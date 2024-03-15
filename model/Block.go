@@ -826,6 +826,10 @@ func (b *Block) NewOptimizedBloomFilter() *blobloom.Filter {
 
 	// insert all transaction ids first 8 bytes to the filter
 	for _, subtree := range b.SubtreeSlices {
+		if subtree == nil {
+			// TODO: why would subtree be nil?
+			return nil
+		}
 		subtree := subtree
 		g.Go(func() error {
 			for _, node := range subtree.Nodes {

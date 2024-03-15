@@ -52,6 +52,7 @@ type BlockValidation struct {
 	subtreeExists                      *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
 	subtreeCount                       atomic.Int32
 	blockHashesCurrentlyValidated      *util.SwissMap
+	blockBloomFiltersBeingCreated      *util.SwissMap
 	setMinedChan                       chan *chainhash.Hash
 }
 
@@ -87,6 +88,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		subtreeExists:                      expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes
 		subtreeCount:                       atomic.Int32{},
 		blockHashesCurrentlyValidated:      util.NewSwissMap(0),
+		blockBloomFiltersBeingCreated:      util.NewSwissMap(0),
 		setMinedChan:                       make(chan *chainhash.Hash, 1000),
 	}
 
@@ -440,10 +442,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		u.logger.Infof("[ValidateBlock][%s] update subtrees TTL DONE", block.Hash().String())
 	}()
 
-	/// create bloom filter for the block and store
-	u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block", block.Hash().String())
-	u.createAppendBloomFilter(block)
-	u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
+	go func() {
+		/// create bloom filter for the block and store
+		u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block", block.Hash().String())
+		u.createAppendBloomFilter(block)
+		u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
+	}()
 
 	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
@@ -453,6 +457,11 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 }
 
 func (u *BlockValidation) createAppendBloomFilter(block *model.Block) {
+	_ = u.blockBloomFiltersBeingCreated.Put(*block.Hash())
+	defer func() {
+		_ = u.blockBloomFiltersBeingCreated.Delete(*block.Hash())
+	}()
+
 	// create a bloom filter for the block
 	bbf := &model.BlockBloomFilter{}
 	bbf.Filter = block.NewOptimizedBloomFilter()

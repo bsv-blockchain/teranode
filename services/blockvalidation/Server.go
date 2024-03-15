@@ -460,10 +460,16 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 	}
 
 	// check if the parent block is being validated, then wait for it to finish.
-	if u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) {
+	blockBeingFinalized := u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) ||
+		u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock)
+
+	if blockBeingFinalized {
 		u.logger.Infof("[processBlockFound][%s] parent block is being validated (hash: %s), waiting for it to finish", hash.String(), block.Header.HashPrevBlock.String())
 		for {
-			if !u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) {
+			blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) ||
+				u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock)
+
+			if !blockBeingFinalized {
 				break
 			}
 			time.Sleep(1 * time.Second)
@@ -592,10 +598,16 @@ LOOP:
 
 		for _, blockHeader := range blockHeaders {
 			// check if parent block is currently being validated, then wait for it to finish. If the parent block was being validated, when the for loop is done, GetBlockExists will return true.
-			if u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) {
+			blockBeingFinalized := u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) ||
+				u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock)
+
+			if blockBeingFinalized {
 				u.logger.Infof("[catchup][%s] parent block is being validated (hash: %s), waiting for it to finish", fromBlock.Hash().String(), blockHeader.HashPrevBlock.String())
 				for {
-					if !u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) {
+					blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) ||
+						u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock)
+
+					if !blockBeingFinalized {
 						break
 					}
 					time.Sleep(1 * time.Second)

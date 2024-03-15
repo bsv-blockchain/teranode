@@ -3,7 +3,11 @@
 package bloom
 
 import (
+	"bufio"
 	"crypto/rand"
+	"fmt"
+	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -20,20 +24,68 @@ func generateRandomTxid() []byte {
 
 func TestBloomFilter2(t *testing.T) {
 	// Number of txids to test
-	numTxids := 10_000_000
+	numTxids := 600_000_000
 	t.Logf("Number of txids: %v\n", numTxids)
 	txids := make([][]byte, numTxids)
 	insertionDiv := 5
 
-	// Generate random txids
-	for i := 0; i < numTxids; i++ {
-		txids[i] = generateRandomTxid()
+	fileName := fmt.Sprintf("txs_%d.bin", numTxids)
+	// check whether the file already exists
+	if _, err := os.Stat(fileName); err == nil {
+		// load the tx ids from file
+		f, err := os.Open(fileName)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// create read buffer
+		r := bufio.NewReaderSize(f, 32*1024*1024)
+
+		for i := 0; i < numTxids; i++ {
+			txids[i] = make([]byte, 32)
+			_, err = r.Read(txids[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		_ = f.Close()
+	} else {
+		// Generate random txids
+		for i := 0; i < numTxids; i++ {
+			txids[i] = generateRandomTxid()
+		}
+
+		// write the txs to disk
+		f, err := os.Create(fileName)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// create write buffer
+		w := bufio.NewWriterSize(f, 32*1024*1024)
+
+		for i := 0; i < numTxids; i++ {
+			_, err = w.Write(txids[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+
+		}
+
+		_ = w.Flush()
+		_ = f.Close()
 	}
+
+	allocTxIds := getAlloc()
 
 	filter := blobloom.NewOptimized(blobloom.Config{
 		Capacity: uint64(numTxids / insertionDiv), // Expected number of keys.
-		FPRate:   1e-5,                            // Accept one false positive per 10,000 lookups.
+		FPRate:   1e-9,                            // Accept one false positive per 10,000 lookups.
 	})
+
+	allocBloom := getAlloc() - allocTxIds
+	t.Logf("Allocated memory for bloom filter: %v MB\n", allocBloom/(1024*1024))
 
 	// Add 10% of the txids
 	var n64 uint64
@@ -103,4 +155,10 @@ func TestBloomFilter(t *testing.T) {
 	}
 	t.Logf("\nTime to test txids: %v\n", time.Since(start))
 	t.Logf("Number of false positives: %v\n", falsePositives)
+}
+
+func getAlloc() uint64 {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	return m.Alloc
 }
