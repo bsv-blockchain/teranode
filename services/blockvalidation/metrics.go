@@ -31,9 +31,9 @@ var (
 	prometheusBlockValidationSetTXMetaCacheFrpc    prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheDel     prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheDelFrpc prometheus.Counter
-	prometheusBlockValidationSetMinedLocal         prometheus.Counter
-	prometheusBlockValidationSetMinedMulti         prometheus.Counter
-	prometheusBlockValidationSetMinedMultiFrpc     prometheus.Counter
+	//prometheusBlockValidationSetMinedLocal         prometheus.Counter
+	prometheusBlockValidationSetMinedMulti     prometheus.Counter
+	prometheusBlockValidationSetMinedMultiFrpc prometheus.Counter
 
 	// expiring cache metrics
 	prometheusBlockValidationLastValidatedBlocksCache prometheus.Gauge
@@ -226,13 +226,13 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockValidationSetMinedLocal = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
-			Name:      "set_tx_mined_local",
-			Help:      "Number of tx mined local sets",
-		},
-	)
+	//prometheusBlockValidationSetMinedLocal = promauto.NewCounter(
+	//	prometheus.CounterOpts{
+	//		Namespace: "blockvalidation",
+	//		Name:      "set_tx_mined_local",
+	//		Help:      "Number of tx mined local sets",
+	//	},
+	//)
 
 	prometheusBlockValidationSetMinedMulti = promauto.NewCounter(
 		prometheus.CounterOpts{

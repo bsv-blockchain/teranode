@@ -117,30 +117,32 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		}
 	}()
 
-	go func() {
-		for {
-			blockchainSubscription, err := bv.blockchainClient.Subscribe(ctx, "blockvalidation")
-			if err != nil {
-				logger.Errorf("[BlockValidation:setMined] failed to subscribe to blockchain: %s", err)
+	if bv.blockchainClient != nil {
+		go func() {
+			for {
+				blockchainSubscription, err := bv.blockchainClient.Subscribe(ctx, "blockvalidation")
+				if err != nil {
+					logger.Errorf("[BlockValidation:setMined] failed to subscribe to blockchain: %s", err)
 
-				// backoff for 5 seconds and try again
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			for notification := range blockchainSubscription {
-				if notification == nil {
+					// backoff for 5 seconds and try again
+					time.Sleep(5 * time.Second)
 					continue
 				}
 
-				if notification.Type == model.NotificationType_Block {
-					// push block hash to the setMinedChan
-					bv.blockHashesCurrentlyValidated.Put(*notification.Hash)
-					bv.setMinedChan <- notification.Hash
+				for notification := range blockchainSubscription {
+					if notification == nil {
+						continue
+					}
+
+					if notification.Type == model.NotificationType_Block {
+						// push block hash to the setMinedChan
+						_ = bv.blockHashesCurrentlyValidated.Put(*notification.Hash)
+						bv.setMinedChan <- notification.Hash
+					}
 				}
 			}
-		}
-	}()
+		}()
+	}
 
 	return bv
 }
@@ -206,7 +208,9 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	var block *model.Block
 	var ids []uint32
 
-	defer u.blockHashesCurrentlyValidated.Delete(*block.Hash())
+	defer func() {
+		_ = u.blockHashesCurrentlyValidated.Delete(*block.Hash())
+	}()
 
 	cachedBlock, blockWasAlreadyCached := u.lastValidatedBlocks.Get(*blockHash)
 	if blockWasAlreadyCached && cachedBlock != nil {
