@@ -5,11 +5,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 
 	"github.com/bitcoin-sv/ubsv/util"
 
@@ -42,7 +43,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			duration := time.Since(start)
 			sizeInKB := float64(len(b)) / 1024
 
-			h.logger.Infof("[Asset_http] GetSubtree in %s for %s (%.2f kB): %s DONE in %s (%.2f kB/sec)", mode, c.Request().RemoteAddr, c.Param("hash"), sizeInKB, duration, calculateSpeed(duration, sizeInKB))
+			h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s (%.2f kB): %s DONE in %s (%.2f kB/sec)", mode, c.Request().RemoteAddr, c.Param("hash"), sizeInKB, duration, calculateSpeed(duration, sizeInKB))
 		}()
 
 		h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
