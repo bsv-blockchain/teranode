@@ -115,6 +115,11 @@ type Block struct {
 	txMap           util.TxMap
 }
 
+type BlockBloomFilter struct {
+	Filter       *blobloom.Filter
+	CreationTime time.Time
+}
+
 func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64) (*Block, error) {
 
 	return &Block{
@@ -223,7 +228,7 @@ func (b *Block) String() string {
 	return b.Hash().String()
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*blobloom.Filter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32) (bool, error) {
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32) (bool, error) {
 	startTime := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:Valid")
 	defer func() {
@@ -397,7 +402,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*blobloom.Filter, currentBlockHeaderIDs []uint32) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentBlockHeaderIDs []uint32) error {
 	if b.txMap == nil {
 		return fmt.Errorf("txMap is nil, cannot check transaction order")
 	}
@@ -460,7 +465,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				// get first 8 bytes of the subtreeNode hash
 				n64 := binary.BigEndian.Uint64(subtreeNode.Hash[:])
 				for _, filter := range recentBlocksBloomFilters {
-					if filter.Has(n64) {
+					if filter.Filter.Has(n64) {
 						// we have a match, check
 						txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
 						if err != nil {

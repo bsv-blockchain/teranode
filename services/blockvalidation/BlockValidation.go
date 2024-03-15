@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
-	"github.com/greatroar/blobloom"
 
 	"github.com/ordishs/go-utils/expiringmap"
 
@@ -36,24 +35,24 @@ import (
 )
 
 type BlockValidation struct {
-	logger           ulogger.Logger
-	blockchainClient blockchain.ClientI
-	subtreeStore     blob.Store
-	subtreeTTL       time.Duration
-	txStore          blob.Store
-	txMetaStore      txmeta.Store
-	//minedBlockStore               *txmetacache.ImprovedCache
-	recentBlocksBloomFilters      []*blobloom.Filter
-	validatorClient               validator.Interface
-	subtreeValidationClient       subtreevalidation.Interface
-	subtreeDeDuplicator           *deduplicator.DeDuplicator
-	optimisticMining              bool
-	lastValidatedBlocks           *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] // map of full blocks that have been validated
-	blockExists                   *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
-	subtreeExists                 *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
-	subtreeCount                  atomic.Int32
-	blockHashesCurrentlyValidated *util.SwissMap
-	setMinedChan                  chan *chainhash.Hash
+	logger                             ulogger.Logger
+	blockchainClient                   blockchain.ClientI
+	subtreeStore                       blob.Store
+	subtreeTTL                         time.Duration
+	txStore                            blob.Store
+	txMetaStore                        txmeta.Store
+	recentBlocksBloomFilters           []*model.BlockBloomFilter
+	recentBlocksBloomFiltersExpiration time.Duration
+	validatorClient                    validator.Interface
+	subtreeValidationClient            subtreevalidation.Interface
+	subtreeDeDuplicator                *deduplicator.DeDuplicator
+	optimisticMining                   bool
+	lastValidatedBlocks                *expiringmap.ExpiringMap[chainhash.Hash, *model.Block] // map of full blocks that have been validated
+	blockExists                        *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
+	subtreeExists                      *expiringmap.ExpiringMap[chainhash.Hash, bool]         // map of block hashes that have been validated and exist
+	subtreeCount                       atomic.Int32
+	blockHashesCurrentlyValidated      *util.SwissMap
+	setMinedChan                       chan *chainhash.Hash
 }
 
 type missingTx struct {
@@ -62,7 +61,7 @@ type missingTx struct {
 }
 
 func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface) *BlockValidation {
+	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation {
 
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
@@ -70,27 +69,25 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
 	logger.Infof("optimisticMining = %s", optimisticMining)
 
-	//blockMinedCacheMaxMB, _ := gocore.Config().GetInt("blockMinedCacheMaxMB", 256)
-
 	bv := &BlockValidation{
-		logger:           logger,
-		blockchainClient: blockchainClient,
-		subtreeStore:     subtreeStore,
-		subtreeTTL:       subtreeTTL,
-		txStore:          txStore,
-		txMetaStore:      txMetaStore,
-		//minedBlockStore:               txmetacache.NewImprovedCache(blockMinedCacheMaxMB*1024*1024, types.Unallocated), // new unallocated cache, it doesn't pre-allocate
-		recentBlocksBloomFilters:      make([]*blobloom.Filter, 0),
-		validatorClient:               validatorClient,
-		subtreeValidationClient:       subtreeValidationClient,
-		subtreeDeDuplicator:           deduplicator.New(subtreeTTL),
-		optimisticMining:              optimisticMining,
-		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
-		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes
-		subtreeCount:                  atomic.Int32{},
-		blockHashesCurrentlyValidated: util.NewSwissMap(0),
-		setMinedChan:                  make(chan *chainhash.Hash, 1000),
+		logger:                             logger,
+		blockchainClient:                   blockchainClient,
+		subtreeStore:                       subtreeStore,
+		subtreeTTL:                         subtreeTTL,
+		txStore:                            txStore,
+		txMetaStore:                        txMetaStore,
+		recentBlocksBloomFilters:           make([]*model.BlockBloomFilter, 0),
+		recentBlocksBloomFiltersExpiration: bloomExpiration,
+		validatorClient:                    validatorClient,
+		subtreeValidationClient:            subtreeValidationClient,
+		subtreeDeDuplicator:                deduplicator.New(subtreeTTL),
+		optimisticMining:                   optimisticMining,
+		lastValidatedBlocks:                expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blockExists:                        expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
+		subtreeExists:                      expiringmap.New[chainhash.Hash, bool](10 * time.Minute),  // we keep this for 10 minutes
+		subtreeCount:                       atomic.Int32{},
+		blockHashesCurrentlyValidated:      util.NewSwissMap(0),
+		setMinedChan:                       make(chan *chainhash.Hash, 1000),
 	}
 
 	go func() {
@@ -453,17 +450,20 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 func (u *BlockValidation) createAppendBloomFilter(block *model.Block) {
 	// create a bloom filter for the block
-	filter := block.NewOptimizedBloomFilter()
+	bbf := &model.BlockBloomFilter{}
+	bbf.Filter = block.NewOptimizedBloomFilter()
+	bbf.CreationTime = time.Now()
 
-	if len(u.recentBlocksBloomFilters) >= 5 {
-		// remove the oldest one
-		u.recentBlocksBloomFilters = u.recentBlocksBloomFilters[1:]
+	// prune older bloom filters
+	for i, bf := range u.recentBlocksBloomFilters {
+		if bf.CreationTime.Before(time.Now().Add(-u.recentBlocksBloomFiltersExpiration)) {
+			// remove the bloom filter from the list
+			u.recentBlocksBloomFilters = append(u.recentBlocksBloomFilters[:i], u.recentBlocksBloomFilters[i+1:]...)
+		}
 	}
 
 	// append the most recently validated bloom filter
-	u.recentBlocksBloomFilters = append(u.recentBlocksBloomFilters, filter)
-
-	return
+	u.recentBlocksBloomFilters = append(u.recentBlocksBloomFilters, bbf)
 }
 
 // storeCoinbaseTx

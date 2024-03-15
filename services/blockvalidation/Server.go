@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
@@ -118,7 +119,23 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	}
 
 	subtreeValidationClient := subtreevalidation.NewClient(ctx, u.logger)
-	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient)
+
+	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+	if err != nil || !found {
+		return fmt.Errorf("could not get txmeta_store URL: %v", err)
+	}
+
+	expiration := uint64(0)
+	expirationValue := txMetaStoreURL.Query().Get("expiration")
+	if expirationValue != "" {
+		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
+		if err != nil {
+			return fmt.Errorf("could not parse expiration %s: %v", expirationValue, err)
+		}
+		expiration = uint64(expiration64)
+	}
+
+	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
 
 	go u.processSubtreeNotify.Start()
 
