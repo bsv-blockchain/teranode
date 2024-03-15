@@ -454,32 +454,26 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					return fmt.Errorf("transaction %s could not be found in tx meta data", subtreeNode.Hash.String())
 				}
 
-				// we need to somehow bring localSetMined back
-				// it will only hold few blocks, so we will assume there is a magic number of blocks that is "enough" to say transaction is not duplicate. But it is not true.
-				// we can't make 600M calls to aerospike.
-				// how can we go around? offload more to aerospike? bloom filter?
-				// if the answer is no, we are already certain, we are good to go.
-				// if the answer is yes, we are not sure yet, so we make a call to aerospike and we will be sure.
-				// 1 block = 1 bloom filter DS. Size issue, much less calls to aerospike, but bloom implementation must be very efficient -> 600M calls to it per block. 5GB per filter.
-				// 100 block 500 GB. 30 Blocks 150 GB.
-				// time encompassing blocks, e.g. 10 blocks, must be longer than txmeta TTL.
-				/*
-					var blockIDBytes []byte
-					if minedBlockStore != nil {
-						// check whether the transaction has recently been mined in a block on our chain
-						// improved cache with append.
-						_ = minedBlockStore.Get(&blockIDBytes, subtreeNode.Hash[:])
-						if len(blockIDBytes) > 0 {
-							for i := 0; i < len(blockIDBytes); i += 4 {
-								blockID := binary.LittleEndian.Uint32(blockIDBytes[i : i+4])
-								if _, ok = currentBlockHeaderIDsMap[blockID]; ok {
-									return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
-								}
+				// check whether the transaction has recently been mined in a block on our chain
+				// for all transactions, we go over all bloom filters, we collect the transactions that are in the bloom filter
+				// collected transactions will be checked in the txMetaStore, as they can be false positives.
+				// get first 8 bytes of the subtreeNode hash
+				n64 := binary.BigEndian.Uint64(subtreeNode.Hash[:])
+				for _, filter := range recentBlocksBloomFilters {
+					if filter.Has(n64) {
+						// we have a match, check
+						txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
+						if err != nil {
+							return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
+						}
+
+						for _, blockID := range txMeta.BlockIDs {
+							if _, found := currentBlockHeaderIDsMap[blockID]; found {
+								return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
 							}
 						}
-					}*/
-
-				// make bloomfilter check for every transaction
+					}
+				}
 
 				for _, parentTxHash := range parentTxHashes {
 					parentTxIdx, foundInSameBlock := b.txMap.Get(parentTxHash)

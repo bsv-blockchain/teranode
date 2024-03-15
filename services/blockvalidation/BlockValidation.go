@@ -455,7 +455,7 @@ func (u *BlockValidation) createAppendBloomFilter(block *model.Block) {
 	// create a bloom filter for the block
 	filter := block.NewOptimizedBloomFilter()
 
-	if len(u.recentBlocksBloomFilters) > 5 {
+	if len(u.recentBlocksBloomFilters) >= 5 {
 		// remove the oldest one
 		u.recentBlocksBloomFilters = u.recentBlocksBloomFilters[1:]
 	}
