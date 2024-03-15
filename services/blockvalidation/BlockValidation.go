@@ -945,9 +945,9 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 
 		if attempt > maxRetries {
 			failFast = true
-			u.logger.Infof("[Init] [attempt #%d] final attempt to process subtree, this time with full checks enabled [%s]", attempt, v.SubtreeHash.String())
+			u.logger.Infof("[validateSubtreeInternal][%s] [attempt #%d] final attempt to process subtree, this time with full checks enabled", v.SubtreeHash.String(), attempt)
 		} else {
-			u.logger.Infof("[Init] [attempt #%d] (fail fast=%v) process %d txs from subtree begin [%s]", attempt, failFast, len(txHashes), v.SubtreeHash.String())
+			u.logger.Infof("[validateSubtreeInternal][%s] [attempt #%d] (fail fast=%v) process %d txs from subtree", v.SubtreeHash.String(), attempt, failFast, len(txHashes))
 		}
 
 		// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
@@ -957,7 +957,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 		//missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice, failFast)
 		//if err != nil {
 		//	if errors.Is(err, ubsverrors.ErrThresholdExceeded) {
-		//		u.logger.Warnf(fmt.Sprintf("[validateSubtreeInternal][%s] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String()))
+		//		u.logger.Warnf("[validateSubtreeInternal][%s] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String())
 		//		time.Sleep(retrySleepDuration)
 		//		continue
 		//	}
@@ -974,7 +974,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 			missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, batched, failFast)
 			if err != nil {
-				return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from store", v.SubtreeHash.String()), err)
+				return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from store", v.SubtreeHash.String(), attempt), err)
 			}
 		}
 
@@ -994,7 +994,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 				}
 			}
 
-			u.logger.Infof("[validateSubtreeInternal][%s] processing %d missing tx for subtree instance", v.SubtreeHash.String(), len(missingTxHashesCompacted))
+			u.logger.Infof("[validateSubtreeInternal][%s] [attempt #%d] processing %d missing tx for subtree instance", v.SubtreeHash.String(), attempt, len(missingTxHashesCompacted))
 
 			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseUrl, txMetaSlice)
 			if err != nil {
