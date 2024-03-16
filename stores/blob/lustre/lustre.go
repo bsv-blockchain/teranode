@@ -75,7 +75,7 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 	}
 
 	// write the bytes from the reader to a file with the filename
-	file, err := os.Create(fileName)
+	file, err := os.Create(fileName + ".tmp")
 	if err != nil {
 		return fmt.Errorf("[%s] failed to create file: %w", fileName, err)
 	}
@@ -83,6 +83,11 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 
 	if _, err = io.Copy(file, reader); err != nil {
 		return fmt.Errorf("[%s] failed to write data to file: %w", fileName, err)
+	}
+
+	// rename the file to the final name
+	if err = os.Rename(fileName+".tmp", fileName); err != nil {
+		return fmt.Errorf("[%s] failed to rename file from tmp: %w", fileName, err)
 	}
 
 	return nil
@@ -97,8 +102,13 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 	}
 
 	// write bytes to file
-	if err = os.WriteFile(fileName, value, 0644); err != nil {
+	if err = os.WriteFile(fileName+".tmp", value, 0644); err != nil {
 		return fmt.Errorf("[%s] failed to write data to file: %w", fileName, err)
+	}
+
+	// rename the file to the final name
+	if err = os.Rename(fileName+".tmp", fileName); err != nil {
+		return fmt.Errorf("[%s] failed to rename file from tmp: %w", fileName, err)
 	}
 
 	return nil
