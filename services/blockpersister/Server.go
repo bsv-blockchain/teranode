@@ -82,7 +82,9 @@ func (ps *Server) Start(ctx context.Context) (err error) {
 			return
 		}
 
-		go ps.bp.blockFinalHandler(context.Background(), nil, blockBytes)
+		go func() {
+			_ = ps.bp.blockFinalHandler(context.Background(), nil, blockBytes)
+		}()
 
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))

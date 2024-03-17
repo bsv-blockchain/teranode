@@ -157,9 +157,28 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	startTime, stat, ctx := util.NewStatFromContext(ctx, "processSubtree", stats)
+	var txCount int
+
+	startTime, groupStat, ctx := util.NewStatFromContext(ctx, "processSubtree", stats)
 	defer func() {
-		stat.AddTime(startTime)
+		if txCount > 1_000_000 {
+			groupStat.NewStat("> 1,000,000 txs").AddTime(startTime)
+		} else if txCount > 100_000 {
+			groupStat.NewStat("> 100,000 txs").AddTime(startTime)
+		} else if txCount > 10_000 {
+			groupStat.NewStat("> 10,000 txs").AddTime(startTime)
+		} else if txCount > 1_000 {
+			groupStat.NewStat("> 1,000 txs").AddTime(startTime)
+		} else if txCount > 100 {
+			groupStat.NewStat("> 100 txs").AddTime(startTime)
+		} else if txCount > 10 {
+			groupStat.NewStat("> 10 txs").AddTime(startTime)
+		} else if txCount > 0 {
+			groupStat.NewStat("> 0 txs").AddTime(startTime)
+		} else {
+			groupStat.NewStat("0 txs").AddTime(startTime)
+		}
+
 		prometheusBlockPersisterSubtrees.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
 
@@ -243,6 +262,8 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 			return fmt.Errorf("[BlockPersister] error writing tx to file: %w", err)
 		}
 	}
+
+	txCount = len(txHashes)
 
 	return nil
 }
