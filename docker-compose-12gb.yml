@@ -6,7 +6,7 @@ version: '3.8'
 x-ubsv-base:
   &ubsv-base
   image: ubsv:latest
-  mem_limit: 2g
+  mem_limit: 2621m
   depends_on:
     - postgres-shared
     - kafka-shared
@@ -30,10 +30,10 @@ x-aerospike-base: &aerospike-base
   mem_limit: 512m
   networks:
     - ubsv-network
-  environment:
-    REPL_FACTOR: 1
-    MEM_GB: 0.5
-    STORAGE_GB: 1
+  # environment:
+    # REPL_FACTOR: 1
+    # MEM_GB: 0.5
+    # STORAGE_GB: 1
 
 networks:
   ubsv-network:
@@ -80,18 +80,24 @@ services:
     <<: *aerospike-base
     ports:
       - 3100:3000
+    volumes:
+      - ./deploy/dev/aerospike-1.conf:/etc/aerospike/aerospike.conf
 
   aerospike-2:
     container_name: aerospike-2
     <<: *aerospike-base
     ports:
       - 3200:3000
+    volumes:
+      - ./deploy/dev/aerospike-2.conf:/etc/aerospike/aerospike.conf
 
   aerospike-3:
     container_name: aerospike-3
     <<: *aerospike-base
     ports:
       - 3300:3000
+    volumes:
+      - ./deploy/dev/aerospike-3.conf:/etc/aerospike/aerospike.conf
 
   kafka-shared:
     container_name: kafka-shared
