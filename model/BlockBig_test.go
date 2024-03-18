@@ -81,7 +81,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	defer pprof.StopCPUProfile()
 
 	start := time.Now()
-	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs)
+	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 

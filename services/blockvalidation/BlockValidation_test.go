@@ -309,7 +309,7 @@ func TestBlockValidation_validateBlock_small(t *testing.T) {
 
 	blockValidation := NewBlockValidation(ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
@@ -411,7 +411,7 @@ func TestBlockValidation_validateBlock(t *testing.T) {
 
 	blockValidation := NewBlockValidation(ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }

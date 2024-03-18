@@ -38,6 +38,9 @@ var (
 	prometheusBlockCheckMerkleRoot        prometheus.Histogram
 	prometheusBlockGetSubtrees            prometheus.Histogram
 	prometheusBlockGetAndValidateSubtrees prometheus.Histogram
+	prometheusBloomQueryCounter           prometheus.Gauge
+	prometheusBloomPositiveCounter        prometheus.Gauge
+	prometheusBloomFalsePositiveCounter   prometheus.Gauge
 )
 
 var (
@@ -97,6 +100,67 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
+
+	prometheusBloomQueryCounter = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "block",
+			Name:      "bloom_filter_query_counter",
+			Help:      "Number of queries to the bloom filter",
+		},
+	)
+
+	prometheusBloomPositiveCounter = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "block",
+			Name:      "bloom_filter_positive_counter",
+			Help:      "Number of positive from the bloom filter",
+		},
+	)
+
+	prometheusBloomFalsePositiveCounter = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "block",
+			Name:      "bloom_filter_false_positive_counter",
+			Help:      "Number of false positives from the bloom filter",
+		},
+	)
+
+}
+
+type BloomStats struct {
+	QueryCounter         uint64
+	PositiveCounter      uint64
+	FalsePositiveCounter uint64
+	mu                   sync.Mutex
+}
+
+func NewBloomStats() *BloomStats {
+	return &BloomStats{
+		QueryCounter:         0,
+		PositiveCounter:      0,
+		FalsePositiveCounter: 0,
+	}
+}
+
+func (bs *BloomStats) BloomFilterStatsProcessor(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if prometheusBloomQueryCounter != nil {
+					bs.mu.Lock()
+					prometheusBloomQueryCounter.Set(float64(bs.QueryCounter))
+					prometheusBloomPositiveCounter.Set(float64(bs.PositiveCounter))
+					prometheusBloomFalsePositiveCounter.Set(float64(bs.FalsePositiveCounter))
+					bs.mu.Unlock()
+				}
+
+			}
+		}
+	}()
 }
 
 type Block struct {
@@ -228,7 +292,7 @@ func (b *Block) String() string {
 	return b.Hash().String()
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32) (bool, error) {
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
 	startTime := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:Valid")
 	defer func() {
@@ -331,7 +395,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
 	if txMetaStore != nil {
-		err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, recentBlocksBloomFilters, currentBlockHeaderIDs)
+		err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, recentBlocksBloomFilters, currentBlockHeaderIDs, bloomStats)
 		if err != nil {
 			return false, err
 		}
@@ -402,7 +466,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentBlockHeaderIDs []uint32) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) error {
 	if b.txMap == nil {
 		return fmt.Errorf("txMap is nil, cannot check transaction order")
 	}
@@ -425,6 +489,9 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		subtree := subtree
 		g.Go(func() error {
 			var parentTxHashes []chainhash.Hash
+			bloomStats.mu.Lock()
+			bloomStats.QueryCounter += uint64(len(subtree.Nodes))
+			bloomStats.mu.Unlock()
 			for snIdx, subtreeNode := range subtree.Nodes {
 				if subtreeNode.Hash.IsEqual(CoinbasePlaceholderHash) {
 					continue
@@ -464,9 +531,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				// collected transactions will be checked in the txMetaStore, as they can be false positives.
 				// get first 8 bytes of the subtreeNode hash
 				n64 := binary.BigEndian.Uint64(subtreeNode.Hash[:])
+
 				for _, filter := range recentBlocksBloomFilters {
 					if filter.Filter.Has(n64) {
-						// we have a match, check
+						// we have a match, check the txMetaStore
+						bloomStats.mu.Lock()
+						bloomStats.PositiveCounter++
+						bloomStats.mu.Unlock()
 						txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
 						if err != nil {
 							return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
@@ -477,6 +548,9 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 								return fmt.Errorf("transaction %s has already been mined in block %d", subtreeNode.Hash.String(), blockID)
 							}
 						}
+						bloomStats.mu.Lock()
+						bloomStats.FalsePositiveCounter++
+						bloomStats.mu.Unlock()
 					}
 				}
 

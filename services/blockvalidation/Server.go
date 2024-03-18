@@ -64,6 +64,8 @@ type Server struct {
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
 	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
+	// bloom filter stats for all blocks processed
+	bloomFilterStats *model.BloomStats
 }
 
 func Enabled() bool {
@@ -96,6 +98,7 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		catchupCh:            make(chan processBlockCatchup, catchupChBuffer),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
+		bloomFilterStats:     model.NewBloomStats(),
 	}
 
 	// create a caching tx meta store
@@ -138,6 +141,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
 
 	go u.processSubtreeNotify.Start()
+
+	go u.bloomFilterStats.BloomFilterStatsProcessor(ctx)
 
 	go func() {
 		for {
@@ -499,7 +504,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
-	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl)
+	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.bloomFilterStats)
 	if err != nil {
 		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}
@@ -668,7 +673,7 @@ LOOP:
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
 	for block := range validateBlocksChan {
-		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL); err != nil {
+		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.bloomFilterStats); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
 	}

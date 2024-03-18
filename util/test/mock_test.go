@@ -64,7 +64,7 @@ func Test_GenerateBlock(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, CachedTxMetaStore, nil, currentChain, currentChainIDs)
+	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, CachedTxMetaStore, nil, currentChain, currentChainIDs, model.NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
 }
