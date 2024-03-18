@@ -3,6 +3,7 @@ package grpc_impl
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -15,13 +16,15 @@ var (
 	prometheusAssetGRPCSubscribe          prometheus.Counter
 )
 
-var prometheusMetricsInitialized = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusAssetGRPCHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "Asset",
@@ -77,6 +80,4 @@ func initPrometheusMetrics() {
 			Help:      "Number of subscription ops",
 		},
 	)
-
-	prometheusMetricsInitialized = true
 }

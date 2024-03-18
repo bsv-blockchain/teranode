@@ -89,6 +89,7 @@
     }
 
     peers = Object.keys(groupedMessages).length > 0 ? Object.keys(groupedMessages) : []
+    peers = peers.sort()
 
     const msgboxW = byPeer ? (innerWidth - $contentLeft) / peers.length : innerWidth - $contentLeft
     collapseMsgContent = msgboxW < 500
@@ -167,8 +168,6 @@
 
 <style>
   .tools-container {
-    flex: 1;
-
     width: 100%;
     min-height: 50px;
     padding: 24px;

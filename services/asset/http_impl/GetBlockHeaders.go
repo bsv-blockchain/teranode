@@ -2,6 +2,8 @@ package http_impl
 
 import (
 	"encoding/hex"
+	"errors"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,7 +46,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 
 		headers, heights, err = h.repository.GetBlockHeaders(c.Request().Context(), hash, uint64(numberOfHeaders))
 		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
+			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

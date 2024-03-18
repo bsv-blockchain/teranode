@@ -99,6 +99,7 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
 	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON))
+	apiGroup.GET("/block/:hash/forks", h.GetBlockForks)
 
 	apiGroup.GET("/block/:hash/subtrees/json", h.GetBlockSubtrees(JSON))
 
@@ -198,4 +199,9 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 
 func (h *HTTP) Stop(ctx context.Context) error {
 	return h.e.Shutdown(ctx)
+}
+
+func (h *HTTP) AddHTTPHandler(pattern string, handler http.Handler) error {
+	h.e.GET(pattern, echo.WrapHandler(handler))
+	return nil
 }

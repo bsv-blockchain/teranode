@@ -4,13 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
@@ -160,19 +160,22 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 	}, nil
 }
 
-func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
-
+func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	// TODO make this into a batch call
-	for _, hash := range hashes {
-		data, err := s.Get(ctx, hash)
+	for _, item := range items {
+		data, err := s.Get(ctx, item.Hash)
 		if err != nil {
-			return nil, err
+			if uerr, ok := err.(*ubsverrors.Error); ok {
+				if uerr.Code == ubsverrors.ErrorConstants_NOT_FOUND {
+					continue
+				}
+			}
+			return err
 		}
-		results[*hash] = data
+		item.Data = data
 	}
 
-	return results, nil
+	return nil
 }
 
 func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
@@ -201,9 +204,9 @@ func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		postgresErr := "duplicate key value violates unique constraint"
 		sqLiteErr := "UNIQUE constraint failed"
 		if strings.Contains(err.Error(), postgresErr) || strings.Contains(err.Error(), sqLiteErr) {
-			return data, errors.Join(errors.New("failed to insert tx meta"), txmeta.NewErrTxmetaAlreadyExists(hash))
+			return data, fmt.Errorf("failed to insert tx meta: %w", txmeta.NewErrTxmetaAlreadyExists(hash))
 		}
-		return data, errors.Join(errors.New("failed to insert tx meta"), err)
+		return data, fmt.Errorf("failed to insert tx meta: %w", err)
 	}
 
 	prometheusTxMetaSet.Inc()

@@ -3,6 +3,7 @@ package txmeta
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/libsv/go-bt/v2"
@@ -37,6 +38,10 @@ func NewMetaDataFromBytes(dataBytes *[]byte, d *Data) {
 }
 
 func NewDataFromBytes(dataBytes []byte) (*Data, error) {
+	if len(dataBytes) < 24 {
+		return nil, fmt.Errorf("dataBytes too short, expected at least 24 bytes, got %d", len(dataBytes))
+	}
+
 	d := &Data{}
 
 	// read the numbers
@@ -54,9 +59,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 		if err != nil {
 			return nil, err
 		}
-		if d.ParentTxHashes[i] = chainhash.Hash(hashBytes[:]); err != nil {
-			return nil, err
-		}
+		d.ParentTxHashes[i] = chainhash.Hash(hashBytes[:])
 	}
 
 	// read the tx

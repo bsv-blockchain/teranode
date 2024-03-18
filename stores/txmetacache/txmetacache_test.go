@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -21,6 +22,9 @@ var (
 )
 
 func Test_txMetaCache_GetMeta(t *testing.T) {
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
+
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
 
@@ -139,16 +143,18 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 }
 
 func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
+	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
+	util.SkipVeryLongTests(t)
 	ctx := context.Background()
-	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 32)
+	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 2048)
 	cache := c.(*TxMetaCache)
+	var err error
 
-	for i := 0; i < 6000000; i++ {
+	for i := 0; i < 2_000_000; i++ {
 		hash := chainhash.HashH([]byte(string(rune(i))))
-		_ = cache.SetCache(&hash, &txmeta.Data{})
+		err = cache.SetCache(&hash, &txmeta.Data{})
+		require.NoError(t, err)
 	}
-
-	//assert.Equal(t, 32*1024*1024, cache.BytesSize(), "map should not have exceeded max size")
 
 	//make sure newly added items are not expired
 	hash := chainhash.HashH([]byte(string(rune(999_999_999))))
@@ -158,4 +164,18 @@ func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, txmetaLatest)
 
+}
+
+func TestMap(t *testing.T) {
+	m := make(map[chainhash.Hash]*txmeta.Data)
+
+	hash1, _ := chainhash.NewHashFromStr("000000000000000004c636f1bf72da9bdea11677ea3eefbde93ce0358ef28c30")
+	hash2, _ := chainhash.NewHashFromStr("000000000000000004c636f1bf72da9bdea11677ea3eefbde93ce0358ef28c30")
+
+	assert.Equal(t, hash1, hash2)
+
+	m[*hash1] = &txmeta.Data{}
+	m[*hash2] = &txmeta.Data{}
+
+	assert.Equal(t, 1, len(m))
 }

@@ -2,6 +2,18 @@
 
 ## Index
 
+1. [Description](#1-description)
+2. [Functionality](#2-functionality)
+- [2.1. Starting the Validator Service](#21-starting-the-validator-service)
+- [2.2. Receiving Transaction Validation Requests](#22-receiving-transaction-validation-requests)
+- [2.3. Validating the Transaction](#23-validating-the-transaction)
+- [2.4. Post-validation: Updating stores and propagating the transaction](#24-post-validation-updating-stores-and-propagating-the-transaction)
+3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
+4. [Data Model](#4-data-model)
+5. [Technology](#5-technology)
+6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
+7. [How to run](#7-how-to-run)
+8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
 
 ## 1. Description
 
@@ -192,7 +204,12 @@ Equally, we can see the submission to the P2P Service in more detail:
    - A gRPC stream notification about the failed transaction is sent to each subscriber.
 
 
-## 3. Data Model
+
+## 3. gRPC Protobuf Definitions
+
+The Validator Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/validatorProto.md).
+
+## 4. Data Model
 
 The Validation Service deals with the extended transaction format, as seen below:
 
@@ -209,7 +226,7 @@ The Validation Service deals with the extended transaction format, as seen below
 More information on the extended tx structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
 
 
-## 4. Technology
+## 5. Technology
 
 The code snippet you've provided utilizes a variety of technologies and libraries, each serving a specific purpose within the context of a Bitcoin SV (BSV) blockchain-related application. Here's a breakdown of these technologies:
 
@@ -233,7 +250,7 @@ The code snippet you've provided utilizes a variety of technologies and librarie
   - `github.com/opentracing/opentracing-go`: Used for distributed tracing.
 
 
-## 5. Directory Structure and Main Files
+## 6. Directory Structure and Main Files
 
 ```
 ./services/validator
@@ -285,7 +302,7 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 ```
 
 
-## 6. How to run
+## 7. How to run
 
 
 To run the Validator Service locally, you can execute the following command:
@@ -297,24 +314,23 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Validator=1
 Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Validator Service locally.
 
 
-## 7. Configuration options (settings flags)
+## 8. Configuration options (settings flags)
 
-1. **validator_grpcListenAddress**: Specifies the listening address for the gRPC server.
-
-2. **validator_kafkaBrokers**: Defines the address of the Kafka brokers. This is crucial for the application to connect to a Kafka cluster for message streaming, particularly for transaction data.
-
-3. **validator_kafkaWorkers**: Indicates the number of workers to be used for Kafka consumers. This setting controls the level of parallelism or concurrency in processing Kafka messages.
-
-4. **validator_frpcListenAddress**: The listening address for the fRPC server.
-
-5. **validator_frpcConcurrency**: Sets the concurrency level for the fRPC server.
-
-6. **blockvalidation_txMetaCacheBatcherEnabled**: Determines whether the batcher for transaction metadata caching in the block validation process is enabled.
-
-7. **blockvalidation_txMetaCacheBatchSize**: Specifies the batch size for transaction metadata caching in the block validation process.
-
-8. **blockvalidation_txMetaCacheBatchTimeoutMillis**: Indicates the timeout (in milliseconds) for the batch operation in transaction metadata caching.
-
-9. **blockassembly_disabled**: A boolean setting that indicates whether the block assembly feature is disabled.
-
-10. **blockassembly_kafkaBrokers**: Defines the Kafka brokers' address for the block assembly process.
+- **`validator_grpcListenAddress`**: Determines if the validator service is enabled based on its presence in the configuration. It specifies the address for the validator's gRPC server to listen on.
+- **`validator_kafkaBrokers`**: Configures the Kafka brokers for the validator to connect to for transaction validation messages.
+- **`validator_kafkaWorkers`**: Sets the number of workers for processing Kafka messages in parallel.
+- **`blockvalidation_txMetaCacheBatcherEnabled`**: Toggles the use of a batcher for sending transaction metadata to the block validation cache.
+- **`blockvalidation_txMetaCacheBatcherSendTimeout`**: Configures the timeout for sending a batch of transaction metadata to the block validation cache.
+- **`validator_blockvalidation_maxRetries`**: Specifies the maximum number of retries for sending transaction metadata to the block validation cache.
+- **`validator_blockvalidation_retrySleep`**: Defines the delay between retries when sending transaction metadata to the block validation cache.
+- **`validator_blockvalidation_delay`**: Sets a delay before attempting to send transaction metadata to the block validation cache.
+- **`blockvalidation_txMetaCacheBatchSize`**: Determines the size of the batch for the batcher when sending transaction metadata to the block validation cache.
+- **`blockvalidation_txMetaCacheBatchTimeoutMillis`**: Configures the timeout in milliseconds for the batcher when batching transaction metadata for the block validation cache.
+- **`blockassembly_disabled`**: Indicates whether the block assembly feature is disabled.
+- **`blockassembly_creates_utxos`**: Specifies if the block assembly process is responsible for creating UTXOs.
+- **`blockassembly_kafkaBrokers`**: Sets the Kafka brokers for connecting to the block assembly module.
+- **`blockassembly_kafkaWorkers`**: Configures the number of workers for processing Kafka messages related to block assembly.
+- **`grpc_resolver`**: Determines the gRPC resolver to use, supporting Kubernetes with "k8s" or "kubernetes" options for service discovery.
+- **`validator_sendBatchSize`**: Specifies the size of batches for sending validation requests to the validator gRPC server.
+- **`validator_sendBatchTimeout`**: Sets the timeout in milliseconds for batching validation requests before sending them to the validator.
+- **`validator_sendBatchWorkers`**: Configures the number of workers for processing batches of validation requests.

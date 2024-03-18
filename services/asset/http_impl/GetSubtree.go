@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/ubsverrors"
+
 	"github.com/bitcoin-sv/ubsv/util"
 
 	"github.com/labstack/echo/v4"
@@ -41,7 +43,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			duration := time.Since(start)
 			sizeInKB := float64(len(b)) / 1024
 
-			h.logger.Infof("[Asset_http] GetSubtree in %s for %s (%.2f kB): %s DONE in %s (%.2f kB/sec)", mode, c.Request().RemoteAddr, c.Param("hash"), sizeInKB, duration, calculateSpeed(duration, sizeInKB))
+			h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s (%.2f kB): %s DONE in %s (%.2f kB/sec)", mode, c.Request().RemoteAddr, c.Param("hash"), sizeInKB, duration, calculateSpeed(duration, sizeInKB))
 		}()
 
 		h.logger.Infof("[Asset_http] GetSubtree in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))
@@ -60,7 +62,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			// this is only needed for the json response
 			subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
 			if err != nil {
-				if strings.HasSuffix(err.Error(), " not found") {
+				if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
 				} else {
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -75,7 +77,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		// get subtree reader is much more efficient than get subtree
 		subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
 		if err != nil {
-			if strings.HasSuffix(err.Error(), " not found") {
+			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -130,7 +132,7 @@ func NewSubtreeNodesReader(subtreeReader io.Reader) (*SubtreeNodesReader, error)
 	itemCount := binary.LittleEndian.Uint64(b)
 
 	return &SubtreeNodesReader{
-		reader:    bufio.NewReaderSize(subtreeReader, 1024*1024*4),
+		reader:    bufio.NewReaderSize(subtreeReader, 1024*1024*4), // 4MB buffer
 		itemCount: int(itemCount),
 		extraBuf:  make([]byte, 16),
 	}, nil
@@ -198,7 +200,7 @@ func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	start2 := gocore.CurrentTime()
 	subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
 	if err != nil {
-		if strings.HasSuffix(err.Error(), " not found") {
+		if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
 		} else {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

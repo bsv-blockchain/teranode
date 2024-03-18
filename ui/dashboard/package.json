@@ -27,6 +27,7 @@
     "@types/eslint": "8.56.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
+    "browserslist-to-esbuild": "^2.1.1",
     "eslint": "^8.56.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-storybook": "^0.6.15",
@@ -44,10 +45,13 @@
   },
   "type": "module",
   "dependencies": {
+    "@types/d3": "^7.4.3",
     "@zerodevx/svelte-toast": "^0.9.5",
+    "d3": "^7.8.5",
     "echarts": "^5.4.3",
     "i18next": "^23.7.6",
     "polished": "^4.2.2",
+    "svelte-exmarkdown": "^3.0.3",
     "svelte-i18next": "^2.2.2",
     "tippy.js": "^6.3.7"
   }

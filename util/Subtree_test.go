@@ -505,7 +505,7 @@ func Test_BuildMerkleTreeStoreFromBytes(t *testing.T) {
 //}
 
 func Test_Deserialize(t *testing.T) {
-	//SkipLongTests(t)
+	SkipLongTests(t)
 	runtime.SetCPUProfileRate(1000)
 
 	size := 1024 * 1024
@@ -529,7 +529,7 @@ func Test_Deserialize(t *testing.T) {
 }
 
 func Test_DeserializeFromReader(t *testing.T) {
-	//SkipLongTests(t)
+	SkipLongTests(t)
 	runtime.SetCPUProfileRate(1000)
 
 	size := 1024 * 1024

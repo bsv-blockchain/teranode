@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/dolthub/swiss"
 )
@@ -94,6 +95,10 @@ func NewSwissMapUint64(length int) *SwissMapUint64 {
 	}
 }
 
+func (s *SwissMapUint64) Map() *swiss.Map[[32]byte, uint64] {
+	return s.m
+}
+
 func (s *SwissMapUint64) Exists(hash [32]byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -133,6 +138,55 @@ func (s *SwissMapUint64) Get(hash [32]byte) (uint64, bool) {
 
 func (s *SwissMapUint64) Length() int {
 	return s.length
+}
+
+// Lock-free map for uint64 keys and values
+type SwissMapKVUint64 struct {
+	m      *swiss.Map[uint64, uint64]
+	length atomic.Uint32
+}
+
+func NewSwissMapKVUint64(length int) *SwissMapKVUint64 {
+	return &SwissMapKVUint64{
+		m:      swiss.NewMap[uint64, uint64](uint32(length)),
+		length: atomic.Uint32{},
+	}
+}
+
+func (s *SwissMapKVUint64) Map() *swiss.Map[uint64, uint64] {
+	return s.m
+}
+
+func (s *SwissMapKVUint64) Exists(hash uint64) bool {
+	_, ok := s.m.Get(hash)
+	return ok
+}
+
+func (s *SwissMapKVUint64) Put(hash uint64, n uint64) error {
+	exists := s.m.Has(hash)
+	if exists {
+		return fmt.Errorf("hash already exists in map")
+	}
+
+	s.m.Put(hash, n)
+	s.length.Add(1)
+
+	return nil
+}
+
+func (s *SwissMapKVUint64) Get(hash uint64) (uint64, bool) {
+	// s.length.Add(1)
+
+	n, ok := s.m.Get(hash)
+	if !ok {
+		return 0, false
+	}
+
+	return n, true
+}
+
+func (s *SwissMapKVUint64) Length() int {
+	return int(s.length.Load())
 }
 
 type SplitSwissMap struct {
@@ -203,6 +257,10 @@ func (g *SplitSwissMapUint64) Exists(hash [32]byte) bool {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Exists(hash)
 }
 
+func (g *SplitSwissMapUint64) Map() map[uint16]*SwissMapUint64 {
+	return g.m
+}
+
 func (g *SplitSwissMapUint64) Put(hash [32]byte, n uint64) error {
 	return g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Put(hash, n)
 }
@@ -215,6 +273,49 @@ func (g *SplitSwissMapUint64) Length() int {
 	length := 0
 	for i := uint16(0); i <= g.nrOfBuckets; i++ {
 		length += g.m[i].length
+	}
+
+	return length
+}
+
+type SplitSwissMapKVUint64 struct {
+	m           map[uint64]*SwissMapKVUint64
+	nrOfBuckets uint64
+}
+
+func NewSplitSwissMapKVUint64(length int) *SplitSwissMapKVUint64 {
+	m := &SplitSwissMapKVUint64{
+		m:           make(map[uint64]*SwissMapKVUint64, 256),
+		nrOfBuckets: 1024,
+	}
+
+	for i := uint64(0); i <= m.nrOfBuckets; i++ {
+		m.m[i] = NewSwissMapKVUint64(length / int(m.nrOfBuckets))
+	}
+
+	return m
+}
+
+func (g *SplitSwissMapKVUint64) Exists(hash uint64) bool {
+	return g.m[hash%g.nrOfBuckets].Exists(hash)
+}
+
+func (g *SplitSwissMapKVUint64) Map() map[uint64]*SwissMapKVUint64 {
+	return g.m
+}
+
+func (g *SplitSwissMapKVUint64) Put(hash uint64, n uint64) error {
+	return g.m[hash%g.nrOfBuckets].Put(hash, n)
+}
+
+func (g *SplitSwissMapKVUint64) Get(hash uint64) (uint64, bool) {
+	return g.m[hash%g.nrOfBuckets].Get(hash)
+}
+
+func (g *SplitSwissMapKVUint64) Length() int {
+	length := 0
+	for i := uint64(0); i <= g.nrOfBuckets; i++ {
+		length += int(g.m[i].length.Load())
 	}
 
 	return length
@@ -255,6 +356,7 @@ func (g *SplitGoMap) Put(hash [32]byte, n uint64) error {
 	g.m[Bytes2Uint16Buckets(hash, g.nrOfBuckets)].Set(hash, struct{}{})
 	return nil
 }
+
 func (g *SplitGoMap) PutMulti(bucket uint16, hashes [][32]byte) error {
 	g.m[bucket].SetMulti(hashes, struct{}{})
 	return nil

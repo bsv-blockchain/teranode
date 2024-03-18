@@ -1,39 +1,51 @@
 @startuml
-
-participant "Node" as Node
+participant "P2P Service" as Node
+participant "P2PNode" as P2PNode
 control "DHT (Distributed Hash Table)" as DHT
-control "Routing Discovery" as RoutingDiscovery
-database "Peers" as Peers
+control "RoutingDiscovery" as RoutingDiscovery
 control "Host" as Host
+database "Peers" as Peers
 entity "Topic" as Topic
 
-Node -> DHT: InitDHT(ctx, Host)
+Node -> P2PNode: Start(ctx, topicNames...)
+activate P2PNode
+
+P2PNode -> DHT: initDHT(ctx) or initPrivateDHT(ctx)
 activate DHT
-DHT --> Node: Return DHT instance
+DHT --> P2PNode: DHT Instance
 deactivate DHT
 
-Node -> RoutingDiscovery: NewRoutingDiscovery(DHT)
+P2PNode -> RoutingDiscovery: NewRoutingDiscovery(DHT)
 activate RoutingDiscovery
-Node -> RoutingDiscovery: Advertise topics
-loop for each Topic in tn
-    Node -> Topic: Advertise(ctx, RoutingDiscovery, Topic)
+
+P2PNode -> RoutingDiscovery: Advertise Self
+loop for each Topic in topicNames
+    P2PNode -> Topic: Advertise(ctx, RoutingDiscovery, Topic)
 end
 deactivate RoutingDiscovery
 
-loop Peer Discovery
-    Node -> RoutingDiscovery: FindPeers(ctx, Topic)
+loop Peer Discovery for each Topic
+    P2PNode -> RoutingDiscovery: FindPeers(ctx, Topic)
     activate RoutingDiscovery
     RoutingDiscovery -> Peers: Get peers for Topic
     deactivate RoutingDiscovery
     loop for each Peer in Peers
-        Peers --> Node: Peer
-        Node -> Host: Connect(ctx, Peer)
+        Peers --> P2PNode: PeerInfo
+        P2PNode -> Host: Connect(ctx, PeerInfo)
         alt successful connection
-            Host -> Node: Connected
+            Host -> P2PNode: Connected
         else connection failed
-            Host -> Node: Connection Failed
+            Host -> P2PNode: Connection Failed
         end
     end
 end
+
+P2PNode -> P2PNode: connectToStaticPeers(ctx, staticPeers)
+
+P2PNode -> Host: SetStreamHandler(protocol.ID, streamHandler)
+Host --> P2PNode: Handler Set
+
+deactivate P2PNode
+left footer Last Modified On: 6-March-2024
 
 @enduml

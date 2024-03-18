@@ -3,7 +3,6 @@
 
 ## Index
 
-
 1. [Introduction](#1-introduction)
 2. [Getting Started](#2-getting-started)
 - [2.1. Pre-requisites and Installation](#21-pre-requisites-and-installation)
@@ -24,15 +23,12 @@
 - [7.4. Protobuf](#74-protobuf)
 - [7.5. IPv6 Multicast](#75-ipv6-multicast)
 - [7.6. Stores](#76-stores)
-- [7.7. Docker ](#77-docker-)
-- [7.8. Kubernetes](#78-kubernetes)
 8. [Project Structure and Coding Conventions](#8-project-structure-and-coding-conventions)
 - [8.1 Directory Structure and Descriptions:](#81-directory-structure-and-descriptions)
 - [8.2. Coding Conventions](#82-coding-conventions)
 - [8.3. Error Handling](#83-error-handling)
-- [8.4. Logging](#84-logging)
-- [8.5. Testing Conventions](#85-testing-conventions)
 9. [License](#9-license)
+
 
 ## 1. Introduction
 
@@ -120,7 +116,7 @@ Additional logs can be produced when the node is run with the following environm
 
 ---
 
-Please check the [Architecture Documentation](docs/architecture/ubsv-architecture.md) for an introduction to the overall architecture of the node.
+Please check the [Architecture Documentation](docs/architecture/teranode-architecture.md) for an introduction to the overall architecture of the node.
 
 Additional documentation on the Network Consensus Rules can be found in the [Network Consensus Rules](docs%2FnetworkConsensusRules.md) document.
 
@@ -154,6 +150,7 @@ Store Documentation:
 
 Overlay Service documentation:
 
++ [Block Persister Service](docs/services/blockPersister.md)
 + [P2P Service](docs/services/p2p.md)
 + [P2P Bootstrap Service](docs/services/p2pBootstrap.md)
 + [Bootstrap (Deprecated)](docs/services/bootstrap.md)
@@ -308,21 +305,12 @@ The system uses a number of different store technologies to store data. Differen
   - File data on all objects within the /s3 subfolder are released from the filesystem every hour, within a 30 minute flexible time window. The filesystem metadata will still be available, but the actual file contents will be cleared.
   - Once data is archived off to S3, the best way to read it again is using S3 direct API calls
   - Linked S3 archive buckets:
-    - asia-ubsv-subtree-store
-    - asia-ubsv-txstore
+    - ap-ubsv-subtree-store
+    - ap-ubsv-txstore
     - eu-ubsv-subtree-store
     - eu-ubsv-txstore
     - us-ubsv-subtree-store
     - us-ubsv-txstore
-
-### 7.7. Docker
-
--- TODO
-
-
-### 7.8. Kubernetes
--- TODO
-  * [Kubernetes Resolver for gRPC](k8sresolver/README.md)
 
 
 ---
@@ -375,14 +363,11 @@ ubsv/
 │   ├── blockassembly/            # Block Assembly Service
 │   ├── blockchain/               # Blockchain Service
 │   ├── blockvalidation/          # Block Validation Service
-│   ├── bootstrap/                # Bootstrap Service
 │   ├── coinbase/                 # Coinbase Service
 │   ├── miner/                    # Miner Service
 │   ├── p2p/                      # P2P Service
 │   ├── propagation/              # Propagation Service
-│   ├── seeder/                   # Seeder Service
-│   ├── txmeta/                   # TXMeta Service
-│   ├── utxo/                     # UTXO Service
+│   ├── blockpersister/           # Block Persister Service
 │   └── validator/                # Validator Service
 │
 ├── stores/                       # This directory contains the different stores used by the node.
@@ -407,9 +392,7 @@ For naming conventions please check the [Naming Conventions](docs/guidelines/nam
 
 ### 8.3. Error Handling
 
-### 8.4. Logging
-
-### 8.5. Testing Conventions
+-- TODO
 
 
 ---

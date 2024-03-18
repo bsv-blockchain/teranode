@@ -4,19 +4,21 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
-	prometheusBlockValidationHealth                          prometheus.Counter
-	prometheusBlockValidationBlockFoundCh                    prometheus.Gauge
-	prometheusBlockValidationBlockFound                      prometheus.Counter
-	prometheusBlockValidationBlockFoundDuration              prometheus.Histogram
-	prometheusBlockValidationCatchupCh                       prometheus.Gauge
-	prometheusBlockValidationCatchup                         prometheus.Counter
-	prometheusBlockValidationCatchupDuration                 prometheus.Histogram
-	prometheusBlockValidationProcessBlockFoundDuration       prometheus.Histogram
-	prometheusBlockValidationSubtreeFound                    prometheus.Counter
-	prometheusBlockValidationSubtreeFoundDuration            prometheus.Histogram
+	prometheusBlockValidationHealth                    prometheus.Counter
+	prometheusBlockValidationBlockFoundCh              prometheus.Gauge
+	prometheusBlockValidationBlockFound                prometheus.Counter
+	prometheusBlockValidationBlockFoundDuration        prometheus.Histogram
+	prometheusBlockValidationCatchupCh                 prometheus.Gauge
+	prometheusBlockValidationCatchup                   prometheus.Counter
+	prometheusBlockValidationCatchupDuration           prometheus.Histogram
+	prometheusBlockValidationProcessBlockFoundDuration prometheus.Histogram
+	prometheusBlockValidationSetTxMetaQueueCh          prometheus.Gauge
+	//prometheusBlockValidationSetTxMetaQueueChWaitDuration    prometheus.Histogram
+	//prometheusBlockValidationSetTxMetaQueueDuration          prometheus.Histogram
 	prometheusBlockValidationValidateBlock                   prometheus.Counter
 	prometheusBlockValidationValidateBlockDuration           prometheus.Histogram
 	prometheusBlockValidationValidateSubtree                 prometheus.Counter
@@ -27,20 +29,27 @@ var (
 	// tx meta cache stats
 	prometheusBlockValidationSetTXMetaCache        prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheFrpc    prometheus.Counter
-	prometheusBlockValidationSetTXMetaCacheKafka   prometheus.Histogram
 	prometheusBlockValidationSetTXMetaCacheDel     prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheDelFrpc prometheus.Counter
+	prometheusBlockValidationSetMinedLocal         prometheus.Counter
 	prometheusBlockValidationSetMinedMulti         prometheus.Counter
 	prometheusBlockValidationSetMinedMultiFrpc     prometheus.Counter
+
+	// expiring cache metrics
+	prometheusBlockValidationLastValidatedBlocksCache prometheus.Gauge
+	prometheusBlockValidationBlockExistsCache         prometheus.Gauge
+	prometheusBlockValidationSubtreeExistsCache       prometheus.Gauge
 )
 
-var prometheusMetricsInitialised = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialised {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusBlockValidationHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "blockvalidation",
@@ -108,22 +117,31 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockValidationSubtreeFound = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockValidationSetTxMetaQueueCh = promauto.NewGauge(
+		prometheus.GaugeOpts{
 			Namespace: "blockvalidation",
-			Name:      "subtree_found",
-			Help:      "Number of subtrees found",
+			Name:      "set_tx_meta_queue_ch",
+			Help:      "Number of tx meta queue buffered in the set tx meta queue channel",
 		},
 	)
 
-	prometheusBlockValidationSubtreeFoundDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
-			Name:      "subtree_found_duration_millis",
-			Help:      "Duration of subtree found",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
+	//prometheusBlockValidationSetTxMetaQueueChWaitDuration = promauto.NewHistogram(
+	//	prometheus.HistogramOpts{
+	//		Namespace: "blockvalidation",
+	//		Name:      "set_tx_meta_queue_ch_wait_duration_millis",
+	//		Help:      "Duration of set tx meta queue channel wait",
+	//		Buckets:   util.MetricsBucketsMilliSeconds,
+	//	},
+	//)
+	//
+	//prometheusBlockValidationSetTxMetaQueueDuration = promauto.NewHistogram(
+	//	prometheus.HistogramOpts{
+	//		Namespace: "blockvalidation",
+	//		Name:      "set_tx_meta_queue_duration_millis",
+	//		Help:      "Duration of set tx meta from queue",
+	//		Buckets:   util.MetricsBucketsMilliSeconds,
+	//	},
+	//)
 
 	prometheusBlockValidationValidateBlock = promauto.NewCounter(
 		prometheus.CounterOpts{
@@ -192,15 +210,6 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockValidationSetTXMetaCacheKafka = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
-			Name:      "set_tx_meta_cache_kafka_micros",
-			Help:      "Duration of setting tx meta cache from kafka",
-			Buckets:   util.MetricsBucketsMicroSeconds,
-		},
-	)
-
 	prometheusBlockValidationSetTXMetaCacheDel = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "blockvalidation",
@@ -214,6 +223,14 @@ func initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "del_tx_meta_cache_frpc",
 			Help:      "Number of tx meta cache deletes with frpc",
+		},
+	)
+
+	prometheusBlockValidationSetMinedLocal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "blockvalidation",
+			Name:      "set_tx_mined_local",
+			Help:      "Number of tx mined local sets",
 		},
 	)
 
@@ -233,5 +250,27 @@ func initPrometheusMetrics() {
 		},
 	)
 
-	prometheusMetricsInitialised = true
+	prometheusBlockValidationLastValidatedBlocksCache = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "last_validated_blocks_cache",
+			Help:      "Number of blocks in the last validated blocks cache",
+		},
+	)
+
+	prometheusBlockValidationBlockExistsCache = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "block_exists_cache",
+			Help:      "Number of blocks in the block exists cache",
+		},
+	)
+
+	prometheusBlockValidationSubtreeExistsCache = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockvalidation",
+			Name:      "subtree_exists_cache",
+			Help:      "Number of subtrees in the subtree exists cache",
+		},
+	)
 }

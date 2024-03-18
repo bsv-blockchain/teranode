@@ -3,6 +3,7 @@ package blockchain
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -23,13 +24,15 @@ var (
 	prometheusBlockchainSendNotification       prometheus.Counter
 )
 
-var prometheusMetricsInitialized = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusBlockchainHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "blockchain",
@@ -147,6 +150,4 @@ func initPrometheusMetrics() {
 			Help:      "Number of SendNotification calls to the blockchain service",
 		},
 	)
-
-	prometheusMetricsInitialized = true
 }

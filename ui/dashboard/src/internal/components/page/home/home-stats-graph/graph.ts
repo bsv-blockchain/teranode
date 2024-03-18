@@ -1,4 +1,4 @@
-import { formatDate, addNumCommas } from '$lib/utils/format'
+import { formatDate, formatLargeNumberStr } from '$lib/utils/format'
 import { timeSeriesTooltipFormatter } from '$internal/utils/graph'
 
 // See:
@@ -53,7 +53,7 @@ echarts.use([
   CanvasRenderer,
 ])
 
-export const getGraphObj = (t, data, period, smooth = true) => {
+export const getGraphObj = (t, data, period, smooth = false) => {
   // graph data
   const graphData: any[] = []
   if (data) {
@@ -120,7 +120,7 @@ export const getGraphObj = (t, data, period, smooth = true) => {
   if (graphData?.length) {
     const seriesNames = [t('graph.series.tx_count')]
     graphOptions = {
-      grid: { top: 44, right: 30, bottom: 60, left: 80 },
+      grid: { top: 44, right: 25, bottom: 60, left: 62 },
       dataset: {
         source: graphData,
         dimensions: [t('graph.series.date')].concat(seriesNames),
@@ -146,7 +146,7 @@ export const getGraphObj = (t, data, period, smooth = true) => {
           min: 0,
           max: 'dataMax',
           axisLabel: {
-            formatter: (value) => addNumCommas(value),
+            formatter: (value) => formatLargeNumberStr(value, 2, false),
           },
           splitLine: {
             show: false,

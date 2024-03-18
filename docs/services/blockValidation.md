@@ -12,11 +12,16 @@
   - [2.3.2. Catching up after a parent block is not found](#232-catching-up-after-a-parent-block-is-not-found)
   - [2.3.3. Validating the Subtrees](#233-validating-the-subtrees)
   - [2.3.4. Block Data Validation](#234-block-data-validation)
-3. [Data Model](#3-data-model)
-4. [Technology](#4-technology)
-5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
-6. [How to run](#6-how-to-run)
-7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
+3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
+4. [Data Model](#4-data-model)
+- [4.1. Block Data Model](#41-block-data-model)
+  - [4.2. Subtree Data Model](#42-subtree-data-model)
+- [4.3. Transaction Data Model](#43-transaction-data-model)
+- [4.4. Transaction Metadata Model](#44-transaction-metadata-model)
+5. [Technology](#5-technology)
+6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
+7. [How to run](#7-how-to-run)
+8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
 
 
 ## 1. Description
@@ -60,6 +65,12 @@ To improve performance, the Block Validation Service uses a caching mechanism fo
 	}
 ```
 
+
+Finally, note that the Block Validation service benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
+Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
+Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
+
+![lustre_fs.svg](..%2Flustre_fs.svg)
 
 
 ## 2. Functionality
@@ -107,6 +118,17 @@ Let's go through the different steps:
   * For each Tx for each Subtree, we set the Tx as mined in the Tx Meta Store. This allows the Tx Meta Store to know which blocks the Tx is in.
   * Should an error occur during the validation process, the block will be invalidated and removed from the blockchain.
 
+Note - there is a `optimisticMining` setting that allows to reverse the block validation and block addition to the blockchain steps.
+* In the regular mode, the block is validated first, and, if valid, added to the block.
+* If `optimisticMining` is on, the block is optimistically added to the blockchain right away, and then validated in the background next. If it was to be found invalid after validation, it would be removed from the blockchain. This mode is not recommended for production use, as it can lead to a temporary fork in the blockchain. It however can be useful for performance testing purposes.
+
+Also note - Teranode has a `blockvalidation_localSetMined` setting. This setting signals whether the Block Validation service exclusively validates and processes other node's mined blocks (`blockvalidation_localSetMined=false`, default behaviour), or both locally and remotely mined blocks.
+  * The default `localSetMined = false` mode exhibits the behaviour described in the above sequence diagram, specifically within the `finalizeBlockValidation` method. In this mode, the service solely processes blocks mined by other nodes.
+  * In the alternative `localSetMined = true` mode, the service logic under `finalizeBlockValidation` is not executed, and, instead, a new blockchain listener is created to process both locally and remotely mined blocks. Independently of the source of the block, an in-memory cache will track which txs are mined.
+    * The purpose of this mode is to allow for lighter and faster throughput at Block Assembly level.
+    * This mode will not be detailed further in this document.
+
+
 
 #### 2.3.2. Catching up after a parent block is not found
 
@@ -133,10 +155,15 @@ As part of the overall block validation, the service will validate the block dat
 
 
 
+## 3. gRPC Protobuf Definitions
 
-## 3. Data Model
+The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/blockValidationProto.md).
 
-### 3.1. Block Data Model
+
+
+## 4. Data Model
+
+### 4.1. Block Data Model
 
 Each block is an abstraction which is a container of a group of subtrees. A block contains a variable number of subtrees, a coinbase transaction, and a header, called a block header, which includes the block ID of the previous block, effectively creating a chain.
 
@@ -151,7 +178,7 @@ This table provides an overview of each field in the `Block` struct, including t
 More information on the block structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
 
 
-#### 3.2. Subtree Data Model
+#### 4.2. Subtree Data Model
 
 A subtree acts as an intermediate data structure to hold batches of transaction IDs (including metadata) and their corresponding Merkle root. Blocks are then built from a collection of subtrees.
 
@@ -170,7 +197,7 @@ Here's a table documenting the structure of the `Subtree` type:
 
 Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
 
-### 3.3. Transaction Data Model
+### 4.3. Transaction Data Model
 
 This refers to the extended transaction format, as seen below:
 
@@ -187,7 +214,7 @@ This refers to the extended transaction format, as seen below:
 More information on the extended tx structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
 
 
-### 3.4. Transaction Metadata Model
+### 4.4. Transaction Metadata Model
 
 The TX Meta data model is defined in `stores/txmeta/data.go`:
 
@@ -210,7 +237,7 @@ Note:
   - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the tx meta store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
 
 
-## 4. Technology
+## 5. Technology
 
 
 1. **Go Programming Language (Golang)**.
@@ -237,7 +264,7 @@ Note:
   - Utilizes Go's `sync` package for synchronization primitives like mutexes, aiding in managing concurrent access to shared resources.
 
 
-## 5. Directory Structure and Main Files
+## 6. Directory Structure and Main Files
 
 ```
 ./services/blockvalidation
@@ -260,7 +287,7 @@ Note:
 └── txmetacache_test.go            - Unit tests for the `txmetacache.go` functionalities.
 ```
 
-## 6. How to run
+## 7. How to run
 
 To run the Block Validation Service locally, you can execute the following command:
 
@@ -270,18 +297,31 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -BlockValidation=1
 
 Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Block Validation Service locally.
 
-## 7. Configuration options (settings flags)
+## 8. Configuration options (settings flags)
 
 In the `blockvalidation` service, the `gocore.Config().Get()` function is used to retrieve various configuration settings.  The specific configuration settings used in the service are as follows:
 
-1. **`blockvalidation_grpcListenAddress`**:
-  - Used in the `Enabled()` function to determine if a specific gRPC listen address is configured for the block validation service.
+### General Settings
+- `blockvalidation_grpcListenAddress`: Specifies the GRPC server listen address for the block validation service.
+- `blockvalidation_subtreeGroupConcurrency`: Determines the concurrency level for subtree group processing. Default is set to 1, limiting simultaneous subtree processing to prevent race conditions or resource contention.
+- `blockvalidation_txMetaCacheEnabled`: A boolean flag indicating whether the transaction metadata cache is enabled. Default is `true`, allowing the use of a cached version of the transaction metadata store to improve performance.
+- `blockvalidation_subtreeFoundChConcurrency`: Configures the concurrency for processing found subtrees, with a default value intended to manage the load efficiently.
+- `blockvalidation_kafkaBrokers`: URL for the Kafka brokers used in the block validation process.
+- `blockvalidation_frpcListenAddress`: Address for the fRPC server used by the block validation service.
+- `blockvalidation_httpListenAddress`: HTTP server listen address for additional HTTP-based interfaces.
+- `blockvalidation_quick_validation`: Enables a quick validation mode, which may skip certain intensive checks for faster processing. Useful in scenarios where performance is prioritized, and certain risk factors are managed externally.
+- `blockvalidation_validation_max_retries`: Specifies the maximum number of retries for validation attempts. This setting is part of a mechanism to retry validation in case of transient failures or conditions that might change upon subsequent attempts.
+- `blockvalidation_validation_retry_sleep`: Configures the sleep duration between validation retries, allowing the system to pause and potentially recover or await changes before retrying validation.
+- `blockvalidation_subtreeValidationTimeout`: Sets a timeout for subtree validation processes, ensuring that validation attempts do not hang indefinitely and system resources are managed efficiently.
 
-2. **`blockvalidation_frpcListenAddress`**:
-  - Used in the `Start()` function to get the listen address for the fRPC server.
+### Kafka and Concurrency Related
+- `blockvalidation_kafkaWorkers`: Determines the number of workers for Kafka-related tasks within the block validation process, allowing for parallel processing of messages or tasks.
+- `blockvalidation_subtreeTTL`: Configures the time-to-live (TTL) for subtrees, determining how long subtree data should be retained before expiration.
+- `blockvalidation_catchupConcurrency`: Controls the concurrency level for the catch-up process, optimizing the handling of block data during synchronization or catch-up phases.
+- `blockvalidation_frpcConcurrency`: Sets the concurrency level for fRPC server operations, managing how many simultaneous fRPC calls can be handled.
 
-3. **`blockvalidation_txMetaCacheEnabled`**:
-  - Used in the `New()` function to check if the transaction metadata cache is enabled.
-
-4. **`blockvalidation_frpcConcurrency`**:
-  - Used in the `frpcServer()` function to set the concurrency level for the fRPC server.
+### Performance and Optimization
+- `blockvalidation_validateBlockSubtreesConcurrency`: Adjusts the concurrency for validating block subtrees, a crucial factor in optimizing the validation performance for blocks containing a large number of subtrees.
+- `blockvalidation_validateSubtreeInternal`: Configures the internal concurrency for subtree validation tasks, affecting how subtree validation operations are parallelized.
+- `blockvalidation_quick_validation_threshold`: Determines a threshold for the quick validation process, impacting decision-making in validation strategies.
+- `blockvalidation_validateSubtreeBatchSize`: Sets the batch size for subtree validation, optimizing network calls and processing efficiency when validating subtrees.

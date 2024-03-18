@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
+	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/aerospike/aerospike-client-go/v6/types"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -124,6 +125,11 @@ func init() {
 			"error",    // error returned
 		},
 	)
+
+	if gocore.Config().GetBool("aerospike_debug", true) {
+		asl.Logger.SetLevel(asl.DEBUG)
+	}
+
 }
 
 type storeUtxo struct {
@@ -149,8 +155,6 @@ type Store struct {
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
-	//asl.Logger.SetLevel(asl.DEBUG)
-
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger = logger.New("aero", ulogger.WithLevel(logLevelStr))
 
@@ -418,7 +422,7 @@ func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.H
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Warnf("[BATCH_ERR][%s] Failed to batch store %d aerospike utxos, adding to retry queue: %v\n", txID.String(), batchId, err)
+		s.logger.Warnf("[BATCH_ERR][%s] Failed to batch store %d aerospike utxos in batchId %d, adding to retry queue: %v\n", txID.String(), len(utxoHashes), batchId, err)
 		// don't return, check each record in the batch for errors and process accordingly
 	}
 
@@ -493,6 +497,8 @@ func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash chainhash.Hash, id
 		}
 		return fmt.Errorf("[storeUtxo][%s:%d] error in aerospike store PutBins (time taken: %s) : %w", hash.String(), idx, time.Since(start).String(), err)
 	}
+
+	prometheusUtxoStore.Add(1)
 
 	return nil
 }
@@ -622,12 +628,12 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 
 			// we've determined that this utxo was not filtered out due to being spent, so it must be due to locktime
 			s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight.Load(), err.Error())
-			lockTime, ok := value.Bins["locktime"].(uint32)
+			lockTime, ok := value.Bins["locktime"].(int)
 			if !ok {
 				lockTime = 0
 			}
 
-			return utxostore.NewErrLockTime(lockTime, s.blockHeight.Load())
+			return utxostore.NewErrLockTime(uint32(lockTime), s.blockHeight.Load())
 		}
 
 		return fmt.Errorf("error in aerospike spend PutBins (time taken: %s): %w", time.Since(start).String(), err)

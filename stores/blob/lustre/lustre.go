@@ -20,8 +20,8 @@ import (
 )
 
 type s3Store interface {
-	Get(ctx context.Context, key []byte) ([]byte, error)
-	GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error)
+	Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error)
+	GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error)
 }
 
 type Lustre struct {
@@ -69,13 +69,13 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 	s.logger.Debugf("[File] SetFromReader: %s", utils.ReverseAndHexEncodeSlice(key))
 	defer reader.Close()
 
-	fileName, err := s.getFileNameForSet(key, opts)
+	fileName, err := s.getFileNameForSet(key, opts...)
 	if err != nil {
 		return fmt.Errorf("[%s] failed to get file name: %w", utils.ReverseAndHexEncodeSlice(key), err)
 	}
 
 	// write the bytes from the reader to a file with the filename
-	file, err := os.Create(fileName)
+	file, err := os.Create(fileName + ".tmp")
 	if err != nil {
 		return fmt.Errorf("[%s] failed to create file: %w", fileName, err)
 	}
@@ -85,28 +85,42 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 		return fmt.Errorf("[%s] failed to write data to file: %w", fileName, err)
 	}
 
+	// rename the file to the final name
+	if err = os.Rename(fileName+".tmp", fileName); err != nil {
+		return fmt.Errorf("[%s] failed to rename file from tmp: %w", fileName, err)
+	}
+
 	return nil
 }
 
 func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
 
-	fileName, err := s.getFileNameForSet(hash, opts)
+	fileName, err := s.getFileNameForSet(hash, opts...)
 	if err != nil {
 		return fmt.Errorf("[%s] failed to get file name: %w", utils.ReverseAndHexEncodeSlice(hash), err)
 	}
 
 	// write bytes to file
-	if err = os.WriteFile(fileName, value, 0644); err != nil {
+	if err = os.WriteFile(fileName+".tmp", value, 0644); err != nil {
 		return fmt.Errorf("[%s] failed to write data to file: %w", fileName, err)
+	}
+
+	// rename the file to the final name
+	if err = os.Rename(fileName+".tmp", fileName); err != nil {
+		return fmt.Errorf("[%s] failed to rename file from tmp: %w", fileName, err)
 	}
 
 	return nil
 }
 
-func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error {
-	filename := s.filename(hash)
-	persistedFilename := s.getFileNameForPersist(filename)
+func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.Options) error {
+	fileName, err := s.getFileNameForGet(hash, opts...)
+	if err != nil {
+		return err
+	}
+
+	persistedFilename := s.getFileNameForPersist(fileName)
 	if ttl <= 0 {
 		// check whether the persisted file exists
 		_, err := os.Stat(persistedFilename)
@@ -115,23 +129,26 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration) error
 		}
 
 		// the file should be persisted
-		return os.Rename(filename, persistedFilename)
+		return os.Rename(fileName, persistedFilename)
 	}
 
 	// the filename should be moved from the persist sub dir to the main dir
-	return os.Rename(persistedFilename, filename)
+	return os.Rename(persistedFilename, fileName)
 }
 
-func (s *Lustre) GetIoReader(ctx context.Context, hash []byte) (io.ReadCloser, error) {
-	fileName := s.filename(hash)
+func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.Options) (io.ReadCloser, error) {
+	fileName, err := s.getFileNameForGet(hash, opts...)
+	if err != nil {
+		return nil, err
+	}
 
 	file, err := os.Open(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
 			// check the persist sub dir
 			file, err = os.Open(s.getFileNameForPersist(fileName))
 			if err != nil {
+				s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
 				if errors.Is(err, os.ErrNotExist) {
 					// check s3
 					fileReader, err := s.s3Client.GetIoReader(ctx, hash)
@@ -153,17 +170,20 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte) (io.ReadCloser, e
 	return file, nil
 }
 
-func (s *Lustre) Get(ctx context.Context, hash []byte) ([]byte, error) {
+func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName := s.filename(hash)
+	fileName, err := s.getFileNameForGet(hash, opts...)
+	if err != nil {
+		return nil, err
+	}
 
 	bytes, err := os.ReadFile(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
 			// check the persist sub dir
 			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
 			if err != nil {
+				s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
 				if errors.Is(err, os.ErrNotExist) {
 					// check s3
 					bytes, err = s.s3Client.Get(ctx, hash)
@@ -185,17 +205,20 @@ func (s *Lustre) Get(ctx context.Context, hash []byte) ([]byte, error) {
 	return bytes, err
 }
 
-func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byte, error) {
+func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName := s.filename(hash)
+	fileName, err := s.getFileNameForGet(hash, opts...)
+	if err != nil {
+		return nil, err
+	}
 
 	bytes, err := os.ReadFile(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
 			// check the persist sub dir
 			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
 			if err != nil {
+				s.logger.Warnf("[%s] file not found in subtree temp dir: %v", fileName, err)
 				if errors.Is(err, os.ErrNotExist) {
 					// check s3
 					bytes, err = s.s3Client.Get(ctx, hash)
@@ -217,11 +240,15 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int) ([]byt
 	return bytes, err
 }
 
-func (s *Lustre) Exists(_ context.Context, hash []byte) (bool, error) {
-	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName := s.filename(hash)
+func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
+	fileName, err := s.getFileNameForGet(hash, opts...)
+	if err != nil {
+		return false, err
+	}
 
-	_, err := os.Stat(fileName)
+	s.logger.Infof("[Lustre] Exists: %s", fileName)
+
+	_, err = os.Stat(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// check the persist sub dir
@@ -240,13 +267,16 @@ func (s *Lustre) Exists(_ context.Context, hash []byte) (bool, error) {
 	return true, nil
 }
 
-func (s *Lustre) Del(_ context.Context, hash []byte) error {
+func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.Options) error {
 	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName := s.filename(hash)
+	fileName, err := s.getFileNameForGet(hash, opts...)
+	if err != nil {
+		return err
+	}
 
 	// remove ttl file, if exists
 	errPersist := os.Remove(s.getFileNameForPersist(fileName))
-	err := os.Remove(fileName)
+	err = os.Remove(fileName)
 
 	if err != nil && errPersist != nil {
 		return err
@@ -271,18 +301,28 @@ func (s *Lustre) getFileNameForPersist(filename string) string {
 	return filepath.Clean("/" + filepath.Join(fileParts...))
 }
 
-func (s *Lustre) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
+func (s *Lustre) getFileNameForGet(hash []byte, opts ...options.Options) (string, error) {
 	fileName := s.filename(hash)
+
+	fileOptions := options.NewSetOptions(opts...)
+
+	if fileOptions.Extension != "" {
+		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
+	}
+
+	return fileName, nil
+}
+func (s *Lustre) getFileNameForSet(hash []byte, opts ...options.Options) (string, error) {
+	fileName, err := s.getFileNameForGet(hash, opts...)
+	if err != nil {
+		return "", err
+	}
 
 	fileOptions := options.NewSetOptions(opts...)
 
 	if fileOptions.TTL <= 0 {
 		// the file should be persisted
 		fileName = s.getFileNameForPersist(fileName)
-	}
-
-	if fileOptions.Extension != "" {
-		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
 	}
 
 	return fileName, nil

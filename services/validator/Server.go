@@ -7,15 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/Shopify/sarama"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -91,79 +87,6 @@ func (v *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (v *Server) Start(ctx context.Context) error {
-
-	kafkaBrokers, ok := gocore.Config().Get("validator_kafkaBrokers")
-	if ok {
-		v.logger.Infof("[Validator] Starting Kafka validator on address: %s", kafkaBrokers)
-		kafkaURL, err := url.Parse(kafkaBrokers)
-		if err != nil {
-			v.logger.Errorf("[Validator] Kafka validator failed to start: %s", err)
-		} else {
-			workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
-			v.logger.Infof("[Validator] Kafka consumer started with %d workers", workers)
-
-			var clusterAdmin sarama.ClusterAdmin
-
-			n := atomic.Uint64{}
-			workerCh := make(chan util.KafkaMessage)
-			for i := 0; i < workers; i++ {
-				go func() {
-					var response *validator_api.ValidateTransactionResponse
-					for msg := range workerCh {
-						response, err = v.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
-							TransactionData: msg.Message.Value,
-						})
-						if err != nil {
-							v.logger.Errorf("[Validator] Error validating transaction: %s", err)
-
-						}
-						if !response.Valid {
-							tx, err := bt.NewTxFromBytes(msg.Message.Value)
-							if err == nil {
-								v.sendInvalidTxNotification(tx.TxID(), response.Reason)
-							}
-
-							v.logger.Errorf("[Validator] Invalid transaction: %s", response.Reason)
-						}
-						processedN := n.Add(1)
-						if processedN%1000 == 0 {
-							v.logger.Debugf("[Validator] Processed %d transactions", processedN)
-						}
-					}
-				}()
-			}
-
-			go func() {
-				clusterAdmin, _, err = util.ConnectToKafka(kafkaURL)
-				if err != nil {
-					log.Fatal("[Validator] unable to connect to kafka: ", err)
-				}
-				defer func() { _ = clusterAdmin.Close() }()
-
-				topic := kafkaURL.Path[1:]
-
-				var partitions int
-				if partitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions")); err != nil {
-					log.Fatal("[Validator] unable to parse Kafka partitions: ", err)
-				}
-
-				var replicationFactor int
-				if replicationFactor, err = strconv.Atoi(kafkaURL.Query().Get("replication")); err != nil {
-					log.Fatal("[Validator] unable to parse Kafka replication factor: ", err)
-				}
-
-				_ = clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
-					NumPartitions:     int32(partitions),
-					ReplicationFactor: int16(replicationFactor),
-				}, false)
-
-				err = util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "validators", workerCh)
-				if err != nil {
-					v.logger.Errorf("[Validator] Kafka listener failed to start: %s", err)
-				}
-			}()
-		}
-	}
 
 	go func() {
 		for {

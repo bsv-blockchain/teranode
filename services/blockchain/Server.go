@@ -100,10 +100,10 @@ func (b *Blockchain) Init(ctx context.Context) error {
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
 
-	blockKafkaBrokersURL, err, ok := gocore.Config().GetURL("block_kafkaBrokers")
+	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
 	if err == nil && ok {
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
-		if _, b.blockKafkaProducer, err = util.ConnectToKafka(blockKafkaBrokersURL); err != nil {
+		if _, b.blockKafkaProducer, err = util.ConnectToKafka(blocksKafkaURL); err != nil {
 			return fmt.Errorf("[Blockchain] error connecting to kafka: %s", err)
 		}
 	}
@@ -213,7 +213,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		return nil, err
 	}
 
-	b.logger.Warnf("[SubtreeAssembly] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
+	b.logger.Warnf("[BlockPersister] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
 	if b.blockKafkaProducer != nil {
 		// TODO add a retry mechanism
 		go func(block *model.Block) {
@@ -221,20 +221,13 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 			if err != nil {
 				b.logger.Errorf("[Blockchain] Error serializing block: %v", err)
 			} else {
-				b.logger.Warnf("[SubtreeAssembly] sending block to kafka: %s", block.String())
+				b.logger.Warnf("[BlockPersister] sending block to kafka: %s", block.String())
 				if err = b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
 					b.logger.Errorf("[Blockchain] Error sending block to kafka: %v", err)
 				}
 			}
 		}(block)
 	}
-
-	// if !request.External {
-	_, _ = b.SendNotification(ctx1, &blockchain_api.Notification{
-		Type: model.NotificationType_MiningOn,
-		Hash: block.Hash().CloneBytes(),
-	})
-	// }
 
 	_, _ = b.SendNotification(ctx1, &blockchain_api.Notification{
 		Type: model.NotificationType_Block,
@@ -489,6 +482,8 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 		TxCount:     meta.TxCount,
 		SizeInBytes: meta.SizeInBytes,
 		Miner:       meta.Miner,
+		BlockTime:   meta.BlockTime,
+		Timestamp:   meta.Timestamp,
 	}, nil
 }
 
@@ -518,6 +513,33 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 	return &blockchain_api.GetBlockHeadersResponse{
 		BlockHeaders: blockHeaderBytes,
 		Heights:      heights,
+	}, nil
+}
+
+func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersFromHeightRequest) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockHeadersFromHeight", stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	blockHeaders, metas, err := b.store.GetBlockHeadersFromHeight(ctx1, req.StartHeight, req.Limit)
+	if err != nil {
+		return nil, ubsverrors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	metasBytes := make([][]byte, len(metas))
+	for i, meta := range metas {
+		metasBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersFromHeightResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        metasBytes,
 	}, nil
 }
 

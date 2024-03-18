@@ -37,7 +37,7 @@ func (as *AuxiliaryStore) Health(ctx context.Context) (int, string, error) {
 	return as.store.Health(ctx)
 }
 
-func (as *AuxiliaryStore) Exists(ctx context.Context, key []byte) (bool, error) {
+func (as *AuxiliaryStore) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
 	if ok, err := as.auxiliaryStore.Exists(ctx, key); ok && err == nil {
 		return true, nil
 	}
@@ -45,7 +45,7 @@ func (as *AuxiliaryStore) Exists(ctx context.Context, key []byte) (bool, error) 
 	return as.store.Exists(ctx, key)
 }
 
-func (as *AuxiliaryStore) GetIoReader(ctx context.Context, key []byte) (io.ReadCloser, error) {
+func (as *AuxiliaryStore) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
 	reader, err := as.auxiliaryStore.GetIoReader(ctx, key)
 	if err == nil && reader != nil {
 		return reader, nil
@@ -57,7 +57,7 @@ func (as *AuxiliaryStore) GetIoReader(ctx context.Context, key []byte) (io.ReadC
 	return as.store.GetIoReader(ctx, key)
 }
 
-func (as *AuxiliaryStore) Get(ctx context.Context, key []byte) ([]byte, error) {
+func (as *AuxiliaryStore) Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error) {
 	data, err := as.auxiliaryStore.Get(ctx, key)
 	if err == nil && data != nil {
 		return data, nil
@@ -69,7 +69,7 @@ func (as *AuxiliaryStore) Get(ctx context.Context, key []byte) ([]byte, error) {
 	return as.store.Get(ctx, key)
 }
 
-func (as *AuxiliaryStore) GetHead(ctx context.Context, key []byte, nrOfBytes int) ([]byte, error) {
+func (as *AuxiliaryStore) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
 	data, err := as.auxiliaryStore.GetHead(ctx, key, nrOfBytes)
 	if err == nil && data != nil {
 		return data, nil
@@ -91,12 +91,12 @@ func (as *AuxiliaryStore) Set(ctx context.Context, key []byte, value []byte, opt
 	return as.store.Set(ctx, key, value, opts...)
 }
 
-func (as *AuxiliaryStore) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
+func (as *AuxiliaryStore) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.Options) error {
 	// we only write to our main store, never to our auxiliary store
 	return as.store.SetTTL(ctx, key, ttl)
 }
 
-func (as *AuxiliaryStore) Del(_ context.Context, key []byte) error {
+func (as *AuxiliaryStore) Del(_ context.Context, key []byte, opts ...options.Options) error {
 	// we only write to our main store, never to our auxiliary store
 	return as.store.Del(context.Background(), key)
 }

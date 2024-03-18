@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
-	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -52,7 +51,8 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 
 	prometheusBlockValidationSetTXMetaCacheFrpc.Inc()
 	go func(data [][]byte) {
-		hashes := make(map[chainhash.Hash]*txmeta_store.Data)
+		keys := make([][]byte, 0)
+		values := make([][]byte, 0)
 		for _, meta := range data {
 			if len(meta) < 32 {
 				f.logger.Errorf("meta data is too short: %v", meta)
@@ -61,16 +61,11 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 
 			// first 32 bytes is hash
 			hash := chainhash.Hash(meta[:32])
-
-			dataBytes := meta[32:]
-			txMetaData := &txmeta_store.Data{}
-			txmeta_store.NewMetaDataFromBytes(&dataBytes, txMetaData)
-
-			txMetaData.Tx = nil
-			hashes[hash] = txMetaData
+			keys = append(keys, hash[:])
+			values = append(values, meta[32:])
 		}
 
-		if err := f.blockValidation.SetTxMetaCacheMulti(ctx, hashes); err != nil {
+		if err := f.blockValidation.SetTxMetaCacheMulti(ctx, keys, values); err != nil {
 			f.logger.Errorf("failed to set tx meta data: %v", err)
 		}
 	}(request.Data)

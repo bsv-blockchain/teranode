@@ -15,10 +15,11 @@ type Error struct {
 }
 
 var (
-	ErrUnknown         = New(ErrorConstants_UNKNOWN, "unknown error")
-	ErrInvalidArgument = New(ErrorConstants_INVALID_ARGUMENT, "invalid argument")
-	ErrNotFound        = New(ErrorConstants_NOT_FOUND, "not found")
-	ErrBlockNotFound   = New(ErrorConstants_BLOCK_NOT_FOUND, "block not found")
+	ErrUnknown           = New(ErrorConstants_UNKNOWN, "unknown error")
+	ErrInvalidArgument   = New(ErrorConstants_INVALID_ARGUMENT, "invalid argument")
+	ErrNotFound          = New(ErrorConstants_NOT_FOUND, "not found")
+	ErrBlockNotFound     = New(ErrorConstants_BLOCK_NOT_FOUND, "block not found")
+	ErrThresholdExceeded = New(ErrorConstants_THRESHOLD_EXCEEDED, "threshold exceeded")
 )
 
 func (e *Error) Error() string {

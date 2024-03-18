@@ -33,9 +33,16 @@ coverage.out
 *.prof
 /model/test-generated_test_data/
 /model/big-test-generated_test_data/
+/services/validator/test-generated_test_data/
+/util/test/test-generated_test_data
 bins/
 
 .sentryclirc
 
 kustomization.yaml.bak
 
+*.dump
+
+cmd/testUtil/compose/docker-compose.yml
+cmd/testUtil/compose/generator/scripts/postgres/init.sql
+docker-compose-generated.yml

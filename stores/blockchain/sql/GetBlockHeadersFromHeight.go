@@ -1,0 +1,117 @@
+package sql
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2/chainhash"
+)
+
+type getBlockHeadersFromHeightCache struct {
+	blockHeaders []*model.BlockHeader
+	metas        []*model.BlockHeaderMeta
+}
+
+func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockHeaders")
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
+	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaders-%d-%d", height, limit)))
+	cached := cache.Get(cacheId)
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().(*getBlockHeadersFromHeightCache); ok && cacheData != nil {
+			s.logger.Debugf("GetBlockHeadersFromHeight cache hit")
+			return cacheData.blockHeaders, cacheData.metas, nil
+		}
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// we are getting all forks, so we need a bit more than the limit
+	blockHeaders := make([]*model.BlockHeader, 0, 2*limit)
+	metas := make([]*model.BlockHeaderMeta, 0, 2*limit)
+
+	q := `
+		SELECT
+			 b.version
+			,b.block_time
+			,b.nonce
+			,b.previous_hash
+			,b.merkle_root
+			,b.n_bits
+		    ,b.id
+			,b.height
+			,b.tx_count
+			,b.size_in_bytes
+			,b.peer_id
+		    ,b.block_time
+		    ,b.inserted_at
+		FROM blocks b
+		WHERE height >= $1 AND height < $2
+		ORDER BY height DESC
+	`
+	rows, err := s.db.QueryContext(ctx, q, height, height+limit)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return blockHeaders, metas, nil
+		}
+		return nil, nil, fmt.Errorf("failed to get headers: %w", err)
+	}
+	defer rows.Close()
+
+	var hashPrevBlock []byte
+	var hashMerkleRoot []byte
+	var nBits []byte
+	var insertedAt CustomTime
+	for rows.Next() {
+		blockHeader := &model.BlockHeader{}
+		blockHeaderMeta := &model.BlockHeaderMeta{}
+
+		if err = rows.Scan(
+			&blockHeader.Version,
+			&blockHeader.Timestamp,
+			&blockHeader.Nonce,
+			&hashPrevBlock,
+			&hashMerkleRoot,
+			&nBits,
+			&blockHeaderMeta.ID,
+			&blockHeaderMeta.Height,
+			&blockHeaderMeta.TxCount,
+			&blockHeaderMeta.SizeInBytes,
+			&blockHeaderMeta.Miner,
+			&blockHeaderMeta.BlockTime,
+			&insertedAt,
+		); err != nil {
+			return nil, nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		blockHeaderMeta.Timestamp = uint32(insertedAt.Unix())
+		blockHeader.Bits = model.NewNBitFromSlice(nBits)
+
+		blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+		}
+		blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+		}
+
+		blockHeaders = append(blockHeaders, blockHeader)
+		metas = append(metas, blockHeaderMeta)
+	}
+
+	cache.Set(cacheId, &getBlockHeadersFromHeightCache{
+		blockHeaders: blockHeaders,
+		metas:        metas,
+	}, cacheTTL)
+
+	return blockHeaders, metas, nil
+}

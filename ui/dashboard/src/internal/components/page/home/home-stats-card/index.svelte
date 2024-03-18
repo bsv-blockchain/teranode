@@ -7,7 +7,8 @@
   import { sock as p2pSock } from '$internal/stores/p2pStore'
 
   export let loading = true
-  export let data = {}
+  export let data: any = {}
+  export let fullStats = false
   export let onRefresh = () => {}
 
   const baseKey = 'page.home.stats'
@@ -17,19 +18,33 @@
 
   $: connected = $p2pSock !== null
 
-  const cols = [
+  const colsLg = [
+    'txns_per_second',
     'block_count',
+    'avg_block_size',
     'tx_count',
+    'max_height',
+    'avg_tx_count_per_block',
+  ]
+
+  const colsMd = [
+    'txns_per_second',
+    'tx_count',
+    'block_count',
     'max_height',
     'avg_block_size',
     'avg_tx_count_per_block',
-    'txns_per_second',
   ]
 
+  $: cols = $mediaSize <= MediaSize.md ? colsMd : colsLg
   $: colCount = $mediaSize <= MediaSize.md ? ($mediaSize <= MediaSize.xs ? 1 : 2) : 3
 </script>
 
-<Card title={t(`${baseKey}.title`)} showFooter={false} headerPadding="20px 24px 10px 24px">
+<Card
+  title={t(`${baseKey}.${fullStats ? 'title' : 'alternateTitle'}`)}
+  showFooter={false}
+  headerPadding="20px 24px 10px 24px"
+>
   <svelte:fragment slot="header-tools">
     <div class="live">
       <div class="live-icon" class:connected>

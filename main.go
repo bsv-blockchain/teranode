@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/subtreeassembly"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -12,6 +11,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockpersister"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
+	"golang.org/x/term"
 
 	zlogsentry "github.com/archdx/zerolog-sentry"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/aerospiketest"
@@ -23,6 +26,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	"github.com/bitcoin-sv/ubsv/cmd/utxostore_blaster/utxostore_blaster"
+	"github.com/bitcoin-sv/ubsv/cmd/validate_block/validateblock"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -92,6 +96,9 @@ func main() {
 		blockchainstatus.Init()
 		blockchainstatus.Start()
 		return
+	case "validateblock.run":
+		// validateblock.Init()
+		validateblock.Start()
 	case "blaster.run":
 		// txblaster.Init()
 		txblaster.Start()
@@ -117,16 +124,17 @@ func main() {
 
 	startBlockchain := shouldStart("Blockchain")
 	startBlockAssembly := shouldStart("BlockAssembly")
+	startSubtreeValidation := shouldStart("SubtreeValidation")
 	startBlockValidation := shouldStart("BlockValidation")
 	startValidator := shouldStart("Validator")
 	startPropagation := shouldStart("Propagation")
 	startMiner := shouldStart("Miner")
+	startP2P := shouldStart("P2P")
 	startAsset := shouldStart("Asset")
 	startCoinbase := shouldStart("Coinbase")
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
-	startP2P := shouldStart("P2P")
-	startSubtreeAssembly := shouldStart("SubtreeAssembly")
+	startBlockPersister := shouldStart("BlockPersister")
 	help := shouldStart("help")
 
 	if help || appCount == 0 {
@@ -204,6 +212,15 @@ func main() {
 
 	var err error
 
+	// p2p server
+	if startP2P {
+		if err = sm.AddService("P2P", p2p.NewServer(
+			logger.New("P2P"),
+		)); err != nil {
+			panic(err)
+		}
+	}
+
 	// asset service
 	if startAsset {
 		if err := sm.AddService("Asset", asset.NewServer(
@@ -222,8 +239,8 @@ func main() {
 		blockValidationClient = blockvalidation.NewClient(ctx, logger)
 	}
 
-	if startSubtreeAssembly {
-		if err = sm.AddService("SubtreeAssembly", subtreeassembly.New(
+	if startBlockPersister {
+		if err = sm.AddService("BlockPersister", blockpersister.New(
 			logger,
 			getSubtreeStore(logger),
 			getTxMetaStore(logger),
@@ -245,7 +262,7 @@ func main() {
 			if !ok {
 				assetAddr, ok = gocore.Config().Get("asset_grpcAddress")
 				if !ok {
-					panic(err)
+					panic("asset_grpcAddress not found in config file")
 				}
 			}
 
@@ -266,6 +283,29 @@ func main() {
 			)); err != nil {
 				panic(err)
 			}
+		}
+	}
+
+	// subtreeValidation
+	if startSubtreeValidation {
+		validatorClient, err := validator.New(ctx,
+			logger,
+			getUtxoStore(ctx, logger),
+			getTxMetaStore(logger),
+			nil,
+		)
+		if err != nil {
+			logger.Fatalf("could not create validator [%v]", err)
+		}
+
+		if err := sm.AddService("Subtree Validation", subtreevalidation.New(
+			logger.New("stval"),
+			getSubtreeStore(logger),
+			getTxStore(logger),
+			getTxMetaStore(logger),
+			validatorClient,
+		)); err != nil {
+			panic(err)
 		}
 	}
 
@@ -307,15 +347,6 @@ func main() {
 			)); err != nil {
 				panic(err)
 			}
-		}
-	}
-
-	// p2p server
-	if startP2P {
-		if err = sm.AddService("P2P", p2p.NewServer(
-			logger.New("P2P"),
-		)); err != nil {
-			panic(err)
 		}
 	}
 
@@ -421,6 +452,13 @@ func initLogger(serviceName string) ulogger.Logger {
 		ulogger.WithLevel(logLevel),
 	}
 
+	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+
+	output := zerolog.ConsoleWriter{
+		Out:     os.Stdout,
+		NoColor: !isTerminal, // Disable color if output is not a terminal
+	}
+
 	// sentry
 	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok && sentryDns != "" {
 		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
@@ -439,8 +477,10 @@ func initLogger(serviceName string) ulogger.Logger {
 			panic("sentry.Init: " + err.Error())
 		}
 
-		multi := zerolog.MultiLevelWriter(os.Stdout, w)
+		multi := zerolog.MultiLevelWriter(output, w)
 		logOptions = append(logOptions, ulogger.WithWriter(multi))
+	} else {
+		logOptions = append(logOptions, ulogger.WithWriter(output))
 	}
 
 	useLogger, ok := gocore.Config().Get("logger")

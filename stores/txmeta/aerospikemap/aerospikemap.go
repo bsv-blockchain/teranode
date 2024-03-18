@@ -4,6 +4,7 @@ package aerospikemap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -53,6 +55,11 @@ func init() {
 			Help: "Number of txmeta delete calls done to aerospike",
 		},
 	)
+
+	if gocore.Config().GetBool("aerospike_debug", true) {
+		asl.Logger.SetLevel(asl.DEBUG)
+	}
+
 }
 
 type Store struct {
@@ -61,8 +68,6 @@ type Store struct {
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
-	asl.Logger.SetLevel(asl.DEBUG)
-
 	logger = logger.New("aero_map_store")
 
 	namespace := u.Path[1:]
@@ -150,19 +155,8 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	return status, nil
 }
 
-func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
-
-	// TODO make this into a batch call
-	for _, hash := range hashes {
-		data, err := s.Get(ctx, hash)
-		if err != nil {
-			return nil, err
-		}
-		results[*hash] = data
-	}
-
-	return results, nil
+func (s *Store) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.MissingTxHash, fields ...string) error {
+	return errors.New("not implemented")
 }
 
 func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {

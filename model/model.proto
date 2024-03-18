@@ -65,6 +65,8 @@ message BlockStats {
   uint64 max_height = 3;
   double avg_block_size = 4;
   double avg_tx_count_per_block = 5;
+  uint32 first_block_time = 6;
+  uint32 last_block_time = 7;
 }
 
 // swagger:model DataPoint

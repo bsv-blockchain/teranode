@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/types"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -35,36 +36,53 @@ type TxMetaCache struct {
 	logger      ulogger.Logger
 }
 
+type CacheStats struct {
+	EntriesCount       uint64
+	TrimCount          uint64
+	TotalMapSize       uint64
+	TotalElementsAdded uint64
+}
+
 func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta.Store, options ...int) txmeta.Store {
+	if _, ok := txMetaStore.(*TxMetaCache); ok {
+		// txMetaStore is a TxMetaCache, this is not allowed
+		panic("Cannot use TxMetaCache as the underlying store for TxMetaCache")
+	}
+
 	initPrometheusMetrics()
 
-	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 32)
-	if len(options) > 0 {
+	maxMB, _ := gocore.Config().GetInt("txMetaCacheMaxMB", 256)
+
+	if len(options) > 0 && options[0] > 256 {
 		maxMB = options[0]
 	}
 
 	m := &TxMetaCache{
 		txMetaStore: txMetaStore,
-		cache:       NewImprovedCache(maxMB * 1024 * 1024),
+		cache:       NewImprovedCache(maxMB*1024*1024, types.Trimmed),
 		metrics:     metrics{},
 		logger:      logger,
 	}
 
 	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			default:
-				if prometheusBlockValidationTxMetaCacheSize != nil {
-					prometheusBlockValidationTxMetaCacheSize.Set(float64(m.Length()))
+			case <-ticker.C:
+				cacheStats := m.GetCacheStats()
+				if prometheusBlockValidationTxMetaCacheInsertions != nil {
+					prometheusBlockValidationTxMetaCacheSize.Set(float64(cacheStats.EntriesCount))
 					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
 					prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
 					prometheusBlockValidationTxMetaCacheEvictions.Set(float64(m.metrics.evictions.Load()))
+					prometheusBlockValidationTxMetaCacheTrims.Set(float64(cacheStats.TrimCount))
+					prometheusBlockValidationTxMetaCacheMapSize.Set(float64(cacheStats.TotalMapSize))
+					prometheusBlockValidationTxMetaCacheTotalElementsAdded.Set(float64(cacheStats.TotalElementsAdded))
 				}
-
-				time.Sleep(5 * time.Second)
 			}
 		}
 	}()
@@ -74,20 +92,49 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
 	txMeta.Tx = nil
-	t.cache.Set(hash[:], txMeta.MetaBytes())
+	err := t.cache.Set(hash[:], txMeta.MetaBytes())
+	if err != nil {
+		return err
+	}
 
 	t.metrics.insertions.Add(1)
 
 	return nil
 }
 
-func (t *TxMetaCache) SetCacheMulti(hashes map[chainhash.Hash]*txmeta.Data) error {
-	for hash, txMeta := range hashes {
-		txMeta.Tx = nil
-		t.cache.Set(hash[:], txMeta.MetaBytes())
+func (t *TxMetaCache) SetCacheFromBytes(key, txMetaBytes []byte) error {
+	err := t.cache.Set(key, txMetaBytes)
+	if err != nil {
+		return err
 	}
 
-	t.metrics.insertions.Add(uint64(len(hashes)))
+	t.metrics.insertions.Add(1)
+
+	return nil
+}
+
+func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
+	err := t.cache.SetMulti(keys, values)
+	if err != nil {
+		return err
+	}
+	t.metrics.insertions.Add(uint64(len(keys)))
+	return nil
+}
+
+func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *txmeta.Data {
+	cachedBytes := make([]byte, 0)
+	_ = t.cache.Get(&cachedBytes, hash[:])
+
+	if len(cachedBytes) > 0 {
+		t.metrics.hits.Add(1)
+		txmetaData := txmeta.Data{}
+		txmeta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+
+		return &txmetaData
+	}
+	t.metrics.misses.Add(1)
+
 	return nil
 }
 
@@ -109,6 +156,8 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmet
 	if err != nil {
 		return nil, err
 	}
+
+	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
 
 	// add to cache
 	txMeta.Tx = nil
@@ -136,6 +185,8 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 		return nil, err
 	}
 
+	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
+
 	// add to cache
 	txMeta.Tx = nil
 	_ = t.SetCache(hash, txMeta)
@@ -143,17 +194,21 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
+func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.MissingTxHash, fields ...string) error {
+	if err := t.txMetaStore.MetaBatchDecorate(ctx, hashes, fields...); err != nil {
+		return err
+	}
 
-	var err error
-	for _, hash := range hashes {
-		if results[*hash], err = t.Get(ctx, hash); err != nil {
-			return nil, err
+	prometheusBlockValidationTxMetaCacheGetOrigin.Add(float64(len(hashes)))
+
+	for _, data := range hashes {
+		if data.Data != nil {
+			data.Data.Tx = nil
+			_ = t.SetCache(data.Hash, data.Data)
 		}
 	}
 
-	return results, nil
+	return nil
 }
 
 func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
@@ -176,14 +231,6 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	//	return err
 	//}
 
-	// remove const, parameterize
-
-	// currently CPU is overwhelmed
-	// workload
-	// 1- cont. write and read a.t.m txMeta. Locks should be short. Buckets are smaller, less update per bucket -> less lock time per bucket
-	// 2- blockIDs: readaing or writing a lot. Multi makes sense. Big batfcfh comes at once, longer lock is fine
-
-	// G: why we can't call it with goroutines?
 	for _, hash := range hashes {
 		err = t.setMinedInCache(ctx, hash, blockID)
 		if err != nil {
@@ -196,12 +243,7 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 	return nil
 }
 
-// 1 move blockID slice out of metacache
-// 2 implement improvedcache setmulti with locks
-
 func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
-	// G: why not comment out the following as well?
-	// Does only SetMinedMulti called. Yes block validaiton only calls that
 	err := t.txMetaStore.SetMined(ctx, hash, blockID)
 	if err != nil {
 		return err
@@ -245,14 +287,14 @@ func (t *TxMetaCache) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func (t *TxMetaCache) Length() int {
+func (t *TxMetaCache) GetCacheStats() *CacheStats {
 	s := &Stats{}
 	t.cache.UpdateStats(s)
-	return int(s.EntriesCount)
-}
 
-// func (t *TxMetaCache) BytesSize() int {
-// 	s := &Stats{}
-// 	t.cache.UpdateStats(s)
-// 	return int(s.BytesSize)
-// }
+	return &CacheStats{
+		EntriesCount:       s.EntriesCount,
+		TrimCount:          s.TrimCount,
+		TotalMapSize:       s.TotalMapSize,
+		TotalElementsAdded: s.TotalElementsAdded,
+	}
+}

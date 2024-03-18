@@ -80,3 +80,35 @@ func TestNewSplitSwissMap(t *testing.T) {
 		assert.False(t, ok)
 	})
 }
+
+func TestNewSwissMapKVUint64(t *testing.T) {
+	t.Run("NewSplitSwissMap", func(t *testing.T) {
+		m := NewSwissMapKVUint64(100)
+		assert.NotNil(t, m)
+
+		err := m.Put(1, 1)
+		require.NoError(t, err)
+
+		ok := m.Exists(1)
+		assert.True(t, ok)
+
+		ok = m.Exists(2)
+		assert.False(t, ok)
+	})
+}
+
+func TestNewSplitSwissMapKVUint64(t *testing.T) {
+	t.Run("NewSplitSwissMap", func(t *testing.T) {
+		m := NewSplitSwissMapKVUint64(100)
+		assert.NotNil(t, m)
+
+		err := m.Put(1, 1)
+		require.NoError(t, err)
+
+		ok := m.Exists(1)
+		assert.True(t, ok)
+
+		ok = m.Exists(2)
+		assert.False(t, ok)
+	})
+}

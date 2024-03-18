@@ -30,6 +30,9 @@ service BlockAssemblyAPI {
 
   // De-duplicate transaction in block assembly subtree processor.
   rpc DeDuplicateBlockAssembly (EmptyMessage) returns (EmptyMessage) {}
+
+  // Reset transaction in block assembly subtree processor.
+  rpc ResetBlockAssembly (EmptyMessage) returns (EmptyMessage) {}
 }
 
 // An empty message used as a placeholder or a request with no data.

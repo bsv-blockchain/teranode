@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -50,6 +51,8 @@ type BlockAssembler struct {
 	difficultyAdjustment       bool
 	currentDifficulty          *model.NBit
 	defaultMiningNBits         *model.NBit
+	resetCh                    chan struct{}
+	resetWaitCount             atomic.Int32
 }
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface,
@@ -77,6 +80,8 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 		difficultyAdjustmentWindow: difficultyAdjustmentWindow,
 		difficultyAdjustment:       difficultyAdjustment,
 		defaultMiningNBits:         &defaultMiningBits,
+		resetCh:                    make(chan struct{}),
+		resetWaitCount:             atomic.Int32{},
 	}
 
 	return b
@@ -127,13 +132,41 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				close(b.blockchainSubscriptionCh)
 				return
 
+			case <-b.resetCh:
+				// reset the block assembly
+				b.logger.Infof("[BlockAssembler] resetting block assembler")
+				bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler] resetting error getting best block header: %v", err)
+					continue
+				}
+
+				b.logger.Infof("[BlockAssembler] resetting to new best block header: %d", meta.Height)
+				b.bestBlockHeader = bestBlockchainBlockHeader
+				b.bestBlockHeight = meta.Height
+				err = b.SetState(ctx)
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler] resetting error setting state: %v", err)
+				}
+
+				prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight))
+
+				b.subtreeProcessor.Reset(b.bestBlockHeader)
+				b.resetWaitCount.Add(2) // wait 2 blocks before starting to mine again
+
 			case responseCh := <-b.miningCandidateCh:
 				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
-				miningCandidate, subtrees, err := b.getMiningCandidate()
-				responseCh <- &miningCandidateResponse{
-					miningCandidate: miningCandidate,
-					subtrees:        subtrees,
-					err:             err,
+				if b.resetWaitCount.Load() > 0 {
+					responseCh <- &miningCandidateResponse{
+						err: fmt.Errorf("waiting for reset to complete"),
+					}
+				} else {
+					miningCandidate, subtrees, err := b.getMiningCandidate()
+					responseCh <- &miningCandidateResponse{
+						miningCandidate: miningCandidate,
+						subtrees:        subtrees,
+						err:             err,
+					}
 				}
 				// stat.AddTime(start)
 
@@ -147,6 +180,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 						continue
 					}
 					b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
+
+					prometheusBlockAssemblyBestBlockHeight.Set(float64(meta.Height))
 
 					// if the bestBlockchainBlockHeader is the same as the current best block header, we already have this block, nothing to do, skip
 					if bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Hash()) {
@@ -174,6 +209,13 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 					b.bestBlockHeader = bestBlockchainBlockHeader
 					b.bestBlockHeight = meta.Height
+
+					prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight))
+
+					if b.resetWaitCount.Load() > 0 {
+						// decrement the reset wait count, we just found and processed a block
+						b.resetWaitCount.Add(-1)
+					}
 
 					err = b.SetState(ctx)
 					if err != nil {
@@ -239,6 +281,8 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	}
 
 	b.startChannelListeners(ctx)
+
+	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight))
 
 	return nil
 }
@@ -329,6 +373,10 @@ func (b *BlockAssembler) DeDuplicateTransactions() {
 	b.subtreeProcessor.DeDuplicateTransactions()
 }
 
+func (b *BlockAssembler) Reset() {
+	b.resetCh <- struct{}{}
+}
+
 func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCandidate, []*util.Subtree, error) {
 	// make sure we call this on the select, so we don't get a candidate when we found a new block
 	responseCh := make(chan *miningCandidateResponse)
@@ -417,6 +465,13 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 	moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, header)
 	if err != nil {
 		return fmt.Errorf("error getting reorg blocks: %w", err)
+	}
+
+	if len(moveDownBlocks) > 5 || len(moveUpBlocks) > 5 {
+		// large reorg, log it and Reset the block assembler
+		b.logger.Warnf("large reorg, moveDownBlocks: %d, moveUpBlocks: %d, resetting block assembly", len(moveDownBlocks), len(moveUpBlocks))
+		b.Reset()
+		return nil
 	}
 
 	// now do the reorg in the subtree processor

@@ -14,4 +14,5 @@ enum ErrorConstants {
   INVALID_ARGUMENT = 1;
   NOT_FOUND = 2;
   BLOCK_NOT_FOUND=3;
+  THRESHOLD_EXCEEDED=4;
 }

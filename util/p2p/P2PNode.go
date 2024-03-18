@@ -348,9 +348,12 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 	var kademliaDHT *dht.IpfsDHT
 
 	if s.config.UsePrivateDHT {
-		kademliaDHT = initPrivateDHT(ctx, s.host)
+		kademliaDHT = s.initPrivateDHT(ctx, s.host)
 	} else {
-		kademliaDHT = initDHT(ctx, s.host)
+		kademliaDHT = s.initDHT(ctx, s.host)
+	}
+	if kademliaDHT == nil {
+		return
 	}
 	routingDiscovery := dRouting.NewRoutingDiscovery(kademliaDHT)
 
@@ -471,7 +474,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 	}
 }
 
-func initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
+func (s *P2PNode) initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
 	// Start a DHT, for use in peer discovery. We can't just make a new DHT
 	// client because we want each peer to maintain its own local copy of the
 	// DHT, so that the bootstrapping node of the DHT can go down without
@@ -503,7 +506,7 @@ func initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
 	return kademliaDHT
 }
 
-func initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
+func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 	bootstrapAddresses, _ := gocore.Config().GetMulti("p2p_bootstrapAddresses", "|")
 	if len(bootstrapAddresses) == 0 {
 		panic(fmt.Errorf("[P2PNode] bootstrapAddresses not set in config"))
@@ -521,7 +524,8 @@ func initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 
 		err = host.Connect(ctx, *peerInfo)
 		if err != nil {
-			panic(fmt.Sprintf("[P2PNode] failed to connect to bootstrap address %s: %v", ba, err))
+			s.logger.Errorf(fmt.Sprintf("[P2PNode] failed to connect to bootstrap address %s: %v", ba, err))
+			return nil
 		}
 	}
 

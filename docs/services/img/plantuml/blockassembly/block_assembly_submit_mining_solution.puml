@@ -56,11 +56,15 @@ end
 SubtreeStore --> Server : Subtrees TTL updated
 deactivate SubtreeStore
 
-Server -> Model : UpdateTxMinedStatus(gCtx, logger, txMetaStore, subtreesInJob, block.Header)
-activate Model
-Model -> TxMetaStore: SetMinedMulti(gCtx, hashes, blockID)
-Model --> TxMetaStore : TX Status updated as mined (for all Txs in all Subtrees)
-deactivate Model
+alt if localSetMined mode is off
+    Server -> Model : UpdateTxMinedStatus(gCtx, logger, txMetaStore, subtreesInJob, block.Header)
+    activate Model
+    Model -> TxMetaStore: SetMinedMulti(gCtx, hashes, blockID)
+    Model --> TxMetaStore : TX Status updated as mined (for all Txs in all Subtrees)
+    deactivate Model
+end
+
+
 
 Server -> JobStore : DeleteAll()
 JobStore --> Server : All jobs deleted
@@ -76,4 +80,7 @@ Server --> Client : Return result
 deactivate Server
 Client --> Miner : Return result
 deactivate Client
+
+left footer Last Modified On: 26-Feb-2024
+
 @enduml

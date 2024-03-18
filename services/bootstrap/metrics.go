@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -12,13 +13,15 @@ var (
 	prometheusBroadcastNotification prometheus.Counter
 )
 
-var prometheusMetricsInitialized = false
+var (
+	prometheusMetricsInitOnce sync.Once
+)
 
 func initPrometheusMetrics() {
-	if prometheusMetricsInitialized {
-		return
-	}
+	prometheusMetricsInitOnce.Do(_initPrometheusMetrics)
+}
 
+func _initPrometheusMetrics() {
 	prometheusHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "bootstrap",
@@ -50,6 +53,4 @@ func initPrometheusMetrics() {
 			Help:      "Number of calls to the BroadcastNotification endpoint",
 		},
 	)
-
-	prometheusMetricsInitialized = true
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
+  import { mediaSize, MediaSize } from '$lib/stores/media'
   import TextInput from '$lib/components/textinput/index.svelte'
   import BreadCrumbs from '$internal/components/breadcrumbs/index.svelte'
   import { failure } from '$lib/utils/notifications'
@@ -8,7 +9,11 @@
   import i18n from '$internal/i18n'
   import * as api from '$internal/api'
 
+  $: t = $i18n.t
+
   export let style = ''
+  export let showTools = true
+  export let showWarning = true
 
   let searchValue = ''
   let lastSearchCalled = ''
@@ -33,32 +38,41 @@
       return false
     }
   }
+
+  let w
+
+  $: focusWidth = $mediaSize <= MediaSize.xs ? w - 60 : 570
 </script>
 
-<div class="toolbar" {style}>
-  <div class="left">
-    <BreadCrumbs />
+<svelte:window bind:innerWidth={w} />
+
+{#if showTools}
+  <div class="toolbar" {style}>
+    <div class="left">
+      <BreadCrumbs />
+    </div>
+    <div class="right">
+      <TextInput
+        name="one"
+        size="medium"
+        style="--input-size-md-border-radius:8px"
+        autocomplete="off"
+        bind:value={searchValue}
+        width={330}
+        {focusWidth}
+        icon={searchValue === lastSearchCalled || !searchValue
+          ? 'icon-search-line'
+          : 'icon-search-solid'}
+        placeholder={$i18n.t('comp.toolbar.placeholder')}
+        on:keydown={onSearchKeyDown}
+      />
+    </div>
   </div>
-  <div class="right">
-    <TextInput
-      name="one"
-      size="medium"
-      style="--input-size-md-border-radius:8px"
-      autocomplete="off"
-      bind:value={searchValue}
-      width={330}
-      focusWidth={570}
-      icon={searchValue === lastSearchCalled || !searchValue
-        ? 'icon-search-line'
-        : 'icon-search-solid'}
-      placeholder={$i18n.t('comp.toolbar.placeholder')}
-      on:keydown={onSearchKeyDown}
-    />
-  </div>
-</div>
-<div class="warning" {style}>
- ---- Alpha Testing in Progress 🛠️ Expect Breaks & Resets! ----
-</div>
+{/if}
+
+{#if showWarning}
+  <div class="warning" {style}>{t('global.warning_2')}</div>
+{/if}
 
 <style>
   .toolbar {

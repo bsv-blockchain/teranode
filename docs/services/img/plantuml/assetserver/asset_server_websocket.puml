@@ -33,4 +33,7 @@ Client -> Server: Disconnect WebSocket
 activate Server
 Server -> Channels: Remove client channel
 deactivate Server
+
+left footer Last Modified On: 4-Dec-2023
+
 @enduml

@@ -1,0 +1,50 @@
+{{ define "ubsvService" }}
+  ubsv-{{ .Index }}:
+    <<: *ubsv-base
+    command: ["/app/ubsv.run"]
+    ports:
+      - "{{ .Ports }}"
+    volumes:
+      - ./data/ubsv{{ .Index }}/txstore:/app/data/ubsv{{ .Index }}/txstore
+      - ./data/ubsv{{ .Index }}/subtreestore:/app/data/ubsv{{ .Index }}/subtreestore
+    environment:
+      - SETTINGS_CONTEXT=docker
+      - subtree_store={{ .SubtreeStore }}
+      - txstore={{ .TxStore }}
+      - validator_grpcAddress={{ .ValidatorGRPCAddress }}
+      - asset_httpAddress={{ .AssetHTTPAddress }}
+      - asset_grpcAddress={{ .AssetGRPCAddress }}
+      - asset_clientName=ubsv-{{ .Index }}
+      - blockchain_grpcAddress={{ .BlockchainGRPCAddress }}
+      - blockchain_store=postgres://postgres:postgres@postgres:5432/blockchain{{ .Index }}
+      - utxostore=postgres://postgres:postgres@postgres:5432/utxostore{{ .Index }}
+      - txmeta_store=postgres://postgres:postgres@postgres:5432/txmeta{{ .Index }}
+      - blockassembly_grpcAddress={{ .BlockAssemblyGRPCAddress }}
+      - blockvalidation_httpAddress={{ .BlockValidationHTTPAddress }}
+      - coinbase_store=postgres://postgres:postgres@postgres:5432/coinbase{{ .Index }}
+      - coinbase_wallet_private_key={{ .CoinbaseWalletPrivateKey }}
+      - coinbase_arbitrary_text=ubsv-{{ .Index }}
+      - coinbase_assetGrpcAddress={{ .CoinbaseAssetGRPCAddress }}
+      - coinbase_grpcAddress={{ .CoinbaseGRPCAddress }}
+      - coinbase_p2p_private_key={{ .CoinbaseP2PPrivateKey }}
+      - coinbase_p2p_peer_id={{ .CoinbaseP2PPeerID }}
+      - coinbase_p2p_static_peers={{ .CoinbaseP2PStaticPeers }}
+      - feature_bootstrap={{ .FeatureBootstrap }}
+      - logLevel=DEBUG
+      - mine_initial_blocks={{ .MineInitialBlocks }}
+      - mine_initial_blocks_count={{ .MineInitialBlocksCount }}
+      - miner_wallet_private_keys={{ .MinerWalletPrivateKeys }}
+      - propagation_grpcAddresses={{ .PropagationGRPCAddresses }}
+      - propagation_httpAddresses={{ .PropagationHTTPAddresses }}
+      - propagation_quicAddresses={{ .PropagationQUICAddresses }}
+      - p2p_bootstrapAddresses={{ .P2PBootstrapAddresses }}
+      - p2p_dht_use_private={{ .P2PDhtUsePrivate }}
+      - p2p_private_key={{ .P2PPrivateKey }}
+      - p2p_peer_id={{ .P2PPeerID }}
+      - p2p_static_peers={{ .P2PStaticPeers }}
+      - securityLevelGRPC=0
+      - securityLevelHTTP=0
+      - startCoinbase={{ .StartCoinbase }}
+      - startP2P={{ .StartP2P }}
+      - p2p_shared_key=847a544c7403b353bd493791de2bd70878860932a40957196cc7462c8cf435c7
+{{ end }}

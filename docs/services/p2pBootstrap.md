@@ -12,7 +12,7 @@ The bootstrap service helps new nodes discover other peers and join the network.
 
 ## 2. Architecture
 
-The P2P Bootstrap service is a standalone service that runs in each UBSV node, acting as a bootstrap node for new nodes joining the network.
+The P2P Bootstrap service is a standalone service that runs in each Teranode node, acting as a bootstrap node for new nodes joining the network.
 
 The service is implemented using the `libp2p` library, a modular network stack for peer-to-peer applications. Please refer to the [libp2p documentation](https://docs.libp2p.io/concepts/introduction/overview/) for more information.
 
@@ -92,14 +92,22 @@ The application code can be found in `p2pBoostrap/Server.go`.
 
 ## 5. Settings
 
-1. **`p2p_dht_protocol_id`**: Specifies the protocol identifier for the Distributed Hash Table (DHT) used in the peer-to-peer network. The DHT, based on Kademlia, is required for peer discovery and routing. The protocol ID ensures that peers in the network follow the same protocol rules.
+- **`p2p_dht_protocol_id`**: Defines the protocol ID for the Distributed Hash Table (DHT) used by the P2P network. This setting customizes the protocol namespace, allowing different networks or applications to operate independently on the same physical network.
 
-2. **`p2p_shared_key`**: This represents the pre-shared key (PSK) for creating a private network. All communications within this network are encrypted using this PSK, ensuring that only authorized nodes with the correct key can participate in the network. This key is crucial for maintaining privacy and security in the P2P network.
 
-3. **`p2p_bootstrap_privkey`**: A private key used to establish the identity of a bootstrap node in the network. The private key is used to derive the node's public key and ID, contributing to the secure identity in the libp2p network.
+- **`p2p_shared_key`**: A base16 encoded string used as a pre-shared key for private network creation. This key ensures that only nodes with the correct key can join the network, enhancing privacy and security.
 
-4. **`p2p_bootstrap_listenAddress`** and **`p2p_bootstrap_listenPort`**: These settings define the IP address and port on which the bootstrap node listens for incoming connections.
 
+- **`p2p_bootstrap_privkey`**: Specifies the private key of the bootstrap node in hexadecimal format. This key is crucial for node identity and secure communications within the P2P network.
+
+
+- **`p2p_bootstrap_listenAddress`**: The IP address that the bootstrap node will listen on. This setting determines where the node accepts incoming connections.
+
+
+- **`p2p_bootstrap_listenPort`**: An integer representing the port number on which the bootstrap node listens for incoming P2P connections. This setting is part of defining the node's network address.
+
+
+- **`p2p_bootstrap_transportProtocol`**: Specifies the network transport protocol (e.g., "ip4" for IPv4) used by the bootstrap node. This setting determines how the node communicates over the network.
 
 ## 6. Usage
 

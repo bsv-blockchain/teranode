@@ -32,6 +32,14 @@ ports:
     expose: true
     port: 9907
     protocol: TCP
+  kafka:
+    expose: true
+    port: 9092
+    protocol: TCP
+  kafka-external:
+    expose: true
+    port: 9094
+    protocol: TCP
   p2p-ws:
     expose: true
     port: 9906

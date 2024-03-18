@@ -106,6 +106,7 @@ function get(url, options: any = {}, done?, fail?) {
 // }
 
 let baseUrl = ''
+//const baseUrl = 'https://m1.scaling.ubsv.dev/api/v1'
 
 assetHTTPAddress.subscribe((value) => {
   baseUrl = value
@@ -161,6 +162,19 @@ export function searchItem(data: { q: string }, done?, fail?) {
 
 export function getBlockStats(done?, fail?) {
   return get(`${baseUrl}/blockstats`, {}, done, fail)
+}
+
+export function getBlockForks(
+    data: { hash: string; limit: number },
+    done?,
+    fail?,
+) {
+  return get(
+      `${baseUrl}/block/${data.hash}/forks`,
+      { query: { limit: data.limit } },
+      done,
+      fail,
+  )
 }
 
 export function getBlockGraphData(data: { period: string }, done?, fail?) {

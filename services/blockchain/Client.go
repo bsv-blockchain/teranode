@@ -247,9 +247,7 @@ func (c *Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.H
 		return nil, err
 	}
 	bits := model.NewNBitFromSlice(resp.Bits)
-	if err != nil {
-		return nil, err
-	}
+
 	return &bits, nil
 }
 
@@ -280,6 +278,8 @@ func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *m
 		TxCount:     resp.TxCount,
 		SizeInBytes: resp.SizeInBytes,
 		Miner:       resp.Miner,
+		BlockTime:   resp.BlockTime,
+		Timestamp:   resp.Timestamp,
 	}
 
 	return header, meta, nil
@@ -304,6 +304,8 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 		TxCount:     resp.TxCount,
 		SizeInBytes: resp.SizeInBytes,
 		Miner:       resp.Miner,
+		BlockTime:   resp.BlockTime,
+		Timestamp:   resp.Timestamp,
 	}
 
 	return header, meta, nil
@@ -328,6 +330,36 @@ func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash,
 	}
 
 	return headers, resp.Heights, nil
+}
+
+func (c *Client) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	resp, err := c.client.GetBlockHeadersFromHeight(ctx, &blockchain_api.GetBlockHeadersFromHeightRequest{
+		StartHeight: height,
+		Limit:       limit,
+	})
+	if err != nil {
+		return nil, nil, ubsverrors.UnwrapGRPC(err)
+	}
+
+	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+	for _, headerBytes := range resp.BlockHeaders {
+		header, err := model.NewBlockHeaderFromBytes(headerBytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		headers = append(headers, header)
+	}
+
+	metas := make([]*model.BlockHeaderMeta, 0, len(resp.Metas))
+	for _, metaBytes := range resp.Metas {
+		meta, err := model.NewBlockHeaderMetaFromBytes(metaBytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		metas = append(metas, meta)
+	}
+
+	return headers, metas, nil
 }
 
 func (c *Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {

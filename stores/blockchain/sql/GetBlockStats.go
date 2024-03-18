@@ -38,8 +38,8 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 			INNER JOIN ChainBlocks cb ON b.id = cb.parent_id
 			WHERE b.parent_id != 0
 		)
-		SELECT count(1), sum(tx_count), max(height), avg(size_in_bytes), avg(tx_count) from ChainBlocks
-		WHERE block_time >= $1
+		SELECT count(1), sum(tx_count), max(height), avg(size_in_bytes), avg(tx_count), min(block_time), max(block_time) from ChainBlocks
+		WHERE block_time >= $1 AND id > 0
 	`
 
 	blockStats := &model.BlockStats{}
@@ -52,10 +52,15 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 		&blockStats.MaxHeight,
 		&blockStats.AvgBlockSize,
 		&blockStats.AvgTxCountPerBlock,
+		&blockStats.FirstBlockTime,
+		&blockStats.LastBlockTime,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stats: %w", err)
 	}
+
+	// add 1 to the block count to include the genesis block, which is excluded from the query
+	blockStats.BlockCount += 1
 
 	return blockStats, nil
 }

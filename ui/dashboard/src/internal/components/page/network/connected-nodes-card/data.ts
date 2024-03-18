@@ -1,7 +1,10 @@
 import { formatNum, shortHash } from '$lib/utils/format'
 import { getDetailsUrl, DetailType } from '$internal/utils/urls'
+import { humanTime } from '$internal/utils/format'
+import { valueSet } from '$lib/utils/types'
 // eslint-ignore-next-line
 import RenderLink from '$lib/components/table/renderers/render-link/index.svelte'
+import RenderSpan from '$lib/components/table/renderers/render-span/index.svelte'
 
 const pageKey = 'page.network.nodes'
 const fieldKey = `${pageKey}.fields`
@@ -36,6 +39,7 @@ export const getColDefs = (t) => {
       id: 'size_in_bytes',
       name: t(`${fieldKey}.size_in_bytes`),
       type: 'number',
+      format: 'dataSize',
       props: {
         width: '10%',
       },
@@ -67,7 +71,7 @@ export const getColDefs = (t) => {
     {
       id: 'receivedAt',
       name: t(`${fieldKey}.receivedAt`),
-      type: 'string',
+      type: 'number',
       props: {
         width: '10%',
       },
@@ -108,6 +112,16 @@ export const renderCells = {
         href: getDetailsUrl(DetailType.block, item[colId]),
         external: false,
         text: shortHash(item[colId]),
+      },
+      value: '',
+    }
+  },
+  receivedAt: (idField, item, colId) => {
+    return {
+      component: valueSet(item[colId]) ? RenderSpan : null,
+      props: {
+        value: humanTime(item[colId]),
+        className: 'num',
       },
       value: '',
     }

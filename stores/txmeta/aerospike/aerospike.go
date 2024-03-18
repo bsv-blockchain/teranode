@@ -14,12 +14,14 @@ import (
 	"github.com/aerospike/aerospike-client-go/v6"
 	asl "github.com/aerospike/aerospike-client-go/v6/logger"
 	"github.com/aerospike/aerospike-client-go/v6/types"
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -30,6 +32,8 @@ var (
 	prometheusTxMetaSetMined       prometheus.Counter
 	prometheusTxMetaSetMinedBatch  prometheus.Counter
 	prometheusTxMetaSetMinedBatchN prometheus.Counter
+	prometheusTxMetaGetMulti       prometheus.Counter
+	prometheusTxMetaGetMultiN      prometheus.Counter
 	prometheusTxMetaDelete         prometheus.Counter
 )
 
@@ -64,12 +68,29 @@ func init() {
 			Help: "Number of txmeta set_mined_batch txs done to aerospike",
 		},
 	)
+	prometheusTxMetaGetMulti = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_txmeta_get_multi",
+			Help: "Number of txmeta get_multi calls done to aerospike",
+		},
+	)
+	prometheusTxMetaGetMultiN = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_txmeta_get_multi_n",
+			Help: "Number of txmeta get_multi txs done to aerospike",
+		},
+	)
 	prometheusTxMetaDelete = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "aerospike_txmeta_delete",
 			Help: "Number of txmeta delete calls done to aerospike",
 		},
 	)
+
+	if gocore.Config().GetBool("aerospike_debug", true) {
+		asl.Logger.SetLevel(asl.DEBUG)
+	}
+
 }
 
 type Store struct {
@@ -77,10 +98,6 @@ type Store struct {
 	namespace  string
 	expiration uint32
 	logger     ulogger.Logger
-}
-
-func init() {
-	asl.Logger.SetLevel(asl.DEBUG)
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
@@ -192,57 +209,92 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	return status, nil
 }
 
-func (s *Store) GetMulti(ctx context.Context, hashes []*chainhash.Hash) (map[chainhash.Hash]*txmeta.Data, error) {
+func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
-	results := make(map[chainhash.Hash]*txmeta.Data, len(hashes))
 	//policy := util.GetAerospikeBatchReadPolicy()
 
-	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
+	batchRecords := make([]aerospike.BatchRecordIfc, len(items))
 
-	for idx, hash := range hashes {
-		key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	for idx, item := range items {
+		key, err := aerospike.NewKey(s.namespace, "txmeta", item.Hash[:])
 		if err != nil {
-			return nil, err
+			return err
 		}
 
-		record := aerospike.NewBatchRead(key, []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"})
+		bins := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"}
+		if len(fields) > 0 {
+			bins = fields
+		}
+
+		record := aerospike.NewBatchRead(key, bins)
 		// Add to batch
 		batchRecords[idx] = record
 	}
 
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	prometheusTxMetaSetMinedBatch.Inc()
 
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
-			results[*hashes[idx]] = nil
-			s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", hashes[idx].String(), err)
+			items[idx].Data = nil
+			if !model.CoinbasePlaceholderHash.IsEqual(items[idx].Hash) {
+				s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", items[idx].Hash.String(), err)
+			}
 		} else {
 			bins := batchRecord.BatchRec().Record.Bins
-			// TODO add the rest of the bins
-			if bins["tx"] != nil {
-				txBytes, ok := bins["tx"].([]byte)
-				if ok {
-					tx, err := bt.NewTxFromBytes(txBytes)
-					if err != nil {
-						return nil, errors.Join(errors.New("could not convert tx bytes to bt.Tx"), err)
-					}
 
-					results[*hashes[idx]] = &txmeta.Data{Tx: tx}
-				} else {
-					results[*hashes[idx]] = nil
+			items[idx].Data = &txmeta.Data{}
+
+			for key, value := range bins {
+				switch key {
+				case "tx":
+					txBytes, ok := value.([]byte)
+					if ok {
+						tx, err := bt.NewTxFromBytes(txBytes)
+						if err != nil {
+							return fmt.Errorf("could not convert tx bytes to bt.Tx: %w", err)
+						}
+						items[idx].Data.Tx = tx
+					}
+				case "fee":
+					fee, ok := value.(int)
+					if ok {
+						items[idx].Data.Fee = uint64(fee)
+					}
+				case "sizeInBytes":
+					sizeInBytes, ok := value.(int)
+					if ok {
+						items[idx].Data.SizeInBytes = uint64(sizeInBytes)
+					}
+				case "parentTxHashes":
+					parentTxHashesInterface, ok := value.([]byte)
+					if ok {
+						parentTxHashes := make([]chainhash.Hash, 0, len(parentTxHashesInterface)/32)
+						for i := 0; i < len(parentTxHashesInterface); i += 32 {
+							parentTxHashes = append(parentTxHashes, chainhash.Hash(parentTxHashesInterface[i:i+32]))
+						}
+						items[idx].Data.ParentTxHashes = parentTxHashes
+					}
+				case "blockIDs":
+					temp := value.([]interface{})
+					var blockIDs []uint32
+					for _, val := range temp {
+						blockIDs = append(blockIDs, uint32(val.(int)))
+					}
+					items[idx].Data.BlockIDs = blockIDs
 				}
 			}
 		}
 	}
 
-	return results, nil
+	prometheusTxMetaGetMulti.Inc()
+	prometheusTxMetaGetMultiN.Add(float64(len(batchRecords)))
+
+	return nil
 }
 
 func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
@@ -281,7 +333,8 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		aerospike.NewBin("lockTime", int(tx.LockTime)),
 	}
 
-	policy := util.GetAerospikeWritePolicy(0, s.expiration)
+	// s.expiration - expiration is set in SetMined and SetMinedMulti
+	policy := util.GetAerospikeWritePolicy(0, 0)
 	policy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	maxRetries := 5
