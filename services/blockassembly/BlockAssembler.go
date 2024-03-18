@@ -149,6 +149,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					b.logger.Errorf("[BlockAssembler] resetting error setting state: %v", err)
 				}
 
+				prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight))
+
 				b.subtreeProcessor.Reset(b.bestBlockHeader)
 				b.resetWaitCount.Add(2) // wait 2 blocks before starting to mine again
 
@@ -179,6 +181,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					}
 					b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
 
+					prometheusBlockAssemblyBestBlockHeight.Set(float64(meta.Height))
+
 					// if the bestBlockchainBlockHeader is the same as the current best block header, we already have this block, nothing to do, skip
 					if bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Hash()) {
 						b.logger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
@@ -205,6 +209,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 					b.bestBlockHeader = bestBlockchainBlockHeader
 					b.bestBlockHeight = meta.Height
+
+					prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight))
 
 					if b.resetWaitCount.Load() > 0 {
 						// decrement the reset wait count, we just found and processed a block
@@ -275,6 +281,8 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	}
 
 	b.startChannelListeners(ctx)
+
+	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight))
 
 	return nil
 }
