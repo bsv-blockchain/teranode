@@ -1,6 +1,7 @@
 module github.com/bitcoin-sv/ubsv
 
 go 1.21
+toolchain go1.22.1
 
 replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.7
 
@@ -31,7 +32,7 @@ require (
 	github.com/libsv/go-bc v0.1.26
 	github.com/libsv/go-bk v0.1.6
 	github.com/libsv/go-bt/v2 v2.2.5
-	github.com/libsv/go-p2p v0.1.3
+	github.com/libsv/go-p2p v0.1.9
 	github.com/loopholelabs/frisbee-go v0.7.2
 	github.com/loopholelabs/polyglot v1.1.4
 	github.com/multiformats/go-multiaddr v0.11.0
