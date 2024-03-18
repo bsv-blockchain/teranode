@@ -31,13 +31,14 @@ var stats = gocore.NewStat("subtreevalidation")
 // Server type carries the logger within it
 type Server struct {
 	subtreevalidation_api.UnimplementedSubtreeValidationAPIServer
-	logger          ulogger.Logger
-	subtreeStore    blob.Store
-	subtreeTTL      time.Duration
-	txStore         blob.Store
-	txMetaStore     txmeta_store.Store
-	validatorClient validator.Interface
-	subtreeCount    atomic.Int32
+	logger                   ulogger.Logger
+	subtreeStore             blob.Store
+	subtreeTTL               time.Duration
+	txStore                  blob.Store
+	txMetaStore              txmeta_store.Store
+	validatorClient          validator.Interface
+	subtreeCount             atomic.Int32
+	maxMerkleItemsPerSubtree int
 }
 
 func Enabled() bool {
@@ -53,17 +54,19 @@ func New(
 	validatorClient validator.Interface,
 ) *Server {
 
+	maxMerkleItemsPerSubtree, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1024)
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("subtreevalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
 	u := &Server{
-		logger:          logger,
-		subtreeStore:    subtreeStore,
-		subtreeTTL:      subtreeTTL,
-		txStore:         txStore,
-		txMetaStore:     txMetaStore,
-		validatorClient: validatorClient,
-		subtreeCount:    atomic.Int32{},
+		logger:                   logger,
+		subtreeStore:             subtreeStore,
+		subtreeTTL:               subtreeTTL,
+		txStore:                  txStore,
+		txMetaStore:              txMetaStore,
+		validatorClient:          validatorClient,
+		subtreeCount:             atomic.Int32{},
+		maxMerkleItemsPerSubtree: maxMerkleItemsPerSubtree,
 	}
 
 	// create a caching tx meta store

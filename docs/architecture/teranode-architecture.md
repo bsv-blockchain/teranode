@@ -34,7 +34,7 @@
     - [4.5.4. Overall Block and SubTree Validation Process](#454-overall-block-and-subtree-validation-process)
 - [4.6. P2P Service](#46-p2p-service)
 - [4.7. Blockchain Service](#47-blockchain-service)
-- [4.8 Subtree Assembly Service ](#48-subtree-assembly-service-)
+- [4.8. Block Persister Service](#48-block-persister-service)
 - [4.9. Asset Service](#49-asset-service)
 - [4.10. Coinbase Service](#410-coinbase-service)
 - [4.11. Bootstrap](#411-bootstrap)
@@ -581,33 +581,35 @@ The system is designed to maintain the blockchain's integrity by ensuring that a
 
 ---
 
-### 4.8 Subtree Assembly Service
+### 4.8 Block Persister Service
 
-The Subtree Assembly service functions as an overlay microservice, designed to post-process subtrees after their integration into blocks.
+The Block Persister service functions as an overlay microservice, designed to post-process blocks.
 
-Whenever a new block is introduced to the blockchain, the Subtree Assembly service decorates (enriches) all transactions within the block's subtrees, ensuring the inclusion of transaction metadata (extended transaction format).
+Whenever a new block is introduced to the blockchain, the Block Persister service decorates (enriches) all transactions within the block's subtrees, ensuring the inclusion of transaction metadata (extended transaction format). Once that is done, the blocks are saved as files in a block data storage (such as S3).
 
 This service plays a key role within the Teranode network, guaranteeing that subtrees are accurately processed and stored with the essential metadata for necessary audit and traceability purposes.
 
-![Subtree_Assembly_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FSubtree_Assembly_Service_Container_Diagram.png)
+![Block_Persister_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FBlock_Persister_Service_Container_Diagram.png)
 
 - **Blockchain Service:**
-    - Sends "new block" notifications to the Subtree Assembly Service.
+    - Sends "new block" notifications to the Block Persister Service.
 
-- **Subtree Assembly Service**
+- **Block Persister Service**
     - This service is responsible for post-processing transactions (Txs) for all subtrees in new blocks. It subscribes and listens to new block notifications. When a new block is receives, the service decorates all transactions within all subtrees in the block, and updates the subtree into the Subtree Store.
 
 - **Subtree Store:**
-    - Holds the subtree data. The Subtree Assembly Service interacts with this store to both retrieve (Get) and save (Set) subtree data.
+    - Holds the subtree data. The Block Persister Service interacts with this store to retrieve (Get) subtree data.
 
 - **TX Meta Store:**
-    - Maintains transaction metadata. The Subtree Assembly Service accesses (Get) this store to decorate the transactions within the subtrees with metadata.
+    - Maintains transaction metadata. The Block Persister Service accesses (Get) this store to decorate the transactions within the subtrees with metadata.
+
+- **Decorated Block Store:**
+    - Stores decorated block data, as files.
 
 
-A more detailed diagram can be seen below, detailing the messaging mechanism between the Blockchain Service and the Subtree Assembly Service.
+A more detailed diagram can be seen below, detailing the messaging mechanism between the Blockchain Service and the Block Persister Service.
 
-![Subtree_Assembly_Service_Components_Diagram.png](..%2Fservices%2Fimg%2FSubtree_Assembly_Service_Components_Diagram.png)
-
+![Block_Persister_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FBlock_Persister_Service_Component_Diagram.png)
 
 ---
 

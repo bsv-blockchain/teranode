@@ -47,22 +47,23 @@ rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags native,aerospik
 Enable or disable components by setting the corresponding option to `1` or `0`. Options are not case-sensitive.
 
 
-| Component       | Option          | Description                                         |
-|-----------------|-----------------|-----------------------------------------------------|
-| Blockchain      | `-Blockchain=1`     | Start the Blockchain component.                      |
-| Block Assembly  | `-BlockAssembly=1`  | Start the Block Assembly process.                    |
-| Block Validation| `-BlockValidation=1`| Begin the Block Validation process.                  |
-| Validator       | `-Validator=1`      | Activate the Validator.                              |
-| Utxo Store      | `-UtxoStore=1`      | Initiate the UTXO Store.                             |
-| Tx Meta Store   | `-TxMetaStore=1`    | Start the Transaction Meta Store.                    |
-| Propagation     | `-Propagation=1`    | Begin the Propagation process.                       |
-| Seeder          | `-Seeder=1`         | Activate the Seeder component.                       |
-| Miner           | `-Miner=1`          | Start the Miner component.                           |
-| Asset Service   | `-Asset=1`          | Initiate the Asset Service.                          |
-| Coinbase        | `-Coinbase=1`       | Activate the Coinbase component.                     |
-| Bootstrap       | `-Bootstrap=1`      | Start the Bootstrap process.                         |
-| P2P             | `-P2P=1`            | Begin the P2P communication process.                 |
-| Help            | `-help=1`           | Display the help information.                        |
+| Component          | Option                 | Description                           |
+|--------------------|------------------------|---------------------------------------|
+| Blockchain         | `-Blockchain=1`        | Start the Blockchain component.       |
+| Block Assembly     | `-BlockAssembly=1`     | Start the Block Assembly process.     |
+| Block Validation   | `-BlockValidation=1`   | Begin the Block Validation process.   |
+| Subtree Validation | `-SubtreeValidation=1` | Begin the Subtree Validation process. |
+| Validator          | `-Validator=1`         | Activate the Validator.               |
+| Utxo Store         | `-UtxoStore=1`         | Initiate the UTXO Store.              |
+| Tx Meta Store      | `-TxMetaStore=1`       | Start the Transaction Meta Store.     |
+| Propagation        | `-Propagation=1`       | Begin the Propagation process.        |
+| Seeder             | `-Seeder=1`            | Activate the Seeder component.        |
+| Miner              | `-Miner=1`             | Start the Miner component.            |
+| Asset Service      | `-Asset=1`             | Initiate the Asset Service.           |
+| Coinbase           | `-Coinbase=1`          | Activate the Coinbase component.      |
+| BlockPersister     | `-BlockPersister=1`    | Start the Block Persister process.    |
+| P2P                | `-P2P=1`               | Begin the P2P communication process.  |
+| Help               | `-help=1`              | Display the help information.         |
 
 
 

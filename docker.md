@@ -8,8 +8,15 @@ Ensure node version is greater than 20.
 I give docker 32GB RAM and 128GB disk and 10 CPU (not sure of the minimum requirement yet)
 If memory is too much then try reducing miner_waitSeconds value (docker default is 5 mins)
 
+The docker-compose.yml file is the default compse file and assumes you have lots of RAM. If you have a 16GB machine then use the docker-compose-12g.yml which limits the whole setup to 12GB RAM.
+
 ## build docker images
 `$ docker compose build`
+
+(you may need to login)
+
+`$ CERT=$(aws ecr get-login-password --region eu-north-1)
+echo $CERT | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com >&2`
 
 ## run x3 teranodes with miners, coinbase, and tx-blasters
 `$ docker compose up -d`

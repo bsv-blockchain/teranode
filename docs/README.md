@@ -150,7 +150,7 @@ Store Documentation:
 
 Overlay Service documentation:
 
-+ [Subtree Assembly Service](docs/services/subtreeAssembly.md)
++ [Block Persister Service](docs/services/blockPersister.md)
 + [P2P Service](docs/services/p2p.md)
 + [P2P Bootstrap Service](docs/services/p2pBootstrap.md)
 + [Bootstrap (Deprecated)](docs/services/bootstrap.md)
@@ -367,7 +367,7 @@ ubsv/
 │   ├── miner/                    # Miner Service
 │   ├── p2p/                      # P2P Service
 │   ├── propagation/              # Propagation Service
-│   ├── subtreeAssembly/          # Subtree Assembly Service
+│   ├── blockpersister/           # Block Persister Service
 │   └── validator/                # Validator Service
 │
 ├── stores/                       # This directory contains the different stores used by the node.

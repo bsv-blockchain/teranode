@@ -309,7 +309,6 @@ In the `blockvalidation` service, the `gocore.Config().Get()` function is used t
 - `blockvalidation_kafkaBrokers`: URL for the Kafka brokers used in the block validation process.
 - `blockvalidation_frpcListenAddress`: Address for the fRPC server used by the block validation service.
 - `blockvalidation_httpListenAddress`: HTTP server listen address for additional HTTP-based interfaces.
-- `subtreeassembly_kafkaBrokers`: Kafka brokers URL for the subtree assembly process.
 - `blockvalidation_quick_validation`: Enables a quick validation mode, which may skip certain intensive checks for faster processing. Useful in scenarios where performance is prioritized, and certain risk factors are managed externally.
 - `blockvalidation_validation_max_retries`: Specifies the maximum number of retries for validation attempts. This setting is part of a mechanism to retry validation in case of transient failures or conditions that might change upon subsequent attempts.
 - `blockvalidation_validation_retry_sleep`: Configures the sleep duration between validation retries, allowing the system to pause and potentially recover or await changes before retrying validation.
