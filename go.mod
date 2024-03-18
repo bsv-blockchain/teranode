@@ -1,6 +1,7 @@
 module github.com/bitcoin-sv/ubsv
 
-go 1.21
+go 1.21.3
+
 toolchain go1.22.1
 
 replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.7
