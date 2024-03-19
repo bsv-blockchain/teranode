@@ -159,25 +159,11 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 
 	var txCount int
 
-	startTime, groupStat, ctx := util.NewStatFromContext(ctx, "processSubtree", stats)
+	startTime, stat, ctx := util.NewStatFromContext(ctx, "processSubtree", stats, false)
+	stat.AddRanges(0, 10, 100, 1_000, 10_000, 100_000, 1_000_000)
+
 	defer func() {
-		if txCount > 1_000_000 {
-			groupStat.NewStat("> 1,000,000 txs").AddTime(startTime)
-		} else if txCount > 100_000 {
-			groupStat.NewStat("> 100,000 txs").AddTime(startTime)
-		} else if txCount > 10_000 {
-			groupStat.NewStat("> 10,000 txs").AddTime(startTime)
-		} else if txCount > 1_000 {
-			groupStat.NewStat("> 1,000 txs").AddTime(startTime)
-		} else if txCount > 100 {
-			groupStat.NewStat("> 100 txs").AddTime(startTime)
-		} else if txCount > 10 {
-			groupStat.NewStat("> 10 txs").AddTime(startTime)
-		} else if txCount > 0 {
-			groupStat.NewStat("> 0 txs").AddTime(startTime)
-		} else {
-			groupStat.NewStat("0 txs").AddTime(startTime)
-		}
+		stat.AddTimeForRange(startTime, txCount)
 
 		prometheusBlockPersisterSubtrees.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()

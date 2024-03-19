@@ -34,9 +34,11 @@ var (
 	prometheusBlockAssemblerSubtrees           prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration  prometheus.Histogram
 	//prometheusBlockAssemblerUtxoStoreDuration  prometheus.Histogram
-	prometheusBlockAssemblerReorg         prometheus.Counter
-	prometheusBlockAssemblerReorgDuration prometheus.Histogram
-	prometheusBlockAssemblerSetFromKafka  prometheus.Histogram
+	prometheusBlockAssemblerReorg             prometheus.Counter
+	prometheusBlockAssemblerReorgDuration     prometheus.Histogram
+	prometheusBlockAssemblerSetFromKafka      prometheus.Histogram
+	prometheusBlockAssemblyBestBlockHeight    prometheus.Gauge
+	prometheusBlockAssemblyCurrentBlockHeight prometheus.Gauge
 )
 
 var (
@@ -238,6 +240,22 @@ func _initPrometheusMetrics() {
 			Name:      "set_from_kafka_duration_micros",
 			Help:      "Duration of setting from kafka in block assembler",
 			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyBestBlockHeight = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockassembly",
+			Name:      "best_block_height",
+			Help:      "Best block height in block assembly",
+		},
+	)
+
+	prometheusBlockAssemblyCurrentBlockHeight = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "blockassembly",
+			Name:      "current_block_height",
+			Help:      "Current block height in block assembly",
 		},
 	)
 }

@@ -1,0 +1,19 @@
+@startuml
+participant "Block Persister" as BlockPersister
+participant "Blockchain Service" as Blockchain
+participant "Kafka Service" as Kafka
+
+BlockPersister -> BlockPersister: Load Configuration
+BlockPersister --> BlockPersister: Configuration Data
+
+BlockPersister -> Blockchain: Initialize Blockchain Service
+Blockchain --> BlockPersister: Blockchain Service Instance
+
+BlockPersister -> Kafka: Subscribe to Kafka Listeners
+Kafka --> BlockPersister: Listen to Block Notifications
+
+note left of Kafka: Listeners for\nBlock Notifications
+
+left footer Last Modified On: 15-March-2024
+
+@enduml
