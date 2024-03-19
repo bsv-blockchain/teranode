@@ -289,7 +289,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree)
 			return nil
 		}
 
-		// The function was called by BlockFound, and we had not already blessed the subtree, so we we load the subtree from the store to get the hashes
+		// The function was called by BlockFound, and we had not already blessed the subtree, so we load the subtree from the store to get the hashes
 		// get subtree from network over http using the baseUrl
 		txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, &v.SubtreeHash, v.BaseUrl)
 		if err != nil {

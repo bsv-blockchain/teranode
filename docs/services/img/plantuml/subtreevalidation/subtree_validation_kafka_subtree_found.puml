@@ -1,0 +1,29 @@
+@startuml
+participant "P2P" as P2P
+queue "kafka" as KA
+participant "Subtree Validation Server" as SVS
+participant "Validator" as Validator
+database "Subtree Store" as SubtreeStore
+
+P2P -> KA: New Subtree Message
+KA -> SVS: subtreeHandler(ctx, request)
+activate SVS
+
+SVS -> SubtreeStore: subtreeStore.Exists(spanCtx, subtreeHash[:])
+activate SubtreeStore
+SubtreeStore --> SVS: subtreeExists / err
+deactivate SubtreeStore
+
+SVS -> SVS: Obtain a lock on the Subtree
+
+SVS -> Validator: validateSubtreeInternal(ctx, validateSubtreeMessage)
+activate Validator
+Validator --> SVS
+deactivate Validator
+deactivate SVS
+
+deactivate Validator
+
+left footer Last Modified On: 19-March-2024
+
+@enduml

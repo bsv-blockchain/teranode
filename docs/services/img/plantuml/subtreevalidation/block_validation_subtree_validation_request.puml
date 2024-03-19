@@ -1,0 +1,45 @@
+@startuml
+participant "Block Validation\n(BlockValidation.go)" as BV
+participant "Subtree Validation Client" as SVC
+participant "Subtree Validation Server" as SVS
+participant "Validator" as Validator
+database "Subtree Store" as SubtreeStore
+
+BV -> BV: validateBlockSubtrees(ctx, block, baseUrl)
+activate BV
+
+loop for each subtree in the block
+
+    alt if a subtree does not exist
+        BV -> SVC: CheckSubtree(ctx, request)
+        activate SVC
+        SVC -> SVS: CheckSubtree(ctx, request)
+        deactivate SVC
+        activate SVS
+
+        SVS -> SubtreeStore: subtreeStore.Exists(spanCtx, subtreeHash[:])
+
+        activate SubtreeStore
+        SubtreeStore --> SVS: subtreeExists / err
+        deactivate SubtreeStore
+
+        SVS -> SVS: Obtain a lock on the Subtree
+
+        SVS -> Validator: validateSubtreeInternal(ctx, validateSubtreeMessage)
+        activate Validator
+
+        Validator --> SVS
+
+        deactivate Validator
+        deactivate SVS
+
+        deactivate Validator
+        SVS --> SVC
+        SVC --> BV
+    end
+end
+
+deactivate BV
+left footer Last Modified On: 19-March-2024
+
+@enduml

@@ -9,6 +9,11 @@ RECTANGLE BlockAssembly {
 RECTANGLE BlockValidation {
 }
 
+RECTANGLE SubtreetValidation {
+    <color:grey><i><size:10>This will push subtrees</size></i></color>
+  <color:grey><i><size:10>to the shared filesystem
+}
+
 RECTANGLE AssetService {
 }
 
@@ -18,7 +23,8 @@ RECTANGLE LustreFS {
 RECTANGLE S3 {}
 
 BlockAssembly -- LustreFS : subtrees TTL >
-BlockValidation -- LustreFS : subtrees TTL
+BlockValidation -- LustreFS : subtrees TTL <
+SubtreetValidation -- LustreFS : subtrees TTL >
 AssetService -- LustreFS : subtrees TTL <
 LustreFS -- S3 : subtrees (non-TTL) >
 @enduml
