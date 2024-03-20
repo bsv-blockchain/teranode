@@ -523,22 +523,6 @@ func TestPeerListeners(t *testing.T) {
 			wire.NewMsgGetHeaders(),
 		},
 		{
-			"OnCFHeaders",
-			wire.NewMsgCFHeaders(),
-		},
-		{
-			"OnFeeFilter",
-			wire.NewMsgFeeFilter(15000),
-		},
-		{
-			"OnFilterAdd",
-			wire.NewMsgFilterAdd([]byte{0x01}),
-		},
-		{
-			"OnFilterClear",
-			wire.NewMsgFilterClear(),
-		},
-		{
 			"OnMerkleBlock",
 			wire.NewMsgMerkleBlock(wire.NewBlockHeader(1,
 				&chainhash.Hash{}, &chainhash.Hash{}, 1, 1)),

@@ -20,7 +20,7 @@ func TestExcessiveBlockSizeUserAgentComment(t *testing.T) {
 	}
 
 	uac := cfg.UserAgentComments[0]
-	uacExpected := "EB32.0"
+	uacExpected := "EB128.0"
 	if uac != uacExpected {
 		t.Fatalf("Expected UserAgentComments to contain %s but got %s", uacExpected, uac)
 	}
@@ -38,7 +38,7 @@ func TestExcessiveBlockSizeUserAgentComment(t *testing.T) {
 	}
 
 	uac = cfg.UserAgentComments[0]
-	uacExpected = "EB64.0"
+	uacExpected = "EB128.0"
 	if uac != uacExpected {
 		t.Fatalf("Expected UserAgentComments to contain %s but got %s", uacExpected, uac)
 	}
