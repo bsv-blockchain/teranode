@@ -445,7 +445,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	go func() {
 		/// create bloom filter for the block and store
 		u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block", block.Hash().String())
-		u.createAppendBloomFilter(block)
+		u.createAppendBloomFilter(setCtx, block)
 		u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
 	}()
 
@@ -456,15 +456,22 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	return nil
 }
 
-func (u *BlockValidation) createAppendBloomFilter(block *model.Block) {
+func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *model.Block) {
 	_ = u.blockBloomFiltersBeingCreated.Put(*block.Hash())
 	defer func() {
 		_ = u.blockBloomFiltersBeingCreated.Delete(*block.Hash())
 	}()
 
+	var err error
+
 	// create a bloom filter for the block
 	bbf := &model.BlockBloomFilter{}
-	bbf.Filter = block.NewOptimizedBloomFilter()
+	bbf.Filter, err = block.NewOptimizedBloomFilter(ctx, u.logger, u.subtreeStore)
+	if err != nil {
+		u.logger.Errorf("[createAppendBloomFilter][%s] failed to create bloom filter: %s", block.Hash().String(), err)
+		return
+	}
+
 	bbf.CreationTime = time.Now()
 
 	// prune older bloom filters

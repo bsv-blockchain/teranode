@@ -22,7 +22,6 @@ import (
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	bloom "github.com/bitcoin-sv/ubsv/util/bloom"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-p2p/wire"
@@ -414,17 +413,7 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 	}
 
 	subtreeFees := uint64(0)
-	for idx, subtree := range b.SubtreeSlices {
-		if subtree == nil {
-			// get how many slices we are missing
-			missingSlices := 0
-			for i := idx; i < len(b.SubtreeSlices); i++ {
-				if b.SubtreeSlices[i] == nil {
-					missingSlices++
-				}
-			}
-			return fmt.Errorf("subtree %d (of %d, slices len %d, missing %d) is not loaded for block validation: %s", idx, len(b.Subtrees), len(b.SubtreeSlices), missingSlices, b.hash.String())
-		}
+	for _, subtree := range b.SubtreeSlices {
 		subtreeFees += subtree.Fees
 	}
 
@@ -618,11 +607,9 @@ func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeS
 		prometheusBlockGetSubtrees.Observe(time.Since(startTime).Seconds())
 	}()
 
-	if len(b.SubtreeSlices) == 0 {
-		// get the subtree slices from the subtree store
-		if err := b.GetAndValidateSubtrees(ctx, logger, subtreeStore); err != nil {
-			return nil, err
-		}
+	// get the subtree slices from the subtree store
+	if err := b.GetAndValidateSubtrees(ctx, logger, subtreeStore); err != nil {
+		return nil, err
 	}
 
 	return b.SubtreeSlices, nil
@@ -640,6 +627,11 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	defer func() {
 		b.subtreeSlicesMu.Unlock()
 	}()
+
+	if len(b.Subtrees) == len(b.SubtreeSlices) {
+		// already loaded
+		return nil
+	}
 
 	b.SubtreeSlices = make([]*util.Subtree, len(b.Subtrees))
 	b.SubtreeMetaSlices = make([]*util.SubtreeMeta, len(b.Subtrees))
@@ -664,7 +656,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 				// probably when being moved to permanent storage in another service
 				retries := 0
 				subtree := &util.Subtree{}
-				for {
+				for { // retry for loop
 					subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
 					if err != nil {
 						if retries < 3 {
@@ -895,61 +887,30 @@ func (b *Block) Bytes() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (b *Block) NewOptimizedBloomFilter() *blobloom.Filter {
+func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store) (*blobloom.Filter, error) {
+	err := b.GetAndValidateSubtrees(ctx, logger, subtreeStore)
+	if err != nil {
+		return nil, err
+	}
+
 	filter := blobloom.NewOptimized(blobloom.Config{
 		Capacity: b.TransactionCount, // Expected number of keys.
 		FPRate:   1e-5,               // Accept one false positive per 100,000 lookups.
 	})
 
 	var n64 uint64
-
-	g := errgroup.Group{}
-	g.SetLimit(16)
-
 	// insert all transaction ids first 8 bytes to the filter
-	for _, subtree := range b.SubtreeSlices {
+	for idx, subtree := range b.SubtreeSlices {
 		if subtree == nil {
-			// TODO: why would subtree be nil?
-			return nil
+			return nil, fmt.Errorf("subtree %d is nil: %s", idx, b.hash.String())
 		}
-		subtree := subtree
-		g.Go(func() error {
-			for _, node := range subtree.Nodes {
-				binary.BigEndian.PutUint64(node.Hash[:], n64)
-				filter.Add(n64)
-			}
-			return nil
-		})
+		for _, node := range subtree.Nodes {
+			binary.BigEndian.PutUint64(node.Hash[:], n64)
+			filter.Add(n64)
+		}
 	}
 
-	if err := g.Wait(); err != nil {
-		return nil
-	}
-
-	return filter
-}
-
-func (b *Block) NewBloomFilter() *bloom.ShardedBloomFilter {
-	g := errgroup.Group{}
-	g.SetLimit(16)
-
-	filter := bloom.NewShardedBloomFilter()
-
-	for _, subtree := range b.SubtreeSlices {
-		subtree := subtree
-		g.Go(func() error {
-			for _, node := range subtree.Nodes {
-				filter.Add(node.Hash[:])
-			}
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil
-	}
-
-	return filter
+	return filter, nil
 }
 
 func medianTimestamp(timestamps []time.Time) (*time.Time, error) {

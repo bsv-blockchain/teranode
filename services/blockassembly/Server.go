@@ -49,18 +49,17 @@ type BlockAssembly struct {
 	blockAssembler *BlockAssembler
 	logger         ulogger.Logger
 
-	blockchainClient          blockchain.ClientI
-	txStore                   blob.Store
-	utxoStore                 utxostore.Interface
-	txMetaStore               txmeta_store.Store
-	subtreeStore              blob.Store
-	subtreeTTL                time.Duration
-	assetClient               WrapperInterface
-	blockValidationClient     WrapperInterface
-	jobStore                  *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
-	blockSubmissionChan       chan *BlockSubmissionRequest
-	blockAssemblyDisabled     bool
-	blockAssemblyCreatesUTXOs bool
+	blockchainClient      blockchain.ClientI
+	txStore               blob.Store
+	utxoStore             utxostore.Interface
+	txMetaStore           txmeta_store.Store
+	subtreeStore          blob.Store
+	subtreeTTL            time.Duration
+	assetClient           WrapperInterface
+	blockValidationClient WrapperInterface
+	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
+	blockSubmissionChan   chan *BlockSubmissionRequest
+	blockAssemblyDisabled bool
 }
 
 type subtreeRetrySend struct {
@@ -85,19 +84,18 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
 	ba := &BlockAssembly{
-		logger:                    logger,
-		blockchainClient:          blockchainClient,
-		txStore:                   txStore,
-		utxoStore:                 utxoStore,
-		txMetaStore:               txMetaStore,
-		subtreeStore:              subtreeStore,
-		subtreeTTL:                subtreeTTL,
-		assetClient:               AssetClient,
-		blockValidationClient:     blockValidationClient,
-		jobStore:                  ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
-		blockSubmissionChan:       make(chan *BlockSubmissionRequest),
-		blockAssemblyDisabled:     gocore.Config().GetBool("blockassembly_disabled", false),
-		blockAssemblyCreatesUTXOs: gocore.Config().GetBool("blockassembly_creates_utxos", false),
+		logger:                logger,
+		blockchainClient:      blockchainClient,
+		txStore:               txStore,
+		utxoStore:             utxoStore,
+		txMetaStore:           txMetaStore,
+		subtreeStore:          subtreeStore,
+		subtreeTTL:            subtreeTTL,
+		assetClient:           AssetClient,
+		blockValidationClient: blockValidationClient,
+		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
+		blockSubmissionChan:   make(chan *BlockSubmissionRequest),
+		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
 	}
 
 	go ba.jobStore.Start()
@@ -457,12 +455,6 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	if !ba.blockAssemblyDisabled {
-		if ba.blockAssemblyCreatesUTXOs {
-			if err = ba.storeUtxos(ctx, req); err != nil {
-				return nil, err
-			}
-		}
-
 		ba.blockAssembler.AddTx(util.SubtreeNode{
 			Hash:        chainhash.Hash(req.Txid),
 			Fee:         req.Fee,
@@ -517,19 +509,11 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	}
 
 	var batchError error = nil
-	var err error
 	txIdErrors := make([][]byte, 0, len(requests))
 	for _, req := range requests {
 		startTxTime := time.Now()
 		// create the subtree node
 		if !ba.blockAssemblyDisabled {
-			if ba.blockAssemblyCreatesUTXOs {
-				if err = ba.storeUtxos(ctx, req); err != nil {
-					batchError = err
-					txIdErrors = append(txIdErrors, req.Txid)
-				}
-			}
-
 			ba.blockAssembler.AddTx(util.SubtreeNode{
 				Hash:        chainhash.Hash(req.Txid),
 				Fee:         req.Fee,

@@ -45,7 +45,6 @@ type Validator struct {
 	blockValidationBatcher        batcher.Batcher2[txmeta.Data]
 	saveInParallel                bool
 	blockAssemblyDisabled         bool
-	blockAssemblyCreatesUTXOs     bool
 	blockValidationBatcherEnabled bool
 	blockassemblyKafkaChan        chan []byte
 	blockvalidationKafkaChan      chan []byte
@@ -156,7 +155,6 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 	}
 
 	validator.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
-	validator.blockAssemblyCreatesUTXOs = gocore.Config().GetBool("blockassembly_creates_utxos", false)
 
 	txsKafkaURL, _, found := gocore.Config().GetURL("kafka_txsConfig")
 	if found {
@@ -270,23 +268,15 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	setSpan := tracing.Start(setCtx, "Validator:sendToBlockAssembly")
 	defer setSpan.Finish()
 
-	// if the block assembly creates utxos, then we don't need to do it here
-	if !v.blockAssemblyCreatesUTXOs {
-		// then we store the new utxos from the tx
-		err = v.storeUtxos(setSpan.Ctx, tx)
-		if err != nil {
-			if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
-				err = errors.Join(ErrInternal, err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
-			}
+	/*
+		Scenario where store is done before adding to assembly:
+		Parent -> spent -> tx meta -> stored                                                  -> block assembly
+		Child                                 -> spent -> tx meta -> stored -> block assembly
 
-			if err = v.reverseTxMetaStore(setSpan, tx.TxIDChainHash()); err != nil {
-				err = errors.Join(ErrInternal, err, fmt.Errorf("error reversing tx meta utxoStore: %v", err))
-			}
-
-			setSpan.RecordError(err)
-			return err
-		}
-	}
+		Scenario where store is done after adding to assembly:
+		Parent -> spent -> tx meta -> block assembly -> stored
+		Child                                                  -> spent -> tx meta -> stored -> block assembly
+	*/
 
 	txMetaData, err := v.registerTxInMetaStore(setSpan, tx, spentUtxos)
 	if err != nil {
@@ -303,26 +293,6 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 	}
 
 	if !v.blockAssemblyDisabled {
-		var h *chainhash.Hash
-		utxoHashes := make([]chainhash.Hash, len(tx.Outputs))
-		for i, output := range tx.Outputs {
-			h, err = util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
-			if err != nil {
-				if reverseErr := v.reverseStores(setSpan, tx); reverseErr != nil {
-					err = errors.Join(err, fmt.Errorf("error reversing utxo stores: %v", reverseErr))
-				}
-				if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
-					err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
-				}
-				if metaErr := v.txMetaStore.Delete(setSpan.Ctx, tx.TxIDChainHash()); metaErr != nil {
-					err = errors.Join(err, fmt.Errorf("error deleting tx %s from tx meta utxoStore: %v", tx.TxIDChainHash().String(), metaErr))
-				}
-				setSpan.RecordError(err)
-				return err
-			}
-			utxoHashes[i] = *h
-		}
-
 		parentTxHashes := make([]chainhash.Hash, len(tx.Inputs))
 		for i, input := range tx.Inputs {
 			parentTxHashes[i] = *input.PreviousTxIDChainHash()
@@ -334,26 +304,41 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 			Fee:            txMetaData.Fee,
 			Size:           uint64(tx.Size()),
 			LockTime:       tx.LockTime,
-			UtxoHashes:     utxoHashes,
 			ParentTxHashes: parentTxHashes,
 		}, spentUtxos); err != nil {
 			err = errors.Join(ErrInternal, fmt.Errorf("error sending tx to block assembler: %v", err))
 
-			if reverseErr := v.reverseStores(setSpan, tx); reverseErr != nil {
-				err = errors.Join(err, fmt.Errorf("error reversing utxo stores: %v", reverseErr))
+			if metaErr := v.txMetaStore.Delete(setSpan.Ctx, tx.TxIDChainHash()); metaErr != nil {
+				err = errors.Join(err, fmt.Errorf("error deleting tx %s from tx meta utxoStore: %v", tx.TxIDChainHash().String(), metaErr))
 			}
 
 			if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
 				err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
 			}
 
-			if metaErr := v.txMetaStore.Delete(setSpan.Ctx, tx.TxIDChainHash()); metaErr != nil {
-				err = errors.Join(err, fmt.Errorf("error deleting tx %s from tx meta utxoStore: %v", tx.TxIDChainHash().String(), metaErr))
-			}
-
 			setSpan.RecordError(err)
 			return err
 		}
+	}
+
+	// if the block assembly creates utxos, then we don't need to do it here
+	// then we store the new utxos from the tx
+	err = v.storeUtxos(setSpan.Ctx, tx)
+	if err != nil {
+		if err = v.blockAssembler.RemoveTx(setSpan.Ctx, tx.TxIDChainHash()); err != nil {
+			err = errors.Join(ErrInternal, err, fmt.Errorf("error removing tx from block assembly: %v", err))
+		}
+
+		if err = v.reverseTxMetaStore(setSpan, tx.TxIDChainHash()); err != nil {
+			err = errors.Join(ErrInternal, err, fmt.Errorf("error reversing tx meta utxoStore: %v", err))
+		}
+
+		if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
+			err = errors.Join(ErrInternal, err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
+		}
+
+		setSpan.RecordError(err)
+		return err
 	}
 
 	return nil
