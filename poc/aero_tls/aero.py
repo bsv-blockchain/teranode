@@ -1,7 +1,8 @@
 import aerospike
 
 user = "read-write"
-password = "i23nqwreak"
+# use a secure password like i23nqwreak
+password = os.getenv("aerospike_password")
 config = {'hosts': [('aerospike.aerospike.svc.cluster.local', 3000)], 'policies': {'timeout': 1000}, 'user': user,'password': password}
 
 client = aerospike.client(config).connect()
