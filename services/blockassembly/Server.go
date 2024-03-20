@@ -49,19 +49,17 @@ type BlockAssembly struct {
 	blockAssembler *BlockAssembler
 	logger         ulogger.Logger
 
-	blockchainClient          blockchain.ClientI
-	txStore                   blob.Store
-	utxoStore                 utxostore.Interface
-	txMetaStore               txmeta_store.Store
-	subtreeStore              blob.Store
-	subtreeTTL                time.Duration
-	assetClient               WrapperInterface
-	blockValidationClient     WrapperInterface
-	jobStore                  *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
-	blockSubmissionChan       chan *BlockSubmissionRequest
-	blockAssemblyDisabled     bool
-	blockAssemblyCreatesUTXOs bool
-	localSetMined             bool
+	blockchainClient      blockchain.ClientI
+	txStore               blob.Store
+	utxoStore             utxostore.Interface
+	txMetaStore           txmeta_store.Store
+	subtreeStore          blob.Store
+	subtreeTTL            time.Duration
+	assetClient           WrapperInterface
+	blockValidationClient WrapperInterface
+	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
+	blockSubmissionChan   chan *BlockSubmissionRequest
+	blockAssemblyDisabled bool
 }
 
 type subtreeRetrySend struct {
@@ -86,20 +84,18 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
 	ba := &BlockAssembly{
-		logger:                    logger,
-		blockchainClient:          blockchainClient,
-		txStore:                   txStore,
-		utxoStore:                 utxoStore,
-		txMetaStore:               txMetaStore,
-		subtreeStore:              subtreeStore,
-		subtreeTTL:                subtreeTTL,
-		assetClient:               AssetClient,
-		blockValidationClient:     blockValidationClient,
-		jobStore:                  ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
-		blockSubmissionChan:       make(chan *BlockSubmissionRequest),
-		blockAssemblyDisabled:     gocore.Config().GetBool("blockassembly_disabled", false),
-		blockAssemblyCreatesUTXOs: gocore.Config().GetBool("blockassembly_creates_utxos", false),
-		localSetMined:             gocore.Config().GetBool("blockvalidation_localSetMined", false),
+		logger:                logger,
+		blockchainClient:      blockchainClient,
+		txStore:               txStore,
+		utxoStore:             utxoStore,
+		txMetaStore:           txMetaStore,
+		subtreeStore:          subtreeStore,
+		subtreeTTL:            subtreeTTL,
+		assetClient:           AssetClient,
+		blockValidationClient: blockValidationClient,
+		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
+		blockSubmissionChan:   make(chan *BlockSubmissionRequest),
+		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
 	}
 
 	go ba.jobStore.Start()
@@ -459,12 +455,6 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	if !ba.blockAssemblyDisabled {
-		if ba.blockAssemblyCreatesUTXOs {
-			if err = ba.storeUtxos(ctx, req); err != nil {
-				return nil, err
-			}
-		}
-
 		ba.blockAssembler.AddTx(util.SubtreeNode{
 			Hash:        chainhash.Hash(req.Txid),
 			Fee:         req.Fee,
@@ -519,19 +509,11 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	}
 
 	var batchError error = nil
-	var err error
 	txIdErrors := make([][]byte, 0, len(requests))
 	for _, req := range requests {
 		startTxTime := time.Now()
 		// create the subtree node
 		if !ba.blockAssemblyDisabled {
-			if ba.blockAssemblyCreatesUTXOs {
-				if err = ba.storeUtxos(ctx, req); err != nil {
-					batchError = err
-					txIdErrors = append(txIdErrors, req.Txid)
-				}
-			}
-
 			ba.blockAssembler.AddTx(util.SubtreeNode{
 				Hash:        chainhash.Hash(req.Txid),
 				Fee:         req.Fee,
@@ -790,7 +772,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 	startTime := time.Now()
 	ba.logger.Infof("[BlockAssembly][%s][%s] validating block", jobID, block.Header.Hash())
 	// check fully valid, including whether difficulty in header is low enough
-	if ok, err := block.Valid(ctx, ba.logger, nil, nil, nil, nil, nil); !ok {
+	if ok, err := block.Valid(ctx, ba.logger, nil, nil, nil, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] invalid block: %v", jobID, block.Hash().String(), err)
 	}
@@ -814,16 +796,6 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to add block: %w", jobID, block.Hash().String(), err)
 	}
 
-	ids, err := ba.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
-	if err != nil {
-		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to get block header ids: %w", jobID, block.Hash().String(), err)
-	}
-
-	var blockID uint32
-	if len(ids) > 0 {
-		blockID = ids[0]
-	}
-
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
 	callerSpan := opentracing.SpanFromContext(ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
@@ -845,23 +817,6 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 
 			return nil
 		})
-
-		if !ba.localSetMined {
-			g.Go(func() error {
-				timeStart := time.Now()
-				// add the transactions in this block to the txMeta block hashes
-				ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status", jobID, block.Header.Hash())
-
-				if err := model.UpdateTxMinedStatus(gCtx, ba.logger, ba.blockValidationClient, subtreesInJob, blockID); err != nil {
-					// TODO retry
-					ba.logger.Errorf("[BlockAssembly][%s][%s] error updating tx mined status: %v", jobID, block.Header.Hash(), err)
-				}
-
-				ba.logger.Infof("[BlockAssembly][%s][%s] update tx mined status DONE in %s", jobID, block.Header.Hash(), time.Since(timeStart).String())
-
-				return nil
-			})
-		}
 
 		if err = g.Wait(); err != nil {
 			ba.logger.Errorf("[BlockAssembly][%s][InvalidateBlock] block is not valid: %v", block.String(), err)

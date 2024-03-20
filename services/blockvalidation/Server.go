@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
@@ -63,6 +64,8 @@ type Server struct {
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
 	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
+	// bloom filter stats for all blocks processed
+	bloomFilterStats *model.BloomStats
 }
 
 func Enabled() bool {
@@ -95,6 +98,7 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		catchupCh:            make(chan processBlockCatchup, catchupChBuffer),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
+		bloomFilterStats:     model.NewBloomStats(),
 	}
 
 	// create a caching tx meta store
@@ -118,9 +122,27 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	}
 
 	subtreeValidationClient := subtreevalidation.NewClient(ctx, u.logger)
-	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient)
+
+	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+	if err != nil || !found {
+		return fmt.Errorf("could not get txmeta_store URL: %v", err)
+	}
+
+	expiration := uint64(0)
+	expirationValue := txMetaStoreURL.Query().Get("expiration")
+	if expirationValue != "" {
+		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
+		if err != nil {
+			return fmt.Errorf("could not parse expiration %s: %v", expirationValue, err)
+		}
+		expiration = uint64(expiration64)
+	}
+
+	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
 
 	go u.processSubtreeNotify.Start()
+
+	go u.bloomFilterStats.BloomFilterStatsProcessor(ctx)
 
 	go func() {
 		for {
@@ -170,7 +192,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				return
 			case c := <-u.catchupCh:
 				{
-
 					u.logger.Infof("[Init] processing catchup on channel [%s]", c.block.Hash().String())
 					if err := u.catchup(ctx1, c.block, c.baseURL); err != nil {
 						u.logger.Errorf("[Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
@@ -443,7 +464,25 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 		return err
 	}
 
-	// catchup if we are missing the parent block
+	// check if the parent block is being validated, then wait for it to finish.
+	blockBeingFinalized := u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) ||
+		u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock)
+
+	if blockBeingFinalized {
+		u.logger.Infof("[processBlockFound][%s] parent block is being validated (hash: %s), waiting for it to finish", hash.String(), block.Header.HashPrevBlock.String())
+		for {
+			blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) ||
+				u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock)
+
+			if !blockBeingFinalized {
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+		u.logger.Infof("[processBlockFound][%s] parent block is done being validated", hash.String())
+	}
+
+	// catchup if we are missing the parent block.
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
 		return fmt.Errorf("[processBlockFound][%s] failed to check if parent block %s exists [%w]", hash.String(), block.Header.HashPrevBlock.String(), err)
@@ -465,7 +504,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
-	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl)
+	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.bloomFilterStats)
 	if err != nil {
 		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}
@@ -563,10 +602,29 @@ LOOP:
 		}
 
 		for _, blockHeader := range blockHeaders {
+			// check if parent block is currently being validated, then wait for it to finish. If the parent block was being validated, when the for loop is done, GetBlockExists will return true.
+			blockBeingFinalized := u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) ||
+				u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock)
+
+			if blockBeingFinalized {
+				u.logger.Infof("[catchup][%s] parent block is being validated (hash: %s), waiting for it to finish", fromBlock.Hash().String(), blockHeader.HashPrevBlock.String())
+				for {
+					blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) ||
+						u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock)
+
+					if !blockBeingFinalized {
+						break
+					}
+					time.Sleep(1 * time.Second)
+				}
+				u.logger.Infof("[catchup][%s] parent block is done being validated", fromBlock.Hash().String())
+			}
+
 			exists, err = u.blockValidation.GetBlockExists(spanCtx, blockHeader.Hash())
 			if err != nil {
-				return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
+				return fmt.Errorf("[catchup][%s] failed to check if parent block exists [%w]", fromBlock.Hash().String(), err)
 			}
+
 			if exists {
 				break LOOP
 			}
@@ -575,6 +633,7 @@ LOOP:
 			catchupBlockHeaders = append(catchupBlockHeaders, blockHeader)
 
 			fromBlockHeaderHash = blockHeader.HashPrevBlock
+			// TODO: check if its only useful for a chain with different genesis block?
 			if fromBlockHeaderHash.IsEqual(&chainhash.Hash{}) {
 				return fmt.Errorf("[catchup][%s] failed to find parent block header, last was: %s", fromBlock.Hash().String(), blockHeader.String())
 			}
@@ -614,7 +673,7 @@ LOOP:
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
 	for block := range validateBlocksChan {
-		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL); err != nil {
+		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.bloomFilterStats); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
 	}

@@ -86,7 +86,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			httpmock.NewBytesResponder(200, nodeBytes),
 		)
 
-		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient)
+		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 
 		v := ValidateSubtree{
 			SubtreeHash:   *subtree.RootHash(),
@@ -162,7 +162,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, deferFunc := setup()
 	defer deferFunc()
 
-	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	blockValidation.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
 
 	numberOfItems := 1_024 * 1_024
@@ -307,9 +307,9 @@ func TestBlockValidation_validateBlock_small(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
@@ -409,9 +409,9 @@ func TestBlockValidation_validateBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
@@ -463,7 +463,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 		httpmock.NewBytesResponder(200, nodeBytes),
 	)
 
-	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 
 	// Create a mock context
 	ctx := context.Background()

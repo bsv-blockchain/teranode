@@ -47,12 +47,6 @@ func (f *fRPC_BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.B
 		return nil, fmt.Errorf("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid))
 	}
 
-	if f.ba.blockAssemblyCreatesUTXOs {
-		if err = f.storeUtxos(ctx, req); err != nil {
-			return nil, fmt.Errorf("failed to store utxos: %s", err)
-		}
-	}
-
 	f.ba.blockAssembler.AddTx(util.SubtreeNode{
 		Hash:        chainhash.Hash(req.Txid),
 		Fee:         req.Fee,
@@ -75,13 +69,6 @@ func (f *fRPC_BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembl
 	var req *blockassembly_api.BlockassemblyApiAddTxRequest
 	var txIdErrors [][]byte
 	for _, req = range batch.TxRequests {
-		if f.ba.blockAssemblyCreatesUTXOs {
-			if err = f.storeUtxos(ctx, req); err != nil {
-				txIdErrors = append(txIdErrors, req.Txid)
-				continue
-			}
-		}
-
 		f.ba.blockAssembler.AddTx(util.SubtreeNode{
 			Hash:        chainhash.Hash(req.Txid),
 			Fee:         req.Fee,
