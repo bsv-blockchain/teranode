@@ -1255,7 +1255,7 @@ func (b *BlockChain) initChainState() error {
 		// initialized for use with chain yet, so break out now to allow
 		// that to happen under a writable database transaction.
 		serializedData := dbTx.Metadata().Get(chainStateKeyName)
-		log.Tracef("Serialized chain state: %x", serializedData)
+		log.Debugf("Serialized chain state: %x", serializedData)
 		state, err := deserializeBestChainState(serializedData)
 		if err != nil {
 			return err
@@ -1322,7 +1322,7 @@ func (b *BlockChain) initChainState() error {
 			lastNode = node
 			i++
 		}
-		log.Debug("Done loading block index")
+		log.Debugf("Done loading block index")
 
 		// Set the best chain view to the stored best state.
 		tip := b.index.LookupNode(&state.hash)

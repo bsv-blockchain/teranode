@@ -316,7 +316,7 @@ func (idx *TxIndex) Init() error {
 			highestKnown = testBlockID
 			testBlockID += increment
 		}
-		log.Tracef("Forward scan (highest known %d, next unknown %d)",
+		log.Debugf("Forward scan (highest known %d, next unknown %d)",
 			highestKnown, nextUnknown)
 
 		// No used block IDs due to new database.
@@ -334,7 +334,7 @@ func (idx *TxIndex) Init() error {
 			} else {
 				highestKnown = testBlockID
 			}
-			log.Tracef("Binary scan (highest known %d, next "+
+			log.Debugf("Binary scan (highest known %d, next "+
 				"unknown %d)", highestKnown, nextUnknown)
 			if highestKnown+1 == nextUnknown {
 				break

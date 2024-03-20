@@ -890,7 +890,7 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 	for e := sm.startHeader; e != nil; e = e.Next() {
 		node, ok := e.Value.(*headerNode)
 		if !ok {
-			log.Warn("Header list node type is not a headerNode")
+			log.Warnf("Header list node type is not a headerNode")
 			continue
 		}
 
@@ -1364,13 +1364,13 @@ out:
 			break out
 		}
 	}
-	log.Debug("Block handler shutting down: flushing blockchain caches...")
+	log.Debugf("Block handler shutting down: flushing blockchain caches...")
 	if err := sm.chain.FlushCachedState(blockchain.FlushRequired); err != nil {
 		log.Errorf("Error while flushing blockchain caches: %v", err)
 	}
 
 	sm.wg.Done()
-	log.Trace("Block handler done")
+	log.Debugf("Block handler done")
 }
 
 // handleBlockchainNotification handles notifications from blockchain.  It does
@@ -1540,7 +1540,7 @@ func (sm *SyncManager) Start() {
 		return
 	}
 
-	log.Trace("Starting sync manager")
+	log.Debugf("Starting sync manager")
 	sm.wg.Add(1)
 	go sm.blockHandler()
 }
@@ -1620,7 +1620,7 @@ func New(config *Config) (*SyncManager, error) {
 			sm.resetHeaderState(&best.Hash, best.Height)
 		}
 	} else {
-		log.Info("Checkpoints are disabled")
+		log.Infof("Checkpoints are disabled")
 	}
 
 	sm.chain.Subscribe(sm.handleBlockchainNotification)

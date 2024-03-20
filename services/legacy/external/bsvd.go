@@ -46,11 +46,6 @@ func bsvdMain(serverChan chan<- *server) error {
 		return err
 	}
 	cfg = tcfg
-	defer func() {
-		if logRotator != nil {
-			logRotator.Close()
-		}
-	}()
 
 	// Do required one-time initialization on wire
 	wire.SetLimits(cfg.ExcessiveBlockSize)
@@ -59,7 +54,7 @@ func bsvdMain(serverChan chan<- *server) error {
 	// triggered either from an OS signal such as SIGINT (Ctrl+C) or from
 	// another subsystem such as the RPC server.
 	interrupt := interruptListener()
-	defer bsvdLog.Info("Shutdown complete")
+	defer bsvdLog.Infof("Shutdown complete")
 
 	// Show version at startup.
 	bsvdLog.Infof("Version %s", version.String())
@@ -261,11 +256,11 @@ func loadBlockDB() (database.DB, error) {
 		}
 	}
 
-	bsvdLog.Info("Block database loaded")
+	bsvdLog.Infof("Block database loaded")
 	return db, nil
 }
 
-func main() {
+func Start() {
 	// Use all processor cores.
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
@@ -281,26 +276,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Call serviceMain on Windows to handle running as a service.  When
-	// the return isService flag is true, exit now since we ran as a
-	// service.  Otherwise, just fall through to normal operation.
-	if runtime.GOOS == "windows" {
-		isService, err := winServiceMain()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-		if isService {
-			os.Exit(0)
-		}
-	}
-
 	// Work around defer not working after os.Exit()
 	if err := bsvdMain(nil); err != nil {
 		os.Exit(1)
 	}
-}
-
-func Start() {
-	main()
 }

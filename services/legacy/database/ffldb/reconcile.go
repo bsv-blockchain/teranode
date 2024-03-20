@@ -86,7 +86,7 @@ func reconcileDB(pdb *db, create bool) (database.DB, error) {
 	if wc.curFileNum > curFileNum || (wc.curFileNum == curFileNum &&
 		wc.curOffset > curOffset) {
 
-		log.Info("Detected unclean shutdown - Repairing...")
+		log.Infof("Detected unclean shutdown - Repairing...")
 		log.Debugf("Metadata claims file %d, offset %d. Block data is "+
 			"at file %d, offset %d", curFileNum, curOffset,
 			wc.curFileNum, wc.curOffset)

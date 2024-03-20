@@ -24,8 +24,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
+
+var log = ulogger.New("AMGR")
 
 // AddrManager provides a concurrency safe address manager for caching potential
 // peers on the bitcoin network.
@@ -222,7 +225,7 @@ func (a *AddrManager) updateAddress(netAddr, srcAddr *wire.NetAddress) {
 
 	// Enforce max addresses.
 	if len(a.addrNew[bucket]) > newBucketSize {
-		log.Tracef("new bucket is full, expiring old")
+		log.Debugf("new bucket is full, expiring old")
 		a.expireNew(bucket)
 	}
 
@@ -230,7 +233,7 @@ func (a *AddrManager) updateAddress(netAddr, srcAddr *wire.NetAddress) {
 	ka.refs++
 	a.addrNew[bucket][addr] = ka
 
-	log.Tracef("Added new address %s for a total of %d addresses", addr,
+	log.Debugf("Added new address %s for a total of %d addresses", addr,
 		a.nTried+a.nNew)
 }
 
@@ -245,7 +248,7 @@ func (a *AddrManager) expireNew(bucket int) {
 	var oldest *KnownAddress
 	for k, v := range a.addrNew[bucket] {
 		if v.isBad() {
-			log.Tracef("expiring bad address %v", k)
+			log.Debugf("expiring bad address %v", k)
 			delete(a.addrNew[bucket], k)
 			v.refs--
 			if v.refs == 0 {
@@ -263,7 +266,7 @@ func (a *AddrManager) expireNew(bucket int) {
 
 	if oldest != nil {
 		key := NetAddressKey(oldest.na)
-		log.Tracef("expiring oldest address %v", key)
+		log.Debugf("expiring oldest address %v", key)
 
 		delete(a.addrNew[bucket], key)
 		oldest.refs--
@@ -350,7 +353,7 @@ out:
 	}
 	a.savePeers()
 	a.wg.Done()
-	log.Trace("Address handler done")
+	log.Debugf("Address handler done")
 }
 
 // savePeers saves all the known addresses to a file so they can be read back
@@ -542,7 +545,7 @@ func (a *AddrManager) Start() {
 		return
 	}
 
-	log.Trace("Starting address manager")
+	log.Debugf("Starting address manager")
 
 	// Load peers we already know about from file.
 	a.loadPeers()
@@ -768,7 +771,7 @@ func (a *AddrManager) GetAddress() *KnownAddress {
 			ka := e.Value.(*KnownAddress)
 			randval := a.rand.Intn(large)
 			if float64(randval) < (factor * ka.chance() * float64(large)) {
-				log.Tracef("Selected %v from tried bucket",
+				log.Debugf("Selected %v from tried bucket",
 					NetAddressKey(ka.na))
 				return ka
 			}
@@ -796,7 +799,7 @@ func (a *AddrManager) GetAddress() *KnownAddress {
 			}
 			randval := a.rand.Intn(large)
 			if float64(randval) < (factor * ka.chance() * float64(large)) {
-				log.Tracef("Selected %v from new bucket",
+				log.Debugf("Selected %v from new bucket",
 					NetAddressKey(ka.na))
 				return ka
 			}
@@ -932,7 +935,7 @@ func (a *AddrManager) Good(addr *wire.NetAddress) {
 	a.nNew++
 
 	rmkey := NetAddressKey(rmka.na)
-	log.Tracef("Replacing %s with %s in tried", rmkey, addrKey)
+	log.Debugf("Replacing %s with %s in tried", rmkey, addrKey)
 
 	// We made sure there is space here just above.
 	a.addrNew[newBucket][rmkey] = rmka

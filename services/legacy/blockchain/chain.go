@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -25,6 +26,8 @@ const (
 	// queued.
 	maxOrphanBlocks = 100
 )
+
+var log = ulogger.New("CHAN")
 
 // BlockLocator is used to help locate a specific block.  The algorithm for
 // building the block locator is to add the hashes in reverse order until
@@ -1794,7 +1797,7 @@ func (b *BlockChain) RollbackUtxoSet(height int32) (*UtxoViewpoint, error) {
 			return nil, err
 		}
 	}
-	log.Info("Finished rolling back blocks")
+	log.Infof("Finished rolling back blocks")
 	return view, nil
 }
 
@@ -1843,7 +1846,7 @@ func (b *BlockChain) ReIndexChainState() error {
 	defer b.chainLock.Unlock()
 
 	// Delete the UTXO bucket and create a new one
-	log.Info("Deleting UTXO database bucket...")
+	log.Infof("Deleting UTXO database bucket...")
 	err := b.db.Update(func(tx database.Tx) error {
 		if err := tx.Metadata().DeleteBucket(utxoSetBucketName); err != nil {
 			return err
@@ -1856,7 +1859,7 @@ func (b *BlockChain) ReIndexChainState() error {
 	if err != nil {
 		return err
 	}
-	log.Info("Deletion complete. Re-indexing UTXO set...")
+	log.Infof("Deletion complete. Re-indexing UTXO set...")
 
 	var (
 		blk           *bsvutil.Block
@@ -2135,11 +2138,11 @@ func New(config *Config) (*BlockChain, error) {
 	}
 
 	if config.ReIndexChainState {
-		log.Info("Re-indexing UTXO set from disk. This will take a while...")
+		log.Infof("Re-indexing UTXO set from disk. This will take a while...")
 		if err := b.ReIndexChainState(); err != nil {
 			return nil, err
 		}
-		log.Info("Re-indexing complete")
+		log.Infof("Re-indexing complete")
 	}
 
 	log.Infof("Chain state (height %d, hash %v, totaltx %d, work %v)",

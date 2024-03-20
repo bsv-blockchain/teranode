@@ -291,7 +291,7 @@ func (b *BlockChain) warnUnknownVersions(node *blockNode) error {
 		node = node.parent
 	}
 	if numUpgraded > unknownVerWarnNum {
-		log.Warn("Unknown block versions are being mined, so new " +
+		log.Warnf("Unknown block versions are being mined, so new " +
 			"rules might be in effect.  Are you running the " +
 			"latest version of the software?")
 		b.unknownVersionsWarned = true

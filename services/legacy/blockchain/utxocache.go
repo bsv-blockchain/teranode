@@ -543,7 +543,7 @@ func (s *utxoCache) flush(bestState *BestState) error {
 	s.flushInProgress = true
 	defer func() { s.flushInProgress = false }()
 	for len(s.cachedEntries) > 0 {
-		log.Tracef("Flushing %d more entries...", len(s.cachedEntries))
+		log.Debugf("Flushing %d more entries...", len(s.cachedEntries))
 		err := s.db.Update(func(dbTx database.Tx) error {
 			return flushBatch(dbTx)
 		})
@@ -561,7 +561,7 @@ func (s *utxoCache) flush(bestState *BestState) error {
 		return err
 	}
 	s.lastFlushHash = bestState.Hash
-	log.Debug("Done flushing UTXO cache to disk")
+	log.Debugf("Done flushing UTXO cache to disk")
 	return nil
 }
 
@@ -626,7 +626,7 @@ func (s *utxoCache) InitConsistentState(tip *blockNode, interrupt <-chan struct{
 	if err != nil {
 		return err
 	}
-	log.Tracef("UTXO cache consistency status from disk: [%d] hash %v",
+	log.Debugf("UTXO cache consistency status from disk: [%d] hash %v",
 		statusCode, statusHash)
 
 	// We can set this variable now already because it will always be valid
@@ -652,7 +652,7 @@ func (s *utxoCache) InitConsistentState(tip *blockNode, interrupt <-chan struct{
 		return nil
 	}
 
-	log.Info("Reconstructing UTXO state after unclean shutdown. This may take " +
+	log.Infof("Reconstructing UTXO state after unclean shutdown. This may take " +
 		"a long time...")
 
 	// Even though this should always be true, make sure the fetched hash is in
@@ -707,7 +707,7 @@ func (s *utxoCache) InitConsistentState(tip *blockNode, interrupt <-chan struct{
 		return node, nil
 	}
 	for node := tip; node.height >= statusNode.height; {
-		log.Tracef("Rolling back %d more blocks...",
+		log.Debugf("Rolling back %d more blocks...",
 			node.height-statusNode.height+1)
 		err := s.db.Update(func(dbTx database.Tx) error {
 			var err error
@@ -719,7 +719,7 @@ func (s *utxoCache) InitConsistentState(tip *blockNode, interrupt <-chan struct{
 		}
 
 		if interruptRequested(interrupt) {
-			log.Warn("UTXO state reconstruction interrupted")
+			log.Warnf("UTXO state reconstruction interrupted")
 			return errInterruptRequested
 		}
 
@@ -771,7 +771,7 @@ func (s *utxoCache) InitConsistentState(tip *blockNode, interrupt <-chan struct{
 		return node, err
 	}
 	for node := statusNodeNext; node.height <= tip.height; {
-		log.Tracef("Replaying %d more blocks...", tip.height-node.height+1)
+		log.Debugf("Replaying %d more blocks...", tip.height-node.height+1)
 		err := s.db.Update(func(dbTx database.Tx) error {
 			var err error
 			node, err = rollforwardBatch(dbTx, node)
@@ -782,7 +782,7 @@ func (s *utxoCache) InitConsistentState(tip *blockNode, interrupt <-chan struct{
 		}
 
 		if interruptRequested(interrupt) {
-			log.Warn("UTXO state reconstruction interrupted")
+			log.Warnf("UTXO state reconstruction interrupted")
 			return errInterruptRequested
 		}
 
@@ -791,6 +791,6 @@ func (s *utxoCache) InitConsistentState(tip *blockNode, interrupt <-chan struct{
 		}
 	}
 
-	log.Debug("UTXO state reconstruction done")
+	log.Debugf("UTXO state reconstruction done")
 	return nil
 }

@@ -31,7 +31,6 @@ require (
 	github.com/jarcoal/httpmock v1.3.1
 	github.com/jellydator/ttlcache/v3 v3.0.1
 	github.com/jessevdk/go-flags v1.5.0
-	github.com/jrick/logrotate v1.0.0
 	github.com/lib/pq v1.10.7
 	github.com/libp2p/go-libp2p v0.31.0
 	github.com/libp2p/go-libp2p-kad-dht v0.25.1

@@ -277,7 +277,7 @@ func (vm *Engine) CheckErrorCondition(finalScript bool) error {
 	}
 	if !v {
 		// Log interesting data.
-		log.Tracef("%v", newLogClosure(func() string {
+		log.Debugf("%v", newLogClosure(func() string {
 			dis0, _ := vm.DisasmScript(0)
 			dis1, _ := vm.DisasmScript(1)
 			return fmt.Sprintf("scripts failed: script0: %s\n"+
@@ -377,7 +377,7 @@ func (vm *Engine) Step() (done bool, err error) {
 func (vm *Engine) Execute() (err error) {
 	done := false
 	for !done {
-		log.Tracef("%v", newLogClosure(func() string {
+		log.Debugf("%v", newLogClosure(func() string {
 			dis, err := vm.DisasmPC()
 			if err != nil {
 				return fmt.Sprintf("stepping (%v)", err)
@@ -389,7 +389,7 @@ func (vm *Engine) Execute() (err error) {
 		if err != nil {
 			return err
 		}
-		log.Tracef("%v", newLogClosure(func() string {
+		log.Debugf("%v", newLogClosure(func() string {
 			var dstr, astr string
 
 			// if we're tracing, dump the stacks.

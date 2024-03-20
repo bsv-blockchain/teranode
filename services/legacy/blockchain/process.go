@@ -155,7 +155,7 @@ func (b *BlockChain) ProcessBlock(block *bsvutil.Block, flags BehaviorFlags) (bo
 	fastAdd := flags.HasFlag(BFFastAdd)
 
 	blockHash := block.Hash()
-	log.Tracef("Processing block %v", blockHash)
+	log.Debugf("Processing block %v", blockHash)
 
 	if !flags.HasFlag(BFNoDupBlockCheck) {
 		// The block must not already exist in the main chain or side chains.

@@ -34,7 +34,7 @@ func interruptListener() <-chan struct{} {
 				sig)
 
 		case <-shutdownRequestChannel:
-			bsvdLog.Info("Shutdown requested.  Shutting down...")
+			bsvdLog.Infof("Shutdown requested.  Shutting down...")
 		}
 		close(c)
 
@@ -48,7 +48,7 @@ func interruptListener() <-chan struct{} {
 					"shutting down...", sig)
 
 			case <-shutdownRequestChannel:
-				bsvdLog.Info("Shutdown requested.  Already " +
+				bsvdLog.Infof("Shutdown requested.  Already " +
 					"shutting down...")
 			}
 		}

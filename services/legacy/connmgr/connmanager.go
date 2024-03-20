@@ -11,7 +11,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
+
+var log = ulogger.New("CMGR")
 
 // maxFailedAttempts is the maximum number of successive failed connection
 // attempts after which network failure is assumed and new connections will
@@ -353,7 +357,7 @@ out:
 	}
 
 	cm.wg.Done()
-	log.Trace("Connection handler done")
+	log.Debugf("Connection handler done")
 }
 
 // NewConnReq creates a new connection request and connects to the
@@ -502,7 +506,7 @@ func (cm *ConnManager) listenHandler(listener net.Listener) {
 	}
 
 	cm.wg.Done()
-	log.Tracef("Listener handler done for %s", listener.Addr())
+	log.Debugf("Listener handler done for %s", listener.Addr())
 }
 
 // Start launches the connection manager and begins connecting to the network.
@@ -512,7 +516,7 @@ func (cm *ConnManager) Start() {
 		return
 	}
 
-	log.Trace("Connection manager started")
+	log.Debugf("Connection manager started")
 	cm.wg.Add(1)
 	go cm.connHandler()
 
@@ -551,7 +555,7 @@ func (cm *ConnManager) Stop() {
 	}
 
 	close(cm.quit)
-	log.Trace("Connection manager stopped")
+	log.Debugf("Connection manager stopped")
 }
 
 // New returns a new connection manager.

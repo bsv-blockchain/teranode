@@ -807,7 +807,7 @@ func scanBlockFiles(dbPath string) (int, uint32, error) {
 		return 0, 0, err
 	}
 
-	log.Tracef("Scan found latest block file #%d with length %d", lastFile,
+	log.Debugf("Scan found latest block file #%d with length %d", lastFile,
 		fileLen)
 	return lastFile, fileLen, nil
 }

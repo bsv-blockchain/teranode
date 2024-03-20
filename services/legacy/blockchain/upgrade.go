@@ -68,7 +68,7 @@ func migrateBlockIndex(db database.DB) error {
 			return fmt.Errorf("Bucket %s does not exist", v1BucketName)
 		}
 
-		log.Info("Re-indexing block information in the database. This might take a while...")
+		log.Infof("Re-indexing block information in the database. This might take a while...")
 
 		v2BlockIdxBucket, err :=
 			dbTx.Metadata().CreateBucketIfNotExists(v2BucketName)

@@ -1198,7 +1198,7 @@ func (tx *transaction) StoreBlock(block *bsvutil.Block) error {
 		height: uint32(blockHeight),
 		bytes:  blockBytes,
 	})
-	log.Tracef("Added block %s to pending blocks", blockHash)
+	log.Debugf("Added block %s to pending blocks", blockHash)
 
 	return nil
 }
@@ -1227,7 +1227,7 @@ func (tx *transaction) DeleteBlocks(beforeHeight uint32) error {
 	// Add the block to be deleted to the list of pending delete blocks to delete
 	// when the transaction is committed.
 	tx.pendingBlockDeletes = append(tx.pendingBlockDeletes, beforeHeight)
-	log.Tracef("Added block height %d to pending delete blocks", beforeHeight)
+	log.Debugf("Added block height %d to pending delete blocks", beforeHeight)
 
 	return nil
 }
@@ -1681,7 +1681,7 @@ func (tx *transaction) writePendingAndCommit() error {
 
 	// Loop through all of the pending blocks to store and write them.
 	for _, blockData := range tx.pendingBlockData {
-		log.Tracef("Storing block %s", blockData.hash)
+		log.Debugf("Storing block %s", blockData.hash)
 		location, err := tx.db.store.writeBlock(blockData.bytes, blockData.height)
 		if err != nil {
 			rollback()

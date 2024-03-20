@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvlog"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 // blockProgressLogger provides periodic logging for other services in order
@@ -23,7 +23,7 @@ type blockProgressLogger struct {
 	receivedLogTx     int64
 	lastBlockLogTime  time.Time
 
-	subsystemLogger bsvlog.Logger
+	subsystemLogger ulogger.Logger
 	progressAction  string
 	sync.Mutex
 }
@@ -33,7 +33,7 @@ type blockProgressLogger struct {
 //
 //	{progressAction} {numProcessed} {blocks|block} in the last {timePeriod}
 //	({numTxs}, height {lastBlockHeight}, {lastBlockTimeStamp})
-func newBlockProgressLogger(progressMessage string, logger bsvlog.Logger) *blockProgressLogger {
+func newBlockProgressLogger(progressMessage string, logger ulogger.Logger) *blockProgressLogger {
 	return &blockProgressLogger{
 		lastBlockLogTime: time.Now(),
 		progressAction:   progressMessage,

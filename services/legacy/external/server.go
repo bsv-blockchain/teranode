@@ -456,7 +456,7 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 // transactions don't rely on the previous one in a linear fashion like blocks.
 func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 	if cfg.BlocksOnly {
-		peerLog.Tracef("Ignoring tx %v from %v - blocksonly enabled",
+		peerLog.Debugf("Ignoring tx %v from %v - blocksonly enabled",
 			msg.TxHash(), sp)
 		return
 	}
@@ -518,7 +518,7 @@ func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
 	newInv := wire.NewMsgInvSizeHint(uint(len(msg.InvList)))
 	for _, invVect := range msg.InvList {
 		if invVect.Type == wire.InvTypeTx {
-			peerLog.Tracef("Ignoring tx %v in inv from %v -- "+
+			peerLog.Debugf("Ignoring tx %v in inv from %v -- "+
 				"blocksonly enabled", invVect.Hash, sp)
 			if sp.ProtocolVersion() >= wire.BIP0037Version {
 				peerLog.Infof("Peer %v is announcing "+
@@ -894,7 +894,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	// to fetch a missing transaction results in the same behavior.
 	// tx, err := s.txMemPool.FetchTransaction(hash)
 	// if err != nil {
-	// 	peerLog.Tracef("Unable to fetch tx %v from transaction "+
+	// 	peerLog.Debugf("Unable to fetch tx %v from transaction "+
 	// 		"pool: %v", hash, err)
 
 	// 	if doneChan != nil {
@@ -926,7 +926,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 		return err
 	})
 	if err != nil {
-		peerLog.Tracef("Unable to fetch requested block hash %v: %v",
+		peerLog.Debugf("Unable to fetch requested block hash %v: %v",
 			hash, err)
 
 		if doneChan != nil {
@@ -939,7 +939,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	var msgBlock wire.MsgBlock
 	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))
 	if err != nil {
-		peerLog.Tracef("Unable to deserialize requested block hash "+
+		peerLog.Debugf("Unable to deserialize requested block hash "+
 			"%v: %v", hash, err)
 
 		if doneChan != nil {
@@ -1499,7 +1499,7 @@ func (s *server) peerHandler() {
 	s.addrManager.Start()
 	s.syncManager.Start()
 
-	srvrLog.Tracef("Starting peer handler")
+	srvrLog.Debugf("Starting peer handler")
 
 	state := &peerState{
 		inboundPeers:    make(map[int32]*serverPeer),
@@ -1558,7 +1558,7 @@ out:
 		case <-s.quit:
 			// Disconnect all peers on server shutdown.
 			state.forAllPeers(func(sp *serverPeer) {
-				srvrLog.Tracef("Shutdown peer %s", sp)
+				srvrLog.Debugf("Shutdown peer %s", sp)
 				sp.Disconnect()
 			})
 			break out
@@ -1585,7 +1585,7 @@ cleanup:
 		}
 	}
 	s.wg.Done()
-	srvrLog.Tracef("Peer handler done")
+	srvrLog.Debugf("Peer handler done")
 }
 
 // AddPeer adds a new peer that has already been connected to the server.
@@ -1666,7 +1666,7 @@ func (s *server) Start() {
 		return
 	}
 
-	srvrLog.Trace("Starting server")
+	srvrLog.Debugf("Starting server")
 
 	// Start the peer handler which in turn starts the address and block
 	// managers.
@@ -1909,14 +1909,14 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 				"is required by the address index")
 			cfg.TxIndex = true
 		} else {
-			indxLog.Info("Transaction index is enabled")
+			indxLog.Infof("Transaction index is enabled")
 		}
 
 		s.txIndex = indexers.NewTxIndex(db)
 		indexes = append(indexes, s.txIndex)
 	}
 	if cfg.AddrIndex {
-		indxLog.Info("Address index is enabled")
+		indxLog.Infof("Address index is enabled")
 		s.addrIndex = indexers.NewAddrIndex(db, chainParams)
 		indexes = append(indexes, s.addrIndex)
 	}

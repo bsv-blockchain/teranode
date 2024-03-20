@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -72,6 +73,8 @@ const (
 )
 
 var (
+	log = ulogger.New("PEER")
+
 	// nodeCount is the total number of peer connections made since startup
 	// and is used to assign an id to a peer.
 	nodeCount int32
@@ -473,7 +476,7 @@ func (p *Peer) String() string {
 // This function is safe for concurrent access.
 func (p *Peer) UpdateLastBlockHeight(newHeight int32) {
 	p.statsMtx.Lock()
-	log.Tracef("Updating last block height of peer %v from %v to %v",
+	log.Debugf("Updating last block height of peer %v from %v to %v",
 		p.addr, p.lastBlock, newHeight)
 	p.lastBlock = newHeight
 	p.statsMtx.Unlock()
@@ -484,7 +487,7 @@ func (p *Peer) UpdateLastBlockHeight(newHeight int32) {
 //
 // This function is safe for concurrent access.
 func (p *Peer) UpdateLastAnnouncedBlock(blkHash *chainhash.Hash) {
-	log.Tracef("Updating last blk for peer %v, %v", p.addr, blkHash)
+	log.Debugf("Updating last blk for peer %v, %v", p.addr, blkHash)
 
 	p.statsMtx.Lock()
 	p.lastAnnouncedBlock = blkHash
@@ -853,7 +856,7 @@ func (p *Peer) PushGetBlocksMsg(locator blockchain.BlockLocator, stopHash *chain
 	p.prevGetBlocksMtx.Unlock()
 
 	if isDuplicate {
-		log.Tracef("Filtering duplicate [getblocks] with begin "+
+		log.Debugf("Filtering duplicate [getblocks] with begin "+
 			"hash %v, stop hash %v", beginHash, stopHash)
 		return nil
 	}
@@ -897,7 +900,7 @@ func (p *Peer) PushGetHeadersMsg(locator blockchain.BlockLocator, stopHash *chai
 	p.prevGetHdrsMtx.Unlock()
 
 	if isDuplicate {
-		log.Tracef("Filtering duplicate [getheaders] with begin hash %v",
+		log.Debugf("Filtering duplicate [getheaders] with begin hash %v",
 			beginHash)
 		return nil
 	}
@@ -1016,10 +1019,10 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 		return fmt.Sprintf("Received %v%s from %s",
 			msg.Command(), summary, p)
 	}))
-	log.Tracef("%v", newLogClosure(func() string {
+	log.Debugf("%v", newLogClosure(func() string {
 		return spew.Sdump(msg)
 	}))
-	log.Tracef("%v", newLogClosure(func() string {
+	log.Debugf("%v", newLogClosure(func() string {
 		return spew.Sdump(buf)
 	}))
 
@@ -1044,10 +1047,10 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 		return fmt.Sprintf("Sending %v%s to %s", msg.Command(),
 			summary, p)
 	}))
-	log.Tracef("%v", newLogClosure(func() string {
+	log.Debugf("%v", newLogClosure(func() string {
 		return spew.Sdump(msg)
 	}))
-	log.Tracef("%v", newLogClosure(func() string {
+	log.Debugf("%v", newLogClosure(func() string {
 		var buf bytes.Buffer
 		_, err := wire.WriteMessageWithEncodingN(&buf, msg, p.ProtocolVersion(),
 			p.cfg.ChainParams.Net, enc)
@@ -1217,7 +1220,7 @@ out:
 			case sccHandlerStart:
 				// Warn on unbalanced callback signalling.
 				if handlerActive {
-					log.Warn("Received handler start " +
+					log.Warnf("Received handler start " +
 						"control command while a " +
 						"handler is already active")
 					continue
@@ -1229,7 +1232,7 @@ out:
 			case sccHandlerDone:
 				// Warn on unbalanced callback signalling.
 				if !handlerActive {
-					log.Warn("Received handler done " +
+					log.Warnf("Received handler done " +
 						"control command when a " +
 						"handler is not already active")
 					continue
@@ -1301,7 +1304,7 @@ cleanup:
 			break cleanup
 		}
 	}
-	log.Tracef("Peer stall handler done for %s", p)
+	log.Debugf("Peer stall handler done for %s", p)
 }
 
 // inHandler handles all incoming messages for the peer.  It must be run as a
@@ -1490,7 +1493,7 @@ out:
 	p.Disconnect()
 
 	close(p.inQuit)
-	log.Tracef("Peer input handler done for %s", p)
+	log.Debugf("Peer input handler done for %s", p)
 }
 
 // queueHandler handles the queuing of outgoing data for the peer. This runs as
@@ -1510,7 +1513,7 @@ func (p *Peer) queueHandler() {
 		trickleTicker = time.NewTicker(p.cfg.TrickleInterval)
 		defer trickleTicker.Stop()
 	} else {
-		trickleTicker = &time.Ticker{C: make(chan (time.Time))}
+		trickleTicker = &time.Ticker{C: make(chan time.Time)}
 	}
 
 	// We keep the waiting flag so that we know if we have a message queued
@@ -1653,7 +1656,7 @@ cleanup:
 		}
 	}
 	close(p.queueQuit)
-	log.Tracef("Peer queue handler done for %s", p)
+	log.Debugf("Peer queue handler done for %s", p)
 }
 
 // shouldLogWriteError returns whether or not the passed error, which is
@@ -1746,7 +1749,7 @@ cleanup:
 		}
 	}
 	close(p.outQuit)
-	log.Tracef("Peer output handler done for %s", p)
+	log.Debugf("Peer output handler done for %s", p)
 }
 
 // pingHandler periodically pings the peer.  It must be run as a goroutine.
@@ -1839,7 +1842,7 @@ func (p *Peer) Disconnect() {
 		return
 	}
 
-	log.Tracef("Disconnecting %s", p)
+	log.Debugf("Disconnecting %s", p)
 	if atomic.LoadInt32(&p.connected) != 0 {
 		p.conn.Close()
 	}
@@ -2029,7 +2032,7 @@ func (p *Peer) negotiateOutboundProtocol() error {
 
 // start begins processing input and output messages.
 func (p *Peer) start() error {
-	log.Tracef("Starting peer %s", p)
+	log.Debugf("Starting peer %s", p)
 
 	negotiateErr := make(chan error, 1)
 	go func() {

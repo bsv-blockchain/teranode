@@ -7,12 +7,12 @@ package ffldb
 import (
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvlog"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
-var log = bsvlog.Disabled
+var log = ulogger.New("BCDB")
 
 const (
 	dbType = "ffldb"
@@ -63,19 +63,12 @@ func createDBDriver(args ...interface{}) (database.DB, error) {
 	return openDB(dbPath, network, true)
 }
 
-// useLogger is the callback provided during driver registration that sets the
-// current logger to the provided one.
-func useLogger(logger bsvlog.Logger) {
-	log = logger
-}
-
 func init() {
 	// Register the driver.
 	driver := database.Driver{
-		DbType:    dbType,
-		Create:    createDBDriver,
-		Open:      openDBDriver,
-		UseLogger: useLogger,
+		DbType: dbType,
+		Create: createDBDriver,
+		Open:   openDBDriver,
 	}
 	if err := database.RegisterDriver(driver); err != nil {
 		panic(fmt.Sprintf("Failed to regiser database driver '%s': %v",
