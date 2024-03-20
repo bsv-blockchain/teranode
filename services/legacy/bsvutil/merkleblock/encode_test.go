@@ -11,72 +11,10 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/bloom"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/merkleblock"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
-
-// TestMerkleBlock3 tests merkleblock encoding using bloom filter. This test
-// derives from when merkleblock encoding functionality was bundled under
-// the bloom filter package as TestMerkleBlock3
-func TestNewMerkleBlockWithFilter(t *testing.T) {
-	blockStr := "0100000079cda856b143d9db2c1caff01d1aecc8630d30625d10e8b" +
-		"4b8b0000000000000b50cc069d6a3e33e3ff84a5c41d9d3febe7c770fdc" +
-		"c96b2c3ff60abe184f196367291b4d4c86041b8fa45d630101000000010" +
-		"00000000000000000000000000000000000000000000000000000000000" +
-		"0000ffffffff08044c86041b020a02ffffffff0100f2052a01000000434" +
-		"104ecd3229b0571c3be876feaac0442a9f13c5a572742927af1dc623353" +
-		"ecf8c202225f64868137a18cdd85cbbb4c74fbccfd4f49639cf1bdc94a5" +
-		"672bb15ad5d4cac00000000"
-	blockBytes, err := hex.DecodeString(blockStr)
-	if err != nil {
-		t.Errorf("TestMerkleBlock3 DecodeString failed: %v", err)
-		return
-	}
-	blk, err := bsvutil.NewBlockFromBytes(blockBytes)
-	if err != nil {
-		t.Errorf("TestMerkleBlock3 NewBlockFromBytes failed: %v", err)
-		return
-	}
-
-	f := bloom.NewFilter(10, 0, 0.000001, wire.BloomUpdateAll)
-
-	inputStr := "63194f18be0af63f2c6bc9dc0f777cbefed3d9415c4af83f3ee3a3d669c00cb5"
-	hash, err := chainhash.NewHashFromStr(inputStr)
-	if err != nil {
-		t.Errorf("TestMerkleBlock3 NewHashFromStr failed: %v", err)
-		return
-	}
-
-	f.AddHash(hash)
-
-	mBlock, _ := merkleblock.NewMerkleBlockWithFilter(blk, f)
-
-	wantStr := "0100000079cda856b143d9db2c1caff01d1aecc8630d30625d10e8b4" +
-		"b8b0000000000000b50cc069d6a3e33e3ff84a5c41d9d3febe7c770fdcc" +
-		"96b2c3ff60abe184f196367291b4d4c86041b8fa45d630100000001b50c" +
-		"c069d6a3e33e3ff84a5c41d9d3febe7c770fdcc96b2c3ff60abe184f196" +
-		"30101"
-	want, err := hex.DecodeString(wantStr)
-	if err != nil {
-		t.Errorf("TestMerkleBlock3 DecodeString failed: %v", err)
-		return
-	}
-
-	got := bytes.NewBuffer(nil)
-	err = mBlock.BsvEncode(got, wire.ProtocolVersion, wire.LatestEncoding)
-	if err != nil {
-		t.Errorf("TestMerkleBlock3 BsvEncode failed: %v", err)
-		return
-	}
-
-	if !bytes.Equal(want, got.Bytes()) {
-		t.Errorf("TestMerkleBlock3 failed merkle proof comparison: "+
-			"got %v want %v", got.Bytes(), want)
-		return
-	}
-}
 
 // TestValidNewMerkleBlockWithTxnSet tests encoding a merkle proof for a given block
 // with specified transaction set

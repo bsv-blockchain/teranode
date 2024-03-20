@@ -151,17 +151,6 @@ type MessageListeners struct {
 	// OnFeeFilter is invoked when a peer receives a feefilter bitcoin message.
 	OnFeeFilter func(p *Peer, msg *wire.MsgFeeFilter)
 
-	// OnFilterAdd is invoked when a peer receives a filteradd bitcoin message.
-	OnFilterAdd func(p *Peer, msg *wire.MsgFilterAdd)
-
-	// OnFilterClear is invoked when a peer receives a filterclear bitcoin
-	// message.
-	OnFilterClear func(p *Peer, msg *wire.MsgFilterClear)
-
-	// OnFilterLoad is invoked when a peer receives a filterload bitcoin
-	// message.
-	OnFilterLoad func(p *Peer, msg *wire.MsgFilterLoad)
-
 	// OnMerkleBlock  is invoked when a peer receives a merkleblock bitcoin
 	// message.
 	OnMerkleBlock func(p *Peer, msg *wire.MsgMerkleBlock)
@@ -1463,21 +1452,6 @@ out:
 		case *wire.MsgFeeFilter:
 			if p.cfg.Listeners.OnFeeFilter != nil {
 				p.cfg.Listeners.OnFeeFilter(p, msg)
-			}
-
-		case *wire.MsgFilterAdd:
-			if p.cfg.Listeners.OnFilterAdd != nil {
-				p.cfg.Listeners.OnFilterAdd(p, msg)
-			}
-
-		case *wire.MsgFilterClear:
-			if p.cfg.Listeners.OnFilterClear != nil {
-				p.cfg.Listeners.OnFilterClear(p, msg)
-			}
-
-		case *wire.MsgFilterLoad:
-			if p.cfg.Listeners.OnFilterLoad != nil {
-				p.cfg.Listeners.OnFilterLoad(p, msg)
 			}
 
 		case *wire.MsgMerkleBlock:

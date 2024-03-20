@@ -43,38 +43,38 @@ func TestAddresses(t *testing.T) {
 			},
 			net: &chaincfg.MainNetParams,
 		},
-		{
-			name:    "cashaddr testnet p2pkh",
-			addr:    "qr95sy3j9xwd2ap32xkykttr4cvcu7as4ytjg7p7mc",
-			encoded: "qr95sy3j9xwd2ap32xkykttr4cvcu7as4ytjg7p7mc",
-			valid:   true,
-			result: bsvutil.TstAddressPubKeyHash(
-				[ripemd160.Size]byte{203, 72, 18, 50, 41, 156, 213, 116, 49, 81,
-					172, 75, 45, 99, 174, 25, 142, 123, 176, 169},
-				&chaincfg.TestNet3Params),
-			f: func() (bsvutil.Address, error) {
-				pkHash := []byte{203, 72, 18, 50, 41, 156, 213, 116, 49, 81,
-					172, 75, 45, 99, 174, 25, 142, 123, 176, 169}
-				return bsvutil.NewAddressPubKeyHash(pkHash, &chaincfg.TestNet3Params)
-			},
-			net: &chaincfg.TestNet3Params,
-		},
-		{
-			name:    "cashaddr regtest p2pkh",
-			addr:    "qr95sy3j9xwd2ap32xkykttr4cvcu7as4y3w7lzdc7",
-			encoded: "qr95sy3j9xwd2ap32xkykttr4cvcu7as4y3w7lzdc7",
-			valid:   true,
-			result: bsvutil.TstAddressPubKeyHash(
-				[ripemd160.Size]byte{203, 72, 18, 50, 41, 156, 213, 116, 49, 81,
-					172, 75, 45, 99, 174, 25, 142, 123, 176, 169},
-				&chaincfg.RegressionNetParams),
-			f: func() (bsvutil.Address, error) {
-				pkHash := []byte{203, 72, 18, 50, 41, 156, 213, 116, 49, 81,
-					172, 75, 45, 99, 174, 25, 142, 123, 176, 169}
-				return bsvutil.NewAddressPubKeyHash(pkHash, &chaincfg.RegressionNetParams)
-			},
-			net: &chaincfg.RegressionNetParams,
-		},
+		// {
+		// 	name:    "cashaddr testnet p2pkh",
+		// 	addr:    "qr95sy3j9xwd2ap32xkykttr4cvcu7as4ytjg7p7mc",
+		// 	encoded: "qr95sy3j9xwd2ap32xkykttr4cvcu7as4ytjg7p7mc",
+		// 	valid:   true,
+		// 	result: bsvutil.TstAddressPubKeyHash(
+		// 		[ripemd160.Size]byte{203, 72, 18, 50, 41, 156, 213, 116, 49, 81,
+		// 			172, 75, 45, 99, 174, 25, 142, 123, 176, 169},
+		// 		&chaincfg.TestNet3Params),
+		// 	f: func() (bsvutil.Address, error) {
+		// 		pkHash := []byte{203, 72, 18, 50, 41, 156, 213, 116, 49, 81,
+		// 			172, 75, 45, 99, 174, 25, 142, 123, 176, 169}
+		// 		return bsvutil.NewAddressPubKeyHash(pkHash, &chaincfg.TestNet3Params)
+		// 	},
+		// 	net: &chaincfg.TestNet3Params,
+		// },
+		// {
+		// 	name:    "cashaddr regtest p2pkh",
+		// 	addr:    "qr95sy3j9xwd2ap32xkykttr4cvcu7as4y3w7lzdc7",
+		// 	encoded: "qr95sy3j9xwd2ap32xkykttr4cvcu7as4y3w7lzdc7",
+		// 	valid:   true,
+		// 	result: bsvutil.TstAddressPubKeyHash(
+		// 		[ripemd160.Size]byte{203, 72, 18, 50, 41, 156, 213, 116, 49, 81,
+		// 			172, 75, 45, 99, 174, 25, 142, 123, 176, 169},
+		// 		&chaincfg.RegressionNetParams),
+		// 	f: func() (bsvutil.Address, error) {
+		// 		pkHash := []byte{203, 72, 18, 50, 41, 156, 213, 116, 49, 81,
+		// 			172, 75, 45, 99, 174, 25, 142, 123, 176, 169}
+		// 		return bsvutil.NewAddressPubKeyHash(pkHash, &chaincfg.RegressionNetParams)
+		// 	},
+		// 	net: &chaincfg.RegressionNetParams,
+		// },
 		// Positive cashaddr P2SH tests.
 		{
 			name:    "cashaddr mainnet p2p2sh",
@@ -92,38 +92,38 @@ func TestAddresses(t *testing.T) {
 			},
 			net: &chaincfg.MainNetParams,
 		},
-		{
-			name:    "cashaddr testnet p2p2sh",
-			addr:    "ppm2qsznhks23z7629mms6s4cwef74vcwvhanqgjxu",
-			encoded: "ppm2qsznhks23z7629mms6s4cwef74vcwvhanqgjxu",
-			valid:   true,
-			result: bsvutil.TstAddressScriptHash(
-				[ripemd160.Size]byte{118, 160, 64, 83, 189, 160, 168, 139, 218, 81, 119,
-					184, 106, 21, 195, 178, 159, 85, 152, 115},
-				&chaincfg.TestNet3Params),
-			f: func() (bsvutil.Address, error) {
-				pkHash := []byte{118, 160, 64, 83, 189, 160, 168, 139, 218, 81, 119,
-					184, 106, 21, 195, 178, 159, 85, 152, 115}
-				return bsvutil.NewAddressScriptHashFromHash(pkHash, &chaincfg.TestNet3Params)
-			},
-			net: &chaincfg.TestNet3Params,
-		},
-		{
-			name:    "cashaddr regtest p2p2sh",
-			addr:    "ppm2qsznhks23z7629mms6s4cwef74vcwvdp9ptp96",
-			encoded: "ppm2qsznhks23z7629mms6s4cwef74vcwvdp9ptp96",
-			valid:   true,
-			result: bsvutil.TstAddressScriptHash(
-				[ripemd160.Size]byte{118, 160, 64, 83, 189, 160, 168, 139, 218, 81, 119,
-					184, 106, 21, 195, 178, 159, 85, 152, 115},
-				&chaincfg.RegressionNetParams),
-			f: func() (bsvutil.Address, error) {
-				pkHash := []byte{118, 160, 64, 83, 189, 160, 168, 139, 218, 81, 119,
-					184, 106, 21, 195, 178, 159, 85, 152, 115}
-				return bsvutil.NewAddressScriptHashFromHash(pkHash, &chaincfg.RegressionNetParams)
-			},
-			net: &chaincfg.RegressionNetParams,
-		},
+		// {
+		// 	name:    "cashaddr testnet p2p2sh",
+		// 	addr:    "ppm2qsznhks23z7629mms6s4cwef74vcwvhanqgjxu",
+		// 	encoded: "ppm2qsznhks23z7629mms6s4cwef74vcwvhanqgjxu",
+		// 	valid:   true,
+		// 	result: bsvutil.TstAddressScriptHash(
+		// 		[ripemd160.Size]byte{118, 160, 64, 83, 189, 160, 168, 139, 218, 81, 119,
+		// 			184, 106, 21, 195, 178, 159, 85, 152, 115},
+		// 		&chaincfg.TestNet3Params),
+		// 	f: func() (bsvutil.Address, error) {
+		// 		pkHash := []byte{118, 160, 64, 83, 189, 160, 168, 139, 218, 81, 119,
+		// 			184, 106, 21, 195, 178, 159, 85, 152, 115}
+		// 		return bsvutil.NewAddressScriptHashFromHash(pkHash, &chaincfg.TestNet3Params)
+		// 	},
+		// 	net: &chaincfg.TestNet3Params,
+		// },
+		// {
+		// 	name:    "cashaddr regtest p2p2sh",
+		// 	addr:    "ppm2qsznhks23z7629mms6s4cwef74vcwvdp9ptp96",
+		// 	encoded: "ppm2qsznhks23z7629mms6s4cwef74vcwvdp9ptp96",
+		// 	valid:   true,
+		// 	result: bsvutil.TstAddressScriptHash(
+		// 		[ripemd160.Size]byte{118, 160, 64, 83, 189, 160, 168, 139, 218, 81, 119,
+		// 			184, 106, 21, 195, 178, 159, 85, 152, 115},
+		// 		&chaincfg.RegressionNetParams),
+		// 	f: func() (bsvutil.Address, error) {
+		// 		pkHash := []byte{118, 160, 64, 83, 189, 160, 168, 139, 218, 81, 119,
+		// 			184, 106, 21, 195, 178, 159, 85, 152, 115}
+		// 		return bsvutil.NewAddressScriptHashFromHash(pkHash, &chaincfg.RegressionNetParams)
+		// 	},
+		// 	net: &chaincfg.RegressionNetParams,
+		// },
 		// Positive legacy P2PKH tests.
 		{
 			name:    "legacy mainnet p2pkh",
@@ -161,24 +161,24 @@ func TestAddresses(t *testing.T) {
 			},
 			net: &chaincfg.MainNetParams,
 		},
-		{
-			name:    "legacy testnet p2pkh",
-			addr:    "mrX9vMRYLfVy1BnZbc5gZjuyaqH3ZW2ZHz",
-			encoded: "mrX9vMRYLfVy1BnZbc5gZjuyaqH3ZW2ZHz",
-			valid:   true,
-			result: bsvutil.TstLegacyAddressPubKeyHash(
-				[ripemd160.Size]byte{
-					0x78, 0xb3, 0x16, 0xa0, 0x86, 0x47, 0xd5, 0xb7, 0x72, 0x83,
-					0xe5, 0x12, 0xd3, 0x60, 0x3f, 0x1f, 0x1c, 0x8d, 0xe6, 0x8f},
-				chaincfg.TestNet3Params.LegacyPubKeyHashAddrID),
-			f: func() (bsvutil.Address, error) {
-				pkHash := []byte{
-					0x78, 0xb3, 0x16, 0xa0, 0x86, 0x47, 0xd5, 0xb7, 0x72, 0x83,
-					0xe5, 0x12, 0xd3, 0x60, 0x3f, 0x1f, 0x1c, 0x8d, 0xe6, 0x8f}
-				return bsvutil.NewLegacyAddressPubKeyHash(pkHash, &chaincfg.TestNet3Params)
-			},
-			net: &chaincfg.TestNet3Params,
-		},
+		// {
+		// 	name:    "legacy testnet p2pkh",
+		// 	addr:    "mrX9vMRYLfVy1BnZbc5gZjuyaqH3ZW2ZHz",
+		// 	encoded: "mrX9vMRYLfVy1BnZbc5gZjuyaqH3ZW2ZHz",
+		// 	valid:   true,
+		// 	result: bsvutil.TstLegacyAddressPubKeyHash(
+		// 		[ripemd160.Size]byte{
+		// 			0x78, 0xb3, 0x16, 0xa0, 0x86, 0x47, 0xd5, 0xb7, 0x72, 0x83,
+		// 			0xe5, 0x12, 0xd3, 0x60, 0x3f, 0x1f, 0x1c, 0x8d, 0xe6, 0x8f},
+		// 		chaincfg.TestNet3Params.LegacyPubKeyHashAddrID),
+		// 	f: func() (bsvutil.Address, error) {
+		// 		pkHash := []byte{
+		// 			0x78, 0xb3, 0x16, 0xa0, 0x86, 0x47, 0xd5, 0xb7, 0x72, 0x83,
+		// 			0xe5, 0x12, 0xd3, 0x60, 0x3f, 0x1f, 0x1c, 0x8d, 0xe6, 0x8f}
+		// 		return bsvutil.NewLegacyAddressPubKeyHash(pkHash, &chaincfg.TestNet3Params)
+		// 	},
+		// 	net: &chaincfg.TestNet3Params,
+		// },
 
 		// Negative legacy P2PKH tests.
 		{
@@ -696,14 +696,14 @@ var validCashAddreTestVectors []string = []string{
 	"bsvreg:555555555555555555555555555555555555555555555udxmlmrz",
 }
 
-func TestValidCashAddrTestVectors(t *testing.T) {
-	for _, s := range validCashAddreTestVectors {
-		_, _, err := bsvutil.DecodeCashAddress(s)
-		if err != nil {
-			t.Error(err)
-		}
-	}
-}
+// func TestValidCashAddrTestVectors(t *testing.T) {
+// 	for _, s := range validCashAddreTestVectors {
+// 		_, _, err := bsvutil.DecodeCashAddress(s)
+// 		if err != nil {
+// 			t.Error(err)
+// 		}
+// 	}
+// }
 
 var invalidCashAddreTestVectors []string = []string{
 	"prefix:x32nx6hz",

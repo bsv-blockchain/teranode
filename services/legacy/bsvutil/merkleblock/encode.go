@@ -8,7 +8,6 @@ package merkleblock
 import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/bloom"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -88,32 +87,6 @@ func TxInSet(tx *chainhash.Hash, set []*chainhash.Hash) bool {
 		}
 	}
 	return false
-}
-
-// NewMerkleBlockWithFilter returns a new *wire.MsgMerkleBlock and an array of the matched
-// transaction index numbers based on the passed block and bloom filter.
-func NewMerkleBlockWithFilter(block *bsvutil.Block, filter *bloom.Filter) (*wire.MsgMerkleBlock, []uint32) {
-
-	numTx := uint32(len(block.Transactions()))
-	mBlock := MerkleBlock{
-		numTx:       numTx,
-		allHashes:   make([]*chainhash.Hash, 0, numTx),
-		matchedBits: make([]byte, 0, numTx),
-	}
-
-	// Find and keep track of any transactions that match the filter.
-	var matchedIndices []uint32
-	for txIndex, tx := range block.Transactions() {
-		if filter.MatchTxAndUpdate(tx) {
-			mBlock.matchedBits = append(mBlock.matchedBits, 0x01)
-			matchedIndices = append(matchedIndices, uint32(txIndex))
-		} else {
-			mBlock.matchedBits = append(mBlock.matchedBits, 0x00)
-		}
-		mBlock.allHashes = append(mBlock.allHashes, tx.Hash())
-	}
-
-	return mBlock.calcBlock(block), matchedIndices
 }
 
 // NewMerkleBlockWithTxnSet returns a new *wire.MsgMerkleBlock containing a

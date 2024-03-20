@@ -412,15 +412,6 @@ func TestPeerListeners(t *testing.T) {
 			OnFeeFilter: func(p *peer.Peer, msg *wire.MsgFeeFilter) {
 				ok <- msg
 			},
-			OnFilterAdd: func(p *peer.Peer, msg *wire.MsgFilterAdd) {
-				ok <- msg
-			},
-			OnFilterClear: func(p *peer.Peer, msg *wire.MsgFilterClear) {
-				ok <- msg
-			},
-			OnFilterLoad: func(p *peer.Peer, msg *wire.MsgFilterLoad) {
-				ok <- msg
-			},
 			OnMerkleBlock: func(p *peer.Peer, msg *wire.MsgMerkleBlock) {
 				ok <- msg
 			},
@@ -546,10 +537,6 @@ func TestPeerListeners(t *testing.T) {
 		{
 			"OnFilterClear",
 			wire.NewMsgFilterClear(),
-		},
-		{
-			"OnFilterLoad",
-			wire.NewMsgFilterLoad([]byte{0x01}, 10, 0, wire.BloomUpdateNone),
 		},
 		{
 			"OnMerkleBlock",
