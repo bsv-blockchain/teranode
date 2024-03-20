@@ -44,6 +44,19 @@ type reorgBlocksRequest struct {
 	errChan        chan error
 }
 
+type resetBlocks struct {
+	blockHeader    *model.BlockHeader
+	moveDownBlocks []*model.Block
+	moveUpBlocks   []*model.Block
+	responseCh     chan ResetResponse
+}
+
+type ResetResponse struct {
+	MovedDownBlocks []*model.Block
+	MovedUpBlocks   []*model.Block
+	Err             error
+}
+
 type SubtreeProcessor struct {
 	currentItemsPerFile       int
 	txChan                    chan *[]txIDAndFee
@@ -51,6 +64,7 @@ type SubtreeProcessor struct {
 	moveUpBlockChan           chan moveBlockRequest
 	reorgBlockChan            chan reorgBlocksRequest
 	deDuplicateTransactionsCh chan struct{}
+	resetCh                   chan *resetBlocks
 	newSubtreeChan            chan NewSubtreeRequest // used to notify of a new subtree
 	chainedSubtrees           []*util.Subtree        // TODO change this to use badger under the hood, so we can scale beyond RAM
 	chainedSubtreeCount       atomic.Int32
@@ -109,6 +123,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		moveUpBlockChan:           make(chan moveBlockRequest),
 		reorgBlockChan:            make(chan reorgBlocksRequest),
 		deDuplicateTransactionsCh: make(chan struct{}),
+		resetCh:                   make(chan *resetBlocks),
 		newSubtreeChan:            newSubtreeChan,
 		chainedSubtrees:           make([]*util.Subtree, 0, ExpectedNumberOfSubtrees),
 		chainedSubtreeCount:       atomic.Int32{},
@@ -187,6 +202,9 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 			case <-stp.deDuplicateTransactionsCh:
 				stp.deDuplicateTransactions()
 
+			case resetBlocks := <-stp.resetCh:
+				stp.reset(resetBlocks.blockHeader, resetBlocks.moveDownBlocks, resetBlocks.moveUpBlocks, resetBlocks.responseCh)
+
 			default:
 				nrProcessed := 0
 				mapLength := stp.removeMap.Length()
@@ -230,30 +248,84 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 // Reset resets the subtree processor, removing all subtrees and transactions
 // this will be called from the block assembler in a channel select, making sure no other operations are happening
 // the queue will still be ingesting transactions
-func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader) {
+func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block) ResetResponse {
+	responseCh := make(chan ResetResponse)
+	stp.resetCh <- &resetBlocks{
+		blockHeader:    blockHeader,
+		moveDownBlocks: moveDownBlocks,
+		moveUpBlocks:   moveUpBlocks,
+		responseCh:     responseCh,
+	}
+
+	return <-responseCh
+}
+
+func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block, responseCh chan ResetResponse) {
+	stp.logger.Warnf("[SubtreeProcessor][Reset] Resetting subtree processor")
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
 
 	stp.currentSubtree, _ = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 	stp.txCount.Store(0)
 
-	stp.currentBlockHeader = blockHeader
-
 	// dequeue all transactions
+	stp.logger.Warnf("[SubtreeProcessor][Reset] Dequeueing all transactions")
+	validUntilMillis := time.Now().UnixMilli()
 	for {
 		txReq := stp.queue.dequeue(0)
-		if txReq == nil {
+		if txReq == nil || txReq.time > validUntilMillis {
+			// we are done
 			break
 		}
 	}
 
+	movedDownBlocks := make([]*model.Block, 0, len(moveDownBlocks))
+	movedUpBlocks := make([]*model.Block, 0, len(moveUpBlocks))
+
+	for _, block := range moveDownBlocks {
+		if err := stp.utxoStore.Delete(context.Background(), block.CoinbaseTx); err != nil {
+			responseCh <- ResetResponse{
+				MovedDownBlocks: movedDownBlocks,
+				MovedUpBlocks:   movedUpBlocks,
+				Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
+			}
+		}
+		stp.currentBlockHeader = block.Header
+		movedDownBlocks = append(movedDownBlocks, block)
+	}
+
+	for _, block := range moveUpBlocks {
+		if err := stp.processCoinbaseUtxos(context.Background(), block); err != nil {
+			responseCh <- ResetResponse{
+				MovedDownBlocks: movedDownBlocks,
+				MovedUpBlocks:   movedUpBlocks,
+				Err:             fmt.Errorf("[SubtreeProcessor][Reset] error processing coinbase utxos: %s", err.Error()),
+			}
+		}
+		stp.currentBlockHeader = block.Header
+		movedUpBlocks = append(movedUpBlocks, block)
+	}
+
+	stp.currentBlockHeader = blockHeader
+
 	// we do not clear the removeMap, this will always be valid
 	// stp.removeMap = util.NewSwissMap(0)
+	stp.logger.Warnf("[SubtreeProcessor][Reset] Resetting subtree processor DONE")
+
+	responseCh <- ResetResponse{
+		MovedDownBlocks: movedDownBlocks,
+		MovedUpBlocks:   movedUpBlocks,
+		Err:             nil,
+	}
 }
 
 func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeader) {
 	// TODO should this also be in the channel select ?
 	stp.currentBlockHeader = blockHeader
+}
+
+func (stp *SubtreeProcessor) GetCurrentBlockHeader() *model.BlockHeader {
+	return stp.currentBlockHeader
 }
 
 func (stp *SubtreeProcessor) TxCount() uint64 {

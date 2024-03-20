@@ -17,6 +17,10 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 RUN go build .
 
 FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-v2
+
+RUN adduser --disabled-password --gecos '' appuser
+USER appuser
+
 WORKDIR /app
 
 COPY --from=0 /go/bin/dlv .

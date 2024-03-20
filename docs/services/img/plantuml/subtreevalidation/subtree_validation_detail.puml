@@ -1,0 +1,87 @@
+@startuml
+participant "Validator" as ValidateSubtree
+entity "Subtree Data" as SubtreeData
+database "Tx Meta Store" as TxMetaStore
+database "Subtree Store" as SubtreeStore
+participant "Util HTTP Request" as Util
+
+
+ValidateSubtree -> ValidateSubtree: validateSubtreeInternal(ctx, validateSubtree)
+
+' Existing Sequence
+activate ValidateSubtree
+
+ValidateSubtree -> SubtreeStore: subtreeStore.Exists(spanCtx, subtreeHash[:])
+activate SubtreeStore
+SubtreeStore --> ValidateSubtree: subtreeExists / err
+deactivate SubtreeStore
+
+== Get the Subtree from the remote Asset Server  ==
+
+ValidateSubtree -> ValidateSubtree: getSubtreeTxHashes(ctx, stat, subtreeHash, baseUrl)
+activate ValidateSubtree
+
+ValidateSubtree -> Util: DoHTTPRequestBodyReader(spanCtx, url)
+activate Util
+Util --> ValidateSubtree: subtree / err
+deactivate Util
+
+deactivate ValidateSubtree
+
+== Create a subtree metadata (a decorated subtree)  ==
+
+ValidateSubtree -> ValidateSubtree: Create a subtreeMeta from the subtree
+
+== Attempt to obtain the Tx Metadata for all txs through the existing meta cache  ==
+
+ValidateSubtree -> ValidateSubtree: processTxMetaUsingCache(ctx, txHashes, txMetaSlice, failFast)
+activate ValidateSubtree
+
+activate TxMetaStore
+loop for each txHash in the subtree
+   ValidateSubtree -> TxMetaStore: txMetaStore.GetMetaCached(gCtx, &txHash)
+    TxMetaStore --> ValidateSubtree: txMeta / err
+end
+deactivate TxMetaStore
+deactivate ValidateSubtree
+
+== For any Tx Metadata not found in the cache, obtain it directly from the store  ==
+
+ValidateSubtree -> ValidateSubtree: processTxMetaUsingStore(ctx, txHashes, txMetaSlice, failFast)
+activate ValidateSubtree
+
+ValidateSubtree -> TxMetaStore: txMetaStore.MetaBatchDecorate(gCtx, &txHash)
+activate TxMetaStore
+TxMetaStore --> ValidateSubtree: txMeta / err
+deactivate TxMetaStore
+
+deactivate ValidateSubtree
+
+== If a transaction is unknown by the node, do request it from the remote node ==
+
+
+ValidateSubtree -> ValidateSubtree: processMissingTransactions(ctx, subtreeHash, missingTxHashesCompacted, baseUrl, txMetaSlice)
+
+== Add all decorated (with tx meta) transactions to the subtree ==
+
+loop for each tx in the subtree
+ValidateSubtree -> SubtreeData: Add transaction to Subtree -  AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
+SubtreeData --> ValidateSubtree
+end
+
+== Add meta data required for block validation ==
+
+ValidateSubtree -> SubtreeData: SetParentTxHashes(subtreeIdx, txMeta.ParentTxHashes)
+SubtreeData --> ValidateSubtree
+
+== Persist the decorated subtree ==
+ValidateSubtree -> SubtreeStore: Set(spanCtx, merkleRoot[:], completeSubtreeBytes)
+activate SubtreeStore
+SubtreeStore --> ValidateSubtree
+deactivate SubtreeStore
+
+deactivate ValidateSubtree
+
+left footer Last Modified On: 19-March-2024
+
+@enduml

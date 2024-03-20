@@ -2,16 +2,14 @@
 
 ## Index
 
-
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Receving subtrees for validation](#21-receving-subtrees-for-validation)
-- [2.2. Receiving blocks for validation](#22-receiving-blocks-for-validation)
-- [2.3. Validating blocks](#23-validating-blocks)
-  - [2.3.1. Overview](#231-overview)
-  - [2.3.2. Catching up after a parent block is not found](#232-catching-up-after-a-parent-block-is-not-found)
-  - [2.3.3. Validating the Subtrees](#233-validating-the-subtrees)
-  - [2.3.4. Block Data Validation](#234-block-data-validation)
+- [2.1. Receiving blocks for validation](#21-receiving-blocks-for-validation)
+- [2.2. Validating blocks](#22-validating-blocks)
+  - [2.2.1. Overview](#221-overview)
+  - [2.2.2. Catching up after a parent block is not found](#222-catching-up-after-a-parent-block-is-not-found)
+  - [2.2.3. Validating the Subtrees](#223-validating-the-subtrees)
+  - [2.2.4. Block Data Validation](#224-block-data-validation)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 - [4.1. Block Data Model](#41-block-data-model)
@@ -22,6 +20,9 @@
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+- [General Settings](#general-settings)
+- [Kafka and Concurrency Related](#kafka-and-concurrency-related)
+- [Performance and Optimization](#performance-and-optimization)
 
 
 ## 1. Description
@@ -29,24 +30,18 @@
 
 The Block Validator is responsible for ensuring the integrity and consistency of each block before it is added to the blockchain. It performs several key functions:
 
-1. **Validation of Subtree Structure**: Verifies that each received subtree adheres to the defined structure and format, and that its transactions are known and valid.
+1. **Validation of Block Structure**: Verifies that each block adheres to the defined structure and format, and that their subtrees are known and valid.
 
-2. **Validation of Block Structure**: Verifies that each block adheres to the defined structure and format, and that their subtrees are known and valid.
+2. **Merkle Root Verification**: Confirms that the Merkle root in the block header correctly represents the subtrees in the block, ensuring data integrity.
 
-3. **Transaction Legitimacy**: Ensures all transactions within subtrees are valid, including checks for double-spending.
-
-4. **Merkle Root Verification**: Confirms that the Merkle root in the block header correctly represents the subtrees in the block, ensuring data integrity.
-
-5. **Block Header Verification**: Validates the block header, including the proof of work , timestamp, and reference to the previous block, maintaining the blockchain's unbroken chain.
-
-
+3. **Block Header Verification**: Validates the block header, including the proof of work , timestamp, and reference to the previous block, maintaining the blockchain's unbroken chain.
 
 ![Block_Validation_Service_Container_Diagram.png](img%2FBlock_Validation_Service_Container_Diagram.png)
 
 The Block Validation Service:
 
-* Receives new subtrees and blocks from the P2P Service. The P2P Service has received them from other nodes on the network.
-* Validates the subtrees and blocks, after fetching them from the remote asset server.
+* Receives new blocks from the P2P Service. The P2P Service has received them from other nodes on the network.
+* Validates the blocks, after fetching them from the remote asset server.
 * Updates stores, and notifies the blockchain service of the new block.
 
 The P2P Service communicates with the Block Validation over either gRPC (Recommended) or fRPC (Experimental) protocols.
@@ -75,19 +70,10 @@ Teranode microservices make use of the Lustre file system in order to share subt
 
 ## 2. Functionality
 
-The block validator is a service that validates blocks and their subtrees. After validating them, it will update the relevant stores and blockchain accordingly.
+The block validator is a service that validates blocks. After validating them, it will update the relevant stores and blockchain accordingly.
 
 
-### 2.1. Receving subtrees for validation
-
-* The P2P service is responsible for receiving new subtrees from the network. When a new subtree is found, it will notify the block validation service via the `SubtreeFound()` gRPC endpoint.
-* The block validation service will then check if the subtree is already known. If not, it will start the validation process.
-* Once validated, we add it to the Subtree store, from where it will be retrieved later on (when a block using the subtrees gets validated).
-
-![block_validation_subtree_found.svg](img%2Fplantuml%2Fblockvalidation%2Fblock_validation_subtree_found.svg)
-
-
-### 2.2. Receiving blocks for validation
+### 2.1. Receiving blocks for validation
 
 ![block_validation_p2p_block_found.svg](img%2Fplantuml%2Fblockvalidation%2Fblock_validation_p2p_block_found.svg)
 
@@ -96,22 +82,19 @@ The block validator is a service that validates blocks and their subtrees. After
 * The block is added to a channel for processing. The channel is used to ensure that the block validation process is asynchronous and non-blocking.
 
 
+### 2.2. Validating blocks
 
-### 2.3. Validating blocks
-
-#### 2.3.1. Overview
+#### 2.2.1. Overview
 
 ![block_validation_p2p_block_validation.svg](img%2Fplantuml%2Fblockvalidation%2Fblock_validation_p2p_block_validation.svg)
 
-Let's go through the different steps:
-
-* As seen in the section 2.2, a new block is queued for validation in the blockFoundCh. The block validation server will pick it up and start the validation process.
+* As seen in the section 2.1, a new block is queued for validation in the blockFoundCh. The block validation server will pick it up and start the validation process.
 * The server will request the block data from the remote node (`DoHTTPRequest()`).
 * If the parent block is not known, it will be added to the catchupCh channel for processing. We stop at this point, as we can no longer proceed. The catchup process will be explained in the next section (section 2.2.2).
 * If the parent is known, the block will be validated.
   * First, the service validates all the block subtrees.
-    * For each subtree, we check if it is known. If not, we kick off a subtree validation process (see section 2.3.3 for more details).
-  * The validator retrieves the last 100 block headers, which are used to validate the block data. We can see more about this specific step in the section 2.3.4.
+    * For each subtree, we check if it is known. If not, we kick off a subtree validation process (see section 2.2.3 for more details).
+  * The validator retrieves the last 100 block headers, which are used to validate the block data. We can see more about this specific step in the section 2.2.4.
   * The validator stores the coinbase Tx in the Tx Meta Store and the Tx Store.
   * The validator adds the block to the Blockchain.
   * For each Subtree in the block, the validator updates the TTL (Time To Live) to zero for the subtree. This allows the Store to clear out data the services will no longer use.
@@ -130,7 +113,7 @@ Also note - Teranode has a `blockvalidation_localSetMined` setting. This setting
 
 
 
-#### 2.3.2. Catching up after a parent block is not found
+#### 2.2.2. Catching up after a parent block is not found
 
 ![block_validation_p2p_block_catchup.svg](img%2Fplantuml%2Fblockvalidation%2Fblock_validation_p2p_block_catchup.svg)
 
@@ -138,16 +121,16 @@ When a block parent is not found in the local blockchain, the node will start a 
 
 When a block is not known, it will be requested from the remote node. Once received, it will be queued for validation (effectively starting the process of validation for the parent block from the beginning, as seen in 2.3.1).
 
-#### 2.3.3. Validating the Subtrees
+#### 2.2.3. Validating the Subtrees
 
-Should the validation process for a block encounter a subtree it does not know about, it can request the subtree off the remote node.
+Should the validation process for a block encounter a subtree it does not know about, it can request its processing off the Subtree Validation service.
 
-![block_validation_p2p_block_subtree_retrieval.svg](img%2Fplantuml%2Fblockvalidation%2Fblock_validation_p2p_block_subtree_retrieval.svg)
+![block_validation_subtree_validation_request.svg](img%2Fplantuml%2Fsubtreevalidation%2Fblock_validation_subtree_validation_request.svg)
 
 If any transaction under the subtree is also missing, the subtree validation process will kick off a recovery process for those transactions.
 
 
-#### 2.3.4. Block Data Validation
+#### 2.2.4. Block Data Validation
 
 As part of the overall block validation, the service will validate the block data, ensuring the format and integrity of the data, as well as confirming that coinbase tx, subtrees and transactions are valid. This is done in the `Valid()` method under the `Block` struct.
 
@@ -157,8 +140,7 @@ As part of the overall block validation, the service will validate the block dat
 
 ## 3. gRPC Protobuf Definitions
 
-The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/blockValidationProto.md).
-
+The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/subtreevalidationProto.md).
 
 
 ## 4. Data Model
@@ -299,29 +281,19 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 8. Configuration options (settings flags)
 
-In the `blockvalidation` service, the `gocore.Config().Get()` function is used to retrieve various configuration settings.  The specific configuration settings used in the service are as follows:
+The Block Validation service uses the following configuration options:
 
 ### General Settings
-- `blockvalidation_grpcListenAddress`: Specifies the GRPC server listen address for the block validation service.
-- `blockvalidation_subtreeGroupConcurrency`: Determines the concurrency level for subtree group processing. Default is set to 1, limiting simultaneous subtree processing to prevent race conditions or resource contention.
-- `blockvalidation_txMetaCacheEnabled`: A boolean flag indicating whether the transaction metadata cache is enabled. Default is `true`, allowing the use of a cached version of the transaction metadata store to improve performance.
-- `blockvalidation_subtreeFoundChConcurrency`: Configures the concurrency for processing found subtrees, with a default value intended to manage the load efficiently.
-- `blockvalidation_kafkaBrokers`: URL for the Kafka brokers used in the block validation process.
-- `blockvalidation_frpcListenAddress`: Address for the fRPC server used by the block validation service.
-- `blockvalidation_httpListenAddress`: HTTP server listen address for additional HTTP-based interfaces.
-- `blockvalidation_quick_validation`: Enables a quick validation mode, which may skip certain intensive checks for faster processing. Useful in scenarios where performance is prioritized, and certain risk factors are managed externally.
-- `blockvalidation_validation_max_retries`: Specifies the maximum number of retries for validation attempts. This setting is part of a mechanism to retry validation in case of transient failures or conditions that might change upon subsequent attempts.
-- `blockvalidation_validation_retry_sleep`: Configures the sleep duration between validation retries, allowing the system to pause and potentially recover or await changes before retrying validation.
-- `blockvalidation_subtreeValidationTimeout`: Sets a timeout for subtree validation processes, ensuring that validation attempts do not hang indefinitely and system resources are managed efficiently.
+- **`blockvalidation_grpcAddress`**: Specifies the gRPC address for the block validation service. It is crucial for initializing the block validation client and establishing communication with the block validation service.
+- **`blockvalidation_httpAddress`**: Configures the HTTP address for the block validation service. This setting is optional and, if provided, enables HTTP-based interactions with the block validation service.
 
 ### Kafka and Concurrency Related
-- `blockvalidation_kafkaWorkers`: Determines the number of workers for Kafka-related tasks within the block validation process, allowing for parallel processing of messages or tasks.
-- `blockvalidation_subtreeTTL`: Configures the time-to-live (TTL) for subtrees, determining how long subtree data should be retained before expiration.
-- `blockvalidation_catchupConcurrency`: Controls the concurrency level for the catch-up process, optimizing the handling of block data during synchronization or catch-up phases.
-- `blockvalidation_frpcConcurrency`: Sets the concurrency level for fRPC server operations, managing how many simultaneous fRPC calls can be handled.
+- **`blockvalidation_subtreeGroupConcurrency`**: Determines the concurrency level for processing subtree groups. This setting is used to optimize the parallel processing of subtrees within blocks, balancing throughput with resource utilization.
+- **`blockvalidation_blockFoundCh_buffer_size`** and **`blockvalidation_catchupCh_buffer_size`**: Configure the buffer sizes for channels used in handling block found and catchup events. These settings influence the capacity of the system to buffer incoming block notifications and catchup requests, affecting how the system copes with spikes in load.
+- **`blockvalidation_frpcAddress`** and **`blockvalidation_httpListenAddress`**: Define addresses for starting the fRPC and HTTP servers within the block validation service, respectively.
+- **`blockvalidation_frpcConcurrency`**: Sets the concurrency level for the fRPC server, adjusting the number of concurrent requests the server can handle.
 
 ### Performance and Optimization
-- `blockvalidation_validateBlockSubtreesConcurrency`: Adjusts the concurrency for validating block subtrees, a crucial factor in optimizing the validation performance for blocks containing a large number of subtrees.
-- `blockvalidation_validateSubtreeInternal`: Configures the internal concurrency for subtree validation tasks, affecting how subtree validation operations are parallelized.
-- `blockvalidation_quick_validation_threshold`: Determines a threshold for the quick validation process, impacting decision-making in validation strategies.
-- `blockvalidation_validateSubtreeBatchSize`: Sets the batch size for subtree validation, optimizing network calls and processing efficiency when validating subtrees.
+- **`blockvalidation_txMetaCacheEnabled`**: Enables or disables the transaction metadata cache. Turning on this cache can significantly improve performance by reducing the need to repeatedly fetch transaction metadata from persistent storage.
+- **`blockvalidation_validateBlockSubtreesConcurrency`**: Controls the concurrency level for validating block subtrees, a critical setting for optimizing the validation process of blocks composed of multiple subtrees.
+- **`blockvalidation_localSetMined`**: A boolean setting that, when enabled, indicates that the block validation service should mark transactions as mined for both local and remotely mined blocks.

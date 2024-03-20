@@ -9,6 +9,7 @@ database "Subtree Store" as SubtreeStore
 database "Tx Meta Store" as TxMetaStore
 database "Tx Store" as TxStore
 queue "catchupCh\nCatchup Channel" as CCC
+participant "Subtree Validation" as SVS
 
 BFC -> BVS: processBlockFound(ctx, hash, baseURL)
 activate BVS
@@ -47,7 +48,8 @@ alt Not Exists - Start the Validation process
        deactivate SubtreeStore
 
         alt Subtree Not Exists
-           BVVB -> BVVB: validateSubtree(ctx, subtreeHash, baseURL)
+           BVVB -> SVS: CheckSubtree(ctx, subtreeHash, baseURL)
+           SVS --> BVVB
         end
     end
 
