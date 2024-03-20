@@ -1,4 +1,0 @@
-linters:
-  disable:
-    - errcheck
-    
