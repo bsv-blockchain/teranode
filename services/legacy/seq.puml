@@ -1,0 +1,35 @@
+@startuml overview
+footer "© 2024 Bitcoin SV. All rights reserved."
+hide footbox
+
+actor mainnet
+actor legacy
+database db
+database teranode
+
+mainnet -> legacy : inv(block hash)
+
+legacy -> db: have I seen this block before?
+return no
+
+legacy -> mainnet: getdata(block, hash)
+
+
+mainnet -> legacy : blockmsg(block data)
+
+legacy -> legacy: build block(header, coinbase, subtree)
+
+legacy -> teranode: block(hash, base_url)
+
+teranode -> legacy: http://{base_url}/subtree/hash
+
+legacy -> db: save block hash
+
+legacy -> teranode: subtree txids
+
+loop each txid
+    teranode -> legacy: http://{base_url}/tx/txid    
+    legacy -> teranode: tx(response)
+end
+
+@enduml

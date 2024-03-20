@@ -1,0 +1,17 @@
+language: go
+go:
+  - "1.9.7"
+  - "1.10.4"
+  - "1.11.1"
+  - "tip"
+
+sudo: false
+
+before_install:
+  - go get gopkg.in/alecthomas/gometalinter.v2
+  - gometalinter.v2 --install
+
+script:
+  - export PATH=$PATH:$HOME/gopath/bin
+  - ./goclean.sh
+

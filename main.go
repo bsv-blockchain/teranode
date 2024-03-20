@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
+	"github.com/bitcoin-sv/ubsv/services/legacy"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"golang.org/x/term"
 
@@ -135,6 +136,7 @@ func main() {
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
 	startBlockPersister := shouldStart("BlockPersister")
+	startLegacy := shouldStart("Legacy")
 	help := shouldStart("help")
 
 	if help || appCount == 0 {
@@ -245,6 +247,12 @@ func main() {
 			getSubtreeStore(logger),
 			getTxMetaStore(logger),
 		)); err != nil {
+			panic(err)
+		}
+	}
+
+	if startLegacy {
+		if err = sm.AddService("Legacy", legacy.New(logger)); err != nil {
 			panic(err)
 		}
 	}
