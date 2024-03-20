@@ -109,6 +109,9 @@ func Start() {
 
 	percent := 0
 	percentStep := txCount / 100
+	if percentStep == 0 {
+		percentStep = 1
+	}
 
 	for {
 		// Read the next transaction
@@ -131,6 +134,7 @@ func Start() {
 		}
 	}
 
+	fmt.Print("\r")
 	logger.Infof("TXID count:                %d", len(txIDs))
 
 	root, err := bc.BuildMerkleRoot(txIDs)
