@@ -344,7 +344,14 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 	subtreeFees := uint64(0)
 	for idx, subtree := range b.SubtreeSlices {
 		if subtree == nil {
-			return fmt.Errorf("subtree %d is not loaded for block validation: %s", idx, b.hash.String())
+			// get how many slices we are missing
+			missingSlices := 0
+			for i := idx; i < len(b.SubtreeSlices); i++ {
+				if b.SubtreeSlices[i] == nil {
+					missingSlices++
+				}
+			}
+			return fmt.Errorf("subtree %d (of %d, slices len %d, missing %d) is not loaded for block validation: %s", idx, len(b.Subtrees), len(b.SubtreeSlices), missingSlices, b.hash.String())
 		}
 		subtreeFees += subtree.Fees
 	}
