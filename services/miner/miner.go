@@ -130,31 +130,16 @@ func (m *Miner) Start(ctx context.Context) error {
 			if cancel != nil {
 				cancel()
 			}
-			miningCtx, cancel = context.WithCancel(context.Background())
+			miningCtx, cancel = context.WithCancel(ctx)
 			defer cancel() // Ensure cancel is called at the end of each iteration
-
-			// Define retry delays
-			retryDelays := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
 
 			var candidate *model.MiningCandidate
 			var err error
 
-			for i := 0; i < len(retryDelays); i++ {
-				candidate, err = m.blockAssemblyClient.GetMiningCandidate(ctx)
-				if err == nil {
-					break // Success, exit the loop
-				}
-
-				if i < len(retryDelays)-1 {
-					// Wait for the specified period before retrying, except for the last attempt
-					time.Sleep(retryDelays[i])
-				}
-			}
-
+			candidate, err = m.blockAssemblyClient.GetMiningCandidate(miningCtx)
 			if err != nil {
-				// After all retries, if there's still an error, wrap and return it using %w
-				// to wrap the error, so the caller can use errors.Is() to check for this specific error
-				return fmt.Errorf("error getting mining candidate after %d retries: %w", len(retryDelays), err)
+				m.logger.Errorf("error getting mining candidate: %v", err)
+				continue
 			}
 
 			if previousCandidate != nil && bytes.Equal(candidate.Id, previousCandidate.Id) {
@@ -171,8 +156,8 @@ func (m *Miner) Start(ctx context.Context) error {
 				waitSeconds = 1
 			}
 			// start mining in a new goroutine, so we can cancel it if we need to
-			go func(ctx context.Context) {
-				err := m.mine(ctx, candidate, waitSeconds)
+			go func(miningCtx context.Context) {
+				err := m.mine(miningCtx, candidate, waitSeconds)
 				if err != nil {
 					if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "Canceled desc = context canceled") {
 						m.logger.Infof("[Miner]: stopped waiting for new candidate (will start over)")
@@ -189,7 +174,7 @@ func (m *Miner) Start(ctx context.Context) error {
 	}
 }
 
-func (m *Miner) Stop(ctx context.Context) error {
+func (m *Miner) Stop(_ context.Context) error {
 	m.logger.Infof("[Miner] Stopping miner")
 	m.candidateTimer.Stop()
 
