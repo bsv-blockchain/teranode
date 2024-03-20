@@ -14,10 +14,10 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -119,7 +119,7 @@ type BlockChain struct {
 	sigCache            *txscript.SigCache
 	indexManager        IndexManager
 	hashCache           *txscript.HashCache
-	excessiveBlockSize  uint32
+	excessiveBlockSize  uint64
 
 	// The following fields are calculated based upon the provided chain
 	// parameters.  They are also set when the instance is created and
@@ -2016,7 +2016,7 @@ type Config struct {
 	HashCache *txscript.HashCache
 
 	// ExcessiveBlockSize is the user-configurable max block size
-	ExcessiveBlockSize uint32
+	ExcessiveBlockSize uint64
 
 	// Prune controls whether or not the blockchain should delete
 	// historical blocks and metadata.

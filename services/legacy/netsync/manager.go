@@ -15,10 +15,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	peerpkg "github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -30,10 +30,6 @@ const (
 	// maxNetworkViolations is the max number of network violations a
 	// sync peer can have before a new sync peer is found.
 	maxNetworkViolations = 3
-
-	// maxRejectedTxns is the maximum number of rejected transactions
-	// hashes to store in memory.
-	maxRejectedTxns = 1000
 
 	// maxRequestedBlocks is the maximum number of requested block
 	// hashes to store in memory.

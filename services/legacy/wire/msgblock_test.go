@@ -11,7 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
+
 	"github.com/davecgh/go-spew/spew"
 )
 
@@ -52,7 +53,7 @@ func TestBlock(t *testing.T) {
 
 	// Ensure transactions are added properly.
 	tx := blockOne.Transactions[0].Copy()
-	msg.AddTransaction(tx)
+	_ = msg.AddTransaction(tx)
 	if !reflect.DeepEqual(msg.Transactions, blockOne.Transactions) {
 		t.Errorf("AddTransaction: wrong transactions - got %v, want %v",
 			spew.Sdump(msg.Transactions),

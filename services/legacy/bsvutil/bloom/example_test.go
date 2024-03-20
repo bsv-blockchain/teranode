@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/bloom"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // This example demonstrates how to create a new bloom filter, add a transaction

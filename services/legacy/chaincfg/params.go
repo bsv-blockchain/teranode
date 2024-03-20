@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // These variables are the chain proof-of-work limit parameters for each default

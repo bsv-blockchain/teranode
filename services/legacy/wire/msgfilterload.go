@@ -117,10 +117,10 @@ func (msg *MsgFilterLoad) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
-func (msg *MsgFilterLoad) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgFilterLoad) MaxPayloadLength(pver uint32) uint64 {
 	// Num filter bytes (varInt) + filter + 4 bytes hash funcs +
 	// 4 bytes tweak + 1 byte flags.
-	return uint32(VarIntSerializeSize(MaxFilterLoadFilterSize)) +
+	return uint64(VarIntSerializeSize(MaxFilterLoadFilterSize)) +
 		MaxFilterLoadFilterSize + 9
 }
 

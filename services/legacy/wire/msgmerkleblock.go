@@ -8,14 +8,14 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // maxFlagsPerMerkleBlock returns the maximum number of flag bytes that could
 // possibly fit into a merkle block.  Since each transaction is represented by
 // a single bit, this is the max number of transactions per block divided by
 // 8 bits per byte.  Then an extra one to cover partials.
-func maxFlagsPerMerkleBlock() uint32 {
+func maxFlagsPerMerkleBlock() uint64 {
 	return maxTxPerBlock() / 8
 }
 
@@ -32,7 +32,7 @@ type MsgMerkleBlock struct {
 
 // AddTxHash adds a new transaction hash to the message.
 func (msg *MsgMerkleBlock) AddTxHash(hash *chainhash.Hash) error {
-	if uint32(len(msg.Hashes))+1 > maxTxPerBlock() {
+	if uint64(len(msg.Hashes))+1 > maxTxPerBlock() {
 		str := fmt.Sprintf("too many tx hashes for message [max %v]",
 			maxTxPerBlock())
 		return messageError("MsgMerkleBlock.AddTxHash", str)
@@ -145,7 +145,7 @@ func (msg *MsgMerkleBlock) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
-func (msg *MsgMerkleBlock) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgMerkleBlock) MaxPayloadLength(pver uint32) uint64 {
 	return MaxBlockPayload()
 }
 

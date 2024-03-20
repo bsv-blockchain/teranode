@@ -7,8 +7,8 @@ package merkleblock
 
 import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // MaxTxnCount defines the maximum number of transactions we will process before
@@ -28,7 +28,7 @@ var MaxTxnCount = wire.MaxBlockPayload() / 61
 // PartialBlock is used to house intermediate information needed to decode a
 // wire.MsgMerkleBlock
 type PartialBlock struct {
-	numTx       uint32
+	numTx       uint64
 	finalHashes []*chainhash.Hash
 	bits        []byte
 	// variables below used for traversal and extraction
@@ -36,7 +36,7 @@ type PartialBlock struct {
 	bitsUsed      uint32
 	hashesUsed    uint32
 	matchedHashes []*chainhash.Hash
-	matchedItems  []uint32
+	matchedItems  []uint64
 }
 
 // NewMerkleBlockFromMsg returns a MerkleBlock from parsing a wire.MsgMerkleBlock
@@ -50,7 +50,7 @@ type PartialBlock struct {
 func NewMerkleBlockFromMsg(msg wire.MsgMerkleBlock) *PartialBlock {
 
 	// get number of hashes in message
-	numTx := msg.Transactions
+	numTx := uint64(msg.Transactions)
 
 	// from the wire message Flags decode the bits
 	bits := make([]byte, len(msg.Flags)*8)
@@ -76,7 +76,7 @@ func NewMerkleBlockFromMsg(msg wire.MsgMerkleBlock) *PartialBlock {
 		bitsUsed:      0,
 		hashesUsed:    0,
 		matchedHashes: make([]*chainhash.Hash, 0),
-		matchedItems:  make([]uint32, 0),
+		matchedItems:  make([]uint64, 0),
 	}
 
 	return mBlock
@@ -97,7 +97,7 @@ func (m *PartialBlock) ExtractMatches() *chainhash.Hash {
 		return nil
 	}
 
-	totalHashes := uint32(len(m.finalHashes))
+	totalHashes := uint64(len(m.finalHashes))
 
 	// check there are not more hashes than total number of transactions in a block
 	if totalHashes > m.numTx {
@@ -106,12 +106,12 @@ func (m *PartialBlock) ExtractMatches() *chainhash.Hash {
 
 	// there must be atleast one bit per node in the partial merkle tree and
 	// atleast one node per hash
-	if uint32(len(m.bits)) < totalHashes {
+	if uint64(len(m.bits)) < totalHashes {
 		return nil
 	}
 
 	// calculate the height of the merkle tree
-	height := uint32(0)
+	height := uint64(0)
 	for m.calcTreeWidth(height) > 1 {
 		height++
 	}
@@ -141,7 +141,7 @@ func (m *PartialBlock) ExtractMatches() *chainhash.Hash {
 
 // traverseAndExtract traverses over a partial merkle tree and finds matched
 // transaction hashes and their item position in the block
-func (m *PartialBlock) traverseAndExtract(height, pos uint32) *chainhash.Hash {
+func (m *PartialBlock) traverseAndExtract(height, pos uint64) *chainhash.Hash {
 
 	if m.bitsUsed >= uint32(len(m.bits)) {
 		// bits array has overflowed
@@ -200,7 +200,7 @@ func (m *PartialBlock) GetMatches() []*chainhash.Hash {
 
 // GetItems returns the item number of the matched transactions placement in the
 // merkle block
-func (m *PartialBlock) GetItems() []uint32 {
+func (m *PartialBlock) GetItems() []uint64 {
 	return m.matchedItems
 }
 
@@ -211,6 +211,6 @@ func (m *PartialBlock) BadTree() bool {
 
 // calcTreeWidth calculates and returns the the number of nodes (width) or a
 // merkle tree at the given depth-first height.
-func (m *PartialBlock) calcTreeWidth(height uint32) uint32 {
+func (m *PartialBlock) calcTreeWidth(height uint64) uint64 {
 	return (m.numTx + (1 << height) - 1) >> height
 }

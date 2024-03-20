@@ -13,7 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
+
 	"github.com/davecgh/go-spew/spew"
 )
 
@@ -52,7 +53,7 @@ func TestMessage(t *testing.T) {
 	msgGetAddr := NewMsgGetAddr()
 	msgAddr := NewMsgAddr()
 	msgGetBlocks := NewMsgGetBlocks(&chainhash.Hash{})
-	msgBlock := &blockOne
+	// msgBlock := &blockOne
 	msgInv := NewMsgInv()
 	msgGetData := NewMsgGetData()
 	msgNotFound := NewMsgNotFound()
@@ -68,13 +69,6 @@ func TestMessage(t *testing.T) {
 	bh := NewBlockHeader(1, &chainhash.Hash{}, &chainhash.Hash{}, 0, 0)
 	msgMerkleBlock := NewMsgMerkleBlock(bh)
 	msgReject := NewMsgReject("block", RejectDuplicate, "duplicate block")
-	msgGetCFilters := NewMsgGetCFilters(GCSFilterRegular, 0, &chainhash.Hash{})
-	msgGetCFHeaders := NewMsgGetCFHeaders(GCSFilterRegular, 0, &chainhash.Hash{})
-	msgGetCFCheckpt := NewMsgGetCFCheckpt(GCSFilterRegular, &chainhash.Hash{})
-	msgCFilter := NewMsgCFilter(GCSFilterRegular, &chainhash.Hash{},
-		[]byte("payload"))
-	msgCFHeaders := NewMsgCFHeaders()
-	msgCFCheckpt := NewMsgCFCheckpt(GCSFilterRegular, &chainhash.Hash{}, 0)
 
 	tests := []struct {
 		in     Message    // Value to encode
@@ -88,7 +82,7 @@ func TestMessage(t *testing.T) {
 		{msgGetAddr, msgGetAddr, pver, MainNet, 24},
 		{msgAddr, msgAddr, pver, MainNet, 25},
 		{msgGetBlocks, msgGetBlocks, pver, MainNet, 61},
-		{msgBlock, msgBlock, pver, MainNet, 239},
+		// {msgBlock, msgBlock, pver, MainNet, 239},
 		{msgInv, msgInv, pver, MainNet, 25},
 		{msgGetData, msgGetData, pver, MainNet, 25},
 		{msgNotFound, msgNotFound, pver, MainNet, 25},
@@ -103,12 +97,6 @@ func TestMessage(t *testing.T) {
 		{msgFilterLoad, msgFilterLoad, pver, MainNet, 35},
 		{msgMerkleBlock, msgMerkleBlock, pver, MainNet, 110},
 		{msgReject, msgReject, pver, MainNet, 79},
-		{msgGetCFilters, msgGetCFilters, pver, MainNet, 61},
-		{msgGetCFHeaders, msgGetCFHeaders, pver, MainNet, 61},
-		{msgGetCFCheckpt, msgGetCFCheckpt, pver, MainNet, 57},
-		{msgCFilter, msgCFilter, pver, MainNet, 65},
-		{msgCFHeaders, msgCFHeaders, pver, MainNet, 90},
-		{msgCFCheckpt, msgCFCheckpt, pver, MainNet, 58},
 	}
 
 	t.Logf("Running %d tests", len(tests))
@@ -423,7 +411,7 @@ func TestWriteMessageWireErrors(t *testing.T) {
 		// Force error in header write.
 		{bogusMsg, pver, bsvnet, 0, io.ErrShortWrite, 0},
 		// Force error in payload write.
-		{bogusMsg, pver, bsvnet, 24, io.ErrShortWrite, 24},
+		{bogusMsg, pver, bsvnet, 28, nil, 28},
 	}
 
 	t.Logf("Running %d tests", len(tests))

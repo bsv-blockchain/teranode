@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // defaultTransactionAlloc is the default size used for the backing array
@@ -23,13 +23,13 @@ const defaultTransactionAlloc = 2048
 const MaxBlocksPerMsg = 500
 
 // MaxBlockPayload returns the maximum bytes a block message can be in bytes.
-func MaxBlockPayload() uint32 {
+func MaxBlockPayload() uint64 {
 	return ebs
 }
 
 // maxTxPerBlock returns the maximum number of transactions that could
 // possibly fit into a block.
-func maxTxPerBlock() uint32 {
+func maxTxPerBlock() uint64 {
 	return (MaxBlockPayload() / minTxPayload) + 1
 }
 
@@ -223,7 +223,7 @@ func (msg *MsgBlock) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
-func (msg *MsgBlock) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgBlock) MaxPayloadLength(pver uint32) uint64 {
 	// Block header at 80 bytes + transaction count + max transactions
 	// which can vary up to the MaxBlockPayload (including the block header
 	// and transaction count).

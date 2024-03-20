@@ -23,13 +23,13 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/connmgr"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	_ "github.com/bitcoin-sv/ubsv/services/legacy/database/ffldb"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
 	"github.com/btcsuite/go-socks/socks"
+	"github.com/libsv/go-bt/v2/chainhash"
 
 	flags "github.com/jessevdk/go-flags"
 )
@@ -77,18 +77,18 @@ var (
 // to parse and execute service commands specified via the -s flag.
 var runServiceCommand func(string) error
 
-// minUint32 is a helper function to return the minimum of two uint32s.
+// minUint64 is a helper function to return the minimum of two uint64s.
 // This avoids a math import and the need to cast to floats.
-func minUint32(a, b uint32) uint32 {
+func minUint64(a, b uint64) uint64 {
 	if a < b {
 		return a
 	}
 	return b
 }
 
-// maxUint32 is a helper function to return the maximum of two uint32s.
+// maxUint64 is a helper function to return the maximum of two uint64s.
 // This avoids a math import and the need to cast to floats.
-func maxUint32(a, b uint32) uint32 {
+func maxUint64(a, b uint64) uint64 {
 	if a > b {
 		return a
 	}
@@ -135,7 +135,7 @@ type config struct {
 	CPUProfile              string        `long:"cpuprofile" description:"Write CPU profile to the specified file"`
 	DebugLevel              string        `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
 	Upnp                    bool          `long:"upnp" description:"Use UPnP to map our listening port outside of NAT"`
-	ExcessiveBlockSize      uint32        `long:"excessiveblocksize" description:"The maximum size block (in bytes) this node will accept. Cannot be less than 32000000."`
+	ExcessiveBlockSize      uint64        `long:"excessiveblocksize" description:"The maximum size block (in bytes) this node will accept. Cannot be less than 32000000."`
 	MinRelayTxFee           float64       `long:"minrelaytxfee" description:"The minimum transaction fee in BSV/kB to be considered a non-zero fee."`
 	FreeTxRelayLimit        float64       `long:"limitfreerelay" description:"Limit relay of transactions with no transaction fee to the given amount in thousands of bytes per minute"`
 	NoRelayPriority         bool          `long:"norelaypriority" description:"Do not require free or low-fee transactions to have high priority for relaying"`
@@ -143,9 +143,9 @@ type config struct {
 	MaxOrphanTxs            int           `long:"maxorphantx" description:"Max number of orphan transactions to keep in memory"`
 	Generate                bool          `long:"generate" description:"Generate (mine) bitcoins using the CPU"`
 	MiningAddrs             []string      `long:"miningaddr" description:"Add the specified payment address to the list of addresses to use for generated blocks -- At least one address is required if the generate option is set"`
-	BlockMinSize            uint32        `long:"blockminsize" description:"Mininum block size in bytes to be used when creating a block"`
-	BlockMaxSize            uint32        `long:"blockmaxsize" description:"Maximum block size in bytes to be used when creating a block"`
-	BlockPrioritySize       uint32        `long:"blockprioritysize" description:"Size in bytes for high-priority/low-fee transactions when creating a block"`
+	BlockMinSize            uint64        `long:"blockminsize" description:"Mininum block size in bytes to be used when creating a block"`
+	BlockMaxSize            uint64        `long:"blockmaxsize" description:"Maximum block size in bytes to be used when creating a block"`
+	BlockPrioritySize       uint64        `long:"blockprioritysize" description:"Size in bytes for high-priority/low-fee transactions when creating a block"`
 	UserAgentComments       []string      `long:"uacomment" description:"Comment to add to the user agent -- See BIP 14 for more information."`
 	NoPeerBloomFilters      bool          `long:"nopeerbloomfilters" description:"Disable bloom filtering support"`
 	NoCFilters              bool          `long:"nocfilters" description:"Disable committed filtering (CF) support"`
@@ -383,7 +383,7 @@ func fileExists(name string) bool {
 func newConfigParser(cfg *config, so *serviceOptions, options flags.Options) *flags.Parser {
 	parser := flags.NewParser(cfg, options)
 	if runtime.GOOS == "windows" {
-		parser.AddGroup("Service Options", "Service Options", so)
+		_, _ = parser.AddGroup("Service Options", "Service Options", so)
 	}
 	return parser
 }
@@ -645,8 +645,7 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	if cfg.Prune && cfg.PruneDepth < minPruneDepth {
-		str := "%s: The pruneheight option may not be less than %d -- parsed [%d]"
-		err := fmt.Errorf(str, minPruneDepth, funcName, cfg.PruneDepth)
+		err := fmt.Errorf("%s: The prune height option may not be less than %d -- parsed [%d]", funcName, minPruneDepth, cfg.PruneDepth)
 		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintln(os.Stderr, usageMessage)
 		return nil, nil, err
@@ -735,7 +734,7 @@ func loadConfig() (*config, []string, error) {
 	}
 
 	// Excessive blocksize cannot be set less than the default but it can be higher.
-	cfg.ExcessiveBlockSize = maxUint32(cfg.ExcessiveBlockSize, defaultExcessiveBlockSize)
+	cfg.ExcessiveBlockSize = maxUint64(cfg.ExcessiveBlockSize, defaultExcessiveBlockSize)
 
 	// Limit the max block size to a sane value.
 	blockMaxSizeMax := cfg.ExcessiveBlockSize - 1000
@@ -751,8 +750,8 @@ func loadConfig() (*config, []string, error) {
 		return nil, nil, err
 	}
 	// Limit the block priority and minimum block sizes to max block size.
-	cfg.BlockPrioritySize = minUint32(cfg.BlockPrioritySize, cfg.BlockMaxSize)
-	cfg.BlockMinSize = minUint32(cfg.BlockMinSize, cfg.BlockMaxSize)
+	cfg.BlockPrioritySize = minUint64(cfg.BlockPrioritySize, cfg.BlockMaxSize)
+	cfg.BlockMinSize = minUint64(cfg.BlockMinSize, cfg.BlockMaxSize)
 
 	// Prepend ExcessiveBlockSize signaling to the UserAgentComments
 	cfg.UserAgentComments = append([]string{fmt.Sprintf("EB%.1f", float64(cfg.ExcessiveBlockSize)/1000000)}, cfg.UserAgentComments...)

@@ -8,8 +8,8 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // TxIndexUnknown is the value returned for a transaction index that is unknown.

@@ -9,7 +9,7 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // This example demonstrates signing a message with a secp256k1 private key that

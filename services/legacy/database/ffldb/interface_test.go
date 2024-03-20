@@ -27,9 +27,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 var (
@@ -754,10 +754,8 @@ func testMetadataManualTxInterface(tc *testContext) bool {
 	// deleteValues starts a read-write transaction and deletes the keys
 	// in the passed key/value pairs.
 	deleteValues := func(values []keyPair) bool {
-		tx, err := tc.db.Begin(true)
-		if err != nil {
+		tx, _ := tc.db.Begin(true)
 
-		}
 		defer rollbackOnPanic(tc.t, tx)
 
 		metadataBucket := tx.Metadata()

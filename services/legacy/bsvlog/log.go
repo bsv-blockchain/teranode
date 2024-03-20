@@ -36,7 +36,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"runtime"
 	"strings"
@@ -279,7 +278,7 @@ func (b *Backend) print(lvl, tag string, args ...interface{}) {
 	*bytebuf = buf.Bytes()
 
 	b.mu.Lock()
-	b.w.Write(*bytebuf)
+	_, _ = b.w.Write(*bytebuf)
 	b.mu.Unlock()
 
 	recycleBuffer(bytebuf)
@@ -306,7 +305,7 @@ func (b *Backend) printf(lvl, tag string, format string, args ...interface{}) {
 	*bytebuf = append(buf.Bytes(), '\n')
 
 	b.mu.Lock()
-	b.w.Write(*bytebuf)
+	_, _ = b.w.Write(*bytebuf)
 	b.mu.Unlock()
 
 	recycleBuffer(bytebuf)
@@ -476,5 +475,5 @@ func (l *slog) SetLevel(level Level) {
 var Disabled Logger
 
 func init() {
-	Disabled = &slog{lvl: LevelOff, b: NewBackend(ioutil.Discard)}
+	Disabled = &slog{lvl: LevelOff, b: NewBackend(io.Discard)}
 }

@@ -78,7 +78,7 @@ func (msg *MsgAddr) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) err
 		if err != nil {
 			return err
 		}
-		msg.AddAddress(na)
+		_ = msg.AddAddress(na)
 	}
 	return nil
 }
@@ -124,7 +124,7 @@ func (msg *MsgAddr) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
-func (msg *MsgAddr) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgAddr) MaxPayloadLength(pver uint32) uint64 {
 	if pver < MultipleAddressVersion {
 		// Num addresses (varInt) + a single net addresses.
 		return MaxVarIntPayload + maxNetAddressPayload(pver)

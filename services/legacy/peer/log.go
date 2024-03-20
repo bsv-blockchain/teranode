@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvlog"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -191,14 +191,6 @@ func messageSummary(msg wire.Message) string {
 
 	case *wire.MsgHeaders:
 		return fmt.Sprintf("num %d", len(msg.Headers))
-
-	case *wire.MsgGetCFHeaders:
-		return fmt.Sprintf("start_height=%d, stop_hash=%v",
-			msg.StartHeight, msg.StopHash)
-
-	case *wire.MsgCFHeaders:
-		return fmt.Sprintf("stop_hash=%v, num_filter_hashes=%d",
-			msg.StopHash, len(msg.FilterHashes))
 
 	case *wire.MsgReject:
 		// Ensure the variable length strings don't contain any

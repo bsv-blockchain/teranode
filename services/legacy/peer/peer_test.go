@@ -14,14 +14,14 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/btcsuite/go-socks/socks"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // fixedExcessiveBlockSize should not be the default -we want to ensure it will work in all cases
-const fixedExcessiveBlockSize uint32 = 42111000
+const fixedExcessiveBlockSize uint64 = 42111000
 
 func init() {
 	wire.SetLimits(fixedExcessiveBlockSize)
@@ -403,15 +403,6 @@ func TestPeerListeners(t *testing.T) {
 			OnGetHeaders: func(p *peer.Peer, msg *wire.MsgGetHeaders) {
 				ok <- msg
 			},
-			OnGetCFilters: func(p *peer.Peer, msg *wire.MsgGetCFilters) {
-				ok <- msg
-			},
-			OnGetCFHeaders: func(p *peer.Peer, msg *wire.MsgGetCFHeaders) {
-				ok <- msg
-			},
-			OnGetCFCheckpt: func(p *peer.Peer, msg *wire.MsgGetCFCheckpt) {
-				ok <- msg
-			},
 			OnCFilter: func(p *peer.Peer, msg *wire.MsgCFilter) {
 				ok <- msg
 			},
@@ -539,23 +530,6 @@ func TestPeerListeners(t *testing.T) {
 		{
 			"OnGetHeaders",
 			wire.NewMsgGetHeaders(),
-		},
-		{
-			"OnGetCFilters",
-			wire.NewMsgGetCFilters(wire.GCSFilterRegular, 0, &chainhash.Hash{}),
-		},
-		{
-			"OnGetCFHeaders",
-			wire.NewMsgGetCFHeaders(wire.GCSFilterRegular, 0, &chainhash.Hash{}),
-		},
-		{
-			"OnGetCFCheckpt",
-			wire.NewMsgGetCFCheckpt(wire.GCSFilterRegular, &chainhash.Hash{}),
-		},
-		{
-			"OnCFilter",
-			wire.NewMsgCFilter(wire.GCSFilterRegular, &chainhash.Hash{},
-				[]byte("payload")),
 		},
 		{
 			"OnCFHeaders",

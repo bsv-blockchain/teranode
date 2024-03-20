@@ -4,11 +4,6 @@
 
 package treap
 
-import (
-	"math/rand"
-	"time"
-)
-
 const (
 	// staticDepth is the size of the static array to use for keeping track
 	// of the parent stack during treap iteration.  Since a treap has a very
@@ -129,8 +124,4 @@ func (s *parentStack) Push(node *treapNode) {
 	}
 	s.overflow[index] = node
 	s.index++
-}
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
 }

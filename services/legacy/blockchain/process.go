@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // BehaviorFlags is a bitmask defining tweaks to the normal behavior when

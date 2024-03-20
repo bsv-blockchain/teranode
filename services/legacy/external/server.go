@@ -7,11 +7,8 @@ package external
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"runtime"
 	"sort"
@@ -27,7 +24,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/bloom"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/connmgr"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	"github.com/bitcoin-sv/ubsv/services/legacy/netsync"
@@ -35,6 +31,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -65,9 +62,6 @@ var (
 
 // addrMe specifies the server address to send peers.
 var addrMe *wire.NetAddress
-
-// zeroHash is the zero value hash (all zeros).  It is defined as a convenience.
-var zeroHash chainhash.Hash
 
 // onionAddr implements the net.Addr interface and represents a tor address.
 type onionAddr struct {
@@ -189,13 +183,6 @@ func (ps *peerState) forAllPeers(closure func(sp *serverPeer)) {
 	ps.forAllOutboundPeers(closure)
 }
 
-// cfHeaderKV is a tuple of a filter header and its associated block hash. The
-// struct is used to cache cfcheckpt responses.
-type cfHeaderKV struct {
-	blockHash    chainhash.Hash
-	filterHeader chainhash.Hash
-}
-
 // server provides a bitcoin server for handling communications to and from
 // bitcoin peers.
 type server struct {
@@ -236,12 +223,6 @@ type server struct {
 	// do not need to be protected for concurrent access.
 	txIndex   *indexers.TxIndex
 	addrIndex *indexers.AddrIndex
-	cfIndex   *indexers.CfIndex
-
-	// cfCheckptCaches stores a cached slice of filter headers for cfcheckpt
-	// messages for each filter type.
-	cfCheckptCaches    map[wire.FilterType][]cfHeaderKV
-	cfCheckptCachesMtx sync.RWMutex
 }
 
 // serverPeer extends the peer to maintain state shared by the server and
@@ -315,17 +296,6 @@ func (sp *serverPeer) setDisableRelayTx(disable bool) {
 	sp.relayMtx.Lock()
 	sp.disableRelayTx = disable
 	sp.relayMtx.Unlock()
-}
-
-// relayTxDisabled returns whether or not relaying of transactions for the given
-// peer is disabled.
-// It is safe for concurrent access.
-func (sp *serverPeer) relayTxDisabled() bool {
-	sp.relayMtx.Lock()
-	isDisabled := sp.disableRelayTx
-	sp.relayMtx.Unlock()
-
-	return isDisabled
 }
 
 // pushAddrMsg sends an addr message to the connected peer using the provided
@@ -422,7 +392,7 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// Ignore peers that aren't running Bitcoin
 	if strings.Contains(msg.UserAgent, "ABC") || strings.Contains(msg.UserAgent, "BUCash") {
 		srvrLog.Debugf("Rejecting peer %s for not running Bitcoin", sp.Peer)
-		reason := fmt.Sprint("Sorry, you are not running Bitcoin")
+		reason := "Sorry, you are not running Bitcoin"
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}
 
@@ -626,7 +596,7 @@ func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
 			continue
 		}
 		if err != nil {
-			notFound.AddInvVect(iv)
+			_ = notFound.AddInvVect(iv)
 
 			// When there is a failure fetching the final entry
 			// and the done channel was sent in due to there
@@ -675,7 +645,7 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 	invMsg := wire.NewMsgInv()
 	for i := range hashList {
 		iv := wire.NewInvVect(wire.InvTypeBlock, &hashList[i])
-		invMsg.AddInvVect(iv)
+		_ = invMsg.AddInvVect(iv)
 	}
 
 	// Send the inventory message if there is anything to send.
@@ -699,7 +669,7 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 		// not found message.
 		notFound := wire.NewMsgNotFound()
 		for _, inv := range invMsg.InvList {
-			notFound.AddInvVect(inv)
+			_ = notFound.AddInvVect(inv)
 		}
 		sp.QueueMessage(notFound, nil)
 	}
@@ -732,330 +702,6 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 		blockHeaders[i] = &headers[i]
 	}
 	sp.QueueMessage(&wire.MsgHeaders{Headers: blockHeaders}, nil)
-}
-
-// OnGetCFilters is invoked when a peer receives a getcfilters bitcoin message.
-func (sp *serverPeer) OnGetCFilters(_ *peer.Peer, msg *wire.MsgGetCFilters) {
-	// Ignore getcfilters requests if not in sync.
-	if !sp.server.syncManager.IsCurrent() {
-		return
-	}
-
-	// We'll also ensure that the remote party is requesting a set of
-	// filters that we actually currently maintain.
-	switch msg.FilterType {
-	case wire.GCSFilterRegular:
-		break
-
-	default:
-		peerLog.Debug("Filter request for unknown filter: %v",
-			msg.FilterType)
-		return
-	}
-
-	hashes, err := sp.server.chain.HeightToHashRange(
-		int32(msg.StartHeight), &msg.StopHash, wire.MaxGetCFiltersReqRange,
-	)
-	if err != nil {
-		peerLog.Debugf("Invalid getcfilters request: %v", err)
-		return
-	}
-
-	// Create []*chainhash.Hash from []chainhash.Hash to pass to
-	// FiltersByBlockHashes.
-	hashPtrs := make([]*chainhash.Hash, len(hashes))
-	for i := range hashes {
-		hashPtrs[i] = &hashes[i]
-	}
-
-	filters, err := sp.server.cfIndex.FiltersByBlockHashes(
-		hashPtrs, msg.FilterType,
-	)
-	if err != nil {
-		peerLog.Errorf("Error retrieving cfilters: %v", err)
-		return
-	}
-
-	for i, filterBytes := range filters {
-		if len(filterBytes) == 0 {
-			peerLog.Warnf("Could not obtain cfilter for %v",
-				hashes[i])
-			return
-		}
-
-		filterMsg := wire.NewMsgCFilter(
-			msg.FilterType, &hashes[i], filterBytes,
-		)
-		sp.QueueMessage(filterMsg, nil)
-	}
-}
-
-// OnGetCFHeaders is invoked when a peer receives a getcfheader bitcoin message.
-func (sp *serverPeer) OnGetCFHeaders(_ *peer.Peer, msg *wire.MsgGetCFHeaders) {
-	// Ignore getcfilterheader requests if not in sync.
-	if !sp.server.syncManager.IsCurrent() {
-		return
-	}
-
-	// We'll also ensure that the remote party is requesting a set of
-	// headers for filters that we actually currently maintain.
-	switch msg.FilterType {
-	case wire.GCSFilterRegular:
-		break
-
-	default:
-		peerLog.Debug("Filter request for unknown headers for "+
-			"filter: %v", msg.FilterType)
-		return
-	}
-
-	startHeight := int32(msg.StartHeight)
-	maxResults := wire.MaxCFHeadersPerMsg
-
-	// If StartHeight is positive, fetch the predecessor block hash so we
-	// can populate the PrevFilterHeader field.
-	if msg.StartHeight > 0 {
-		startHeight--
-		maxResults++
-	}
-
-	// Fetch the hashes from the block index.
-	hashList, err := sp.server.chain.HeightToHashRange(
-		startHeight, &msg.StopHash, maxResults,
-	)
-	if err != nil {
-		peerLog.Debugf("Invalid getcfheaders request: %v", err)
-	}
-
-	// This is possible if StartHeight is one greater that the height of
-	// StopHash, and we pull a valid range of hashes including the previous
-	// filter header.
-	if len(hashList) == 0 || (msg.StartHeight > 0 && len(hashList) == 1) {
-		peerLog.Debug("No results for getcfheaders request")
-		return
-	}
-
-	// Create []*chainhash.Hash from []chainhash.Hash to pass to
-	// FilterHeadersByBlockHashes.
-	hashPtrs := make([]*chainhash.Hash, len(hashList))
-	for i := range hashList {
-		hashPtrs[i] = &hashList[i]
-	}
-
-	// Fetch the raw filter hash bytes from the database for all blocks.
-	filterHashes, err := sp.server.cfIndex.FilterHashesByBlockHashes(
-		hashPtrs, msg.FilterType,
-	)
-	if err != nil {
-		peerLog.Errorf("Error retrieving cfilter hashes: %v", err)
-		return
-	}
-
-	// Generate cfheaders message and send it.
-	headersMsg := wire.NewMsgCFHeaders()
-
-	// Populate the PrevFilterHeader field.
-	if msg.StartHeight > 0 {
-		prevBlockHash := &hashList[0]
-
-		// Fetch the raw committed filter header bytes from the
-		// database.
-		headerBytes, err := sp.server.cfIndex.FilterHeaderByBlockHash(
-			prevBlockHash, msg.FilterType)
-		if err != nil {
-			peerLog.Errorf("Error retrieving CF header: %v", err)
-			return
-		}
-		if len(headerBytes) == 0 {
-			peerLog.Warnf("Could not obtain CF header for %v", prevBlockHash)
-			return
-		}
-
-		// Deserialize the hash into PrevFilterHeader.
-		err = headersMsg.PrevFilterHeader.SetBytes(headerBytes)
-		if err != nil {
-			peerLog.Warnf("Committed filter header deserialize "+
-				"failed: %v", err)
-			return
-		}
-
-		hashList = hashList[1:]
-		filterHashes = filterHashes[1:]
-	}
-
-	// Populate HeaderHashes.
-	for i, hashBytes := range filterHashes {
-		if len(hashBytes) == 0 {
-			peerLog.Warnf("Could not obtain CF hash for %v", hashList[i])
-			return
-		}
-
-		// Deserialize the hash.
-		filterHash, err := chainhash.NewHash(hashBytes)
-		if err != nil {
-			peerLog.Warnf("Committed filter hash deserialize "+
-				"failed: %v", err)
-			return
-		}
-
-		headersMsg.AddCFHash(filterHash)
-	}
-
-	headersMsg.FilterType = msg.FilterType
-	headersMsg.StopHash = msg.StopHash
-
-	sp.QueueMessage(headersMsg, nil)
-}
-
-// OnGetCFCheckpt is invoked when a peer receives a getcfcheckpt bitcoin message.
-func (sp *serverPeer) OnGetCFCheckpt(_ *peer.Peer, msg *wire.MsgGetCFCheckpt) {
-	// Ignore getcfcheckpt requests if not in sync.
-	if !sp.server.syncManager.IsCurrent() {
-		return
-	}
-
-	// We'll also ensure that the remote party is requesting a set of
-	// checkpoints for filters that we actually currently maintain.
-	switch msg.FilterType {
-	case wire.GCSFilterRegular:
-		break
-
-	default:
-		peerLog.Debug("Filter request for unknown checkpoints for "+
-			"filter: %v", msg.FilterType)
-		return
-	}
-
-	// Now that we know the client is fetching a filter that we know of,
-	// we'll fetch the block hashes et each check point interval so we can
-	// compare against our cache, and create new check points if necessary.
-	blockHashes, err := sp.server.chain.IntervalBlockHashes(
-		&msg.StopHash, wire.CFCheckptInterval,
-	)
-	if err != nil {
-		peerLog.Debugf("Invalid getcfilters request: %v", err)
-		return
-	}
-
-	checkptMsg := wire.NewMsgCFCheckpt(
-		msg.FilterType, &msg.StopHash, len(blockHashes),
-	)
-
-	// Fetch the current existing cache so we can decide if we need to
-	// extend it or if its adequate as is.
-	sp.server.cfCheckptCachesMtx.RLock()
-	checkptCache := sp.server.cfCheckptCaches[msg.FilterType]
-
-	// If the set of block hashes is beyond the current size of the cache,
-	// then we'll expand the size of the cache and also retain the write
-	// lock.
-	var updateCache bool
-	if len(blockHashes) > len(checkptCache) {
-		// Now that we know we'll need to modify the size of the cache,
-		// we'll release the read lock and grab the write lock to
-		// possibly expand the cache size.
-		sp.server.cfCheckptCachesMtx.RUnlock()
-
-		sp.server.cfCheckptCachesMtx.Lock()
-		defer sp.server.cfCheckptCachesMtx.Unlock()
-
-		// Now that we have the write lock, we'll check again as it's
-		// possible that the cache has already been expanded.
-		checkptCache = sp.server.cfCheckptCaches[msg.FilterType]
-
-		// If we still need to expand the cache, then We'll mark that
-		// we need to update the cache for below and also expand the
-		// size of the cache in place.
-		if len(blockHashes) > len(checkptCache) {
-			updateCache = true
-
-			additionalLength := len(blockHashes) - len(checkptCache)
-			newEntries := make([]cfHeaderKV, additionalLength)
-
-			peerLog.Infof("Growing size of checkpoint cache from %v to %v "+
-				"block hashes", len(checkptCache), len(blockHashes))
-
-			checkptCache = append(
-				sp.server.cfCheckptCaches[msg.FilterType],
-				newEntries...,
-			)
-		}
-	} else {
-		// Otherwise, we'll hold onto the read lock for the remainder
-		// of this method.
-		defer sp.server.cfCheckptCachesMtx.RUnlock()
-
-		peerLog.Tracef("Serving stale cache of size %v",
-			len(checkptCache))
-	}
-
-	// Now that we know the cache is of an appropriate size, we'll iterate
-	// backwards until the find the block hash. We do this as it's possible
-	// a re-org has occurred so items in the db are now in the main china
-	// while the cache has been partially invalidated.
-	var forkIdx int
-	for forkIdx = len(blockHashes); forkIdx > 0; forkIdx-- {
-		if checkptCache[forkIdx-1].blockHash == blockHashes[forkIdx-1] {
-			break
-		}
-	}
-
-	// Now that we know the how much of the cache is relevant for this
-	// query, we'll populate our check point message with the cache as is.
-	// Shortly below, we'll populate the new elements of the cache.
-	for i := 0; i < forkIdx; i++ {
-		checkptMsg.AddCFHeader(&checkptCache[i].filterHeader)
-	}
-
-	// We'll now collect the set of hashes that are beyond our cache so we
-	// can look up the filter headers to populate the final cache.
-	blockHashPtrs := make([]*chainhash.Hash, 0, len(blockHashes)-forkIdx)
-	for i := forkIdx; i < len(blockHashes); i++ {
-		blockHashPtrs = append(blockHashPtrs, &blockHashes[i])
-	}
-	filterHeaders, err := sp.server.cfIndex.FilterHeadersByBlockHashes(
-		blockHashPtrs, msg.FilterType,
-	)
-	if err != nil {
-		peerLog.Errorf("Error retrieving cfilter headers: %v", err)
-		return
-	}
-
-	// Now that we have the full set of filter headers, we'll add them to
-	// the checkpoint message, and also update our cache in line.
-	for i, filterHeaderBytes := range filterHeaders {
-		if len(filterHeaderBytes) == 0 {
-			peerLog.Warnf("Could not obtain CF header for %v",
-				blockHashPtrs[i])
-			return
-		}
-
-		filterHeader, err := chainhash.NewHash(filterHeaderBytes)
-		if err != nil {
-			peerLog.Warnf("Committed filter header deserialize "+
-				"failed: %v", err)
-			return
-		}
-
-		checkptMsg.AddCFHeader(filterHeader)
-
-		// If the new main chain is longer than what's in the cache,
-		// then we'll override it beyond the fork point.
-		if updateCache {
-			checkptCache[forkIdx+i] = cfHeaderKV{
-				blockHash:    blockHashes[forkIdx+i],
-				filterHeader: *filterHeader,
-			}
-		}
-	}
-
-	// Finally, we'll update the cache if we need to, and send the final
-	// message back to the requesting peer.
-	if updateCache {
-		sp.server.cfCheckptCaches[msg.FilterType] = checkptCache
-	}
-
-	sp.QueueMessage(checkptMsg, nil)
 }
 
 // enforceNodeBloomFlag disconnects the peer if the server is not configured to
@@ -1289,24 +935,6 @@ func (sp *serverPeer) OnWrite(_ *peer.Peer, bytesWritten int, msg wire.Message, 
 	sp.server.AddBytesSent(uint64(bytesWritten))
 }
 
-// randomUint16Number returns a random uint16 in a specified input range.  Note
-// that the range is in zeroth ordering; if you pass it 1800, you will get
-// values from 0 to 1800.
-func randomUint16Number(max uint16) uint16 {
-	// In order to avoid modulo bias and ensure every possible outcome in
-	// [0, max) has equal probability, the random number must be sampled
-	// from a random source that has a range limited to a multiple of the
-	// modulus.
-	var randomNumber uint16
-	var limitRange = (math.MaxUint16 / max) * max
-	for {
-		binary.Read(rand.Reader, binary.LittleEndian, &randomNumber)
-		if randomNumber < limitRange {
-			return (randomNumber % max)
-		}
-	}
-}
-
 // AddRebroadcastInventory adds 'iv' to the list of inventories to be
 // rebroadcasted at random intervals until they show up in a block.
 func (s *server) AddRebroadcastInventory(iv *wire.InvVect, data interface{}) {
@@ -1351,7 +979,7 @@ func (s *server) RemoveRebroadcastInventory(iv *wire.InvVect) {
 // Transaction has one confirmation on the main chain. Now we can mark it as no
 // longer needing rebroadcasting.
 func (s *server) TransactionConfirmed(tx *bsvutil.Tx) {
-	return // SAO: No RPC server support
+	// SAO: No RPC server support
 }
 
 // pushTxMsg sends a tx message for the provided transaction hash to the
@@ -1442,7 +1070,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 		best := sp.server.chain.BestSnapshot()
 		invMsg := wire.NewMsgInvSizeHint(1)
 		iv := wire.NewInvVect(wire.InvTypeBlock, &best.Hash)
-		invMsg.AddInvVect(iv)
+		_ = invMsg.AddInvVect(iv)
 		sp.QueueMessage(invMsg, doneChan)
 		sp.continueHash = nil
 	}
@@ -1928,27 +1556,24 @@ func disconnectPeer(peerList map[int32]*serverPeer, compareFunc func(*serverPeer
 func newPeerConfig(sp *serverPeer) *peer.Config {
 	return &peer.Config{
 		Listeners: peer.MessageListeners{
-			OnVersion:      sp.OnVersion,
-			OnTx:           sp.OnTx,
-			OnBlock:        sp.OnBlock,
-			OnInv:          sp.OnInv,
-			OnHeaders:      sp.OnHeaders,
-			OnGetData:      sp.OnGetData,
-			OnGetBlocks:    sp.OnGetBlocks,
-			OnGetHeaders:   sp.OnGetHeaders,
-			OnGetCFilters:  sp.OnGetCFilters,
-			OnGetCFHeaders: sp.OnGetCFHeaders,
-			OnGetCFCheckpt: sp.OnGetCFCheckpt,
-			OnFeeFilter:    sp.OnFeeFilter,
-			OnFilterAdd:    sp.OnFilterAdd,
-			OnFilterClear:  sp.OnFilterClear,
-			OnFilterLoad:   sp.OnFilterLoad,
-			OnGetAddr:      sp.OnGetAddr,
-			OnAddr:         sp.OnAddr,
-			OnRead:         sp.OnRead,
-			OnWrite:        sp.OnWrite,
-			OnReject:       sp.OnReject,
-			OnNotFound:     sp.OnNotFound,
+			OnVersion:     sp.OnVersion,
+			OnTx:          sp.OnTx,
+			OnBlock:       sp.OnBlock,
+			OnInv:         sp.OnInv,
+			OnHeaders:     sp.OnHeaders,
+			OnGetData:     sp.OnGetData,
+			OnGetBlocks:   sp.OnGetBlocks,
+			OnGetHeaders:  sp.OnGetHeaders,
+			OnFeeFilter:   sp.OnFeeFilter,
+			OnFilterAdd:   sp.OnFilterAdd,
+			OnFilterClear: sp.OnFilterClear,
+			OnFilterLoad:  sp.OnFilterLoad,
+			OnGetAddr:     sp.OnGetAddr,
+			OnAddr:        sp.OnAddr,
+			OnRead:        sp.OnRead,
+			OnWrite:       sp.OnWrite,
+			OnReject:      sp.OnReject,
+			OnNotFound:    sp.OnNotFound,
 		},
 		AddrMe:            addrMe,
 		NewestBlock:       sp.newestBlock,
@@ -2097,8 +1722,8 @@ out:
 	}
 
 	s.connManager.Stop()
-	s.syncManager.Stop()
-	s.addrManager.Stop()
+	_ = s.syncManager.Stop()
+	_ = s.addrManager.Stop()
 
 	// Drain channels before exiting so nothing is left waiting around
 	// to send.
@@ -2190,64 +1815,6 @@ func (s *server) UpdatePeerHeights(latestBlkHash *chainhash.Hash, latestHeight i
 	}
 }
 
-// rebroadcastHandler keeps track of user submitted inventories that we have
-// sent out but have not yet made it into a block. We periodically rebroadcast
-// them in case our peers restarted or otherwise lost track of them.
-func (s *server) rebroadcastHandler() {
-	// Wait 5 min before first tx rebroadcast.
-	timer := time.NewTimer(5 * time.Minute)
-	pendingInvs := make(map[wire.InvVect]interface{})
-
-out:
-	for {
-		select {
-		case riv := <-s.modifyRebroadcastInv:
-			switch msg := riv.(type) {
-			// Incoming InvVects are added to our map of RPC txs.
-			case broadcastInventoryAdd:
-				pendingInvs[*msg.invVect] = msg.data
-
-			// When an InvVect has been added to a block, we can
-			// now remove it, if it was present.
-			case broadcastInventoryDel:
-				if _, ok := pendingInvs[*msg]; ok {
-					delete(pendingInvs, *msg)
-				}
-			}
-
-		case <-timer.C:
-			// Any inventory we have has not made it into a block
-			// yet. We periodically resubmit them until they have.
-			for iv, data := range pendingInvs {
-				ivCopy := iv
-				s.RelayInventory(&ivCopy, data)
-			}
-
-			// Process at a random time up to 30mins (in seconds)
-			// in the future.
-			timer.Reset(time.Second *
-				time.Duration(randomUint16Number(1800)))
-
-		case <-s.quit:
-			break out
-		}
-	}
-
-	timer.Stop()
-
-	// Drain channels before exiting so nothing is left waiting around
-	// to send.
-cleanup:
-	for {
-		select {
-		case <-s.modifyRebroadcastInv:
-		default:
-			break cleanup
-		}
-	}
-	s.wg.Done()
-}
-
 // Start begins accepting connections from peers.
 func (s *server) Start() {
 	// Already started?
@@ -2318,7 +1885,7 @@ func (s *server) ScheduleShutdown(duration time.Duration) {
 			select {
 			case <-done:
 				ticker.Stop()
-				s.Stop()
+				_ = s.Stop()
 				break out
 			case <-ticker.C:
 				remaining = remaining - tickDuration
@@ -2413,10 +1980,10 @@ out:
 				}
 				na := wire.NewNetAddressIPPort(externalip, uint16(listenPort),
 					s.services)
-				err = s.addrManager.AddLocalAddress(na, addrmgr.UpnpPrio)
-				if err != nil {
-					// XXX DeletePortMapping?
-				}
+				_ = s.addrManager.AddLocalAddress(na, addrmgr.UpnpPrio)
+				// if err != nil {
+				// 	// XXX DeletePortMapping?
+				// }
 				srvrLog.Warnf("Successfully bound via UPnP to %s", addrmgr.NetAddressKey(na))
 				first = false
 			}
@@ -2487,7 +2054,6 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 		services:             services,
 		sigCache:             txscript.NewSigCache(cfg.SigCacheMaxSize),
 		hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),
-		cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),
 	}
 
 	// Create the transaction and address indexes if needed.
@@ -2515,11 +2081,6 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 		indxLog.Info("Address index is enabled")
 		s.addrIndex = indexers.NewAddrIndex(db, chainParams)
 		indexes = append(indexes, s.addrIndex)
-	}
-	if !cfg.NoCFilters {
-		indxLog.Info("Committed filter index is enabled")
-		s.cfIndex = indexers.NewCfIndex(db, chainParams)
-		indexes = append(indexes, s.cfIndex)
 	}
 
 	// Create an index manager if any of the optional indexes are enabled.
@@ -2832,7 +2393,7 @@ func addLocalAddress(addrMgr *addrmgr.AddrManager, addr string, services wire.Se
 			}
 
 			netAddr := wire.NewNetAddressIPPort(ifaceIP, uint16(port), services)
-			addrMgr.AddLocalAddress(netAddr, addrmgr.BoundPrio)
+			_ = addrMgr.AddLocalAddress(netAddr, addrmgr.BoundPrio)
 		}
 	} else {
 		netAddr, err := addrMgr.HostToNetAddress(host, uint16(port), services)
@@ -2840,7 +2401,7 @@ func addLocalAddress(addrMgr *addrmgr.AddrManager, addr string, services wire.Se
 			return err
 		}
 
-		addrMgr.AddLocalAddress(netAddr, addrmgr.BoundPrio)
+		_ = addrMgr.AddLocalAddress(netAddr, addrmgr.BoundPrio)
 	}
 
 	return nil

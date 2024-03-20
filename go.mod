@@ -7,7 +7,6 @@ replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.7
 require (
 	github.com/IBM/sarama v1.42.2
 	github.com/TAAL-GmbH/arc v1.0.32
-	github.com/aead/siphash v1.0.1
 	github.com/aerospike/aerospike-client-go/v6 v6.14.1
 	github.com/archdx/zerolog-sentry v1.8.2
 	github.com/aws/aws-sdk-go-v2 v1.25.3
@@ -17,6 +16,8 @@ require (
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
 	github.com/btcsuite/winsvc v1.0.0
+	github.com/cbeuw/connutil v0.0.0-20200411215123-966bfaa51ee3
+	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/centrifugal/centrifuge v0.30.1
 	github.com/centrifugal/centrifuge-go v0.10.1
 	github.com/cespare/xxhash v1.1.0
@@ -32,7 +33,6 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.0.1
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/jrick/logrotate v1.0.0
-	github.com/kkdai/bstream v1.0.0
 	github.com/lib/pq v1.10.7
 	github.com/libp2p/go-libp2p v0.31.0
 	github.com/libp2p/go-libp2p-kad-dht v0.25.1
@@ -40,7 +40,6 @@ require (
 	github.com/libsv/go-bc v0.1.26
 	github.com/libsv/go-bk v0.1.6
 	github.com/libsv/go-bt/v2 v2.2.5
-	github.com/libsv/go-p2p v0.1.9
 	github.com/loopholelabs/frisbee-go v0.7.2
 	github.com/loopholelabs/polyglot v1.1.4
 	github.com/multiformats/go-multiaddr v0.11.0
@@ -189,6 +188,7 @@ require (
 	github.com/libp2p/go-netroute v0.2.1 // indirect
 	github.com/libp2p/go-reuseport v0.4.0 // indirect
 	github.com/libp2p/go-yamux/v4 v4.0.1 // indirect
+	github.com/libsv/go-p2p v0.1.9 // indirect
 	github.com/loopholelabs/common v0.4.9 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/marten-seemann/tcp v0.0.0-20210406111302-dfbc87cc63fd // indirect

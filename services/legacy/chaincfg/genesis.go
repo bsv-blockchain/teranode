@@ -7,8 +7,8 @@ package chaincfg
 import (
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // genesisCoinbaseTx is the coinbase transaction for the genesis blocks for

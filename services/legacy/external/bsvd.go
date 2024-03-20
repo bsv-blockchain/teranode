@@ -156,7 +156,7 @@ func bsvdMain(serverChan chan<- *server) error {
 	}
 	defer func() {
 		bsvdLog.Infof("Gracefully shutting down the server...")
-		server.Stop()
+		_ = server.Stop()
 		server.WaitForShutdown()
 		srvrLog.Infof("Server shutdown complete")
 	}()
@@ -169,34 +169,6 @@ func bsvdMain(serverChan chan<- *server) error {
 	// shutdown is requested through one of the subsystems such as the RPC
 	// server.
 	<-interrupt
-	return nil
-}
-
-// removeRegressionDB removes the existing regression test database if running
-// in regression test mode and it already exists.
-func removeRegressionDB(dbPath string) error {
-	// Don't do anything if not in regression test mode.
-	if !cfg.RegressionTest {
-		return nil
-	}
-
-	// Remove the old regression test database if it already exists.
-	fi, err := os.Stat(dbPath)
-	if err == nil {
-		bsvdLog.Infof("Removing regression test database from '%s'", dbPath)
-		if fi.IsDir() {
-			err := os.RemoveAll(dbPath)
-			if err != nil {
-				return err
-			}
-		} else {
-			err := os.Remove(dbPath)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -266,10 +238,6 @@ func loadBlockDB() (database.DB, error) {
 
 	// The database name is based on the database type.
 	dbPath := blockDbPath(cfg.DbType)
-
-	// The regression test is special in that it needs a clean database for
-	// each run, so remove it now if it already exists.
-	removeRegressionDB(dbPath)
 
 	bsvdLog.Infof("Loading block database from '%s'", dbPath)
 	db, err := database.Open(cfg.DbType, dbPath, activeNetParams.Net)

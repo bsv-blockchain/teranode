@@ -16,11 +16,11 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	_ "github.com/bitcoin-sv/ubsv/services/legacy/database/ffldb"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -256,88 +256,6 @@ func loadUtxoView(filename string) (*UtxoViewpoint, error) {
 	}
 
 	return view, nil
-}
-
-// convertUtxoStore reads a utxostore from the legacy format and writes it back
-// out using the latest format.  It is only useful for converting utxostore data
-// used in the tests, which has already been done.  However, the code is left
-// available for future reference.
-func convertUtxoStore(r io.Reader, w io.Writer) error {
-	// The old utxostore file format was:
-	// <tx hash><serialized utxo len><serialized utxo>
-	//
-	// The serialized utxo len was a little endian uint32 and the serialized
-	// utxo uses the format described in upgrade.go.
-
-	littleEndian := binary.LittleEndian
-	for {
-		// Hash of the utxo entry.
-		var hash chainhash.Hash
-		_, err := io.ReadAtLeast(r, hash[:], len(hash[:]))
-		if err != nil {
-			// Expected EOF at the right offset.
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-
-		// Num of serialized utxo entry bytes.
-		var numBytes uint32
-		err = binary.Read(r, littleEndian, &numBytes)
-		if err != nil {
-			return err
-		}
-
-		// Serialized utxo entry.
-		serialized := make([]byte, numBytes)
-		_, err = io.ReadAtLeast(r, serialized, int(numBytes))
-		if err != nil {
-			return err
-		}
-
-		// Deserialize the entry.
-		entries, err := deserializeUtxoEntryV0(serialized)
-		if err != nil {
-			return err
-		}
-
-		// Loop through all of the utxos and write them out in the new
-		// format.
-		for outputIdx, entry := range entries {
-			// Reserialize the entries using the new format.
-			serialized, err := serializeUtxoEntry(entry)
-			if err != nil {
-				return err
-			}
-
-			// Write the hash of the utxo entry.
-			_, err = w.Write(hash[:])
-			if err != nil {
-				return err
-			}
-
-			// Write the output index of the utxo entry.
-			err = binary.Write(w, littleEndian, outputIdx)
-			if err != nil {
-				return err
-			}
-
-			// Write num of serialized utxo entry bytes.
-			err = binary.Write(w, littleEndian, uint32(len(serialized)))
-			if err != nil {
-				return err
-			}
-
-			// Write the serialized utxo.
-			_, err = w.Write(serialized)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
 }
 
 // TstSetCoinbaseMaturity makes the ability to set the coinbase maturity

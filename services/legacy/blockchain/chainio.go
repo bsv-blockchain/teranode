@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -1039,10 +1039,9 @@ const (
 	// ucsEmpty is used as a return value to indicate that no status was
 	// stored.  The zero value should not be stored in the database.
 	ucsEmpty        byte = 0
-	ucsConsistent        = 1
-	ucsFlushOngoing      = 2
-	// ucsNbCodes is the number of valid utxo consistency status codes.
-	ucsNbCodes = 3
+	ucsConsistent   byte = 1
+	ucsFlushOngoing byte = 2
+	ucsNbCodes      byte = 3 // ucsNbCodes is the number of valid utxo consistency status codes.
 )
 
 // serializeUtxoStateConsistency serializes the utxo state consistency status

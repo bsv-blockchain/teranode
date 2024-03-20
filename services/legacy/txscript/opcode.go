@@ -16,8 +16,8 @@ import (
 	"hash"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // An opcode defines the information related to a txscript opcode.  opfunc, if

@@ -14,19 +14,11 @@ import (
 )
 
 // fixedExcessiveBlockSize should not be the default -we want to ensure it will work in all cases
-const fixedExcessiveBlockSize uint32 = 42111000
+const fixedExcessiveBlockSize uint64 = 42111000
 
 func init() {
 	wire.SetLimits(fixedExcessiveBlockSize)
 }
-
-var (
-	// ignoreDbTypes are types which should be ignored when running tests
-	// that iterate all supported DB types.  This allows some tests to add
-	// bogus drivers for testing purposes while still allowing other tests
-	// to easily iterate all supported drivers.
-	ignoreDbTypes = map[string]bool{"createopenfail": true}
-)
 
 // checkDbError ensures the passed error is a database.Error with an error code
 // that matches the passed  error code.
@@ -101,7 +93,7 @@ func TestCreateOpenFail(t *testing.T) {
 		Create: bogusCreateDB,
 		Open:   bogusCreateDB,
 	}
-	database.RegisterDriver(driver)
+	_ = database.RegisterDriver(driver)
 
 	// Ensure creating a database with the new type fails with the expected
 	// error.

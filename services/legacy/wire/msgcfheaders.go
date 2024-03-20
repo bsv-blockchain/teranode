@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -89,7 +89,7 @@ func (msg *MsgCFHeaders) Bsvdecode(r io.Reader, pver uint32, _ MessageEncoding) 
 		if err != nil {
 			return err
 		}
-		msg.AddCFHash(&cfh)
+		_ = msg.AddCFHash(&cfh)
 	}
 
 	return nil
@@ -164,7 +164,7 @@ func (msg *MsgCFHeaders) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver. This is part of the Message interface implementation.
-func (msg *MsgCFHeaders) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgCFHeaders) MaxPayloadLength(pver uint32) uint64 {
 	// Hash size + filter type + num headers (varInt) +
 	// (header size * max headers).
 	return 1 + chainhash.HashSize + chainhash.HashSize + MaxVarIntPayload +

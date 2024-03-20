@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // MaxBlockLocatorsPerMsg is the maximum number of block locator hashes allowed
@@ -77,7 +77,7 @@ func (msg *MsgGetBlocks) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding
 		if err != nil {
 			return err
 		}
-		msg.AddBlockLocatorHash(hash)
+		_ = msg.AddBlockLocatorHash(hash)
 	}
 
 	return readElement(r, &msg.HashStop)
@@ -121,7 +121,7 @@ func (msg *MsgGetBlocks) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
-func (msg *MsgGetBlocks) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgGetBlocks) MaxPayloadLength(pver uint32) uint64 {
 	// Protocol version 4 bytes + num hashes (varInt) + max block locator
 	// hashes + hash stop.
 	return 4 + MaxVarIntPayload + (MaxBlockLocatorsPerMsg * chainhash.HashSize) + chainhash.HashSize

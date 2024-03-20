@@ -13,9 +13,9 @@ import (
 
 // maxNetAddressPayload returns the max payload size for a bitcoin NetAddress
 // based on the protocol version.
-func maxNetAddressPayload(pver uint32) uint32 {
+func maxNetAddressPayload(pver uint32) uint64 {
 	// Services 8 bytes + ip 16 bytes + port 2 bytes.
-	plen := uint32(26)
+	plen := uint64(26)
 
 	// NetAddressTimeVersion added a timestamp field.
 	if pver >= NetAddressTimeVersion {

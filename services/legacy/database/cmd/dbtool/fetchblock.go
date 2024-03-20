@@ -9,8 +9,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // fetchBlockCmd defines the configuration options for the fetchblock command.

@@ -10,7 +10,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
+
 	"github.com/davecgh/go-spew/spew"
 )
 
@@ -28,7 +29,7 @@ func TestNotFound(t *testing.T) {
 
 	// Ensure max payload is expected value for latest protocol version.
 	// Num inventory vectors (varInt) + max allowed inventory vectors.
-	wantPayload := uint32(1800009)
+	wantPayload := uint64(1800009)
 	maxPayload := msg.MaxPayloadLength(pver)
 	if maxPayload != wantPayload {
 		t.Errorf("MaxPayloadLength: wrong max payload length for "+

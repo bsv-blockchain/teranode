@@ -5,14 +5,12 @@
 package indexers
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 var (
@@ -464,34 +462,6 @@ func indexNeedsInputs(index Indexer) bool {
 	}
 
 	return false
-}
-
-// dbFetchTx looks up the passed transaction hash in the transaction index and
-// loads it from the database.
-func dbFetchTx(dbTx database.Tx, hash *chainhash.Hash) (*wire.MsgTx, error) {
-	// Look up the location of the transaction.
-	blockRegion, err := dbFetchTxIndexEntry(dbTx, hash)
-	if err != nil {
-		return nil, err
-	}
-	if blockRegion == nil {
-		return nil, fmt.Errorf("transaction %v not found", hash)
-	}
-
-	// Load the raw transaction bytes from the database.
-	txBytes, err := dbTx.FetchBlockRegion(blockRegion)
-	if err != nil {
-		return nil, err
-	}
-
-	// Deserialize the transaction.
-	var msgTx wire.MsgTx
-	err = msgTx.Deserialize(bytes.NewReader(txBytes))
-	if err != nil {
-		return nil, err
-	}
-
-	return &msgTx, nil
 }
 
 // ConnectBlock must be invoked when a block is extending the main chain.  It

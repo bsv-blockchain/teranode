@@ -7,8 +7,8 @@ package bloom
 import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // merkleBlock is used to house intermediate information needed to generate a
@@ -116,7 +116,7 @@ func NewMerkleBlock(block *bsvutil.Block, filter *Filter) (*wire.MsgMerkleBlock,
 		Flags:        make([]byte, (len(mBlock.bits)+7)/8),
 	}
 	for _, hash := range mBlock.finalHashes {
-		msgMerkleBlock.AddTxHash(hash)
+		_ = msgMerkleBlock.AddTxHash(hash)
 	}
 	for i := uint32(0); i < uint32(len(mBlock.bits)); i++ {
 		msgMerkleBlock.Flags[i/8] |= mBlock.bits[i] << (i % 8)

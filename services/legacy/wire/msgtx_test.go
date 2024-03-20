@@ -11,7 +11,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
+
 	"github.com/davecgh/go-spew/spew"
 )
 

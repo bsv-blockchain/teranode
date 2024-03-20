@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // TestMruInventoryMap ensures the MruInventoryMap behaves as expected including

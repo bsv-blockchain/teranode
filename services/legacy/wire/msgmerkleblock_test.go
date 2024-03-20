@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
+
 	"github.com/davecgh/go-spew/spew"
 )
 
@@ -48,7 +49,7 @@ func TestMerkleBlock(t *testing.T) {
 
 	// Load maxTxPerBlock hashes
 	data := make([]byte, 32)
-	for i := uint32(0); i < maxTxPerBlock(); i++ {
+	for i := uint64(0); i < maxTxPerBlock(); i++ {
 		rand.Read(data)
 		hash, err := chainhash.NewHash(data)
 		if err != nil {

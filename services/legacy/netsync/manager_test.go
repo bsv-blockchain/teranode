@@ -12,14 +12,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	_ "github.com/bitcoin-sv/ubsv/services/legacy/database/ffldb"
 	"github.com/bitcoin-sv/ubsv/services/legacy/netsync"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
-	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 )
 
@@ -30,12 +27,6 @@ const (
 	// testDbRoot is the root directory used to create all test databases.
 	testDbRoot = "testdbs"
 )
-
-// zeroHash is the zero value hash (all zeros).
-var zeroHash chainhash.Hash
-
-// nullTime is an empty time defined for convenience
-var nullTime time.Time
 
 type testConfig struct {
 	dbName      string
@@ -218,60 +209,4 @@ func TestPeerConnections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to stop SyncManager: %v", err)
 	}
-}
-
-// Test blockchain syncing protocol. SyncManager should request, processes, and
-// relay blocks to/from peers.
-
-type msgChans struct {
-	memPoolChan    chan *wire.MsgMemPool
-	txChan         chan *wire.MsgTx
-	blockChan      chan *wire.MsgBlock
-	invChan        chan *wire.MsgInv
-	headersChan    chan *wire.MsgHeaders
-	getDataChan    chan *wire.MsgGetData
-	getBlocksChan  chan *wire.MsgGetBlocks
-	getHeadersChan chan *wire.MsgGetHeaders
-	rejectChan     chan *wire.MsgReject
-}
-
-func newMessageChans() *msgChans {
-	var instance msgChans
-	instance.memPoolChan = make(chan *wire.MsgMemPool)
-	instance.txChan = make(chan *wire.MsgTx)
-	instance.blockChan = make(chan *wire.MsgBlock)
-	instance.invChan = make(chan *wire.MsgInv)
-	instance.headersChan = make(chan *wire.MsgHeaders)
-	instance.getDataChan = make(chan *wire.MsgGetData)
-	instance.getBlocksChan = make(chan *wire.MsgGetBlocks)
-	instance.getHeadersChan = make(chan *wire.MsgGetHeaders)
-	instance.rejectChan = make(chan *wire.MsgReject)
-	return &instance
-}
-
-func buildBlockInv(blocks ...*bsvutil.Block) *wire.MsgInv {
-	msg := wire.NewMsgInv()
-	for _, block := range blocks {
-		invVect := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
-		msg.AddInvVect(invVect)
-	}
-	return msg
-}
-
-// createSpendingTx constructs a transaction spending from the provided one
-// which sends the entire value of one output to the given address.
-func createSpendingTx(prevTx *bsvutil.Tx, index uint32, scriptSig []byte, address bsvutil.Address) (*bsvutil.Tx, error) {
-	scriptPubKey, err := txscript.PayToAddrScript(address)
-	if err != nil {
-		return nil, err
-	}
-
-	prevTxMsg := prevTx.MsgTx()
-	prevOut := prevTxMsg.TxOut[index]
-	prevOutPoint := &wire.OutPoint{Hash: prevTxMsg.TxHash(), Index: index}
-
-	spendTx := wire.NewMsgTx(1)
-	spendTx.AddTxIn(wire.NewTxIn(prevOutPoint, scriptSig))
-	spendTx.AddTxOut(wire.NewTxOut(prevOut.Value, scriptPubKey))
-	return bsvutil.NewTx(spendTx), nil
 }

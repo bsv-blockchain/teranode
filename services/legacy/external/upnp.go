@@ -36,6 +36,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -229,7 +230,7 @@ func getServiceURL(rootURL string) (url string, err error) {
 	}
 	defer r.Body.Close()
 	if r.StatusCode >= 400 {
-		err = errors.New(string(r.StatusCode))
+		err = fmt.Errorf("%d", r.StatusCode)
 		return
 	}
 	var root root

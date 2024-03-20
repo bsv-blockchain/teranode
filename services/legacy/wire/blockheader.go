@@ -9,7 +9,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // MaxBlockHeaderPayload is the maximum number of bytes a block header can be.
@@ -51,7 +51,7 @@ func (h *BlockHeader) BlockHash() chainhash.Hash {
 	// encode could fail except being out of memory which would cause a
 	// run-time panic.
 	buf := bytes.NewBuffer(make([]byte, 0, MaxBlockHeaderPayload))
-	_ = writeBlockHeader(buf, 0, h)
+	writeBlockHeader(buf, 0, h)
 
 	return chainhash.DoubleHashH(buf.Bytes())
 }

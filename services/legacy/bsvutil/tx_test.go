@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // TestTx tests the API for Tx.

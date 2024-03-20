@@ -7,7 +7,7 @@ package wire
 import (
 	"io"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // MaxGetCFiltersReqRange the maximum number of filters that may be requested in
@@ -63,7 +63,7 @@ func (msg *MsgGetCFilters) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
-func (msg *MsgGetCFilters) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgGetCFilters) MaxPayloadLength(pver uint32) uint64 {
 	// Filter type + uint32 + block hash
 	return 1 + 4 + chainhash.HashSize
 }

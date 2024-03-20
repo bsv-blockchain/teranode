@@ -12,7 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
+
 	"github.com/davecgh/go-spew/spew"
 )
 
@@ -42,7 +43,7 @@ type fakeRandReader struct {
 }
 
 // fixedExcessiveBlockSize should not be the default -we want to ensure it will work in all cases
-const fixedExcessiveBlockSize uint32 = 42111000
+const fixedExcessiveBlockSize uint64 = 42111000
 
 func init() {
 	// Wire package requires initialization

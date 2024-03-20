@@ -909,7 +909,7 @@ func packAddressData(addrType AddressType, addrHash []byte) ([]byte, error) {
 	if (len(addrHash)-20)%4 != 0 {
 		return nil, errors.New("invalid address hash size")
 	}
-	if encodedSize < 0 || encodedSize > 8 {
+	if encodedSize > 8 {
 		return nil, errors.New("encoded size out of valid range")
 	}
 	versionByte |= encodedSize

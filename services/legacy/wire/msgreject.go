@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // RejectCode represents a numeric value by which a remote peer indicates
@@ -103,7 +103,7 @@ func (msg *MsgReject) Bsvdecode(r io.Reader, pver uint32, enc MessageEncoding) e
 
 	// CmdBlock and CmdTx messages have an additional hash field that
 	// identifies the specific block or transaction.
-	if msg.Cmd == CmdBlock || msg.Cmd == CmdTx {
+	if msg.Cmd == CmdBlock || msg.Cmd == CmdTx || msg.Cmd == CmdExtendedTx {
 		err := readElement(r, &msg.Hash)
 		if err != nil {
 			return err
@@ -143,7 +143,7 @@ func (msg *MsgReject) BsvEncode(w io.Writer, pver uint32, enc MessageEncoding) e
 
 	// CmdBlock and CmdTx messages have an additional hash field that
 	// identifies the specific block or transaction.
-	if msg.Cmd == CmdBlock || msg.Cmd == CmdTx {
+	if msg.Cmd == CmdBlock || msg.Cmd == CmdTx || msg.Cmd == CmdExtendedTx {
 		err := writeElement(w, &msg.Hash)
 		if err != nil {
 			return err
@@ -161,8 +161,8 @@ func (msg *MsgReject) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
-func (msg *MsgReject) MaxPayloadLength(pver uint32) uint32 {
-	plen := uint32(0)
+func (msg *MsgReject) MaxPayloadLength(pver uint32) uint64 {
+	plen := uint64(0)
 	// The reject message did not exist before protocol version
 	// RejectVersion.
 	if pver >= RejectVersion {

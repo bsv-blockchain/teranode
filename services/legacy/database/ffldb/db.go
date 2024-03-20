@@ -15,7 +15,6 @@ import (
 	"sync"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database/internal/treap"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
@@ -26,6 +25,7 @@ import (
 	"github.com/btcsuite/goleveldb/leveldb/iterator"
 	"github.com/btcsuite/goleveldb/leveldb/opt"
 	"github.com/btcsuite/goleveldb/leveldb/util"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (

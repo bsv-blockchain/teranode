@@ -13,9 +13,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -782,7 +782,7 @@ func (b *BlockChain) checkBlockContext(block *bsvutil.Block, prevNode *blockNode
 	if (b.chainParams == &chaincfg.MainNetParams || b.chainParams == &chaincfg.TestNet3Params) &&
 		block.Height() == b.chainParams.UahfForkHeight+1 {
 		if block.MsgBlock().SerializeSize() <= LegacyMaxBlockSize {
-			str := fmt.Sprintf("the first block after uahf fork block is not greater than 1MB")
+			str := "the first block after uahf fork block is not greater than 1MB"
 			return ruleError(ErrBlockTooSmall, str)
 		}
 	}

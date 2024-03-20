@@ -10,8 +10,8 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // CheckpointConfirmations is the number of blocks before the end of the current

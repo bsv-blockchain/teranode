@@ -8,8 +8,8 @@ import (
 	"io"
 	"math"
 
+	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/libsv/go-p2p/wire"
 )
 
 type SubtreeNode struct {

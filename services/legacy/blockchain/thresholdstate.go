@@ -7,7 +7,7 @@ package blockchain
 import (
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // ThresholdState define the various threshold states used when voting on

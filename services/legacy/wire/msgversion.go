@@ -206,7 +206,7 @@ func (msg *MsgVersion) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
-func (msg *MsgVersion) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgVersion) MaxPayloadLength(pver uint32) uint64 {
 	// XXX: <= 106 different
 
 	// Protocol version 4 bytes + services 8 bytes + timestamp 8 bytes +

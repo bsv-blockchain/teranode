@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // importCmd defines the configuration options for the insecureimport command.
@@ -82,7 +82,7 @@ func (bi *blockImporter) readBlock() ([]byte, error) {
 	}
 
 	// Read the block length and ensure it is sane.
-	var blockLen uint32
+	var blockLen uint64
 	if err := binary.Read(bi.r, binary.LittleEndian, &blockLen); err != nil {
 		return nil, err
 	}

@@ -8,9 +8,9 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // UtxoViewpoint represents a view into the set of unspent transaction outputs
@@ -21,8 +21,7 @@ import (
 // The unspent outputs are needed by other transactions for things such as
 // script validation and double spend prevention.
 type UtxoViewpoint struct {
-	entries  map[wire.OutPoint]*UtxoEntry
-	bestHash chainhash.Hash
+	entries map[wire.OutPoint]*UtxoEntry
 }
 
 // LookupEntry returns information about a given transaction output according to

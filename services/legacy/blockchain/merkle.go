@@ -8,7 +8,7 @@ import (
 	"math"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // nextPowerOfTwo returns the next highest power of two from a given number if

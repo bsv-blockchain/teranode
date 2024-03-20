@@ -12,7 +12,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 const (
@@ -634,7 +634,7 @@ func WriteVarString(w io.Writer, pver uint32, str string) error {
 // attacks and forced panics through malformed messages.  The fieldName
 // parameter is only used for the error message so it provides more context in
 // the error.
-func ReadVarBytes(r io.Reader, pver uint32, maxAllowed uint32,
+func ReadVarBytes(r io.Reader, pver uint32, maxAllowed uint64,
 	fieldName string) ([]byte, error) {
 
 	count, err := ReadVarInt(r, pver)

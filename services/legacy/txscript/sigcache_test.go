@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // genRandomSig returns a random message, a signature of the message under the

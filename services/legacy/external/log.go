@@ -29,7 +29,7 @@ type logWriter struct{}
 
 func (logWriter) Write(p []byte) (n int, err error) {
 	os.Stdout.Write(p)
-	logRotator.Write(p)
+	_, _ = logRotator.Write(p)
 	return len(p), nil
 }
 
@@ -151,13 +151,4 @@ func directionString(inbound bool) string {
 		return "inbound"
 	}
 	return "outbound"
-}
-
-// pickNoun returns the singular or plural form of a noun depending
-// on the count n.
-func pickNoun(n uint64, singular, plural string) string {
-	if n == 1 {
-		return singular
-	}
-	return plural
 }

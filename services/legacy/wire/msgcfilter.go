@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg/chainhash"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // FilterType is used to represent a filter type.
@@ -102,8 +102,8 @@ func (msg *MsgCFilter) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
-func (msg *MsgCFilter) MaxPayloadLength(pver uint32) uint32 {
-	return uint32(VarIntSerializeSize(MaxCFilterDataSize)) +
+func (msg *MsgCFilter) MaxPayloadLength(pver uint32) uint64 {
+	return uint64(VarIntSerializeSize(MaxCFilterDataSize)) +
 		MaxCFilterDataSize + chainhash.HashSize + 1
 }
 
