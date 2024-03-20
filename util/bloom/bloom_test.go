@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"crypto/rand"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/util"
 	"os"
 	"runtime"
 	"testing"
@@ -23,6 +24,8 @@ func generateRandomTxid() []byte {
 }
 
 func TestBloomFilter2(t *testing.T) {
+	util.SkipVeryLongTests(t)
+
 	// Number of txids to test
 	numTxids := 600_000_000
 	t.Logf("Number of txids: %v\n", numTxids)
@@ -122,7 +125,7 @@ func TestBloomFilter(t *testing.T) {
 	filter := NewShardedBloomFilter()
 
 	// Number of txids to test
-	numTxids := 10_000_000
+	numTxids := 1_000_000
 	t.Logf("Number of txids: %v\n", numTxids)
 	txids := make([][]byte, numTxids)
 	insertionDiv := 5

@@ -84,19 +84,6 @@ func (f *fRPC_BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembl
 	}, err
 }
 
-func (f *fRPC_BlockAssembly) storeUtxos(ctx context.Context, req *blockassembly_api.BlockassemblyApiAddTxRequest) error {
-	utxoHashes := make([]chainhash.Hash, len(req.Utxos))
-	for i, hash := range req.Utxos {
-		utxoHashes[i] = chainhash.Hash(hash)
-	}
-
-	if err := f.ba.utxoStore.StoreFromHashes(ctx, chainhash.Hash(req.Txid), utxoHashes, req.Locktime); err != nil {
-		return fmt.Errorf("failed to store utxos: %s", err)
-	}
-
-	return nil
-}
-
 func (f *fRPC_BlockAssembly) RemoveTx(_ context.Context, request *blockassembly_api.BlockassemblyApiRemoveTxRequest) (*blockassembly_api.BlockassemblyApiEmptyMessage, error) {
 	startTime := time.Now()
 	prometheusBlockAssemblyRemoveTx.Inc()

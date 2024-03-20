@@ -551,23 +551,3 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostor
 
 	return nil
 }
-
-func (v *Validator) reverseStores(traceSpan tracing.Span, tx *bt.Tx) error {
-	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "reverseStores")
-	defer stat.AddTime(start)
-
-	reverseUtxoSpan := tracing.Start(ctx, "Validator:Validate:reverseStores")
-	defer reverseUtxoSpan.Finish()
-
-	// decouple the tracing context to not cancel the context when the tx is being saved in the background
-	callerSpan := opentracing.SpanFromContext(reverseUtxoSpan.Ctx)
-	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
-	_, _, ctx = util.StartStatFromContext(setCtx, "reverseStores")
-
-	if errReverse := v.utxoStore.Delete(ctx, tx); errReverse != nil {
-		reverseUtxoSpan.RecordError(errReverse)
-		return fmt.Errorf("error reversing utxo stores %v", errReverse)
-	}
-
-	return nil
-}

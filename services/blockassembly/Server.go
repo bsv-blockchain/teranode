@@ -530,19 +530,6 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	}, batchError
 }
 
-func (ba *BlockAssembly) storeUtxos(ctx context.Context, req *blockassembly_api.AddTxRequest) error {
-	utxoHashes := make([]chainhash.Hash, len(req.Utxos))
-	for i, hash := range req.Utxos {
-		utxoHashes[i] = chainhash.Hash(hash)
-	}
-
-	if err := ba.utxoStore.StoreFromHashes(ctx, chainhash.Hash(req.Txid), utxoHashes, req.Locktime); err != nil {
-		return fmt.Errorf("failed to store utxos: %s", err)
-	}
-
-	return nil
-}
-
 func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) (*txmeta_store.Data, error) {
 	startMetaTime := time.Now()
 	txMetaSpan, txMetaSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:txMeta")
