@@ -1,15 +1,12 @@
-// Copyright (c) 2013-2017 The btcsuite developers
-// Copyright (c) 2015-2018 The Decred developers
-// Use of this source code is governed by an ISC
-// license that can be found in the LICENSE file.
-
-package external
+package legacy
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"runtime"
 	"sort"
 	"strconv"
@@ -30,6 +27,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -58,30 +56,38 @@ var (
 	userAgentVersion = fmt.Sprintf("%d.%d.%d", version.AppMajor, version.AppMinor, version.AppPatch)
 )
 
+type Server struct {
+	logger ulogger.Logger
+}
+
+func New(logger ulogger.Logger) *Server {
+	return &Server{
+		logger: logger,
+	}
+
+}
+
+func (ps *Server) Health(_ context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
+func (ps *Server) Init(_ context.Context) (err error) {
+	return nil
+}
+
+func (ps *Server) Start(ctx context.Context) (err error) {
+	if err := bsvdMain(nil); err != nil {
+		os.Exit(1)
+	}
+	return nil
+}
+
+func (ps *Server) Stop(ctx context.Context) (err error) {
+	return nil
+}
+
 // addrMe specifies the server address to send peers.
 var addrMe *wire.NetAddress
-
-// onionAddr implements the net.Addr interface and represents a tor address.
-type onionAddr struct {
-	addr string
-}
-
-// String returns the onion address.
-//
-// This is part of the net.Addr interface.
-func (oa *onionAddr) String() string {
-	return oa.addr
-}
-
-// Network returns "onion".
-//
-// This is part of the net.Addr interface.
-func (oa *onionAddr) Network() string {
-	return "onion"
-}
-
-// Ensure onionAddr implements the net.Addr interface.
-var _ net.Addr = (*onionAddr)(nil)
 
 // simpleAddr implements the net.Addr interface with two struct fields
 type simpleAddr struct {
@@ -210,7 +216,6 @@ type server struct {
 	peerHeightsUpdate    chan updatePeerHeightsMsg
 	wg                   sync.WaitGroup
 	quit                 chan struct{}
-	nat                  NAT
 	db                   database.DB
 	timeSource           blockchain.MedianTimeSource
 	services             wire.ServiceFlag
@@ -410,18 +415,6 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// to specified peers and actively avoids advertising and connecting to
 	// discovered peers.
 	if !cfg.SimNet && !isInbound {
-		// Advertise the local address when the server accepts incoming
-		// connections and it believes itself to be close to the best known tip.
-		if !cfg.DisableListen && sp.server.syncManager.IsCurrent() {
-			// Get address that best matches.
-			lna := addrManager.GetBestLocalAddress(remoteAddr)
-			if addrmgr.IsRoutable(lna) {
-				// Filter addresses the peer already knows about.
-				addresses := []*wire.NetAddress{lna}
-				sp.pushAddrMsg(addresses)
-			}
-		}
-
 		// Request known addresses if the server address manager needs
 		// more and the peer has a protocol version new enough to
 		// include a timestamp with addresses.
@@ -1672,11 +1665,6 @@ func (s *server) Start() {
 	// managers.
 	s.wg.Add(1)
 	go s.peerHandler()
-
-	if s.nat != nil {
-		s.wg.Add(1)
-		go s.upnpUpdateThread()
-	}
 }
 
 // Stop gracefully shuts down the server by stopping and disconnecting all
@@ -1794,60 +1782,6 @@ func parseListeners(addrs []string) ([]net.Addr, error) {
 	return netAddrs, nil
 }
 
-func (s *server) upnpUpdateThread() {
-	// Go off immediately to prevent code duplication, thereafter we renew
-	// lease every 15 minutes.
-	timer := time.NewTimer(0 * time.Second)
-	lport, _ := strconv.ParseInt(activeNetParams.DefaultPort, 10, 16)
-	first := true
-out:
-	for {
-		select {
-		case <-timer.C:
-			// TODO: pick external port  more cleverly
-			// TODO: know which ports we are listening to on an external net.
-			// TODO: if specific listen port doesn't work then ask for wildcard
-			// listen port?
-			// XXX this assumes timeout is in seconds.
-			listenPort, err := s.nat.AddPortMapping("tcp", int(lport), int(lport),
-				"bsvd listen port", 20*60)
-			if err != nil {
-				srvrLog.Warnf("can't add UPnP port mapping: %v", err)
-			}
-			if first && err == nil {
-				// TODO: look this up periodically to see if upnp domain changed
-				// and so did ip.
-				externalip, err := s.nat.GetExternalAddress()
-				if err != nil {
-					srvrLog.Warnf("UPnP can't get external address: %v", err)
-					continue out
-				}
-				na := wire.NewNetAddressIPPort(externalip, uint16(listenPort),
-					s.services)
-				_ = s.addrManager.AddLocalAddress(na, addrmgr.UpnpPrio)
-				// if err != nil {
-				// 	// XXX DeletePortMapping?
-				// }
-				srvrLog.Warnf("Successfully bound via UPnP to %s", addrmgr.NetAddressKey(na))
-				first = false
-			}
-			timer.Reset(time.Minute * 15)
-		case <-s.quit:
-			break out
-		}
-	}
-
-	timer.Stop()
-
-	if err := s.nat.DeletePortMapping("tcp", int(lport), int(lport)); err != nil {
-		srvrLog.Warnf("unable to remove UPnP port mapping: %v", err)
-	} else {
-		srvrLog.Debugf("successfully disestablished UPnP port mapping")
-	}
-
-	s.wg.Done()
-}
-
 // newServer returns a new bsvd server configured to listen on addr for the
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
@@ -1861,17 +1795,6 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 	amgr := addrmgr.New(cfg.DataDir, bsvdLookup)
 
 	var listeners []net.Listener
-	var nat NAT
-	if !cfg.DisableListen {
-		var err error
-		listeners, nat, err = initListeners(amgr, listenAddrs, services)
-		if err != nil {
-			return nil, err
-		}
-		if len(listeners) == 0 {
-			return nil, errors.New("no valid listen address")
-		}
-	}
 
 	s := server{
 		startupTime:          time.Now().Unix(),
@@ -1886,7 +1809,6 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 		quit:                 make(chan struct{}),
 		modifyRebroadcastInv: make(chan interface{}),
 		peerHeightsUpdate:    make(chan updatePeerHeightsMsg),
-		nat:                  nat,
 		db:                   db,
 		timeSource:           blockchain.NewMedianTime(),
 		services:             services,
@@ -2051,106 +1973,6 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 	return &s, nil
 }
 
-// initListeners initializes the configured net listeners and adds any bound
-// addresses to the address manager. Returns the listeners and a NAT interface,
-// which is non-nil if UPnP is in use.
-func initListeners(amgr *addrmgr.AddrManager, listenAddrs []string, services wire.ServiceFlag) ([]net.Listener, NAT, error) {
-	// Listen for TCP connections at the configured addresses
-	netAddrs, err := parseListeners(listenAddrs)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	listeners := make([]net.Listener, 0, len(netAddrs))
-	for _, addr := range netAddrs {
-		listener, err := net.Listen(addr.Network(), addr.String())
-		if err != nil {
-			srvrLog.Warnf("Can't listen on %s: %v", addr, err)
-			continue
-		}
-		listeners = append(listeners, listener)
-	}
-
-	var nat NAT
-	defaultPort, err := strconv.ParseUint(activeNetParams.DefaultPort, 10, 16)
-	if err != nil {
-		srvrLog.Errorf("Can not parse default port %s for active chain: %v",
-			activeNetParams.DefaultPort, err)
-		return nil, nil, err
-	}
-	if len(cfg.ExternalIPs) != 0 {
-		for _, sip := range cfg.ExternalIPs {
-			eport := uint16(defaultPort)
-			host, portstr, err := net.SplitHostPort(sip)
-			if err != nil {
-				// no port, use default.
-				host = sip
-			} else {
-				port, err := strconv.ParseUint(portstr, 10, 16)
-				if err != nil {
-					srvrLog.Warnf("Can not parse port from %s for "+
-						"externalip: %v", sip, err)
-					continue
-				}
-				eport = uint16(port)
-			}
-			na, err := amgr.HostToNetAddress(host, eport, services)
-			if err != nil {
-				srvrLog.Warnf("Not adding %s as externalip: %v", sip, err)
-				continue
-			}
-
-			// Found a valid external IP, make sure we use these details
-			// so peers get the correct IP information. Since we can only
-			// advertise one IP, use the first seen.
-			if addrMe == nil {
-				addrMe = na
-			}
-
-			err = amgr.AddLocalAddress(na, addrmgr.ManualPrio)
-			if err != nil {
-				amgrLog.Warnf("Skipping specified external IP: %v", err)
-			}
-		}
-	} else {
-		if cfg.Upnp {
-			var err error
-			nat, err = Discover()
-			if err != nil {
-				srvrLog.Warnf("Can't discover upnp: %v", err)
-			}
-			// nil nat here is fine, just means no upnp on network.
-
-			// Found a valid external IP, make sure we use these details
-			// so peers get the correct IP information.
-			if nat != nil {
-				addr, err := nat.GetExternalAddress()
-				if err == nil {
-					eport := uint16(defaultPort)
-					na, err := amgr.HostToNetAddress(addr.String(), eport, services)
-					if err == nil {
-						if addrMe == nil {
-							addrMe = na
-						}
-					}
-
-				}
-			}
-		}
-
-		// Add bound addresses to address manager to be advertised to peers.
-		for _, listener := range listeners {
-			addr := listener.Addr().String()
-			err := addLocalAddress(amgr, addr, services)
-			if err != nil {
-				amgrLog.Warnf("Skipping bound address %s: %v", addr, err)
-			}
-		}
-	}
-
-	return listeners, nat, nil
-}
-
 // addrStringToNetAddr takes an address in the form of 'host:port' and returns
 // a net.Addr which maps to the original address with any host names resolved
 // to IP addresses.  It also handles tor addresses properly by returning a
@@ -2172,16 +1994,6 @@ func addrStringToNetAddr(addr string) (net.Addr, error) {
 			IP:   ip,
 			Port: port,
 		}, nil
-	}
-
-	// Tor addresses cannot be resolved to an IP, so just return an onion
-	// address instead.
-	if strings.HasSuffix(host, ".onion") {
-		if cfg.NoOnion {
-			return nil, errors.New("tor has been disabled")
-		}
-
-		return &onionAddr{addr: addr}, nil
 	}
 
 	// Attempt to look up an IP address associated with the parsed host.

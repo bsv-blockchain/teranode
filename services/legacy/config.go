@@ -2,11 +2,12 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-package external
+package legacy
 
 import (
 	"bufio"
 	"bytes"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,9 @@ import (
 
 	flags "github.com/jessevdk/go-flags"
 )
+
+//go:embed sample-bsvd.conf
+var configData []byte
 
 const (
 	defaultConfigFilename          = "bsvd.conf"
@@ -628,12 +632,6 @@ func loadConfig() (*config, []string, error) {
 		return nil, nil, err
 	}
 
-	// --proxy or --connect without --listen disables listening.
-	if (cfg.Proxy != "" || len(cfg.ConnectPeers) > 0) &&
-		len(cfg.Listeners) == 0 {
-		cfg.DisableListen = true
-	}
-
 	// Connect means no DNS seeding.
 	if len(cfg.ConnectPeers) > 0 {
 		cfg.DisableDNSSeed = true
@@ -931,11 +929,7 @@ func createDefaultConfigFile(destinationPath string) error {
 		return err
 	}
 
-	sampleBytes, err := Asset("sample-bsvd.conf")
-	if err != nil {
-		return err
-	}
-	src := bytes.NewReader(sampleBytes)
+	src := bytes.NewReader(configData)
 
 	dest, err := os.OpenFile(destinationPath,
 		os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)

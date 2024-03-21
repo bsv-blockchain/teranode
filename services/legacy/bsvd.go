@@ -2,18 +2,14 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-package external
+package legacy
 
 import (
-	"fmt"
 	_ "net/http/pprof"
 	"os"
 	"path/filepath"
-	"runtime"
-	"runtime/debug"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
-	"github.com/bitcoin-sv/ubsv/services/legacy/limits"
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 )
@@ -28,10 +24,6 @@ const (
 var (
 	cfg *config
 )
-
-// winServiceMain is only invoked on Windows.  It detects when bsvd is running
-// as a service and reacts accordingly.
-var winServiceMain func() (bool, error)
 
 // bsvdMain is the real main function for bsvd.  It is necessary to work around
 // the fact that deferred functions do not run when os.Exit() is called.  The
@@ -252,26 +244,4 @@ func loadBlockDB() (database.DB, error) {
 
 	bsvdLog.Infof("Block database loaded")
 	return db, nil
-}
-
-func Start() {
-	// Use all processor cores.
-	runtime.GOMAXPROCS(runtime.NumCPU())
-
-	// Block and transaction processing can cause bursty allocations.  This
-	// limits the garbage collector from excessively overallocating during
-	// bursts.  This value was arrived at with the help of profiling live
-	// usage.
-	debug.SetGCPercent(10)
-
-	// Up some limits.
-	if err := limits.SetLimits(); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to set limits: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Work around defer not working after os.Exit()
-	if err := bsvdMain(nil); err != nil {
-		os.Exit(1)
-	}
 }
