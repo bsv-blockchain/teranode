@@ -8,7 +8,6 @@
 
   export let loading = true
   export let data: any = {}
-  export let fullStats = false
   export let onRefresh = () => {}
 
   const baseKey = 'page.home.stats'
@@ -41,7 +40,7 @@
 </script>
 
 <Card
-  title={t(`${baseKey}.${fullStats ? 'title' : 'alternateTitle'}`)}
+  title={t(`${baseKey}.title`)}
   showFooter={false}
   headerPadding="20px 24px 10px 24px"
 >

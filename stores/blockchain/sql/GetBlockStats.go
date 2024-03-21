@@ -3,8 +3,6 @@ package sql
 import (
 	"context"
 	"fmt"
-	"time"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
 )
@@ -39,14 +37,12 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 			WHERE b.parent_id != 0
 		)
 		SELECT count(1), sum(tx_count), max(height), avg(size_in_bytes), avg(tx_count), min(block_time), max(block_time) from ChainBlocks
-		WHERE block_time >= $1 AND id > 0
+		WHERE id > 0
 	`
 
 	blockStats := &model.BlockStats{}
 
-	blockTime := time.Now().UTC().Add(-24 * time.Hour).Unix()
-
-	err := s.db.QueryRowContext(ctx, q, blockTime).Scan(
+	err := s.db.QueryRowContext(ctx, q).Scan(
 		&blockStats.BlockCount,
 		&blockStats.TxCount,
 		&blockStats.MaxHeight,
