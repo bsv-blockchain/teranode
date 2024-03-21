@@ -487,7 +487,6 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 			var parentTxHashes []chainhash.Hash
 			bloomStats.mu.Lock()
 			bloomStats.QueryCounter += uint64(len(subtree.Nodes))
-			logger.Errorf("NOT ERROR, setting bloomStats.QueryCounter to %d", bloomStats.QueryCounter)
 			bloomStats.mu.Unlock()
 			for snIdx, subtreeNode := range subtree.Nodes {
 				if subtreeNode.Hash.IsEqual(CoinbasePlaceholderHash) {
