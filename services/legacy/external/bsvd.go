@@ -83,12 +83,6 @@ func bsvdMain(serverChan chan<- *server) error {
 	// 	defer pprof.StopCPUProfile()
 	// }
 
-	// Perform upgrades to bsvd as new versions require it.
-	// if err := doUpgrades(); err != nil {
-	// 	bsvdLog.Errorf("%v", err)
-	// 	return err
-	// }
-
 	// Return now if an interrupt signal was triggered.
 	if interruptRequested(interrupt) {
 		return nil

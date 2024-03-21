@@ -7,8 +7,6 @@ package external
 import (
 	"bufio"
 	"bytes"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -933,20 +931,6 @@ func createDefaultConfigFile(destinationPath string) error {
 		return err
 	}
 
-	// We generate a random user and password
-	randomBytes := make([]byte, 20)
-	_, err = rand.Read(randomBytes)
-	if err != nil {
-		return err
-	}
-	generatedRPCUser := base64.StdEncoding.EncodeToString(randomBytes)
-
-	_, err = rand.Read(randomBytes)
-	if err != nil {
-		return err
-	}
-	generatedRPCPass := base64.StdEncoding.EncodeToString(randomBytes)
-
 	sampleBytes, err := Asset("sample-bsvd.conf")
 	if err != nil {
 		return err
@@ -961,19 +945,12 @@ func createDefaultConfigFile(destinationPath string) error {
 	defer dest.Close()
 
 	// We copy every line from the sample config file to the destination,
-	// only replacing the two lines for rpcuser and rpcpass
 	reader := bufio.NewReader(src)
 	for err != io.EOF {
 		var line string
 		line, err = reader.ReadString('\n')
 		if err != nil && err != io.EOF {
 			return err
-		}
-
-		if strings.Contains(line, "rpcuser=") {
-			line = "rpcuser=" + generatedRPCUser + "\n"
-		} else if strings.Contains(line, "rpcpass=") {
-			line = "rpcpass=" + generatedRPCPass + "\n"
 		}
 
 		if _, err := dest.WriteString(line); err != nil {
