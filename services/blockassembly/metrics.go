@@ -22,10 +22,6 @@ var (
 	prometheusBlockAssemblyUpdateSubtreesTTL            prometheus.Histogram
 	//prometheusBlockAssemblyUpdateTxMinedStatus          prometheus.Histogram
 
-	// subtree cache
-	prometheusBlockAssemblyLocalTTLCacheHit  prometheus.Counter
-	prometheusBlockAssemblyLocalTTLCacheMiss prometheus.Counter
-
 	// in BlockAssembler
 	prometheusBlockAssemblerGetMiningCandidate prometheus.Counter
 	prometheusBlockAssemblerSubtreeCreated     prometheus.Counter
@@ -132,22 +128,6 @@ func _initPrometheusMetrics() {
 			Name:      "update_subtrees_ttl_duration_seconds",
 			Help:      "Duration of updating subtrees TTL in the blockassembly service",
 			Buckets:   util.MetricsBucketsSeconds,
-		},
-	)
-
-	prometheusBlockAssemblyLocalTTLCacheHit = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockassembly",
-			Name:      "local_ttl_cache_hit",
-			Help:      "Number of hits to the local ttl cache in the blockassembly service",
-		},
-	)
-
-	prometheusBlockAssemblyLocalTTLCacheMiss = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockassembly",
-			Name:      "local_ttl_cache_miss",
-			Help:      "Number of misses to the local ttl cache in the blockassembly service",
 		},
 	)
 

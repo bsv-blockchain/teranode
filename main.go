@@ -237,7 +237,7 @@ func main() {
 	}
 
 	var blockValidationClient *blockvalidation.Client
-	if startBlockAssembly || startPropagation || startValidator {
+	if startPropagation || startValidator {
 		blockValidationClient = blockvalidation.NewClient(ctx, logger)
 	}
 
@@ -260,19 +260,6 @@ func main() {
 				panic(err)
 			}
 
-			assetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
-			if !ok {
-				assetAddr, ok = gocore.Config().Get("asset_grpcAddress")
-				if !ok {
-					panic("asset_grpcAddress not found in config file")
-				}
-			}
-
-			assetClient, err := asset.NewClient(ctx, logger, assetAddr)
-			if err != nil {
-				panic(err)
-			}
-
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				logger.New("bass"),
 				getTxStore(logger),
@@ -280,8 +267,6 @@ func main() {
 				getTxMetaStore(logger),
 				getSubtreeStore(logger),
 				blockchainClient,
-				assetClient,
-				blockValidationClient, // TODO replace with getSubtreeStore(logger) when running block assembly and block validation on the same node
 			)); err != nil {
 				panic(err)
 			}

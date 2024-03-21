@@ -55,8 +55,6 @@ type BlockAssembly struct {
 	txMetaStore           txmeta_store.Store
 	subtreeStore          blob.Store
 	subtreeTTL            time.Duration
-	assetClient           WrapperInterface
-	blockValidationClient WrapperInterface
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	blockSubmissionChan   chan *BlockSubmissionRequest
 	blockAssemblyDisabled bool
@@ -75,7 +73,7 @@ func Enabled() bool {
 
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store, subtreeStore blob.Store,
-	blockchainClient blockchain.ClientI, AssetClient, blockValidationClient WrapperInterface) *BlockAssembly {
+	blockchainClient blockchain.ClientI) *BlockAssembly {
 
 	// initialize Prometheus metrics, singleton, will only happen once
 	initPrometheusMetrics()
@@ -91,8 +89,6 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 		txMetaStore:           txMetaStore,
 		subtreeStore:          subtreeStore,
 		subtreeTTL:            subtreeTTL,
-		assetClient:           AssetClient,
-		blockValidationClient: blockValidationClient,
 		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
 		blockSubmissionChan:   make(chan *BlockSubmissionRequest),
 		blockAssemblyDisabled: gocore.Config().GetBool("blockassembly_disabled", false),
@@ -103,7 +99,7 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 	return ba
 }
 
-func (ba *BlockAssembly) Health(ctx context.Context) (int, string, error) {
+func (ba *BlockAssembly) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
@@ -115,14 +111,6 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	// retry channel for subtrees that failed to be stored
 	subtreeRetryChanBuffer, _ := gocore.Config().GetInt("blockassembly_subtreeRetryChanBuffer", 1_000)
 	subtreeRetryChan := make(chan *subtreeRetrySend, subtreeRetryChanBuffer)
-
-	remoteTTLStores := gocore.Config().GetBool("blockassembly_remoteTTLStores", false)
-	if remoteTTLStores {
-		ba.subtreeStore, err = NewRemoteTTLWrapper(ba.logger, ba.subtreeStore, ba.assetClient, ba.blockValidationClient)
-		if err != nil {
-			return fmt.Errorf("failed to create remote TTL wrapper: %s", err)
-		}
-	}
 
 	auxiliarySubtreeStoreDir, ok := gocore.Config().Get("blockassembly_auxiliarySubtreeStore", "")
 	if ok && auxiliarySubtreeStoreDir != "" {
