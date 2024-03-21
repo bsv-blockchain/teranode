@@ -202,6 +202,7 @@ When a node creates a new subtree, or finds a new block hashing solution, it wil
    - If a new block notification is detected, it publishes the block message to the PubSub System.
    - The PubSub System then delivers this message to Node 2.
    - Node 2 receives the message on the block topic, **submits the block message to its own Block Validation Service**, and notifies the block message on its notification channel.
+     - Note that the Block Validation Service might be configured to either receive gRPC notifications or listen to a Kafka producer. In the diagram above, the gRPC method is described. Please check the [Block Validation Service](blockValidation.md) documentation for more details
 
 2. **New Mined Block Notification**:
    - Node 1 listens for blockchain notifications.
@@ -213,8 +214,8 @@ When a node creates a new subtree, or finds a new block hashing solution, it wil
    - Node 1 listens for blockchain notifications.
    - If a new subtree notification is detected, it publishes the subtree message to the PubSub System.
    - The PubSub System delivers this message to Node 2.
-   - Node 2 receives the subtree message on the subtree topic, **submits the subtree message to its own Block Validation Service**, and notifies the subtree message on its notification channel.
-
+   - Node 2 receives the subtree message on the subtree topic, **submits the subtree message to its own Subtree Validation Service**, and notifies the subtree message on its notification channel.
+      - Note that the Subtree Validation Service might be configured to either receive gRPC notifications or listen to a Kafka producer. In the diagram above, the gRPC method is described. Please check the [Subtree Validation Service](subtreeValidation.md)  documentation for more details
 
 ### 2.5. TX Validator Messages
 

@@ -5,6 +5,7 @@ queue "PubSub System" as PubSub
 participant "Node 2" as Node2
 queue "Notification Channel" as notificationChannel
 participant "Block Validator" as BlockValidationClient
+participant "Subtree Validator" as SubtreeValidationClient
 
 === New Block Notification ===
 Node1 -> Node1: blockchainSubscriptionListener(ctx)
@@ -40,7 +41,7 @@ end
 PubSub -> Node2: s.topics[subtreeTopicName]
 activate Node2
 Node2 -> Node2: handleSubtreeTopic(ctx)
-Node2 -> BlockValidationClient: s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl)
+Node2 -> SubtreeValidationClient: s.subtreeValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl)
 Node2 -> notificationChannel: notify subtreeMessage to s.notificationCh
 deactivate Node2
 
