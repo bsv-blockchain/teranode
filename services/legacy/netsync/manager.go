@@ -6,6 +6,7 @@ package netsync
 
 import (
 	"container/list"
+	"context"
 	"math/rand"
 	"net"
 	"sync"
@@ -1299,6 +1300,8 @@ out:
 				}
 
 			case *blockMsg:
+				TeranodeHandler(context.TODO())(msg)
+
 				sm.handleBlockMsg(msg)
 				if msg.reply != nil {
 					msg.reply <- struct{}{}

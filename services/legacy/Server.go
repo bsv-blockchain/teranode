@@ -76,7 +76,7 @@ func (ps *Server) Init(_ context.Context) (err error) {
 }
 
 func (ps *Server) Start(ctx context.Context) (err error) {
-	if err := bsvdMain(nil); err != nil {
+	if err := bsvdMain(ctx); err != nil {
 		os.Exit(1)
 	}
 	return nil
@@ -1483,7 +1483,7 @@ func (s *server) peerDoneHandler(sp *serverPeer) {
 // peerHandler is used to handle peer operations such as adding and removing
 // peers to and from the server, banning peers, and broadcasting messages to
 // peers.  It must be run in a goroutine.
-func (s *server) peerHandler() {
+func (s *server) peerHandler(ctx context.Context) {
 	// Start the address manager and sync manager, both of which are needed
 	// by peers.  This is done here since their lifecycle is closely tied
 	// to this handler and rather than adding more channels to sychronize
@@ -1653,7 +1653,7 @@ func (s *server) UpdatePeerHeights(latestBlkHash *chainhash.Hash, latestHeight i
 }
 
 // Start begins accepting connections from peers.
-func (s *server) Start() {
+func (s *server) Start(ctx context.Context) {
 	// Already started?
 	if atomic.AddInt32(&s.started, 1) != 1 {
 		return
@@ -1664,7 +1664,7 @@ func (s *server) Start() {
 	// Start the peer handler which in turn starts the address and block
 	// managers.
 	s.wg.Add(1)
-	go s.peerHandler()
+	go s.peerHandler(ctx)
 }
 
 // Stop gracefully shuts down the server by stopping and disconnecting all
@@ -1785,7 +1785,7 @@ func parseListeners(addrs []string) ([]net.Addr, error) {
 // newServer returns a new bsvd server configured to listen on addr for the
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
-func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Params, interrupt <-chan struct{}) (*server, error) {
+func newServer(ctx context.Context, listenAddrs []string, db database.DB, chainParams *chaincfg.Params) (*server, error) {
 	services := defaultServices
 
 	services &^= wire.SFNodeCF
@@ -1860,7 +1860,6 @@ func newServer(listenAddrs []string, db database.DB, chainParams *chaincfg.Param
 	s.chain, err = blockchain.New(&blockchain.Config{
 		DB:                 s.db,
 		UtxoCacheMaxSize:   uint64(cfg.UtxoCacheMaxSizeMiB) * 1024 * 1024,
-		Interrupt:          interrupt,
 		ChainParams:        s.chainParams,
 		Checkpoints:        checkpoints,
 		TimeSource:         s.timeSource,

@@ -295,8 +295,12 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 					return
 				default:
 					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, consumerClosureFunc)); err != nil {
-						logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
-						// Consider delay before retry or exit based on error type
+						if errors.Is(err, context.Canceled) {
+							logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, groupID)
+						} else {
+							logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
+							// Consider delay before retry or exit based on error type
+						}
 					}
 				}
 			}

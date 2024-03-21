@@ -288,7 +288,12 @@ type MinedBlockStore interface {
 }
 
 func (b *Block) String() string {
-	return b.Hash().String()
+	height, err := util.ExtractCoinbaseHeight(b.CoinbaseTx)
+	if err != nil {
+		height = 0
+	}
+
+	return fmt.Sprintf("Block %s (height: %d, txCount: %d, size: %d", b.Hash().String(), height, b.TransactionCount, b.SizeInBytes)
 }
 
 func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {

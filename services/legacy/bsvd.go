@@ -5,7 +5,7 @@
 package legacy
 
 import (
-	_ "net/http/pprof"
+	"context"
 	"os"
 	"path/filepath"
 
@@ -30,7 +30,10 @@ var (
 // optional serverChan parameter is mainly used by the service code to be
 // notified with the server once it is setup so it can gracefully stop it when
 // requested from the service control manager.
-func bsvdMain(serverChan chan<- *server) error {
+func bsvdMain(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// Load configuration and parse command line.  This function also
 	// initializes logging and configures it accordingly.
 	tcfg, _, err := loadConfig()
@@ -45,43 +48,13 @@ func bsvdMain(serverChan chan<- *server) error {
 	// Get a channel that will be closed when a shutdown signal has been
 	// triggered either from an OS signal such as SIGINT (Ctrl+C) or from
 	// another subsystem such as the RPC server.
-	interrupt := interruptListener()
 	defer bsvdLog.Infof("Shutdown complete")
 
 	// Show version at startup.
 	bsvdLog.Infof("Version %s", version.String())
 
-	// Enable http profiling server if requested.
-	// if cfg.Profile != "" {
-	// 	go func() {
-	// 		listenAddr := net.JoinHostPort("", cfg.Profile)
-	// 		bsvdLog.Infof("Profile server listening on %s", listenAddr)
-	// 		profileRedirect := http.RedirectHandler("/debug/pprof",
-	// 			http.StatusSeeOther)
-	// 		http.Handle("/", profileRedirect)
-	// 		bsvdLog.Errorf("%v", http.ListenAndServe(listenAddr, nil))
-	// 	}()
-	// }
-
-	// Write cpu profile if requested.
-	// if cfg.CPUProfile != "" {
-	// 	f, err := os.Create(cfg.CPUProfile)
-	// 	if err != nil {
-	// 		bsvdLog.Errorf("Unable to create cpu profile: %v", err)
-	// 		return err
-	// 	}
-	// 	pprof.StartCPUProfile(f)
-	// 	defer f.Close()
-	// 	defer pprof.StopCPUProfile()
-	// }
-
-	// Return now if an interrupt signal was triggered.
-	if interruptRequested(interrupt) {
-		return nil
-	}
-
 	// Load the block database.
-	db, err := loadBlockDB()
+	db, err := loadBlockDB(ctx)
 	if err != nil {
 		bsvdLog.Errorf("%v", err)
 		return err
@@ -92,43 +65,8 @@ func bsvdMain(serverChan chan<- *server) error {
 		db.Close()
 	}()
 
-	// Return now if an interrupt signal was triggered.
-	if interruptRequested(interrupt) {
-		return nil
-	}
-
-	// Drop indexes and exit if requested.
-	//
-	// NOTE: The order is important here because dropping the tx index also
-	// drops the address index since it relies on it.
-	// if cfg.DropAddrIndex {
-	// 	if err := indexers.DropAddrIndex(db, interrupt); err != nil {
-	// 		bsvdLog.Errorf("%v", err)
-	// 		return err
-	// 	}
-
-	// 	return nil
-	// }
-	// if cfg.DropTxIndex {
-	// 	if err := indexers.DropTxIndex(db, interrupt); err != nil {
-	// 		bsvdLog.Errorf("%v", err)
-	// 		return err
-	// 	}
-
-	// 	return nil
-	// }
-	// if cfg.DropCfIndex {
-	// 	if err := indexers.DropCfIndex(db, interrupt); err != nil {
-	// 		bsvdLog.Errorf("%v", err)
-	// 		return err
-	// 	}
-
-	// 	return nil
-	// }
-
 	// Create server and start it.
-	server, err := newServer(cfg.Listeners, db, activeNetParams.Params,
-		interrupt)
+	server, err := newServer(ctx, cfg.Listeners, db, activeNetParams.Params)
 	if err != nil {
 		// TODO: this logging could do with some beautifying.
 		bsvdLog.Errorf("Unable to start server on %v: %v",
@@ -141,15 +79,10 @@ func bsvdMain(serverChan chan<- *server) error {
 		server.WaitForShutdown()
 		srvrLog.Infof("Server shutdown complete")
 	}()
-	server.Start()
-	if serverChan != nil {
-		serverChan <- server
-	}
 
-	// Wait until the interrupt signal is received from an OS signal or
-	// shutdown is requested through one of the subsystems such as the RPC
-	// server.
-	<-interrupt
+	server.Start(ctx)
+
+	<-ctx.Done()
 	return nil
 }
 
@@ -202,7 +135,7 @@ func warnMultipleDBs() {
 // contains additional logic such warning the user if there are multiple
 // databases which consume space on the file system and ensuring the regression
 // test database is clean when in regression test mode.
-func loadBlockDB() (database.DB, error) {
+func loadBlockDB(ctx context.Context) (database.DB, error) {
 	// The memdb backend does not have a file path associated with it, so
 	// handle it uniquely.  We also don't want to worry about the multiple
 	// database type warnings when running with the memory database.
