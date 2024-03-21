@@ -8,7 +8,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
@@ -16,11 +15,14 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-var once sync.Once
+var (
+	once sync.Once
+	tb   *TeranodeBridge
+)
 
 type TeranodeBridge struct {
 	blockValidationClient *blockvalidation.Client
-	txCache               map[chainhash.Hash]*wire.MsgTx
+	txCache               map[chainhash.Hash][]byte
 	subtreeCache          map[chainhash.Hash]*util.Subtree
 	blockCache            map[chainhash.Hash]*model.Block
 	baseUrl               string
@@ -42,7 +44,7 @@ func NewTeranodeBridge(ctx context.Context) *TeranodeBridge {
 	}
 
 	tb := &TeranodeBridge{
-		txCache:               make(map[chainhash.Hash]*wire.MsgTx),
+		txCache:               make(map[chainhash.Hash][]byte),
 		subtreeCache:          make(map[chainhash.Hash]*util.Subtree),
 		blockCache:            make(map[chainhash.Hash]*model.Block),
 		blockValidationClient: blockvalidation.NewClient(ctx, log),
@@ -83,15 +85,29 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 			continue // Skip coinbase tx
 		}
 
-		tb.txCache[*tx.Hash()] = tx.MsgTx()
-		size += int64(tx.MsgTx().SerializeSize())
+		// Add the txid to the subtree
+		txHash := *tx.Hash()
 
-		if err := st.AddNode(*tx.Hash(), 0, 0); err != nil {
+		if err := st.AddNode(txHash, 0, 0); err != nil {
 			return err
 		}
+
+		// Serialize the tx
+		var txBytes bytes.Buffer
+		if err := tx.MsgTx().Serialize(&txBytes); err != nil {
+			return err
+		}
+
+		size += int64(txBytes.Len())
+
+		// Add the tx to the cache
+		tb.txCache[txHash] = txBytes.Bytes()
 	}
 
-	tb.subtreeCache[*st.RootHash()] = st
+	if st.Height > 0 {
+		// Add the subtree to the cache
+		tb.subtreeCache[*st.RootHash()] = st
+	}
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
@@ -116,7 +132,12 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 
 	blockSize := msg.block.MsgBlock().SerializeSize()
 
-	block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{st.RootHash()}, uint64(len(txs)), uint64(blockSize))
+	subtrees := make([]*chainhash.Hash, 0)
+	if st.Height > 0 {
+		subtrees = append(subtrees, st.RootHash())
+	}
+
+	block, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(txs)), uint64(blockSize))
 	if err != nil {
 		return err
 	}
@@ -135,8 +156,6 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 }
 
 func TeranodeHandler(ctx context.Context) func(msg *blockMsg) error {
-	var tb *TeranodeBridge
-
 	once.Do(func() {
 		tb = NewTeranodeBridge(ctx)
 	})
@@ -193,10 +212,5 @@ func (tb *TeranodeBridge) TxHandler(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, "tx not found")
 	}
 
-	var txBytes bytes.Buffer
-	if err := tx.Serialize(&txBytes); err != nil {
-		return c.JSON(http.StatusInternalServerError, "error serializing tx")
-	}
-
-	return c.Blob(http.StatusOK, "application/octet-stream", txBytes.Bytes())
+	return c.Blob(http.StatusOK, "application/octet-stream", tx)
 }

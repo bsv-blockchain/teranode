@@ -251,12 +251,6 @@ func main() {
 		}
 	}
 
-	if startLegacy {
-		if err = sm.AddService("Legacy", legacy.New(logger)); err != nil {
-			panic(err)
-		}
-	}
-
 	// blockAssembly
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
@@ -413,6 +407,12 @@ func main() {
 					panic(err)
 				}
 			}
+		}
+	}
+
+	if startLegacy {
+		if err = sm.AddService("Legacy", legacy.New(logger)); err != nil {
+			panic(err)
 		}
 	}
 

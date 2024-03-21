@@ -1285,6 +1285,7 @@ out:
 		select {
 		case <-ticker.C:
 			sm.handleCheckSyncPeer()
+
 		case m := <-sm.msgChan:
 			switch msg := m.(type) {
 			case *newPeerMsg:
