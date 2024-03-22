@@ -27,12 +27,6 @@ func (b *Block) SetBlockBytes(buf []byte) {
 	b.serializedBlock = buf
 }
 
-// TstAppDataDir makes the internal appDataDir function available to the test
-// package.
-func TstAppDataDir(goos, appName string, roaming bool) string {
-	return appDataDir(goos, appName, roaming)
-}
-
 // TstAddressPubKeyHash makes a AddressPubKeyHash, setting the
 // unexported fields with the parameters hash and netID.
 func TstAddressPubKeyHash(hash [ripemd160.Size]byte,

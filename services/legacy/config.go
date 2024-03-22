@@ -29,6 +29,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 
 	flags "github.com/jessevdk/go-flags"
 )
@@ -68,7 +69,7 @@ const (
 )
 
 var (
-	defaultHomeDir    = bsvutil.AppDataDir("bsvd", false)
+	defaultHomeDir, _ = gocore.Config().Get("legacy_workingDir", os.TempDir())
 	defaultConfigFile = filepath.Join(defaultHomeDir, defaultConfigFilename)
 	defaultDataDir    = filepath.Join(defaultHomeDir, defaultDataDirname)
 	knownDbTypes      = database.SupportedDrivers()
