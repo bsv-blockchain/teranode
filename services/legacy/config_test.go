@@ -10,7 +10,7 @@ func TestExcessiveBlockSizeUserAgentComment(t *testing.T) {
 	// Wipe test args.
 	os.Args = []string{"bsvd"}
 
-	cfg, _, err := loadConfig()
+	cfg, err := loadConfig()
 	if err != nil {
 		t.Fatal("Failed to load configuration")
 	}
@@ -28,7 +28,7 @@ func TestExcessiveBlockSizeUserAgentComment(t *testing.T) {
 	// Custom excessive block size.
 	os.Args = []string{"bsvd", "--excessiveblocksize=64000000"}
 
-	cfg, _, err = loadConfig()
+	cfg, err = loadConfig()
 	if err != nil {
 		t.Fatal("Failed to load configuration")
 	}
@@ -57,11 +57,4 @@ func TestCreateDefaultConfigFile(t *testing.T) {
 		os.Remove(testpath)
 		os.Remove(tmpDir)
 	}()
-
-	err = createDefaultConfigFile(testpath)
-
-	if err != nil {
-		t.Fatalf("Failed to create a default config file: %v", err)
-	}
-
 }

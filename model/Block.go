@@ -353,10 +353,22 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	}
 
 	var height uint32
-	// 5. Check that the coinbase transaction includes the correct block height.
-	height, err = b.ExtractCoinbaseHeight()
-	if err != nil {
-		return false, err
+	if b.Header.Version > 1 {
+		// We can only calculate the height from coinbase transactions in block versions 2 and higher
+
+		// https://en.bitcoin.it/wiki/BIP_0034
+		// BIP-34 was created to force miners to add the block height to the coinbase tx.
+		// This BIP came into effect at block 227,835, which is after the first halving
+		// at block 210,000.  Therefore, until this happened, we do not know the actual
+		// height of the block we are checking for.
+
+		// TODO - do this another way, if necessary
+
+		// 5. Check that the coinbase transaction includes the correct block height.
+		height, err = b.ExtractCoinbaseHeight()
+		if err != nil {
+			return false, err
+		}
 	}
 
 	// only do the subtree checks if we have a subtree store
@@ -381,9 +393,11 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 
 	// 9. Check that the total fees of the block are less than or equal to the block reward.
 	// 10. Check that the coinbase transaction includes the correct block reward.
-	err = b.checkBlockRewardAndFees(height)
-	if err != nil {
-		return false, err
+	if height > 0 {
+		err = b.checkBlockRewardAndFees(height)
+		if err != nil {
+			return false, err
+		}
 	}
 
 	// 11. Check that there are no duplicate transactions in the block.
@@ -412,6 +426,17 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 }
 
 func (b *Block) checkBlockRewardAndFees(height uint32) error {
+	// https://en.bitcoin.it/wiki/BIP_0034
+	// BIP-34 was created to force miners to add the block height to the coinbase tx.
+	// This BIP came into effect at block 227,835, which is after the first halving
+	// at block 210,000.  Therefore, until this happened, we do not know the actual
+	// height of the block we are checking for.
+
+	// TODO - do this another way, if necessary
+	if height == 0 {
+		return nil // Skip this check
+	}
+
 	coinbaseOutputSatoshis := uint64(0)
 	for _, tx := range b.CoinbaseTx.Outputs {
 		coinbaseOutputSatoshis += tx.Satoshis

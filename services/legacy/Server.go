@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -1749,13 +1748,6 @@ func parseListeners(addrs []string) ([]net.Addr, error) {
 		if err != nil {
 			// Shouldn't happen due to already being normalized.
 			return nil, err
-		}
-
-		// Empty host or host of * on plan9 is both IPv4 and IPv6.
-		if host == "" || (host == "*" && runtime.GOOS == "plan9") {
-			netAddrs = append(netAddrs, simpleAddr{net: "tcp4", addr: addr})
-			netAddrs = append(netAddrs, simpleAddr{net: "tcp6", addr: addr})
-			continue
 		}
 
 		// Strip IPv6 zone id if present since net.ParseIP does not

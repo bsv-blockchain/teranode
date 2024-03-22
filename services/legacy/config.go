@@ -5,16 +5,11 @@
 package legacy
 
 import (
-	"bufio"
-	"bytes"
 	_ "embed"
-	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,12 +17,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/connmgr"
 	"github.com/bitcoin-sv/ubsv/services/legacy/database"
 	_ "github.com/bitcoin-sv/ubsv/services/legacy/database/ffldb"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
-	"github.com/bitcoin-sv/ubsv/services/legacy/version"
-	"github.com/btcsuite/go-socks/socks"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 
@@ -59,7 +51,7 @@ const (
 	defaultMaxOrphanTransactions   = 100
 	defaultMaxOrphanTxSize         = 100000
 	defaultSigCacheMaxSize         = 100000
-	defaultTxIndex                 = false
+	defaultTxIndex                 = true // We want to have this index to be able to convert standard txs to extended txs
 	defaultAddrIndex               = false
 	defaultUtxoCacheMaxSizeMiB     = 450
 	defaultMinSyncPeerNetworkSpeed = 51200
@@ -333,11 +325,7 @@ func fileExists(name string) bool {
 
 // newConfigParser returns a new command line flags parser.
 func newConfigParser(cfg *config, so *serviceOptions, options flags.Options) *flags.Parser {
-	parser := flags.NewParser(cfg, options)
-	if runtime.GOOS == "windows" {
-		_, _ = parser.AddGroup("Service Options", "Service Options", so)
-	}
-	return parser
+	return flags.NewParser(cfg, options)
 }
 
 // loadConfig initializes and parses the config using a config file and command
@@ -352,7 +340,7 @@ func newConfigParser(cfg *config, so *serviceOptions, options flags.Options) *fl
 // The above results in bsvd functioning properly without any config settings
 // while still allowing the user to override settings with config files and
 // command line options.  Command line options always take precedence.
-func loadConfig() (*config, []string, error) {
+func loadConfig() (*config, error) {
 	// Default config.
 	cfg := config{
 		ConfigFile:              defaultConfigFile,
@@ -380,86 +368,9 @@ func loadConfig() (*config, []string, error) {
 		TargetOutboundPeers:     defaultTargetOutboundPeers,
 	}
 
-	// Service options which are only added on Windows.
-	serviceOpts := serviceOptions{}
-
-	// Pre-parse the command line options to see if an alternative config
-	// file or the version flag was specified.  Any errors aside from the
-	// help message error can be ignored here since they will be caught by
-	// the final parse below.
-	preCfg := cfg
-	preParser := newConfigParser(&preCfg, &serviceOpts, flags.HelpFlag)
-	_, err := preParser.Parse()
-	if err != nil {
-		if e, ok := err.(*flags.Error); ok && e.Type == flags.ErrHelp {
-			fmt.Fprintln(os.Stderr, err)
-			return nil, nil, err
-		}
-	}
-
-	// Show the version and exit if the version flag was specified.
-	appName := filepath.Base(os.Args[0])
-	appName = strings.TrimSuffix(appName, filepath.Ext(appName))
-	usageMessage := fmt.Sprintf("Use %s -h to show usage", appName)
-	if preCfg.ShowVersion {
-		fmt.Println(appName, "version", version.String())
-		os.Exit(0)
-	}
-
-	// Perform service command and exit if specified.  Invalid service
-	// commands show an appropriate error.  Only runs on Windows since
-	// the runServiceCommand function will be nil when not on Windows.
-	if serviceOpts.ServiceCommand != "" && runServiceCommand != nil {
-		err := runServiceCommand(serviceOpts.ServiceCommand)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-		os.Exit(0)
-	}
-
-	// Load additional config from file.
-	var configFileError error
-	parser := newConfigParser(&cfg, &serviceOpts, flags.Default)
-	if !(preCfg.RegressionTest || preCfg.SimNet) || preCfg.ConfigFile !=
-		defaultConfigFile {
-
-		if _, err := os.Stat(preCfg.ConfigFile); os.IsNotExist(err) {
-			err := createDefaultConfigFile(preCfg.ConfigFile)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error creating a "+
-					"default config file: %v\n", err)
-			}
-		}
-
-		err := flags.NewIniParser(parser).ParseFile(preCfg.ConfigFile)
-		if err != nil {
-			if _, ok := err.(*os.PathError); !ok {
-				fmt.Fprintf(os.Stderr, "Error parsing config "+
-					"file: %v\n", err)
-				fmt.Fprintln(os.Stderr, usageMessage)
-				return nil, nil, err
-			}
-			configFileError = err
-		}
-	}
-
-	// Don't add peers from the config file when in regression test mode.
-	if preCfg.RegressionTest && len(cfg.AddPeers) > 0 {
-		cfg.AddPeers = nil
-	}
-
-	// Parse command line options again to ensure they take precedence.
-	remainingArgs, err := parser.Parse()
-	if err != nil {
-		if e, ok := err.(*flags.Error); !ok || e.Type != flags.ErrHelp {
-			fmt.Fprintln(os.Stderr, usageMessage)
-		}
-		return nil, nil, err
-	}
-
 	// Create the home directory if it doesn't already exist.
 	funcName := "loadConfig"
-	err = os.MkdirAll(defaultHomeDir, 0700)
+	err := os.MkdirAll(defaultHomeDir, 0700)
 	if err != nil {
 		// Show a nicer error message if it's because a symlink is
 		// linked to a directory that does not exist (probably because
@@ -474,64 +385,14 @@ func loadConfig() (*config, []string, error) {
 		str := "%s: Failed to create home directory: %v"
 		err := fmt.Errorf(str, funcName, err)
 		fmt.Fprintln(os.Stderr, err)
-		return nil, nil, err
-	}
-
-	// Multiple networks can't be selected simultaneously.
-	numNets := 0
-	// Count number of network flags passed; assign active network params
-	// while we're at it
-	if cfg.TestNet3 {
-		numNets++
-		activeNetParams = &testNet3Params
-	}
-	if cfg.RegressionTest {
-		numNets++
-		activeNetParams = &regressionNetParams
-	}
-	if cfg.SimNet {
-		numNets++
-		// Also disable dns seeding on the simulation test network.
-		activeNetParams = &simNetParams
-		cfg.DisableDNSSeed = true
-	}
-	if numNets > 1 {
-		str := "%s: The testnet, regtest, segnet, and simnet params " +
-			"can't be used together -- choose one of the four"
-		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// Re-indexing and pruning don't mix.
-	if cfg.ReIndexChainState && cfg.Prune {
-		str := "%s: reindexchainstate can not be used with a pruned blockchain."
-		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Set the default policy for relaying non-standard transactions
 	// according to the default of the active network. The set
 	// configuration value takes precedence over the default value for the
 	// selected network.
-	relayNonStd := activeNetParams.RelayNonStdTxs
-	switch {
-	case cfg.RelayNonStd && cfg.RejectNonStd:
-		str := "%s: rejectnonstd and relaynonstd cannot be used " +
-			"together -- choose only one"
-		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	case cfg.RejectNonStd:
-		relayNonStd = false
-	case cfg.RelayNonStd:
-		relayNonStd = true
-	}
-	cfg.RelayNonStd = relayNonStd
+	cfg.RelayNonStd = activeNetParams.RelayNonStdTxs
 
 	// Append the network type to the data directory so it is "namespaced"
 	// per network.  In addition to the block database, there are other
@@ -547,97 +408,6 @@ func loadConfig() (*config, []string, error) {
 	cfg.LogDir = cleanAndExpandPath(cfg.LogDir)
 	cfg.LogDir = filepath.Join(cfg.LogDir, netName(activeNetParams))
 
-	// Special show command to list supported subsystems and exit.
-	if cfg.DebugLevel == "show" {
-		fmt.Println("Supported subsystems", supportedSubsystems())
-		os.Exit(0)
-	}
-
-	// Validate database type.
-	if !validDbType(cfg.DbType) {
-		str := "%s: The specified database type [%v] is invalid -- " +
-			"supported types %v"
-		err := fmt.Errorf(str, funcName, cfg.DbType, knownDbTypes)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// Validate profile port number
-	if cfg.Profile != "" {
-		profilePort, err := strconv.Atoi(cfg.Profile)
-		if err != nil || profilePort < 1024 || profilePort > 65535 {
-			str := "%s: The profile port must be between 1024 and 65535"
-			err := fmt.Errorf(str, funcName)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
-			return nil, nil, err
-		}
-	}
-
-	// Don't allow ban durations that are too short.
-	if cfg.BanDuration < time.Second {
-		str := "%s: The banduration option may not be less than 1s -- parsed [%v]"
-		err := fmt.Errorf(str, funcName, cfg.BanDuration)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	if cfg.Prune && cfg.PruneDepth < minPruneDepth {
-		err := fmt.Errorf("%s: The prune height option may not be less than %d -- parsed [%d]", funcName, minPruneDepth, cfg.PruneDepth)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// Validate any given whitelisted IP addresses and networks.
-	if len(cfg.Whitelists) > 0 {
-		var ip net.IP
-		cfg.whitelists = make([]*net.IPNet, 0, len(cfg.Whitelists))
-
-		for _, addr := range cfg.Whitelists {
-			_, ipnet, err := net.ParseCIDR(addr)
-			if err != nil {
-				ip = net.ParseIP(addr)
-				if ip == nil {
-					str := "%s: The whitelist value of '%s' is invalid"
-					err = fmt.Errorf(str, funcName, addr)
-					fmt.Fprintln(os.Stderr, err)
-					fmt.Fprintln(os.Stderr, usageMessage)
-					return nil, nil, err
-				}
-				var bits int
-				if ip.To4() == nil {
-					// IPv6
-					bits = 128
-				} else {
-					bits = 32
-				}
-				ipnet = &net.IPNet{
-					IP:   ip,
-					Mask: net.CIDRMask(bits, bits),
-				}
-			}
-			cfg.whitelists = append(cfg.whitelists, ipnet)
-		}
-	}
-
-	// --addPeer and --connect do not mix.
-	if len(cfg.AddPeers) > 0 && len(cfg.ConnectPeers) > 0 {
-		str := "%s: the --addpeer and --connect options can not be " +
-			"mixed"
-		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// Connect means no DNS seeding.
-	if len(cfg.ConnectPeers) > 0 {
-		cfg.DisableDNSSeed = true
-	}
-
 	// Add the default listener if none were specified. The default
 	// listener is all addresses on the listen port for the network
 	// we are to connect to.
@@ -646,43 +416,6 @@ func loadConfig() (*config, []string, error) {
 			net.JoinHostPort("", activeNetParams.DefaultPort),
 		}
 	}
-
-	// Validate the the minrelaytxfee.
-	cfg.minRelayTxFee, err = bsvutil.NewAmount(cfg.MinRelayTxFee)
-	if err != nil {
-		str := "%s: invalid minrelaytxfee: %v"
-		err := fmt.Errorf(str, funcName, err)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// Limit the max orphan count to a sane vlue.
-	if cfg.MaxOrphanTxs < 0 {
-		str := "%s: The maxorphantx option may not be less than 0 " +
-			"-- parsed [%d]"
-		err := fmt.Errorf(str, funcName, cfg.MaxOrphanTxs)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// Excessive blocksize cannot be set less than the default but it can be higher.
-	cfg.ExcessiveBlockSize = maxUint64(cfg.ExcessiveBlockSize, defaultExcessiveBlockSize)
-
-	// Limit the max block size to a sane value.
-	blockMaxSizeMax := cfg.ExcessiveBlockSize - 1000
-	if cfg.BlockMaxSize < blockMaxSizeMin || cfg.BlockMaxSize >
-		blockMaxSizeMax {
-
-		str := "%s: The blockmaxsize option must be in between %d " +
-			"and %d -- parsed [%d]"
-		err := fmt.Errorf(str, funcName, blockMaxSizeMin,
-			blockMaxSizeMax, cfg.BlockMaxSize)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
 	// Limit the block priority and minimum block sizes to max block size.
 	cfg.BlockPrioritySize = minUint64(cfg.BlockPrioritySize, cfg.BlockMaxSize)
 	cfg.BlockMinSize = minUint64(cfg.BlockMinSize, cfg.BlockMaxSize)
@@ -690,121 +423,13 @@ func loadConfig() (*config, []string, error) {
 	// Prepend ExcessiveBlockSize signaling to the UserAgentComments
 	cfg.UserAgentComments = append([]string{fmt.Sprintf("EB%.1f", float64(cfg.ExcessiveBlockSize)/1000000)}, cfg.UserAgentComments...)
 
-	// Look for illegal characters in the user agent comments.
-	for _, uaComment := range cfg.UserAgentComments {
-		if strings.ContainsAny(uaComment, "/:()") {
-			err := fmt.Errorf("%s: The following characters must not "+
-				"appear in user agent comments: '/', ':', '(', ')'",
-				funcName)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
-			return nil, nil, err
-		}
-	}
-
-	// --txindex and --droptxindex do not mix.
-	if cfg.TxIndex && cfg.DropTxIndex {
-		err := fmt.Errorf("%s: the --txindex and --droptxindex "+
-			"options may  not be activated at the same time",
-			funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// --addrindex and --dropaddrindex do not mix.
-	if cfg.AddrIndex && cfg.DropAddrIndex {
-		err := fmt.Errorf("%s: the --addrindex and --dropaddrindex "+
-			"options may not be activated at the same time",
-			funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// --addrindex and --droptxindex do not mix.
-	if cfg.AddrIndex && cfg.DropTxIndex {
-		err := fmt.Errorf("%s: the --addrindex and --droptxindex "+
-			"options may not be activated at the same time "+
-			"because the address index relies on the transaction "+
-			"index",
-			funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// Check mining addresses are valid and saved parsed versions.
-	cfg.miningAddrs = make([]bsvutil.Address, 0, len(cfg.MiningAddrs))
-	for _, strAddr := range cfg.MiningAddrs {
-		addr, err := bsvutil.DecodeAddress(strAddr, activeNetParams.Params)
-		if err != nil {
-			str := "%s: mining address '%s' failed to decode: %v"
-			err := fmt.Errorf(str, funcName, strAddr, err)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
-			return nil, nil, err
-		}
-		if !addr.IsForNet(activeNetParams.Params) {
-			str := "%s: mining address '%s' is on the wrong network"
-			err := fmt.Errorf(str, funcName, strAddr)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
-			return nil, nil, err
-		}
-		cfg.miningAddrs = append(cfg.miningAddrs, addr)
-	}
-
-	// Ensure there is at least one mining address when the generate flag is
-	// set.
-	if cfg.Generate && len(cfg.MiningAddrs) == 0 {
-		str := "%s: the generate flag is set, but there are no mining " +
-			"addresses specified "
-		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// Add default port to all listener addresses if needed and remove
-	// duplicate addresses.
-	cfg.Listeners = normalizeAddresses(cfg.Listeners,
-		activeNetParams.DefaultPort)
-
-	// Add default port to all added peer addresses if needed and remove
-	// duplicate addresses.
-	cfg.AddPeers = normalizeAddresses(cfg.AddPeers,
-		activeNetParams.DefaultPort)
-	cfg.ConnectPeers = normalizeAddresses(cfg.ConnectPeers,
-		activeNetParams.DefaultPort)
-
-	// --noonion and --onion do not mix.
-	if cfg.NoOnion && cfg.OnionProxy != "" {
-		err := fmt.Errorf("%s: the --noonion and --onion options may "+
-			"not be activated at the same time", funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
 	// Check the checkpoints for syntax errors.
 	cfg.addCheckpoints, err = parseCheckpoints(cfg.AddCheckpoints)
 	if err != nil {
 		str := "%s: Error parsing checkpoints: %v"
 		err := fmt.Errorf(str, funcName, err)
 		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// Tor stream isolation requires either proxy or onion proxy to be set.
-	if cfg.TorIsolation && cfg.Proxy == "" && cfg.OnionProxy == "" {
-		str := "%s: Tor stream isolation requires either proxy or " +
-			"onionproxy to be set"
-		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
+		return nil, err
 	}
 
 	// Setup dial and DNS resolution (lookup) functions depending on the
@@ -815,145 +440,8 @@ func loadConfig() (*config, []string, error) {
 	// specified in which case the system DNS resolver is used).
 	cfg.dial = net.DialTimeout
 	cfg.lookup = net.LookupIP
-	if cfg.Proxy != "" {
-		_, _, err := net.SplitHostPort(cfg.Proxy)
-		if err != nil {
-			str := "%s: Proxy address '%s' is invalid: %v"
-			err := fmt.Errorf(str, funcName, cfg.Proxy, err)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
-			return nil, nil, err
-		}
 
-		// Tor isolation flag means proxy credentials will be overridden
-		// unless there is also an onion proxy configured in which case
-		// that one will be overridden.
-		torIsolation := false
-		if cfg.TorIsolation && cfg.OnionProxy == "" &&
-			(cfg.ProxyUser != "" || cfg.ProxyPass != "") {
-
-			torIsolation = true
-			fmt.Fprintln(os.Stderr, "Tor isolation set -- "+
-				"overriding specified proxy user credentials")
-		}
-
-		proxy := &socks.Proxy{
-			Addr:         cfg.Proxy,
-			Username:     cfg.ProxyUser,
-			Password:     cfg.ProxyPass,
-			TorIsolation: torIsolation,
-		}
-		cfg.dial = proxy.DialTimeout
-
-		// Treat the proxy as tor and perform DNS resolution through it
-		// unless the --noonion flag is set or there is an
-		// onion-specific proxy configured.
-		if !cfg.NoOnion && cfg.OnionProxy == "" {
-			cfg.lookup = func(host string) ([]net.IP, error) {
-				return connmgr.TorLookupIP(host, cfg.Proxy)
-			}
-		}
-	}
-
-	// Setup onion address dial function depending on the specified options.
-	// The default is to use the same dial function selected above.  However,
-	// when an onion-specific proxy is specified, the onion address dial
-	// function is set to use the onion-specific proxy while leaving the
-	// normal dial function as selected above.  This allows .onion address
-	// traffic to be routed through a different proxy than normal traffic.
-	if cfg.OnionProxy != "" {
-		_, _, err := net.SplitHostPort(cfg.OnionProxy)
-		if err != nil {
-			str := "%s: Onion proxy address '%s' is invalid: %v"
-			err := fmt.Errorf(str, funcName, cfg.OnionProxy, err)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
-			return nil, nil, err
-		}
-
-		// Tor isolation flag means onion proxy credentials will be
-		// overridden.
-		if cfg.TorIsolation &&
-			(cfg.OnionProxyUser != "" || cfg.OnionProxyPass != "") {
-			fmt.Fprintln(os.Stderr, "Tor isolation set -- "+
-				"overriding specified onionproxy user "+
-				"credentials ")
-		}
-
-		cfg.oniondial = func(network, addr string, timeout time.Duration) (net.Conn, error) {
-			proxy := &socks.Proxy{
-				Addr:         cfg.OnionProxy,
-				Username:     cfg.OnionProxyUser,
-				Password:     cfg.OnionProxyPass,
-				TorIsolation: cfg.TorIsolation,
-			}
-			return proxy.DialTimeout(network, addr, timeout)
-		}
-
-		// When configured in bridge mode (both --onion and --proxy are
-		// configured), it means that the proxy configured by --proxy is
-		// not a tor proxy, so override the DNS resolution to use the
-		// onion-specific proxy.
-		if cfg.Proxy != "" {
-			cfg.lookup = func(host string) ([]net.IP, error) {
-				return connmgr.TorLookupIP(host, cfg.OnionProxy)
-			}
-		}
-	} else {
-		cfg.oniondial = cfg.dial
-	}
-
-	// Specifying --noonion means the onion address dial function results in
-	// an error.
-	if cfg.NoOnion {
-		cfg.oniondial = func(a, b string, t time.Duration) (net.Conn, error) {
-			return nil, errors.New("tor has been disabled")
-		}
-	}
-
-	// Warn about missing config file only after all other configuration is
-	// done.  This prevents the warning on help messages and invalid
-	// options.  Note this should go directly before the return.
-	if configFileError != nil {
-		bsvdLog.Warnf("%v", configFileError)
-	}
-
-	return &cfg, remainingArgs, nil
-}
-
-// createDefaultConfig copies the sample-bsvd.conf content to the given destination path,
-// and populates it with some randomly generated RPC username and password.
-func createDefaultConfigFile(destinationPath string) error {
-	// Create the destination directory if it does not exists
-	err := os.MkdirAll(filepath.Dir(destinationPath), 0700)
-	if err != nil {
-		return err
-	}
-
-	src := bytes.NewReader(configData)
-
-	dest, err := os.OpenFile(destinationPath,
-		os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	defer dest.Close()
-
-	// We copy every line from the sample config file to the destination,
-	reader := bufio.NewReader(src)
-	for err != io.EOF {
-		var line string
-		line, err = reader.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return err
-		}
-
-		if _, err := dest.WriteString(line); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return &cfg, err
 }
 
 // bsvdDial connects to the address on the named network using the appropriate
