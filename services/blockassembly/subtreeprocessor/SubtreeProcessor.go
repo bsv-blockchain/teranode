@@ -837,13 +837,12 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return nil
 	}
 
-	// TODO this does not work for the early blocks in Bitcoin
-	blockHeight, err := block.ExtractCoinbaseHeight()
+	blockHeight, err := stp.utxoStore.GetBlockHeight()
 	if err != nil {
-		return fmt.Errorf("error extracting coinbase height: %v", err)
+		return fmt.Errorf("error extracting coinbase height via utxo store: %v", err)
 	}
 
-	if err = stp.utxoStore.Store(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
+	if err := stp.utxoStore.Store(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
 		// error will be handled below
 		stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
 	}

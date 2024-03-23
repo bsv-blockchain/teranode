@@ -368,7 +368,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree)
 			// compact the missingTxHashes to only a list of the missing ones
 			missingTxHashesCompacted := make([]txmeta.MissingTxHash, 0, missed)
 			for idx, txHash := range txHashes {
-				if txMetaSlice[idx] == nil {
+				if txMetaSlice[idx] == nil && !txHash.IsEqual(model.CoinbasePlaceholderHash) {
 					missingTxHashesCompacted = append(missingTxHashesCompacted, txmeta.MissingTxHash{
 						Hash: &txHash,
 						Idx:  idx,

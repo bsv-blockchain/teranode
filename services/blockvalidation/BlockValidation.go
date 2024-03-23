@@ -861,9 +861,9 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 	//abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
 	maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
 	//retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
-	if err != nil {
-		panic(fmt.Sprintf("invalid value for blockvalidation_fail_fast_validation_retry_sleep: %v", err))
-	}
+	// if err != nil {
+	// 	panic(fmt.Sprintf("invalid value for blockvalidation_fail_fast_validation_retry_sleep: %v", err))
+	// }
 	subtreeWarmupCount, _ := gocore.Config().GetInt("blockvalidation_validation_warmup_count", 128)
 
 	txMetaSlice := make([]*txmeta.Data, len(txHashes))
@@ -915,7 +915,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 			// compact the missingTxHashes to only a list of the missing ones
 			missingTxHashesCompacted := make([]txmeta.MissingTxHash, 0, missed)
 			for idx, txHash := range txHashes {
-				if txMetaSlice[idx] == nil {
+				if txMetaSlice[idx] == nil && !txHash.IsEqual(model.CoinbasePlaceholderHash) {
 					missingTxHashesCompacted = append(missingTxHashesCompacted, txmeta.MissingTxHash{
 						Hash: &txHash,
 						Idx:  idx,

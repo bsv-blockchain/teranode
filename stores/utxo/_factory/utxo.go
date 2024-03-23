@@ -94,43 +94,6 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
 }
 
-func BlockHeightListener(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Interface, source string) {
-	// get the latest block height to compare against lock time utxos
-	blockchainClient, err := blockchain.NewClient(ctx, logger)
-	if err != nil {
-		panic(err)
-	}
-	blockchainSubscriptionCh, err := blockchainClient.Subscribe(ctx, source)
-	if err != nil {
-		panic(err)
-	}
-
-	go func() {
-
-		for {
-			select {
-			case <-ctx.Done():
-				logger.Infof("[UTXOStore] shutting down block height subscription for: %s", source)
-				return
-			case notification := <-blockchainSubscriptionCh:
-				if notification.Type == model.NotificationType_Block {
-					go func() {
-						// trying to keep up, when we use GetBestBlockHeader it is often very slightly behind
-						// causing errors saving coinbase splitting tx. This is an experiment.
-						// _, meta, err := blockchainClient.GetBlockHeader(ctx, notification.Hash)
-						_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
-						if err != nil {
-							logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
-						} else {
-							setBlockHeight(ctx, logger, utxoStore, source, meta.Height)
-						}
-					}()
-				}
-			}
-		}
-	}()
-}
-
 func setBlockHeight(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Interface, source string, blockHeight uint32) error {
 	return utxoStore.SetBlockHeight(blockHeight)
 }

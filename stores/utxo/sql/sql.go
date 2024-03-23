@@ -148,6 +148,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 }
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
+	s.logger.Warnf("setting block height to %d", blockHeight)
 	s.blockHeight.Store(blockHeight)
 	return nil
 }

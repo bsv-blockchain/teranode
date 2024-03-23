@@ -4,15 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
@@ -102,28 +101,67 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 		return err
 	}
 
-	for i, tx := range msg.block.Transactions() {
-		if i == 0 {
-			continue // Skip coinbase tx
-		}
-
+	for _, wireTx := range msg.block.Transactions() {
 		// Add the txid to the subtree
-		txHash := *tx.Hash()
+		txHash := *wireTx.Hash()
 
-		if err := subtree.AddNode(txHash, 0, 0); err != nil {
-			return err
+		txHashStr := txHash.String()
+		if txHashStr == "0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9" {
+			var i int
+			i++
+			_ = i
 		}
 
 		// Serialize the tx
 		var txBytes bytes.Buffer
-		if err := tx.MsgTx().Serialize(&txBytes); err != nil {
+		if err := wireTx.MsgTx().Serialize(&txBytes); err != nil {
 			return err
 		}
 
-		size += int64(txBytes.Len())
+		txSize := uint64(txBytes.Len())
+		size += int64(txSize)
+
+		tx, err := bt.NewTxFromBytes(txBytes.Bytes())
+		if err != nil {
+			return err
+		}
+
+		if !tx.IsCoinbase() {
+			if err := subtree.AddNode(txHash, 0, txSize); err != nil {
+				return err
+			}
+
+			for _, input := range tx.Inputs {
+				inputTxHash := input.PreviousTxIDChainHash()
+				inputHashStr := inputTxHash.String()
+				log.Debugf("input hash: %s", inputHashStr)
+
+				inputTxBytes, ok := tb.txCache.Get(*inputTxHash)
+				if !ok {
+					return errors.New("input tx not found")
+				}
+
+				previousTx, err := bt.NewTxFromBytes(inputTxBytes)
+				if err != nil {
+					return err
+				}
+
+				previousOutput := previousTx.Outputs[input.PreviousTxOutIndex]
+
+				input.PreviousTxScript = previousOutput.LockingScript
+				input.PreviousTxSatoshis = previousOutput.Satoshis
+			}
+
+			if !tx.IsExtended() {
+				return fmt.Errorf("tx %s is not extended", txHash)
+			}
+		}
+
+		txBytesExtended := tx.ExtendedBytes()
 
 		// Add the tx to the cache
-		tb.txCache.Set(txHash, txBytes.Bytes())
+		tb.txCache.Set(txHash, txBytesExtended)
+
 	}
 
 	if subtree.Height > 0 {
@@ -215,12 +253,12 @@ func (tb *TeranodeBridge) BlockHandler(c echo.Context) error {
 	// 	_ = i
 	// }
 
-	// stopBlockHash170, _ := chainhash.NewHashFromStr("00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee")
-	// if stopBlockHash170.IsEqual(hash) {
-	// 	var i int
-	// 	i++
-	// 	_ = i
-	// }
+	stopBlockHash170, _ := chainhash.NewHashFromStr("00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee")
+	if stopBlockHash170.IsEqual(hash) {
+		var i int
+		i++
+		_ = i
+	}
 
 	blockBytes, ok := tb.blockCache.Get(*hash)
 	if !ok {
@@ -250,12 +288,12 @@ func (tb *TeranodeBridge) TxHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, "invalid hash")
 	}
 
-	tx, ok := tb.txCache.Get(*hash)
+	txBytes, ok := tb.txCache.Get(*hash)
 	if !ok {
 		return c.JSON(http.StatusNotFound, "tx not found")
 	}
 
-	return c.Blob(http.StatusOK, "application/octet-stream", tx)
+	return c.Blob(http.StatusOK, "application/octet-stream", txBytes)
 }
 
 func (tb *TeranodeBridge) TxBatchHandler() func(c echo.Context) error {
@@ -272,7 +310,6 @@ func (tb *TeranodeBridge) TxBatchHandler() func(c echo.Context) error {
 		g.SetLimit(1024)
 
 		responseBytes := make([]byte, 0, 32*1024*1024) // 32MB initial capacity
-		responseBytesMu := sync.Mutex{}
 		for {
 			var hash chainhash.Hash
 			_, err := io.ReadFull(body, hash[:])
@@ -285,25 +322,18 @@ func (tb *TeranodeBridge) TxBatchHandler() func(c echo.Context) error {
 				}
 			}
 
-			g.Go(func() error {
-				b, ok := tb.txCache.Get(hash)
+			if hash.IsEqual(model.CoinbasePlaceholderHash) {
+				continue
+			}
 
-				if !ok {
-					if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
-						log.Errorf("[GetTransactions][%s] tx not found in repository: %s", hash.String(), err.Error())
-						return echo.NewHTTPError(http.StatusNotFound, err.Error())
-					} else {
-						log.Errorf("[GetTransactions][%s] failed to get tx from repository: %s", hash.String(), err.Error())
-						return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-					}
-				}
+			b, ok := tb.txCache.Get(hash)
+			if !ok {
+				hashStr := hash.String()
+				log.Errorf("[GetTransactions][%s] tx not found in repository", hashStr)
+				return echo.NewHTTPError(http.StatusNotFound)
+			}
 
-				responseBytesMu.Lock()
-				responseBytes = append(responseBytes, b...)
-				responseBytesMu.Unlock()
-
-				return nil
-			})
+			responseBytes = append(responseBytes, b...)
 
 			nrTxAdded++
 		}
