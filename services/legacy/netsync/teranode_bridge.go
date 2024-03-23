@@ -136,6 +136,7 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 				inputHashStr := inputTxHash.String()
 				log.Debugf("input hash: %s", inputHashStr)
 
+				// TODO  - not feasible to get previous tx from cache. Only works when starting from empty DB and syncing everything
 				inputTxBytes, ok := tb.txCache.Get(*inputTxHash)
 				if !ok {
 					return errors.New("input tx not found")
