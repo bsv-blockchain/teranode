@@ -139,54 +139,56 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 }
 
 func (u *BlockValidation) start(ctx context.Context) {
-	// first check whether all old blocks have been processed properly
-	blocksMinedNotSet, err := u.blockchainClient.GetBlocksMinedNotSet(ctx)
-	if err != nil {
-		u.logger.Errorf("[BlockValidation:start] failed to get blocks mined not set: %s", err)
-	}
-
-	g, gCtx := errgroup.WithContext(ctx)
-
-	if len(blocksMinedNotSet) > 0 {
-		u.logger.Infof("[BlockValidation:start] found %d blocks mined not set", len(blocksMinedNotSet))
-		for _, block := range blocksMinedNotSet {
-			blockHash := block.Hash()
-			g.Go(func() error {
-				u.logger.Infof("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
-				if err := u.setTxMined(gCtx, blockHash); err != nil {
-					u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
-				}
-
-				return nil
-			})
+	if u.blockchainClient != nil {
+		// first check whether all old blocks have been processed properly
+		blocksMinedNotSet, err := u.blockchainClient.GetBlocksMinedNotSet(ctx)
+		if err != nil {
+			u.logger.Errorf("[BlockValidation:start] failed to get blocks mined not set: %s", err)
 		}
-	}
 
-	// get all blocks that have subtrees not set
-	blocksSubtreesNotSet, err := u.blockchainClient.GetBlocksSubtreesNotSet(ctx)
-	if err != nil {
-		u.logger.Errorf("[BlockValidation:start] failed to get blocks subtrees not set: %s", err)
-	}
+		g, gCtx := errgroup.WithContext(ctx)
 
-	if len(blocksSubtreesNotSet) > 0 {
-		u.logger.Infof("[BlockValidation:start] found %d blocks subtrees not set", len(blocksSubtreesNotSet))
-		for _, block := range blocksSubtreesNotSet {
-			block := block
-			g.Go(func() error {
-				u.logger.Infof("[BlockValidation:start] processing block subtrees not set: %s", block.Hash().String())
-				if err := u.updateSubtreesTTL(gCtx, block); err != nil {
-					u.logger.Errorf("[BlockValidation:start] failed to update subtrees TTL: %s", err)
-				}
+		if len(blocksMinedNotSet) > 0 {
+			u.logger.Infof("[BlockValidation:start] found %d blocks mined not set", len(blocksMinedNotSet))
+			for _, block := range blocksMinedNotSet {
+				blockHash := block.Hash()
+				g.Go(func() error {
+					u.logger.Infof("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
+					if err := u.setTxMined(gCtx, blockHash); err != nil {
+						u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
+					}
 
-				return nil
-			})
+					return nil
+				})
+			}
 		}
-	}
 
-	// wait for all blocks to be processed
-	if err = g.Wait(); err != nil {
-		// we cannot start the block validation, we are in a bad state
-		u.logger.Fatalf("[BlockValidation:start] failed to start, process old block mined/subtrees sets: %s", err)
+		// get all blocks that have subtrees not set
+		blocksSubtreesNotSet, err := u.blockchainClient.GetBlocksSubtreesNotSet(ctx)
+		if err != nil {
+			u.logger.Errorf("[BlockValidation:start] failed to get blocks subtrees not set: %s", err)
+		}
+
+		if len(blocksSubtreesNotSet) > 0 {
+			u.logger.Infof("[BlockValidation:start] found %d blocks subtrees not set", len(blocksSubtreesNotSet))
+			for _, block := range blocksSubtreesNotSet {
+				block := block
+				g.Go(func() error {
+					u.logger.Infof("[BlockValidation:start] processing block subtrees not set: %s", block.Hash().String())
+					if err := u.updateSubtreesTTL(gCtx, block); err != nil {
+						u.logger.Errorf("[BlockValidation:start] failed to update subtrees TTL: %s", err)
+					}
+
+					return nil
+				})
+			}
+		}
+
+		// wait for all blocks to be processed
+		if err = g.Wait(); err != nil {
+			// we cannot start the block validation, we are in a bad state
+			u.logger.Fatalf("[BlockValidation:start] failed to start, process old block mined/subtrees sets: %s", err)
+		}
 	}
 
 	// start a blockchain listener and process all the blocks that are mined into the txmeta store
