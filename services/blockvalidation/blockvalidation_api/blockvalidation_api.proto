@@ -30,6 +30,7 @@ message HealthResponse {
 message BlockFoundRequest {
   bytes hash = 1;
   string base_url = 2;
+  bool wait_to_complete = 3;
 }
 
 // swagger:model SubtreeFoundRequest
