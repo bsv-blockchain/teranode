@@ -42,6 +42,7 @@ type BlockValidation struct {
 	txStore                            blob.Store
 	txMetaStore                        txmeta.Store
 	recentBlocksBloomFilters           []*model.BlockBloomFilter
+	recentBlocksBloomFiltersMu         sync.Mutex
 	recentBlocksBloomFiltersExpiration time.Duration
 	validatorClient                    validator.Interface
 	subtreeValidationClient            subtreevalidation.Interface
@@ -102,29 +103,13 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		}
 	}()
 
-	// start a blockchain listener and process all the blocks that are mined into the txmeta store
-	// this should only be done when shared storage is available, and the block validation has access to all subtrees locally
 	ctx := context.Background()
-	go func() {
-		for blockHash := range bv.setMinedChan {
-
-			startTime := time.Now()
-			logger.Infof("[BlockValidation:setMined][%s] block setTxMined", blockHash.String())
-
-			err := bv.setTxMined(ctx, blockHash)
-			if err != nil {
-				logger.Errorf("[BlockValidation][%s] failed setTxMined: %s", blockHash.String(), err)
-			}
-			logger.Infof("[BlockValidation:setMined][%s] block setTxMined DONE in %s", blockHash.String(), time.Since(startTime))
-		}
-	}()
-
 	if bv.blockchainClient != nil {
 		go func() {
 			for {
 				blockchainSubscription, err := bv.blockchainClient.Subscribe(ctx, "blockvalidation")
 				if err != nil {
-					logger.Errorf("[BlockValidation:setMined] failed to subscribe to blockchain: %s", err)
+					bv.logger.Errorf("[BlockValidation:setMined] failed to subscribe to blockchain: %s", err)
 
 					// backoff for 5 seconds and try again
 					time.Sleep(5 * time.Second)
@@ -146,7 +131,79 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		}()
 	}
 
+	go func() {
+		bv.start(ctx)
+	}()
+
 	return bv
+}
+
+func (u *BlockValidation) start(ctx context.Context) {
+	// first check whether all old blocks have been processed properly
+	blocksMinedNotSet, err := u.blockchainClient.GetBlocksMinedNotSet(ctx)
+	if err != nil {
+		u.logger.Errorf("[BlockValidation:start] failed to get blocks mined not set: %s", err)
+	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	if len(blocksMinedNotSet) > 0 {
+		u.logger.Infof("[BlockValidation:start] found %d blocks mined not set", len(blocksMinedNotSet))
+		for _, block := range blocksMinedNotSet {
+			blockHash := block.Hash()
+			g.Go(func() error {
+				u.logger.Infof("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
+				if err := u.setTxMined(gCtx, blockHash); err != nil {
+					u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
+				}
+
+				return nil
+			})
+		}
+	}
+
+	// get all blocks that have subtrees not set
+	blocksSubtreesNotSet, err := u.blockchainClient.GetBlocksSubtreesNotSet(ctx)
+	if err != nil {
+		u.logger.Errorf("[BlockValidation:start] failed to get blocks subtrees not set: %s", err)
+	}
+
+	if len(blocksSubtreesNotSet) > 0 {
+		u.logger.Infof("[BlockValidation:start] found %d blocks subtrees not set", len(blocksSubtreesNotSet))
+		for _, block := range blocksSubtreesNotSet {
+			block := block
+			g.Go(func() error {
+				u.logger.Infof("[BlockValidation:start] processing block subtrees not set: %s", block.Hash().String())
+				if err := u.updateSubtreesTTL(gCtx, block); err != nil {
+					u.logger.Errorf("[BlockValidation:start] failed to update subtrees TTL: %s", err)
+				}
+
+				return nil
+			})
+		}
+	}
+
+	// wait for all blocks to be processed
+	if err = g.Wait(); err != nil {
+		// we cannot start the block validation, we are in a bad state
+		u.logger.Fatalf("[BlockValidation:start] failed to start, process old block mined/subtrees sets: %s", err)
+	}
+
+	// start a blockchain listener and process all the blocks that are mined into the txmeta store
+	// this should only be done when shared storage is available, and the block validation has access to all subtrees locally
+	go func() {
+		for blockHash := range u.setMinedChan {
+
+			startTime := time.Now()
+			u.logger.Infof("[BlockValidation:start][%s] block setTxMined", blockHash.String())
+
+			err := u.setTxMined(ctx, blockHash)
+			if err != nil {
+				u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
+			}
+			u.logger.Infof("[BlockValidation:start][%s] block setTxMined DONE in %s", blockHash.String(), time.Since(startTime))
+		}
+	}()
 }
 
 func (u *BlockValidation) SetBlockExists(hash *chainhash.Hash) error {
@@ -246,6 +303,12 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	if blockWasAlreadyCached {
 		u.lastValidatedBlocks.Delete(*blockHash)
 	}
+
+	// update block mined_set to true
+	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
+		return fmt.Errorf("[setMined][%s] failed to set block mined: %s", block.Hash().String(), err)
+	}
+
 	return nil
 }
 
@@ -457,10 +520,24 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 }
 
 func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *model.Block) {
+	if u.blockBloomFiltersBeingCreated.Exists(*block.Hash()) {
+		return
+	}
+
+	// check whether the bloom filter for this block already exists
+	for _, bf := range u.recentBlocksBloomFilters {
+		if bf.BlockHash.IsEqual(block.Hash()) {
+			return
+		}
+	}
+
 	_ = u.blockBloomFiltersBeingCreated.Put(*block.Hash())
 	defer func() {
 		_ = u.blockBloomFiltersBeingCreated.Delete(*block.Hash())
 	}()
+
+	startTime := time.Now()
+	u.logger.Infof("[createAppendBloomFilter][%s] creating bloom filter", block.Hash().String())
 
 	var err error
 
@@ -473,17 +550,25 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	}
 
 	bbf.CreationTime = time.Now()
+	bbf.BlockHash = block.Hash()
 
 	// prune older bloom filters
-	for i, bf := range u.recentBlocksBloomFilters {
-		if bf.CreationTime.Before(time.Now().Add(-u.recentBlocksBloomFiltersExpiration)) {
-			// remove the bloom filter from the list
-			u.recentBlocksBloomFilters = append(u.recentBlocksBloomFilters[:i], u.recentBlocksBloomFilters[i+1:]...)
+	u.recentBlocksBloomFiltersMu.Lock()
+	newBloomFilters := make([]*model.BlockBloomFilter, 0, len(u.recentBlocksBloomFilters))
+	for _, bf := range u.recentBlocksBloomFilters {
+		// only add recent bloom filters back to the list
+		if bf.CreationTime.After(time.Now().Add(-u.recentBlocksBloomFiltersExpiration)) {
+			newBloomFilters = append(newBloomFilters, bf)
 		}
 	}
+	u.recentBlocksBloomFilters = newBloomFilters
 
 	// append the most recently validated bloom filter
 	u.recentBlocksBloomFilters = append(u.recentBlocksBloomFilters, bbf)
+
+	u.logger.Infof("[createAppendBloomFilter][%s] creating bloom filter DONE in %s (%d slices)", block.Hash().String(), time.Since(startTime), len(u.recentBlocksBloomFilters))
+
+	u.recentBlocksBloomFiltersMu.Unlock()
 }
 
 // storeCoinbaseTx
@@ -527,6 +612,11 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 
 	if err = g.Wait(); err != nil {
 		return errors.Join(fmt.Errorf("[ValidateBlock][%s] failed to update subtree TTLs", block.Hash().String()), err)
+	}
+
+	// update block subtrees_set to true
+	if err = u.blockchainClient.SetBlockSubtreesSet(ctx, block.Hash()); err != nil {
+		return fmt.Errorf("[ValidateBlock][%s] failed to set block subtrees_set: %s", block.Hash().String(), err)
 	}
 
 	return nil

@@ -180,6 +180,7 @@ type Block struct {
 
 type BlockBloomFilter struct {
 	Filter       *blobloom.Filter
+	BlockHash    *chainhash.Hash
 	CreationTime time.Time
 }
 
@@ -614,7 +615,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						}
 					}
 					if foundInPreviousBlocks != 1 {
-						return fmt.Errorf("parent transaction %s of %s is not valid on our current chain", parentTxHash.String(), subtreeNode.Hash.String())
+						return fmt.Errorf("parent transaction %s of %s is not valid on our current chain, found %d times", parentTxHash.String(), subtreeNode.Hash.String(), foundInPreviousBlocks)
 					}
 				}
 			}

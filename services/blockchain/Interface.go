@@ -31,4 +31,8 @@ type ClientI interface {
 	Subscribe(ctx context.Context, source string) (chan *model.Notification, error)
 	GetState(ctx context.Context, key string) ([]byte, error)
 	SetState(ctx context.Context, key string, data []byte) error
+	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+	GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error)
+	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
+	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 }

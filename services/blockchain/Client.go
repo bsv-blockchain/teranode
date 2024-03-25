@@ -478,3 +478,61 @@ func (c *Client) SetState(ctx context.Context, key string, data []byte) error {
 
 	return nil
 }
+
+func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.SetBlockMinedSet(ctx, &blockchain_api.SetBlockMinedSetRequest{
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
+	resp, err := c.client.GetBlocksMinedNotSet(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, ubsverrors.UnwrapGRPC(err)
+	}
+
+	blocks := make([]*model.Block, 0, len(resp.BlockBytes))
+	for _, blockBytes := range resp.BlockBytes {
+		block, err := model.NewBlockFromBytes(blockBytes)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, block)
+	}
+
+	return blocks, nil
+}
+
+func (c *Client) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.SetBlockSubtreesSet(ctx, &blockchain_api.SetBlockSubtreesSetRequest{
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
+	resp, err := c.client.GetBlocksSubtreesNotSet(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, ubsverrors.UnwrapGRPC(err)
+	}
+
+	blocks := make([]*model.Block, 0, len(resp.BlockBytes))
+	for _, blockBytes := range resp.BlockBytes {
+		block, err := model.NewBlockFromBytes(blockBytes)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, block)
+	}
+
+	return blocks, nil
+}

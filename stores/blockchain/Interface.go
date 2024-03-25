@@ -40,4 +40,8 @@ type Store interface {
 	GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error)
 	GetState(ctx context.Context, key string) ([]byte, error)
 	SetState(ctx context.Context, key string, data []byte) error
+	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+	GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error)
+	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
+	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 }

@@ -690,6 +690,64 @@ func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Not
 	return &emptypb.Empty{}, nil
 }
 
+func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.SetBlockMinedSetRequest) (*emptypb.Empty, error) {
+	blockHash := chainhash.Hash(req.BlockHash)
+	err := b.store.SetBlockMinedSet(ctx, &blockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksMinedNotSetResponse, error) {
+	blocks, err := b.store.GetBlocksMinedNotSet(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	blockBytes := make([][]byte, len(blocks))
+	for i, block := range blocks {
+		blockBytes[i], err = block.Bytes()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &blockchain_api.GetBlocksMinedNotSetResponse{
+		BlockBytes: blockBytes,
+	}, nil
+}
+
+func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_api.SetBlockSubtreesSetRequest) (*emptypb.Empty, error) {
+	blockHash := chainhash.Hash(req.BlockHash)
+	err := b.store.SetBlockSubtreesSet(ctx, &blockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksSubtreesNotSetResponse, error) {
+	blocks, err := b.store.GetBlocksSubtreesNotSet(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	blockBytes := make([][]byte, len(blocks))
+	for i, block := range blocks {
+		blockBytes[i], err = block.Bytes()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &blockchain_api.GetBlocksSubtreesNotSetResponse{
+		BlockBytes: blockBytes,
+	}, nil
+}
+
 func safeClose[T any](ch chan T) {
 	defer func() {
 		_ = recover()

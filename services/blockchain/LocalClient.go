@@ -125,3 +125,19 @@ func (c LocalClient) GetState(ctx context.Context, key string) ([]byte, error) {
 func (c LocalClient) SetState(ctx context.Context, key string, data []byte) error {
 	return c.store.SetState(ctx, key, data)
 }
+
+func (c LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.SetBlockMinedSet(ctx, blockHash)
+}
+
+func (c LocalClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
+	return c.store.GetBlocksMinedNotSet(ctx)
+}
+
+func (c LocalClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.SetBlockSubtreesSet(ctx, blockHash)
+}
+
+func (c LocalClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
+	return c.store.GetBlocksSubtreesNotSet(ctx)
+}

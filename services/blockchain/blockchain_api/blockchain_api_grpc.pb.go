@@ -43,6 +43,10 @@ const (
 	BlockchainAPI_SendNotification_FullMethodName          = "/blockchain_api.BlockchainAPI/SendNotification"
 	BlockchainAPI_GetState_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetState"
 	BlockchainAPI_SetState_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetState"
+	BlockchainAPI_SetBlockMinedSet_FullMethodName          = "/blockchain_api.BlockchainAPI/SetBlockMinedSet"
+	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName      = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
+	BlockchainAPI_SetBlockSubtreesSet_FullMethodName       = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
+	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName   = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -73,6 +77,10 @@ type BlockchainAPIClient interface {
 	SendNotification(ctx context.Context, in *Notification, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetState(ctx context.Context, in *GetStateRequest, opts ...grpc.CallOption) (*StateResponse, error)
 	SetState(ctx context.Context, in *SetStateRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	SetBlockMinedSet(ctx context.Context, in *SetBlockMinedSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetBlocksMinedNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksMinedNotSetResponse, error)
+	SetBlockSubtreesSet(ctx context.Context, in *SetBlockSubtreesSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetBlocksSubtreesNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksSubtreesNotSetResponse, error)
 }
 
 type blockchainAPIClient struct {
@@ -304,6 +312,42 @@ func (c *blockchainAPIClient) SetState(ctx context.Context, in *SetStateRequest,
 	return out, nil
 }
 
+func (c *blockchainAPIClient) SetBlockMinedSet(ctx context.Context, in *SetBlockMinedSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_SetBlockMinedSet_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetBlocksMinedNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksMinedNotSetResponse, error) {
+	out := new(GetBlocksMinedNotSetResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlocksMinedNotSet_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) SetBlockSubtreesSet(ctx context.Context, in *SetBlockSubtreesSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_SetBlockSubtreesSet_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetBlocksSubtreesNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksSubtreesNotSetResponse, error) {
+	out := new(GetBlocksSubtreesNotSetResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockchainAPIServer is the server API for BlockchainAPI service.
 // All implementations must embed UnimplementedBlockchainAPIServer
 // for forward compatibility
@@ -332,6 +376,10 @@ type BlockchainAPIServer interface {
 	SendNotification(context.Context, *Notification) (*emptypb.Empty, error)
 	GetState(context.Context, *GetStateRequest) (*StateResponse, error)
 	SetState(context.Context, *SetStateRequest) (*emptypb.Empty, error)
+	SetBlockMinedSet(context.Context, *SetBlockMinedSetRequest) (*emptypb.Empty, error)
+	GetBlocksMinedNotSet(context.Context, *emptypb.Empty) (*GetBlocksMinedNotSetResponse, error)
+	SetBlockSubtreesSet(context.Context, *SetBlockSubtreesSetRequest) (*emptypb.Empty, error)
+	GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error)
 	mustEmbedUnimplementedBlockchainAPIServer()
 }
 
@@ -404,6 +452,18 @@ func (UnimplementedBlockchainAPIServer) GetState(context.Context, *GetStateReque
 }
 func (UnimplementedBlockchainAPIServer) SetState(context.Context, *SetStateRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetState not implemented")
+}
+func (UnimplementedBlockchainAPIServer) SetBlockMinedSet(context.Context, *SetBlockMinedSetRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetBlockMinedSet not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetBlocksMinedNotSet(context.Context, *emptypb.Empty) (*GetBlocksMinedNotSetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlocksMinedNotSet not implemented")
+}
+func (UnimplementedBlockchainAPIServer) SetBlockSubtreesSet(context.Context, *SetBlockSubtreesSetRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetBlockSubtreesSet not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlocksSubtreesNotSet not implemented")
 }
 func (UnimplementedBlockchainAPIServer) mustEmbedUnimplementedBlockchainAPIServer() {}
 
@@ -817,6 +877,78 @@ func _BlockchainAPI_SetState_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_SetBlockMinedSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetBlockMinedSetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).SetBlockMinedSet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_SetBlockMinedSet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).SetBlockMinedSet(ctx, req.(*SetBlockMinedSetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetBlocksMinedNotSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetBlocksMinedNotSet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetBlocksMinedNotSet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetBlocksMinedNotSet(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_SetBlockSubtreesSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetBlockSubtreesSetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).SetBlockSubtreesSet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_SetBlockSubtreesSet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).SetBlockSubtreesSet(ctx, req.(*SetBlockSubtreesSetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetBlocksSubtreesNotSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetBlocksSubtreesNotSet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetBlocksSubtreesNotSet(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockchainAPI_ServiceDesc is the grpc.ServiceDesc for BlockchainAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -907,6 +1039,22 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetState",
 			Handler:    _BlockchainAPI_SetState_Handler,
+		},
+		{
+			MethodName: "SetBlockMinedSet",
+			Handler:    _BlockchainAPI_SetBlockMinedSet_Handler,
+		},
+		{
+			MethodName: "GetBlocksMinedNotSet",
+			Handler:    _BlockchainAPI_GetBlocksMinedNotSet_Handler,
+		},
+		{
+			MethodName: "SetBlockSubtreesSet",
+			Handler:    _BlockchainAPI_SetBlockSubtreesSet_Handler,
+		},
+		{
+			MethodName: "GetBlocksSubtreesNotSet",
+			Handler:    _BlockchainAPI_GetBlocksSubtreesNotSet_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

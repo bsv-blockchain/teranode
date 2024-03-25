@@ -853,6 +853,11 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 		return err
 	}
 
+	// update block subtrees_set to true
+	if err = ba.blockchainClient.SetBlockSubtreesSet(ctx, block.Hash()); err != nil {
+		return fmt.Errorf("[ValidateBlock][%s] failed to set block subtrees_set: %s", block.Hash().String(), err)
+	}
+
 	ba.logger.Infof("[removeSubtreesTTL][%s] updating subtree TTLs DONE in %s", block.Hash().String(), time.Since(startTime).String())
 
 	return nil
