@@ -55,7 +55,7 @@ func (u *BlockValidation) processTxMetaUsingStore(ctx context.Context, txHashes 
 
 						if txMetaSlice[i+j] == nil {
 							missingTxHashesCompacted = append(missingTxHashesCompacted, &txmeta.MissingTxHash{
-								Hash: &txHashes[i+j],
+								Hash: txHashes[i+j],
 								Idx:  i + j,
 							})
 						}

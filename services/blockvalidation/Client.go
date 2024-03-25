@@ -142,10 +142,11 @@ func (s *Client) Health(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseUrl string) error {
+func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseUrl string, waitToComplete bool) error {
 	req := &blockvalidation_api.BlockFoundRequest{
-		Hash:    blockHash.CloneBytes(),
-		BaseUrl: baseUrl,
+		Hash:           blockHash.CloneBytes(),
+		BaseUrl:        baseUrl,
+		WaitToComplete: waitToComplete,
 	}
 
 	_, err := s.apiClient.BlockFound(ctx, req)

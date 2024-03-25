@@ -489,7 +489,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 			}
 		}
 
-		return nil, errors.Join(fmt.Errorf("validator: UTXO Store spend failed for %s", tx.TxIDChainHash().String()), err)
+		return nil, fmt.Errorf("validator: UTXO Store spend failed for %s: %w", tx.TxIDChainHash().String(), err)
 	}
 
 	return spends, nil

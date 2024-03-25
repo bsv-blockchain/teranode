@@ -370,7 +370,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree)
 			for idx, txHash := range txHashes {
 				if txMetaSlice[idx] == nil && !txHash.IsEqual(model.CoinbasePlaceholderHash) {
 					missingTxHashesCompacted = append(missingTxHashesCompacted, txmeta.MissingTxHash{
-						Hash: &txHash,
+						Hash: txHash,
 						Idx:  idx,
 					})
 				}
@@ -560,13 +560,18 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 
 	// check if all missing transactions have been blessed
 	count := 0
-	for _, txMeta := range txMetaSlice {
+	missed := make([]*chainhash.Hash, 0, len(txMetaSlice))
+	for i, txMeta := range txMetaSlice {
 		if txMeta == nil {
+			missed = append(missed, &missingTxHashes[i].Hash)
 			count++
 		}
 	}
 	if count > 0 {
 		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice", subtreeHash.String(), count)
+		for _, m := range missed {
+			u.logger.Debugf("\t txid: %s", m)
+		}
 	}
 
 	return nil
@@ -584,8 +589,10 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []t
 
 	// get the transactions in batches of 500
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_missingTransactionsBatchSize", 100_000)
+
 	for i := 0; i < len(missingTxHashes); i += batchSize {
 		missingTxHashesBatch := missingTxHashes[i:util.Min(i+batchSize, len(missingTxHashes))]
+
 		g.Go(func() error {
 			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, missingTxHashesBatch, baseUrl)
 			if err != nil {
@@ -613,10 +620,7 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []t
 	// populate the missingTx slice with the tx data
 	missingTxs = make([]missingTx, 0, len(missingTxHashes))
 	for _, mTx := range missingTxHashes {
-		if mTx.Hash == nil {
-			return nil, fmt.Errorf("[blessMissingTransaction] #2 missing transaction hash is nil [%s]", mTx.Hash.String())
-		}
-		tx, ok := missingTxsMap[*mTx.Hash]
+		tx, ok := missingTxsMap[mTx.Hash]
 		if !ok {
 			return nil, fmt.Errorf("[blessMissingTransaction] missing transaction [%s]", mTx.Hash.String())
 		}

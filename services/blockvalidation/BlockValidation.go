@@ -1009,7 +1009,7 @@ func (u *BlockValidation) validateSubtreeInternal(ctx context.Context, v Validat
 			for idx, txHash := range txHashes {
 				if txMetaSlice[idx] == nil && !txHash.IsEqual(model.CoinbasePlaceholderHash) {
 					missingTxHashesCompacted = append(missingTxHashesCompacted, txmeta.MissingTxHash{
-						Hash: &txHash,
+						Hash: txHash,
 						Idx:  idx,
 					})
 				}
@@ -1226,10 +1226,7 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 	// populate the missingTx slice with the tx data
 	missingTxs = make([]missingTx, 0, len(missingTxHashes))
 	for _, mTx := range missingTxHashes {
-		if mTx.Hash == nil {
-			return nil, fmt.Errorf("[blessMissingTransaction] #2 missing transaction hash is nil [%s]", mTx.Hash.String())
-		}
-		tx, ok := missingTxsMap[*mTx.Hash]
+		tx, ok := missingTxsMap[mTx.Hash]
 		if !ok {
 			return nil, fmt.Errorf("[blessMissingTransaction] missing transaction [%s]", mTx.Hash.String())
 		}

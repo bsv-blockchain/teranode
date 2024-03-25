@@ -188,7 +188,7 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 
 	for i := 0; i < len(subtree.Nodes); i++ {
 		txHashes[i] = &txmeta.MissingTxHash{
-			Hash: &subtree.Nodes[i].Hash,
+			Hash: subtree.Nodes[i].Hash,
 			Idx:  i,
 		}
 	}
@@ -234,7 +234,7 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 
 	for i, data := range txHashes {
 		if data.Data == nil {
-			if model.CoinbasePlaceholderHash.IsEqual(data.Hash) {
+			if model.CoinbasePlaceholderHash.Equal(data.Hash) {
 				if i != 0 {
 					return errors.New("[BlockPersister] coinbase tx is not first in subtree")
 				}

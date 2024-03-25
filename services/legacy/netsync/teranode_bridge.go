@@ -22,7 +22,6 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -30,11 +29,16 @@ var (
 	tb   *TeranodeBridge
 )
 
+type wrapper struct {
+	bytes     []byte
+	readCount int
+}
+
 type TeranodeBridge struct {
 	blockValidationClient *blockvalidation.Client
-	txCache               *expiringmap.ExpiringMap[chainhash.Hash, []byte]
-	subtreeCache          *expiringmap.ExpiringMap[chainhash.Hash, []byte]
-	blockCache            *expiringmap.ExpiringMap[chainhash.Hash, []byte]
+	txCache               *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
+	subtreeCache          *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
+	blockCache            *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	baseUrl               string
 	lookupFn              func(wire.OutPoint) (*blockchain.UtxoEntry, error)
 }
@@ -55,9 +59,9 @@ func NewTeranodeBridge(ctx context.Context, lookupFn func(wire.OutPoint) (*block
 	}
 
 	tb := &TeranodeBridge{
-		txCache:               expiringmap.New[chainhash.Hash, []byte](20 * time.Minute),
-		subtreeCache:          expiringmap.New[chainhash.Hash, []byte](20 * time.Minute),
-		blockCache:            expiringmap.New[chainhash.Hash, []byte](20 * time.Minute),
+		txCache:               expiringmap.New[chainhash.Hash, *wrapper](20 * time.Minute),
+		subtreeCache:          expiringmap.New[chainhash.Hash, *wrapper](20 * time.Minute),
+		blockCache:            expiringmap.New[chainhash.Hash, *wrapper](20 * time.Minute),
 		blockValidationClient: blockvalidation.NewClient(ctx, log),
 		baseUrl:               baseUrl.String(),
 		lookupFn:              lookupFn,
@@ -142,9 +146,10 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 				var script *bscript.Script
 				var satoshis uint64
 
-				prevTxBytes, ok := tb.txCache.Get(*input.PreviousTxIDChainHash())
+				w, ok := tb.txCache.Get(*input.PreviousTxIDChainHash())
+
 				if ok {
-					prevTx, err := bt.NewTxFromBytes(prevTxBytes)
+					prevTx, err := bt.NewTxFromBytes(w.bytes)
 					if err != nil {
 						return err
 					}
@@ -183,7 +188,9 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 		txBytesExtended := tx.ExtendedBytes()
 
 		// Add the tx to the cache
-		tb.txCache.Set(txHash, txBytesExtended)
+		tb.txCache.Set(txHash, &wrapper{
+			bytes: txBytesExtended,
+		})
 
 	}
 
@@ -194,7 +201,9 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 			return err
 		}
 
-		tb.subtreeCache.Set(*subtree.RootHash(), subtreeBytes)
+		tb.subtreeCache.Set(*subtree.RootHash(), &wrapper{
+			bytes: subtreeBytes,
+		})
 	}
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
@@ -237,12 +246,14 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 		return err
 	}
 
-	tb.blockCache.Set(*blockHash, blockBytes)
+	tb.blockCache.Set(*blockHash, &wrapper{
+		bytes: blockBytes,
+	})
 
 	log.Warnf("Block %s received", teranodeBlock)
 
-	if err = tb.blockValidationClient.BlockFound(context.TODO(), blockHash, tb.baseUrl); err != nil {
-		log.Errorf("error broadcasting block from %s: %s", tb.baseUrl, err)
+	if err = tb.blockValidationClient.BlockFound(context.TODO(), blockHash, tb.baseUrl, true); err != nil {
+		return fmt.Errorf("error broadcasting block from %s: %w", tb.baseUrl, err)
 	}
 
 	return nil
@@ -283,12 +294,15 @@ func (tb *TeranodeBridge) BlockHandler(c echo.Context) error {
 		_ = i
 	}
 
-	blockBytes, ok := tb.blockCache.Get(*hash)
+	w, ok := tb.blockCache.Get(*hash)
 	if !ok {
 		return c.JSON(http.StatusNotFound, "block not found")
 	}
 
-	return c.Blob(http.StatusOK, "application/octet-stream", blockBytes)
+	w.readCount++
+	log.Warnf("block %s read %d times", hash, w.readCount)
+
+	return c.Blob(http.StatusOK, "application/octet-stream", w.bytes)
 }
 
 func (tb *TeranodeBridge) SubtreeHandler(c echo.Context) error {
@@ -297,12 +311,15 @@ func (tb *TeranodeBridge) SubtreeHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, "invalid hash")
 	}
 
-	subtreeBytes, ok := tb.subtreeCache.Get(*hash)
+	w, ok := tb.subtreeCache.Get(*hash)
 	if !ok {
 		return c.JSON(http.StatusNotFound, "subtree not found")
 	}
 
-	return c.Blob(http.StatusOK, "application/octet-stream", subtreeBytes)
+	w.readCount++
+	log.Warnf("subtree %s read %d times", hash, w.readCount)
+
+	return c.Blob(http.StatusOK, "application/octet-stream", w.bytes)
 }
 
 func (tb *TeranodeBridge) TxHandler(c echo.Context) error {
@@ -311,12 +328,15 @@ func (tb *TeranodeBridge) TxHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, "invalid hash")
 	}
 
-	txBytes, ok := tb.txCache.Get(*hash)
+	w, ok := tb.txCache.Get(*hash)
 	if !ok {
 		return c.JSON(http.StatusNotFound, "tx not found")
 	}
 
-	return c.Blob(http.StatusOK, "application/octet-stream", txBytes)
+	w.readCount++
+	log.Warnf("tx %s read %d times", hash, w.readCount)
+
+	return c.Blob(http.StatusOK, "application/octet-stream", w.bytes)
 }
 
 func (tb *TeranodeBridge) TxBatchHandler() func(c echo.Context) error {
@@ -327,10 +347,6 @@ func (tb *TeranodeBridge) TxBatchHandler() func(c echo.Context) error {
 		defer body.Close()
 
 		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEOctetStream)
-
-		// Read the body into a 32 byte hashes one by one and stream the tx data back to the client
-		g, _ := errgroup.WithContext(c.Request().Context())
-		g.SetLimit(1024)
 
 		responseBytes := make([]byte, 0, 32*1024*1024) // 32MB initial capacity
 		for {
@@ -345,28 +361,28 @@ func (tb *TeranodeBridge) TxBatchHandler() func(c echo.Context) error {
 				}
 			}
 
+			log.Infof("ReadTXID *********** %s", hash)
+
 			if hash.IsEqual(model.CoinbasePlaceholderHash) {
 				continue
 			}
 
-			b, ok := tb.txCache.Get(hash)
+			w, ok := tb.txCache.Get(hash)
 			if !ok {
 				hashStr := hash.String()
 				log.Errorf("[GetTransactions][%s] tx not found in repository", hashStr)
 				return echo.NewHTTPError(http.StatusNotFound)
 			}
 
-			responseBytes = append(responseBytes, b...)
+			w.readCount++
+			log.Warnf("txs %s read %d times SIMON", hash, w.readCount)
+
+			responseBytes = append(responseBytes, w.bytes...)
 
 			nrTxAdded++
 		}
 
-		if err := g.Wait(); err != nil {
-			log.Errorf("[GetTransactions] failed to get txs from repository: %s", err.Error())
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
-		}
-
-		log.Infof("[GetTransactions] sending %d txs to client (%d bytes)", nrTxAdded, len(responseBytes))
+		log.Infof("sending %d txs to client (%d bytes)", nrTxAdded, len(responseBytes))
 		return c.Blob(200, echo.MIMEOctetStream, responseBytes)
 	}
 }

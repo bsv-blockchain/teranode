@@ -241,7 +241,7 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 		err = batchRecord.BatchRec().Err
 		if err != nil {
 			items[idx].Data = nil
-			if !model.CoinbasePlaceholderHash.IsEqual(items[idx].Hash) {
+			if !model.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
 				s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", items[idx].Hash.String(), err)
 			}
 		} else {

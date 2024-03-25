@@ -51,7 +51,7 @@ const (
 	defaultMaxOrphanTransactions   = 100
 	defaultMaxOrphanTxSize         = 100000
 	defaultSigCacheMaxSize         = 100000
-	defaultTxIndex                 = true // We want to have this index to be able to convert standard txs to extended txs
+	defaultTxIndex                 = false
 	defaultAddrIndex               = false
 	defaultUtxoCacheMaxSizeMiB     = 450
 	defaultMinSyncPeerNetworkSpeed = 51200

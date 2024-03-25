@@ -38,6 +38,7 @@ var stats = gocore.NewStat("blockvalidation")
 type processBlockFound struct {
 	hash    *chainhash.Hash
 	baseURL string
+	errCh   chan error
 }
 
 type processBlockCatchup struct {
@@ -207,6 +208,11 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					if err := u.processBlockFound(ctx1, b.hash, b.baseURL); err != nil {
 						u.logger.Errorf("[Init] failed to process block [%s] [%v]", b.hash.String(), err)
 					}
+
+					if b.errCh != nil {
+						b.errCh <- err
+					}
+
 					u.logger.Infof("[Init] processing block found on channel DONE [%s]", b.hash.String())
 					prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 				}
@@ -424,15 +430,29 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 
+	var errCh chan error
+
+	if req.WaitToComplete {
+		errCh = make(chan error)
+	}
+
 	// process the block in the background, in the order we receive them, but without blocking the grpc call
 	go func() {
 		u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
 		u.blockFoundCh <- processBlockFound{
 			hash:    hash,
 			baseURL: req.GetBaseUrl(),
+			errCh:   errCh,
 		}
 		prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 	}()
+
+	if req.WaitToComplete {
+		err := <-errCh
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
@@ -489,6 +509,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 	}
 
 	if !parentExists {
+		panic("STOP")
 		// add to catchup channel, which will block processing any new blocks until we have caught up
 		go func() {
 			u.logger.Infof("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())

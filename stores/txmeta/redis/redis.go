@@ -173,7 +173,7 @@ func (r *Redis) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data
 func (r *Redis) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	// TODO make this into a batch call
 	for _, item := range items {
-		data, err := r.Get(ctx, item.Hash)
+		data, err := r.Get(ctx, &item.Hash)
 		if err != nil {
 			if uerr, ok := err.(*ubsverrors.Error); ok {
 				if uerr.Code == ubsverrors.ErrorConstants_NOT_FOUND {

@@ -204,7 +204,7 @@ func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.Mi
 	for _, data := range hashes {
 		if data.Data != nil {
 			data.Data.Tx = nil
-			_ = t.SetCache(data.Hash, data.Data)
+			_ = t.SetCache(&data.Hash, data.Data)
 		}
 	}
 

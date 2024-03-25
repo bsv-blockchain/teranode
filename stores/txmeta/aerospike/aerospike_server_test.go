@@ -179,9 +179,9 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 
 		items := make([]*txmeta.MissingTxHash, 3)
-		items[0] = &txmeta.MissingTxHash{Hash: hash}
-		items[1] = &txmeta.MissingTxHash{Hash: hash2}
-		items[2] = &txmeta.MissingTxHash{Hash: hash3}
+		items[0] = &txmeta.MissingTxHash{Hash: *hash}
+		items[1] = &txmeta.MissingTxHash{Hash: *hash2}
+		items[2] = &txmeta.MissingTxHash{Hash: *hash3}
 
 		err = db.MetaBatchDecorate(ctx, items)
 		require.NoError(t, err)
@@ -291,9 +291,9 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 
 		items := make([]*txmeta.MissingTxHash, 3)
-		items[0] = &txmeta.MissingTxHash{Hash: hash}
-		items[1] = &txmeta.MissingTxHash{Hash: hash2}
-		items[2] = &txmeta.MissingTxHash{Hash: hash3}
+		items[0] = &txmeta.MissingTxHash{Hash: *hash}
+		items[1] = &txmeta.MissingTxHash{Hash: *hash2}
+		items[2] = &txmeta.MissingTxHash{Hash: *hash3}
 
 		err = db.MetaBatchDecorate(ctx, items, "tx", "fee", "sizeInBytes")
 		require.NoError(t, err)

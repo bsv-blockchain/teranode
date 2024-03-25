@@ -29,7 +29,7 @@ func (m *NullStore) Get(_ context.Context, _ *chainhash.Hash) (*txmeta.Data, err
 func (m *NullStore) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	// TODO make this into a batch call
 	for _, item := range items {
-		data, err := m.Get(ctx, item.Hash)
+		data, err := m.Get(ctx, &item.Hash)
 		if err != nil {
 			return err
 		}
