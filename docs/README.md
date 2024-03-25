@@ -136,6 +136,8 @@ Detailed Node Service documentation:
 
 + [Block Validation Service](docs/services/blockValidation.md)
 
++ [Subtree Validation Service](docs/services/subtreeValidation.md)
+
 + [Block Assembly Service](docs/services/blockAssembly.md)
 
 + [Blockchain Service](docs/services/blockchain.md)

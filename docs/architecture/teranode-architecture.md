@@ -27,21 +27,24 @@
 - [4.2. Transaction Validator](#42-transaction-validator)
 - [4.3. Block Assembly Service](#43-block-assembly-service)
 - [4.4. Miner](#44-miner)
-- [4.5. Subtree and Block Validation Service](#45-subtree-and-block-validation-service)
+- [4.5. Subtree Validation Service](#45-subtree-validation-service)
     - [4.5.1. Service Components and Dependencies:](#451-service-components-and-dependencies)
     - [4.5.2. SubTree Validation Details:](#452-subtree-validation-details)
-    - [4.5.3. Block Validation Details:](#453-block-validation-details)
-    - [4.5.4. Overall Block and SubTree Validation Process](#454-overall-block-and-subtree-validation-process)
-- [4.6. P2P Service](#46-p2p-service)
-- [4.7. Blockchain Service](#47-blockchain-service)
-- [4.8. Block Persister Service](#48-block-persister-service)
-- [4.9. Asset Service](#49-asset-service)
-- [4.10. Coinbase Service](#410-coinbase-service)
-- [4.11. Bootstrap](#411-bootstrap)
-- [4.12. P2P Legacy Service](#412-p2p-legacy-service)
-- [4.13. UTXO Store](#413-utxo-store)
-- [4.14. Transaction Meta Store](#414-transaction-meta-store)
-- [4.15. Banlist Service](#415-banlist-service)
+    - [4.5.3. Overall SubTree Validation Process](#453-overall-subtree-validation-process)
+- [4.6. Block Validation Service](#46-block-validation-service)
+    - [4.6.1. Service Components and Dependencies:](#461-service-components-and-dependencies)
+    - [4.6.2. Block Validation Details:](#462-block-validation-details)
+    - [4.6.3. Overall Block Process](#463-overall-block-process)
+- [4.7. P2P Service](#47-p2p-service)
+- [4.8. Blockchain Service](#48-blockchain-service)
+- [4.9 Block Persister Service](#49-block-persister-service)
+- [4.10. Asset Service](#410-asset-service)
+- [4.11. Coinbase Service](#411-coinbase-service)
+- [4.12. Bootstrap](#412-bootstrap)
+- [4.13. P2P Legacy Service](#413-p2p-legacy-service)
+- [4.14. UTXO Store](#414-utxo-store)
+- [4.15. Transaction Meta Store](#415-transaction-meta-store)
+- [4.16. Banlist Service](#416-banlist-service)
 
 
 ## 1. Overview
@@ -80,7 +83,8 @@ Various services and components are outlined to show their interactions and func
   - **TX Validator Service**: Checks transactions for correctness and adherence to network rules.
   - **Block Assembly Service**: Assembles blocks to be included blockchain.
   - **Blockchain Service**: Manages the block headers and list of subtrees in a block.
-  - **Block Validation Service**: Validates new subtrees and blocks before they are added to the blockchain.
+  - **Subtree Validation Service**: Validates new subtrees and persist them internally.
+  - **Block Validation Service**: Validates new blocks before they are added to the blockchain.-
   - **TX Store**: Queries "in scope" transaction and transaction ouput data.
   - **UTXO Store**: Retrieves information about **unspent** transaction outputs, which are essential for validating new transactions.
   - **TX Meta Store**: Keeps track of the status of transactions within the system.
@@ -413,53 +417,46 @@ Challenges and Considerations:
 ---
 
 
-### 4.5. Subtree and Block Validation Service
 
+### 4.5. Subtree Validation Service
 
-The Block Validation Service is a critical component designed to ensure the integrity and consistency of the blockchain.
-
-Its responsibilities can be broadly categorized into two main areas: **SubTree validation** and **Block validation**.
-
-In addition, the Block Validation Service plays a key role in maintaining the Unspent Transaction Outputs (UTXO) set, which is essential for determining the ownership of coins.
+The Subtree Validation Service validates newly received Subtrees (as created by other remote nodes), post-processes them (adding metadata useful to the block validation at a later stage), and persist them in the Subtree Store.
 
 The container diagram for this service is represented below:
 
-![Block_Validation_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FBlock_Validation_Service_Container_Diagram.png)
+![Subtree_Validation_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FSubtree_Validation_Service_Container_Diagram.png)
 
 A more detailed view shows the various protocols the service can be interacted with:
 
-![Block_Validation_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FBlock_Validation_Service_Component_Diagram.png)
+![Subtree_Validation_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FSubtree_Validation_Service_Component_Diagram.png)
 
 
 #### 4.5.1. Service Components and Dependencies:
 
-1. **Block Validation Service:** Acts as the orchestrator for the block validation process. It reacts to new subtrees or blocks being found by either this node or other nodes in the network. The service is tasked with validating the individual subtrees of a block, and later on validating the block that aggregates said subtrees.
+1. **Subtree Validation Service:** Acts as the orchestrator for the validation process. It reacts to new subtrees being found by other nodes in the network. The service is tasked with validating the individual subtrees, as well as persisting them with additional metadata.
 
-2. **P2P Service:** The P2P Service receives notifications about new Subtrees and Blocks from other nodes, and delivers them to the Block Validation Service for processing.
 
-3. **Blockchain Server:** The Blockchain service maintains the node blockchain. The Block Validation Service will send validated blocks to the Blockchain service for inclusion in the blockchain. Also, the Block Validation Service can use the Blockchain to obtain information it requires for its operation, such as the latest block header (the chaintip).
+2. **P2P Service:** The P2P Service receives notifications about new Subtrees from other nodes, and delivers them to the Subtree Validation Service for processing.
+
+
+3. **Block Validation Server:** Responsible for validating Blocks, the Block Validation Server might request the Subtree Validation service to validate missing subtrees.
+
 
 4. **Subtree Store:** Holds the Merkle subtrees, which are partial hashes of the complete block. These are crucial for quickly validating new blocks found by competing miners. These are discarded once they are no longer required (i.e., after a new block is found and the subtrees are no longer needed).
 
 
-5. **TX Store:** Maintains a record of all created transactions, including those that have not yet been confirmed and added to a block on the blockchain.
+5. **TX Meta Store:** Keeps track of the validation status of individual transactions.
 
 
-6. **UTXO Store:** Manages the list of all unspent transaction outputs, which represent potential inputs for new transactions.
+6. **Asset Server:** When a new Subtree notification is received, the Block Validation Service will download the subtree or block from the originating node, through the Asset Server in the remote node.
 
 
-7. **TX Meta Store:** Keeps track of the validation status of individual transactions.
-
-
-8. **Asset Server:** When a new Subtree or Block notification is received, the Block Validation Service will download the subtree or block from the originating node, through the Asset Server in the remote node.
-
-    Equally, the Service will request missing Subtrees (while validating Blocks) and missing Transactions (while validating Subtrees) from the Asset Server in the remote node.
-
+Equally, the Service will request missing Transactions (while validating Subtrees) from the Asset Server in the remote node.
 
 
 #### 4.5.2. SubTree Validation Details:
 
-- **Real-Time Validation**: As subtrees are received, which may occur as frequently as every second, the Block Validation service immediately checks their integrity. This involves verifying that each transaction ID listed within a subTree is valid and that the corresponding transactions exist and are themselves valid within the network's consensus rules. If a transaction is missing, we must request it from the miner that sent the subtree. If a transaction is invalid, the subtree is rejected.
+- **Real-Time Validation**: As subtrees are received, which may occur as frequently as every second, the Subtree Validation service immediately checks their integrity. This involves verifying that each transaction ID listed within a subTree is valid and that the corresponding transactions exist and are themselves valid within the network's consensus rules. If a transaction is missing, we must request it from the miner that sent the subtree. If a transaction is invalid, the subtree is rejected.
 
 
 - **UTXO Validation**: Part of the validation process includes ensuring that the transactions within a subTree correctly reference and spend UTXOs.
@@ -471,7 +468,67 @@ A more detailed view shows the various protocols the service can be interacted w
 - **Handling Unvalidated Transactions**: If a subtree contains a transaction that hasn't been previously validated or "blessed," the TX Validator service must retrieve and validate that transaction. If the transaction is valid, it is added to the block assembly process. If it is invalid due to issues like missing inputs, the transaction and its subtree are not accepted ("blessed").
 
 
-#### 4.5.3. Block Validation Details:
+#### 4.5.3. Overall SubTree Validation Process
+
+The validation process is continuous and iterative, designed to maintain the blockchain's integrity and support high transaction throughput:
+
+1. **Transaction and SubTree Receipt**: Transactions are collected and grouped into subtrees, each representing 1 million transaction IDs.
+
+
+2. **SubTree Validation**: As subtrees are broadcast, the Validator service validates them in real-time.
+    * If a subtree contains a transaction that has not been previously validated, the Validator service retrieves the full transaction data and validates it.
+    * If the Validator service successfully validates a subtree, it is "blessed," indicating approval. If a subtree (or a transaction within the subtree) fails validation, the subtree is rejected.
+
+
+3. **Decorated Subtrees**: The validated subtrees are decorated to include additional metadata. Specifically, the decorated subtrees will include all the parent Txs. This step represents an optimization, so the block validation process (performed by the Block Validation Service at a later stage), does not need to perform costly requests to the Tx Meta Store for each transaction.
+
+
+4. **Subtree Store**: Validated subtrees are stored in the Subtree Store.
+
+
+### 4.6. Block Validation Service
+
+
+The Block Validation Service is responsible for receiving and processing new blocks. These new blocks are announced by other nodes, and it is the Block Validation role to check their validity and update the blockchain, and other data stores, as required.
+
+The container diagram for this service is represented below:
+
+![Block_Validation_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FBlock_Validation_Service_Container_Diagram.png)
+
+A more detailed view shows the various protocols the service can be interacted with:
+
+![Block_Validation_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FBlock_Validation_Service_Component_Diagram.png)
+
+
+#### 4.6.1. Service Components and Dependencies:
+
+1. **Block Validation Service:** Acts as the orchestrator for the block validation process. It reacts to new blocks being found by either this node or other nodes in the network. The service is tasked with validating the block.
+
+
+2. **P2P Service:** The P2P Service receives notifications about Blocks from other nodes, and delivers them to the Block Validation Service for processing.
+
+
+3. **Blockchain Server:** The Blockchain service maintains the node blockchain. The Block Validation Service will send validated blocks to the Blockchain service for inclusion in the blockchain. Also, the Block Validation Service can use the Blockchain to obtain information it requires for its operation, such as the latest block header (the chaintip).
+
+
+4. **Subtree Validation Service:** If the Block Validation encounters a block with unknown subtrees, it will delegate the validation of said subtrees to the Subtree Validation.
+
+
+5. **Subtree Store:** Holds the Merkle subtrees, which are partial hashes of the complete block. These are crucial for quickly validating new blocks found by competing miners. These are discarded once they are no longer required (i.e., after a new block is found and the subtrees are no longer needed).
+
+
+6. **TX Store:** Maintains a record of all created transactions, including those that have not yet been confirmed and added to a block on the blockchain.
+
+
+7. **TX Meta Store:** Keeps track of the validation status of individual transactions.
+
+
+8. **Asset Server:** When a new Subtree or Block notification is received, the Block Validation Service will download the subtree or block from the originating node, through the Asset Server in the remote node.
+
+    Equally, the Service will request missing Subtrees (while validating Blocks) and missing Transactions (while validating Subtrees) from the Asset Server in the remote node.
+
+
+#### 4.6.2. Block Validation Details:
 
 - **Top Merkle Tree Validation**: When a new block is announced, the Validator service doesn't need to validate all individual transactions, as the subtrees have already been validated. Instead, it can quickly validate the block by checking the top part of the Merkle tree composed of the hashes of the subtrees. This greatly reduces the amount of data that needs to be processed during block validation.
 
@@ -479,33 +536,23 @@ A more detailed view shows the various protocols the service can be interacted w
 - **Merkle Subtree Store**: This is a dedicated storage component within the Validator service that holds the subtrees. It retains the subtrees until a new block is found and integrated into the blockchain, after which the subtrees are no longer needed and can be discarded. This storage ensures that subtrees are readily available for block validation and helps in maintaining the continuity of the validation process.
 
 
-#### 4.5.4. Overall Block and SubTree Validation Process
+#### 4.6.3. Overall Block Process
 
 The validation process is continuous and iterative, designed to maintain the blockchain's integrity and support high transaction throughput:
 
-1. **Transaction and SubTree Receipt**: Transactions are collected and grouped into subtrees, each representing up to 1 million transaction IDs.
+
+1. **Block Assembly and Propagation**: When a new block is discovered by a miner, it's announced to the network, including only the top-level Merkle hashes of the subtrees.
 
 
-2. **SubTree Validation**: As subtrees are broadcast, the Validator service validates them in real-time.
-   * If a subtree contains a transaction that has not been previously validated, the Validator service retrieves the full transaction data and validates it.
-   * If the Validator service successfully validates a subtree, it is "blessed," indicating approval. If a subtree (or a transaction within the subtree) fails validation, the subtree is rejected.
+2. **Block Validation by Validator Service**: The Validator service uses the stored subtrees to validate the newly announced block quickly. This is done by deriving the announced top-level Merkle hashes from the hashes of the subtrees in the Merkle subtree Store.
 
 
-3. **Merkle Subtree Storage**: Validated subtrees are stored in the Merkle subtree Store.
-
-
-4. **Block Assembly and Propagation**: When a new block is discovered by a miner, it's announced to the network, including only the top-level Merkle hashes of the subtrees.
-
-
-5. **Block Validation by Validator Service**: The Validator service uses the stored subtrees to validate the newly announced block quickly. This is done by deriving the announced top-level Merkle hashes from the hashes of the subtrees in the Merkle subtree Store.
-
-
-6. **Blockchain Update**: Once the Validator service validates a block, it propagates this block to the Blockchain service, ensuring that the blockchain remains up-to-date and consistent across all nodes.
+3. **Blockchain Update**: Once the Validator service validates a block, it propagates this block to the Blockchain service, ensuring that the blockchain remains up-to-date and consistent across all nodes.
 
 
 ---
 
-### 4.6. P2P Service
+### 4.7. P2P Service
 
 The P2P Service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.
 
@@ -530,7 +577,7 @@ A more detailed component diagram can be seen below:
 
 ---
 
-### 4.7. Blockchain Service
+### 4.8. Blockchain Service
 
 The service is responsible for managing block updates and adding them to the blockchain maintained by the node. The blocks can be received from other nodes or mined by the node itself. Blocks mined by the node are broadcast to other nodes via the Blockchain Service.
 
@@ -581,7 +628,7 @@ The system is designed to maintain the blockchain's integrity by ensuring that a
 
 ---
 
-### 4.8 Block Persister Service
+### 4.9 Block Persister Service
 
 The Block Persister service functions as an overlay microservice, designed to post-process blocks.
 
@@ -613,7 +660,7 @@ A more detailed diagram can be seen below, detailing the messaging mechanism bet
 
 ---
 
-### 4.9. Asset Service
+### 4.10. Asset Service
 
 The Asset Service acts as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
 
@@ -643,7 +690,7 @@ The various microservices write directly to the data stores, but the asset servi
 
 ---
 
-### 4.10. Coinbase Service
+### 4.11. Coinbase Service
 
 The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
 
@@ -673,7 +720,7 @@ In essence, the Coinbase Service operates as a straightforward Simplified Paymen
 
 ---
 
-### 4.11. Bootstrap
+### 4.12. Bootstrap
 
 The Bootstrap Service helps new nodes find peers in a Teranode BSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
 
@@ -684,7 +731,7 @@ The service is implemented using the `libp2p` library, a modular network stack f
 ---
 
 
-### 4.12. P2P Legacy Service
+### 4.13. P2P Legacy Service
 
 The P2P service is responsible for managing communications between BSV and Teranode-BSV nodes, effectively translating between the historical BSV and the new (Teranode BSV) data abstractions. This makes possible to run historical and Teranodes side by side, allowing for a gradual rollout of Teranode.
 
@@ -711,7 +758,7 @@ Here's the breakdown of the components and their functions:
 
 ---
 
-### 4.13. UTXO Store
+### 4.14. UTXO Store
 
 The UTXO Store service is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store service is primarily used by the Validator service to retrieve UTXOs when validating transactions. The main purpose of this service is to provide a quick lookup service on behalf of other micro-services (such as the Validator service).
 
@@ -719,7 +766,7 @@ The UTXO Store service is responsible for tracking spendable UTXOs. These are UT
 
 ---
 
-### 4.14. Transaction Meta Store
+### 4.15. Transaction Meta Store
 
 The Transaction Meta Store service is responsible for storing and retrieving transaction metadata. This is used by many services, including the Validator and Block Assembly services, to retrieve transaction metadata when validating transactions. The Transaction Meta Store service is also used by the Block Assembly service to retrieve transaction metadata when assembling blocks.
 
@@ -737,7 +784,7 @@ The metadata in scope in this service refers to extra fields of interest during 
 
 ---
 
-### 4.15. Banlist Service
+### 4.16. Banlist Service
 
 Bitcoin is an open public system that anyone can use. While most participants act in good faith, the system needs to protect itself against rogue agents. If a node is breaching the network consensus rules (a "rogue" node), it will get banned.
 

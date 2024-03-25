@@ -1,0 +1,11 @@
+@startuml
+entity Validator
+control "Kafka Producer" as Kafka
+participant "Subtree Validation" as SubtreeValidation
+
+Validator -> Kafka: publishToKafka()
+Kafka -> SubtreeValidation: consume()
+
+left footer Last Modified On: 19-March-2024
+
+@enduml

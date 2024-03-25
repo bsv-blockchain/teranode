@@ -36,6 +36,8 @@
 
 The Bitcoin (BTC) _scalability issue_ refers to the challenge faced by the historical Bitcoin network in processing a large number of transactions efficiently. Originally, the Bitcoin block size, where transactions are recorded, was limited to 1 megabyte. This limitation meant that the network could only handle an average of **3.3 to 7 transactions per second**. As Bitcoin's popularity grew, this has led to delayed transaction processing and higher fees.
 
+With BSV, the block size limit was increased to 4 gigabyte, thereby also increasing the performance of the network. However, the current BSV node software (SV Node) has its own limitations, especially related to scalability and performance, limiting the current network to several thousand transactions per second.
+
 **UBSV** is BSV’s solution to the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for BSV scaling to be truly unbounded.
 
 UBSV provides a robust node processing system for BSV that can consistently handle over **1M transactions per second**, while strictly adhering to the Bitcoin whitepaper.
@@ -133,6 +135,8 @@ Detailed Node Service documentation:
 + [Propagation Service](docs/services/propagation.md)
 
 + [Validator Service](docs/services/validator.md)
+
++ [Subtree Validation Service](docs/services/subtreeValidation.md)
 
 + [Block Validation Service](docs/services/blockValidation.md)
 
@@ -362,12 +366,13 @@ ubsv/
 │   ├── blobserver/               # Blob Server Service
 │   ├── blockassembly/            # Block Assembly Service
 │   ├── blockchain/               # Blockchain Service
+│   ├── blockpersister/           # Block Persister Service
 │   ├── blockvalidation/          # Block Validation Service
 │   ├── coinbase/                 # Coinbase Service
 │   ├── miner/                    # Miner Service
 │   ├── p2p/                      # P2P Service
 │   ├── propagation/              # Propagation Service
-│   ├── blockpersister/           # Block Persister Service
+│   ├── subtreevalidation/        # Subtree Validation Service
 │   └── validator/                # Validator Service
 │
 ├── stores/                       # This directory contains the different stores used by the node.
