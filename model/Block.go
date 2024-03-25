@@ -144,6 +144,8 @@ func NewBloomStats() *BloomStats {
 func (bs *BloomStats) BloomFilterStatsProcessor(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -413,10 +415,14 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
-	if txMetaStore != nil {
-		err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, recentBlocksBloomFilters, currentBlockHeaderIDs, bloomStats)
-		if err != nil {
-			return false, err
+
+	// TODO - Re-enable order checking in all cases
+	if !gocore.Config().GetBool("startLegacy", false) {
+		if txMetaStore != nil {
+			err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, recentBlocksBloomFilters, currentBlockHeaderIDs, bloomStats)
+			if err != nil {
+				return false, err
+			}
 		}
 	}
 

@@ -509,7 +509,6 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 	}
 
 	if !parentExists {
-		panic("STOP")
 		// add to catchup channel, which will block processing any new blocks until we have caught up
 		go func() {
 			u.logger.Infof("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())
