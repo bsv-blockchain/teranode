@@ -1301,7 +1301,7 @@ out:
 				}
 
 			case *blockMsg:
-				TeranodeHandler(context.TODO())(msg)
+				// SAO - Possible hook point for blocks
 
 				sm.handleBlockMsg(msg)
 				if msg.reply != nil {
@@ -1403,11 +1403,14 @@ func (sm *SyncManager) handleBlockchainNotification(notification *blockchain.Not
 
 	// A block has been connected to the main block chain.
 	case blockchain.NTBlockConnected:
-		// block, ok := notification.Data.(*bsvutil.Block)
-		// if !ok {
-		// 	log.Warnf("Chain connected notification is not a block.")
-		// 	break
-		// }
+		block, ok := notification.Data.(*bsvutil.Block)
+		if !ok {
+			log.Warnf("Chain connected notification is not a block.")
+			break
+		}
+
+		// Make sure we process the block before bsvd does, so the UTXO is not spent
+		TeranodeHandler(context.TODO(), sm.chain.FetchUtxoEntry)(block)
 
 		// Remove all of the transactions (except the coinbase) in the
 		// connected block from the transaction pool.  Secondly, remove any

@@ -92,6 +92,7 @@ func (fm *FolderManager) Stop() {
 
 func (f *folder) ttl() {
 	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
 	for {
 		select {

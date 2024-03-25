@@ -111,6 +111,7 @@ func (s *Server) Init(_ context.Context) (err error) {
 // Start function
 func (s *Server) Start(ctx context.Context) (err error) {
 	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 
 	go func() {
 		for {

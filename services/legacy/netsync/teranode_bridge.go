@@ -12,9 +12,13 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
@@ -32,9 +36,10 @@ type TeranodeBridge struct {
 	subtreeCache          *expiringmap.ExpiringMap[chainhash.Hash, []byte]
 	blockCache            *expiringmap.ExpiringMap[chainhash.Hash, []byte]
 	baseUrl               string
+	lookupFn              func(wire.OutPoint) (*blockchain.UtxoEntry, error)
 }
 
-func NewTeranodeBridge(ctx context.Context) *TeranodeBridge {
+func NewTeranodeBridge(ctx context.Context, lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, error)) *TeranodeBridge {
 	listenAddress, ok := gocore.Config().Get("legacy_httpListenAddress")
 	if !ok {
 		panic("legacy_httpListenAddress not set")
@@ -55,6 +60,7 @@ func NewTeranodeBridge(ctx context.Context) *TeranodeBridge {
 		blockCache:            expiringmap.New[chainhash.Hash, []byte](20 * time.Minute),
 		blockValidationClient: blockvalidation.NewClient(ctx, log),
 		baseUrl:               baseUrl.String(),
+		lookupFn:              lookupFn,
 	}
 
 	e := echo.New()
@@ -73,7 +79,7 @@ func NewTeranodeBridge(ctx context.Context) *TeranodeBridge {
 	return tb
 }
 
-func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
+func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 	var size int64
 
 	// stopBlockHash0, _ := chainhash.NewHashFromStr("000000002a22cfee1f2c846adbd12b3e183d4f97683f85dad08a79780a84bd55")
@@ -90,7 +96,7 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 	// 	_ = i
 	// }
 
-	txs := msg.block.Transactions()
+	txs := block.Transactions()
 
 	subtree, err := util.NewIncompleteTreeByLeafCount(len(txs))
 	if err != nil {
@@ -101,16 +107,16 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 		return err
 	}
 
-	for _, wireTx := range msg.block.Transactions() {
+	for _, wireTx := range block.Transactions() {
 		// Add the txid to the subtree
 		txHash := *wireTx.Hash()
 
-		txHashStr := txHash.String()
-		if txHashStr == "0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9" {
-			var i int
-			i++
-			_ = i
-		}
+		// txHashStr := txHash.String()
+		// if txHashStr == "0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9" {
+		// 	var i int
+		// 	i++
+		// 	_ = i
+		// }
 
 		// Serialize the tx
 		var txBytes bytes.Buffer
@@ -132,25 +138,41 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 			}
 
 			for _, input := range tx.Inputs {
-				inputTxHash := input.PreviousTxIDChainHash()
-				inputHashStr := inputTxHash.String()
-				log.Debugf("input hash: %s", inputHashStr)
+				// Lookup the previous tx in out txCache
+				var script *bscript.Script
+				var satoshis uint64
 
-				// TODO  - not feasible to get previous tx from cache. Only works when starting from empty DB and syncing everything
-				inputTxBytes, ok := tb.txCache.Get(*inputTxHash)
-				if !ok {
-					return errors.New("input tx not found")
+				prevTxBytes, ok := tb.txCache.Get(*input.PreviousTxIDChainHash())
+				if ok {
+					prevTx, err := bt.NewTxFromBytes(prevTxBytes)
+					if err != nil {
+						return err
+					}
+
+					script = prevTx.Outputs[input.PreviousTxOutIndex].LockingScript
+					satoshis = prevTx.Outputs[input.PreviousTxOutIndex].Satoshis
+
+				} else {
+					previousOutput, err := tb.lookupFn(wire.OutPoint{
+						Hash:  *input.PreviousTxIDChainHash(),
+						Index: input.PreviousTxOutIndex,
+					})
+
+					if err != nil {
+						return err
+					}
+
+					if previousOutput == nil {
+						return fmt.Errorf("previous output not found for block %s, tx %s, prevTx %s, vout %d", block.Hash(), txHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
+					}
+
+					script = bscript.NewFromBytes(previousOutput.PkScript())
+					satoshis = uint64(previousOutput.Amount())
 				}
 
-				previousTx, err := bt.NewTxFromBytes(inputTxBytes)
-				if err != nil {
-					return err
-				}
+				input.PreviousTxScript = script
+				input.PreviousTxSatoshis = satoshis
 
-				previousOutput := previousTx.Outputs[input.PreviousTxOutIndex]
-
-				input.PreviousTxScript = previousOutput.LockingScript
-				input.PreviousTxSatoshis = previousOutput.Satoshis
 			}
 
 			if !tx.IsExtended() {
@@ -177,7 +199,7 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
-	if err := msg.block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
+	if err := block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
 		return err
 	}
 
@@ -196,28 +218,28 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 		return err
 	}
 
-	blockSize := msg.block.MsgBlock().SerializeSize()
+	blockSize := block.MsgBlock().SerializeSize()
 
 	subtrees := make([]*chainhash.Hash, 0)
 	if subtree.Height > 0 {
 		subtrees = append(subtrees, subtree.RootHash())
 	}
 
-	block, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(txs)), uint64(blockSize))
+	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(txs)), uint64(blockSize))
 	if err != nil {
 		return err
 	}
 
-	blockHash := block.Hash()
+	blockHash := teranodeBlock.Hash()
 
-	blockBytes, err := block.Bytes()
+	blockBytes, err := teranodeBlock.Bytes()
 	if err != nil {
 		return err
 	}
 
 	tb.blockCache.Set(*blockHash, blockBytes)
 
-	log.Warnf("Block %s received", block)
+	log.Warnf("Block %s received", teranodeBlock)
 
 	if err = tb.blockValidationClient.BlockFound(context.TODO(), blockHash, tb.baseUrl); err != nil {
 		log.Errorf("error broadcasting block from %s: %s", tb.baseUrl, err)
@@ -226,9 +248,9 @@ func (tb *TeranodeBridge) HandleBlock(msg *blockMsg) error {
 	return nil
 }
 
-func TeranodeHandler(ctx context.Context) func(msg *blockMsg) error {
+func TeranodeHandler(ctx context.Context, lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, error)) func(msg *bsvutil.Block) error {
 	once.Do(func() {
-		tb = NewTeranodeBridge(ctx)
+		tb = NewTeranodeBridge(ctx, lookupFn)
 	})
 
 	return tb.HandleBlock

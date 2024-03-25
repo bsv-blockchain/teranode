@@ -36,6 +36,7 @@ func (h *HTTP) HandleWebSocket(notificationCh chan *asset_api.Notification) func
 	deadClientCh := make(chan chan []byte, 10)
 
 	pingTimer := time.NewTicker(30 * time.Second)
+	defer pingTimer.Stop()
 
 	go func() {
 		for {
