@@ -621,6 +621,14 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						}
 					}
 					if foundInPreviousBlocks != 1 {
+						// log out the block header IDs map
+						ids := make([]uint32, 0, len(currentBlockHeaderIDsMap))
+						for id := range currentBlockHeaderIDsMap {
+							ids = append(ids, id)
+						}
+						sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+						logger.Errorf("parent error currentBlockHeaderIDsMap: %v", ids)
+						logger.Errorf("parent error parentTxMeta: %v", parentTxMeta)
 						return fmt.Errorf("parent transaction %s of %s is not valid on our current chain, found %d times", parentTxHash.String(), subtreeNode.Hash.String(), foundInPreviousBlocks)
 					}
 				}
