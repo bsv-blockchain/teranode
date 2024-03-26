@@ -568,7 +568,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 		}
 	}
 	if count > 0 {
-		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice", subtreeHash.String(), count)
+		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice (%d requested)", subtreeHash.String(), count, len(txMetaSlice))
 		for _, m := range missed {
 			u.logger.Debugf("\t txid: %s", m)
 		}
