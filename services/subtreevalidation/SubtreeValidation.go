@@ -333,13 +333,6 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree)
 			u.logger.Infof("[validateSubtreeInternal][%s] [attempt #%d] (fail fast=%v) process %d txs from subtree", v.SubtreeHash.String(), attempt, failFast, len(txHashes))
 		}
 
-		/* no point looking at a coinbase placeholder. Take it out of the list of hashes to check. */
-		// feels like a hack - surely it shouldn't be there to begin with?
-		if txHashes[0].IsEqual(model.CoinbasePlaceholderHash) {
-			txHashes = txHashes[1:]
-			txMetaSlice = txMetaSlice[1:]
-		}
-
 		// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
 		// 1. First attempt to load the txMeta from the cache...
