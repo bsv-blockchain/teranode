@@ -21,9 +21,11 @@ func Test_GetBlock(t *testing.T) {
 
 	// Start the server
 	ctx := context.Background()
-	if err := server.Start(ctx); err != nil {
-		t.Errorf("Failed to start server: %v", err)
-	}
+	go func() {
+		if err := server.Start(ctx); err != nil {
+			t.Errorf("Failed to start server: %v", err)
+		}
+	}()
 
 	request := &blockchain_api.GetBlockRequest{
 		Hash: []byte{1},
@@ -35,6 +37,23 @@ func Test_GetBlock(t *testing.T) {
 	// unwrap the error
 	unwrappedErr := ubsverrors.UnwrapGRPC(err)
 	uErr, ok := unwrappedErr.(*ubsverrors.Error)
+	if !ok {
+		t.Fatalf("expected *ubsverrors.Error; got %T", unwrappedErr)
+	}
+
+	require.True(t, uErr.Is(ubsverrors.ErrBlockNotFound))
+	fmt.Println(uErr)
+
+	requestHeight := &blockchain_api.GetBlockByHeightRequest{
+		Height: 1,
+	}
+
+	block, err = server.GetBlockByHeight(context.Background(), requestHeight)
+	require.Empty(t, block)
+
+	// unwrap the error
+	unwrappedErr = ubsverrors.UnwrapGRPC(err)
+	uErr, ok = unwrappedErr.(*ubsverrors.Error)
 	if !ok {
 		t.Fatalf("expected *ubsverrors.Error; got %T", unwrappedErr)
 	}
