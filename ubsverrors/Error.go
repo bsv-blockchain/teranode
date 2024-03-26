@@ -17,11 +17,13 @@ type Error struct {
 }
 
 var (
-	ErrUnknown           = New(ErrorConstants_UNKNOWN, "unknown error")
-	ErrInvalidArgument   = New(ErrorConstants_INVALID_ARGUMENT, "invalid argument")
-	ErrNotFound          = New(ErrorConstants_NOT_FOUND, "not found")
-	ErrBlockNotFound     = New(ErrorConstants_BLOCK_NOT_FOUND, "block not found")
-	ErrThresholdExceeded = New(ErrorConstants_THRESHOLD_EXCEEDED, "threshold exceeded")
+	ErrUnknown              = New(ErrorConstants_UNKNOWN, "unknown error")
+	ErrInvalidArgument      = New(ErrorConstants_INVALID_ARGUMENT, "invalid argument")
+	ErrNotFound             = New(ErrorConstants_NOT_FOUND, "not found")
+	ErrBlockNotFound        = New(ErrorConstants_BLOCK_NOT_FOUND, "block not found")
+	ErrThresholdExceeded    = New(ErrorConstants_THRESHOLD_EXCEEDED, "threshold exceeded")
+	ErrInvalidBlock         = New(ErrorConstants_INVALID_BLOCK, "invalid block")
+	ErrInvalidTxDoubleSpend = New(ErrorConstants_INVALID_TX_DOUBLE_SPEND, "invalid tx, double spend")
 )
 
 func (e *Error) Error() string {
@@ -29,7 +31,7 @@ func (e *Error) Error() string {
 		return fmt.Sprintf("%d: %v", e.Code, e.Message)
 	}
 
-	return fmt.Sprintf("%d: %v: %v", e.Code, e.Message, e.WrappedErr)
+	return fmt.Sprintf("Error: %s (error code: %d),  %v: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
 }
 
 // Is reports whether error codes match.
@@ -82,23 +84,6 @@ func WrapGRPC(err error) error {
 		return st.Err()
 	}
 	return status.New(ErrorCodeToGRPCCode(ErrUnknown.Code), ErrUnknown.Message).Err()
-}
-
-func UnwrapGRPC2(err error) error {
-	st, ok := status.FromError(err)
-	if !ok {
-		return err // Not a gRPC status error
-	}
-
-	for _, detail := range st.Details() {
-		switch t := detail.(type) {
-		case *UBSVError:
-			return New(ErrorConstants(t.Code), t.Message)
-		}
-	}
-
-	// Fallback if no detailed error information is found
-	return New(ErrUnknown.Code, st.Message())
 }
 
 func UnwrapGRPC(err error) error {
