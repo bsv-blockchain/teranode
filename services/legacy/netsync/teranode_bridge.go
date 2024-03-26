@@ -73,6 +73,7 @@ func NewTeranodeBridge(ctx context.Context, lookupFn func(wire.OutPoint) (*block
 	e.GET("/subtree/:hash", tb.SubtreeHandler)
 	e.GET("/tx/:hash", tb.TxHandler)
 	e.POST("/txs", tb.TxBatchHandler())
+	e.GET("/headers/:hash", tb.TempHeaderHandler)
 
 	go func() {
 		if err := e.Start(listenAddress); err != nil {
@@ -337,6 +338,22 @@ func (tb *TeranodeBridge) TxHandler(c echo.Context) error {
 	log.Warnf("tx %s read %d times", hash, w.readCount)
 
 	return c.Blob(http.StatusOK, "application/octet-stream", w.bytes)
+}
+
+func (tb *TeranodeBridge) TempHeaderHandler(c echo.Context) error {
+	hash, err := chainhash.NewHashFromStr(c.Param("hash"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, "invalid hash")
+	}
+
+	_, ok := tb.blockCache.Get(*hash)
+	if !ok {
+		log.Errorf("block requested in /headers (%s) was NOT found in blockCache", hash)
+		return c.JSON(http.StatusInternalServerError, "/headers not implemented")
+	}
+
+	log.Errorf("block requested in /headers (%s) was found in blockCache", hash)
+	return c.JSON(http.StatusInternalServerError, "/headers not implemented")
 }
 
 func (tb *TeranodeBridge) TxBatchHandler() func(c echo.Context) error {
