@@ -6,6 +6,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 type Error struct {
@@ -30,6 +32,7 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("%d: %v: %v", e.Code, e.Message, e.WrappedErr)
 }
 
+// Is reports whether error codes match.
 func (e *Error) Is(target error) bool {
 	if ue, ok := target.(*Error); ok {
 		return e.Code == ue.Code
@@ -42,15 +45,19 @@ func (e *Error) Unwrap() error {
 	return e.WrappedErr
 }
 
-func New(code ErrorConstants, message string, wrappedError ...error) error {
-	// Check the code exists in the ErrorConstants enum
-	if _, ok := ErrorConstants_name[int32(code)]; !ok {
-		return fmt.Errorf("invalid error code: %d for error %q", code, message)
-	}
-
+func New(code ErrorConstants, message string, wrappedError ...error) *Error {
 	var wErr error
 	if len(wrappedError) > 0 {
 		wErr = wrappedError[0]
+	}
+
+	// Check the code exists in the ErrorConstants enum
+	if _, ok := ErrorConstants_name[int32(code)]; !ok {
+		return &Error{
+			Code:       code,
+			Message:    "invalid error code",
+			WrappedErr: wErr,
+		}
 	}
 
 	return &Error{
@@ -62,38 +69,86 @@ func New(code ErrorConstants, message string, wrappedError ...error) error {
 
 func WrapGRPC(err error) error {
 	var uErr *Error
-
 	if errors.As(err, &uErr) {
-		st := status.New(codes.Internal, err.Error())
-
-		details := &UBSVError{
+		details, _ := anypb.New(&UBSVError{
 			Code:    uErr.Code,
 			Message: uErr.Message,
+		})
+		st := status.New(ErrorCodeToGRPCCode(uErr.Code), uErr.Message)
+		st, err := st.WithDetails(details)
+		if err != nil {
+			return status.New(codes.Internal, "error adding details to gRPC status").Err()
 		}
-
-		st, _ = st.WithDetails(details)
-
 		return st.Err()
 	}
+	return status.New(ErrorCodeToGRPCCode(ErrUnknown.Code), ErrUnknown.Message).Err()
+}
 
-	return err
+func UnwrapGRPC2(err error) error {
+	st, ok := status.FromError(err)
+	if !ok {
+		return err // Not a gRPC status error
+	}
+
+	for _, detail := range st.Details() {
+		switch t := detail.(type) {
+		case *UBSVError:
+			return New(ErrorConstants(t.Code), t.Message)
+		}
+	}
+
+	// Fallback if no detailed error information is found
+	return New(ErrUnknown.Code, st.Message())
 }
 
 func UnwrapGRPC(err error) error {
-	if err == nil {
-		return nil
+	st, ok := status.FromError(err)
+	if !ok {
+		return err // Not a gRPC status error
 	}
 
-	if st, ok := status.FromError(err); ok {
-		for _, detail := range st.Details() {
-			if t, ok := detail.(*UBSVError); ok {
-				return &Error{
-					Code:    t.Code,
-					Message: t.Message,
-				}
-			}
+	// Attempt to extract and return detailed UBSVError if present
+	for _, detail := range st.Details() {
+		var ubsverr UBSVError
+		if err := anypb.UnmarshalTo(detail.(*anypb.Any), &ubsverr, proto.UnmarshalOptions{}); err == nil {
+			return New(ErrorConstants(ubsverr.Code), ubsverr.Message)
 		}
 	}
 
-	return err
+	// Fallback: Map common gRPC status codes to custom error codes
+	switch st.Code() {
+	case codes.NotFound:
+		return New(ErrorConstants_NOT_FOUND, st.Message())
+	case codes.InvalidArgument:
+		return New(ErrorConstants_INVALID_ARGUMENT, st.Message())
+	case codes.ResourceExhausted:
+		return New(ErrorConstants_THRESHOLD_EXCEEDED, st.Message())
+	case codes.Unknown:
+		return New(ErrUnknown.Code, st.Message())
+	default:
+		// For unhandled cases, return ErrUnknown with the original gRPC error message
+		return New(ErrUnknown.Code, st.Message())
+	}
+}
+
+// ErrorCodeToGRPCCode maps your application-specific error codes to gRPC status codes.
+func ErrorCodeToGRPCCode(code ErrorConstants) codes.Code {
+	switch code {
+	case ErrorConstants_UNKNOWN:
+		return codes.Unknown
+	case ErrorConstants_INVALID_ARGUMENT:
+		return codes.InvalidArgument
+	case ErrorConstants_NOT_FOUND:
+		return codes.NotFound
+	case ErrorConstants_BLOCK_NOT_FOUND:
+		return codes.NotFound
+	case ErrorConstants_THRESHOLD_EXCEEDED:
+		return codes.ResourceExhausted
+	case ErrorConstants_INVALID_BLOCK:
+		return codes.Internal
+	case ErrorConstants_INVALID_TX_DOUBLE_SPEND:
+		return codes.Internal
+	default:
+		return codes.Internal
+	}
 }
