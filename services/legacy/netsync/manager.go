@@ -1417,7 +1417,10 @@ func (sm *SyncManager) handleBlockchainNotification(notification *blockchain.Not
 		log.Infof("NTBlockConnected: %s", block.Hash())
 
 		// Make sure we process the block before bsvd does, so the UTXO is not spent
-		TeranodeHandler(context.TODO(), sm.chain.FetchUtxoEntry)(block)
+		if err := TeranodeHandler(context.TODO(), sm.chain.FetchUtxoEntry)(block); err != nil {
+			log.Errorf("Failed to process block %s: %w", block.Hash(), err)
+			break
+		}
 
 		// Remove all of the transactions (except the coinbase) in the
 		// connected block from the transaction pool.  Secondly, remove any

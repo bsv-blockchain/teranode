@@ -15,8 +15,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.52.1
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
-	github.com/cbeuw/connutil v0.0.0-20200411215123-966bfaa51ee3
-	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/centrifugal/centrifuge v0.30.1
 	github.com/centrifugal/centrifuge-go v0.10.1
 	github.com/cespare/xxhash v1.1.0

@@ -59,9 +59,9 @@ func NewTeranodeBridge(ctx context.Context, lookupFn func(wire.OutPoint) (*block
 	}
 
 	tb := &TeranodeBridge{
-		txCache:               expiringmap.New[chainhash.Hash, *wrapper](20 * time.Minute),
-		subtreeCache:          expiringmap.New[chainhash.Hash, *wrapper](20 * time.Minute),
-		blockCache:            expiringmap.New[chainhash.Hash, *wrapper](20 * time.Minute),
+		txCache:               expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
+		subtreeCache:          expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
+		blockCache:            expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
 		blockValidationClient: blockvalidation.NewClient(ctx, log),
 		baseUrl:               baseUrl.String(),
 		lookupFn:              lookupFn,
@@ -105,11 +105,11 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 
 	subtree, err := util.NewIncompleteTreeByLeafCount(len(txs))
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to create subtree: %w", err)
 	}
 
 	if err := subtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
-		return err
+		return fmt.Errorf("Failed to add coinbase placeholder: %w", err)
 	}
 
 	for _, wireTx := range block.Transactions() {
@@ -126,7 +126,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 		// Serialize the tx
 		var txBytes bytes.Buffer
 		if err := wireTx.MsgTx().Serialize(&txBytes); err != nil {
-			return err
+			return fmt.Errorf("Could not serialize msgTx: %w", err)
 		}
 
 		txSize := uint64(txBytes.Len())
@@ -134,12 +134,12 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 
 		tx, err := bt.NewTxFromBytes(txBytes.Bytes())
 		if err != nil {
-			return err
+			return fmt.Errorf("Failed to create bt.Tx: %w", err)
 		}
 
 		if !tx.IsCoinbase() {
 			if err := subtree.AddNode(txHash, 0, txSize); err != nil {
-				return err
+				return fmt.Errorf("Failed to add node (%s) to subtree: %w", txHash, err)
 			}
 
 			for _, input := range tx.Inputs {
@@ -152,7 +152,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 				if ok {
 					prevTx, err := bt.NewTxFromBytes(w.bytes)
 					if err != nil {
-						return err
+						return fmt.Errorf("Failed to create bt.Tx for previous tx (s): %w", *input.PreviousTxIDChainHash(), err)
 					}
 
 					script = prevTx.Outputs[input.PreviousTxOutIndex].LockingScript
@@ -165,7 +165,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 					})
 
 					if err != nil {
-						return err
+						return fmt.Errorf("Failed to lookup previous tx (%s:%d): %w", *input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, err)
 					}
 
 					if previousOutput == nil {
@@ -199,7 +199,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 		// Add the subtree to the cache
 		subtreeBytes, err := subtree.SerializeNodes()
 		if err != nil {
-			return err
+			return fmt.Errorf("Failed to serialize subtree: %w", err)
 		}
 
 		tb.subtreeCache.Set(*subtree.RootHash(), &wrapper{
@@ -210,22 +210,22 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
 	if err := block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
-		return err
+		return fmt.Errorf("Failed to serialize header: %w", err)
 	}
 
 	header, err := model.NewBlockHeaderFromBytes(headerBytes.Bytes())
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to create block header from bytes: %w", err)
 	}
 
 	var coinbase bytes.Buffer
 	if err := txs[0].MsgTx().Serialize(&coinbase); err != nil {
-		return err
+		return fmt.Errorf("Failed to serialize coinbase: %w", err)
 	}
 
 	coinbaseTx, err := bt.NewTxFromBytes(coinbase.Bytes())
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to create bt.Tx for coinbase: %w", err)
 	}
 
 	blockSize := block.MsgBlock().SerializeSize()
@@ -237,14 +237,14 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 
 	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(txs)), uint64(blockSize))
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to create model.NewBlock: %w", err)
 	}
 
 	blockHash := teranodeBlock.Hash()
 
 	blockBytes, err := teranodeBlock.Bytes()
 	if err != nil {
-		return err
+		return fmt.Errorf("Failed to get block bytes: %w", err)
 	}
 
 	tb.blockCache.Set(*blockHash, &wrapper{
