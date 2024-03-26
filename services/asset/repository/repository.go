@@ -106,6 +106,8 @@ func (r *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) (
 		return txMeta.Tx.ExtendedBytes(), nil
 	}
 
+	r.logger.Warnf("[Repository] GetTransaction: %s not found in txmeta store: %v", hash.String(), err)
+
 	tx, err := r.TxStore.Get(ctx, hash.CloneBytes())
 	if err != nil {
 		return nil, err

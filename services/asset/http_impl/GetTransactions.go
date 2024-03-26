@@ -53,7 +53,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 			g.Go(func() error {
 				b, err := h.repository.GetTransaction(gCtx, &hash)
 				if err != nil {
-					if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+					if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file") {
 						h.logger.Errorf("[GetTransactions][%s] tx not found in repository: %s", hash.String(), err.Error())
 						return echo.NewHTTPError(http.StatusNotFound, err.Error())
 					} else {
