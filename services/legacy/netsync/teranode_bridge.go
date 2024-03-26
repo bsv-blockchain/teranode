@@ -152,7 +152,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 				if ok {
 					prevTx, err := bt.NewTxFromBytes(w.bytes)
 					if err != nil {
-						return fmt.Errorf("Failed to create bt.Tx for previous tx (s): %w", *input.PreviousTxIDChainHash(), err)
+						return fmt.Errorf("Failed to create bt.Tx for previous tx (%s): %w", input.PreviousTxIDChainHash(), err)
 					}
 
 					script = prevTx.Outputs[input.PreviousTxOutIndex].LockingScript
