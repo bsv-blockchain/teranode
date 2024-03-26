@@ -659,6 +659,9 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 
 	// If we didn't ask for this block then the peer is misbehaving.
 	blockHash := bmsg.block.Hash()
+
+	log.Infof("Received block %s from %s", blockHash, peer.Addr())
+
 	if _, exists = state.requestedBlocks[*blockHash]; !exists {
 		// The regression test intentionally sends some blocks twice
 		// to test duplicate block insertion fails.  Don't disconnect
@@ -1397,6 +1400,8 @@ func (sm *SyncManager) handleBlockchainNotification(notification *blockchain.Not
 			break
 		}
 
+		log.Infof("NTBlockAccepted: %s", block.Hash())
+
 		// Generate the inventory vector and relay it.
 		iv := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
 		sm.peerNotifier.RelayInventory(iv, block.MsgBlock().Header)
@@ -1408,6 +1413,8 @@ func (sm *SyncManager) handleBlockchainNotification(notification *blockchain.Not
 			log.Warnf("Chain connected notification is not a block.")
 			break
 		}
+
+		log.Infof("NTBlockConnected: %s", block.Hash())
 
 		// Make sure we process the block before bsvd does, so the UTXO is not spent
 		TeranodeHandler(context.TODO(), sm.chain.FetchUtxoEntry)(block)
@@ -1444,11 +1451,13 @@ func (sm *SyncManager) handleBlockchainNotification(notification *blockchain.Not
 
 	// A block has been disconnected from the main block chain.
 	case blockchain.NTBlockDisconnected:
-		// block, ok := notification.Data.(*bsvutil.Block)
-		// if !ok {
-		// 	log.Warnf("Chain disconnected notification is not a block.")
-		// 	break
-		// }
+		block, ok := notification.Data.(*bsvutil.Block)
+		if !ok {
+			log.Warnf("Chain disconnected notification is not a block.")
+			break
+		}
+
+		log.Infof("NTBlockDisconnected: %s", block.Hash())
 
 		// Reinsert all of the transactions (except the coinbase) into
 		// the transaction pool.
