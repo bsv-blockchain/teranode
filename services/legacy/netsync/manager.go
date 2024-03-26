@@ -1418,7 +1418,7 @@ func (sm *SyncManager) handleBlockchainNotification(notification *blockchain.Not
 
 		// Make sure we process the block before bsvd does, so the UTXO is not spent
 		if err := TeranodeHandler(context.TODO(), sm.chain.FetchUtxoEntry)(block); err != nil {
-			log.Errorf("Failed to process block %s: %w", block.Hash(), err)
+			log.Errorf("Failed to process block %s: %v", block.Hash(), err)
 			break
 		}
 
