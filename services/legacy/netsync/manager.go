@@ -6,7 +6,6 @@ package netsync
 
 import (
 	"container/list"
-	"context"
 	"math/rand"
 	"net"
 	"sync"
@@ -1304,7 +1303,10 @@ out:
 				}
 
 			case *blockMsg:
-				// SAO - Possible hook point for blocks
+				if err := TeranodeHandleBlock(sm.chain.FetchUtxoEntry)(msg.block); err != nil {
+					log.Errorf("Failed to process HandleBlock %s: %v", msg.block.Hash(), err)
+					break
+				}
 
 				sm.handleBlockMsg(msg)
 				if msg.reply != nil {
@@ -1417,8 +1419,8 @@ func (sm *SyncManager) handleBlockchainNotification(notification *blockchain.Not
 		log.Infof("NTBlockConnected: %s", block.Hash())
 
 		// Make sure we process the block before bsvd does, so the UTXO is not spent
-		if err := TeranodeHandler(context.TODO(), sm.chain.FetchUtxoEntry)(block); err != nil {
-			log.Errorf("Failed to process block %s: %v", block.Hash(), err)
+		if err := TeranodeHandleBlockConnected()(block); err != nil {
+			log.Errorf("Failed to process HandleBlockConnected %s: %v", block.Hash(), err)
 			break
 		}
 

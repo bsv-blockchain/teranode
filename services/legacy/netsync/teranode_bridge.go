@@ -43,7 +43,7 @@ type TeranodeBridge struct {
 	lookupFn              func(wire.OutPoint) (*blockchain.UtxoEntry, error)
 }
 
-func NewTeranodeBridge(ctx context.Context, lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, error)) *TeranodeBridge {
+func NewTeranodeBridge(lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, error)) *TeranodeBridge {
 	listenAddress, ok := gocore.Config().Get("legacy_httpListenAddress")
 	if !ok {
 		panic("legacy_httpListenAddress not set")
@@ -62,7 +62,7 @@ func NewTeranodeBridge(ctx context.Context, lookupFn func(wire.OutPoint) (*block
 		txCache:               expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
 		subtreeCache:          expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
 		blockCache:            expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
-		blockValidationClient: blockvalidation.NewClient(ctx, log),
+		blockValidationClient: blockvalidation.NewClient(context.TODO(), log),
 		baseUrl:               baseUrl.String(),
 		lookupFn:              lookupFn,
 	}
@@ -85,21 +85,9 @@ func NewTeranodeBridge(ctx context.Context, lookupFn func(wire.OutPoint) (*block
 }
 
 func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
+	log.Warnf("HandleBlock received for %s", block.Hash())
+
 	var size int64
-
-	// stopBlockHash0, _ := chainhash.NewHashFromStr("000000002a22cfee1f2c846adbd12b3e183d4f97683f85dad08a79780a84bd55")
-	// if stopBlockHash0.IsEqual(msg.block.Hash()) {
-	// 	var i int
-	// 	i++
-	// 	_ = i
-	// }
-
-	// stopBlockHash1, _ := chainhash.NewHashFromStr("00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee")
-	// if stopBlockHash1.IsEqual(msg.block.Hash()) {
-	// 	var i int
-	// 	i++
-	// 	_ = i
-	// }
 
 	txs := block.Transactions()
 
@@ -115,13 +103,6 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 	for _, wireTx := range block.Transactions() {
 		// Add the txid to the subtree
 		txHash := *wireTx.Hash()
-
-		// txHashStr := txHash.String()
-		// if txHashStr == "0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9" {
-		// 	var i int
-		// 	i++
-		// 	_ = i
-		// }
 
 		// Serialize the tx
 		var txBytes bytes.Buffer
@@ -240,59 +221,48 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 		return fmt.Errorf("Failed to create model.NewBlock: %w", err)
 	}
 
-	blockHash := teranodeBlock.Hash()
-
 	blockBytes, err := teranodeBlock.Bytes()
 	if err != nil {
 		return fmt.Errorf("Failed to get block bytes: %w", err)
 	}
 
-	tb.blockCache.Set(*blockHash, &wrapper{
+	tb.blockCache.Set(*block.Hash(), &wrapper{
 		bytes: blockBytes,
 	})
 
-	log.Warnf("Block %s received", teranodeBlock)
+	return nil
+}
 
-	if err = tb.blockValidationClient.BlockFound(context.TODO(), blockHash, tb.baseUrl, true); err != nil {
+func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
+	log.Warnf("HandleBlockConnected received for %s", block.Hash())
+
+	if err := tb.blockValidationClient.BlockFound(context.TODO(), block.Hash(), tb.baseUrl, true); err != nil {
 		return fmt.Errorf("error broadcasting block from %s: %w", tb.baseUrl, err)
 	}
 
 	return nil
 }
 
-func TeranodeHandler(ctx context.Context, lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, error)) func(msg *bsvutil.Block) error {
+func TeranodeHandleBlock(lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, error)) func(msg *bsvutil.Block) error {
 	once.Do(func() {
-		tb = NewTeranodeBridge(ctx, lookupFn)
+		tb = NewTeranodeBridge(lookupFn)
 	})
 
 	return tb.HandleBlock
+}
+
+func TeranodeHandleBlockConnected() func(msg *bsvutil.Block) error {
+	if tb == nil {
+		panic("teranode bridge not initialised")
+	}
+
+	return tb.HandleBlockConnected
 }
 
 func (tb *TeranodeBridge) BlockHandler(c echo.Context) error {
 	hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, "invalid hash")
-	}
-
-	// stopBlockHashG, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	// if stopBlockHashG.IsEqual(hash) {
-	// 	var i int
-	// 	i++
-	// 	_ = i
-	// }
-
-	// stopBlockHash1, _ := chainhash.NewHashFromStr("00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048")
-	// if stopBlockHash1.IsEqual(hash) {
-	// 	var i int
-	// 	i++
-	// 	_ = i
-	// }
-
-	stopBlockHash170, _ := chainhash.NewHashFromStr("00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee")
-	if stopBlockHash170.IsEqual(hash) {
-		var i int
-		i++
-		_ = i
 	}
 
 	w, ok := tb.blockCache.Get(*hash)
