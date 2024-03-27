@@ -42,7 +42,7 @@ func TestValidatorErrors(t *testing.T) {
 
 	ns := &NullStore{}
 
-	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}), nil)
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}))
 	require.NoError(t, err)
 	err = v.Validate(context.Background(), tx)
 	require.Error(t, err)

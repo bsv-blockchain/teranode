@@ -66,7 +66,7 @@ func BenchmarkValidator(b *testing.B) {
 
 	ns := &NullStore{}
 
-	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}), nil)
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}))
 	if err != nil {
 		panic(err)
 	}
@@ -93,7 +93,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	utxoStore := utxoMemorystore.New(false)
 	txMetaStore := memory.New(ulogger.TestLogger{}, true)
 
-	v, err := validator.New(context.Background(), ulogger.TestLogger{}, utxoStore, txMetaStore, nil)
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, utxoStore, txMetaStore)
 	if err != nil {
 		panic(err)
 	}

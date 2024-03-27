@@ -36,17 +36,16 @@ type subscriber struct {
 // Server type carries the logger within it
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
-	validator             Interface
-	logger                ulogger.Logger
-	utxoStore             utxostore.Interface
-	txMetaStore           txmetastore.Store
-	blockValidationClient blockValidationTxMetaClient
-	kafkaSignal           chan os.Signal
-	newSubscriptions      chan subscriber
-	deadSubscriptions     chan subscriber
-	subscribers           map[subscriber]bool
-	subscriptionCtx       context.Context
-	cancelSubscriptions   context.CancelFunc
+	validator           Interface
+	logger              ulogger.Logger
+	utxoStore           utxostore.Interface
+	txMetaStore         txmetastore.Store
+	kafkaSignal         chan os.Signal
+	newSubscriptions    chan subscriber
+	deadSubscriptions   chan subscriber
+	subscribers         map[subscriber]bool
+	subscriptionCtx     context.Context
+	cancelSubscriptions context.CancelFunc
 }
 
 func Enabled() bool {
@@ -55,20 +54,19 @@ func Enabled() bool {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store, blockValidationClient blockValidationTxMetaClient) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store) *Server {
 	initPrometheusMetrics()
 	subscriptionCtx, cancelSubscriptions := context.WithCancel(context.Background())
 
 	return &Server{
-		logger:                logger,
-		utxoStore:             utxoStore,
-		txMetaStore:           txMetaStore,
-		blockValidationClient: blockValidationClient,
-		newSubscriptions:      make(chan subscriber, 10),
-		deadSubscriptions:     make(chan subscriber, 10),
-		subscribers:           make(map[subscriber]bool),
-		subscriptionCtx:       subscriptionCtx,
-		cancelSubscriptions:   cancelSubscriptions,
+		logger:              logger,
+		utxoStore:           utxoStore,
+		txMetaStore:         txMetaStore,
+		newSubscriptions:    make(chan subscriber, 10),
+		deadSubscriptions:   make(chan subscriber, 10),
+		subscribers:         make(map[subscriber]bool),
+		subscriptionCtx:     subscriptionCtx,
+		cancelSubscriptions: cancelSubscriptions,
 	}
 }
 
@@ -77,7 +75,7 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {
-	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaStore, v.blockValidationClient)
+	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaStore)
 	if err != nil {
 		return fmt.Errorf("could not create validator [%w]", err)
 	}

@@ -8,22 +8,22 @@ import (
 )
 
 var (
-	prometheusHealth                              prometheus.Counter
-	prometheusProcessedTransactions               prometheus.Counter
-	prometheusInvalidTransactions                 prometheus.Counter
-	prometheusTransactionValidateTotal            prometheus.Histogram
-	prometheusTransactionValidate                 prometheus.Histogram
-	prometheusTransactionValidateBatch            prometheus.Histogram
-	prometheusTransactionStoreUtxos               prometheus.Histogram
-	prometheusTransactionSpendUtxos               prometheus.Histogram
-	prometheusTransactionDuration                 prometheus.Histogram
-	prometheusTransactionSize                     prometheus.Histogram
-	prometheusValidatorSendToBlockAssembly        prometheus.Histogram
-	prometheusValidatorSendToBlockAssemblyKafka   prometheus.Histogram
-	prometheusValidatorSendToBlockValidation      prometheus.Histogram
+	prometheusHealth                            prometheus.Counter
+	prometheusProcessedTransactions             prometheus.Counter
+	prometheusInvalidTransactions               prometheus.Counter
+	prometheusTransactionValidateTotal          prometheus.Histogram
+	prometheusTransactionValidate               prometheus.Histogram
+	prometheusTransactionValidateBatch          prometheus.Histogram
+	prometheusTransactionStoreUtxos             prometheus.Histogram
+	prometheusTransactionSpendUtxos             prometheus.Histogram
+	prometheusTransactionDuration               prometheus.Histogram
+	prometheusTransactionSize                   prometheus.Histogram
+	prometheusValidatorSendToBlockAssembly      prometheus.Histogram
+	prometheusValidatorSendToBlockAssemblyKafka prometheus.Histogram
+	//prometheusValidatorSendToBlockValidation      prometheus.Histogram
 	prometheusValidatorSendToBlockValidationKafka prometheus.Histogram
 	prometheusValidatorSetTxMeta                  prometheus.Histogram
-	prometheusValidatorSetTxMetaCache             prometheus.Histogram
+	//prometheusValidatorSetTxMetaCache             prometheus.Histogram
 )
 
 var (
@@ -128,14 +128,14 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
-	prometheusValidatorSendToBlockValidation = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "validator",
-			Name:      "send_to_blockvalidation_micros",
-			Help:      "Duration of sending transactions to block validation",
-			Buckets:   util.MetricsBucketsMicroSeconds,
-		},
-	)
+	//prometheusValidatorSendToBlockValidation = promauto.NewHistogram(
+	//	prometheus.HistogramOpts{
+	//		Namespace: "validator",
+	//		Name:      "send_to_blockvalidation_micros",
+	//		Help:      "Duration of sending transactions to block validation",
+	//		Buckets:   util.MetricsBucketsMicroSeconds,
+	//	},
+	//)
 	prometheusValidatorSendToBlockValidationKafka = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
@@ -152,12 +152,12 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
-	prometheusValidatorSetTxMetaCache = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "validator",
-			Name:      "validator_set_tx_meta_cache_millis",
-			Help:      "Duration of validator set tx meta cache",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
+	//prometheusValidatorSetTxMetaCache = promauto.NewHistogram(
+	//	prometheus.HistogramOpts{
+	//		Namespace: "validator",
+	//		Name:      "validator_set_tx_meta_cache_millis",
+	//		Help:      "Duration of validator set tx meta cache",
+	//		Buckets:   util.MetricsBucketsMilliSeconds,
+	//	},
+	//)
 }

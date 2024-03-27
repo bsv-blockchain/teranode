@@ -236,11 +236,6 @@ func main() {
 		}
 	}
 
-	var blockValidationClient *blockvalidation.Client
-	if startPropagation || startValidator {
-		blockValidationClient = blockvalidation.NewClient(ctx, logger)
-	}
-
 	if startBlockPersister {
 		if err = sm.AddService("BlockPersister", blockpersister.New(
 			logger,
@@ -279,7 +274,6 @@ func main() {
 			logger,
 			getUtxoStore(ctx, logger),
 			getTxMetaStore(logger),
-			nil,
 		)
 		if err != nil {
 			logger.Fatalf("could not create validator [%v]", err)
@@ -304,7 +298,6 @@ func main() {
 				logger,
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
-				nil,
 			)
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)
@@ -330,7 +323,6 @@ func main() {
 				logger.New("valid"),
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
-				blockValidationClient,
 			)); err != nil {
 				panic(err)
 			}
@@ -364,7 +356,6 @@ func main() {
 				logger,
 				getUtxoStore(ctx, logger),
 				getTxMetaStore(logger),
-				blockValidationClient,
 			)
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)
