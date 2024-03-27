@@ -419,7 +419,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// TODO - Re-enable order checking in all cases
 	if !gocore.Config().GetBool("startLegacy", false) {
 		if txMetaStore != nil {
-			err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, recentBlocksBloomFilters, currentBlockHeaderIDs, bloomStats)
+			err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats)
 			if err != nil {
 				return false, err
 			}
@@ -499,9 +499,14 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) error {
 	if b.txMap == nil {
 		return fmt.Errorf("txMap is nil, cannot check transaction order")
+	}
+
+	currentBlockHeaderHashesMap := make(map[chainhash.Hash]struct{}, len(currentChain))
+	for _, blockHeader := range currentChain {
+		currentBlockHeaderHashesMap[*blockHeader.Hash()] = struct{}{}
 	}
 
 	currentBlockHeaderIDsMap := make(map[uint32]struct{}, len(currentBlockHeaderIDs))
@@ -566,11 +571,20 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				n64 := binary.BigEndian.Uint64(subtreeNode.Hash[:])
 
 				for _, filter := range recentBlocksBloomFilters {
+					// check whether this bloom filter is on our chain
+					if _, found := currentBlockHeaderHashesMap[*filter.BlockHash]; !found {
+						continue
+					}
+
 					if filter.Filter.Has(n64) {
 						// we have a match, check the txMetaStore
 						bloomStats.mu.Lock()
 						bloomStats.PositiveCounter++
 						bloomStats.mu.Unlock()
+
+						// there is a chance that the bloom filter has a false positive, but the txMetaStore has pruned
+						// the transaction. This will cause the block to be incorrectly invalidated, but this is the safe
+						// option for now. TODO is there a better way to handle this?
 						txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
 						if err != nil {
 							return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
@@ -614,13 +628,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					}
 
 					// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
-					foundInPreviousBlocks := 0
+					foundInPreviousBlocks := make(map[uint32]struct{}, len(parentTxMeta.BlockIDs))
 					for _, blockID := range parentTxMeta.BlockIDs {
 						if _, found := currentBlockHeaderIDsMap[blockID]; found {
-							foundInPreviousBlocks++
+							foundInPreviousBlocks[blockID] = struct{}{}
 						}
 					}
-					if foundInPreviousBlocks != 1 {
+					if len(foundInPreviousBlocks) != 1 {
 						// log out the block header IDs map
 						ids := make([]uint32, 0, len(currentBlockHeaderIDsMap))
 						for id := range currentBlockHeaderIDsMap {
@@ -629,7 +643,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 						logger.Errorf("parent error currentBlockHeaderIDsMap: %v", ids)
 						logger.Errorf("parent error parentTxMeta: %v", parentTxMeta)
-						return fmt.Errorf("parent transaction %s of %s is not valid on our current chain, found %d times", parentTxHash.String(), subtreeNode.Hash.String(), foundInPreviousBlocks)
+						return fmt.Errorf("parent transaction %s of %s is not valid on our current chain, found %d times", parentTxHash.String(), subtreeNode.Hash.String(), len(foundInPreviousBlocks))
 					}
 				}
 			}
@@ -939,7 +953,7 @@ func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logg
 
 	filter := blobloom.NewOptimized(blobloom.Config{
 		Capacity: b.TransactionCount, // Expected number of keys.
-		FPRate:   1e-5,               // Accept one false positive per 100,000 lookups.
+		FPRate:   1e-6,               // Accept one false positive per 100,000 lookups.
 	})
 
 	var n64 uint64

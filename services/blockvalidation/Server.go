@@ -132,11 +132,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	expiration := uint64(0)
 	expirationValue := txMetaStoreURL.Query().Get("expiration")
 	if expirationValue != "" {
-		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
+		expiration, err = strconv.ParseUint(expirationValue, 10, 64)
 		if err != nil {
 			return fmt.Errorf("could not parse expiration %s: %v", expirationValue, err)
 		}
-		expiration = uint64(expiration64)
 	}
 
 	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
