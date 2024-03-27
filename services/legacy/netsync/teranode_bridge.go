@@ -121,13 +121,15 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 		}
 
 		// We want to check if this block is ready for us to be processed
-		if tx.IsCoinbase() && block.MsgBlock().Header.Version > 1 {
+		currentHeight := tb.height.Load()
+
+		if currentHeight > 0 && tx.IsCoinbase() && block.MsgBlock().Header.Version > 1 {
 			blockHeight, err := util.ExtractCoinbaseHeight(tx)
 			if err != nil {
 				return fmt.Errorf("Failed to extract coinbase height: %w", err)
 			}
 
-			if tb.height.Load() != int32(blockHeight-1) {
+			if currentHeight != int32(blockHeight-1) {
 				log.Warnf("HandleBlock received for %s, expected height %d, got %d - IGNORING...", block.Hash(), tb.height.Load()+1, blockHeight)
 				return nil
 			}
@@ -249,9 +251,12 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 }
 
 func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
-	if block.Height() != tb.height.Load()+1 {
-		log.Warnf("HandleBlockConnected received for %s, expected height %d, got %d - IGNORING...", block.Hash(), tb.height.Load()+1, block.Height())
-		return nil
+	currentHeight := tb.height.Load()
+	if currentHeight > 0 {
+		if block.Height() != tb.height.Load()+1 {
+			log.Warnf("HandleBlockConnected received for %s, expected height %d, got %d - IGNORING...", block.Hash(), tb.height.Load()+1, block.Height())
+			return nil
+		}
 	}
 
 	log.Warnf("HandleBlockConnected received for %s", block.Hash())
