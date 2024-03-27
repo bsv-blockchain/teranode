@@ -540,35 +540,34 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 	}
 
 	u.logger.Infof("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
+
 	var txMeta *txmeta.Data
 	var mTx missingTx
+	var missingCount int
+	missed := make([]*chainhash.Hash, 0, len(txMetaSlice))
+
 	for _, mTx = range missingTxs {
 		if mTx.tx == nil {
 			return fmt.Errorf("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
 		}
+
 		txMeta, err = u.blessMissingTransaction(spanCtx, mTx.tx)
 		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String()), err)
+			return fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %w", subtreeHash.String(), mTx.tx.TxIDChainHash().String(), err)
 		}
+
 		if txMeta == nil {
+			missingCount++
+			missed = append(missed, mTx.tx.TxIDChainHash())
 			u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
-		}
-
-		u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
-		txMetaSlice[mTx.idx] = txMeta
-	}
-
-	// check if all missing transactions have been blessed
-	count := 0
-	missed := make([]*chainhash.Hash, 0, len(txMetaSlice))
-	for i, txMeta := range txMetaSlice {
-		if txMeta == nil {
-			missed = append(missed, &missingTxHashes[i].Hash)
-			count++
+		} else {
+			u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
+			txMetaSlice[mTx.idx] = txMeta
 		}
 	}
-	if count > 0 {
-		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice (%d requested)", subtreeHash.String(), count, len(txMetaSlice))
+
+	if missingCount > 0 {
+		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice (%d requested)", subtreeHash.String(), missingCount, len(txMetaSlice))
 		for _, m := range missed {
 			u.logger.Debugf("\t txid: %s", m)
 		}

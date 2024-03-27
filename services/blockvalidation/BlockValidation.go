@@ -1153,39 +1153,44 @@ func (u *BlockValidation) processMissingTransactions(ctx context.Context, subtre
 	}()
 
 	u.logger.Infof("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
+
 	missingTxs, err := u.getMissingTransactions(spanCtx, missingTxHashes, baseUrl)
 	if err != nil {
 		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String()), err)
 	}
 
 	u.logger.Infof("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
+
 	var txMeta *txmeta.Data
 	var mTx missingTx
+	var missingCount int
+	missed := make([]*chainhash.Hash, 0, len(txMetaSlice))
+
 	for _, mTx = range missingTxs {
 		if mTx.tx == nil {
 			return fmt.Errorf("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
 		}
+
 		txMeta, err = u.blessMissingTransaction(spanCtx, mTx.tx)
 		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String()), err)
+			return fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %w", subtreeHash.String(), mTx.tx.TxIDChainHash().String(), err)
 		}
+
 		if txMeta == nil {
+			missingCount++
+			missed = append(missed, mTx.tx.TxIDChainHash())
 			u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
-		}
-
-		u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
-		txMetaSlice[mTx.idx] = txMeta
-	}
-
-	// check if all missing transactions have been blessed
-	count := 0
-	for _, txMeta := range txMetaSlice {
-		if txMeta == nil {
-			count++
+		} else {
+			u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
+			txMetaSlice[mTx.idx] = txMeta
 		}
 	}
-	if count > 0 {
-		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice", subtreeHash.String(), count)
+
+	if missingCount > 0 {
+		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice (%d requested)", subtreeHash.String(), missingCount, len(txMetaSlice))
+		for _, m := range missed {
+			u.logger.Debugf("\t txid: %s", m)
+		}
 	}
 
 	return nil
@@ -1203,8 +1208,10 @@ func (u *BlockValidation) getMissingTransactions(ctx context.Context, missingTxH
 
 	// get the transactions in batches of 500
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_missingTransactionsBatchSize", 100_000)
+
 	for i := 0; i < len(missingTxHashes); i += batchSize {
 		missingTxHashesBatch := missingTxHashes[i:util.Min(i+batchSize, len(missingTxHashes))]
+
 		g.Go(func() error {
 			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, missingTxHashesBatch, baseUrl)
 			if err != nil {
