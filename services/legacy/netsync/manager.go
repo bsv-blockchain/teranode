@@ -223,6 +223,7 @@ type SyncManager struct {
 	// minSyncPeerNetworkSpeed is the minimum speed allowed for
 	// a sync peer.
 	minSyncPeerNetworkSpeed uint64
+	teranodeBridge          *TeranodeBridge
 }
 
 // resetHeaderState sets the headers-first mode state to values appropriate for
@@ -1303,7 +1304,7 @@ out:
 				}
 
 			case *blockMsg:
-				if err := TeranodeHandleBlock(sm.chain.FetchUtxoEntry)(msg.block); err != nil {
+				if err := sm.teranodeBridge.HandleBlock(msg.block); err != nil {
 					log.Errorf("Failed to process HandleBlock %s: %v", msg.block.Hash(), err)
 					break
 				}
@@ -1419,7 +1420,7 @@ func (sm *SyncManager) handleBlockchainNotification(notification *blockchain.Not
 		log.Infof("NTBlockConnected: %s", block.Hash())
 
 		// Make sure we process the block before bsvd does, so the UTXO is not spent
-		if err := TeranodeHandleBlockConnected()(block); err != nil {
+		if err := sm.teranodeBridge.HandleBlockConnected(block); err != nil {
 			log.Errorf("Failed to process HandleBlockConnected %s: %v", block.Hash(), err)
 			break
 		}
@@ -1618,6 +1619,11 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
 func New(config *Config) (*SyncManager, error) {
+	teranodeBridge, err := NewTeranodeBridge(config.Chain)
+	if err != nil {
+		return nil, err
+	}
+
 	sm := SyncManager{
 		peerNotifier:            config.PeerNotifier,
 		chain:                   config.Chain,
@@ -1631,6 +1637,7 @@ func New(config *Config) (*SyncManager, error) {
 		headerList:              list.New(),
 		quit:                    make(chan struct{}),
 		minSyncPeerNetworkSpeed: config.MinSyncPeerNetworkSpeed,
+		teranodeBridge:          teranodeBridge,
 	}
 
 	best := sm.chain.BestSnapshot()

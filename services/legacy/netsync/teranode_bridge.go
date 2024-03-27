@@ -12,8 +12,9 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
+	legacy_blockchain "github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -37,27 +38,33 @@ type wrapper struct {
 
 type TeranodeBridge struct {
 	blockValidationClient *blockvalidation.Client
+	blockchainClient      blockchain.ClientI
 	txCache               *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	subtreeCache          *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	blockCache            *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	baseUrl               string
-	lookupFn              func(wire.OutPoint) (*blockchain.UtxoEntry, error)
 	height                atomic.Int32
+	chain                 *legacy_blockchain.BlockChain
 }
 
-func NewTeranodeBridge(lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, error)) *TeranodeBridge {
+func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, error) {
 	listenAddress, ok := gocore.Config().Get("legacy_httpListenAddress")
 	if !ok {
-		panic("legacy_httpListenAddress not set")
+		return nil, errors.New("legacy_httpListenAddress not set")
 	}
 
 	baseUrl, err, ok := gocore.Config().GetURL("legacy_httpAddress")
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("could not read legacy_httpAddress: %w", err)
 	}
 
 	if !ok {
-		panic("legacy_httpAddress not set")
+		return nil, errors.New("could not find legacy_httpAddress")
+	}
+
+	blockchainClient, err := blockchain.NewClient(context.TODO(), log)
+	if err != nil {
+		return nil, fmt.Errorf("error creating blockchain client: %w", err)
 	}
 
 	tb := &TeranodeBridge{
@@ -65,8 +72,9 @@ func NewTeranodeBridge(lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, erro
 		subtreeCache:          expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
 		blockCache:            expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
 		blockValidationClient: blockvalidation.NewClient(context.TODO(), log),
+		blockchainClient:      blockchainClient,
 		baseUrl:               baseUrl.String(),
-		lookupFn:              lookupFn,
+		chain:                 chain,
 	}
 
 	e := echo.New()
@@ -83,7 +91,49 @@ func NewTeranodeBridge(lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, erro
 		}
 	}()
 
-	return tb
+	log.Infof("Teranode bridge started on %s", listenAddress)
+
+	// Get the best block from the chain and re-advertise it to Teranode to ensure it is in sync
+	_, meta, err := blockchainClient.GetBestBlockHeader(context.TODO())
+	if err != nil {
+		log.Errorf("Failed to get best block header: %s", err)
+	}
+
+	teranodeHeight := int32(meta.Height)
+
+	log.Infof("Teranode bridge starting at height %d", teranodeHeight)
+
+	best := chain.BestSnapshot()
+	log.Infof("Legacy chain best block height: %d", best.Height)
+
+	if teranodeHeight < best.Height {
+		log.Infof("Teranode bridge syncing with legacy...")
+	}
+
+	// Start syncing from the last block we have in Teranode + 1
+	// teranodeHeight++
+
+	for teranodeHeight <= best.Height {
+		block, err := chain.BlockByHeight(teranodeHeight)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to get block by hash %s: %w", best.Hash, err)
+		} else {
+			if err := tb.HandleBlock(block); err != nil {
+				return nil, fmt.Errorf("Failed to handle block %s: %s", block.Hash(), err)
+			}
+
+			if err := tb.HandleBlockConnected(block); err != nil {
+				return nil, fmt.Errorf("Failed to handle block connected %s: %s", block.Hash(), err)
+			}
+		}
+		log.Infof("Teranode bridge synced with legacy block %d", teranodeHeight)
+
+		teranodeHeight++
+	}
+
+	log.Infof("Teranode bridge synced with legacy")
+
+	return tb, nil
 }
 
 func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
@@ -157,7 +207,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 					satoshis = prevTx.Outputs[input.PreviousTxOutIndex].Satoshis
 
 				} else {
-					previousOutput, err := tb.lookupFn(wire.OutPoint{
+					previousOutput, err := tb.chain.FetchUtxoEntry(wire.OutPoint{
 						Hash:  *input.PreviousTxIDChainHash(),
 						Index: input.PreviousTxOutIndex,
 					})
@@ -268,22 +318,6 @@ func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
 	tb.height.Store(block.Height())
 
 	return nil
-}
-
-func TeranodeHandleBlock(lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, error)) func(msg *bsvutil.Block) error {
-	once.Do(func() {
-		tb = NewTeranodeBridge(lookupFn)
-	})
-
-	return tb.HandleBlock
-}
-
-func TeranodeHandleBlockConnected() func(msg *bsvutil.Block) error {
-	if tb == nil {
-		panic("teranode bridge not initialised")
-	}
-
-	return tb.HandleBlockConnected
 }
 
 func (tb *TeranodeBridge) BlockHandler(c echo.Context) error {
