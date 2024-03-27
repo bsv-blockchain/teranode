@@ -510,6 +510,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	go func() {
 		/// create bloom filter for the block and store
 		u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block", block.Hash().String())
+		// TODO: for the next phase, consider re-building the bloom filter in the background when node restarts.
+		// currently, if the node restarts, the bloom filter is not re-built and the node will not be able to validate transactions properly,
+		// since there are no bloom filters. This is a temporary solution to get the node up and running.
+		// Opitons are:
+		// 1. Re-build the bloom filter in the background when the node restarts
+		// 2. after creating the bloom filter, record it in the storage, and delete it after it expires.
 		u.createAppendBloomFilter(setCtx, block)
 		u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
 	}()
