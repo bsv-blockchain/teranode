@@ -733,28 +733,17 @@ The service is implemented using the `libp2p` library, a modular network stack f
 
 ### 4.13. P2P Legacy Service
 
-The P2P service is responsible for managing communications between BSV and Teranode-BSV nodes, effectively translating between the historical BSV and the new (Teranode BSV) data abstractions. This makes possible to run historical and Teranodes side by side, allowing for a gradual rollout of Teranode.
+The P2P Legacy Service is designed to facilitate communication and data exchange between traditional Bitcoin SV (BSV) nodes and the more advanced Teranode-BSV nodes.
+
+![P2P_Legacy_Container_Diagram.png](..%2Fservices%2Fimg%2FP2P_Legacy_Container_Diagram.png)
+
+This service ensures seamless interoperability between the two types of nodes, thereby supporting a smooth transition towards the Teranode infrastructure.
+
+The primary functions of the P2P Legacy Service include the reception of blocks and transactions from legacy BSV nodes and the dissemination of newly mined blocks to these nodes from Teranode nodes.
+
+This ensures that both historical and modern nodes can operate concurrently without disrupting the blockchain's continuity and integrity.
 
 This legacy P2P network is to be phased out as transaction volumes increase, forcing an eventual migration towards a more scalable and feature-rich system.
-
-
-![Legacy_P2P_Overview.png](img%2FLegacy_P2P_Overview.png)
-
-
-This diagram describes the architecture and workflow of the legacy Peer-to-Peer (P2P) service.
-
-Here's the breakdown of the components and their functions:
-
-1. **P2P Network (IPv4)**: This refers to the historical Bitcoin peer-to-peer network using the IPv4 internet protocol.
-
-
-2. **P2P Receiver Service**: These are the services (1 or more) that receive and send transactions from / to the P2P network.
-
-
-3. **TX Lookup service**: This service is responsible for looking up previously stored transaction information. It is used to enrich transactions with additional information before they are broadcast to the network.
-
-
-4. **Multicast Group Tx Receive**: This indicates a multicast setup where transactions are broadcast to multiple nodes simultaneously. This is efficient for disseminating information quickly to many nodes in the network.
 
 ---
 

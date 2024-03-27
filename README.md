@@ -157,6 +157,7 @@ Overlay Service documentation:
 + [Block Persister Service](docs/services/blockPersister.md)
 + [P2P Service](docs/services/p2p.md)
 + [P2P Bootstrap Service](docs/services/p2pBootstrap.md)
++ [P2P Legacy Service](docs/services/p2pLegacy.md)
 + [Bootstrap (Deprecated)](docs/services/bootstrap.md)
 
 
@@ -368,6 +369,7 @@ ubsv/
 │   ├── blockchain/               # Blockchain Service
 │   ├── blockpersister/           # Block Persister Service
 │   ├── blockvalidation/          # Block Validation Service
+│   ├── legacy/                   # P2P Legacy Service
 │   ├── coinbase/                 # Coinbase Service
 │   ├── miner/                    # Miner Service
 │   ├── p2p/                      # P2P Service
