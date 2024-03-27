@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -41,6 +42,7 @@ type TeranodeBridge struct {
 	blockCache            *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	baseUrl               string
 	lookupFn              func(wire.OutPoint) (*blockchain.UtxoEntry, error)
+	height                atomic.Int32
 }
 
 func NewTeranodeBridge(lookupFn func(wire.OutPoint) (*blockchain.UtxoEntry, error)) *TeranodeBridge {
@@ -116,6 +118,19 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 		tx, err := bt.NewTxFromBytes(txBytes.Bytes())
 		if err != nil {
 			return fmt.Errorf("Failed to create bt.Tx: %w", err)
+		}
+
+		// We want to check if this block is ready for us to be processed
+		if tx.IsCoinbase() && block.MsgBlock().Header.Version > 1 {
+			blockHeight, err := util.ExtractCoinbaseHeight(tx)
+			if err != nil {
+				return fmt.Errorf("Failed to extract coinbase height: %w", err)
+			}
+
+			if tb.height.Load() != int32(blockHeight-1) {
+				log.Warnf("HandleBlock received for %s, expected height %d, got %d - IGNORING...", block.Hash(), tb.height.Load()+1, blockHeight)
+				return nil
+			}
 		}
 
 		if !tx.IsCoinbase() {
@@ -234,11 +249,18 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 }
 
 func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
+	if block.Height() != tb.height.Load()+1 {
+		log.Warnf("HandleBlockConnected received for %s, expected height %d, got %d - IGNORING...", block.Hash(), tb.height.Load()+1, block.Height())
+		return nil
+	}
+
 	log.Warnf("HandleBlockConnected received for %s", block.Hash())
 
 	if err := tb.blockValidationClient.BlockFound(context.TODO(), block.Hash(), tb.baseUrl, true); err != nil {
 		return fmt.Errorf("error broadcasting block from %s: %w", tb.baseUrl, err)
 	}
+
+	tb.height.Store(block.Height())
 
 	return nil
 }
