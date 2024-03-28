@@ -244,6 +244,12 @@ func (s *Store) Store(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) erro
 		// Execute the batch transaction
 		_, err = stmt.ExecContext(ctx)
 		if err != nil {
+			if err, ok := err.(*pq.Error); ok {
+				if err.Code == "23505" {
+					// duplicate key value violates unique constraint "ux_utxos_hash"
+					return errors.Join(utxostore.ErrAlreadyExists, err)
+				}
+			}
 			return err
 		}
 
