@@ -24,6 +24,9 @@ var (
 	ErrThresholdExceeded    = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
 	ErrInvalidBlock         = New(ERR_INVALID_BLOCK, "invalid block")
 	ErrInvalidTxDoubleSpend = New(ERR_INVALID_TX_DOUBLE_SPEND, "invalid tx, double spend")
+	ErrServiceUnavailable   = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
+	ErrServiceNotStarted    = New(ERR_SERVICE_NOT_STARTED, "service not started")
+	ErrStorageError         = New(ERR_STORAGE_ERROR, "storage error")
 )
 
 func (e *Error) Error() string {
@@ -34,24 +37,37 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("Error: %s (error code: %d),  %v: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
 }
 
+// errors.WrapGRPC(errros.New() )
+// fmt.Errorf -> errors.New() will be replaced.
+
 // Is reports whether error codes match.
 func (e *Error) Is(target error) bool {
 	var ue *Error
+
 	if errors.As(target, &ue) {
 		return e.Code == ue.Code
 	}
 
-	return false
+	return errors.Is(e, target)
 }
 
 func (e *Error) Unwrap() error {
 	return e.WrappedErr
 }
 
-func New(code ERR, message string, wrappedError ...error) *Error {
+func New(code ERR, message string, params ...interface{}) *Error {
 	var wErr error
-	if len(wrappedError) > 0 {
-		wErr = wrappedError[0]
+
+	// sprintf the message with the params except the last one if the last one is an error
+	if len(params) > 0 {
+		if err, ok := params[len(params)-1].(error); ok {
+			wErr = err
+			params = params[:len(params)-1]
+		}
+	}
+
+	if len(params) > 0 {
+		message = fmt.Sprintf(message, params...)
 	}
 
 	// Check the code exists in the ErrorConstants enum
@@ -124,16 +140,18 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 		return codes.Unknown
 	case ERR_INVALID_ARGUMENT:
 		return codes.InvalidArgument
-	case ERR_NOT_FOUND:
-		return codes.NotFound
-	case ERR_BLOCK_NOT_FOUND:
-		return codes.NotFound
+	// case ERR_NOT_FOUND:
+	// 	return codes.NotFound
+	// case ERR_BLOCK_NOT_FOUND:
+	// 	return codes.NotFound
 	case ERR_THRESHOLD_EXCEEDED:
 		return codes.ResourceExhausted
-	case ERR_INVALID_BLOCK:
-		return codes.Internal
-	case ERR_INVALID_TX_DOUBLE_SPEND:
-		return codes.Internal
+	// case ERR_INVALID_BLOCK:
+	// 	return codes.Internal
+	// case ERR_INVALID_TX_DOUBLE_SPEND:
+	// 	return codes.Internal
+	// case ERR_SERVICE_UNAVAILABLE:
+	// 	return codes.Unavailable
 	default:
 		return codes.Internal
 	}
