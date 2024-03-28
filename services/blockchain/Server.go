@@ -243,13 +243,13 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
-		return nil, ubsverrors.New(ubsverrors.ErrorConstants_BLOCK_NOT_FOUND, "hash is not valid", err)
+		return nil, ubsverrors.New(ubsverrors.ERR_BLOCK_NOT_FOUND, "hash is not valid", err)
 	}
 
 	block, height, err := b.store.GetBlock(ctx1, blockHash)
 	if err != nil {
 
-		return nil, ubsverrors.New(ubsverrors.ErrorConstants_BLOCK_NOT_FOUND, "block not found", err)
+		return nil, ubsverrors.New(ubsverrors.ERR_BLOCK_NOT_FOUND, "block not found", err)
 	}
 
 	subtreeHashes := make([][]byte, len(block.Subtrees))
@@ -277,7 +277,7 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 
 	block, err := b.store.GetBlockByHeight(ctx1, request.Height)
 	if err != nil {
-		return nil, ubsverrors.New(ubsverrors.ErrorConstants_BLOCK_NOT_FOUND, "block not found", err)
+		return nil, ubsverrors.New(ubsverrors.ERR_BLOCK_NOT_FOUND, "block not found", err)
 	}
 
 	subtreeHashes := make([][]byte, len(block.Subtrees))

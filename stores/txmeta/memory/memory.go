@@ -55,7 +55,7 @@ func (m *Memory) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingT
 		data, err := m.Get(ctx, &item.Hash)
 		if err != nil {
 			if uerr, ok := err.(*ubsverrors.Error); ok {
-				if uerr.Code == ubsverrors.ErrorConstants_NOT_FOUND {
+				if uerr.Code == ubsverrors.ERR_NOT_FOUND {
 					continue
 				}
 			}

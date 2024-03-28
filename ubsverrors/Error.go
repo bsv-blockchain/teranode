@@ -11,19 +11,19 @@ import (
 )
 
 type Error struct {
-	Code       ErrorConstants
+	Code       ERR
 	Message    string
 	WrappedErr error
 }
 
 var (
-	ErrUnknown              = New(ErrorConstants_UNKNOWN, "unknown error")
-	ErrInvalidArgument      = New(ErrorConstants_INVALID_ARGUMENT, "invalid argument")
-	ErrNotFound             = New(ErrorConstants_NOT_FOUND, "not found")
-	ErrBlockNotFound        = New(ErrorConstants_BLOCK_NOT_FOUND, "block not found")
-	ErrThresholdExceeded    = New(ErrorConstants_THRESHOLD_EXCEEDED, "threshold exceeded")
-	ErrInvalidBlock         = New(ErrorConstants_INVALID_BLOCK, "invalid block")
-	ErrInvalidTxDoubleSpend = New(ErrorConstants_INVALID_TX_DOUBLE_SPEND, "invalid tx, double spend")
+	ErrUnknown              = New(ERR_UNKNOWN, "unknown error")
+	ErrInvalidArgument      = New(ERR_INVALID_ARGUMENT, "invalid argument")
+	ErrNotFound             = New(ERR_NOT_FOUND, "not found")
+	ErrBlockNotFound        = New(ERR_BLOCK_NOT_FOUND, "block not found")
+	ErrThresholdExceeded    = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
+	ErrInvalidBlock         = New(ERR_INVALID_BLOCK, "invalid block")
+	ErrInvalidTxDoubleSpend = New(ERR_INVALID_TX_DOUBLE_SPEND, "invalid tx, double spend")
 )
 
 func (e *Error) Error() string {
@@ -36,7 +36,8 @@ func (e *Error) Error() string {
 
 // Is reports whether error codes match.
 func (e *Error) Is(target error) bool {
-	if ue, ok := target.(*Error); ok {
+	var ue *Error
+	if errors.As(target, &ue) {
 		return e.Code == ue.Code
 	}
 
@@ -47,14 +48,14 @@ func (e *Error) Unwrap() error {
 	return e.WrappedErr
 }
 
-func New(code ErrorConstants, message string, wrappedError ...error) *Error {
+func New(code ERR, message string, wrappedError ...error) *Error {
 	var wErr error
 	if len(wrappedError) > 0 {
 		wErr = wrappedError[0]
 	}
 
 	// Check the code exists in the ErrorConstants enum
-	if _, ok := ErrorConstants_name[int32(code)]; !ok {
+	if _, ok := ERR_name[int32(code)]; !ok {
 		return &Error{
 			Code:       code,
 			Message:    "invalid error code",
@@ -94,20 +95,20 @@ func UnwrapGRPC(err error) error {
 
 	// Attempt to extract and return detailed UBSVError if present
 	for _, detail := range st.Details() {
-		var ubsverr UBSVError
-		if err := anypb.UnmarshalTo(detail.(*anypb.Any), &ubsverr, proto.UnmarshalOptions{}); err == nil {
-			return New(ErrorConstants(ubsverr.Code), ubsverr.Message)
+		var ubsvErr UBSVError
+		if err := anypb.UnmarshalTo(detail.(*anypb.Any), &ubsvErr, proto.UnmarshalOptions{}); err == nil {
+			return New(ubsvErr.Code, ubsvErr.Message)
 		}
 	}
 
 	// Fallback: Map common gRPC status codes to custom error codes
 	switch st.Code() {
 	case codes.NotFound:
-		return New(ErrorConstants_NOT_FOUND, st.Message())
+		return New(ERR_NOT_FOUND, st.Message())
 	case codes.InvalidArgument:
-		return New(ErrorConstants_INVALID_ARGUMENT, st.Message())
+		return New(ERR_INVALID_ARGUMENT, st.Message())
 	case codes.ResourceExhausted:
-		return New(ErrorConstants_THRESHOLD_EXCEEDED, st.Message())
+		return New(ERR_THRESHOLD_EXCEEDED, st.Message())
 	case codes.Unknown:
 		return New(ErrUnknown.Code, st.Message())
 	default:
@@ -117,21 +118,21 @@ func UnwrapGRPC(err error) error {
 }
 
 // ErrorCodeToGRPCCode maps your application-specific error codes to gRPC status codes.
-func ErrorCodeToGRPCCode(code ErrorConstants) codes.Code {
+func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	switch code {
-	case ErrorConstants_UNKNOWN:
+	case ERR_UNKNOWN:
 		return codes.Unknown
-	case ErrorConstants_INVALID_ARGUMENT:
+	case ERR_INVALID_ARGUMENT:
 		return codes.InvalidArgument
-	case ErrorConstants_NOT_FOUND:
+	case ERR_NOT_FOUND:
 		return codes.NotFound
-	case ErrorConstants_BLOCK_NOT_FOUND:
+	case ERR_BLOCK_NOT_FOUND:
 		return codes.NotFound
-	case ErrorConstants_THRESHOLD_EXCEEDED:
+	case ERR_THRESHOLD_EXCEEDED:
 		return codes.ResourceExhausted
-	case ErrorConstants_INVALID_BLOCK:
+	case ERR_INVALID_BLOCK:
 		return codes.Internal
-	case ErrorConstants_INVALID_TX_DOUBLE_SPEND:
+	case ERR_INVALID_TX_DOUBLE_SPEND:
 		return codes.Internal
 	default:
 		return codes.Internal

@@ -11,10 +11,10 @@ import (
 )
 
 var (
-	ErrNotFound = ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, "not found")
+	ErrNotFound = ubsverrors.New(ubsverrors.ERR_NOT_FOUND, "not found")
 
 	// ErrBlockNotFound is returned when a block is not found
-	ErrBlockNotFound = ubsverrors.New(ubsverrors.ErrorConstants_BLOCK_NOT_FOUND, "block not found")
+	ErrBlockNotFound = ubsverrors.New(ubsverrors.ERR_BLOCK_NOT_FOUND, "block not found")
 )
 
 type Store interface {

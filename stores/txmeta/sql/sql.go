@@ -166,7 +166,7 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 		data, err := s.Get(ctx, &item.Hash)
 		if err != nil {
 			if uerr, ok := err.(*ubsverrors.Error); ok {
-				if uerr.Code == ubsverrors.ErrorConstants_NOT_FOUND {
+				if uerr.Code == ubsverrors.ERR_NOT_FOUND {
 					continue
 				}
 			}

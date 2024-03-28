@@ -5,11 +5,11 @@ option go_package = "github.com/bitcoin-sv/ubsv/ubsverrors";
 package ubsverrors;
 
 message UBSVError {
-  ErrorConstants code = 1;
+  ERR code = 1;
   string message = 2;
 } 
 
-enum ErrorConstants {
+enum ERR {
   UNKNOWN = 0;
   INVALID_ARGUMENT = 1;
   NOT_FOUND = 2;

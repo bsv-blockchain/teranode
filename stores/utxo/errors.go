@@ -13,7 +13,7 @@ const (
 )
 
 var (
-	ErrNotFound      = ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, "utxo not found")
+	ErrNotFound      = ubsverrors.New(ubsverrors.ERR_NOT_FOUND, "utxo not found")
 	ErrAlreadyExists = ubsverrors.New(0, "utxo already exists")
 	ErrTypeSpent     = &ErrSpent{}
 	ErrTypeLockTime  = &ErrLockTime{}
