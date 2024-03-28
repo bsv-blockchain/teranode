@@ -104,7 +104,7 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data
 }
 
 func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 
 	q := `
@@ -179,7 +179,7 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 }
 
 func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 
 	q := `
@@ -225,7 +225,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 }
 
 func (s *Store) SetMined(cntxt context.Context, hash *chainhash.Hash, blockID uint32) error {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 
 	blockIDBytes := make([]byte, 4)
@@ -255,7 +255,7 @@ func (s *Store) SetMined(cntxt context.Context, hash *chainhash.Hash, blockID ui
 }
 
 func (s *Store) Delete(cntxt context.Context, hash *chainhash.Hash) error {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, 1*time.Second)
+	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 
 	q := `
