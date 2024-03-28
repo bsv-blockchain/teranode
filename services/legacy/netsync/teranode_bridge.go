@@ -17,6 +17,8 @@ import (
 	legacy_blockchain "github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
@@ -39,6 +41,7 @@ type wrapper struct {
 type TeranodeBridge struct {
 	blockValidationClient *blockvalidation.Client
 	blockchainClient      blockchain.ClientI
+	utxoStore             utxo.Interface
 	txCache               *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	subtreeCache          *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	blockCache            *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
@@ -67,6 +70,19 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 		return nil, fmt.Errorf("error creating blockchain client: %w", err)
 	}
 
+	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		return nil, fmt.Errorf("could not read utxostore: %w", err)
+	}
+	if !found {
+		return nil, fmt.Errorf("could not find utxostore: %w", err)
+	}
+
+	utxoStore, err := utxofactory.NewStore(context.TODO(), log, utxoStoreURL, "teranode_bridge")
+	if err != nil {
+		panic(err)
+	}
+
 	tb := &TeranodeBridge{
 		txCache:               expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
 		subtreeCache:          expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
@@ -75,6 +91,7 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 		blockchainClient:      blockchainClient,
 		baseUrl:               baseUrl.String(),
 		chain:                 chain,
+		utxoStore:             utxoStore,
 	}
 
 	e := echo.New()
@@ -112,7 +129,7 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 	}
 
 	// Start syncing from the last block we have in Teranode + 1
-	// teranodeHeight++
+	teranodeHeight++
 
 	for teranodeHeight <= best.Height {
 		block, err := chain.BlockByHeight(teranodeHeight)
@@ -138,19 +155,8 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 }
 
 func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
+
 	log.Warnf("HandleBlock received for %s", block.Hash())
-
-	for i := 0; i < 10; i++ {
-		if block.Height() <= tb.height.Load()+1 {
-			break
-		}
-		log.Infof("HandleBlock waiting #%d for teranode to reach height %d, currently %d", i, block.Height(), tb.height.Load())
-		time.Sleep(1 * time.Second)
-	}
-
-	if block.Height() > tb.height.Load()+1 {
-		return fmt.Errorf("received block %s (height %d) is beyond teranode height %d - no more processing, not allowing legacy to get too far ahead of teranode", block.Hash(), block.Height(), tb.height.Load())
-	}
 
 	var size int64
 
@@ -198,7 +204,16 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 			}
 		}
 
-		if !tx.IsCoinbase() {
+		if tx.IsCoinbase() {
+			if err := tb.utxoStore.Store(context.TODO(), tx, tx.LockTime); err != nil {
+				if errors.Is(err, utxo.ErrAlreadyExists) {
+					log.Warnf("Coinbase tx %s already exists in utxo store", txHash)
+				} else {
+					return fmt.Errorf("Failed to store coinbase tx %s: %w", txHash, err)
+				}
+			}
+
+		} else {
 			if err := subtree.AddNode(txHash, 0, txSize); err != nil {
 				return fmt.Errorf("Failed to add node (%s) to subtree: %w", txHash, err)
 			}
