@@ -19,39 +19,93 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
-var stats = gocore.NewStat("blockpersister")
-
-type blockPersister struct {
-	l     ulogger.Logger
-	r     reader
-	d     decorator
-	store blob.Store
+type blockPersisterUpload struct {
+	blockHeader *model.BlockHeader
+	filename    string
 }
 
-func newBlockPersister(l ulogger.Logger, storeUrl *url.URL, r reader, d decorator) *blockPersister {
+type blockPersister struct {
+	logger       ulogger.Logger
+	subtreeStore reader
+	txStore      decorator
+	blockStore   blob.Store
+	uploadCh     chan blockPersisterUpload
+	stats        *gocore.Stat
+}
 
-	bp := &blockPersister{l: l, r: r, d: d}
+func newBlockPersister(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, subtreeStore reader, txStore decorator) *blockPersister {
+
+	bp := &blockPersister{
+		logger:       logger,
+		subtreeStore: subtreeStore,
+		txStore:      txStore,
+		uploadCh:     make(chan blockPersisterUpload, 100),
+		stats:        gocore.NewStat("blockpersister"),
+	}
 
 	// Create a new block persister
 	if storeUrl != nil {
-		store, err := blob.NewStore(l, storeUrl)
+		store, err := blob.NewStore(logger, storeUrl)
 		if err != nil {
-			l.Fatalf("Error creating blob store: %v", err)
+			logger.Fatalf("Error creating blob store: %v", err)
 		}
 
-		bp.store = store
+		bp.blockStore = store
 	}
+
+	// Start the upload worker
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case upload := <-bp.uploadCh:
+				r, err := os.Open(upload.filename)
+				if err != nil {
+					bp.logger.Errorf("[BlockPersister] error opening file %s: %v", upload.filename, err)
+				}
+				defer func() {
+					_ = r.Close()
+				}()
+
+				// create buffered reader for uploading
+				bufferedReader := io.NopCloser(bufio.NewReaderSize(r, 1024*1024*16)) // 16MB buffer
+
+				hash := upload.blockHeader.Hash()
+
+				// Write the file to the store
+				if err = bp.blockStore.SetFromReader(ctx,
+					hash.CloneBytes(),
+					bufferedReader,
+					options.WithFileName(hash.String()),
+					options.WithSubDirectory("blocks"),
+				); err != nil {
+					bp.logger.Errorf("[BlockPersister] error writing file to store, retrying: %v", err)
+					bp.uploadCh <- upload
+					continue
+				}
+
+				bp.logger.Infof("[BlockPersister] Wrote block %s to store", upload.blockHeader.Hash().String())
+
+				// Remove the file
+				if err = os.Remove(upload.filename); err != nil {
+					bp.logger.Errorf("[BlockPersister] error removing file %s: %v", upload.filename, err)
+				}
+
+				bp.logger.Infof("[BlockPersister] Removed file %s", upload.filename)
+			}
+		}
+	}()
 
 	return bp
 }
 
 func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, blockBytes []byte) error {
-	startTime, stat, ctx := util.NewStatFromContext(ctx, "blockFinalHandler", stats)
+	startTime, stat, ctx := util.NewStatFromContext(ctx, "blockFinalHandler", bp.stats)
 	defer func() {
 		stat.AddTime(startTime)
 		prometheusBlockPersisterBlocks.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
@@ -62,7 +116,7 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 		return fmt.Errorf("[BlockPersister] error creating block from bytes: %w", err)
 	}
 
-	bp.l.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
+	bp.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
 
 	dir, _ := gocore.Config().Get("blockPersister_workingDir", os.TempDir())
 
@@ -92,63 +146,45 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 	}
 
 	// Write varint of number of tx's
-	if err := wire.WriteVarInt(w, 0, block.TransactionCount); err != nil {
+	if err = wire.WriteVarInt(w, 0, block.TransactionCount); err != nil {
 		return fmt.Errorf("[BlockPersister] error writing transaction count: %w", err)
 	}
 
-	if _, err := w.Write(block.CoinbaseTx.Bytes()); err != nil {
+	if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
 		return fmt.Errorf("[BlockPersister] error writing coinbase tx: %w", err)
 	}
 
 	for i, subtreeHash := range block.Subtrees {
-		bp.l.Infof("[BlockPersister] Processing subtree %s (%d / %d)", subtreeHash.String(), i+1, len(block.Subtrees))
+		bp.logger.Infof("[BlockPersister] Processing subtree %s (%d / %d)", subtreeHash.String(), i+1, len(block.Subtrees))
 
-		if err := bp.processSubtree(ctx, *subtreeHash, w); err != nil {
+		if err = bp.processSubtree(ctx, *subtreeHash, w); err != nil {
 			return fmt.Errorf("[BlockPersister] error processing subtree %d [%s]: %w", i, subtreeHash.String(), err)
 		}
 	}
 
-	if err := w.Flush(); err != nil {
+	if err = w.Flush(); err != nil {
 		return fmt.Errorf("[BlockPersister] error flushing writer: %w", err)
 	}
 
-	if err := f.Close(); err != nil {
+	if err = f.Close(); err != nil {
 		return fmt.Errorf("[BlockPersister] error closing file: %w", err)
 	}
 
-	if err := os.Rename(tmpFilename, filename); err != nil {
+	if err = os.Rename(tmpFilename, filename); err != nil {
 		return fmt.Errorf("[BlockPersister] error renaming file: %w", err)
 	}
 
-	bp.l.Infof("[BlockPersister] Wrote block %s to file %s", block.Header.Hash().String(), filename)
+	bp.logger.Infof("[BlockPersister] Wrote block %s to file %s", block.Header.Hash().String(), filename)
 
 	// Write the file to a store (e.g. S3)
-	if bp.store != nil {
-		r, err := os.Open(filename)
-		if err != nil {
-			return fmt.Errorf("[BlockPersister] error opening file %s: %w", filename, err)
+	if bp.blockStore != nil {
+		bp.uploadCh <- blockPersisterUpload{
+			blockHeader: block.Header,
+			filename:    filename,
 		}
-		defer r.Close()
-
-		// Write the file to the store
-		hash := block.Header.Hash()
-		key := utils.ReverseAndHexEncodeHash(*hash)
-
-		if err := bp.store.SetFromReader(ctx, []byte(key), r, options.WithFileName(hash.String()), options.WithSubDirectory("blocks")); err != nil {
-			return fmt.Errorf("[BlockPersister] error writing file to store: %w", err)
-		}
-
-		bp.l.Infof("[BlockPersister] Wrote block %s to store", block.Header.Hash().String())
-
-		// Remove the file
-		if err := os.Remove(filename); err != nil {
-			return fmt.Errorf("[BlockPersister] error removing file %s: %w", filename, err)
-		}
-
-		bp.l.Infof("[BlockPersister] Removed file %s", filename)
 	}
 
-	bp.l.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
+	bp.logger.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
 
 	return nil
 }
@@ -159,7 +195,7 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 
 	var txCount int
 
-	startTime, stat, ctx := util.NewStatFromContext(ctx, "processSubtree", stats, false)
+	startTime, stat, ctx := util.NewStatFromContext(ctx, "processSubtree", bp.stats, false)
 	stat.AddRanges(0, 10, 100, 1_000, 10_000, 100_000, 1_000_000)
 
 	defer func() {
@@ -169,7 +205,7 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 	}()
 
 	// 1. get the subtree from the subtree store
-	subtreeReader, err := bp.r.GetIoReader(ctx, subtreeHash.CloneBytes())
+	subtreeReader, err := bp.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
 	if err != nil {
 		return fmt.Errorf("[BlockPersister] error getting subtree %s from store: %w", subtreeHash.String(), err)
 	}
@@ -212,14 +248,14 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 				// Proceed with the operation if not cancelled.
 				startTime = gocore.CurrentTime()
 				defer func() {
-					stats.NewStat("MetaBatchDecorate").AddTime(startTime)
+					bp.stats.NewStat("MetaBatchDecorate").AddTime(startTime)
 					prometheusBlockPersisterSubtreeBatch.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 				}()
 
 				end := util.Min(i+batchSize, len(txHashes))
-				bp.l.Debugf("[BlockPersister] Getting txmetas from store for subtree %s [%d:%d]", subtreeHash.String(), i, end)
+				bp.logger.Debugf("[BlockPersister] Getting txmetas from store for subtree %s [%d:%d]", subtreeHash.String(), i, end)
 
-				if err := bp.d.MetaBatchDecorate(ctx, txHashes[i:end], "tx"); err != nil {
+				if err := bp.txStore.MetaBatchDecorate(ctx, txHashes[i:end], "tx"); err != nil {
 					return fmt.Errorf("[BlockPersister] error getting txmetas from store: %w", err)
 				}
 

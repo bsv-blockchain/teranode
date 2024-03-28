@@ -60,6 +60,7 @@ type Coinbase struct {
 	waitForPeers bool
 	g            *errgroup.Group
 	gCtx         context.Context
+	stats        *gocore.Stat
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -132,6 +133,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 		waitForPeers: waitForPeers,
 		g:            g,
 		gCtx:         gCtx,
+		stats:        gocore.NewStat("coinbase"),
 	}
 
 	threshold, found := gocore.Config().GetInt("coinbase_notification_threshold")
@@ -323,7 +325,7 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 }
 
 func (c *Coinbase) catchup(cntxt context.Context, fromBlock *model.Block, baseURL string) error {
-	start, stat, ctx := util.NewStatFromContext(cntxt, "catchup", stats)
+	start, stat, ctx := util.NewStatFromContext(cntxt, "catchup", c.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()

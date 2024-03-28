@@ -2,6 +2,7 @@ package blockpersister
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -26,18 +27,10 @@ type Server struct {
 func New(logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmeta.Store) *Server {
 	initPrometheusMetrics()
 
-	persistURL, err, ok := gocore.Config().GetURL("blockPersister_persistURL")
-	if err != nil || !ok {
-		logger.Fatalf("Error getting blockPersister_persistURL URL: %v", err)
-	}
-
-	bp := newBlockPersister(logger, persistURL, subtreeStore, txMetaStore)
-
 	return &Server{
 		logger:       logger,
 		subtreeStore: subtreeStore,
 		txMetaStore:  txMetaStore,
-		bp:           bp,
 	}
 }
 
@@ -45,7 +38,15 @@ func (ps *Server) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (ps *Server) Init(_ context.Context) (err error) {
+func (ps *Server) Init(ctx context.Context) (err error) {
+
+	persistURL, err, ok := gocore.Config().GetURL("blockPersister_persistURL")
+	if err != nil || !ok {
+		return fmt.Errorf("error getting blockPersister_persistURL URL: %w", err)
+	}
+
+	ps.bp = newBlockPersister(ctx, ps.logger, persistURL, ps.subtreeStore, ps.txMetaStore)
+
 	return nil
 }
 

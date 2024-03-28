@@ -34,11 +34,6 @@ type Server struct {
 	discoveryCh chan *bootstrap_api.Notification
 }
 
-func Enabled() bool {
-	_, found := gocore.Config().Get("bootstrap_grpcListenAddress")
-	return found
-}
-
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger ulogger.Logger) *Server {
 	initPrometheusMetrics()

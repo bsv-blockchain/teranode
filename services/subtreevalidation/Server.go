@@ -26,8 +26,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-var stats = gocore.NewStat("subtreevalidation")
-
 // Server type carries the logger within it
 type Server struct {
 	subtreevalidation_api.UnimplementedSubtreeValidationAPIServer
@@ -39,11 +37,7 @@ type Server struct {
 	validatorClient          validator.Interface
 	subtreeCount             atomic.Int32
 	maxMerkleItemsPerSubtree int
-}
-
-func Enabled() bool {
-	_, found := gocore.Config().Get("subtreevalidation_grpcListenAddress")
-	return found
+	stats                    *gocore.Stat
 }
 
 func New(
@@ -67,6 +61,7 @@ func New(
 		validatorClient:          validatorClient,
 		subtreeCount:             atomic.Int32{},
 		maxMerkleItemsPerSubtree: maxMerkleItemsPerSubtree,
+		stats:                    gocore.NewStat("subtreevalidation"),
 	}
 
 	// create a caching tx meta store
@@ -177,7 +172,7 @@ func (u *Server) Stop(_ context.Context) error {
 }
 
 func (u *Server) HealthGRPC(_ context.Context, _ *subtreevalidation_api.EmptyMessage) (*subtreevalidation_api.HealthResponse, error) {
-	start, stat, _ := util.NewStatFromContext(context.Background(), "Health", stats)
+	start, stat, _ := util.NewStatFromContext(context.Background(), "Health", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -191,7 +186,7 @@ func (u *Server) HealthGRPC(_ context.Context, _ *subtreevalidation_api.EmptyMes
 }
 
 func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_api.CheckSubtreeRequest) (*subtreevalidation_api.CheckSubtreeResponse, error) {
-	start, stat, ctx, cancel := util.NewStatFromContextWithCancel(ctx, "CheckSubtree", stats)
+	start, stat, ctx, cancel := util.NewStatFromContextWithCancel(ctx, "CheckSubtree", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()

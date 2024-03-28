@@ -127,7 +127,7 @@ func TestBlock(t *testing.T) {
 	mockStore, err := newMockStore(extendedTxs)
 	require.NoError(t, err)
 
-	persister := newBlockPersister(ulogger.TestLogger{}, nil, mockStore, mockStore) // a nil url will not create a store
+	persister := newBlockPersister(context.Background(), ulogger.TestLogger{}, nil, mockStore, mockStore) // a nil url will not create a store
 
 	var block model.Block
 

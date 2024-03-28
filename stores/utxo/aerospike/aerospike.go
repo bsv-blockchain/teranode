@@ -232,6 +232,9 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 					// backoff
 					time.Sleep(time.Duration(storeRetryUtxo.retryCount) * time.Second)
 					s.storeRetryCh <- storeRetryUtxo
+				} else {
+					// TODO write to Kafka or something like that...
+					s.logger.Errorf("[UTXO][%s] failed to store utxo %d in aerospike in storeRetryCh for txid %s after 3 retries: %v", storeRetryUtxo.utxoHash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String(), err)
 				}
 			} else {
 				s.logger.Warnf("[UTXO][%s] successfully stored utxo %d in aerospike in storeRetryCh for txid %s", storeRetryUtxo.utxoHash.String(), storeRetryUtxo.idx, storeRetryUtxo.txHash.String())

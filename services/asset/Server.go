@@ -45,12 +45,6 @@ type Server struct {
 	centrifugeServer *centrifuge_impl.Centrifuge
 }
 
-func Enabled() bool {
-	_, grpcOk := gocore.Config().Get("asset_grpcListenAddress")
-	_, httpOk := gocore.Config().Get("asset_httpListenAddress")
-	return grpcOk || httpOk
-}
-
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store, subtreeStore blob.Store) *Server {
 	s := &Server{

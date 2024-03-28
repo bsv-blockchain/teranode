@@ -57,11 +57,6 @@ type PropagationServer struct {
 	validator validator.Interface
 }
 
-func Enabled() bool {
-	_, found := gocore.Config().Get("utxostore_grpcAddress")
-	return found
-}
-
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface) *PropagationServer {
 	initPrometheusMetrics()

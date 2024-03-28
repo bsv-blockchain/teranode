@@ -66,11 +66,6 @@ type subtreeRetrySend struct {
 	retries      int
 }
 
-func Enabled() bool {
-	_, found := gocore.Config().Get("blockassembly_grpcListenAddress")
-	return found
-}
-
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store, subtreeStore blob.Store,
 	blockchainClient blockchain.ClientI) *BlockAssembly {

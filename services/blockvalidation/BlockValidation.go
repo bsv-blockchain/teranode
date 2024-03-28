@@ -55,6 +55,7 @@ type BlockValidation struct {
 	blockHashesCurrentlyValidated      *util.SwissMap
 	blockBloomFiltersBeingCreated      *util.SwissMap
 	setMinedChan                       chan *chainhash.Hash
+	stats                              *gocore.Stat
 }
 
 type missingTx struct {
@@ -91,6 +92,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		blockHashesCurrentlyValidated:      util.NewSwissMap(0),
 		blockBloomFiltersBeingCreated:      util.NewSwissMap(0),
 		setMinedChan:                       make(chan *chainhash.Hash, 1000),
+		stats:                              gocore.NewStat("blockvalidation"),
 	}
 
 	go func() {
@@ -375,7 +377,7 @@ func (u *BlockValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainha
 }
 
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string, bloomStats *model.BloomStats) error {
-	timeStart, stat, ctx := util.NewStatFromContext(ctx, "ValidateBlock", stats)
+	timeStart, stat, ctx := util.NewStatFromContext(ctx, "ValidateBlock", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
 	span.LogKV("block", block.Hash().String())
 	defer func() {

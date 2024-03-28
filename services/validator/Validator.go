@@ -48,6 +48,7 @@ type Validator struct {
 	blockAssemblyDisabled  bool
 	blockassemblyKafkaChan chan []byte
 	txMetaKafkaChan        chan []byte
+	stats                  *gocore.Stat
 }
 
 func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, txMetaStore txmeta.Store) (Interface, error) {
@@ -61,6 +62,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		blockAssembler: ba,
 		txMetaStore:    txMetaStore,
 		saveInParallel: true,
+		stats:          gocore.NewStat("validator"),
 	}
 
 	v.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
@@ -107,7 +109,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 }
 
 func (v *Validator) Health(cntxt context.Context) (int, string, error) {
-	start, stat, _ := util.NewStatFromContext(cntxt, "Health", stats)
+	start, stat, _ := util.NewStatFromContext(cntxt, "Health", v.stats)
 	defer stat.AddTime(start)
 
 	return 0, "LocalValidator", nil
@@ -119,7 +121,7 @@ func (v *Validator) GetBlockHeight() (height uint32, err error) {
 
 // TODO try to break this
 func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
-	start, stat, ctx := util.NewStatFromContext(cntxt, "Validate", stats)
+	start, stat, ctx := util.NewStatFromContext(cntxt, "Validate", v.stats)
 	defer func() {
 		stat.AddTime(start)
 		prometheusTransactionValidateTotal.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)

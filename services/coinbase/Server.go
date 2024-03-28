@@ -29,18 +29,12 @@ import (
 // 	)
 // }
 
-var stats = gocore.NewStat("coinbase")
-
 // Server type carries the logger within it
 type Server struct {
 	coinbase_api.UnimplementedCoinbaseAPIServer
 	coinbase *Coinbase
 	logger   ulogger.Logger
-}
-
-func Enabled() bool {
-	_, found := gocore.Config().Get("coinbase_grpcListenAddress")
-	return found
+	stats    *gocore.Stat
 }
 
 // New will return a server instance with the logger stored within it
@@ -49,10 +43,11 @@ func New(logger ulogger.Logger) *Server {
 
 	return &Server{
 		logger: logger,
+		stats:  gocore.NewStat("coinbase"),
 	}
 }
 
-func (v *Server) Health(ctx context.Context) (int, string, error) {
+func (s *Server) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
@@ -108,7 +103,7 @@ func (s *Server) Stop(ctx context.Context) error {
 func (s *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		stats.NewStat("Health_grpc").AddTime(start)
+		s.stats.NewStat("Health_grpc").AddTime(start)
 	}()
 
 	prometheusHealth.Inc()
@@ -120,7 +115,7 @@ func (s *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*coinbase_api.
 
 func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFundsRequest) (*coinbase_api.RequestFundsResponse, error) {
 	start := gocore.CurrentTime()
-	stat := stats.NewStat("RequestFunds_grpc", true)
+	stat := s.stats.NewStat("RequestFunds_grpc", true)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -141,7 +136,7 @@ func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFund
 func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.DistributeTransactionRequest) (*coinbase_api.DistributeTransactionResponse, error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		stats.NewStat("DistributeTransaction").AddTime(start)
+		s.stats.NewStat("DistributeTransaction").AddTime(start)
 	}()
 
 	tx, err := bt.NewTxFromBytes(req.Tx)

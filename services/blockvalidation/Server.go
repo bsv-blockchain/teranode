@@ -33,8 +33,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-var stats = gocore.NewStat("blockvalidation")
-
 type processBlockFound struct {
 	hash    *chainhash.Hash
 	baseURL string
@@ -67,11 +65,7 @@ type Server struct {
 	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
 	// bloom filter stats for all blocks processed
 	bloomFilterStats *model.BloomStats
-}
-
-func Enabled() bool {
-	_, found := gocore.Config().Get("blockvalidation_grpcListenAddress")
-	return found
+	stats            *gocore.Stat
 }
 
 // New will return a server instance with the logger stored within it
@@ -100,6 +94,7 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
 		bloomFilterStats:     model.NewBloomStats(),
+		stats:                gocore.NewStat("blockvalidation"),
 	}
 
 	// create a caching tx meta store
@@ -185,7 +180,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	// process blocks found from channel
 	go func() {
 		for {
-			_, _, ctx1 := util.NewStatFromContext(ctx, "catchupCh", stats, false)
+			_, _, ctx1 := util.NewStatFromContext(ctx, "catchupCh", u.stats, false)
 			select {
 			case <-ctx.Done():
 				u.logger.Infof("[Init] closing block found channel")
@@ -201,7 +196,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				}
 			case b := <-u.blockFoundCh:
 				{
-					_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", stats, false)
+					_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
 					// TODO optimize this for the valid chain, not processing everything ???
 					u.logger.Infof("[Init] processing block found on channel [%s]", b.hash.String())
 					if err := u.processBlockFound(ctx1, b.hash, b.baseURL); err != nil {
@@ -390,7 +385,7 @@ func (u *Server) Stop(_ context.Context) error {
 }
 
 func (u *Server) HealthGRPC(_ context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
-	start, stat, _ := util.NewStatFromContext(context.Background(), "Health", stats)
+	start, stat, _ := util.NewStatFromContext(context.Background(), "Health", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -404,7 +399,7 @@ func (u *Server) HealthGRPC(_ context.Context, _ *blockvalidation_api.EmptyMessa
 }
 
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "BlockFound", stats)
+	start, stat, ctx := util.NewStatFromContext(ctx, "BlockFound", u.stats)
 	defer func() {
 		stat.AddTime(start)
 		prometheusBlockValidationBlockFoundDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
@@ -459,7 +454,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string) error {
 	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidationServer:processBlockFound")
 	span.LogKV("hash", hash.String())
-	start, stat, ctx := util.NewStatFromContext(spanCtx, "processBlockFound", stats)
+	start, stat, ctx := util.NewStatFromContext(spanCtx, "processBlockFound", u.stats)
 	defer func() {
 		span.Finish()
 		stat.AddTime(start)
@@ -532,7 +527,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 }
 
 func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "getBlock", stats)
+	start, stat, ctx := util.NewStatFromContext(ctx, "getBlock", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:getBlock")
 	defer func() {
 		span.Finish()
@@ -557,7 +552,7 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl str
 }
 
 func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "getBlockHeaders", stats)
+	start, stat, ctx := util.NewStatFromContext(ctx, "getBlockHeaders", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -582,7 +577,7 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 }
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
-	start, stat, ctx := util.NewStatFromContext(ctx, "catchup", stats)
+	start, stat, ctx := util.NewStatFromContext(ctx, "catchup", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:catchup")
 	defer func() {
 		stat.AddTime(start)
@@ -717,7 +712,7 @@ func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.Subtre
 }
 
 func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "Get", stats)
+	start, stat, ctx := util.NewStatFromContext(ctx, "Get", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -733,7 +728,7 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 }
 
 func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.ExistsSubtreeRequest) (*blockvalidation_api.ExistsSubtreeResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "Exists", stats)
+	start, stat, ctx := util.NewStatFromContext(ctx, "Exists", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -750,7 +745,7 @@ func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.Exists
 }
 
 func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
-	start, stat, _ := util.NewStatFromContext(ctx, "SetTxMeta", stats)
+	start, stat, _ := util.NewStatFromContext(ctx, "SetTxMeta", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -769,7 +764,7 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 }
 
 func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", stats)
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -790,7 +785,7 @@ func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.Del
 }
 
 func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api.SetMinedMultiRequest) (*blockvalidation_api.SetMinedMultiResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "SetMinedMulti", stats)
+	start, stat, ctx := util.NewStatFromContext(ctx, "SetMinedMulti", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
