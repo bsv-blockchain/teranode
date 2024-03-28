@@ -2,7 +2,6 @@ package file
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -11,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
@@ -237,7 +236,7 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.Optio
 	//file, err := directio.OpenFile(fileName, os.O_RDONLY, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, ubsverrors.ErrNotFound
+			return nil, errors.ErrNotFound
 		}
 		return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
 	}
@@ -255,7 +254,7 @@ func (s *File) Get(_ context.Context, hash []byte, opts ...options.Options) ([]b
 	bytes, err := os.ReadFile(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, ubsverrors.ErrNotFound
+			return nil, errors.ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to read data from file: %w", err)
 	}
@@ -273,7 +272,7 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 	file, err := os.Open(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, ubsverrors.ErrNotFound
+			return nil, errors.ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}

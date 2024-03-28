@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -13,12 +13,12 @@ const (
 )
 
 var (
-	ErrNotFound      = ubsverrors.New(ubsverrors.ERR_NOT_FOUND, "utxo not found")
-	ErrAlreadyExists = ubsverrors.New(0, "utxo already exists")
+	ErrNotFound      = errors.New(errors.ERR_NOT_FOUND, "utxo not found")
+	ErrAlreadyExists = errors.New(0, "utxo already exists")
 	ErrTypeSpent     = &ErrSpent{}
 	ErrTypeLockTime  = &ErrLockTime{}
-	ErrChainHash     = ubsverrors.New(0, "utxo chain hash could not be calculated")
-	ErrStore         = ubsverrors.New(0, "utxo store error")
+	ErrChainHash     = errors.New(0, "utxo chain hash could not be calculated")
+	ErrStore         = errors.New(0, "utxo store error")
 )
 
 type ErrSpent struct {
@@ -36,7 +36,7 @@ func NewErrSpent(txID *chainhash.Hash, vOut uint32, utxoHash, spendingTxID *chai
 		SpendingTxID: spendingTxID,
 	}
 
-	e := ubsverrors.New(0, errSpent.Error(), ErrTypeSpent)
+	e := errors.New(0, errSpent.Error(), ErrTypeSpent)
 	return e
 }
 
@@ -55,7 +55,7 @@ func NewErrLockTime(lockTime uint32, blockHeight uint32, optionalErrs ...error) 
 		blockHeight: blockHeight,
 	}
 
-	return ubsverrors.New(0, errLockTime.Error(), ErrTypeLockTime)
+	return errors.New(0, errLockTime.Error(), ErrTypeLockTime)
 }
 func (e *ErrLockTime) Error() string {
 	if e.lockTime == 0 {

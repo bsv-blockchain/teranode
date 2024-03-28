@@ -3,7 +3,6 @@ package s3
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -232,7 +231,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") {
-			return nil, ubsverrors.ErrNotFound
+			return nil, errors.ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to get s3 data: %w", err)
 	}
@@ -280,7 +279,7 @@ func (g *S3) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]b
 		})
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") {
-			return nil, ubsverrors.ErrNotFound
+			return nil, errors.ErrNotFound
 		}
 		traceSpan.RecordError(err)
 		return nil, fmt.Errorf("failed to get data: %w", err)
@@ -335,7 +334,7 @@ func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...op
 		})
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") {
-			return nil, ubsverrors.ErrNotFound
+			return nil, errors.ErrNotFound
 		}
 		traceSpan.RecordError(err)
 		return nil, fmt.Errorf("failed to get data head: %w", err)

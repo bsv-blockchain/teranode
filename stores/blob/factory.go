@@ -1,17 +1,17 @@
 package blob
 
 import (
-	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/blob/lustre"
 	"net/url"
 	"strconv"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/badger"
 	"github.com/bitcoin-sv/ubsv/stores/blob/batcher"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/localttl"
+	"github.com/bitcoin-sv/ubsv/stores/blob/lustre"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -91,23 +91,23 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		var ttlStore Store
 		if ttlStoreType == "badger" {
 			if len(localTTLStorePaths) > 1 {
-				return nil, errors.New("badger store only supports one path")
+				return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "badger store only supports one path")
 			}
 			ttlStore, err = badger.New(logger, localTTLStorePath)
 			if err != nil {
-				return nil, errors.Join(errors.New("failed to create badger store"), err)
+				return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to create badger store", err)
 			}
 		} else {
 			// default is file store
 			ttlStore, err = file.New(logger, localTTLStorePath, localTTLStorePaths)
 			if err != nil {
-				return nil, errors.Join(errors.New("failed to create file store"), err)
+				return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to create file store", err)
 			}
 		}
 
 		store, err = localttl.New(logger.New("localTTL"), ttlStore, store)
 		if err != nil {
-			return nil, errors.Join(errors.New("failed to create localTTL store"), err)
+			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to create localTTL store", err)
 		}
 	}
 

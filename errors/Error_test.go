@@ -1,8 +1,9 @@
-package ubsverrors
+package errors
 
 import (
 	"errors"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"strings"
 	"testing"
 
@@ -14,39 +15,20 @@ import (
 // Test_NewCustomError tests the creation of custom errors.
 func Test_NewCustomError(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "resource not found")
-	if err == nil {
-		t.Fatalf("expected non-nil error")
-	}
-
-	if err.Code != ERR_NOT_FOUND {
-		t.Errorf("expected code %v; got %v", ERR_NOT_FOUND, err.Code)
-	}
-
-	if err.Message != "resource not found" {
-		t.Errorf("expected message 'resource not found'; got '%s'", err.Message)
-	}
+	assert.NotNil(t, err)
+	assert.Equal(t, ERR_NOT_FOUND, err.Code)
+	assert.Equal(t, "resource not found", err.Message)
 
 	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", err)
 	thirdErr := New(ERR_INVALID_TX_DOUBLE_SPEND, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", secondErr)
-	//anotherErr := New(ERR_INVALID_TX_DOUBLE_SPEND, "Another ERR, block is invalid")
+	anotherErr := New(ERR_INVALID_TX_DOUBLE_SPEND, "Another ERR, block is invalid")
 	olderError := fmt.Errorf("older error: %w", thirdErr)
 	fourthErr := New(ERR_INVALID_BLOCK, "invalid tx double spend error", olderError)
 
-	// if errors.Is(anotherErr, thirdErr) {
-	// 	fmt.Println(anotherErr)
-	// }
-
-	// if errors.Is(anotherErr, fourthErr) {
-	// 	fmt.Println(anotherErr)
-	// }
-
-	if errors.Is(fourthErr, ErrInvalidTxDoubleSpend) {
-		fmt.Println(fourthErr)
-	}
-
-	// if errors.Is(fourthErr, err) && errors.Is(fourthErr, secondErr) && errors.Is(fourthErr, thirdErr) && errors.Is(fourthErr, olderError) {
-	// 	fmt.Println(fourthErr)
-	// }
+	assert.ErrorIs(t, anotherErr, thirdErr)
+	assert.ErrorIs(t, fourthErr, ErrInvalidTxDoubleSpend)
+	assert.ErrorIs(t, fourthErr, err)
+	assert.NotErrorIs(t, anotherErr, fourthErr)
 }
 
 // Test_WrapGRPC tests wrapping a custom error for gRPC.

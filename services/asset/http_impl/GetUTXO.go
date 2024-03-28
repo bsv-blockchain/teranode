@@ -1,11 +1,10 @@
 package http_impl
 
 import (
-	"errors"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -28,7 +27,7 @@ func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 
 		utxoResponse, err := h.repository.GetUtxo(c.Request().Context(), hash)
 		if err != nil {
-			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

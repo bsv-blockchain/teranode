@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
@@ -92,7 +91,7 @@ func (r *Repository) Health(ctx context.Context) (int, string, error) {
 	}
 
 	if len(errs) > 0 {
-		return -1, sb.String(), errors.New("Health errors occurred")
+		return -1, sb.String(), errors.New(errors.ERR_UNKNOWN, "Health errors occurred")
 	}
 
 	return 0, sb.String(), nil
@@ -231,7 +230,7 @@ func (r *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (
 	}
 
 	if len(subtreeBytes) != 56 {
-		return nil, 0, ubsverrors.ErrNotFound
+		return nil, 0, errors.ErrNotFound
 	}
 
 	subtree := &util.Subtree{}

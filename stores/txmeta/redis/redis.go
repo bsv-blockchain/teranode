@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -175,8 +175,8 @@ func (r *Redis) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 	for _, item := range items {
 		data, err := r.Get(ctx, &item.Hash)
 		if err != nil {
-			if uerr, ok := err.(*ubsverrors.Error); ok {
-				if uerr.Code == ubsverrors.ERR_NOT_FOUND {
+			if uerr, ok := err.(*errors.Error); ok {
+				if uerr.Code == errors.ERR_NOT_FOUND {
 					continue
 				}
 			}

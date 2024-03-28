@@ -1,4 +1,4 @@
-package ubsverrors
+package errors
 
 import (
 	"errors"
@@ -43,12 +43,11 @@ func (e *Error) Error() string {
 // Is reports whether error codes match.
 func (e *Error) Is(target error) bool {
 	var ue *Error
-
 	if errors.As(target, &ue) {
 		return e.Code == ue.Code
 	}
 
-	return errors.Is(e, target)
+	return errors.Is(errors.Unwrap(e), target)
 }
 
 func (e *Error) Unwrap() error {
@@ -155,4 +154,16 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	default:
 		return codes.Internal
 	}
+}
+
+func Join(errs ...error) error {
+	return errors.Join(errs...)
+}
+
+func Is(err, target error) bool {
+	return errors.Is(err, target)
+}
+
+func As(err error, target any) bool {
+	return errors.As(err, target)
 }

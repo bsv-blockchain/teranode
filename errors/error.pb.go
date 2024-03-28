@@ -4,7 +4,7 @@
 // 	protoc        v4.25.3
 // source: ubsverrors/error.proto
 
-package ubsverrors
+package errors
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"

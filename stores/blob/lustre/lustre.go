@@ -2,7 +2,6 @@ package lustre
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -11,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
@@ -159,7 +158,7 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.O
 					fileReader, err := s.s3Client.GetIoReader(ctx, hash)
 					if err != nil {
 						if errors.Is(err, os.ErrNotExist) {
-							return nil, ubsverrors.ErrNotFound
+							return nil, errors.ErrNotFound
 						}
 						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
 					}
@@ -194,7 +193,7 @@ func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 					bytes, err = s.s3Client.Get(ctx, hash)
 					if err != nil {
 						if errors.Is(err, os.ErrNotExist) {
-							return nil, ubsverrors.ErrNotFound
+							return nil, errors.ErrNotFound
 						}
 						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
 					}
@@ -229,7 +228,7 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts .
 					bytes, err = s.s3Client.Get(ctx, hash)
 					if err != nil {
 						if errors.Is(err, os.ErrNotExist) {
-							return nil, ubsverrors.ErrNotFound
+							return nil, errors.ErrNotFound
 						}
 						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
 					}

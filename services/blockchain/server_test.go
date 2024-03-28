@@ -2,11 +2,11 @@ package blockchain
 
 import (
 	"context"
-	"fmt"
+	"github.com/stretchr/testify/assert"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -34,15 +34,8 @@ func Test_GetBlock(t *testing.T) {
 	block, err := server.GetBlock(context.Background(), request)
 	require.Empty(t, block)
 
-	// unwrap the error
-	unwrappedErr := ubsverrors.UnwrapGRPC(err)
-	uErr, ok := unwrappedErr.(*ubsverrors.Error)
-	if !ok {
-		t.Fatalf("expected *ubsverrors.Error; got %T", unwrappedErr)
-	}
-
-	require.True(t, uErr.Is(ubsverrors.ErrBlockNotFound))
-	fmt.Println(uErr)
+	unwrappedErr := errors.UnwrapGRPC(err)
+	require.ErrorIs(t, unwrappedErr, errors.ErrBlockNotFound)
 
 	requestHeight := &blockchain_api.GetBlockByHeightRequest{
 		Height: 1,
@@ -52,14 +45,12 @@ func Test_GetBlock(t *testing.T) {
 	require.Empty(t, block)
 
 	// unwrap the error
-	unwrappedErr = ubsverrors.UnwrapGRPC(err)
-	uErr, ok = unwrappedErr.(*ubsverrors.Error)
-	if !ok {
-		t.Fatalf("expected *ubsverrors.Error; got %T", unwrappedErr)
-	}
-
-	require.True(t, uErr.Is(ubsverrors.ErrBlockNotFound))
-	fmt.Println(uErr)
+	unwrappedErr = errors.UnwrapGRPC(err)
+	require.ErrorIs(t, unwrappedErr, errors.ErrBlockNotFound)
+	var tErr *errors.Error
+	assert.ErrorAs(t, unwrappedErr, &tErr)
+	assert.Equal(t, tErr.Code, errors.ERR_BLOCK_NOT_FOUND)
+	assert.Equal(t, tErr.Message, "block not found")
 
 	// Stop the server
 	if err := server.Stop(ctx); err != nil {
