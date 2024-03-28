@@ -139,6 +139,10 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 	log.Warnf("HandleBlock received for %s", block.Hash())
 
+	if block.Height() > tb.height.Load()+1 {
+		return fmt.Errorf("received block %s (height %d) is beyond teranode height %d - no more processing, not allowing legacy to get too far ahead of teranode", block.Hash(), block.Height(), tb.height.Load())
+	}
+
 	var size int64
 
 	txs := block.Transactions()
