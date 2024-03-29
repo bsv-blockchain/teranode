@@ -736,6 +736,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 	if s.spendBatcher != nil {
 		g := errgroup.Group{}
 		for _, spend := range spends {
+			spend := spend
 			g.Go(func() error {
 				done := make(chan error)
 				s.spendBatcher.Put(&batchSpend{
