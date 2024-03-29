@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"math"
 	"net/url"
 	"strconv"
@@ -132,6 +133,11 @@ func init() {
 
 }
 
+type batchItem struct {
+	value storeUtxo
+	done  chan error
+}
+
 type storeUtxo struct {
 	idx        int
 	utxoHash   chainhash.Hash
@@ -152,6 +158,7 @@ type Store struct {
 	filterEnabled   bool
 	batchId         atomic.Uint64
 	batchingEnabled bool
+	storeBatcher    *batcher.Batcher2[batchItem]
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
@@ -178,6 +185,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 	filterEnabled := gocore.Config().GetBool("utxostore_filterEnabled", true)
 	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
+	storeBatcherEnabled := gocore.Config().GetBool("utxostore_storeBatcherEnabled", true)
 
 	s := &Store{
 		u:               u,
@@ -241,6 +249,64 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 			}
 		}
 	}()
+
+	if storeBatcherEnabled {
+		batchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
+		batchDuration, _ := gocore.Config().GetInt("utxostore_storeBatcherDurationMillis", 10)
+		duration := time.Duration(batchDuration) * time.Millisecond
+
+		sendBatch := func(batch []*batchItem) {
+			batchPolicy := util.GetAerospikeBatchPolicy()
+
+			batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, 0)
+			batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
+
+			batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
+
+			logger.Debugf("[STORE_BATCH] sending batch of %d utxos", len(batch))
+
+			var key *aerospike.Key
+			var bin *aerospike.Bin
+			for idx, bItem := range batch {
+				key, err = aerospike.NewKey(s.namespace, "utxo", bItem.value.utxoHash[:])
+				if err != nil {
+					// we just return the error on the channel, we cannot process this utxo any further
+					bItem.done <- fmt.Errorf("[STORE_BATCH][%s:%d] failed to init new aerospike key for utxo %s: %w", bItem.value.txHash.String(), idx, bItem.value.utxoHash.String(), err)
+					continue
+				}
+
+				bin = aerospike.NewBin("locktime", bItem.value.lockTime)
+				record := aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(bin))
+				batchRecords[idx] = record
+			}
+
+			batchId := s.batchId.Add(1)
+
+			err = s.client.BatchOperate(batchPolicy, batchRecords)
+			if err != nil {
+				s.logger.Warnf("[STORE_BATCH][%s] Failed to batch store aerospike utxos in batchId %d: %v\n", len(batch), batchId, err)
+				// don't return, check each record in the batch for errors and process accordingly
+			}
+
+			// batchOperate may have no errors, but some of the records may have failed
+			for idx, batchRecord := range batchRecords {
+				err = batchRecord.BatchRec().Err
+				if err != nil {
+					var aErr *aerospike.AerospikeError
+					if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+						s.logger.Warnf("[STORE_BATCH][%s:%d] utxo %s already exists in batch %d, skipping", batch[idx].value.txHash.String(), idx, batch[idx].value.utxoHash.String(), batchId)
+						batch[idx].done <- nil
+						continue
+					}
+
+					batch[idx].done <- fmt.Errorf("[STORE_BATCH][%s:%d] error in aerospike store batch record for utxo %s (will retry): %d - %w", batch[idx].value.txHash.String(), idx, batch[idx].value.utxoHash.String(), batchId, err)
+				} else {
+					batch[idx].done <- nil
+				}
+			}
+		}
+		s.storeBatcher = batcher.New[batchItem](batchSize, duration, sendBatch, true)
+	}
 
 	return s, nil
 }
@@ -381,15 +447,23 @@ func (s *Store) Store(_ context.Context, tx *bt.Tx, lockTime ...uint32) error {
 
 	// just store it normally if it is only 1 utxo
 	if len(utxoHashes) == 1 {
+		if s.storeBatcher != nil {
+			return s.storeUtxoInBatches(utxoHashes[0], 0, storeLockTime)
+		}
 		return s.storeUtxo(policy, utxoHashes[0], 0, storeLockTime)
 	}
 
 	if !s.batchingEnabled {
-		// TODO this as temporary fix for testing whether batching is causing a problem
 		for idx, hash := range utxoHashes {
-			if err = s.storeUtxo(policy, hash, idx, storeLockTime); err != nil {
-				// storeUtxo will retry if it fails
-				s.logger.Errorf("[Store][%s] failed to store utxo %s:%d: %v", tx.TxIDChainHash().String(), hash.String(), idx, err)
+			if s.storeBatcher != nil {
+				if err = s.storeUtxoInBatches(hash, idx, storeLockTime); err != nil {
+					return fmt.Errorf("[Store][%s] failed to store utxo %s:%d: %v", tx.TxIDChainHash().String(), hash.String(), idx, err)
+				}
+			} else {
+				if err = s.storeUtxo(policy, hash, idx, storeLockTime); err != nil {
+					// storeUtxo will retry if it fails
+					s.logger.Errorf("[Store][%s] failed to store utxo %s:%d: %v", tx.TxIDChainHash().String(), hash.String(), idx, err)
+				}
 			}
 		}
 
@@ -470,6 +544,27 @@ func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.H
 
 func (s *Store) StoreFromHashes(_ context.Context, txID chainhash.Hash, utxoHashes []chainhash.Hash, lockTime uint32) error {
 	return s.storeUtxosInternal(txID, utxoHashes, lockTime)
+}
+
+func (s *Store) storeUtxoInBatches(hash chainhash.Hash, idx int, nLockTime uint32) error {
+	done := make(chan error)
+	s.storeBatcher.Put(&batchItem{
+		value: storeUtxo{
+			idx:      idx,
+			utxoHash: hash,
+			txHash:   hash,
+			lockTime: nLockTime,
+		},
+		done: done,
+	})
+
+	// this waits for the batch to be sent and the response to be received from the batch operation
+	err := <-done
+	if err != nil {
+		return fmt.Errorf("[storeUtxoInBatches][%s:%d] error in aerospike store record: %w", hash.String(), idx, err)
+	}
+
+	return nil
 }
 
 func (s *Store) storeUtxo(policy *aerospike.WritePolicy, hash chainhash.Hash, idx int, nLockTime uint32) error {
