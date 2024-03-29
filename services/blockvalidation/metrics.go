@@ -1,10 +1,11 @@
 package blockvalidation
 
 import (
+	"sync"
+
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"sync"
 )
 
 var (
@@ -19,13 +20,9 @@ var (
 	prometheusBlockValidationSetTxMetaQueueCh          prometheus.Gauge
 	//prometheusBlockValidationSetTxMetaQueueChWaitDuration    prometheus.Histogram
 	//prometheusBlockValidationSetTxMetaQueueDuration          prometheus.Histogram
-	prometheusBlockValidationValidateBlock                   prometheus.Counter
-	prometheusBlockValidationValidateBlockDuration           prometheus.Histogram
-	prometheusBlockValidationValidateSubtree                 prometheus.Counter
-	prometheusBlockValidationValidateSubtreeDuration         prometheus.Histogram
-	prometheusBlockValidationBlessMissingTransaction         prometheus.Counter
-	prometheusBlockValidationBlessMissingTransactionDuration prometheus.Histogram
-
+	prometheusBlockValidationValidateBlock         prometheus.Counter
+	prometheusBlockValidationValidateBlockDuration prometheus.Histogram
+	prometheusBlockValidationValidateSubtree       prometheus.Counter
 	// tx meta cache stats
 	prometheusBlockValidationSetTXMetaCache        prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheFrpc    prometheus.Counter
@@ -165,32 +162,6 @@ func _initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "validate_subtree",
 			Help:      "Number of subtrees validated",
-		},
-	)
-
-	prometheusBlockValidationValidateSubtreeDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
-			Name:      "validate_subtree_duration_millis",
-			Help:      "Duration of validate subtree",
-			Buckets:   util.MetricsBucketsMilliLongSeconds,
-		},
-	)
-
-	prometheusBlockValidationBlessMissingTransaction = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
-			Name:      "bless_missing_transaction",
-			Help:      "Number of missing transactions blessed",
-		},
-	)
-
-	prometheusBlockValidationBlessMissingTransactionDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
-			Name:      "bless_missing_transaction_duration_millis",
-			Help:      "Duration of bless missing transaction",
-			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 

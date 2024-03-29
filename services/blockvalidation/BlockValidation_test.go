@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
-	"runtime/pprof"
 	"testing"
 	"time"
 
@@ -18,7 +16,6 @@ import (
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
-	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jarcoal/httpmock"
@@ -37,7 +34,6 @@ var (
 	hash1 = tx1.TxIDChainHash()
 	hash2 = tx2.TxIDChainHash()
 	hash3 = tx3.TxIDChainHash()
-	hash4 = tx4.TxIDChainHash()
 )
 
 func newTx(random uint32) *bt.Tx {
@@ -45,75 +41,6 @@ func newTx(random uint32) *bt.Tx {
 	tx.LockTime = random
 	return tx
 }
-
-func TestBlockValidationValidateSubtree(t *testing.T) {
-	t.Run("validateSubtree - smoke test", func(t *testing.T) {
-		initPrometheusMetrics()
-
-		txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, deferFunc := setup()
-		defer deferFunc()
-
-		subtree, err := util.NewTreeByLeafCount(4)
-		require.NoError(t, err)
-		require.NoError(t, subtree.AddNode(*hash1, 121, 0))
-		require.NoError(t, subtree.AddNode(*hash2, 122, 0))
-		require.NoError(t, subtree.AddNode(*hash3, 123, 0))
-		require.NoError(t, subtree.AddNode(*hash4, 123, 0))
-
-		_, err = txMetaStore.Create(context.Background(), tx1)
-		require.NoError(t, err)
-
-		_, err = txMetaStore.Create(context.Background(), tx2)
-		require.NoError(t, err)
-
-		_, err = txMetaStore.Create(context.Background(), tx3)
-		require.NoError(t, err)
-
-		_, err = txMetaStore.Create(context.Background(), tx4)
-		require.NoError(t, err)
-
-		t.Log(tx1.TxIDChainHash().String())
-		t.Log(tx2.TxIDChainHash().String())
-		t.Log(tx3.TxIDChainHash().String())
-		t.Log(tx4.TxIDChainHash().String())
-
-		nodeBytes, err := subtree.SerializeNodes()
-		require.NoError(t, err)
-
-		httpmock.RegisterResponder(
-			"GET",
-			`=~^/subtree/[a-z0-9]+\z`,
-			httpmock.NewBytesResponder(200, nodeBytes),
-		)
-
-		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
-
-		v := ValidateSubtree{
-			SubtreeHash:   *subtree.RootHash(),
-			BaseUrl:       "http://localhost:8000",
-			SubtreeHashes: nil,
-			AllowFailFast: false,
-		}
-		_, err = blockValidation.validateSubtree(context.Background(), v)
-		require.NoError(t, err)
-	})
-}
-
-// func TestBlockValidation_blessMissingTransaction(t *testing.T) {
-// 	t.Run("blessMissingTransaction - smoke test", func(t *testing.T) {
-// 		initPrometheusMetrics()
-
-// 		txMetaStore, validatorClient, txStore, _, deferFunc := setup()
-// 		defer deferFunc()
-
-// 		blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, nil, txStore, txMetaStore, validatorClient)
-// 		missingTx, err := blockValidation.getMissingTransaction(context.Background(), hash1, "http://localhost:8000")
-// 		require.NoError(t, err)
-
-// 		_, err = blockValidation.blessMissingTransaction(context.Background(), missingTx)
-// 		require.NoError(t, err)
-// 	})
-// }
 
 type MockSubtreeValidationClient struct {
 }
@@ -154,69 +81,7 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, subtreevalidation.
 	}
 }
 
-func TestBlockValidationValidateBigSubtree(t *testing.T) {
-	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing of the current size in improved cache constants
-	util.SkipVeryLongTests(t)
-	initPrometheusMetrics()
-
-	txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, deferFunc := setup()
-	defer deferFunc()
-
-	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
-	blockValidation.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
-
-	numberOfItems := 1_024 * 1_024
-
-	subtree, err := util.NewTreeByLeafCount(numberOfItems)
-	require.NoError(t, err)
-
-	for i := 0; i < numberOfItems; i++ {
-		tx := bt.NewTx()
-		_ = tx.AddOpReturnOutput([]byte(fmt.Sprintf("tx%d", i)))
-
-		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
-
-		_, err := blockValidation.txMetaStore.Create(context.Background(), tx)
-		require.NoError(t, err)
-	}
-
-	nodeBytes, err := subtree.SerializeNodes()
-	require.NoError(t, err)
-
-	// this calculation should not be in the test data, in the real world we would be getting this from the other miner
-	rootHash := subtree.RootHash()
-
-	httpmock.RegisterResponder(
-		"GET",
-		`=~^/subtree/[a-z0-9]+\z`,
-		httpmock.NewBytesResponder(200, nodeBytes),
-	)
-
-	f, _ := os.Create("cpu.prof")
-	defer f.Close()
-
-	_ = pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
-
-	start := time.Now()
-
-	v := ValidateSubtree{
-		SubtreeHash:   *rootHash,
-		BaseUrl:       "http://localhost:8000",
-		SubtreeHashes: nil,
-		AllowFailFast: false,
-	}
-	_, err = blockValidation.validateSubtree(context.Background(), v)
-	require.NoError(t, err)
-
-	t.Logf("Time taken: %s\n", time.Since(start))
-
-	f, _ = os.Create("mem.prof")
-	defer f.Close()
-	_ = pprof.WriteHeapProfile(f)
-}
-
-func TestBlockValidation_validateBlock_small(t *testing.T) {
+func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	initPrometheusMetrics()
 
@@ -314,7 +179,7 @@ func TestBlockValidation_validateBlock_small(t *testing.T) {
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
 
-func TestBlockValidation_validateBlock(t *testing.T) {
+func TestBlockValidationValidateBlock(t *testing.T) {
 
 	initPrometheusMetrics()
 	txCount := 1024
@@ -443,40 +308,3 @@ func TestBlockValidation_validateBlock(t *testing.T) {
 //
 //	return calculatedMerkleRootHash, nil
 //}
-
-func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
-	initPrometheusMetrics()
-
-	txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, deferFunc := setup()
-	defer deferFunc()
-
-	subtree, err := util.NewTreeByLeafCount(1)
-	require.NoError(t, err)
-	require.NoError(t, subtree.AddNode(*hash1, 121, 0))
-
-	nodeBytes, err := subtree.SerializeNodes()
-	require.NoError(t, err)
-
-	httpmock.RegisterResponder(
-		"GET",
-		`=~^/subtree/[a-z0-9]+\z`,
-		httpmock.NewBytesResponder(200, nodeBytes),
-	)
-
-	blockValidation := NewBlockValidation(ulogger.TestLogger{}, nil, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
-
-	// Create a mock context
-	ctx := context.Background()
-
-	// Create a mock ValidateSubtree struct
-	v := ValidateSubtree{
-		SubtreeHash:   *hash1,
-		BaseUrl:       "http://localhost:8000",
-		SubtreeHashes: nil,
-		AllowFailFast: false,
-	}
-
-	// Call the validateSubtreeInternal method
-	err = blockValidation.validateSubtreeInternal(ctx, v)
-	require.NoError(t, err)
-}
