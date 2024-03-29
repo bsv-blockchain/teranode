@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"math"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v6"
@@ -93,11 +95,19 @@ func init() {
 
 }
 
+type batchItem struct {
+	tx     *bt.Tx
+	txMeta *txmeta.Data
+	done   chan error
+}
+
 type Store struct {
-	client     *uaerospike.Client
-	namespace  string
-	expiration uint32
-	logger     ulogger.Logger
+	client       *uaerospike.Client
+	namespace    string
+	expiration   uint32
+	logger       ulogger.Logger
+	batchId      atomic.Uint64
+	storeBatcher *batcher.Batcher2[batchItem]
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
@@ -120,12 +130,87 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 		expiration = uint32(expiration64)
 	}
 
-	return &Store{
+	s := &Store{
 		client:     client,
 		namespace:  namespace,
 		expiration: expiration,
 		logger:     logger,
-	}, nil
+	}
+
+	storeBatcherEnabled := gocore.Config().GetBool("txmeta_store_storeBatcherEnabled", true)
+
+	if storeBatcherEnabled {
+		batchSize, _ := gocore.Config().GetInt("txmeta_store_storeBatcherSize", 256)
+		batchDuration, _ := gocore.Config().GetInt("txmeta_store_storeBatcherDurationMillis", 10)
+		duration := time.Duration(batchDuration) * time.Millisecond
+
+		sendBatch := func(batch []*batchItem) {
+			batchPolicy := util.GetAerospikeBatchPolicy()
+
+			batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, 0)
+			batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
+
+			batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
+
+			logger.Debugf("[STORE_BATCH] sending batch of %d txMetas", len(batch))
+
+			var hash *chainhash.Hash
+			var key *aerospike.Key
+			for idx, bItem := range batch {
+				hash = bItem.tx.TxIDChainHash()
+				key, err = aerospike.NewKey(s.namespace, "txmeta", hash[:])
+				if err != nil {
+					bItem.done <- err
+					continue
+				}
+
+				parentTxHashesInterface := make([]byte, 0, 32*len(bItem.txMeta.ParentTxHashes))
+				for _, v := range bItem.txMeta.ParentTxHashes {
+					parentTxHashesInterface = append(parentTxHashesInterface, v[:]...)
+				}
+
+				putOps := []*aerospike.Operation{
+					aerospike.PutOp(aerospike.NewBin("tx", bItem.tx.ExtendedBytes())),
+					aerospike.PutOp(aerospike.NewBin("fee", int(bItem.txMeta.Fee))),
+					aerospike.PutOp(aerospike.NewBin("sizeInBytes", int(bItem.txMeta.SizeInBytes))),
+					aerospike.PutOp(aerospike.NewBin("parentTxHashes", parentTxHashesInterface)),
+					aerospike.PutOp(aerospike.NewBin("firstSeen", time.Now().Unix())),
+					aerospike.PutOp(aerospike.NewBin("lockTime", int(bItem.tx.LockTime))),
+				}
+
+				record := aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
+				batchRecords[idx] = record
+			}
+
+			batchId := s.batchId.Add(1)
+
+			err = s.client.BatchOperate(batchPolicy, batchRecords)
+			if err != nil {
+				s.logger.Warnf("[STORE_BATCH][%s] Failed to batch store aerospike txMeta in batchId %d: %v\n", len(batch), batchId, err)
+				// don't return, check each record in the batch for errors and process accordingly
+			}
+
+			// batchOperate may have no errors, but some of the records may have failed
+			for idx, batchRecord := range batchRecords {
+				err = batchRecord.BatchRec().Err
+				if err != nil {
+					var aErr *aerospike.AerospikeError
+					if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+						s.logger.Warnf("[STORE_BATCH][%s:%d] txMeta already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
+						batch[idx].done <- txmeta.NewErrTxmetaAlreadyExists(hash)
+						continue
+					}
+
+					batch[idx].done <- fmt.Errorf("[STORE_BATCH][%s:%d] error in aerospike store batch record for txMeta (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
+				} else {
+					batch[idx].done <- nil
+				}
+			}
+		}
+		s.storeBatcher = batcher.New[batchItem](batchSize, duration, sendBatch, true)
+	}
+
+	return s, nil
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
@@ -311,6 +396,13 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	if err != nil {
 		e = err
 		return nil, err
+	}
+
+	if s.storeBatcher != nil {
+		done := make(chan error)
+		s.storeBatcher.Put(&batchItem{tx: tx, txMeta: txMeta, done: done})
+		err = <-done
+		return txMeta, err
 	}
 
 	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
