@@ -22,7 +22,6 @@ var (
 	//prometheusBlockValidationSetTxMetaQueueDuration          prometheus.Histogram
 	prometheusBlockValidationValidateBlock         prometheus.Counter
 	prometheusBlockValidationValidateBlockDuration prometheus.Histogram
-	prometheusBlockValidationValidateSubtree       prometheus.Counter
 	// tx meta cache stats
 	prometheusBlockValidationSetTXMetaCache        prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheFrpc    prometheus.Counter
@@ -154,14 +153,6 @@ func _initPrometheusMetrics() {
 			Name:      "validate_block_duration_seconds",
 			Help:      "Duration of validate block",
 			Buckets:   util.MetricsBucketsSeconds,
-		},
-	)
-
-	prometheusBlockValidationValidateSubtree = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
-			Name:      "validate_subtree",
-			Help:      "Number of subtrees validated",
 		},
 	)
 

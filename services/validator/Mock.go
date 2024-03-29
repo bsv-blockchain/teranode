@@ -26,7 +26,7 @@ func (m *MockValidatorClient) GetBlockHeight() (uint32, error) {
 	return m.BlockHeight, nil
 }
 
-func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx) error {
+func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight uint32) error {
 	if len(m.Errors) > 0 {
 		// return error and pop of stack
 		err := m.Errors[0]

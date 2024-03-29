@@ -206,6 +206,12 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 
 	retryCount := 0
 
+	// If the block height is not provided, use the genesis activation height.
+	blockHeight := request.BlockHeight
+	if blockHeight == 0 {
+		blockHeight = validator.GenesisActivationHeight
+	}
+
 	for {
 		gotLock, exists, err := tryLockIfNotExists(ctx, u.subtreeStore, hash)
 		if err != nil {
@@ -227,7 +233,7 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 			}
 
 			// Call the validateSubtreeInternal method
-			if err = u.validateSubtreeInternal(ctx, v); err != nil {
+			if err = u.validateSubtreeInternal(ctx, v, blockHeight); err != nil {
 				return nil, fmt.Errorf("Failed to validate subtree %s: %w", hash.String(), err)
 			}
 

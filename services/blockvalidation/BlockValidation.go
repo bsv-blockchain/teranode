@@ -23,7 +23,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/deduplicator"
-	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
@@ -52,11 +51,6 @@ type BlockValidation struct {
 	blockBloomFiltersBeingCreated      *util.SwissMap
 	setMinedChan                       chan *chainhash.Hash
 	stats                              *gocore.Stat
-}
-
-type missingTx struct {
-	tx  *bt.Tx
-	idx int
 }
 
 func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,

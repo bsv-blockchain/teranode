@@ -14,6 +14,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxoMemorystore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 )
 
@@ -74,7 +75,7 @@ func BenchmarkValidator(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if err := v.Validate(context.Background(), tx); err != nil {
+		if err := v.Validate(context.Background(), tx, validator.GenesisActivationHeight); err != nil {
 			log.Printf("ERROR: %v\n", err)
 		} else {
 			fmt.Println("asd")
@@ -98,7 +99,10 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 		panic(err)
 	}
 
-	err = v.Validate(context.Background(), coinbase)
+	height, err := util.ExtractCoinbaseHeight(coinbase)
+	require.NoError(t, err)
+
+	err = v.Validate(context.Background(), coinbase, height)
 	require.Error(t, err)
 }
 

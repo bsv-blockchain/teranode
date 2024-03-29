@@ -31,6 +31,8 @@ const (
 	coinbaseTxID                       = "0000000000000000000000000000000000000000000000000000000000000000"
 	MaxTxSigopsCountPolicyAfterGenesis = ^uint32(0) // UINT32_MAX
 
+	// https://en.wikipedia.org/wiki/Bitcoin_Cash#:~:text=The%20fork%20that%20created%20Bitcoin,second%20version%20or%20an%20altcoin.
+	ForkIDActivationHeight  = 478559
 	GenesisActivationHeight = 620538
 )
 
@@ -120,7 +122,7 @@ func (v *Validator) GetBlockHeight() (height uint32, err error) {
 }
 
 // TODO try to break this
-func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
+func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
 	start, stat, ctx := util.NewStatFromContext(cntxt, "Validate", v.stats)
 	defer func() {
 		stat.AddTime(start)
@@ -153,7 +155,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx) (err error) {
 		return errors.Join(ErrBadRequest, fmt.Errorf("[Validate][%s] coinbase transactions are not supported", tx.TxIDChainHash().String()))
 	}
 
-	if err = v.validateTransaction(traceSpan, tx); err != nil {
+	if err = v.validateTransaction(traceSpan, tx, blockHeight); err != nil {
 		return errors.Join(ErrBadRequest, fmt.Errorf("[Validate][%s] error validating transaction: %v", tx.TxID(), err))
 	}
 
@@ -428,7 +430,7 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostor
 	return nil
 }
 
-func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error {
+func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) error {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "validateTransaction")
 	defer func() {
 		stat.AddTime(start)
@@ -501,7 +503,7 @@ func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx) error
 	}
 
 	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	if err := v.checkScripts(tx); err != nil {
+	if err := v.checkScripts(tx, blockHeight); err != nil {
 		return err
 	}
 
@@ -636,19 +638,27 @@ func (v *Validator) pushDataCheck(tx *bt.Tx) error {
 	return nil
 }
 
-func (v *Validator) checkScripts(tx *bt.Tx) error {
+func (v *Validator) checkScripts(tx *bt.Tx, blockHeight uint32) error {
 	for i, in := range tx.Inputs {
 		prevOutput := &bt.Output{
 			Satoshis:      in.PreviousTxSatoshis,
 			LockingScript: in.PreviousTxScript,
 		}
 
-		if err := interpreter.NewEngine().Execute(
-			interpreter.WithTx(tx, i, prevOutput),
-			interpreter.WithForkID(),
-			interpreter.WithAfterGenesis(),
-			// interpreter.WithDebugger(&LogDebugger{}),
-		); err != nil {
+		opts := make([]interpreter.ExecutionOptionFunc, 0, 3)
+		opts = append(opts, interpreter.WithTx(tx, i, prevOutput))
+
+		if blockHeight >= ForkIDActivationHeight {
+			opts = append(opts, interpreter.WithForkID())
+		}
+
+		if blockHeight >= GenesisActivationHeight {
+			opts = append(opts, interpreter.WithAfterGenesis())
+		}
+
+		// opts = append(opts, interpreter.WithDebugger(&LogDebugger{}),
+
+		if err := interpreter.NewEngine().Execute(opts...); err != nil {
 			return fmt.Errorf("script execution failed: %w", err)
 		}
 	}

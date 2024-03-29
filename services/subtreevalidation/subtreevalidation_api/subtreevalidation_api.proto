@@ -24,6 +24,7 @@ message HealthResponse {
 message CheckSubtreeRequest {
   bytes hash = 1;
   string base_url = 2;
+  uint32 block_height = 3;
 }
 
 // swagger:model CheckSubtreeResponse

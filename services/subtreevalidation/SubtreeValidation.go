@@ -213,7 +213,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // 	return tx, nil
 // }
 
-func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx) (txMeta *txmeta.Data, err error) {
+func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32) (txMeta *txmeta.Data, err error) {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
 	defer func() {
 		stat.AddTime(startTotal)
@@ -233,7 +233,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx) (txMeta
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
 	// todo return tx meta data
-	err = u.validatorClient.Validate(ctx, tx)
+	err = u.validatorClient.Validate(ctx, tx, blockHeight)
 	if err != nil {
 		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
 		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to validate transaction [%s]", tx.TxID(), err.Error())
@@ -260,7 +260,7 @@ type ValidateSubtree struct {
 	AllowFailFast bool
 }
 
-func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree) error {
+func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32) error {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", v.SubtreeHash.String())
@@ -378,7 +378,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree)
 
 			u.logger.Infof("[validateSubtreeInternal][%s] [attempt #%d] processing %d missing tx for subtree instance", v.SubtreeHash.String(), attempt, len(missingTxHashesCompacted))
 
-			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseUrl, txMetaSlice)
+			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseUrl, txMetaSlice, blockHeight)
 			if err != nil {
 				return err
 			}
@@ -526,7 +526,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 }
 
 func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash,
-	missingTxHashes []txmeta.MissingTxHash, baseUrl string, txMetaSlice []*txmeta.Data) error {
+	missingTxHashes []txmeta.MissingTxHash, baseUrl string, txMetaSlice []*txmeta.Data, blockHeight uint32) error {
 
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:processMissingTransactions")
 	defer func() {
@@ -551,7 +551,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 			return fmt.Errorf("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
 		}
 
-		txMeta, err = u.blessMissingTransaction(spanCtx, mTx.tx)
+		txMeta, err = u.blessMissingTransaction(spanCtx, mTx.tx, blockHeight)
 		if err != nil {
 			return fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %w", subtreeHash.String(), mTx.tx.TxIDChainHash().String(), err)
 		}

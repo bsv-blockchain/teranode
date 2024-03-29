@@ -103,7 +103,7 @@ func (c *Client) GetBlockHeight() (uint32, error) {
 	return resp.Height, nil
 }
 
-func (c *Client) Validate(ctx context.Context, tx *bt.Tx) error {
+func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) error {
 	if c.batchSize == 0 {
 
 		if _, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{

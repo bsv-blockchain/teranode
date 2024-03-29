@@ -28,6 +28,7 @@ message HealthResponse {
 // swagger:model ValidateTransactionRequest
 message ValidateTransactionRequest {
   bytes transaction_data = 1;
+  uint32 block_height = 2;
 }
 
 // swagger:model ValidateTransactionResponse

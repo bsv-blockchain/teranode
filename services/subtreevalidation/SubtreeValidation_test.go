@@ -87,7 +87,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			SubtreeHashes: nil,
 			AllowFailFast: false,
 		}
-		err = blockValidation.validateSubtreeInternal(context.Background(), v)
+		err = blockValidation.validateSubtreeInternal(context.Background(), v, validator.GenesisActivationHeight)
 		require.NoError(t, err)
 	})
 }
@@ -186,7 +186,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 		SubtreeHashes: nil,
 		AllowFailFast: false,
 	}
-	err = blockValidation.validateSubtreeInternal(context.Background(), v)
+	err = blockValidation.validateSubtreeInternal(context.Background(), v, validator.GenesisActivationHeight)
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
@@ -229,6 +229,6 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	}
 
 	// Call the validateSubtreeInternal method
-	err = subtreeValidation.validateSubtreeInternal(ctx, v)
+	err = subtreeValidation.validateSubtreeInternal(ctx, v, validator.GenesisActivationHeight)
 	require.NoError(t, err)
 }

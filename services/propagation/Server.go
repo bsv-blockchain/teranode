@@ -418,7 +418,8 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 		return nil
 	})
 
-	if err := ps.validator.Validate(ctx, btTx); err != nil {
+	// All transactions entering Teranode can be assumed to be after Genesis activation height
+	if err := ps.validator.Validate(ctx, btTx, validator.GenesisActivationHeight); err != nil {
 		if errors.Is(err, validator.ErrInternal) {
 			err = fmt.Errorf("%v: %w", err, ErrInternal)
 		} else if errors.Is(err, validator.ErrBadRequest) {
