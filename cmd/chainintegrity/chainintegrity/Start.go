@@ -3,6 +3,7 @@ package chainintegrity
 import (
 	"context"
 	"flag"
+	txmetafactory "github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
 	"os"
 	"strings"
 
@@ -97,6 +98,18 @@ func Start() {
 		panic("utxostore config not found")
 	}
 	utxoStore, err := utxostore_factory.NewStore(context.Background(), logger, utxoStoreURL, "main", false)
+	if err != nil {
+		panic(err)
+	}
+
+	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no txmeta_store setting found")
+	}
+	txMetaStore, err := txmetafactory.New(logger, txMetaStoreURL)
 	if err != nil {
 		panic(err)
 	}
@@ -235,13 +248,22 @@ func Start() {
 						// check that the transaction exists in the tx store
 						tx, err = txStore.Get(ctx, node.Hash[:])
 						if err != nil {
-							logger.Errorf("failed to get transaction %s from tx store: %s", node, err)
-							continue
+							txMeta, err := txMetaStore.Get(ctx, &node.Hash)
+							if err != nil {
+								logger.Errorf("failed to get transaction %s from txmeta store: %s", node.Hash, err)
+								continue
+							}
+							if txMeta.Tx != nil {
+								tx = txMeta.Tx.ExtendedBytes()
+							} else {
+								logger.Errorf("failed to get transaction %s from tx store: %s", node.Hash, err)
+								continue
+							}
 						}
 
 						btTx, err = bt.NewTxFromBytes(tx)
 						if err != nil {
-							logger.Errorf("failed to parse transaction %s from tx store: %s", node, err)
+							logger.Errorf("failed to parse transaction %s from tx store: %s", node.Hash, err)
 							continue
 						}
 
