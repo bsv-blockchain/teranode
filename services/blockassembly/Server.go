@@ -281,58 +281,12 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 		go ba.startKafkaListener(ctx, kafkaURL)
 	}
 
-	// Experimental fRPC server - to test throughput at scale
-	frpcAddress, ok := gocore.Config().Get("blockassembly_frpcListenAddress")
-	if ok {
-		err = ba.frpcServer(ctx, frpcAddress)
-		if err != nil {
-			ba.logger.Errorf("failed to start fRPC server: %v", err)
-		}
-	}
-
 	// this will block
 	if err = util.StartGRPCServer(ctx, ba.logger, "blockassembly", func(server *grpc.Server) {
 		blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-func (ba *BlockAssembly) frpcServer(ctx context.Context, frpcAddress string) error {
-	ba.logger.Infof("Starting fRPC server on %s", frpcAddress)
-
-	frpcBa := &fRPC_BlockAssembly{
-		ba: ba,
-	}
-
-	s, err := blockassembly_api.NewServer(frpcBa, nil, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create fRPC server: %v", err)
-	}
-
-	concurrency, ok := gocore.Config().GetInt("blockassembly_frpcConcurrency")
-	if ok {
-		ba.logger.Infof("Setting fRPC server concurrency to %d", concurrency)
-		s.SetConcurrency(uint64(concurrency))
-	}
-
-	// run the server
-	go func() {
-		err := s.Start(frpcAddress)
-		if err != nil {
-			ba.logger.Errorf("failed to serve frpc: %v", err)
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		err := s.Shutdown()
-		if err != nil {
-			ba.logger.Errorf("failed to shutdown frpc server: %v", err)
-		}
-	}()
 
 	return nil
 }
@@ -492,7 +446,6 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	}
 
 	var batchError error = nil
-	txIdErrors := make([][]byte, 0, len(requests))
 	for _, req := range requests {
 		startTxTime := time.Now()
 		// create the subtree node
@@ -508,8 +461,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	}
 
 	return &blockassembly_api.AddTxBatchResponse{
-		Ok:         true,
-		TxIdErrors: txIdErrors,
+		Ok: true,
 	}, batchError
 }
 

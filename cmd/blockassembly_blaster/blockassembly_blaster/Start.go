@@ -31,7 +31,6 @@ var (
 	prometheusBlockAssemblerAddTx prometheus.Counter
 	workerCount                   int
 	grpcClient                    blockassembly_api.BlockAssemblyAPIClient
-	frpcClient                    *blockassembly_api.Client
 	broadcastProtocol             string
 	batchSize                     int
 )
@@ -103,24 +102,6 @@ func Start() {
 			panic(err)
 		}
 		grpcClient = blockassembly_api.NewBlockAssemblyAPIClient(conn)
-
-	case "frpc":
-		if blockassemblyFrpcAddress, ok := gocore.Config().Get("blockassembly_frpcAddress"); ok {
-			client, err := blockassembly_api.NewClient(nil, nil)
-			if err != nil {
-				panic(err)
-			}
-
-			err = client.Connect(blockassemblyFrpcAddress)
-			if err != nil {
-				panic(err)
-			} else {
-				frpcClient = client
-			}
-		} else {
-			panic(fmt.Errorf("must have valid blockassembly_frpcAddress"))
-		}
-
 	}
 
 	go func() {
@@ -209,17 +190,6 @@ func sendToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, req *
 		_, err := grpcClient.AddTx(ctx, req)
 		return err
 
-	case "frpc":
-		_, err := frpcClient.BlockAssemblyAPI.AddTx(ctx, &blockassembly_api.BlockassemblyApiAddTxRequest{
-			Txid:     req.Txid,
-			Fee:      req.Fee,
-			Locktime: req.Locktime,
-			Size:     req.Size,
-			Utxos:    req.Utxos,
-		})
-
-		return err
-
 	}
 
 	return nil
@@ -230,23 +200,6 @@ func sendBatchToBlockAssemblyServer(ctx context.Context, logger ulogger.Logger, 
 
 	case "grpc":
 		_, err := grpcClient.AddTxBatch(ctx, req)
-		return err
-
-	case "frpc":
-		batch := make([]*blockassembly_api.BlockassemblyApiAddTxRequest, len(req.TxRequests))
-		for i, req := range req.TxRequests {
-			batch[i] = &blockassembly_api.BlockassemblyApiAddTxRequest{
-				Txid:     req.Txid,
-				Fee:      req.Fee,
-				Locktime: req.Locktime,
-				Size:     req.Size,
-				Utxos:    req.Utxos,
-			}
-		}
-		_, err := frpcClient.BlockAssemblyAPI.AddTxBatch(ctx, &blockassembly_api.BlockassemblyApiAddTxBatchRequest{
-			TxRequests: batch,
-		})
-
 		return err
 
 	}
