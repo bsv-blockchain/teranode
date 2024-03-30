@@ -194,7 +194,10 @@ func (u *BlockValidation) start(ctx context.Context) {
 			err := u.setTxMined(ctx, blockHash)
 			if err != nil {
 				u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
+				// put the block back in the setMinedChan
+				u.setMinedChan <- blockHash
 			}
+
 			u.logger.Infof("[BlockValidation:start][%s] block setTxMined DONE in %s", blockHash.String(), time.Since(startTime))
 		}
 	}()
@@ -289,7 +292,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	blockID := ids[0]
 
 	// add the transactions in this block to the txMeta block IDs in the txMeta store
-	if err = model.UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, blockSubtrees, blockID); err != nil {
+	if err = model.UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, blockSubtrees, blockHash, blockID); err != nil {
 		return fmt.Errorf("[setMined][%s] error updating tx mined status: %w", block.Hash().String(), err)
 	}
 

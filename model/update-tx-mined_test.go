@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
@@ -83,6 +84,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 			ulogger.TestLogger{},
 			txMetaStore,
 			subtrees,
+			&chainhash.Hash{},
 			1,
 		)
 		require.NoError(t, err)
