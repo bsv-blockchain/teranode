@@ -681,6 +681,7 @@ func (s *Store) storeUtxoInBatches(ctx context.Context, hash chainhash.Hash, idx
 		if err != nil {
 			return fmt.Errorf("[storeUtxoInBatches][%s:%d] error in aerospike store record: %w", hash.String(), idx, err)
 		}
+		prometheusUtxoStore.Add(1)
 	}
 
 	return nil
@@ -764,6 +765,8 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 			_ = s.UnSpend(ctx, spentSpends)
 			return fmt.Errorf("error in aerospike spend record: %w", err)
 		}
+
+		prometheusUtxoSpend.Add(float64(len(spends)))
 
 		return nil
 	}

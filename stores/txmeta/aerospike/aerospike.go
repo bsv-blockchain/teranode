@@ -401,8 +401,14 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 	if s.storeBatcher != nil {
 		done := make(chan error)
 		s.storeBatcher.Put(&batchItem{tx: tx, txMeta: txMeta, done: done})
+
 		err = <-done
-		return txMeta, err
+		if err != nil {
+			return nil, err
+		}
+
+		prometheusTxMetaSet.Inc()
+		return txMeta, nil
 	}
 
 	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
