@@ -91,6 +91,19 @@ func (u *Server) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte, values 
 	return nil
 }
 
+func (u *Server) DelTxMetaCache(ctx context.Context, hash *chainhash.Hash) error {
+	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:DelTxMetaCache")
+		defer func() {
+			span.Finish()
+		}()
+
+		return cache.Delete(ctx, hash)
+	}
+
+	return nil
+}
+
 func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) error {
 	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
 		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:DelTxMetaCacheMulti")

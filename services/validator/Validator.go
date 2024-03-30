@@ -257,6 +257,12 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Has
 		err = errors.Join(err, fmt.Errorf("error deleting tx %s from tx meta utxoStore: %v", txID.String(), metaErr))
 	}
 
+	if v.txMetaKafkaChan != nil {
+		startKafka := time.Now()
+		v.txMetaKafkaChan <- append(txID.CloneBytes(), []byte("delete")...)
+		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
+	}
+
 	return err
 }
 

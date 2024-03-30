@@ -16,6 +16,7 @@ var (
 	prometheusSubtreeValidationBlessMissingTransaction         prometheus.Counter
 	prometheusSubtreeValidationBlessMissingTransactionDuration prometheus.Histogram
 	prometheusSubtreeValidationSetTXMetaCacheKafka             prometheus.Histogram
+	prometheusSubtreeValidationDelTXMetaCacheKafka             prometheus.Histogram
 	prometheusSubtreeValidationSetTXMetaCacheKafkaErrors       prometheus.Counter
 )
 
@@ -84,6 +85,15 @@ func _initPrometheusMetrics() {
 			Namespace: "subtreevalidation",
 			Name:      "set_tx_meta_cache_kafka_micros",
 			Help:      "Duration of setting tx meta cache from kafka",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationDelTXMetaCacheKafka = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "subtreevalidation",
+			Name:      "del_tx_meta_cache_kafka_micros",
+			Help:      "Duration of deleting tx meta cache from kafka",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
