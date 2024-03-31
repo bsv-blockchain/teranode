@@ -84,9 +84,9 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 	}
 
 	tb := &TeranodeBridge{
-		txCache:               expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
-		subtreeCache:          expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
-		blockCache:            expiringmap.New[chainhash.Hash, *wrapper](2 * time.Minute),
+		txCache:               expiringmap.New[chainhash.Hash, *wrapper](30 * time.Minute),
+		subtreeCache:          expiringmap.New[chainhash.Hash, *wrapper](30 * time.Minute),
+		blockCache:            expiringmap.New[chainhash.Hash, *wrapper](30 * time.Minute),
 		blockValidationClient: blockvalidation.NewClient(context.TODO(), log),
 		blockchainClient:      blockchainClient,
 		baseUrl:               baseUrl.String(),
