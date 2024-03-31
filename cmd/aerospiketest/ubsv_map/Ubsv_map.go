@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"sync"
 
-	// "github.com/aerospike/aerospike-client-go/v6"
+	// "github.com/aerospike/aerospike-client-go/v7"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"

@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aerospike/aerospike-client-go/v6"
-	asl "github.com/aerospike/aerospike-client-go/v6/logger"
-	"github.com/aerospike/aerospike-client-go/v6/types"
+	"github.com/aerospike/aerospike-client-go/v7"
+	asl "github.com/aerospike/aerospike-client-go/v7/logger"
+	"github.com/aerospike/aerospike-client-go/v7/types"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -296,8 +296,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 
 func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	batchPolicy := util.GetAerospikeBatchPolicy()
-
-	//policy := util.GetAerospikeBatchReadPolicy()
+	policy := util.GetAerospikeBatchReadPolicy()
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(items))
 
@@ -312,7 +311,7 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 			bins = fields
 		}
 
-		record := aerospike.NewBatchRead(key, bins)
+		record := aerospike.NewBatchRead(policy, key, bins)
 		// Add to batch
 		batchRecords[idx] = record
 	}

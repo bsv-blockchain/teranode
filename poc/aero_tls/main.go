@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/aerospike/aerospike-client-go/v6"
+	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/util"
 )
 

@@ -5,7 +5,7 @@ package aerospikemap
 import (
 	"context"
 	"fmt"
-	aero "github.com/aerospike/aerospike-client-go/v6"
+	aero "github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospikemap"
 	"github.com/bitcoin-sv/ubsv/ulogger"

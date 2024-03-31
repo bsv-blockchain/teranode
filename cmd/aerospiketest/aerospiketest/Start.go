@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	asl "github.com/aerospike/aerospike-client-go/v6/logger"
+	asl "github.com/aerospike/aerospike-client-go/v7/logger"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/direct"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/nothing"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/simple"

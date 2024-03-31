@@ -11,7 +11,7 @@ import (
 	"sync"
 	"syscall"
 
-	asl "github.com/aerospike/aerospike-client-go/v6/logger"
+	asl "github.com/aerospike/aerospike-client-go/v7/logger"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/direct"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/nothing"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/simple"
