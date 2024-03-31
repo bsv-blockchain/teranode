@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -67,7 +66,7 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) {
 		}
 
 		// Call the validateSubtreeInternal method
-		if err = u.validateSubtreeInternal(ctx, v, validator.GenesisActivationHeight); err != nil {
+		if err = u.validateSubtreeInternal(ctx, v, util.GenesisActivationHeight); err != nil {
 			u.logger.Errorf("Failed to validate subtree %s: %v", hash.String(), err)
 		}
 	}

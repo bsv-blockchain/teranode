@@ -310,6 +310,10 @@ func (r *Redis) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 		case <-ctx.Done():
 			return fmt.Errorf("timeout spending %d of %d utxos", i, len(spends))
 		default:
+			if spend == nil {
+				continue
+			}
+
 			if err = spendUtxo(ctx, r.rdb, spend, r.getBlockHeight(), r.spentUtxoTtl); err != nil {
 				// revert the spent utxos
 				_ = r.UnSpend(ctx, spentSpends)

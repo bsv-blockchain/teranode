@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,7 +46,7 @@ func TestValidatorErrors(t *testing.T) {
 
 	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}))
 	require.NoError(t, err)
-	err = v.Validate(context.Background(), tx, validator.GenesisActivationHeight)
+	err = v.Validate(context.Background(), tx, util.GenesisActivationHeight)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, validator.ErrBadRequest))
 }

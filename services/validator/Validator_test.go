@@ -75,7 +75,7 @@ func BenchmarkValidator(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if err := v.Validate(context.Background(), tx, validator.GenesisActivationHeight); err != nil {
+		if err := v.Validate(context.Background(), tx, util.GenesisActivationHeight); err != nil {
 			log.Printf("ERROR: %v\n", err)
 		} else {
 			fmt.Println("asd")

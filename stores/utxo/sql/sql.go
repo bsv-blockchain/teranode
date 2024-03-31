@@ -414,6 +414,10 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 
 	var result sql.Result
 	for _, spend := range spends {
+		if spend == nil {
+			continue
+		}
+
 		q := `
 			UPDATE utxos
 			SET tx_id = $1

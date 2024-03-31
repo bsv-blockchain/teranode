@@ -13,7 +13,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
-	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -220,7 +219,7 @@ func (v *Server) Start(ctx context.Context) error {
 						}
 
 						validationClient := blockvalidation.NewClient(ctx, v.logger)
-						if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.AssetHttpAddress, validator.GenesisActivationHeight, false); err != nil {
+						if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.AssetHttpAddress, util.GenesisActivationHeight, false); err != nil {
 							v.logger.Errorf("[Asset] error validating block from %s: %s", p.AssetHttpAddress, err)
 						}
 					}

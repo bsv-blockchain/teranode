@@ -133,6 +133,10 @@ func (m *Memory) Spend(_ context.Context, spends []*utxostore.Spend) (err error)
 	defer m.mu.Unlock()
 
 	for idx, spend := range spends {
+		if spend == nil {
+			continue
+		}
+
 		err = m.spendUtxo(spend)
 		if err != nil {
 			for i := 0; i < idx; i++ {

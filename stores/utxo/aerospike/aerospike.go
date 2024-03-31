@@ -6,13 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
-	"golang.org/x/sync/errgroup"
 	"math"
 	"net/url"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
@@ -740,6 +741,10 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 	if s.spendBatcher != nil {
 		g := errgroup.Group{}
 		for _, spend := range spends {
+			if spend == nil {
+				continue
+			}
+
 			spend := spend
 			g.Go(func() error {
 				done := make(chan error)

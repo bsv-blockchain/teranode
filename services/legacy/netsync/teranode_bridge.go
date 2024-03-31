@@ -257,7 +257,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 
 			}
 
-			if !tx.IsExtended() {
+			if !util.IsExtended(tx, uint32(currentHeight)) {
 				return fmt.Errorf("tx %s is not extended", txHash)
 			}
 		}

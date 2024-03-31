@@ -29,10 +29,6 @@ const (
 	MaxSatoshis                        = 21_000_000_00_000_000
 	coinbaseTxID                       = "0000000000000000000000000000000000000000000000000000000000000000"
 	MaxTxSigopsCountPolicyAfterGenesis = ^uint32(0) // UINT32_MAX
-
-	// https://en.wikipedia.org/wiki/Bitcoin_Cash#:~:text=The%20fork%20that%20created%20Bitcoin,second%20version%20or%20an%20altcoin.
-	ForkIDActivationHeight  = 478559
-	GenesisActivationHeight = 620538
 )
 
 var (
@@ -342,8 +338,14 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 
 	// check the utxos
 	txIDChainHash := tx.TxIDChainHash()
+
 	spends := make([]*utxostore.Spend, len(tx.Inputs))
+
 	for idx, input := range tx.Inputs {
+		if input.PreviousTxSatoshis == 0 {
+			continue // There are some old transactions (e.g. d5a13dcb1ad24dbffab91c3c2ffe7aea38d5e84b444c0014eb6c7c31fe8e23fc) that have 0 satoshis
+		}
+
 		hash, err = util.UTXOHashFromInput(input)
 		if err != nil {
 			utxoSpan.RecordError(err)
@@ -460,7 +462,7 @@ func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx, block
 
 	// 0) Check whether we have a complete transaction in extended format, with all input information
 	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
-	if !tx.IsExtended() {
+	if !util.IsExtended(tx, blockHeight) {
 		return fmt.Errorf("transaction is not in extended format")
 	}
 
@@ -541,7 +543,7 @@ func (v *Validator) checkOutputs(tx *bt.Tx) error {
 	if err != nil {
 		return err
 	}
-	if height >= GenesisActivationHeight {
+	if height >= util.GenesisActivationHeight {
 		minOutput = bt.DustLimit
 	}
 
@@ -656,11 +658,11 @@ func (v *Validator) checkScripts(tx *bt.Tx, blockHeight uint32) error {
 		opts := make([]interpreter.ExecutionOptionFunc, 0, 3)
 		opts = append(opts, interpreter.WithTx(tx, i, prevOutput))
 
-		if blockHeight >= ForkIDActivationHeight {
+		if blockHeight >= util.ForkIDActivationHeight {
 			opts = append(opts, interpreter.WithForkID())
 		}
 
-		if blockHeight >= GenesisActivationHeight {
+		if blockHeight >= util.GenesisActivationHeight {
 			opts = append(opts, interpreter.WithAfterGenesis())
 		}
 

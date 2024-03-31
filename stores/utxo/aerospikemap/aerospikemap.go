@@ -348,6 +348,10 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 			return fmt.Errorf("context cancelled spending %d of %d utxos", i, len(spends))
 
 		default:
+			if spend == nil {
+				continue
+			}
+
 			err = s.spendUtxo(policy, spend)
 			if err != nil {
 				// error encountered, reverse all spends and return error
