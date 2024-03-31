@@ -49,7 +49,7 @@ func (m *MockSubtreeValidationClient) Health(ctx context.Context) (int, string, 
 	return 0, "MockValidator", nil
 }
 
-func (m *MockSubtreeValidationClient) CheckSubtree(ctx context.Context, subtreeHash chainhash.Hash, baseURL string) error {
+func (m *MockSubtreeValidationClient) CheckSubtree(ctx context.Context, subtreeHash chainhash.Hash, baseURL string, blockHeight uint32) error {
 	return nil
 }
 

@@ -221,12 +221,7 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 		}, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
 	}
 
-	blockHeight := req.BlockHeight
-	if blockHeight == 0 {
-		blockHeight = GenesisActivationHeight
-	}
-
-	err = v.validator.Validate(ctx, tx, blockHeight)
+	err = v.validator.Validate(ctx, tx, req.BlockHeight)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
 		traceSpan.RecordError(err)

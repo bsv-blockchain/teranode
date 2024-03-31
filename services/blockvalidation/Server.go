@@ -34,14 +34,16 @@ import (
 )
 
 type processBlockFound struct {
-	hash    *chainhash.Hash
-	baseURL string
-	errCh   chan error
+	hash        *chainhash.Hash
+	blockHeight uint32
+	baseURL     string
+	errCh       chan error
 }
 
 type processBlockCatchup struct {
-	block   *model.Block
-	baseURL string
+	block       *model.Block
+	blockHeight uint32
+	baseURL     string
 }
 
 // Server type carries the logger within it
@@ -199,7 +201,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
 					// TODO optimize this for the valid chain, not processing everything ???
 					u.logger.Infof("[Init] processing block found on channel [%s]", b.hash.String())
-					if err := u.processBlockFound(ctx1, b.hash, b.baseURL); err != nil {
+					if err := u.processBlockFound(ctx1, b.hash, b.baseURL, b.blockHeight); err != nil {
 						u.logger.Errorf("[Init] failed to process block [%s] [%v]", b.hash.String(), err)
 					}
 
@@ -434,9 +436,10 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	go func() {
 		u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
 		u.blockFoundCh <- processBlockFound{
-			hash:    hash,
-			baseURL: req.GetBaseUrl(),
-			errCh:   errCh,
+			hash:        hash,
+			blockHeight: req.BlockHeight,
+			baseURL:     req.GetBaseUrl(),
+			errCh:       errCh,
 		}
 		prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 	}()
@@ -451,7 +454,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
-func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string) error {
+func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string, blockHeight uint32) error {
 	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidationServer:processBlockFound")
 	span.LogKV("hash", hash.String())
 	start, stat, ctx := util.NewStatFromContext(spanCtx, "processBlockFound", u.stats)
@@ -507,8 +510,9 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 		go func() {
 			u.logger.Infof("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())
 			u.catchupCh <- processBlockCatchup{
-				block:   block,
-				baseURL: baseUrl,
+				block:       block,
+				blockHeight: blockHeight,
+				baseURL:     baseUrl,
 			}
 			prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 		}()

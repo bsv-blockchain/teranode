@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/bitcoin-sv/ubsv/.history/services/validator"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/asset/centrifuge_impl"
@@ -219,7 +220,7 @@ func (v *Server) Start(ctx context.Context) error {
 						}
 
 						validationClient := blockvalidation.NewClient(ctx, v.logger)
-						if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.AssetHttpAddress, false); err != nil {
+						if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.AssetHttpAddress, validator.GenesisActivationHeight, false); err != nil {
 							v.logger.Errorf("[Asset] error validating block from %s: %s", p.AssetHttpAddress, err)
 						}
 					}

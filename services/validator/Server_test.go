@@ -52,11 +52,13 @@ func TestGRPCStreaming(t *testing.T) {
 
 	err = stream.Send(&validator_api.ValidateTransactionRequest{
 		TransactionData: tx[:50],
+		BlockHeight:     GenesisActivationHeight,
 	})
 	require.NoError(t, err)
 
 	err = stream.Send(&validator_api.ValidateTransactionRequest{
 		TransactionData: tx[50:],
+		BlockHeight:     GenesisActivationHeight,
 	})
 	require.NoError(t, err)
 

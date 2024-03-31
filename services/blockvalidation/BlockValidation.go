@@ -639,6 +639,15 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(validateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
 
+	var blockHeight uint32 // Height 0 is before ForkID and Genesis activation
+	if block.Header.Version > 1 {
+		var err error
+		blockHeight, err = block.ExtractCoinbaseHeight()
+		if err != nil {
+			return fmt.Errorf("[validateBlockSubtrees][%s] failed to extract coinbase height: %v", block.Hash().String(), err)
+		}
+	}
+
 	//missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
@@ -648,12 +657,12 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 			// get subtree from store
 			subtreeExists, err := u.GetSubtreeExists(gCtx, subtreeHash)
 			if err != nil {
-				return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String()), err)
+				return fmt.Errorf("[validateBlockSubtrees][%s] failed to check if subtree exists in store: %w", subtreeHash.String(), err)
 			}
 			if !subtreeExists {
 				// we don't have the subtree, so we need to process it in the subtree validation service
 				// this will also store the subtree in the store and block while the subtree is being processed
-				err = u.subtreeValidationClient.CheckSubtree(spanCtx, *subtreeHash, baseUrl)
+				err = u.subtreeValidationClient.CheckSubtree(spanCtx, *subtreeHash, baseUrl, blockHeight)
 				if err != nil {
 					return fmt.Errorf("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service: %v", subtreeHash.String(), err)
 				}

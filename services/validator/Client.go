@@ -108,6 +108,7 @@ func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) er
 
 		if _, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
 			TransactionData: tx.ExtendedBytes(),
+			BlockHeight:     blockHeight,
 		}); err != nil {
 			return err
 		}
@@ -117,6 +118,7 @@ func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) er
 		/* batch mode */
 		c.batchCh <- &validator_api.ValidateTransactionRequest{
 			TransactionData: tx.ExtendedBytes(),
+			BlockHeight:     blockHeight,
 		}
 
 	}

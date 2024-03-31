@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/.history/services/validator"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -102,7 +103,7 @@ func (c *Peer) Start(ctx context.Context) error {
 				case asset_api.Type_Block:
 					c.logger.Debugf("Received BLOCK notification: %s", hash.String())
 
-					if err = c.validationClient.BlockFound(ctx, hash, resp.BaseUrl, false); err != nil {
+					if err = c.validationClient.BlockFound(ctx, hash, resp.BaseUrl, validator.GenesisActivationHeight, false); err != nil {
 						c.logger.Errorf("could not validate block: %v", err)
 						continue
 					}

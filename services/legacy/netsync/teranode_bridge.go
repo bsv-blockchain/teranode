@@ -339,7 +339,7 @@ func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
 
 	log.Warnf("HandleBlockConnected received for %s", block.Hash())
 
-	if err := tb.blockValidationClient.BlockFound(context.TODO(), block.Hash(), tb.baseUrl, true); err != nil {
+	if err := tb.blockValidationClient.BlockFound(context.TODO(), block.Hash(), tb.baseUrl, uint32(block.Height()), true); err != nil {
 		return fmt.Errorf("error broadcasting block from %s: %w", tb.baseUrl, err)
 	}
 
@@ -360,7 +360,9 @@ func (tb *TeranodeBridge) BlockHandler(c echo.Context) error {
 	}
 
 	w.readCount++
-	log.Warnf("block %s read %d times", hash, w.readCount)
+	if w.readCount > 1 {
+		log.Warnf("block %s read %d times", hash, w.readCount)
+	}
 
 	return c.Blob(http.StatusOK, "application/octet-stream", w.bytes)
 }
@@ -377,7 +379,9 @@ func (tb *TeranodeBridge) SubtreeHandler(c echo.Context) error {
 	}
 
 	w.readCount++
-	log.Warnf("subtree %s read %d times", hash, w.readCount)
+	if w.readCount > 1 {
+		log.Warnf("subtree %s read %d times", hash, w.readCount)
+	}
 
 	return c.Blob(http.StatusOK, "application/octet-stream", w.bytes)
 }
@@ -394,7 +398,9 @@ func (tb *TeranodeBridge) TxHandler(c echo.Context) error {
 	}
 
 	w.readCount++
-	log.Warnf("tx %s read %d times", hash, w.readCount)
+	if w.readCount > 1 {
+		log.Warnf("tx %s read %d times", hash, w.readCount)
+	}
 
 	return c.Blob(http.StatusOK, "application/octet-stream", w.bytes)
 }
@@ -451,7 +457,9 @@ func (tb *TeranodeBridge) TxBatchHandler() func(c echo.Context) error {
 			}
 
 			w.readCount++
-			log.Warnf("txs %s read %d times SIMON", hash, w.readCount)
+			if w.readCount > 1 {
+				log.Warnf("txs %s read %d times", hash, w.readCount)
+			}
 
 			responseBytes = append(responseBytes, w.bytes...)
 

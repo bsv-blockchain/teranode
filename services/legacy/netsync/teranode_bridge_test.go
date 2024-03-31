@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,5 +70,22 @@ func TestTXc99c49da4c38af669dea436d3e73780dfdb6c1ecf9958baa52960e8baee30e73(t *t
 	ctx := context.Background()
 
 	err = v.Validate(ctx, tx, 110300)
+	require.NoError(t, err)
+}
+
+func TestTXfb0a1d8d34fa5537e461ac384bac761125e1bfa7fec286fa72511240fa66864d(t *testing.T) {
+	tx, err := bt.NewTxFromString("010000000000000000ef012316aac445c13ff31af5f3d1e2cebcada83e54ba10d15e01f49ec28bddc285aa000000008e4b3048022200002b83d59c1d23c08efd82ee0662fec23309c3adbcbd1f0b8695378db4b14e736602220000334a96676e58b1bb01784cb7c556dd8ce1c220171904da22e18fe1e7d1510db5014104d0fe07ff74c9ef5b00fed1104fad43ecf72dbab9e60733e4f56eacf24b20cf3b8cd945bcabcc73ba0158bf9ce769d43e94bd58c5c7e331a188922b3fe9ca1f5affffffffc0c62d00000000001976a9147a2a3b481ca80c4ba7939c54d9278e50189d94f988ac01c0c62d00000000001976a9147a2a3b481ca80c4ba7939c54d9278e50189d94f988ac00000000")
+	require.NoError(t, err)
+
+	assert.Equal(t, "fb0a1d8d34fa5537e461ac384bac761125e1bfa7fec286fa72511240fa66864d", tx.TxIDChainHash().String())
+
+	ns := &NullStore{}
+
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	err = v.Validate(ctx, tx, 124276)
 	require.NoError(t, err)
 }
