@@ -60,7 +60,7 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
 	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
-	logger.Infof("optimisticMining = %s", optimisticMining)
+	logger.Infof("optimisticMining = %v", optimisticMining)
 
 	bv := &BlockValidation{
 		logger:                             logger,
@@ -115,7 +115,6 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 
 					if notification.Type == model.NotificationType_Block {
 						// push block hash to the setMinedChan
-						_ = bv.blockHashesCurrentlyValidated.Put(*notification.Hash)
 						bv.setMinedChan <- notification.Hash
 					}
 				}
@@ -264,6 +263,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	var block *model.Block
 	var ids []uint32
 
+	_ = u.blockHashesCurrentlyValidated.Put(*block.Hash())
 	defer func() {
 		_ = u.blockHashesCurrentlyValidated.Delete(*block.Hash())
 	}()

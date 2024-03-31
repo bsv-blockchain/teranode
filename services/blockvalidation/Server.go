@@ -486,7 +486,8 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 		u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock)
 
 	if blockBeingFinalized {
-		u.logger.Infof("[processBlockFound][%s] parent block is being validated (hash: %s), waiting for it to finish", hash.String(), block.Header.HashPrevBlock.String())
+		u.logger.Infof("[processBlockFound][%s] parent block is being validated (hash: %s), waiting for it to finish: %v - %v", hash.String(), block.Header.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock))
+		retries := 0
 		for {
 			blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) ||
 				u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock)
@@ -494,7 +495,13 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 			if !blockBeingFinalized {
 				break
 			}
+
+			if (retries % 10) == 0 {
+				u.logger.Infof("[processBlockFound][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: %v - %v", hash.String(), retries, block.Header.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock))
+			}
+
 			time.Sleep(1 * time.Second)
+			retries++
 		}
 		u.logger.Infof("[processBlockFound][%s] parent block is done being validated", hash.String())
 	}
@@ -625,7 +632,8 @@ LOOP:
 				u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock)
 
 			if blockBeingFinalized {
-				u.logger.Infof("[catchup][%s] parent block is being validated (hash: %s), waiting for it to finish", fromBlock.Hash().String(), blockHeader.HashPrevBlock.String())
+				u.logger.Infof("[catchup][%s] parent block is being validated (hash: %s), waiting for it to finish: %v - %v", fromBlock.Hash().String(), blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock))
+				retries := 0
 				for {
 					blockBeingFinalized = u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock) ||
 						u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock)
@@ -633,7 +641,13 @@ LOOP:
 					if !blockBeingFinalized {
 						break
 					}
+
+					if (retries % 10) == 0 {
+						u.logger.Infof("[catchup][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: %v - %v", fromBlock.Hash().String(), retries, blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock))
+					}
+
 					time.Sleep(1 * time.Second)
+					retries++
 				}
 				u.logger.Infof("[catchup][%s] parent block is done being validated", fromBlock.Hash().String())
 			}
