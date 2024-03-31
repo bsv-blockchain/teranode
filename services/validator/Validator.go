@@ -139,13 +139,13 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 			buf := make([]byte, 1024)
 			runtime.Stack(buf, false)
 
-			if reservedUtxos != nil && len(*reservedUtxos) > 0 {
-				// TODO is this correct in the recover? should we be reversing the utxos?
-				spanCtx := tracing.Start(ctx, "Validator:Validate:Recover")
-				if reverseErr := v.reverseSpends(spanCtx, *reservedUtxos); reverseErr != nil {
-					v.logger.Errorf("[Validate][%s] error reversing utxos: %v", tx.TxID(), reverseErr)
-				}
-			}
+			//if reservedUtxos != nil && len(*reservedUtxos) > 0 {
+			//	// TODO is this correct in the recover? should we be reversing the utxos?
+			//	spanCtx := tracing.Start(ctx, "Validator:Validate:Recover")
+			//	if reverseErr := v.reverseSpends(spanCtx, *reservedUtxos); reverseErr != nil {
+			//		v.logger.Errorf("[Validate][%s] error reversing utxos: %v", tx.TxID(), reverseErr)
+			//	}
+			//}
 
 			v.logger.Errorf("[Validate][%s] Validate recover [stack=%s]: %v", tx.TxID(), string(buf), r)
 		}
@@ -191,6 +191,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 			return nil
 		}
 
+		v.logger.Errorf("[Validate][%s] error registering tx in metaStore: %v", tx.TxIDChainHash().String(), err)
 		if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
 			err = errors.Join(err, fmt.Errorf("error reversing utxo spends: %v", reverseErr))
 		}
@@ -230,6 +231,8 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 	// then we store the new utxos from the tx
 	err = v.storeUtxos(setSpan.Ctx, tx)
 	if err != nil {
+		v.logger.Errorf("[Validate][%s] error storing tx in utxo utxoStore: %v", tx.TxIDChainHash().String(), err)
+
 		// TODO We need to make sure that these actions are actually completed
 		//      Push into a queue to be processed later?
 
