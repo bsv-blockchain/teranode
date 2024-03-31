@@ -263,9 +263,9 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	var block *model.Block
 	var ids []uint32
 
-	_ = u.blockHashesCurrentlyValidated.Put(*block.Hash())
+	_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 	defer func() {
-		_ = u.blockHashesCurrentlyValidated.Delete(*block.Hash())
+		_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
 	}()
 
 	cachedBlock, blockWasAlreadyCached := u.lastValidatedBlocks.Get(*blockHash)
