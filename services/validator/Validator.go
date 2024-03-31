@@ -139,7 +139,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 			buf := make([]byte, 1024)
 			runtime.Stack(buf, false)
 
-			if len(*reservedUtxos) > 0 {
+			if reservedUtxos != nil && len(*reservedUtxos) > 0 {
 				// TODO is this correct in the recover? should we be reversing the utxos?
 				spanCtx := tracing.Start(ctx, "Validator:Validate:Recover")
 				if reverseErr := v.reverseSpends(spanCtx, *reservedUtxos); reverseErr != nil {
