@@ -249,13 +249,19 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 							)
 						}
 
-						switch subStat.(type) {
+						switch subStat := subStat.(type) {
 						case int16:
-							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat.(int16)))
+							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
 						case int:
-							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat.(int)))
+							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
+						case int32:
+							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
+						case int64:
+							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
+						case float32:
+							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
 						case float64:
-							aerospikePrometheusMetrics[prometheusKey].Add(subStat.(float64))
+							aerospikePrometheusMetrics[prometheusKey].Add(subStat)
 						default:
 							logger.Errorf("Unknown type for aerospike stat %s: %T", subKey, subStat)
 						}
