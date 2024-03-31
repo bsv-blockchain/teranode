@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"runtime"
 	"time"
 
 	"github.com/TAAL-GmbH/arc/api"
@@ -135,20 +134,20 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 	defer func(reservedUtxos *[]*utxostore.Spend) {
 		traceSpan.Finish()
 
-		if r := recover(); r != nil {
-			buf := make([]byte, 1024)
-			runtime.Stack(buf, false)
-
-			//if reservedUtxos != nil && len(*reservedUtxos) > 0 {
-			//	// TODO is this correct in the recover? should we be reversing the utxos?
-			//	spanCtx := tracing.Start(ctx, "Validator:Validate:Recover")
-			//	if reverseErr := v.reverseSpends(spanCtx, *reservedUtxos); reverseErr != nil {
-			//		v.logger.Errorf("[Validate][%s] error reversing utxos: %v", tx.TxID(), reverseErr)
-			//	}
-			//}
-
-			v.logger.Errorf("[Validate][%s] Validate recover [stack=%s]: %v", tx.TxID(), string(buf), r)
-		}
+		//if r := recover(); r != nil {
+		//	buf := make([]byte, 1024)
+		//	runtime.Stack(buf, false)
+		//
+		//	//if reservedUtxos != nil && len(*reservedUtxos) > 0 {
+		//	//	// TODO is this correct in the recover? should we be reversing the utxos?
+		//	//	spanCtx := tracing.Start(ctx, "Validator:Validate:Recover")
+		//	//	if reverseErr := v.reverseSpends(spanCtx, *reservedUtxos); reverseErr != nil {
+		//	//		v.logger.Errorf("[Validate][%s] error reversing utxos: %v", tx.TxID(), reverseErr)
+		//	//	}
+		//	//}
+		//
+		//	v.logger.Errorf("[Validate][%s] Validate recover [stack=%s]: %v", tx.TxID(), string(buf), r)
+		//}
 	}(&spentUtxos)
 
 	if tx.IsCoinbase() {
