@@ -80,7 +80,7 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 	subtreeGroup := errgroup.Group{}
 	subtreeGroup.SetLimit(subtreeGroupConcurrency)
 
-	blockFoundChBuffer, _ := gocore.Config().GetInt("blockvalidation_blockFoundCh_buffer_size", 200)
+	blockFoundChBuffer, _ := gocore.Config().GetInt("blockvalidation_blockFoundCh_buffer_size", 1000) // during testing often mine 1000 blocks to begin with
 	catchupChBuffer, _ := gocore.Config().GetInt("blockvalidation_catchupCh_buffer_size", 10)
 
 	bVal := &Server{
