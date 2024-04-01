@@ -2,10 +2,16 @@
 
 ## Index
 
-1. [Description](#1-description)
+1. [Introduction](#1-introduction)
+- [1.1. Summary](#11-summary)
+- [1.2. Data Transformation for Compatibility](#12-data-transformation-for-compatibility)
+- [1.3. Phased Migration Towards Teranode](#13-phased-migration-towards-teranode)
 2. [Architecture](#2-architecture)
 3. [Data Model](#3-data-model)
-4. [Use Cases](#4-use-cases)
+4. [Functionality](#4-functionality)
+- [4.1. BSV to Teranode Communication](#41-bsv-to-teranode-communication)
+   - [4.1.1. Receiving Inventory Notifications](#411-receiving-inventory-notifications)
+   - [4.1.2. Processing New Blocks](#412-processing-new-blocks)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
