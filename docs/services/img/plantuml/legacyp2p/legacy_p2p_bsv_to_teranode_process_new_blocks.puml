@@ -1,0 +1,72 @@
+@startuml overview
+
+
+participant MainNet as mainnet
+participant "P2P Legacy\nOverlay Service" as legacy
+database db
+database "Tx Cache" as txCache
+database "Subtree Cache" as subtreeCache
+database "Block Cache" as blockCache
+participant "Block Validator\n(Teranode)" as blockValidator
+participant "Subtree Validator\n(Teranode)" as subtreeValidator
+
+mainnet -> legacy : OnBlock(peer, msg, bytes)
+activate legacy
+
+legacy -> legacy: build block from bytes
+
+legacy -> legacy: HandleBlock(block)
+activate legacy
+
+legacy -> legacy: create a new (empty) subtree
+legacy -> legacy: add a placeholder coinbase tx\n to the subtree
+
+loop each tx
+    legacy -> legacy: convert Tx to Extended Tx format
+    legacy -> legacy: add Extended Tx to the Subtree
+    legacy -> txCache: Cache Tx
+    txCache --> legacy
+end
+
+legacy -> subtreeCache: Cache Subtree
+subtreeCache --> legacy
+
+legacy -> legacy: Build a Teranode block (block, subtree)
+
+legacy -> blockCache: Cache Teranode Block
+blockCache --> legacy
+
+legacy -> blockValidator: BlockFound(ctx, hash, base_url)
+activate blockValidator
+
+blockValidator -> legacy: http://{base_url}/block/hash
+
+legacy --> blockValidator: block (response)
+
+blockValidator -> subtreeValidator: CheckSubtree(ctx, hash, baseUrl)
+
+activate subtreeValidator
+
+subtreeValidator -> legacy: http://{base_url}/subtree/hash
+
+legacy --> subtreeValidator: subtree (response)
+
+
+loop each txid
+    subtreeValidator -> legacy: http://{base_url}/tx/txid
+    legacy --> subtreeValidator: tx (response)
+end
+
+deactivate subtreeValidator
+
+blockValidator -> blockValidator: Add block to blockchain
+
+deactivate blockValidator
+
+deactivate legacy
+
+deactivate legacy
+
+left footer "P2P Legacy - Block Processing \n Last Modified On: 27-March-2024. © 2024 Bitcoin SV. All rights reserved."
+
+@enduml

@@ -1,0 +1,35 @@
+@startuml detailed_exchange
+
+participant "MainNet" as mainnet
+participant "P2P Legacy\nOverlay Service" as legacy
+database db
+
+== Connection Establishment ==
+legacy -> mainnet: connect
+
+== Block and Transaction Advertisement ==
+mainnet -> legacy : OnInv(peer, msg)
+note right of legacy: msg contains inventory vectors\nfor transactions or blocks
+
+legacy -> db: have I seen this item before?
+alt is a new block
+    legacy -> mainnet: OnGetData(peer, msg)
+    note right of legacy: Requesting the full block data
+
+    mainnet -> legacy : OnBlock(peer, msg, bytes)
+    legacy -> legacy: Process the block
+    legacy -> db: Store block details
+else is a new transaction
+    legacy -> mainnet: OnGetData(peer, msg)
+    note right of legacy: Requesting the full transaction data
+
+    mainnet -> legacy : OnTx(peer, msg, bytes)
+    legacy -> legacy: Process the transaction
+    legacy -> db: Store transaction details
+else is known
+    note right of legacy: No action needed, item is known
+end
+
+left footer "Detailed Exchange Overview for Transactions and Blocks\n Last Modified On: 26-March-2024. © 2024 Bitcoin SV. All rights reserved."
+
+@enduml
