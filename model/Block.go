@@ -614,40 +614,37 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						continue
 					}
 
-					// TODO this does not keep up at the moment
-					//
 					// check whether the parent transaction has already been mined in a block on our chain
 					// we need to get back to the txMetaStore for this, to make sure we have the latest data
 					// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 					// for the first situation we don't start validating the current block until the parent is validated.
+					parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
+					if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
+						return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
+					}
+					// parent tx meta was not found, must be old, ignore
+					if parentTxMeta == nil {
+						continue
+					}
 
-					//parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
-					//if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
-					//	return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
-					//}
-					//// parent tx meta was not found, must be old, ignore
-					//if parentTxMeta == nil {
-					//	continue
-					//}
-					//
-					//// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
-					//foundInPreviousBlocks := make(map[uint32]struct{}, len(parentTxMeta.BlockIDs))
-					//for _, blockID := range parentTxMeta.BlockIDs {
-					//	if _, found := currentBlockHeaderIDsMap[blockID]; found {
-					//		foundInPreviousBlocks[blockID] = struct{}{}
-					//	}
-					//}
-					//if len(foundInPreviousBlocks) != 1 {
-					//	// log out the block header IDs map
-					//	ids := make([]uint32, 0, len(currentBlockHeaderIDsMap))
-					//	for id := range currentBlockHeaderIDsMap {
-					//		ids = append(ids, id)
-					//	}
-					//	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-					//	logger.Errorf("parent error currentBlockHeaderIDsMap: %v", ids)
-					//	logger.Errorf("parent error parentTxMeta: %v", parentTxMeta)
-					//	return fmt.Errorf("parent transaction %s of %s is not valid on our current chain, found %d times", parentTxHash.String(), subtreeNode.Hash.String(), len(foundInPreviousBlocks))
-					//}
+					// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
+					foundInPreviousBlocks := make(map[uint32]struct{}, len(parentTxMeta.BlockIDs))
+					for _, blockID := range parentTxMeta.BlockIDs {
+						if _, found := currentBlockHeaderIDsMap[blockID]; found {
+							foundInPreviousBlocks[blockID] = struct{}{}
+						}
+					}
+					if len(foundInPreviousBlocks) != 1 {
+						// log out the block header IDs map
+						ids := make([]uint32, 0, len(currentBlockHeaderIDsMap))
+						for id := range currentBlockHeaderIDsMap {
+							ids = append(ids, id)
+						}
+						sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+						logger.Errorf("parent error currentBlockHeaderIDsMap: %v", ids)
+						logger.Errorf("parent error parentTxMeta: %v", parentTxMeta)
+						return fmt.Errorf("parent transaction %s of %s is not valid on our current chain, found %d times", parentTxHash.String(), subtreeNode.Hash.String(), len(foundInPreviousBlocks))
+					}
 				}
 			}
 

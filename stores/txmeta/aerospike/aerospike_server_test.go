@@ -34,6 +34,14 @@ var (
 	key4 *aerospike.Key
 )
 
+func TestAerospikeKey(t *testing.T) {
+	hash, err := chainhash.NewHashFromStr("5062d8fdda67c5098589c8dc47854c0755a9629d9c63ca4581a3f4aa0195effc")
+	require.NoError(t, err)
+
+	_, err = aerospike.NewKey(aerospikeNamespace, "txmeta", hash[:])
+	require.NoError(t, err)
+}
+
 func TestAerospike(t *testing.T) {
 	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s", aerospikeHost, aerospikePort, aerospikeNamespace))
 	require.NoError(t, err)

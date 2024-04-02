@@ -29,14 +29,15 @@ import (
 )
 
 var (
-	prometheusTxMetaGet            prometheus.Counter
-	prometheusTxMetaSet            prometheus.Counter
-	prometheusTxMetaSetMined       prometheus.Counter
-	prometheusTxMetaSetMinedBatch  prometheus.Counter
-	prometheusTxMetaSetMinedBatchN prometheus.Counter
-	prometheusTxMetaGetMulti       prometheus.Counter
-	prometheusTxMetaGetMultiN      prometheus.Counter
-	prometheusTxMetaDelete         prometheus.Counter
+	prometheusTxMetaGet               prometheus.Counter
+	prometheusTxMetaSet               prometheus.Counter
+	prometheusTxMetaSetMined          prometheus.Counter
+	prometheusTxMetaSetMinedBatch     prometheus.Counter
+	prometheusTxMetaSetMinedBatchN    prometheus.Counter
+	prometheusTxMetaSetMinedBatchErrN prometheus.Counter
+	prometheusTxMetaGetMulti          prometheus.Counter
+	prometheusTxMetaGetMultiN         prometheus.Counter
+	prometheusTxMetaDelete            prometheus.Counter
 )
 
 func init() {
@@ -68,6 +69,12 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "aerospike_txmeta_set_mined_batch_n",
 			Help: "Number of txmeta set_mined_batch txs done to aerospike",
+		},
+	)
+	prometheusTxMetaSetMinedBatchErrN = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "aerospike_txmeta_set_mined_batch_err_n",
+			Help: "Number of txmeta set_mined_batch txs errors to aerospike",
 		},
 	)
 	prometheusTxMetaGetMulti = promauto.NewCounter(
@@ -104,6 +111,7 @@ type batchItem struct {
 type Store struct {
 	client       *uaerospike.Client
 	namespace    string
+	setName      string
 	expiration   uint32
 	logger       ulogger.Logger
 	batchId      atomic.Uint64
@@ -130,9 +138,15 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 		expiration = uint32(expiration64)
 	}
 
+	setName := u.Query().Get("set")
+	if setName == "" {
+		setName = "txmeta"
+	}
+
 	s := &Store{
 		client:     client,
 		namespace:  namespace,
+		setName:    setName,
 		expiration: expiration,
 		logger:     logger,
 	}
@@ -158,7 +172,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 			var key *aerospike.Key
 			for idx, bItem := range batch {
 				hash = bItem.tx.TxIDChainHash()
-				key, err = aerospike.NewKey(s.namespace, "txmeta", hash[:])
+				key, err = aerospike.NewKey(s.namespace, setName, hash[:])
 				if err != nil {
 					bItem.done <- err
 					continue
@@ -224,7 +238,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*txmeta.Data, error) {
 	prometheusTxMetaGet.Inc()
 
-	key, aeroErr := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	key, aeroErr := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if aeroErr != nil {
 		return nil, aeroErr
 	}
@@ -301,7 +315,7 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 	batchRecords := make([]aerospike.BatchRecordIfc, len(items))
 
 	for idx, item := range items {
-		key, err := aerospike.NewKey(s.namespace, "txmeta", item.Hash[:])
+		key, err := aerospike.NewKey(s.namespace, s.setName, item.Hash[:])
 		if err != nil {
 			return err
 		}
@@ -326,7 +340,7 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 		if err != nil {
 			items[idx].Data = nil
 			if !model.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
-				s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", items[idx].Hash.String(), err)
+				s.logger.Errorf("batchRecord MetaBatchDecorate: %s - %v", items[idx].Hash.String(), err)
 			}
 		} else {
 			bins := batchRecord.BatchRec().Record.Bins
@@ -410,7 +424,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
 		return txMeta, nil
 	}
 
-	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {
 		e = err
 		return nil, err
@@ -477,7 +491,7 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32
 		}
 	}()
 
-	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {
 		e = err
 		return err
@@ -506,9 +520,9 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
 
 	for idx, hash := range hashes {
-		key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+		key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 		if err != nil {
-			return err
+			return fmt.Errorf("aerospike NewKey error: %w", err)
 		}
 		op := aerospike.ListAppendOp("blockIDs", blockID)
 		record := aerospike.NewBatchWrite(policy, key, op)
@@ -518,24 +532,33 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return err
+		return fmt.Errorf("aerospike BatchOperate error: %w", err)
 	}
 
 	prometheusTxMetaSetMinedBatch.Inc()
 
 	okUpdates := 0
+	errs := make([]error, 0, len(hashes))
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
-			// TODO what to do here?
-			hash := hashes[idx]
-			s.logger.Errorf("batchRecord SetMinedMulti: %s - %v", hash.String(), err)
+			var aErr *aerospike.AerospikeError
+			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
+				// the tx Meta does not exist anymore, so we do not have to set the mined status
+				continue
+			}
+			errs = append(errs, fmt.Errorf("%s - %v", hashes[idx].String(), err))
 		} else {
 			okUpdates++
 		}
 	}
 
 	prometheusTxMetaSetMinedBatchN.Add(float64(okUpdates))
+
+	if len(errs) > 0 {
+		prometheusTxMetaSetMinedBatchErrN.Add(float64(len(errs)))
+		return fmt.Errorf("aerospike batchRecord errors: %v", errs)
+	}
 
 	return nil
 }
@@ -552,7 +575,7 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 
 	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
-	key, err := aerospike.NewKey(s.namespace, "txmeta", hash[:])
+	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {
 		e = err
 		return err
