@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -131,22 +134,30 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 	// Start syncing from the last block we have in Teranode + 1
 	teranodeHeight++
 
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
 	for teranodeHeight <= best.Height {
-		block, err := chain.BlockByHeight(teranodeHeight)
-		if err != nil {
-			return nil, fmt.Errorf("Failed to get block by hash %s: %w", best.Hash, err)
-		} else {
-			if err := tb.HandleBlock(block); err != nil {
-				return nil, fmt.Errorf("Failed to handle block %s: %s", block.Hash(), err)
-			}
+		select {
+		case <-sigs:
+			break
+		default:
+			block, err := chain.BlockByHeight(teranodeHeight)
+			if err != nil {
+				return nil, fmt.Errorf("Failed to get block by hash %s: %w", best.Hash, err)
+			} else {
+				if err := tb.HandleBlock(block); err != nil {
+					return nil, fmt.Errorf("Failed to handle block %s: %s", block.Hash(), err)
+				}
 
-			if err := tb.HandleBlockConnected(block); err != nil {
-				return nil, fmt.Errorf("Failed to handle block connected %s: %s", block.Hash(), err)
+				if err := tb.HandleBlockConnected(block); err != nil {
+					return nil, fmt.Errorf("Failed to handle block connected %s: %s", block.Hash(), err)
+				}
 			}
+			log.Infof("Teranode bridge synced with legacy block %d", teranodeHeight)
+
+			teranodeHeight++
 		}
-		log.Infof("Teranode bridge synced with legacy block %d", teranodeHeight)
-
-		teranodeHeight++
 	}
 
 	log.Infof("Teranode bridge synced with legacy")
