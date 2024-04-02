@@ -79,7 +79,7 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 			}
 
 			if len(hashes) > 0 {
-				logger.Infof("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, remainder batch, for subtree %s in block %d", blockHash.String(), len(hashes), subtree.RootHash().String(), blockID)
+				logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, remainder batch, for subtree %s in block %d", blockHash.String(), len(hashes), subtree.RootHash().String(), blockID)
 				if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
 					return fmt.Errorf("[UpdateTxMinedStatus][%s] error setting mined tx: %v", blockHash.String(), err)
 				}
