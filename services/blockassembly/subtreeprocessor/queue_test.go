@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,7 +144,7 @@ func Test_queueLarge(t *testing.T) {
 	runtime.GC()
 	q := NewLockFreeQueue()
 
-	enqueueItems(t, q, 10_000, 1_000)
+	enqueueItems(t, q, 1, 10_000_000)
 
 	startTime := time.Now()
 	items := 0
@@ -162,7 +163,7 @@ func Test_queueLarge(t *testing.T) {
 
 	runtime.GC()
 
-	enqueueItems(t, q, 10_000, 1_000)
+	enqueueItems(t, q, 1_000, 10_000)
 
 	startTime = time.Now()
 	items = 0
@@ -203,6 +204,48 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 	}
 	wg.Wait()
 	t.Logf("Time queue %d items: %s\n", threads*iter, time.Since(startTime))
+}
+
+func BenchmarkQueue(b *testing.B) {
+	q := NewLockFreeQueue()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q.enqueue(&txIDAndFee{
+			node: util.SubtreeNode{
+				Hash:        chainhash.Hash{},
+				Fee:         uint64(i),
+				SizeInBytes: 0,
+			},
+		})
+	}
+}
+
+func BenchmarkAtomicPointer(b *testing.B) {
+	var v atomic.Pointer[txIDAndFee]
+
+	t1 := &txIDAndFee{
+		node: util.SubtreeNode{
+			Hash:        chainhash.Hash{},
+			Fee:         1,
+			SizeInBytes: 0,
+		},
+	}
+	t2 := &txIDAndFee{
+		node: util.SubtreeNode{
+			Hash:        chainhash.Hash{},
+			Fee:         1,
+			SizeInBytes: 0,
+		},
+	}
+
+	for i := 0; i < b.N; i++ {
+		if i%2 == 0 {
+			v.Swap(t1)
+		} else {
+			v.Swap(t2)
+		}
+	}
 }
 
 func printAlloc() string {
