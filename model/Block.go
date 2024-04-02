@@ -748,7 +748,8 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 				// get subtree meta
 				subtreeMetaReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("meta"))
 				if err != nil {
-					logger.Warnf("failed to get subtree meta %s: %w", subtreeHash.String(), err)
+					// this is just an optimization, we can always get the data from the txmeta store
+					// logger.Warnf("failed to get subtree meta %s: %w", subtreeHash.String(), err)
 					return nil
 				}
 				defer func() {
