@@ -386,16 +386,18 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 						} else if aErr.ResultCode == types.FILTERED_OUT {
 							// get the record
 							record, _ := s.client.Get(nil, key)
-							valueBytes, ok := record.Bins["txid"].([]byte)
-							if ok && len(valueBytes) == 32 {
-								spendingTxHash := chainhash.Hash(valueBytes)
-								if spendingTxHash.IsEqual(batch[idx].spend.SpendingTxID) {
-									s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", batch[idx].spend.Hash.String(), batchId, spendingTxHash.String())
-									batch[idx].done <- nil
-									continue
-								} else {
-									// spent by another transaction
-									batch[idx].done <- utxostore.NewErrSpent(&spendingTxHash)
+							if record != nil && record.Bins != nil && record.Bins["txid"] != nil {
+								valueBytes, ok := record.Bins["txid"].([]byte)
+								if ok && len(valueBytes) == 32 {
+									spendingTxHash := chainhash.Hash(valueBytes)
+									if spendingTxHash.IsEqual(batch[idx].spend.SpendingTxID) {
+										s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", batch[idx].spend.Hash.String(), batchId, spendingTxHash.String())
+										batch[idx].done <- nil
+										continue
+									} else {
+										// spent by another transaction
+										batch[idx].done <- utxostore.NewErrSpent(&spendingTxHash)
+									}
 								}
 							}
 						}

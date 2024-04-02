@@ -29,7 +29,7 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 		span.Finish()
 	}()
 
-	logger.Infof("[UpdateTxMinedStatus][%s] blockID %d", blockHash.String(), blockID)
+	logger.Infof("[UpdateTxMinedStatus][%s] blockID %d for %d subtrees", blockHash.String(), blockID, len(subtrees))
 
 	updateTxMinedStatus := gocore.Config().GetBool("txmeta_store_updateTxMinedStatus", true)
 	if !updateTxMinedStatus {

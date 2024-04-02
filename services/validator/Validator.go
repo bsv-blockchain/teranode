@@ -371,9 +371,11 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 		if ok {
 			// remove the spending tx from the block assembly and freeze it
 			// TODO implement freezing in utxo store
-			err = v.blockAssembler.RemoveTx(ctx, spentErr.SpendingTxID)
-			if err != nil {
-				v.logger.Errorf("validator: UTXO Store remove tx failed: %v", err)
+			if spentErr.SpendingTxID != nil {
+				err = v.blockAssembler.RemoveTx(ctx, spentErr.SpendingTxID)
+				if err != nil {
+					v.logger.Errorf("validator: UTXO Store remove tx failed: %v", err)
+				}
 			}
 		}
 
