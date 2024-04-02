@@ -2,6 +2,8 @@ package util
 
 import (
 	"encoding/hex"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"reflect"
 	"testing"
 
@@ -98,4 +100,36 @@ func Test_getOutputUtxoHash(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCollision(t *testing.T) {
+	// tx id 955c4de19e3428a2620891dad1f4f2f7e5948c6a61b1602372fee47370bb23c2
+	script, err := bscript.NewFromHexString("76a9146d6baa116674e3ccc2afef914145f0d020a0366088ac")
+	require.NoError(t, err)
+	input1 := &bt.Input{
+		PreviousTxSatoshis: 100000,
+		PreviousTxScript:   script,
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     4294967295,
+	}
+	_ = input1.PreviousTxIDAddStr("d59b5e09a3a62166ac262c04d7c6a5cde05a40e82427144bf8060b21b39861b5")
+
+	utxoHash1, _ := UTXOHashFromInput(input1)
+
+	// tx id 2c27c886af61c5e0be4e47cae793864870874ca067d34a7fe012b177a811ee09
+	script, err = bscript.NewFromHexString("76a9143cadb60136ecb6e9dde1c3d02d6642a78540c14b88ac")
+	require.NoError(t, err)
+	input2 := &bt.Input{
+		PreviousTxSatoshis: 100000,
+		PreviousTxScript:   script,
+		PreviousTxOutIndex: 0,
+		SequenceNumber:     4294967295,
+	}
+	_ = input2.PreviousTxIDAddStr("3cc3306864bb9e89ff5c0d0ed7208223c0203c6195cb1cad09c53e425c2c7e9c")
+
+	utxoHash2, _ := UTXOHashFromInput(input2)
+
+	assert.NotEqual(t, utxoHash1, utxoHash2, "Collision detected for different inputs")
+	t.Logf("utxoHash1: %s", utxoHash1.String())
+	t.Logf("utxoHash2: %s", utxoHash2.String())
 }
