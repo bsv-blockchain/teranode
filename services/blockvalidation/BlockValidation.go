@@ -231,8 +231,8 @@ func (u *BlockValidation) validateBlock(ctx context.Context, blockHash *chainhas
 	}
 
 	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
-		if err = u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); err != nil {
-			u.logger.Errorf("[BlockValidation:start][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), err)
+		if iErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); err != nil {
+			u.logger.Errorf("[BlockValidation:start][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), iErr)
 		}
 		return fmt.Errorf("[BlockValidation:start][%s] block is not valid: %v", block.String(), err)
 	}
