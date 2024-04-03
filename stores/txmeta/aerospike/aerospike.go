@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
-	asl "github.com/aerospike/aerospike-client-go/v7/logger"
 	"github.com/aerospike/aerospike-client-go/v7/types"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -24,83 +23,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
-
-var (
-	prometheusTxMetaGet               prometheus.Counter
-	prometheusTxMetaSet               prometheus.Counter
-	prometheusTxMetaSetMined          prometheus.Counter
-	prometheusTxMetaSetMinedBatch     prometheus.Counter
-	prometheusTxMetaSetMinedBatchN    prometheus.Counter
-	prometheusTxMetaSetMinedBatchErrN prometheus.Counter
-	prometheusTxMetaGetMulti          prometheus.Counter
-	prometheusTxMetaGetMultiN         prometheus.Counter
-	prometheusTxMetaDelete            prometheus.Counter
-)
-
-func init() {
-	prometheusTxMetaGet = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_get",
-			Help: "Number of txmeta get calls done to aerospike",
-		},
-	)
-	prometheusTxMetaSet = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_set",
-			Help: "Number of txmeta set calls done to aerospike",
-		},
-	)
-	prometheusTxMetaSetMined = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_set_mined",
-			Help: "Number of txmeta set_mined calls done to aerospike",
-		},
-	)
-	prometheusTxMetaSetMinedBatch = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_set_mined_batch",
-			Help: "Number of txmeta set_mined_batch calls done to aerospike",
-		},
-	)
-	prometheusTxMetaSetMinedBatchN = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_set_mined_batch_n",
-			Help: "Number of txmeta set_mined_batch txs done to aerospike",
-		},
-	)
-	prometheusTxMetaSetMinedBatchErrN = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_set_mined_batch_err_n",
-			Help: "Number of txmeta set_mined_batch txs errors to aerospike",
-		},
-	)
-	prometheusTxMetaGetMulti = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_get_multi",
-			Help: "Number of txmeta get_multi calls done to aerospike",
-		},
-	)
-	prometheusTxMetaGetMultiN = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_get_multi_n",
-			Help: "Number of txmeta get_multi txs done to aerospike",
-		},
-	)
-	prometheusTxMetaDelete = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_txmeta_delete",
-			Help: "Number of txmeta delete calls done to aerospike",
-		},
-	)
-
-	if gocore.Config().GetBool("aerospike_debug", true) {
-		asl.Logger.SetLevel(asl.DEBUG)
-	}
-
-}
 
 type batchStoreItem struct {
 	tx     *bt.Tx
@@ -131,7 +54,7 @@ type Store struct {
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
-	logger = logger.New("aero_store")
+	initPrometheusMetrics()
 
 	namespace := u.Path[1:]
 
@@ -278,6 +201,10 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	startTime := time.Now()
+	defer func() {
+		prometheusTxMetaGetDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+	}()
 	fields := []string{"fee", "sizeInBytes", "parentTxHashes", "blockIDs"}
 
 	if s.getBatcher != nil {
@@ -285,6 +212,11 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data
 		s.getBatcher.Put(&batchGetItem{hash: *hash, fields: fields, done: done})
 
 		data := <-done
+		if data.Err != nil {
+			prometheusTxMetaGetErr.Inc()
+		} else {
+			prometheusTxMetaGet.Inc()
+		}
 		return data.Data, data.Err
 	}
 
@@ -292,6 +224,10 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data
 }
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+	startTime := time.Now()
+	defer func() {
+		prometheusTxMetaGetDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+	}()
 	fields := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"}
 
 	if s.getBatcher != nil {
@@ -299,6 +235,11 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 		s.getBatcher.Put(&batchGetItem{hash: *hash, fields: fields, done: done})
 
 		data := <-done
+		if data.Err != nil {
+			prometheusTxMetaGetErr.Inc()
+		} else {
+			prometheusTxMetaGet.Inc()
+		}
 		return data.Data, data.Err
 	}
 
@@ -319,6 +260,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	start := time.Now()
 	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
+		prometheusTxMetaGetErr.Inc()
 		if errors.Is(aeroErr, aerospike.ErrKeyNotFound) {
 			return nil, txmeta.NewErrTxmetaNotFound(hash)
 		}
