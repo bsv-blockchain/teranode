@@ -306,13 +306,21 @@ func (s *Store) sendStoreBatch(batch []*batchItem) {
 		batchRecords[idx] = record
 	}
 
-	err = s.client.BatchOperate(batchPolicy, batchRecords)
-	if err != nil {
-		s.logger.Warnf("[STORE_BATCH][%d] failed to batch store aerospike utxos in batchId %d: %v\n", batchId, len(batch), err)
-		// don't return, check each record in the batch for errors and process accordingly
+	for retries := 0; retries < 3; retries++ {
+		if err = s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+			if retries < 2 {
+				backoff := time.Duration(2^retries) * time.Second
+				s.logger.Warnf("[STORE_BATCH][%d] retrying batch store aerospike utxos in %s (len %d): %v", batchId, backoff, len(batch), err)
+			} else {
+				s.logger.Errorf("[STORE_BATCH][%d] failed to batch store aerospike utxos (len %d): %v", batchId, len(batch), err)
+				// don't return, check each record in the batch for errors and process accordingly
+			}
+		} else {
+			break
+		}
 	}
 
-	// batchOperate may have no errors, but some of the records may have failed
+	// check all the batch records for errors
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
@@ -380,7 +388,7 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Warnf("[SPEND_BATCH][%d] failed to batch spend aerospike utxos in batchId %d: %v\n", batchId, len(batch), err)
+		s.logger.Warnf("[SPEND_BATCH][%d] failed to batch spend aerospike utxos in batchId %d: %v", batchId, len(batch), err)
 		// don't return, check each record in the batch for errors and process accordingly
 	}
 
@@ -491,7 +499,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 	key, aErr := aerospike.NewKey(s.namespace, "utxo", spend.Hash[:])
 	if aErr != nil {
 		prometheusUtxoErrors.WithLabelValues("Get", aErr.Error()).Inc()
-		s.logger.Errorf("Failed to init new aerospike key: %v\n", aErr)
+		s.logger.Errorf("Failed to init new aerospike key: %v", aErr)
 		return nil, aErr
 	}
 
@@ -507,7 +515,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 			}, fmt.Errorf("%v: %w", aErr, utxostore.ErrNotFound)
 		}
 
-		s.logger.Errorf("Failed to get aerospike key (time taken: %s) : %v\n", time.Since(start).String(), aErr)
+		s.logger.Errorf("Failed to get aerospike key (time taken: %s) : %v", time.Since(start).String(), aErr)
 		return nil, fmt.Errorf("%v: %w", aErr, utxostore.ErrNotFound)
 	}
 
@@ -621,7 +629,7 @@ func (s *Store) storeUtxosInternal(txID chainhash.Hash, utxoHashes []chainhash.H
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Warnf("[BATCH_ERR][%s] Failed to batch store %d aerospike utxos in batchId %d, adding to retry queue: %v\n", txID.String(), len(utxoHashes), batchId, err)
+		s.logger.Warnf("[BATCH_ERR][%s] Failed to batch store %d aerospike utxos in batchId %d, adding to retry queue: %v", txID.String(), len(utxoHashes), batchId, err)
 		// don't return, check each record in the batch for errors and process accordingly
 	}
 
@@ -740,7 +748,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
-			s.logger.Errorf("ERROR panic in aerospike Spend: %v\n", recoverErr)
+			s.logger.Errorf("ERROR panic in aerospike Spend: %v", recoverErr)
 		}
 	}()
 
@@ -936,7 +944,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 	key, err := aerospike.NewKey(s.namespace, "utxo", spend.Hash[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
-		s.logger.Errorf("ERROR in aerospike Reset: %v\n", err)
+		s.logger.Errorf("ERROR in aerospike Reset: %v", err)
 		return err
 	}
 
@@ -944,7 +952,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 	value, getErr := s.client.Get(util.GetAerospikeReadPolicy(), key, "locktime")
 	if getErr != nil {
 		prometheusUtxoErrors.WithLabelValues("Get", getErr.Error()).Inc()
-		s.logger.Errorf("ERROR in aerospike get key (time taken %s) : %v\n", time.Since(start).String(), getErr)
+		s.logger.Errorf("ERROR in aerospike get key (time taken %s) : %v", time.Since(start).String(), getErr)
 		return getErr
 	}
 	nLockTime, ok := value.Bins["locktime"].(int)
@@ -958,7 +966,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 	_, err = s.client.Delete(policy, key)
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Reset", err.Error()).Inc()
-		s.logger.Errorf("ERROR in aerospike Reset delete key (time taken: %s) : %v\n", time.Since(startDelete).String(), err)
+		s.logger.Errorf("ERROR in aerospike Reset delete key (time taken: %s) : %v", time.Since(startDelete).String(), err)
 		return err
 	}
 
@@ -973,7 +981,7 @@ func (s *Store) Delete(_ context.Context, tx *bt.Tx) error {
 	key, err := aerospike.NewKey(s.namespace, "utxo", tx.TxIDChainHash()[:])
 	if err != nil {
 		prometheusUtxoErrors.WithLabelValues("Delete", err.Error()).Inc()
-		s.logger.Errorf("ERROR in aerospike Delete: %v\n", err)
+		s.logger.Errorf("ERROR in aerospike Delete: %v", err)
 		return err
 	}
 

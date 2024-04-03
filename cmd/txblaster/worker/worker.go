@@ -325,14 +325,12 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 			prometheusTransactionDuration.Observe(float64(time.Since(start).Microseconds()))
 			w.totalTransactions.Add(1)
 
-			btUtxo := &bt.UTXO{
+			w.utxoChan <- &bt.UTXO{
 				TxIDHash:      tx.TxIDChainHash(),
 				Vout:          0,
 				LockingScript: tx.Outputs[0].LockingScript,
 				Satoshis:      tx.Outputs[0].Satoshis,
 			}
-
-			w.utxoChan <- btUtxo
 
 			if w.rateLimiter != nil {
 				_ = w.rateLimiter.Wait(ctx)
@@ -351,18 +349,18 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 	err = tx.FromUTXOs(utxo)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return tx, fmt.Errorf("error adding utxo to tx: %v", err)
+		return nil, fmt.Errorf("error adding utxo to tx: %v", err)
 	}
 
 	err = tx.AddP2PKHOutputFromAddress(w.address.AddressString, utxo.Satoshis)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return tx, fmt.Errorf("error adding output to tx: %v", err)
+		return nil, fmt.Errorf("error adding output to tx: %v", err)
 	}
 
 	if err = tx.FillAllInputs(ctx, w.unlocker); err != nil {
 		prometheusInvalidTransactions.Inc()
-		return tx, fmt.Errorf("error filling tx inputs: %v", err)
+		return nil, fmt.Errorf("error filling tx inputs: %v", err)
 	}
 
 	w.sentTxCache.Add(tx.TxIDChainHash().String())
@@ -392,7 +390,7 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 			}
 		}
 
-		return tx, fmt.Errorf("error sending transaction #%d: %v", counter.Load(), err)
+		return nil, fmt.Errorf("error sending transaction #%d: %v", counter.Load(), err)
 	}
 
 	return tx, nil

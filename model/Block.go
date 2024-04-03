@@ -719,7 +719,9 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 					if err != nil {
 						if retries < 3 {
 							retries++
-							logger.Warnf("failed to get subtree %s, retrying %d", subtreeHash.String(), retries)
+							backoff := time.Duration(2^retries) * time.Second
+							logger.Warnf("failed to get subtree %s, retrying %d in %s", subtreeHash.String(), retries, backoff.String())
+							time.Sleep(backoff)
 							continue
 						}
 						return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
@@ -730,7 +732,9 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 						_ = subtreeReader.Close()
 						if retries < 3 {
 							retries++
-							logger.Warnf("failed to deserialize subtree %s, retrying %d", subtreeHash.String(), retries)
+							backoff := time.Duration(2^retries) * time.Second
+							logger.Warnf("failed to deserialize subtree %s, retrying %d in %s", subtreeHash.String(), retries, backoff)
+							time.Sleep(backoff)
 							continue
 						}
 						return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)

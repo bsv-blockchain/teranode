@@ -65,7 +65,7 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 								return fmt.Errorf("[UpdateTxMinedStatus][%s] error setting mined tx: %v", blockHash.String(), err)
 							} else {
 								backoff := time.Duration(2^retries) * time.Second
-								logger.Warnf("[UpdateTxMinedStatus][%s] error setting mined tx, retrying with backoff of %s: %v", blockHash.String(), backoff.String(), err)
+								logger.Warnf("[UpdateTxMinedStatus][%s] error setting mined tx, retrying in %s: %v", blockHash.String(), backoff.String(), err)
 								time.Sleep(backoff)
 							}
 						} else {

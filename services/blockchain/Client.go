@@ -65,8 +65,9 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
 		if err != nil {
 			if retries < maxRetries {
 				retries++
-				logger.Warnf("[Blockchain] failed to connect to blockchain service, retrying %d: %v", retries, err)
-				time.Sleep(time.Duration(retries*retrySleep) * time.Millisecond)
+				backoff := time.Duration(retries*retrySleep) * time.Millisecond
+				logger.Warnf("[Blockchain] failed to connect to blockchain service, retrying %d in %s: %v", retries, backoff, err)
+				time.Sleep(backoff)
 				continue
 			}
 

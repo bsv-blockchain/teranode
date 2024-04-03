@@ -57,8 +57,9 @@ func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Cli
 		if err != nil {
 			if retries < maxRetries {
 				retries++
-				logger.Warnf("failed to connect to asset service, retrying %d: %v", retries, err)
-				time.Sleep(time.Duration(retries*retrySleep) * time.Millisecond)
+				backoff := time.Duration(retries*retrySleep) * time.Millisecond
+				logger.Warnf("failed to connect to asset service, retrying %d in %s: %v", retries, backoff, err)
+				time.Sleep(backoff)
 				continue
 			}
 
