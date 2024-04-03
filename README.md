@@ -160,6 +160,12 @@ Overlay Service documentation:
 + [P2P Legacy Service](docs/services/p2pLegacy.md)
 + [Bootstrap (Deprecated)](docs/services/bootstrap.md)
 
+Additionally, the system has a number of test / development utilities:
+
++ [TX Blaster](docs/commands/txBlaster.md)
++ [UTXO Blaster](docs/commands/utxoBlaster.md)
++ [Propagation Blaster](docs/commands/propagationBlaster.md)
++ [Chain Integrity](docs/commands/chainIntegrity.md)
 
 ---
 

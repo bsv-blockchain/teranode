@@ -1,0 +1,33 @@
+@startuml txblaster Initialization and Worker Management
+
+participant User
+participant "Main Application\n(txblaster)" as MainApp
+entity "Signal Handler" as SignalHandler
+participant Worker
+participant "Other Services\n(Coinbase, P2P, Propagation)" as ExternalServices
+
+== Initialization ==
+User -> MainApp : Start txblaster
+MainApp -> MainApp : Parse command-line arguments
+MainApp -> MainApp : Load configurations
+MainApp -> ExternalServices : Setup P2P networking
+MainApp -> SignalHandler : Setup signal handling for\ngraceful shutdown
+
+== Worker Setup and Start ==
+MainApp -> MainApp : Initialize workers based on\nconfigurations and arguments
+loop For each worker
+    MainApp -> Worker : Start worker goroutine
+    Worker -> ExternalServices : Connect & subscribe to services
+end
+
+== Running ==
+MainApp -> Worker : Manage workers (monitor, restart, etc.)
+
+== Shutdown Signal ==
+User -> SignalHandler : Send SIGINT/SIGTERM
+SignalHandler -> MainApp : Notify shutdown
+MainApp -> Worker : Signal workers to shutdown gracefully
+Worker -> ExternalServices : Disconnect & cleanup
+MainApp -> MainApp : Cleanup resources\nand exit
+
+@enduml
