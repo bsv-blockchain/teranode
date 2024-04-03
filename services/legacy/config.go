@@ -368,6 +368,11 @@ func loadConfig() (*config, error) {
 		TargetOutboundPeers:     defaultTargetOutboundPeers,
 	}
 
+	connectPeers, ok := gocore.Config().GetMulti("legacy_connect_peers", "|")
+	if ok {
+		cfg.ConnectPeers = connectPeers
+	}
+
 	// Create the home directory if it doesn't already exist.
 	funcName := "loadConfig"
 	err := os.MkdirAll(defaultHomeDir, 0700)
