@@ -418,7 +418,7 @@ func (tb *TeranodeBridge) TxHandler(c echo.Context) error {
 
 func (tb *TeranodeBridge) TempHeaderHandler(c echo.Context) error {
 	// TODO: SAO - remove
-	// panic("TernodeBridge has started catchup.")
+	panic("TernodeBridge has started catchup.")
 
 	hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 	if err != nil {

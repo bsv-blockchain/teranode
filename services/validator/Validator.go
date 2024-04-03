@@ -502,9 +502,12 @@ func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx, block
 		return err
 	}
 
-	// 9) The unlocking script (scriptSig) can only push numbers on the stack
-	if err := v.pushDataCheck(tx); err != nil {
-		return err
+	// SAO - https://bitcoin.stackexchange.com/questions/83805/did-the-introduction-of-verifyscript-cause-a-backwards-incompatible-change-to-co
+	if blockHeight != 163685 {
+		// 9) The unlocking script (scriptSig) can only push numbers on the stack
+		if err := v.pushDataCheck(tx); err != nil {
+			return err
+		}
 	}
 
 	// 10) Reject if the sum of input values is less than sum of output values
