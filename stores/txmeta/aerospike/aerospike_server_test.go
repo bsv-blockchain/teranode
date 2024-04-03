@@ -5,6 +5,7 @@ package aerospike
 import (
 	"context"
 	"fmt"
+	"github.com/ordishs/gocore"
 	"net/url"
 	"testing"
 	"time"
@@ -43,6 +44,18 @@ func TestAerospikeKey(t *testing.T) {
 }
 
 func TestAerospike(t *testing.T) {
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "false")
+	runAerospikeTest(t)
+}
+
+func TestAerospikeWithBatching(t *testing.T) {
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "true")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "true")
+	runAerospikeTest(t)
+}
+
+func runAerospikeTest(t *testing.T) {
 	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s", aerospikeHost, aerospikePort, aerospikeNamespace))
 	require.NoError(t, err)
 

@@ -621,7 +621,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					// we need to get back to the txMetaStore for this, to make sure we have the latest data
 					// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 					// for the first situation we don't start validating the current block until the parent is validated.
-					parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxHash)
+					parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxHash)
 					if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
 						return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
 					}

@@ -72,7 +72,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 
 				default:
 					for _, data := range missingTxHashesCompacted {
-						if data.Data == nil {
+						if data.Data == nil || data.Err != nil {
 							newMissed := missed.Add(1)
 							if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
 								return ubsverrors.ErrThresholdExceeded

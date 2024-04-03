@@ -269,6 +269,10 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 	}
 
 	for i, data := range txHashes {
+		if data.Err != nil {
+			return fmt.Errorf("[BlockPersister] error getting tx meta from store: %w", data.Err)
+		}
+
 		if data.Data == nil {
 			if model.CoinbasePlaceholderHash.Equal(data.Hash) {
 				if i != 0 {

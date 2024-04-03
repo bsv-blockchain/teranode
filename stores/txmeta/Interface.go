@@ -19,9 +19,11 @@ func NewErrTxmetaAlreadyExists(key *chainhash.Hash) error {
 }
 
 type MissingTxHash struct {
-	Hash chainhash.Hash
-	Idx  int
-	Data *Data // This is nil until it has been fetched
+	Hash   chainhash.Hash
+	Idx    int
+	Data   *Data // This is nil until it has been fetched
+	Fields []string
+	Err    error
 }
 
 type Store interface {
