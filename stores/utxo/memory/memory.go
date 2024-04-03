@@ -173,7 +173,7 @@ func (m *Memory) spendUtxo(spend *utxostore.Spend) error {
 				return nil
 			}
 
-			return utxostore.NewErrSpent(utxo.SpendingTxID)
+			return utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, utxo.SpendingTxID)
 		}
 	}
 

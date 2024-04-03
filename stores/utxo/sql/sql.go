@@ -444,7 +444,7 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 				if utxo.SpendingTxID.IsEqual(spend.SpendingTxID) {
 					return nil
 				} else {
-					return utxostore.NewErrSpent(utxo.SpendingTxID)
+					return utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, utxo.SpendingTxID)
 				}
 			} else if !util.ValidLockTime(utxo.LockTime, s.blockHeight.Load()) {
 				return utxostore.NewErrLockTime(utxo.LockTime, s.blockHeight.Load())

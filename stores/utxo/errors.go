@@ -22,11 +22,17 @@ var (
 )
 
 type ErrSpent struct {
+	TxID         *chainhash.Hash
+	VOut         uint32
+	UtxoHash     *chainhash.Hash
 	SpendingTxID *chainhash.Hash
 }
 
-func NewErrSpent(spendingTxID *chainhash.Hash, optionalErrs ...error) error {
+func NewErrSpent(txID *chainhash.Hash, vOut uint32, utxoHash, spendingTxID *chainhash.Hash, optionalErrs ...error) error {
 	errSpent := &ErrSpent{
+		TxID:         txID,
+		VOut:         vOut,
+		UtxoHash:     utxoHash,
 		SpendingTxID: spendingTxID,
 	}
 
@@ -35,10 +41,7 @@ func NewErrSpent(spendingTxID *chainhash.Hash, optionalErrs ...error) error {
 }
 
 func (e *ErrSpent) Error() string {
-	if e.SpendingTxID == nil {
-		return "ErrSpent"
-	}
-	return fmt.Sprintf("utxo already spent by txid %s", e.SpendingTxID.String())
+	return fmt.Sprintf("%s:$%d utxo %s already spent by txid %s", e.TxID.String(), e.VOut, e.UtxoHash.String(), e.SpendingTxID.String())
 }
 
 type ErrLockTime struct {

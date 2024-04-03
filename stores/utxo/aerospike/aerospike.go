@@ -396,35 +396,40 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
+			spend := batch[idx].spend
 			var aErr *aerospike.AerospikeError
 			if errors.As(err, &aErr) && aErr != nil {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d, skipping", batch[idx].spend.Hash.String(), batchId)
+					s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d, skipping", spend.Hash.String(), batchId)
 					batch[idx].done <- nil
 					continue
 				} else if aErr.ResultCode == types.FILTERED_OUT {
 					// get the record
-					record, _ := s.client.Get(nil, key)
-					if record != nil && record.Bins != nil && record.Bins["txid"] != nil {
-						valueBytes, ok := record.Bins["txid"].([]byte)
-						if ok && len(valueBytes) == 32 {
-							spendingTxHash := chainhash.Hash(valueBytes)
-							if spendingTxHash.Equal(*batch[idx].spend.SpendingTxID) {
-								s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", batch[idx].spend.Hash.String(), batchId, spendingTxHash.String())
-								batch[idx].done <- nil
-							} else {
-								// spent by another transaction
-								batch[idx].done <- utxostore.NewErrSpent(&spendingTxHash)
+					record, getErr := s.client.Get(nil, batchRecord.BatchRec().Key)
+					if getErr != nil {
+						err = errors.Join(err, getErr)
+					} else {
+						if record != nil && record.Bins != nil && record.Bins["txid"] != nil {
+							valueBytes, ok := record.Bins["txid"].([]byte)
+							if ok && len(valueBytes) == 32 {
+								spendingTxHash := chainhash.Hash(valueBytes)
+								if spendingTxHash.Equal(*spend.SpendingTxID) {
+									s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", spend.Hash.String(), batchId, spendingTxHash.String())
+									batch[idx].done <- nil
+								} else {
+									// spent by another transaction
+									batch[idx].done <- utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, &spendingTxHash)
+								}
+								continue
 							}
-							continue
 						}
 					}
 				}
 			}
 
-			batch[idx].done <- fmt.Errorf("[SPEND_BATCH][%s] error in aerospike spend batch record, locktime %d: %d - %w", batch[idx].spend.Hash.String(), s.blockHeight.Load(), batchId, err)
+			batch[idx].done <- fmt.Errorf("[SPEND_BATCH][%s] error in aerospike spend batch record, locktime %d: %d - %w", spend.Hash.String(), s.blockHeight.Load(), batchId, err)
 		} else {
-			//s.logger.Warnf("[SPEND_BATCH][%s] successfully spent utxo in aerospike in batch %d", batch[idx].spend.Hash.String(), batchId)
+			//s.logger.Warnf("[SPEND_BATCH][%s] successfully spent utxo in aerospike in batch %d", spend.Hash.String(), batchId)
 			batch[idx].done <- nil
 		}
 	}
@@ -577,7 +582,7 @@ func (s *Store) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error 
 		for idx, hash := range utxoHashes {
 			idx, hash := idx, hash
 			g.Go(func() error {
-				if err = s.storeUtxoInBatches(ctx, hash, idx, storeLockTime); err != nil {
+				if err := s.storeUtxoInBatches(ctx, hash, idx, storeLockTime); err != nil {
 					return fmt.Errorf("[Store][%s] failed to store utxo %s:%d: %v", tx.TxIDChainHash().String(), hash.String(), idx, err)
 				}
 				return nil
@@ -770,9 +775,9 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 				})
 
 				// this waits for the batch to be sent and the response to be received from the batch operation
-				err = <-done
-				if err != nil {
-					return err
+				batchErr := <-done
+				if batchErr != nil {
+					return batchErr
 				}
 
 				spentSpends = append(spentSpends, spend)
@@ -866,10 +871,10 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 		}
 		valueBytes, ok := value.Bins["txid"].([]byte)
 		if ok && len(valueBytes) == 32 {
-			spendingTxHash, err := chainhash.NewHash(valueBytes)
-			if [32]byte(valueBytes) == *spend.SpendingTxID {
+			spendingTxHash := chainhash.Hash(valueBytes)
+			if spend.SpendingTxID.IsEqual(&spendingTxHash) {
 				prometheusUtxoReSpend.Inc()
-				s.logger.Warnf("utxo %s has already been marked as spent (will skip) by %s", spend.Hash.String(), spendingTxHash)
+				s.logger.Warnf("utxo %s has already been marked as spent (will skip) by %s", spend.Hash.String(), spendingTxHash.String())
 				return nil
 			} else {
 				prometheusUtxoSpendSpent.Inc()
@@ -877,9 +882,9 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 					return fmt.Errorf("chainhash error: %w", err)
 				}
 
-				s.logger.Debugf("utxo %s was spent by %s", spend.Hash.String(), spendingTxHash)
+				s.logger.Debugf("utxo %s was spent by %s", spend.Hash.String(), spendingTxHash.String())
 
-				return utxostore.NewErrSpent(spendingTxHash)
+				return utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, &spendingTxHash)
 			}
 		}
 		prometheusUtxoErrors.WithLabelValues("Spend", err.Error()).Inc()
@@ -896,7 +901,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 				if err != nil {
 					return fmt.Errorf("chainhash error: %w", err)
 				}
-				return utxostore.NewErrSpent(spendingTxID)
+				return utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxID)
 			}
 
 			// we've determined that this utxo was not filtered out due to being spent, so it must be due to locktime

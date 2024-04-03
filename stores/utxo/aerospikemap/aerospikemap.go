@@ -443,7 +443,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 						}
 
 						s.logger.Debugf("utxo %s was spent by %s", spend.TxID.String(), spendingTxHash)
-						return utxostore.NewErrSpent(spendingTxHash)
+						return utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxHash)
 					}
 				}
 			}

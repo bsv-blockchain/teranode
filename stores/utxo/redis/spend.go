@@ -62,7 +62,7 @@ func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, 
 			return err
 		}
 
-		return utxostore.NewErrSpent(hash)
+		return utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, hash)
 	}
 
 	return fmt.Errorf("unknown response from spend: %v", res)
