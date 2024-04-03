@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -10,6 +11,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -21,7 +23,86 @@ type txMinedStatus interface {
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
 }
 
+type txMinedMessage struct {
+	ctx         context.Context
+	logger      ulogger.Logger
+	txMetaStore txMinedStatus
+	subtrees    []*util.Subtree
+	blockHash   *chainhash.Hash
+	blockID     uint32
+	done        chan error
+}
+
+var (
+	txMinedChan = make(chan *txMinedMessage, 1024)
+	txMinedOnce sync.Once
+
+	// prometheus metrics
+	prometheusUpdateTxMinedCh       prometheus.Counter
+	prometheusUpdateTxMinedQueue    prometheus.Gauge
+	prometheusUpdateTxMinedDuration prometheus.Histogram
+)
+
+func initWorker() {
+	prometheusUpdateTxMinedCh = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "model",
+		Name:      "update_tx_mined_ch",
+		Help:      "Number of tx mined messages sent to the worker",
+	})
+	prometheusUpdateTxMinedQueue = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "model",
+		Name:      "update_tx_mined_queue",
+		Help:      "Number of tx mined messages in the queue",
+	})
+	prometheusUpdateTxMinedDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "model",
+		Name:      "update_tx_mined_duration",
+		Help:      "Duration of updating tx mined status",
+		Buckets:   util.MetricsBucketsSeconds,
+	})
+
+	go func() {
+		for msg := range txMinedChan {
+			if err := updateTxMinedStatus(msg.ctx, msg.logger, msg.txMetaStore, msg.subtrees, msg.blockHash, msg.blockID); err != nil {
+				msg.done <- err
+			} else {
+				msg.done <- nil
+			}
+
+			prometheusUpdateTxMinedQueue.Set(float64(len(txMinedChan)))
+		}
+	}()
+}
+
 func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore txMinedStatus, subtrees []*util.Subtree,
+	blockHash *chainhash.Hash, blockID uint32) error {
+
+	// start the worker, if not already started
+	txMinedOnce.Do(initWorker)
+
+	startTime := time.Now()
+	defer func() {
+		prometheusUpdateTxMinedDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+	}()
+
+	done := make(chan error)
+
+	txMinedChan <- &txMinedMessage{
+		ctx:         ctx,
+		logger:      logger,
+		txMetaStore: txMetaStore,
+		subtrees:    subtrees,
+		blockHash:   blockHash,
+		blockID:     blockID,
+		done:        done,
+	}
+
+	prometheusUpdateTxMinedCh.Inc()
+
+	return <-done
+}
+
+func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore txMinedStatus, subtrees []*util.Subtree,
 	blockHash *chainhash.Hash, blockID uint32) error {
 
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "UpdateTxMinedStatus")
@@ -31,8 +112,8 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 
 	logger.Infof("[UpdateTxMinedStatus][%s] blockID %d for %d subtrees", blockHash.String(), blockID, len(subtrees))
 
-	updateTxMinedStatus := gocore.Config().GetBool("txmeta_store_updateTxMinedStatus", true)
-	if !updateTxMinedStatus {
+	updateTxMinedStatusEnabled := gocore.Config().GetBool("txmeta_store_updateTxMinedStatus", true)
+	if !updateTxMinedStatusEnabled {
 		return nil
 	}
 

@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
@@ -89,10 +90,10 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		txMeta, err := txMetaStore.Get(context.Background(), tx0.TxIDChainHash())
+		txMeta, err := txMetaStore.Get(context.Background(), tx1.TxIDChainHash())
 		require.NoError(t, err)
 
-		_ = txMeta
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
 	})
 }
 
