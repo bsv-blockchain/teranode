@@ -304,9 +304,19 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 		// The function was called by BlockFound, and we had not already blessed the subtree, so we load the subtree from the store to get the hashes
 		// get subtree from network over http using the baseUrl
-		txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, &v.SubtreeHash, v.BaseUrl)
-		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String()), err)
+		for retries := 0; retries < 3; retries++ {
+			txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, &v.SubtreeHash, v.BaseUrl)
+			if err != nil {
+				if retries < 2 {
+					backoff := time.Duration(2^retries) * time.Second
+					u.logger.Warnf("[validateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
+					time.Sleep(backoff)
+				} else {
+					return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String()), err)
+				}
+			} else {
+				break
+			}
 		}
 	}
 
@@ -507,7 +517,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	buffer := make([]byte, chainhash.HashSize)
 	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4) // 4MB buffer
 
-	u.logger.Infof("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
+	u.logger.Debugf("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
 	for {
 		n, err := io.ReadFull(bufferedReader, buffer)
 		if n > 0 {
@@ -525,15 +535,9 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 		}
 	}
 
-	// // the subtree bytes we got from our competing miner only contain the transaction hashes
-	// // it's basically just a list of 32 byte transaction hashes
-	// txHashes := make([]chainhash.Hash, len(subtreeBytes)/chainhash.HashSize)
-	// for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
-	// 	txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
-	// }
 	stat.NewStat("3. createTxHashes").AddTime(start)
 
-	u.logger.Infof("[getSubtreeTxHashes][%s] done with subtree response", subtreeHash.String())
+	u.logger.Debugf("[getSubtreeTxHashes][%s] done with subtree response", subtreeHash.String())
 
 	return txHashes, nil
 }
