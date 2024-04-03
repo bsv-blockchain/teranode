@@ -526,6 +526,8 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		sIdx := sIdx
 		subtree := subtree
 		g.Go(func() error {
+			checkParentTxHashes := make([]chainhash.Hash, 0, len(subtree.Nodes))
+
 			var parentTxHashes []chainhash.Hash
 			bloomStats.mu.Lock()
 			bloomStats.QueryCounter += uint64(len(subtree.Nodes))
@@ -616,18 +618,29 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						// in a previous block here above. No need to check again
 						continue
 					}
+					checkParentTxHashes = append(checkParentTxHashes, parentTxHash)
+				}
+			}
 
+			logger.Infof("Block:validOrderAndBlessed: checking %d parent transactio0ns", len(checkParentTxHashes))
+
+			// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
+			parentG := errgroup.Group{}
+			parentG.SetLimit(1024 * 32)
+			for _, parentTxHash := range checkParentTxHashes {
+				parentTxHash := parentTxHash
+				parentG.Go(func() error {
 					// check whether the parent transaction has already been mined in a block on our chain
 					// we need to get back to the txMetaStore for this, to make sure we have the latest data
 					// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 					// for the first situation we don't start validating the current block until the parent is validated.
 					parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxHash)
 					if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
-						return fmt.Errorf("error getting parent transaction %s of %s from txMetaStore: %v", parentTxHash.String(), subtreeNode.Hash.String(), err)
+						return fmt.Errorf("error getting parent transaction %s from txMetaStore: %v", parentTxHash.String(), err)
 					}
 					// parent tx meta was not found, must be old, ignore
 					if parentTxMeta == nil {
-						continue
+						return nil
 					}
 
 					// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
@@ -646,9 +659,15 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 						logger.Errorf("parent error currentBlockHeaderIDsMap: %v", ids)
 						logger.Errorf("parent error parentTxMeta: %v", parentTxMeta)
-						return fmt.Errorf("parent transaction %s of %s is not valid on our current chain, found %d times", parentTxHash.String(), subtreeNode.Hash.String(), len(foundInPreviousBlocks))
+						return fmt.Errorf("parent transaction %s is not valid on our current chain, found %d times", parentTxHash.String(), len(foundInPreviousBlocks))
 					}
-				}
+
+					return nil
+				})
+			}
+
+			if err := parentG.Wait(); err != nil {
+				return err
 			}
 
 			return nil
