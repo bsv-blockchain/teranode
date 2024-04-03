@@ -340,17 +340,10 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.U
 			return
 		}
 
-		utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
-		for i, hash := range data.UtxoHashes {
-			utxoHashesBytes[i] = hash.CloneBytes()
-		}
-
 		if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
-			Txid:     data.TxIDChainHash.CloneBytes(),
-			Fee:      data.Fee,
-			Size:     data.Size,
-			Locktime: data.LockTime,
-			Utxos:    utxoHashesBytes,
+			Txid: data.TxIDChainHash.CloneBytes(),
+			Fee:  data.Fee,
+			Size: data.Size,
 		}); err != nil {
 			ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
 		}
@@ -382,7 +375,7 @@ func (ba *BlockAssembly) HealthGRPC(_ context.Context, _ *blockassembly_api.Empt
 
 var txsProcessed = atomic.Uint64{}
 
-func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
+func (ba *BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
 	startTime := time.Now()
 	defer func() {
 		if txsProcessed.Load()%1000 == 0 {
@@ -435,7 +428,7 @@ func (ba *BlockAssembly) RemoveTx(_ context.Context, req *blockassembly_api.Remo
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
-func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
+func (ba *BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
 	// start := gocore.CurrentTime()
 	// defer func() {
 	// 	addTxBatchGrpc.AddTime(start)

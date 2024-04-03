@@ -201,11 +201,9 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 
 		// first we send the tx to the block assembler
 		if err = v.sendToBlockAssembler(setSpan, &blockassembly.Data{
-			TxIDChainHash:  tx.TxIDChainHash(),
-			Fee:            txMetaData.Fee,
-			Size:           uint64(tx.Size()),
-			LockTime:       tx.LockTime,
-			ParentTxHashes: parentTxHashes,
+			TxIDChainHash: tx.TxIDChainHash(),
+			Fee:           txMetaData.Fee,
+			Size:          uint64(tx.Size()),
 		}, spentUtxos); err != nil {
 			err = errors.Join(ErrInternal, fmt.Errorf("error sending tx to block assembler: %v", err))
 
@@ -407,17 +405,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 		v.blockassemblyKafkaChan <- bData.Bytes()
 		prometheusValidatorSendToBlockAssemblyKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	} else {
-		utxoHashes := make([]*chainhash.Hash, len(bData.UtxoHashes))
-		for i, h := range bData.UtxoHashes {
-			utxoHashes[i] = &h
-		}
-
-		parentTxHashes := make([]*chainhash.Hash, len(bData.ParentTxHashes))
-		for i, h := range bData.ParentTxHashes {
-			parentTxHashes[i] = &h
-		}
-
-		if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size, bData.LockTime, utxoHashes, parentTxHashes); err != nil {
+		if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size); err != nil {
 			e := fmt.Errorf("error calling blockAssembler Store(): %v", err)
 			traceSpan.RecordError(e)
 			return e

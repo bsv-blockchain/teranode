@@ -65,24 +65,11 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	return client
 }
 
-func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, locktime uint32, utxoHashes []*chainhash.Hash, parentTxHashes []*chainhash.Hash) (bool, error) {
-	utxoBytes := make([][]byte, len(utxoHashes))
-	for i, h := range utxoHashes {
-		utxoBytes[i] = h[:]
-	}
-
-	parentBytes := make([][]byte, len(parentTxHashes))
-	for i, h := range parentTxHashes {
-		parentBytes[i] = h[:]
-	}
-
+func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
 	req := &blockassembly_api.AddTxRequest{
-		Txid:     hash[:],
-		Fee:      fee,
-		Size:     size,
-		Locktime: locktime,
-		Utxos:    utxoBytes,
-		Parents:  parentBytes,
+		Txid: hash[:],
+		Fee:  fee,
+		Size: size,
 	}
 
 	if s.batchSize == 0 {
