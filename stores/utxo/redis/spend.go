@@ -34,7 +34,8 @@ func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, 
 	}
 
 	if s == "NOT_FOUND" {
-		return utxostore.ErrNotFound
+		// panic("NOT_FOUND")
+		// return utxostore.ErrNotFound
 	}
 
 	if strings.HasPrefix(s, "LOCKED") {

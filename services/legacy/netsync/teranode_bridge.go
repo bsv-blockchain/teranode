@@ -210,7 +210,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 			}
 
 			if currentHeight != int32(blockHeight-1) {
-				log.Warnf("HandleBlock received for %s, expected height %d, got %d - IGNORING...", block.Hash(), tb.height.Load()+1, blockHeight)
+				log.Infof("HandleBlock received for %s, expected height %d, got %d - IGNORING...", block.Hash(), tb.height.Load()+1, blockHeight)
 				return nil
 			}
 		}
@@ -218,7 +218,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 		if tx.IsCoinbase() {
 			if err := tb.utxoStore.Store(context.TODO(), tx, tx.LockTime); err != nil {
 				if errors.Is(err, utxo.ErrAlreadyExists) {
-					log.Warnf("Coinbase tx %s already exists in utxo store", txHash)
+					log.Debugf("Coinbase tx %s already exists in utxo store", txHash)
 				} else {
 					return fmt.Errorf("Failed to store coinbase tx %s: %w", txHash, err)
 				}
@@ -343,7 +343,7 @@ func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
 	currentHeight := tb.height.Load()
 	if currentHeight > 0 {
 		if block.Height() != tb.height.Load()+1 {
-			log.Warnf("HandleBlockConnected received for %s, expected height %d, got %d - IGNORING...", block.Hash(), tb.height.Load()+1, block.Height())
+			log.Infof("HandleBlockConnected received for %s, expected height %d, got %d - IGNORING...", block.Hash(), tb.height.Load()+1, block.Height())
 			return nil
 		}
 	}
@@ -417,6 +417,9 @@ func (tb *TeranodeBridge) TxHandler(c echo.Context) error {
 }
 
 func (tb *TeranodeBridge) TempHeaderHandler(c echo.Context) error {
+	// TODO: SAO - remove
+	// panic("TernodeBridge has started catchup.")
+
 	hash, err := chainhash.NewHashFromStr(c.Param("hash"))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, "invalid hash")
@@ -454,7 +457,7 @@ func (tb *TeranodeBridge) TxBatchHandler() func(c echo.Context) error {
 				}
 			}
 
-			log.Infof("ReadTXID *********** %s", hash)
+			// log.Infof("ReadTXID *********** %s", hash)
 
 			if hash.IsEqual(model.CoinbasePlaceholderHash) {
 				continue

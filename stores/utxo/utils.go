@@ -30,7 +30,7 @@ func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHei
 // GetFeesAndUtxoHashes returns the fees and utxo hashes for the outputs of a transaction.
 // It will return an error if the context is cancelled.
 func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
-	if !tx.IsExtended() && !tx.IsCoinbase() {
+	if !util.IsExtended(tx, util.GenesisActivationHeight) && !tx.IsCoinbase() {
 		return 0, nil, fmt.Errorf("tx is not extended")
 	}
 
@@ -48,16 +48,14 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.
 		case <-ctx.Done():
 			return fees, utxoHashes, fmt.Errorf("[GetFeesAndUtxoHashes] timeout - managed to prepare %d of %d", i, len(tx.Outputs))
 		default:
-			if output.Satoshis > 0 {
-				fees -= output.Satoshis
+			fees -= output.Satoshis
 
-				utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
-				if utxoErr != nil {
-					return 0, nil, fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
-				}
-
-				utxoHashes = append(utxoHashes, utxoHash)
+			utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
+			if utxoErr != nil {
+				return 0, nil, fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
 			}
+
+			utxoHashes = append(utxoHashes, utxoHash)
 		}
 	}
 
@@ -70,19 +68,18 @@ func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
 
 	g := errgroup.Group{}
 	for i, output := range tx.Outputs {
-		if output.Satoshis > 0 {
-			i := i
-			output := output
-			g.Go(func() error {
-				utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
-				if utxoErr != nil {
-					return fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
-				}
+		i := i
+		output := output
 
-				utxoHashes[i] = *utxoHash
-				return nil
-			})
-		}
+		g.Go(func() error {
+			utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
+			if utxoErr != nil {
+				return fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
+			}
+
+			utxoHashes[i] = *utxoHash
+			return nil
+		})
 	}
 
 	if err := g.Wait(); err != nil {

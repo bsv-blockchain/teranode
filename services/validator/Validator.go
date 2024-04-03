@@ -497,7 +497,7 @@ func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx, block
 
 	// 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
 	//    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
-	if err := v.checkOutputs(tx); err != nil {
+	if err := v.checkOutputs(tx, blockHeight); err != nil {
 		return err
 	}
 
@@ -547,16 +547,11 @@ func (v *Validator) checkTxSize(txSize int, policy *bitcoin.Settings) error {
 	return nil
 }
 
-func (v *Validator) checkOutputs(tx *bt.Tx) error {
+func (v *Validator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
 
-	// TODO: improve this?
 	minOutput := uint64(0)
-	height, err := v.utxoStore.GetBlockHeight()
-	if err != nil {
-		return err
-	}
-	if height >= util.GenesisActivationHeight {
+	if blockHeight >= util.GenesisActivationHeight {
 		minOutput = bt.DustLimit
 	}
 
