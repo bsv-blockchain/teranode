@@ -584,9 +584,12 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 						// there is a chance that the bloom filter has a false positive, but the txMetaStore has pruned
 						// the transaction. This will cause the block to be incorrectly invalidated, but this is the safe
-						// option for now. TODO is there a better way to handle this?
+						// option for now.
 						txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
 						if err != nil {
+							if errors.Is(err, txmetastore.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
+								continue
+							}
 							return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
 						}
 

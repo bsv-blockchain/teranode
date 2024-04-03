@@ -729,9 +729,11 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 
 	// send the block for validation in the blockvalidation server, this makes sure we also mark the block as
 	// invalid if there is something wrong with it
-	if err = ba.blockValidKafkaProducer.Send(block.Hash().CloneBytes(), block.Hash().CloneBytes()); err != nil {
-		ba.logger.Errorf("[BlockAssembly][%s][%s] failed to send block for validation: %s", jobID, block.Hash().String(), err)
-	}
+	// TODO this does not work properly, since the subtreeMeta is not stored with the subtree from our own blocks
+	//      this needs to be changed before re-activating this one
+	//if err = ba.blockValidKafkaProducer.Send(block.Hash().CloneBytes(), block.Hash().CloneBytes()); err != nil {
+	//	ba.logger.Errorf("[BlockAssembly][%s][%s] failed to send block for validation: %s", jobID, block.Hash().String(), err)
+	//}
 
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
 	callerSpan := opentracing.SpanFromContext(ctx)
