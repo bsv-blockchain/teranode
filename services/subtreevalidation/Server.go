@@ -239,12 +239,13 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 			// Wait for a bit before retrying.
 			select {
 			case <-ctx.Done():
-				return nil, fmt.Errorf("Context cancelled")
-			case <-time.After(500 * time.Millisecond):
+				return nil, fmt.Errorf("context cancelled")
+			case <-time.After(1 * time.Second):
 				retryCount++
 
-				if retryCount > 10 {
-					return nil, fmt.Errorf("Failed to get lock for subtree %s after 10 retries", hash.String())
+				// will retry for 20 seconds
+				if retryCount > 20 {
+					return nil, fmt.Errorf("failed to get lock for subtree %s after 10 retries", hash.String())
 				}
 
 				// Automatically retries the loop.
