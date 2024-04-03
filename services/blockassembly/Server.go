@@ -49,15 +49,16 @@ type BlockAssembly struct {
 	blockAssembler *BlockAssembler
 	logger         ulogger.Logger
 
-	blockchainClient      blockchain.ClientI
-	txStore               blob.Store
-	utxoStore             utxostore.Interface
-	txMetaStore           txmeta_store.Store
-	subtreeStore          blob.Store
-	subtreeTTL            time.Duration
-	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
-	blockSubmissionChan   chan *BlockSubmissionRequest
-	blockAssemblyDisabled bool
+	blockchainClient        blockchain.ClientI
+	txStore                 blob.Store
+	utxoStore               utxostore.Interface
+	txMetaStore             txmeta_store.Store
+	subtreeStore            blob.Store
+	subtreeTTL              time.Duration
+	jobStore                *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
+	blockSubmissionChan     chan *BlockSubmissionRequest
+	blockAssemblyDisabled   bool
+	blockValidKafkaProducer util.KafkaProducerI
 }
 
 type subtreeRetrySend struct {
@@ -123,6 +124,14 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 
 	// init the block assembler for this server
 	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+
+	kafkaBlocksValidateConfig, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
+	if err == nil && ok {
+		_, ba.blockValidKafkaProducer, err = util.ConnectToKafka(kafkaBlocksValidateConfig)
+		if err != nil {
+			return fmt.Errorf("[BlockAssembly:Init] unable to connect to kafka for block validation: %v", err)
+		}
+	}
 
 	// start the new subtree retry processor in the background
 	go func() {
@@ -716,6 +725,12 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 	// add block to the blockchain
 	if err = ba.blockchainClient.AddBlock(ctx, block, ""); err != nil {
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to add block: %w", jobID, block.Hash().String(), err)
+	}
+
+	// send the block for validation in the blockvalidation server, this makes sure we also mark the block as
+	// invalid if there is something wrong with it
+	if err = ba.blockValidKafkaProducer.Send(block.Hash().CloneBytes(), block.Hash().CloneBytes()); err != nil {
+		ba.logger.Errorf("[BlockAssembly][%s][%s] failed to send block for validation: %s", jobID, block.Hash().String(), err)
 	}
 
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background

@@ -65,8 +65,7 @@ type Server struct {
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
 	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
 	// bloom filter stats for all blocks processed
-	bloomFilterStats *model.BloomStats
-	stats            *gocore.Stat
+	stats *gocore.Stat
 }
 
 // New will return a server instance with the logger stored within it
@@ -95,7 +94,6 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		catchupCh:            make(chan processBlockCatchup, catchupChBuffer),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
-		bloomFilterStats:     model.NewBloomStats(),
 		stats:                gocore.NewStat("blockvalidation"),
 	}
 
@@ -130,8 +128,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
 
 	go u.processSubtreeNotify.Start()
-
-	go u.bloomFilterStats.BloomFilterStatsProcessor(ctx)
 
 	go func() {
 		for {
@@ -269,6 +265,20 @@ func (u *Server) Start(ctx context.Context) error {
 				}
 			}()
 		}
+	}
+
+	kafkaBlocksValidateConfigURL, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
+	if err == nil && ok {
+		u.logger.Infof("[BlockValidation] starting block validation Kafka client on address: %s, with %d workers", kafkaBlocksValidateConfigURL.String(), 1)
+
+		util.StartKafkaListener(ctx, u.logger, kafkaBlocksValidateConfigURL, 1, "BlockValidation", "blockvalidation", func(_ context.Context, blockHashBytes []byte, _ []byte) error {
+			blockHash, err := chainhash.NewHash(blockHashBytes)
+			if err != nil {
+				u.logger.Errorf("[BlockValidation] failed to parse block hash from kafka: %v", err)
+				return nil
+			}
+			return u.blockValidation.validateBlock(ctx, blockHash)
+		})
 	}
 
 	// this will block
@@ -521,7 +531,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
-	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.bloomFilterStats)
+	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)
 	if err != nil {
 		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}
@@ -697,7 +707,7 @@ LOOP:
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
 	for block := range validateBlocksChan {
-		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.bloomFilterStats); err != nil {
+		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
 	}
