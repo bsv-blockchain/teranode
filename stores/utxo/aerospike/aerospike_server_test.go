@@ -5,6 +5,7 @@ package aerospike
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"testing"
 	"time"
@@ -181,6 +182,27 @@ func TestAerospike(t *testing.T) {
 
 		resp, err = db.Get(ctx, spend)
 		require.ErrorIs(t, err, utxo.ErrNotFound)
+	})
+
+	t.Run("aerospike spend with max expiry", func(t *testing.T) {
+		cleanDB(t, client, tx)
+		err = db.Store(ctx, tx)
+		require.NoError(t, err) // first store should work
+
+		db.expiration = math.MaxUint32
+
+		err = db.Spend(ctx, spends)
+		require.NoError(t, err) // first spend should work
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		assert.Equal(t, uint32(math.MaxUint32), value.Expiration)
+
+		time.Sleep(2 * time.Second)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		assert.Equal(t, uint32(math.MaxUint32), value.Expiration)
 	})
 
 	t.Run("aerospike reset", func(t *testing.T) {
