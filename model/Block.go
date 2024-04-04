@@ -731,63 +731,71 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		i := i
 		if b.SubtreeSlices[i] == nil {
 			subtreeHash := subtreeHash
+
 			g.Go(func() error {
 				// retry to get the subtree from the store 3 times, there are instances when we get an EOF error,
 				// probably when being moved to permanent storage in another service
 				retries := 0
 				subtree := &util.Subtree{}
 				for { // retry for loop
-					subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
-					if err != nil {
-						if retries < 3 {
-							retries++
-							backoff := time.Duration(2^retries) * time.Second
-							logger.Warnf("failed to get subtree %s, retrying %d in %s", subtreeHash.String(), retries, backoff.String())
-							time.Sleep(backoff)
-							continue
-						}
-						return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
-					}
+					select {
+					case <-gCtx.Done():
+						return gCtx.Err()
+					default:
 
-					err = subtree.DeserializeFromReader(subtreeReader)
-					if err != nil {
+						subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+						if err != nil {
+							if retries < 3 {
+								retries++
+								backoff := time.Duration(2^retries) * time.Second
+								logger.Warnf("failed to get subtree %s, retrying %d in %s", subtreeHash.String(), retries, backoff.String())
+								time.Sleep(backoff)
+								continue
+							}
+							return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
+						}
+
+						err = subtree.DeserializeFromReader(subtreeReader)
+						if err != nil {
+							_ = subtreeReader.Close()
+							if retries < 3 {
+								retries++
+								backoff := time.Duration(2^retries) * time.Second
+								logger.Warnf("failed to deserialize subtree %s, retrying %d in %s", subtreeHash.String(), retries, backoff)
+								time.Sleep(backoff)
+								continue
+							}
+							return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
+						}
+
+						b.SubtreeSlices[i] = subtree
+
+						sizeInBytes.Add(subtree.SizeInBytes)
+						txCount.Add(uint64(subtree.Length()))
+
 						_ = subtreeReader.Close()
-						if retries < 3 {
-							retries++
-							backoff := time.Duration(2^retries) * time.Second
-							logger.Warnf("failed to deserialize subtree %s, retrying %d in %s", subtreeHash.String(), retries, backoff)
-							time.Sleep(backoff)
-							continue
-						}
-						return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
+						break
+
 					}
 
-					b.SubtreeSlices[i] = subtree
+					// get subtree meta
+					subtreeMetaReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("meta"))
+					if err != nil {
+						// this is just an optimization, we can always get the data from the txmeta store
+						// logger.Warnf("failed to get subtree meta %s: %w", subtreeHash.String(), err)
+						return nil
+					}
+					defer func() {
+						_ = subtreeMetaReader.Close()
+					}()
 
-					sizeInBytes.Add(subtree.SizeInBytes)
-					txCount.Add(uint64(subtree.Length()))
+					b.SubtreeMetaSlices[i], err = util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
+					if err != nil {
+						logger.Warnf("failed to deserialize subtree meta %s: %w", subtreeHash.String(), err)
+					}
 
-					_ = subtreeReader.Close()
-					break
-				}
-
-				// get subtree meta
-				subtreeMetaReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("meta"))
-				if err != nil {
-					// this is just an optimization, we can always get the data from the txmeta store
-					// logger.Warnf("failed to get subtree meta %s: %w", subtreeHash.String(), err)
 					return nil
 				}
-				defer func() {
-					_ = subtreeMetaReader.Close()
-				}()
-
-				b.SubtreeMetaSlices[i], err = util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
-				if err != nil {
-					logger.Warnf("failed to deserialize subtree meta %s: %w", subtreeHash.String(), err)
-				}
-
-				return nil
 			})
 		}
 	}

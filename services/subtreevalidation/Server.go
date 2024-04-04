@@ -41,6 +41,7 @@ type Server struct {
 }
 
 func New(
+	ctx context.Context,
 	logger ulogger.Logger,
 	subtreeStore blob.Store,
 	txStore blob.Store,
@@ -67,7 +68,7 @@ func New(
 	// create a caching tx meta store
 	if gocore.Config().GetBool("subtreevalidation_txMetaCacheEnabled", true) {
 		logger.Infof("Using cached version of tx meta store")
-		u.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
+		u.txMetaStore = txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, txMetaStore)
 	} else {
 		u.txMetaStore = txMetaStore
 	}

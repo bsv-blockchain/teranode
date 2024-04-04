@@ -125,7 +125,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}
 
-	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
+	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
 
 	go u.processSubtreeNotify.Start()
 
@@ -251,7 +251,7 @@ func (u *Server) Start(ctx context.Context) error {
 								u.logger.Errorf("[BlockValidation] failed getting block from blockchain service")
 							}
 
-							u.logger.Infof("[BlockValidation][%s] processing block into blockpersister kafka producer", block.Hash().String())
+							u.logger.Debugf("[BlockValidation][%s] processing block into blockpersister kafka producer", block.Hash().String())
 
 							for _, subtreeHash := range block.Subtrees {
 								subtreeBytes := subtreeHash.CloneBytes()

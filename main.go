@@ -193,7 +193,7 @@ func main() {
 	// blockchain service
 	if startBlockchain {
 		var err error
-		blockchainService, err = blockchain.New(logger.New("bchn"))
+		blockchainService, err = blockchain.New(ctx, logger.New("bchn"))
 		if err != nil {
 			panic(err)
 		}
@@ -279,7 +279,7 @@ func main() {
 			logger.Fatalf("could not create validator [%v]", err)
 		}
 
-		if err := sm.AddService("Subtree Validation", subtreevalidation.New(
+		if err := sm.AddService("Subtree Validation", subtreevalidation.New(ctx,
 			logger.New("stval"),
 			getSubtreeStore(logger),
 			getTxStore(logger),

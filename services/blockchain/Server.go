@@ -44,7 +44,7 @@ type Blockchain struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger) (*Blockchain, error) {
 	initPrometheusMetrics()
 
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
@@ -60,7 +60,7 @@ func New(logger ulogger.Logger) (*Blockchain, error) {
 		return nil, err
 	}
 
-	subscriptionCtx, cancelSubscriptions := context.WithCancel(context.Background())
+	subscriptionCtx, cancelSubscriptions := context.WithCancel(ctx)
 
 	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
 
@@ -108,6 +108,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
+				b.cancelSubscriptions()
 				return
 			case notification := <-b.notifications:
 				start := gocore.CurrentTime()
@@ -208,7 +209,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		return nil, err
 	}
 
-	b.logger.Warnf("[BlockPersister] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
+	b.logger.Debugf("[BlockPersister] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
 	if b.blockKafkaProducer != nil {
 		// TODO add a retry mechanism
 		go func(block *model.Block) {

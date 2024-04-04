@@ -52,7 +52,7 @@ type BlockValidation struct {
 	stats                              *gocore.Stat
 }
 
-func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
+func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
 	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation {
 
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
@@ -95,7 +95,6 @@ func NewBlockValidation(logger ulogger.Logger, blockchainClient blockchain.Clien
 		}
 	}()
 
-	ctx := context.Background()
 	if bv.blockchainClient != nil {
 		go func() {
 			for {
@@ -145,6 +144,7 @@ func (u *BlockValidation) start(ctx context.Context) {
 			u.logger.Infof("[BlockValidation:start] found %d blocks mined not set", len(blocksMinedNotSet))
 			for _, block := range blocksMinedNotSet {
 				blockHash := block.Hash()
+
 				g.Go(func() error {
 					u.logger.Infof("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
 					if err := u.setTxMined(gCtx, blockHash); err != nil {
