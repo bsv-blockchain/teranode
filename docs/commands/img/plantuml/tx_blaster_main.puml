@@ -1,13 +1,13 @@
 @startuml txblaster Initialization and Worker Management
 
-participant User
 participant "Main Application\n(txblaster)" as MainApp
 entity "Signal Handler" as SignalHandler
 participant Worker
 participant "Other Services\n(Coinbase, P2P, Propagation)" as ExternalServices
 
 == Initialization ==
-User -> MainApp : Start txblaster
+MainApp -> MainApp : Init and Start
+activate MainApp
 MainApp -> MainApp : Parse command-line arguments
 MainApp -> MainApp : Load configurations
 MainApp -> ExternalServices : Setup P2P networking
@@ -29,5 +29,9 @@ SignalHandler -> MainApp : Notify shutdown
 MainApp -> Worker : Signal workers to shutdown gracefully
 Worker -> ExternalServices : Disconnect & cleanup
 MainApp -> MainApp : Cleanup resources\nand exit
+
+deactivate MainApp
+
+left footer " Last Modified On: 3-April-2024. © 2024 Bitcoin SV. All rights reserved."
 
 @enduml

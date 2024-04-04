@@ -87,7 +87,7 @@ The application uses gRPC or Quic for communication with the propagation service
 ## 5. Directory Structure and Main Files
 
 ```
-.
+cmd/txblaster/
 ├── main.go               # Main entry point for the application; initializes and starts the txblaster service.
 ├── main_native.go        # Alternative entry point optimized for native execution, potentially for specific deployment environments.
 ├── txblaster
