@@ -230,3 +230,19 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 If no errors are seen, you have successfully installed the project and are ready to start working on the project or running the node.
 
 ---
+
+## 9. Troubleshooting
+
+### 9.1. Dependency errors / conflics
+
+Should you have errors with dependencies, try running the following commands:
+
+```bash
+go clean -cache
+go clean -modcache
+rm go.sum
+go mod tidy
+go mod download
+```
+
+This will effectively reset your cache and re-download all dependencies.
