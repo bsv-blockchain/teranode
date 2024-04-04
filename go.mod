@@ -32,7 +32,7 @@ require (
 	github.com/kpango/fastime v1.1.9
 	github.com/lib/pq v1.10.7
 	github.com/libp2p/go-libp2p v0.31.0
-	github.com/libp2p/go-libp2p-kad-dht v0.25.1
+	github.com/libp2p/go-libp2p-kad-dht v0.25.2
 	github.com/libp2p/go-libp2p-pubsub v0.9.3
 	github.com/libsv/go-bc v0.1.26
 	github.com/libsv/go-bk v0.1.6
