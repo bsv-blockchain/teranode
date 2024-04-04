@@ -3,6 +3,7 @@ package errors
 import (
 	"errors"
 	"fmt"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"strings"
 	"testing"
@@ -238,4 +239,14 @@ func createGRPCError(code ERR, msg string) error {
 		panic("failed to add details to status")
 	}
 	return st.Err()
+}
+
+func TestStorageError(t *testing.T) {
+	otherError := fmt.Errorf("storage error")
+	err := New(ERR_STORAGE_ERROR, "error getting transaction %s from txMetaStore", chainhash.Hash{}, otherError)
+	assert.NotNil(t, err)
+	assert.Equal(t, ERR_STORAGE_ERROR, err.Code)
+	assert.Equal(t, "error getting transaction 0000000000000000000000000000000000000000000000000000000000000000 from txMetaStore", err.Message)
+	assert.True(t, Is(err, ErrStorageError), "expected error to be of type ERR_STORAGE_ERROR")
+	assert.True(t, Is(err, otherError), "expected error to be of type otherError")
 }
