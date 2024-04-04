@@ -148,8 +148,10 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Warnf("[STORE_BATCH][%s] Failed to batch store aerospike txMeta in batchId %d: %v\n", len(batch), batchId, err)
-		// don't return, check each record in the batch for errors and process accordingly
+		s.logger.Errorf("[STORE_BATCH][%s] Failed to batch store aerospike txMeta in batchId %d: %v\n", len(batch), batchId, err)
+		for _, bItem := range batch {
+			bItem.done <- err
+		}
 	}
 
 	// batchOperate may have no errors, but some of the records may have failed
