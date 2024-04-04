@@ -60,8 +60,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 			if err != nil {
 				logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
 			} else {
-				// TODO change this back to Debug
-				logger.Warnf("[UTXOStore] setting block height to %d", meta.Height)
+				logger.Debugf("[UTXOStore] setting block height to %d", meta.Height)
 				setBlockHeight(ctx, logger, utxoStore, source, meta.Height)
 			}
 
@@ -79,8 +78,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 								logger.Warnf("[UTXOStore] could not get best block header for %s: %v", source, err)
 								continue
 							}
-							// TODO change this back to Debug
-							logger.Warnf("[UTXOStore] setting block height to %d", meta.Height)
+							logger.Debugf("[UTXOStore] setting block height to %d", meta.Height)
 							setBlockHeight(ctx, logger, utxoStore, source, meta.Height)
 						}
 					}
