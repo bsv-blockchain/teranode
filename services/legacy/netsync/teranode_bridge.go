@@ -348,7 +348,7 @@ func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
 		}
 	}
 
-	log.Warnf("HandleBlockConnected received for %s", block.Hash())
+	log.Warnf("HandleBlockConnected received for %s (%d)", block.Hash(), block.Height())
 
 	if err := tb.blockValidationClient.BlockFound(context.TODO(), block.Hash(), tb.baseUrl, uint32(block.Height()), true); err != nil {
 		return fmt.Errorf("error broadcasting block from %s: %w", tb.baseUrl, err)
