@@ -4,18 +4,18 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // Error functions
 func NewErrTxmetaNotFound(key *chainhash.Hash) error {
-	return ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, fmt.Sprintf("txmeta key %q", key.String()))
+	return errors.New(errors.ERR_NOT_FOUND, fmt.Sprintf("txmeta key %q", key.String()))
 }
 
 func NewErrTxmetaAlreadyExists(key *chainhash.Hash) error {
-	return ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, fmt.Sprintf("txmeta key %q", key.String()))
+	return errors.New(errors.ERR_NOT_FOUND, fmt.Sprintf("txmeta key %q", key.String()))
 }
 
 type MissingTxHash struct {

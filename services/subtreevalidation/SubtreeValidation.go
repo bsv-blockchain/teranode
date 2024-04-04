@@ -3,7 +3,6 @@ package subtreevalidation
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -11,11 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -159,7 +158,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 		if r := recover(); r != nil {
 			switch x := r.(type) {
 			case string:
-				err = errors.New(x)
+				err = errors.New(errors.ERR_UNKNOWN, x)
 			case error:
 				err = x
 			default:
@@ -361,7 +360,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		// 1. First attempt to load the txMeta from the cache...
 		missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice, failFast)
 		if err != nil {
-			if errors.Is(err, ubsverrors.ErrThresholdExceeded) {
+			if errors.Is(err, errors.ErrThresholdExceeded) {
 				u.logger.Warnf("[validateSubtreeInternal][%s] [attempt #%d] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String(), attempt)
 				time.Sleep(retrySleepDuration)
 				continue

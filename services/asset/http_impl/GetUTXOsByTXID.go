@@ -1,11 +1,10 @@
 package http_impl
 
 import (
-	"errors"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
@@ -45,7 +44,7 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 		b, err := h.repository.GetTransaction(c.Request().Context(), hash)
 		if err != nil {
 			h.logger.Errorf("[Asset_http][%s] GetUTXOsByTXID error getting transaction: %s", hash.String(), err.Error())
-			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

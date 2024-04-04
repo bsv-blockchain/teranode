@@ -5,14 +5,19 @@ option go_package = "github.com/bitcoin-sv/ubsv/ubsverrors";
 package ubsverrors;
 
 message UBSVError {
-  ErrorConstants code = 1;
+  ERR code = 1;
   string message = 2;
 } 
 
-enum ErrorConstants {
+enum ERR {
   UNKNOWN = 0;
   INVALID_ARGUMENT = 1;
   NOT_FOUND = 2;
   BLOCK_NOT_FOUND=3;
   THRESHOLD_EXCEEDED=4;
+  INVALID_BLOCK=5;
+  INVALID_TX_DOUBLE_SPEND=6;
+  SERVICE_UNAVAILABLE=7;
+  SERVICE_NOT_STARTED=8;
+  STORAGE_ERROR=9;
 }

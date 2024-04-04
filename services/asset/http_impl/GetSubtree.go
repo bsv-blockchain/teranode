@@ -4,16 +4,13 @@ import (
 	"bufio"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
-
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -62,7 +59,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			// this is only needed for the json response
 			subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
 			if err != nil {
-				if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+				if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
 				} else {
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -77,7 +74,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		// get subtree reader is much more efficient than get subtree
 		subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
 		if err != nil {
-			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -100,7 +97,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			return c.String(200, hex.EncodeToString(b))
 
 		default:
-			err = errors.New("bad read mode")
+			err = errors.New(errors.ERR_UNKNOWN, "bad read mode")
 			return sendError(c, http.StatusInternalServerError, 52, err)
 		}
 	}
@@ -200,7 +197,7 @@ func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	start2 := gocore.CurrentTime()
 	subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
 	if err != nil {
-		if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
 		} else {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

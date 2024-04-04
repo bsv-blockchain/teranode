@@ -1,14 +1,13 @@
 package http_impl
 
 import (
-	"errors"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -53,7 +52,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 			g.Go(func() error {
 				b, err := h.repository.GetTransaction(gCtx, &hash)
 				if err != nil {
-					if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file") {
+					if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such file") {
 						h.logger.Errorf("[GetTransactions][%s] tx not found in repository: %s", hash.String(), err.Error())
 						return echo.NewHTTPError(http.StatusNotFound, err.Error())
 					} else {
