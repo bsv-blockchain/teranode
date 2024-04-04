@@ -388,8 +388,10 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Warnf("[SPEND_BATCH][%d] failed to batch spend aerospike utxos in batchId %d: %v", batchId, len(batch), err)
-		// don't return, check each record in the batch for errors and process accordingly
+		s.logger.Errorf("[SPEND_BATCH][%d] failed to batch spend aerospike utxos in batchId %d: %v", batchId, len(batch), err)
+		for idx, bItem := range batch {
+			bItem.done <- fmt.Errorf("[SPEND_BATCH][%s] failed to batch spend aerospike utxo in batchId %d: %d - %w", bItem.spend.Hash.String(), batchId, idx, err)
+		}
 	}
 
 	// batchOperate may have no errors, but some of the records may have failed
