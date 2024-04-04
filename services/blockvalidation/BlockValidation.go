@@ -2,7 +2,6 @@ package blockvalidation
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
@@ -26,6 +26,13 @@ import (
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
+
+type revalidateBlockData struct {
+	block          *model.Block
+	blockHeaders   []*model.BlockHeader
+	blockHeaderIDs []uint32
+	retries        int
+}
 
 type BlockValidation struct {
 	logger                             ulogger.Logger
@@ -49,6 +56,7 @@ type BlockValidation struct {
 	blockBloomFiltersBeingCreated      *util.SwissMap
 	bloomFilterStats                   *model.BloomStats
 	setMinedChan                       chan *chainhash.Hash
+	revalidateBlockChan                chan revalidateBlockData
 	stats                              *gocore.Stat
 }
 
@@ -82,6 +90,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 		blockBloomFiltersBeingCreated:      util.NewSwissMap(0),
 		bloomFilterStats:                   model.NewBloomStats(),
 		setMinedChan:                       make(chan *chainhash.Hash, 1000),
+		revalidateBlockChan:                make(chan revalidateBlockData, 2),
 		stats:                              gocore.NewStat("blockvalidation"),
 	}
 
@@ -202,6 +211,38 @@ func (u *BlockValidation) start(ctx context.Context) {
 				}
 
 				u.logger.Infof("[BlockValidation:start][%s] block setTxMined DONE in %s", blockHash.String(), time.Since(startTime))
+			}
+		}
+	}()
+
+	// start a worker to revalidate blocks
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case blockData := <-u.revalidateBlockChan:
+				startTime := time.Now()
+				u.logger.Infof("[BlockValidation:start][%s] block revalidation Chan", blockData.block.String())
+
+				err := u.reValidateBlock(blockData)
+				if err != nil {
+					prometheusBlockValidationReValidateBlockErr.Observe(float64(time.Since(startTime).Microseconds() / 1_000_000))
+					u.logger.Errorf("[BlockValidation:start][%s] failed block revalidation, retrying: %s", blockData.block.String(), err)
+					// put the block back in the revalidateBlockChan
+					if blockData.retries < 3 {
+						blockData.retries++
+						go func() {
+							u.revalidateBlockChan <- blockData
+						}()
+					} else {
+						u.logger.Errorf("[BlockValidation:start][%s] failed block revalidation, retries exhausted: %s", blockData.block.String(), err)
+					}
+				} else {
+					prometheusBlockValidationReValidateBlock.Observe(float64(time.Since(startTime).Microseconds() / 1_000_000))
+				}
+
+				u.logger.Infof("[BlockValidation:start][%s] block revalidation Chan DONE in %s", blockData.block.String(), time.Since(startTime))
 			}
 		}
 	}()
@@ -489,8 +530,13 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 				u.logger.Errorf("[ValidateBlock][%s] block is not valid in background: %v", block.String(), err)
 
-				if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
-					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), err)
+				if errors.Is(err, errors.ErrStorageError) {
+					// storage error, block is not really invalid, but we need to re-validate
+					u.ReValidateBlock(block)
+				} else {
+					if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
+						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), err)
+					}
 				}
 			}
 		}()
@@ -556,6 +602,29 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	prometheusBlockValidationValidateBlockDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	u.logger.Infof("[ValidateBlock][%s] DONE but updateSubtreesTTL will continue in the background", block.Hash().String())
+
+	return nil
+}
+
+func (u *BlockValidation) ReValidateBlock(block *model.Block) {
+	u.logger.Errorf("[ValidateBlock][%s] re-validating block", block.String())
+
+}
+
+func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
+	ctx := context.Background()
+	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
+		u.logger.Errorf("[ValidateBlock][%s] block is not valid in background: %v", blockData.block.String(), err)
+
+		if errors.Is(err, errors.ErrStorageError) {
+			// storage error, block is not really invalid, but we need to re-validate
+			return err
+		} else {
+			if err = u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); err != nil {
+				u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), err)
+			}
+		}
+	}
 
 	return nil
 }
@@ -645,7 +714,7 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 		subtreeHash := subtreeHash
 		g.Go(func() error {
 			if err := u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0); err != nil {
-				return errors.Join(errors.New("failed to update subtree TTL"), err)
+				return errors.Join(errors.New(errors.ERR_STORAGE_ERROR, "failed to update subtree TTL"), err)
 			}
 			return nil
 		})

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"runtime"
@@ -13,19 +12,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/greatroar/blobloom"
-
-	"github.com/ordishs/gocore"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/greatroar/blobloom"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
+	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/sync/errgroup"
@@ -210,7 +208,7 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 	// check minimal block size
 	// 92 bytes is the bare minimum, but will not be valid
 	if len(blockBytes) < 92 {
-		return nil, errors.New("block is too small")
+		return nil, errors.New(errors.ERR_INVALID_BLOCK, "block is too small")
 	}
 
 	block := &Block{}
@@ -554,9 +552,12 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					parentTxHashes = subtreeMetaSlice.ParentTxHashes[snIdx]
 				} else {
 					// get from the txMetaStore
-					txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
+					txMeta, err := txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
 					if err != nil {
-						return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
+						if errors.Is(err, txmetastore.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
+							return errors.New(errors.ERR_NOT_FOUND, "transaction %s could not be found in tx txMetaStore", subtreeNode.Hash.String(), err)
+						}
+						return errors.New(errors.ERR_STORAGE_ERROR, "error getting transaction %s from txMetaStore", subtreeNode.Hash.String(), err)
 					} else if txMeta == nil {
 						return fmt.Errorf("transaction %s is not blessed", subtreeNode.Hash.String())
 					}
@@ -587,12 +588,12 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						// there is a chance that the bloom filter has a false positive, but the txMetaStore has pruned
 						// the transaction. This will cause the block to be incorrectly invalidated, but this is the safe
 						// option for now.
-						txMeta, err := txMetaStore.Get(gCtx, &subtreeNode.Hash)
+						txMeta, err := txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
 						if err != nil {
 							if errors.Is(err, txmetastore.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
 								continue
 							}
-							return fmt.Errorf("error getting transaction %s from txMetaStore: %v", subtreeNode.Hash.String(), err)
+							return errors.New(errors.ERR_STORAGE_ERROR, "error getting transaction %s from txMetaStore", subtreeNode.Hash.String(), err)
 						}
 
 						for _, blockID := range txMeta.BlockIDs {
@@ -636,7 +637,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					// for the first situation we don't start validating the current block until the parent is validated.
 					parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxHash)
 					if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
-						return fmt.Errorf("error getting parent transaction %s from txMetaStore: %v", parentTxHash.String(), err)
+						return errors.New(errors.ERR_STORAGE_ERROR, "error getting parent transaction %s from txMetaStore", parentTxHash.String(), err)
 					}
 					// parent tx meta was not found, must be old, ignore
 					if parentTxMeta == nil {
@@ -752,7 +753,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 								time.Sleep(backoff)
 								continue
 							}
-							return errors.Join(fmt.Errorf("failed to get subtree %s", subtreeHash.String()), err)
+							return errors.New(errors.ERR_STORAGE_ERROR, "failed to get subtree %s", subtreeHash.String(), err)
 						}
 
 						err = subtree.DeserializeFromReader(subtreeReader)
@@ -765,7 +766,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 								time.Sleep(backoff)
 								continue
 							}
-							return errors.Join(fmt.Errorf("failed to deserialize subtree %s", subtreeHash.String()), err)
+							return errors.New(errors.ERR_STORAGE_ERROR, "failed to deserialize subtree %s", subtreeHash.String(), err)
 						}
 
 						b.SubtreeSlices[i] = subtree
@@ -876,7 +877,7 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	}
 
 	if !b.Header.HashMerkleRoot.IsEqual(calculatedMerkleRootHash) {
-		return errors.New("merkle root does not match")
+		return errors.New(errors.ERR_INVALID_BLOCK, "merkle root does not match")
 	}
 
 	return nil
@@ -1010,7 +1011,7 @@ func medianTimestamp(timestamps []time.Time) (*time.Time, error) {
 	n := len(timestamps)
 
 	if n == 0 {
-		return nil, errors.New("no timestamps provided")
+		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "no timestamps provided")
 	}
 
 	sort.Slice(timestamps, func(i, j int) bool {
