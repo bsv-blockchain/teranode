@@ -123,7 +123,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	}
 
 	// init the block assembler for this server
-	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.txMetaStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
 
 	kafkaBlocksValidateConfig, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
 	if err == nil && ok {

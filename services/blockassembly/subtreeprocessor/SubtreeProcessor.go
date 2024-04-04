@@ -9,12 +9,14 @@ import (
 	"io"
 	"log"
 	"math"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -78,6 +80,7 @@ type SubtreeProcessor struct {
 	doubleSpendWindowDuration time.Duration
 	subtreeStore              blob.Store
 	utxoStore                 utxostore.Interface
+	txMetaStore               txmeta.Store
 	logger                    ulogger.Logger
 	stat                      *gocore.Stat
 }
@@ -87,7 +90,7 @@ var (
 )
 
 func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, utxoStore utxostore.Interface,
-	newSubtreeChan chan NewSubtreeRequest, options ...Options) *SubtreeProcessor {
+	txMetaStore txmeta.Store, newSubtreeChan chan NewSubtreeRequest, options ...Options) *SubtreeProcessor {
 
 	initPrometheusMetrics()
 
@@ -133,7 +136,8 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		removeMap:                 util.NewSwissMap(0),
 		doubleSpendWindowDuration: time.Duration(doubleSpendWindowMillis) * time.Millisecond,
 		subtreeStore:              subtreeStore,
-		utxoStore:                 utxoStore, // TODO should this be here? It is needed to remove the coinbase on moveDownBlock
+		utxoStore:                 utxoStore,
+		txMetaStore:               txMetaStore,
 		logger:                    logger,
 		stat:                      gocore.NewStat("subtreeProcessor").NewStat("Add", false),
 	}
@@ -290,6 +294,16 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 				Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
 			}
 		}
+
+		// delete tx meta
+		if err := stp.txMetaStore.Delete(context.Background(), block.CoinbaseTx.TxIDChainHash()); err != nil {
+			responseCh <- ResetResponse{
+				MovedDownBlocks: movedDownBlocks,
+				MovedUpBlocks:   movedUpBlocks,
+				Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting tx meta data for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
+			}
+		}
+
 		stp.currentBlockHeader = block.Header
 		movedDownBlocks = append(movedDownBlocks, block)
 	}
@@ -556,6 +570,11 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 				return fmt.Errorf("[moveDownBlock][%s] error deleting utxos for tx %s: %s", block.String(), block.CoinbaseTx.String(), err.Error())
 			}
 
+			// delete tx meta data
+			if err = stp.txMetaStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
+				return fmt.Errorf("[moveDownBlock][%s] error deleting tx meta data for tx %s: %s", block.String(), block.CoinbaseTx.String(), err.Error())
+			}
+
 			// skip the first transaction of the first subtree (coinbase)
 			for i := 1; i < len(subtreeNode); i++ {
 				_ = stp.addNode(subtreeNode[i], true)
@@ -607,6 +626,8 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 
 		err := recover()
 		if err != nil {
+			// print the stack trace
+			stp.logger.Errorf("%s", debug.Stack())
 			stp.logger.Errorf("[moveUpBlock][%s] with block: %s", block.String(), err)
 		}
 	}()
@@ -842,9 +863,14 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return fmt.Errorf("error extracting coinbase height via utxo store: %v", err)
 	}
 
-	if err := stp.utxoStore.Store(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
+	if err = stp.utxoStore.Store(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
 		// error will be handled below
 		stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
+	}
+
+	if _, err = stp.txMetaStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
+		// error will be handled below
+		stp.logger.Errorf("[SubtreeProcessor] error storing txmeta: %v", err)
 	}
 
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)

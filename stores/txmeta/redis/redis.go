@@ -188,7 +188,7 @@ func (r *Redis) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 	return nil
 }
 
-func (r *Redis) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (r *Redis) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*txmeta.Data, error) {
 	data, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
 		return nil, err

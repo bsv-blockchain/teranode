@@ -310,13 +310,22 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 		context.Background(),
 		ulogger.TestLogger{},
 		items.utxoStore,
+		items.txMetaStore,
 		items.blobStore,
 		items.blockchainClient,
 		items.newSubtreeChan,
 	)
 
 	// overwrite default subtree processor with a new one
-	ba.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, items.newSubtreeChan, subtreeprocessor.WithBatcherSize(1))
+	ba.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(
+		context.Background(),
+		ulogger.TestLogger{},
+		nil,
+		nil,
+		nil,
+		items.newSubtreeChan,
+		subtreeprocessor.WithBatcherSize(1),
+	)
 
 	items.blockAssembler = ba
 

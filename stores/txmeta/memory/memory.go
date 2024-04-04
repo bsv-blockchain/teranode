@@ -67,7 +67,7 @@ func (m *Memory) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingT
 	return nil
 }
 
-func (m *Memory) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (m *Memory) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*txmeta.Data, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

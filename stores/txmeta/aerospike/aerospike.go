@@ -413,7 +413,7 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*txmeta.MissingTxHa
 	return nil
 }
 
-func (s *Store) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (s *Store) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*txmeta.Data, error) {
 	start := time.Now()
 	var e error
 	defer func() {

@@ -19,7 +19,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
@@ -50,7 +49,6 @@ type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
 	logger                      ulogger.Logger
 	blockchainClient            blockchain.ClientI
-	utxoStore                   utxostore.Interface
 	subtreeStore                blob.Store
 	txStore                     blob.Store
 	txMetaStore                 txmeta_store.Store
@@ -69,7 +67,7 @@ type Server struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
+func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
 	txMetaStore txmeta_store.Store, validatorClient validator.Interface) *Server {
 
 	initPrometheusMetrics()
@@ -84,7 +82,6 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 	catchupChBuffer, _ := gocore.Config().GetInt("blockvalidation_catchupCh_buffer_size", 10)
 
 	bVal := &Server{
-		utxoStore:            utxoStore,
 		logger:               logger,
 		subtreeStore:         subtreeStore,
 		txStore:              txStore,

@@ -305,7 +305,6 @@ func main() {
 
 			if err := sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
-				getUtxoStore(ctx, logger),
 				getSubtreeStore(logger),
 				getTxStore(logger),
 				getTxMetaStore(logger),

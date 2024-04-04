@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"math/rand"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ type miningCandidateResponse struct {
 type BlockAssembler struct {
 	logger           ulogger.Logger
 	utxoStore        utxostore.Interface
+	txMetaStore      txmeta.Store
 	subtreeStore     blob.Store
 	blockchainClient blockchain.ClientI
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
@@ -56,7 +58,7 @@ type BlockAssembler struct {
 	resetWaitTime              atomic.Int32
 }
 
-func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface,
+func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore txmeta.Store,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) *BlockAssembler {
 
 	maxBlockReorgRollback, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgRollback", 100)
@@ -70,9 +72,10 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 	b := &BlockAssembler{
 		logger:                     logger,
 		utxoStore:                  utxoStore,
+		txMetaStore:                txMetaStore,
 		subtreeStore:               subtreeStore,
 		blockchainClient:           blockchainClient,
-		subtreeProcessor:           subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
+		subtreeProcessor:           subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, txMetaStore, newSubtreeChan),
 		miningCandidateCh:          make(chan chan *miningCandidateResponse),
 		currentChainMap:            make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
 		currentChainMapIDs:         make(map[uint32]struct{}, maxBlockReorgCatchup),

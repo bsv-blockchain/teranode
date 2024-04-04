@@ -178,7 +178,7 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 	return nil
 }
 
-func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (s *Store) Create(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) (*txmeta.Data, error) {
 	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 

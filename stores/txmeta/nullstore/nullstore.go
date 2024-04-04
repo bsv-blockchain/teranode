@@ -39,7 +39,7 @@ func (m *NullStore) MetaBatchDecorate(ctx context.Context, items []*txmeta.Missi
 	return nil
 }
 
-func (m *NullStore) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (m *NullStore) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*txmeta.Data, error) {
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
 		return txMeta, err
