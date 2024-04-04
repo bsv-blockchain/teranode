@@ -1,23 +1,38 @@
 syntax = "proto3";
 
-option go_package = "github.com/bitcoin-sv/ubsv/ubsverrors";
+option go_package = "github.com/bitcoin-sv/ubsv/errors";
 
-package ubsverrors;
+package errors;
 
-message UBSVError {
+message TError {
   ERR code = 1;
   string message = 2;
-} 
+}
 
 enum ERR {
   UNKNOWN = 0;
   INVALID_ARGUMENT = 1;
-  NOT_FOUND = 2;
-  BLOCK_NOT_FOUND=3;
-  THRESHOLD_EXCEEDED=4;
-  INVALID_BLOCK=5;
-  INVALID_TX_DOUBLE_SPEND=6;
-  SERVICE_UNAVAILABLE=7;
-  SERVICE_NOT_STARTED=8;
-  STORAGE_ERROR=9;
+  THRESHOLD_EXCEEDED = 2;
+  NOT_FOUND = 3;
+  PROCESSING = 4;
+  ERROR = 9;
+  BLOCK_NOT_FOUND=10;
+  BLOCK_INVALID=11;
+  BLOCK_ERROR=19;
+  SUBTREE_NOT_FOUND=20;
+  SUBTREE_INVALID=21;
+  SUBTREE_SERIALIZE_ERROR=22;
+  SUBTREE_DESERIALIZE_ERROR=23;
+  SUBTREE_ERROR=29;
+  TX_NOT_FOUND=30;
+  TX_INVALID=31;
+  TX_INVALID_DOUBLE_SPEND=32;
+  TX_ALREADY_EXISTS=33;
+  TX_ERROR=39;
+  SERVICE_UNAVAILABLE=40;
+  SERVICE_NOT_STARTED=41;
+  SERVICE_ERROR=49;
+  STORAGE_UNAVAILABLE=50;
+  STORAGE_NOT_STARTED=51;
+  STORAGE_ERROR=59;
 }

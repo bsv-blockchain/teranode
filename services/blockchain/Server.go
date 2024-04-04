@@ -625,7 +625,7 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 
 	blockHash, err := chainhash.NewHash(request.BlockHash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_INVALID_BLOCK, "[Blockchain] request's hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_INVALID, "[Blockchain] request's hash is not valid", err))
 	}
 
 	// invalidate block will also invalidate all child blocks
@@ -657,7 +657,7 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 
 	blockHash, err := chainhash.NewHash(request.BlockHash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_INVALID_BLOCK, "[Blockchain] request's hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_INVALID, "[Blockchain] request's hash is not valid", err))
 	}
 
 	// invalidate block will also invalidate all child blocks

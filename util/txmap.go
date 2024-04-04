@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/dolthub/swiss"
 )
 
@@ -113,7 +114,7 @@ func (s *SwissMapUint64) Put(hash [32]byte, n uint64) error {
 
 	exists := s.m.Has(hash)
 	if exists {
-		return fmt.Errorf("hash already exists in map")
+		return errors.New(errors.ERR_TX_ALREADY_EXISTS, "hash already exists in map")
 	}
 
 	s.m.Put(hash, n)

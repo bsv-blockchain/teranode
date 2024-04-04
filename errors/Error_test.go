@@ -21,13 +21,13 @@ func Test_NewCustomError(t *testing.T) {
 	assert.Equal(t, "resource not found", err.Message)
 
 	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", err)
-	thirdErr := New(ERR_INVALID_TX_DOUBLE_SPEND, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", secondErr)
-	anotherErr := New(ERR_INVALID_TX_DOUBLE_SPEND, "Another ERR, block is invalid")
+	thirdErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", secondErr)
+	anotherErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "Another ERR, block is invalid")
 	olderError := fmt.Errorf("older error: %w", thirdErr)
-	fourthErr := New(ERR_INVALID_BLOCK, "invalid tx double spend error", olderError)
+	fourthErr := New(ERR_BLOCK_INVALID, "invalid tx double spend error", olderError)
 
 	assert.ErrorIs(t, anotherErr, thirdErr)
-	assert.ErrorIs(t, fourthErr, ErrInvalidTxDoubleSpend)
+	assert.ErrorIs(t, fourthErr, ErrTxInvalidDoubleSpend)
 	assert.ErrorIs(t, fourthErr, err)
 	assert.NotErrorIs(t, anotherErr, fourthErr)
 }
@@ -70,13 +70,13 @@ func Test_ErrorIs(t *testing.T) {
 		t.Errorf("errors.Is failed to recognize NOT_FOUND error type")
 	}
 
-	err = New(ERR_INVALID_BLOCK, "invalid block error")
-	if !errors.Is(err, New(ERR_INVALID_BLOCK, "")) {
+	err = New(ERR_BLOCK_INVALID, "invalid block error")
+	if !errors.Is(err, New(ERR_BLOCK_INVALID, "")) {
 		t.Errorf("errors.Is failed to recognize INVALID_BLOCK error type")
 	}
 
-	err = New(ERR_INVALID_TX_DOUBLE_SPEND, "invalid tx double spend error")
-	if !errors.Is(err, New(ERR_INVALID_TX_DOUBLE_SPEND, "")) {
+	err = New(ERR_TX_INVALID_DOUBLE_SPEND, "invalid tx double spend error")
+	if !errors.Is(err, New(ERR_TX_INVALID_DOUBLE_SPEND, "")) {
 		t.Errorf("errors.Is failed to recognize INVALID_TX_DOUBLE_SPEND error type")
 	}
 
@@ -102,8 +102,8 @@ func Test_ErrorIs(t *testing.T) {
 }
 
 func Test_ErrorWrapWithAdditionalContext(t *testing.T) {
-	originalErr := New(ERR_INVALID_TX_DOUBLE_SPEND, "original error")
-	wrappedErr := New(ERR_INVALID_BLOCK, "Some more additional context", originalErr)
+	originalErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "original error")
+	wrappedErr := New(ERR_BLOCK_INVALID, "Some more additional context", originalErr)
 
 	if !errors.Is(wrappedErr, originalErr) {
 		t.Errorf("Wrapped error does not match original error")
@@ -154,14 +154,14 @@ func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
 		},
 		{
 			name:         "Invalid tx with details",
-			grpcError:    createGRPCError(ERR_INVALID_TX_DOUBLE_SPEND, "double spend detail"),
-			expectedCode: ERR_INVALID_TX_DOUBLE_SPEND,
+			grpcError:    createGRPCError(ERR_TX_INVALID_DOUBLE_SPEND, "double spend detail"),
+			expectedCode: ERR_TX_INVALID_DOUBLE_SPEND,
 			expectedMsg:  "double spend detail",
 		},
 		{
 			name:         "Invalid block with details",
-			grpcError:    createGRPCError(ERR_INVALID_BLOCK, "invalid block detail"),
-			expectedCode: ERR_INVALID_BLOCK,
+			grpcError:    createGRPCError(ERR_BLOCK_INVALID, "invalid block detail"),
+			expectedCode: ERR_BLOCK_INVALID,
 			expectedMsg:  "invalid block detail",
 		},
 		{
@@ -199,7 +199,7 @@ func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
 }
 
 func Test_UnwrapChain(t *testing.T) {
-	baseErr := New(ERR_INVALID_TX_DOUBLE_SPEND, "base error")
+	baseErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "base error")
 	wrappedOnce := fmt.Errorf("error wrapped once: %w", baseErr)
 	wrappedTwice := fmt.Errorf("error wrapped twice: %w", wrappedOnce)
 
@@ -225,7 +225,7 @@ func Test_GRPCErrorsRoundTrip(t *testing.T) {
 // Helper function to create a gRPC error with UBSVError details
 func createGRPCError(code ERR, msg string) error {
 	grpcCode := ErrorCodeToGRPCCode(code)
-	detail := &UBSVError{
+	detail := &TError{
 		Code:    code,
 		Message: msg,
 	}

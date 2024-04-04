@@ -530,12 +530,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 				u.logger.Errorf("[ValidateBlock][%s] block is not valid in background: %v", block.String(), err)
 
-				if errors.Is(err, errors.ErrStorageError) {
-					// storage error, block is not really invalid, but we need to re-validate
+				if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
+					// storage or processing error, block is not really invalid, but we need to re-validate
 					u.ReValidateBlock(block)
 				} else {
 					if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
-						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), err)
+						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
 					}
 				}
 			}

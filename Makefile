@@ -111,7 +111,7 @@ gen:
 	--proto_path=. \
 	--go_out=. \
 	--go_opt=paths=source_relative \
-	ubsverrors/error.proto
+	errors/error.proto
 
 	protoc \
 	--proto_path=. \
