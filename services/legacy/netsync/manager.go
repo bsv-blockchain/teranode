@@ -1417,7 +1417,7 @@ func (sm *SyncManager) handleBlockchainNotification(notification *blockchain.Not
 			break
 		}
 
-		log.Infof("NTBlockConnected: %s", block.Hash())
+		log.Debugf("NTBlockConnected: %s", block.Hash())
 
 		// Make sure we process the block before bsvd does, so the UTXO is not spent
 		if err := sm.teranodeBridge.HandleBlockConnected(block); err != nil {

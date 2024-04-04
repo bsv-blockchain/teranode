@@ -167,7 +167,7 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 
 func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 
-	log.Warnf("HandleBlock received for %s", block.Hash())
+	log.Debugf("HandleBlock received for %s", block.Hash())
 
 	var size int64
 
