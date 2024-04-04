@@ -28,19 +28,17 @@ type subscriber struct {
 // Blockchain type carries the logger within it
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	addBlockChan        chan *blockchain_api.AddBlockRequest
-	store               blockchain_store.Store
-	logger              ulogger.Logger
-	newSubscriptions    chan subscriber
-	deadSubscriptions   chan subscriber
-	subscribers         map[subscriber]bool
-	notifications       chan *blockchain_api.Notification
-	newBlock            chan struct{}
-	subscriptionCtx     context.Context
-	cancelSubscriptions context.CancelFunc
-	difficulty          *Difficulty
-	blockKafkaProducer  util.KafkaProducerI
-	stats               *gocore.Stat
+	addBlockChan       chan *blockchain_api.AddBlockRequest
+	store              blockchain_store.Store
+	logger             ulogger.Logger
+	newSubscriptions   chan subscriber
+	deadSubscriptions  chan subscriber
+	subscribers        map[subscriber]bool
+	notifications      chan *blockchain_api.Notification
+	newBlock           chan struct{}
+	difficulty         *Difficulty
+	blockKafkaProducer util.KafkaProducerI
+	stats              *gocore.Stat
 }
 
 // New will return a server instance with the logger stored within it
@@ -60,8 +58,6 @@ func New(ctx context.Context, logger ulogger.Logger) (*Blockchain, error) {
 		return nil, err
 	}
 
-	subscriptionCtx, cancelSubscriptions := context.WithCancel(ctx)
-
 	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
 
 	d, err := NewDifficulty(s, logger, difficultyAdjustmentWindow)
@@ -69,18 +65,16 @@ func New(ctx context.Context, logger ulogger.Logger) (*Blockchain, error) {
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}
 	return &Blockchain{
-		store:               s,
-		logger:              logger,
-		addBlockChan:        make(chan *blockchain_api.AddBlockRequest, 10),
-		newSubscriptions:    make(chan subscriber, 10),
-		deadSubscriptions:   make(chan subscriber, 10),
-		subscribers:         make(map[subscriber]bool),
-		notifications:       make(chan *blockchain_api.Notification, 100),
-		newBlock:            make(chan struct{}, 10),
-		subscriptionCtx:     subscriptionCtx,
-		cancelSubscriptions: cancelSubscriptions,
-		difficulty:          d,
-		stats:               gocore.NewStat("blockchain"),
+		store:             s,
+		logger:            logger,
+		addBlockChan:      make(chan *blockchain_api.AddBlockRequest, 10),
+		newSubscriptions:  make(chan subscriber, 10),
+		deadSubscriptions: make(chan subscriber, 10),
+		subscribers:       make(map[subscriber]bool),
+		notifications:     make(chan *blockchain_api.Notification, 100),
+		newBlock:          make(chan struct{}, 10),
+		difficulty:        d,
+		stats:             gocore.NewStat("blockchain"),
 	}, nil
 }
 
@@ -108,12 +102,15 @@ func (b *Blockchain) Start(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
-				b.cancelSubscriptions()
+				for sub := range b.subscribers {
+					safeClose(sub.done)
+				}
 				return
 			case notification := <-b.notifications:
 				start := gocore.CurrentTime()
 				func() {
 					b.logger.Debugf("[Blockchain] Sending notification: %s", notification.Stringify())
+
 					for sub := range b.subscribers {
 						b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
 						go func(s subscriber) {
@@ -149,8 +146,6 @@ func (b *Blockchain) Start(ctx context.Context) error {
 }
 
 func (b *Blockchain) Stop(_ context.Context) error {
-	b.cancelSubscriptions()
-
 	return nil
 }
 
