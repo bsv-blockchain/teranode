@@ -14,7 +14,7 @@ import (
 func Test_GetBlock(t *testing.T) {
 	// Create a new server instance
 	logger := ulogger.New("blockchain")
-	server, err := New(logger)
+	server, err := New(context.Background(), logger)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
