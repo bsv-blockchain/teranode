@@ -1,4 +1,4 @@
-//go:build aerospike
+// //go:build aerospike
 
 package aerospikemap
 
@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/ordishs/gocore"
 	"math"
 	"net/url"
 	"testing"
@@ -85,6 +86,20 @@ var (
 )
 
 func TestAerospike(t *testing.T) {
+	gocore.Config().Set("utxostore_spendBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "false")
+	internalTest(t)
+}
+
+func TestAerospikeBatching(t *testing.T) {
+	gocore.Config().Set("utxostore_spendBatcherEnabled", "true")
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "true")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "true")
+	internalTest(t)
+}
+
+func internalTest(t *testing.T) {
 	// raw client to be able to do gets and cleanup
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
@@ -160,7 +175,7 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, value.Bins["tx"], tx.ExtendedBytes())
 		assert.Equal(t, value.Bins["fee"], 215)
-		assert.Equal(t, value.Bins["size"], 328)
+		assert.Equal(t, value.Bins["sizeInBytes"], 328)
 		assert.Equal(t, value.Bins["locktime"], 0)
 		utxos, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
@@ -170,10 +185,10 @@ func TestAerospike(t *testing.T) {
 			require.True(t, ok)
 			assert.Nil(t, utxo)
 		}
-		parentTxHashes, ok := value.Bins["parentTxHashes"].([]interface{})
+		parentTxHashes, ok := value.Bins["parentTxHashes"].([]byte)
 		require.True(t, ok)
-		assert.Len(t, parentTxHashes, 1)
-		assert.Equal(t, parentTxHashes[0], tx.Inputs[0].PreviousTxIDChainHash().CloneBytes())
+		assert.Len(t, parentTxHashes, 32)
+		assert.Equal(t, parentTxHashes, tx.Inputs[0].PreviousTxIDChainHash().CloneBytes())
 		blockIDs, ok := value.Bins["blockIDs"].([]interface{})
 		require.True(t, ok)
 		assert.Len(t, blockIDs, 0)

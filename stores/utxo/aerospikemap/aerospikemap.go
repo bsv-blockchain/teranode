@@ -6,9 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/aerospike/aerospike-client-go/v7/types"
+	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
+	"golang.org/x/sync/errgroup"
 	"math"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
@@ -109,14 +113,21 @@ func init() {
 
 }
 
+type batchSpend struct {
+	spend *utxostore.Spend
+	done  chan error
+}
+
 type Store struct {
-	u           *url.URL
-	client      *uaerospike.Client
-	namespace   string
-	setName     string
-	logger      ulogger.Logger
-	blockHeight uint32
-	expiration  uint32
+	u            *url.URL
+	client       *uaerospike.Client
+	namespace    string
+	setName      string
+	logger       ulogger.Logger
+	blockHeight  atomic.Uint32
+	expiration   uint32
+	batchId      atomic.Uint64
+	spendBatcher *batcher.Batcher2[batchSpend]
 }
 
 var (
@@ -158,25 +169,173 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	}
 
 	logger.Infof("[Aerospike] map utxo store initialised with namespace: %s, set: %s", namespace, setName)
-	return &Store{
+	s := &Store{
 		u:           u,
 		client:      client,
 		namespace:   namespace,
 		setName:     setName,
 		logger:      logger,
-		blockHeight: 0,
+		blockHeight: atomic.Uint32{},
 		expiration:  expiration,
-	}, nil
+	}
+
+	spendBatcherEnabled := gocore.Config().GetBool("utxostore_spendBatcherEnabled", true)
+	spendBatcherEnabled = false
+	if spendBatcherEnabled {
+		batchSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 256)
+		batchDuration, _ := gocore.Config().GetInt("utxostore_spendBatcherDurationMillis", 10)
+		duration := time.Duration(batchDuration) * time.Millisecond
+		s.spendBatcher = batcher.New[batchSpend](batchSize, duration, s.sendSpendBatch, true)
+	}
+
+	return s, nil
+}
+
+func (s *Store) sendSpendBatch(batch []*batchSpend) {
+	batchId := s.batchId.Add(1)
+	s.logger.Debugf("[SPEND_BATCH] sending batch %d of %d spends", batchId, len(batch))
+	defer func() {
+		s.logger.Debugf("[SPEND_BATCH] sending batch %d of %d spends DONE", batchId, len(batch))
+	}()
+
+	batchPolicy := util.GetAerospikeBatchPolicy()
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
+
+	var key *aerospike.Key
+	var err error
+	for idx, bItem := range batch {
+		key, err = aerospike.NewKey(s.namespace, "utxo", bItem.spend.Hash[:])
+		if err != nil {
+			// we just return the error on the channel, we cannot process this utxo any further
+			bItem.done <- fmt.Errorf("[SPEND_BATCH][%s] failed to init new aerospike key for spend: %w", bItem.spend.Hash.String(), err)
+			continue
+		}
+
+		batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, s.expiration)
+		batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+		batchWritePolicy.FilterExpression = aerospike.ExpAnd(
+			aerospike.ExpOr(
+				// anything below the block height is spendable, including 0
+				aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight.Load()))),
+
+				aerospike.ExpAnd(
+					aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
+					// TODO Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median
+					// time past (the median timestamp of the 11 blocks preceding the block in which the transaction is mined),
+					// and not the block time itself.
+					aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(time.Now().Unix())),
+				),
+			),
+			aerospike.ExpEq(aerospike.ExpMapGetByKey(
+				aerospike.MapReturnType.VALUE,
+				aerospike.ExpTypeNIL,
+				aerospike.ExpStringVal(bItem.spend.Hash.String()),
+				aerospike.ExpMapBin("utxos"),
+			), aerospike.ExpNilValue()),
+		)
+		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, []*aerospike.Operation{
+			aerospike.MapPutOp(
+				aerospike.DefaultMapPolicy(),
+				"utxos",
+				bItem.spend.Hash.String(),
+				bItem.spend.SpendingTxID.CloneBytes(),
+			),
+			aerospike.GetBinOp("utxos"),
+		}...)
+	}
+
+	err = s.client.BatchOperate(batchPolicy, batchRecords)
+	if err != nil {
+		s.logger.Errorf("[SPEND_BATCH][%d] failed to batch spend aerospike map utxos in batchId %d: %v", batchId, len(batch), err)
+		for idx, bItem := range batch {
+			bItem.done <- fmt.Errorf("[SPEND_BATCH][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.Hash.String(), batchId, idx, err)
+		}
+	}
+
+	// batchOperate may have no errors, but some of the records may have failed
+	for idx, batchRecord := range batchRecords {
+		spend := batch[idx].spend
+		err = batchRecord.BatchRec().Err
+		if err != nil {
+			var aErr *aerospike.AerospikeError
+			if errors.As(err, &aErr) && aErr != nil {
+				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
+					s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d, skipping", spend.Hash.String(), batchId)
+					batch[idx].done <- nil
+					continue
+				} else if aErr.ResultCode == types.FILTERED_OUT {
+					// get the record
+					record, getErr := s.client.Get(nil, batchRecord.BatchRec().Key)
+					if getErr != nil {
+						err = errors.Join(err, getErr)
+					} else {
+						if record != nil && record.Bins != nil && record.Bins["txid"] != nil {
+							valueBytes, ok := record.Bins["txid"].([]byte)
+							if ok && len(valueBytes) == 32 {
+								spendingTxHash := chainhash.Hash(valueBytes)
+								if spendingTxHash.Equal(*spend.SpendingTxID) {
+									s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", spend.Hash.String(), batchId, spendingTxHash.String())
+									batch[idx].done <- nil
+								} else {
+									// spent by another transaction
+									batch[idx].done <- utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, &spendingTxHash)
+								}
+								continue
+							}
+						}
+					}
+				}
+			}
+
+			batch[idx].done <- fmt.Errorf("[SPEND_BATCH][%s] error in aerospike spend batch record, locktime %d: %d - %w", spend.Hash.String(), s.blockHeight.Load(), batchId, err)
+		} else {
+			response := batchRecord.BatchRec().Record
+			// check whether all utxos are spent
+			utxosValue, ok := response.Bins["utxos"].([]interface{})
+			if ok {
+				if len(utxosValue) == 2 {
+					// utxos are in index 1 of the response
+					utxos, ok := utxosValue[1].(map[interface{}]interface{})
+					if ok {
+						spentUtxos := 0
+						for _, v := range utxos {
+							if v != nil {
+								spentUtxos++
+							}
+						}
+						if spentUtxos == len(utxos) {
+							// mark document as spent and add expiration for TTL
+							ttlPolicy := util.GetAerospikeWritePolicy(0, s.expiration)
+							ttlPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+							_, err = s.client.Operate(ttlPolicy, batchRecord.BatchRec().Key, aerospike.PutOp(
+								aerospike.NewBin(
+									"lastSpend",
+									aerospike.NewIntegerValue(int(time.Now().Unix())),
+								),
+							))
+							if err != nil {
+								batch[idx].done <- fmt.Errorf("[SPEND_BATCH][%s] could not set lastSpend: %w", spend.Hash.String(), err)
+							}
+						}
+					}
+				}
+			}
+
+			//s.logger.Warnf("[SPEND_BATCH][%s] successfully spent utxo in aerospike in batch %d", spend.Hash.String(), batchId)
+			batch[idx].done <- nil
+		}
+	}
 }
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
-	s.blockHeight = blockHeight
+	s.blockHeight.Store(blockHeight)
 	return nil
 }
 
 func (s *Store) GetBlockHeight() (uint32, error) {
-	return s.blockHeight, nil
+	return s.blockHeight.Load(), nil
 }
 
 func (s *Store) Health(ctx context.Context) (int, string, error) {
@@ -281,7 +440,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 	}
 
 	return &utxostore.Response{
-		Status:       int(utxostore.CalculateUtxoStatus(spendingTxId, lockTime, s.blockHeight)),
+		Status:       int(utxostore.CalculateUtxoStatus(spendingTxId, lockTime, s.blockHeight.Load())),
 		SpendingTxID: spendingTxId,
 		LockTime:     lockTime,
 	}, nil
@@ -306,6 +465,46 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 			s.logger.Errorf("ERROR panic in aerospike Spend: %v\n", recoverErr)
 		}
 	}()
+
+	spentSpends := make([]*utxostore.Spend, 0, len(spends))
+
+	if s.spendBatcher != nil {
+		g := errgroup.Group{}
+		for _, spend := range spends {
+			if spend == nil {
+				continue
+			}
+
+			spend := spend
+			g.Go(func() error {
+				done := make(chan error)
+				s.spendBatcher.Put(&batchSpend{
+					spend: spend,
+					done:  done,
+				})
+
+				// this waits for the batch to be sent and the response to be received from the batch operation
+				batchErr := <-done
+				if batchErr != nil {
+					return batchErr
+				}
+
+				spentSpends = append(spentSpends, spend)
+
+				return nil
+			})
+		}
+
+		if err = g.Wait(); err != nil {
+			// revert the spent utxos
+			_ = s.UnSpend(ctx, spentSpends)
+			return fmt.Errorf("error in aerospike spend record: %w", err)
+		}
+
+		prometheusUtxoMapSpend.Add(float64(len(spends)))
+
+		return nil
+	}
 
 	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
@@ -348,7 +547,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 	policy.FilterExpression = aerospike.ExpAnd(
 		aerospike.ExpOr(
 			// anything below the block height is spendable, including 0
-			aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight))),
+			aerospike.ExpLessEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(int64(s.blockHeight.Load()))),
 
 			aerospike.ExpAnd(
 				aerospike.ExpGreaterEq(aerospike.ExpIntBin("locktime"), aerospike.ExpIntVal(500000000)),
@@ -392,10 +591,10 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 
 			locktime, ok := value.Bins["locktime"].(int)
 			if ok {
-				status := utxostore.CalculateUtxoStatus(nil, uint32(locktime), s.blockHeight)
+				status := utxostore.CalculateUtxoStatus(nil, uint32(locktime), s.blockHeight.Load())
 				if status == utxostore.Status_LOCKED {
-					s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight, err.Error())
-					return utxostore.NewErrLockTime(uint32(locktime), s.blockHeight)
+					s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight.Load(), err.Error())
+					return utxostore.NewErrLockTime(uint32(locktime), s.blockHeight.Load())
 				}
 			}
 

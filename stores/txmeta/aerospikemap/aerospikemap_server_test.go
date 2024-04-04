@@ -1,4 +1,4 @@
-//go:build aerospike
+// //go:build aerospike
 
 package aerospikemap
 
@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"net/url"
@@ -25,6 +26,20 @@ const (
 )
 
 func TestAerospike(t *testing.T) {
+	gocore.Config().Set("utxostore_spendBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "false")
+	internalTest(t)
+}
+
+func TestAerospikeBatching(t *testing.T) {
+	gocore.Config().Set("utxostore_spendBatcherEnabled", "true")
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "true")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "true")
+	internalTest(t)
+}
+
+func internalTest(t *testing.T) {
 	// raw client to be able to do gets and cleanup
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
@@ -75,9 +90,10 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint32(1), value.Generation)
 		assert.Equal(t, uint64(215), uint64(value.Bins["fee"].(int)))
-		assert.Equal(t, uint64(328), uint64(value.Bins["size"].(int)))
-		assert.Len(t, value.Bins["parentTxHashes"].([]interface{}), 1)
-		assert.Equal(t, []interface{}{parentTxHash[:]}, value.Bins["parentTxHashes"])
+		assert.Equal(t, uint64(328), uint64(value.Bins["sizeInBytes"].(int)))
+		assert.Len(t, value.Bins["parentTxHashes"].([]byte), 32)
+		binParentTxHash := chainhash.Hash(value.Bins["parentTxHashes"].([]byte))
+		assert.Equal(t, parentTxHash[:], binParentTxHash.CloneBytes())
 		assert.Equal(t, []interface{}{}, value.Bins["blockIDs"])
 
 		err = utxoDb.Store(context.Background(), tx)
