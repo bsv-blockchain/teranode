@@ -288,19 +288,25 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 
 	for _, block := range moveDownBlocks {
 		if err := stp.utxoStore.Delete(context.Background(), block.CoinbaseTx); err != nil {
-			responseCh <- ResetResponse{
-				MovedDownBlocks: movedDownBlocks,
-				MovedUpBlocks:   movedUpBlocks,
-				Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
+			// no need to error out if the key doesn't exist anyway
+			if !errors.Is(err, utxostore.ErrNotFound) {
+				responseCh <- ResetResponse{
+					MovedDownBlocks: movedDownBlocks,
+					MovedUpBlocks:   movedUpBlocks,
+					Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
+				}
 			}
 		}
 
 		// delete tx meta
 		if err := stp.txMetaStore.Delete(context.Background(), block.CoinbaseTx.TxIDChainHash()); err != nil {
-			responseCh <- ResetResponse{
-				MovedDownBlocks: movedDownBlocks,
-				MovedUpBlocks:   movedUpBlocks,
-				Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting tx meta data for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
+			// no need to error out if the key doesn't exist anyway
+			if !errors.Is(err, txmeta.NewErrTxmetaNotFound(block.CoinbaseTx.TxIDChainHash())) {
+				responseCh <- ResetResponse{
+					MovedDownBlocks: movedDownBlocks,
+					MovedUpBlocks:   movedUpBlocks,
+					Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting tx meta data for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
+				}
 			}
 		}
 

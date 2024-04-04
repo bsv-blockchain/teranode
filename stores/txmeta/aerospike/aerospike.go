@@ -604,6 +604,10 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 	start := time.Now()
 	_, err = s.client.Delete(policy, key)
 	if err != nil {
+		if errors.Is(err, aerospike.ErrKeyNotFound) {
+			return txmeta.NewErrTxmetaNotFound(hash)
+		}
+
 		e = fmt.Errorf("aerospike delete error (time taken: %s) : %w", time.Since(start).String(), err)
 		return err
 	}
