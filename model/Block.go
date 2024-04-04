@@ -627,53 +627,55 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				}
 			}
 
-			logger.Infof("[BLOCK][%s] checking %d parent transactio0ns", b.Hash().String(), len(checkParentTxHashes))
+			if len(checkParentTxHashes) > 0 {
+				logger.Infof("[BLOCK][%s] checking parent transactions: %d", b.Hash().String(), len(checkParentTxHashes))
 
-			// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
-			parentG := errgroup.Group{}
-			parentG.SetLimit(1024 * 32)
-			for _, parentTxHash := range checkParentTxHashes {
-				parentTxHash := parentTxHash
-				parentG.Go(func() error {
-					// check whether the parent transaction has already been mined in a block on our chain
-					// we need to get back to the txMetaStore for this, to make sure we have the latest data
-					// two options: 1- parent is currently under validation, 2- parent is from forked chain.
-					// for the first situation we don't start validating the current block until the parent is validated.
-					parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxHash)
-					if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
-						return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxHash.String(), err)
-					}
-					// parent tx meta was not found, must be old, ignore
-					if parentTxMeta == nil {
+				// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
+				parentG := errgroup.Group{}
+				parentG.SetLimit(1024 * 32)
+				for _, parentTxHash := range checkParentTxHashes {
+					parentTxHash := parentTxHash
+					parentG.Go(func() error {
+						// check whether the parent transaction has already been mined in a block on our chain
+						// we need to get back to the txMetaStore for this, to make sure we have the latest data
+						// two options: 1- parent is currently under validation, 2- parent is from forked chain.
+						// for the first situation we don't start validating the current block until the parent is validated.
+						parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxHash)
+						if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
+							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxHash.String(), err)
+						}
+						// parent tx meta was not found, must be old, ignore
+						if parentTxMeta == nil {
+							return nil
+						}
+
+						// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
+						foundInPreviousBlocks := make(map[uint32]struct{}, len(parentTxMeta.BlockIDs))
+						for _, blockID := range parentTxMeta.BlockIDs {
+							if _, found := currentBlockHeaderIDsMap[blockID]; found {
+								foundInPreviousBlocks[blockID] = struct{}{}
+							}
+						}
+						if len(foundInPreviousBlocks) != 1 {
+							// log out the block header IDs map
+							ids := make([]uint32, 0, len(currentBlockHeaderIDsMap))
+							for id := range currentBlockHeaderIDsMap {
+								ids = append(ids, id)
+							}
+							sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+							logger.Errorf("parent error currentBlockHeaderIDsMap: %v", ids)
+							logger.Errorf("parent error parentTxMeta: %v", parentTxMeta)
+							return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] parent transaction %s is not valid on our current chain, found %d times", b.Hash().String(), parentTxHash.String(), len(foundInPreviousBlocks))
+						}
+
 						return nil
-					}
+					})
+				}
 
-					// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
-					foundInPreviousBlocks := make(map[uint32]struct{}, len(parentTxMeta.BlockIDs))
-					for _, blockID := range parentTxMeta.BlockIDs {
-						if _, found := currentBlockHeaderIDsMap[blockID]; found {
-							foundInPreviousBlocks[blockID] = struct{}{}
-						}
-					}
-					if len(foundInPreviousBlocks) != 1 {
-						// log out the block header IDs map
-						ids := make([]uint32, 0, len(currentBlockHeaderIDsMap))
-						for id := range currentBlockHeaderIDsMap {
-							ids = append(ids, id)
-						}
-						sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-						logger.Errorf("parent error currentBlockHeaderIDsMap: %v", ids)
-						logger.Errorf("parent error parentTxMeta: %v", parentTxMeta)
-						return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] parent transaction %s is not valid on our current chain, found %d times", b.Hash().String(), parentTxHash.String(), len(foundInPreviousBlocks))
-					}
-
-					return nil
-				})
-			}
-
-			if err := parentG.Wait(); err != nil {
-				// just return the error from above
-				return err
+				if err := parentG.Wait(); err != nil {
+					// just return the error from above
+					return err
+				}
 			}
 
 			return nil
