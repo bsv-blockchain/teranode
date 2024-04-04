@@ -1,4 +1,4 @@
-// //go:build aerospike
+//go:build aerospike
 
 package aerospikemap
 
