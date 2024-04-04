@@ -220,6 +220,10 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 		if bItem.txMeta == nil {
 			bItem.txMeta, err = util.TxMetaDataFromTx(bItem.tx)
+			if err != nil {
+				bItem.done <- err
+				continue
+			}
 		}
 
 		utxoHashes, err = utxostore.GetUtxoHashes(bItem.tx)

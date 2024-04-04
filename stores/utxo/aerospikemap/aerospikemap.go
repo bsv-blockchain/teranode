@@ -180,7 +180,6 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 	}
 
 	spendBatcherEnabled := gocore.Config().GetBool("utxostore_spendBatcherEnabled", true)
-	spendBatcherEnabled = false
 	if spendBatcherEnabled {
 		batchSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 256)
 		batchDuration, _ := gocore.Config().GetInt("utxostore_spendBatcherDurationMillis", 10)

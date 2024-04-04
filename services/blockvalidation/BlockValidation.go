@@ -359,7 +359,8 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		}
 	}
 
-	blockSubtrees, err := block.GetSubtrees(ctx, u.logger, u.subtreeStore)
+	// make sure all the subtrees are loaded in the block
+	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore)
 	if err != nil {
 		return fmt.Errorf("[setMined][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
 	}
@@ -371,7 +372,13 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	blockID := ids[0]
 
 	// add the transactions in this block to the txMeta block IDs in the txMeta store
-	if err = model.UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, blockSubtrees, blockHash, blockID); err != nil {
+	if err = model.UpdateTxMinedStatus(
+		ctx,
+		u.logger,
+		u.txMetaStore,
+		block,
+		blockID,
+	); err != nil {
 		return fmt.Errorf("[setMined][%s] error updating tx mined status: %w", block.Hash().String(), err)
 	}
 
