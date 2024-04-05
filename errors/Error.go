@@ -99,6 +99,10 @@ func New(code ERR, message string, params ...interface{}) *Error {
 }
 
 func WrapGRPC(err error) error {
+	if err == nil {
+		return nil
+	}
+
 	var uErr *Error
 	if errors.As(err, &uErr) {
 		details, _ := anypb.New(&TError{
@@ -116,6 +120,10 @@ func WrapGRPC(err error) error {
 }
 
 func UnwrapGRPC(err error) error {
+	if err == nil {
+		return nil
+	}
+
 	st, ok := status.FromError(err)
 	if !ok {
 		return err // Not a gRPC status error
