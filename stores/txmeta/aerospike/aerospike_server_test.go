@@ -28,11 +28,12 @@ const (
 )
 
 var (
-	ctx  = context.Background()
-	key  *aerospike.Key
-	key2 *aerospike.Key
-	key3 *aerospike.Key
-	key4 *aerospike.Key
+	ctx         = context.Background()
+	key         *aerospike.Key
+	key2        *aerospike.Key
+	key3        *aerospike.Key
+	key4        *aerospike.Key
+	coinbaseKey *aerospike.Key
 )
 
 func TestAerospikeKey(t *testing.T) {
@@ -101,6 +102,12 @@ func runAerospikeTest(t *testing.T) {
 	tx3.Inputs[0].PreviousTxSatoshis = 203
 	tx3.LockTime = 3
 
+	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff19031404002f6d332d617369612fdf5128e62eda1a07e94dbdbdffffffff0500ca9a3b000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00ca9a3b000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00ca9a3b000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00ca9a3b000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00ca9a3b000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00000000")
+	require.NoError(t, err)
+
+	coinbaseKey, err = aerospike.NewKey(aerospikeNamespace, "txmeta", coinbaseTx.TxIDChainHash()[:])
+	require.NoError(t, err)
+
 	hash2 := tx2.TxIDChainHash()
 	hash3 := tx3.TxIDChainHash()
 
@@ -141,6 +148,7 @@ func runAerospikeTest(t *testing.T) {
 		assert.Len(t, value.Bins["parentTxHashes"].([]byte), 32)
 		assert.Equal(t, parentTxHash[:], value.Bins["parentTxHashes"])
 		assert.Nil(t, value.Bins["blockIDs"])
+		assert.False(t, value.Bins["isCoinbase"].(bool))
 
 		_, err = db.Create(ctx, tx)
 		// not allowed
@@ -163,6 +171,23 @@ func runAerospikeTest(t *testing.T) {
 		require.Equal(t, uint32(3), value.Generation)
 		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 2)
 		assert.Equal(t, 2, value.Bins["blockIDs"].([]interface{})[1])
+	})
+
+	t.Run("aerospike store coinbase", func(t *testing.T) {
+		cleanDB(t, client)
+		_, err = db.Create(ctx, coinbaseTx)
+		require.NoError(t, err)
+
+		var value *aerospike.Record
+		// raw aerospike get
+		value, err = client.Get(util.GetAerospikeReadPolicy(), coinbaseKey)
+		require.NoError(t, err)
+		assert.True(t, value.Bins["isCoinbase"].(bool))
+
+		var txMeta *txmeta.Data
+		txMeta, err = db.Get(context.Background(), coinbaseTx.TxIDChainHash())
+		require.NoError(t, err)
+		assert.True(t, txMeta.IsCoinbase)
 	})
 
 	t.Run("aerospike get", func(t *testing.T) {
@@ -334,5 +359,7 @@ func cleanDB(t *testing.T, client *aerospike.Client) {
 	_, err = client.Delete(policy, key3)
 	require.NoError(t, err)
 	_, err = client.Delete(policy, key4)
+	require.NoError(t, err)
+	_, err = client.Delete(policy, coinbaseKey)
 	require.NoError(t, err)
 }

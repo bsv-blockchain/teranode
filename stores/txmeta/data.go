@@ -18,6 +18,7 @@ type Data struct {
 	BlockIDs       []uint32         `json:"blockIDs"`
 	Fee            uint64           `json:"fee"`
 	SizeInBytes    uint64           `json:"sizeInBytes"`
+	IsCoinbase     bool             `json:"isCoinbase"`
 }
 
 type MetaData struct {
@@ -29,11 +30,12 @@ func NewMetaDataFromBytes(dataBytes *[]byte, d *Data) {
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64((*dataBytes)[:8])
 	d.SizeInBytes = binary.LittleEndian.Uint64((*dataBytes)[8:16])
-	parentTxHashesLen := binary.LittleEndian.Uint64((*dataBytes)[16:24])
+	d.IsCoinbase = (*dataBytes)[16] == 1
+	parentTxHashesLen := binary.LittleEndian.Uint64((*dataBytes)[17:25])
 	d.ParentTxHashes = make([]chainhash.Hash, parentTxHashesLen)
 
 	for i := uint64(0); i < parentTxHashesLen; i++ {
-		d.ParentTxHashes[i] = chainhash.Hash((*dataBytes)[24+i*32 : 24+(i+1)*32])
+		d.ParentTxHashes[i] = chainhash.Hash((*dataBytes)[25+i*32 : 25+(i+1)*32])
 	}
 }
 
@@ -47,9 +49,10 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64(dataBytes[:8])
 	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
-	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[16:24])
+	d.IsCoinbase = dataBytes[16] == byte(1)
+	parentTxHashesLen := binary.LittleEndian.Uint64(dataBytes[17:25])
 
-	buf := bytes.NewReader(dataBytes[24:])
+	buf := bytes.NewReader(dataBytes[25:])
 
 	// read the parent tx hashes
 	var hashBytes [32]byte
@@ -87,12 +90,17 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 }
 
 func (d *Data) Bytes() []byte {
-	buf := make([]byte, 24, 1024) // 8 for Fee, 8 for SizeInBytes
+	buf := make([]byte, 25, 1024) // 8 for Fee, 8 for SizeInBytes
 
 	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
 	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)
+	if d.IsCoinbase {
+		buf[16] = byte(1)
+	} else {
+		buf[16] = byte(0)
+	}
 
-	binary.LittleEndian.PutUint64(buf[16:24], uint64(len(d.ParentTxHashes)))
+	binary.LittleEndian.PutUint64(buf[17:25], uint64(len(d.ParentTxHashes)))
 	for _, parentTxHash := range d.ParentTxHashes {
 		buf = append(buf, parentTxHash.CloneBytes()...)
 	}
@@ -113,12 +121,17 @@ func (d *Data) Bytes() []byte {
 }
 
 func (d *Data) MetaBytes() []byte {
-	buf := make([]byte, 24, 1024) // 8 for Fee, 8 for SizeInBytes
+	buf := make([]byte, 25, 1024) // 8 for Fee, 8 for SizeInBytes
 
 	binary.LittleEndian.PutUint64(buf[:8], d.Fee)
 	binary.LittleEndian.PutUint64(buf[8:16], d.SizeInBytes)
+	if d.IsCoinbase {
+		buf[16] = byte(1)
+	} else {
+		buf[16] = byte(0)
+	}
 
-	binary.LittleEndian.PutUint64(buf[16:24], uint64(len(d.ParentTxHashes)))
+	binary.LittleEndian.PutUint64(buf[17:25], uint64(len(d.ParentTxHashes)))
 	for _, parentTxHash := range d.ParentTxHashes {
 		buf = append(buf, parentTxHash.CloneBytes()...)
 	}

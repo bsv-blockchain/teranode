@@ -426,10 +426,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		// finally add the transaction hash and fee to the subtree
 		txMeta = txMetaSlice[idx]
 		if txMeta == nil {
-			if txHash.Equal(*model.CoinbasePlaceholderHash) {
-				return fmt.Errorf("[validateSubtreeInternal][%s] tx meta is nil for coinbase placeholder at index %d", v.SubtreeHash.String(), idx)
-			}
-			return fmt.Errorf("[validateSubtreeInternal][%s] tx meta not found in txMetaSlice [%s]", v.SubtreeHash.String(), txHash.String())
+			return fmt.Errorf("[validateSubtreeInternal][%s] tx meta not found in txMetaSlice at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)

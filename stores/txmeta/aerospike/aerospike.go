@@ -138,6 +138,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			aerospike.PutOp(aerospike.NewBin("parentTxHashes", parentTxHashesInterface)),
 			aerospike.PutOp(aerospike.NewBin("firstSeen", time.Now().Unix())),
 			aerospike.PutOp(aerospike.NewBin("lockTime", int(bItem.tx.LockTime))),
+			aerospike.PutOp(aerospike.NewBin("isCoinbase", bItem.tx.IsCoinbase())),
 		}
 
 		record := aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
@@ -207,7 +208,7 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data
 	defer func() {
 		prometheusTxMetaGetDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
-	fields := []string{"fee", "sizeInBytes", "parentTxHashes", "blockIDs"}
+	fields := []string{"fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
 
 	if s.getBatcher != nil {
 		done := make(chan batchGetItemData)
@@ -230,7 +231,7 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, er
 	defer func() {
 		prometheusTxMetaGetDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 	}()
-	fields := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"}
+	fields := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
 
 	if s.getBatcher != nil {
 		done := make(chan batchGetItemData)
@@ -319,6 +320,10 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 		status.Tx = tx
 	}
 
+	if value.Bins["isCoinbase"] != nil {
+		status.IsCoinbase = value.Bins["isCoinbase"].(bool)
+	}
+
 	return status, nil
 }
 
@@ -334,7 +339,7 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*txmeta.MissingTxHa
 			return err
 		}
 
-		bins := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs"}
+		bins := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
 		if len(item.Fields) > 0 {
 			bins = item.Fields
 		} else if len(fields) > 0 {
@@ -404,6 +409,11 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*txmeta.MissingTxHa
 						blockIDs = append(blockIDs, uint32(val.(int)))
 					}
 					items[idx].Data.BlockIDs = blockIDs
+				case "isCoinbase":
+					coinbaseBool, ok := value.(bool)
+					if ok {
+						items[idx].Data.IsCoinbase = coinbaseBool
+					}
 				}
 			}
 		}
@@ -462,6 +472,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*txmet
 		aerospike.NewBin("parentTxHashes", parentTxHashesInterface),
 		aerospike.NewBin("firstSeen", time.Now().Unix()),
 		aerospike.NewBin("lockTime", int(tx.LockTime)),
+		aerospike.NewBin("isCoinbase", tx.IsCoinbase()),
 	}
 
 	// s.expiration - expiration is set in SetMined and SetMinedMulti

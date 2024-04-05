@@ -157,6 +157,7 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 		SizeInBytes:    sizeInBytes,
 		ParentTxHashes: parentTxHashes,
 		BlockIDs:       blockIDs,
+		IsCoinbase:     tx.IsCoinbase(),
 	}, nil
 }
 

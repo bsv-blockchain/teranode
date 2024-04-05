@@ -644,8 +644,8 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxHash)) {
 							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxHash.String(), err)
 						}
-						// parent tx meta was not found, must be old, ignore
-						if parentTxMeta == nil {
+						// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
+						if parentTxMeta == nil || parentTxMeta.IsCoinbase {
 							return nil
 						}
 
