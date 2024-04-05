@@ -28,6 +28,7 @@ const (
 	aerospikeHost      = "localhost" // "localhost"
 	aerospikePort      = 3000        // 3800
 	aerospikeNamespace = "test"      // test
+	aerospikeSet       = "utxo-test" // utxo-test
 )
 
 var (
@@ -56,6 +57,12 @@ var (
 		Hash:         utxoHash0,
 		SpendingTxID: hash2,
 	}}
+	spends3 = []*utxostore.Spend{{
+		TxID:         tx.TxIDChainHash(),
+		Vout:         0,
+		Hash:         utxoHash0,
+		SpendingTxID: utxoHash3,
+	}}
 	spendsAll = []*utxostore.Spend{{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
@@ -82,7 +89,7 @@ var (
 		Hash:         utxoHash4,
 		SpendingTxID: hash2,
 	}}
-	key, _ = aero.NewKey(aerospikeNamespace, "utxo", tx.TxIDChainHash().CloneBytes())
+	key, _ = aero.NewKey(aerospikeNamespace, aerospikeSet, tx.TxIDChainHash().CloneBytes())
 )
 
 func TestAerospike(t *testing.T) {
@@ -104,7 +111,7 @@ func internalTest(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospikemap://%s:%d/%s?set=utxo", aerospikeHost, aerospikePort, aerospikeNamespace))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospikemap://%s:%d/%s?set=%s", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -255,7 +262,8 @@ func internalTest(t *testing.T) {
 		}
 
 		// try to spend with different txid
-		err = db.Spend(context.Background(), spends2)
+		err = db.Spend(context.Background(), spends3)
+		require.Error(t, err)
 		require.ErrorIs(t, err, utxostore.ErrTypeSpent)
 
 		// get the doc to check expiry etc.
@@ -265,12 +273,32 @@ func internalTest(t *testing.T) {
 		require.True(t, ok)
 		require.Greater(t, lastSpend, 0)
 		require.Greater(t, value.Expiration, uint32(0))
+		require.Less(t, value.Expiration, uint32(math.MaxUint32))
+
+		// an error was observed were the utxos map got nilled out when trying to double spend
+		// interestingly, this only happened in normal mode, not in batched mode :-S
+		// Here we get all the data again and try the double spend again
+		utxoMap, ok = value.Bins["utxos"].(map[interface{}]interface{})
+		require.True(t, ok)
+		for i := 0; i < 5; i++ {
+			utxoSpendTxID, ok := utxoMap[spendsAll[i].Hash.String()]
+			require.True(t, ok)
+			require.Equal(t, hash2[:], utxoSpendTxID)
+		}
+
+		// try to spend with different txid
+		err = db.Spend(context.Background(), spends3)
+		require.Error(t, err)
+		require.ErrorIs(t, err, utxostore.ErrTypeSpent)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
 	})
 
 	t.Run("aerospike reset", func(t *testing.T) {
 		tx2 := tx.Clone()
 		tx2.LockTime = 100
-		key, _ := aero.NewKey(aerospikeNamespace, "utxo", tx2.TxIDChainHash().CloneBytes())
+		key, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, tx2.TxIDChainHash().CloneBytes())
 		cleanDB(t, client, tx2)
 
 		txMeta, err = txMetaStore.Create(context.Background(), tx2)
@@ -317,7 +345,8 @@ func internalTest(t *testing.T) {
 	t.Run("aerospike block locktime", func(t *testing.T) {
 		tx2 := tx.Clone()
 		tx2.LockTime = 1000
-		key, _ := aero.NewKey(aerospikeNamespace, "utxo", tx2.TxIDChainHash().CloneBytes())
+		key, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, tx2.TxIDChainHash().CloneBytes())
+		cleanDB(t, client, tx)
 		cleanDB(t, client, tx2)
 
 		txMeta, err = txMetaStore.Create(context.Background(), tx2)
@@ -359,7 +388,7 @@ func internalTest(t *testing.T) {
 	t.Run("aerospike unix time locktime", func(t *testing.T) {
 		tx2 := tx.Clone()
 		tx2.LockTime = uint32(time.Now().UTC().Unix() + 2)
-		key, _ := aero.NewKey(aerospikeNamespace, "utxo", tx2.TxIDChainHash().CloneBytes())
+		key, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, tx2.TxIDChainHash().CloneBytes())
 		cleanDB(t, client, tx2)
 
 		txMeta, err = txMetaStore.Create(context.Background(), tx2) // valid in 2 seconds
@@ -402,7 +431,7 @@ func internalTest(t *testing.T) {
 }
 
 func cleanDB(t *testing.T, client *aero.Client, tx *bt.Tx) {
-	key, _ = aero.NewKey(aerospikeNamespace, "utxo", tx.TxIDChainHash().CloneBytes())
+	key, _ = aero.NewKey(aerospikeNamespace, aerospikeSet, tx.TxIDChainHash().CloneBytes())
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	_, err := client.Delete(policy, key)
 	require.NoError(t, err)

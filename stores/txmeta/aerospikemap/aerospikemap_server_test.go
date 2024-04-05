@@ -48,7 +48,7 @@ func internalTest(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s", aerospikeHost, aerospikePort, aerospikeNamespace))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=txmeta-test", aerospikeHost, aerospikePort, aerospikeNamespace))
 	require.NoError(t, err)
 
 	// ubsv db client

@@ -204,14 +204,14 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 	var key *aerospike.Key
 	var err error
 	for idx, bItem := range batch {
-		key, err = aerospike.NewKey(s.namespace, "utxo", bItem.spend.Hash[:])
+		key, err = aerospike.NewKey(s.namespace, s.setName, bItem.spend.TxID.CloneBytes())
 		if err != nil {
 			// we just return the error on the channel, we cannot process this utxo any further
 			bItem.done <- fmt.Errorf("[SPEND_BATCH][%s] failed to init new aerospike key for spend: %w", bItem.spend.Hash.String(), err)
 			continue
 		}
 
-		batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, s.expiration)
+		batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, math.MaxUint32)
 		batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 		batchWritePolicy.FilterExpression = aerospike.ExpAnd(
 			aerospike.ExpOr(
@@ -269,18 +269,31 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 					if getErr != nil {
 						err = errors.Join(err, getErr)
 					} else {
-						if record != nil && record.Bins != nil && record.Bins["txid"] != nil {
-							valueBytes, ok := record.Bins["txid"].([]byte)
-							if ok && len(valueBytes) == 32 {
-								spendingTxHash := chainhash.Hash(valueBytes)
-								if spendingTxHash.Equal(*spend.SpendingTxID) {
-									s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", spend.Hash.String(), batchId, spendingTxHash.String())
-									batch[idx].done <- nil
-								} else {
-									// spent by another transaction
-									batch[idx].done <- utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, &spendingTxHash)
+						if record != nil && record.Bins != nil {
+
+							locktime, ok := record.Bins["locktime"].(int)
+							if ok {
+								status := utxostore.CalculateUtxoStatus(nil, uint32(locktime), s.blockHeight.Load())
+								if status == utxostore.Status_LOCKED {
+									s.logger.Errorf("utxo %s is not spendable in block %d: %s", spend.Hash.String(), s.blockHeight.Load(), err.Error())
+									batch[idx].done <- utxostore.NewErrLockTime(uint32(locktime), s.blockHeight.Load())
 								}
-								continue
+							}
+
+							utxoMap, ok := record.Bins["utxos"].(map[interface{}]interface{})
+							valueBytes, ok := utxoMap[spend.Hash.String()].([]byte)
+							if ok {
+								if len(valueBytes) == 32 {
+									spendingTxHash := chainhash.Hash(valueBytes)
+									if spendingTxHash.Equal(*spend.SpendingTxID) {
+										s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", spend.Hash.String(), batchId, spendingTxHash.String())
+										batch[idx].done <- nil
+									} else {
+										// spent by another transaction
+										batch[idx].done <- utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, &spendingTxHash)
+									}
+									continue
+								}
 							}
 						}
 					}
@@ -291,7 +304,7 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 		} else {
 			response := batchRecord.BatchRec().Record
 			// check whether all utxos are spent
-			utxosValue, ok := response.Bins["utxos"].([]interface{})
+			utxosValue, ok := response.Bins["utxos"].(aerospike.OpResults)
 			if ok {
 				if len(utxosValue) == 2 {
 					// utxos are in index 1 of the response
@@ -495,7 +508,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 		}
 
 		if err = g.Wait(); err != nil {
-			// revert the spent utxos
+			// revert the successfully spent utxos
 			_ = s.UnSpend(ctx, spentSpends)
 			return fmt.Errorf("error in aerospike spend record: %w", err)
 		}
@@ -523,7 +536,11 @@ func (s *Store) Spend(ctx context.Context, spends []*utxostore.Spend) (err error
 
 			err = s.spendUtxo(policy, spend)
 			if err != nil {
-				// error encountered, reverse all spends and return error
+				if errors.Is(err, utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spend.SpendingTxID)) {
+					return err
+				}
+
+				// another error encountered, reverse all spends and return error
 				if resetErr := s.UnSpend(context.Background(), spends); resetErr != nil {
 					s.logger.Errorf("ERROR in aerospike reset: %v\n", resetErr)
 				}
