@@ -5,14 +5,13 @@ package aerospikemap
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	"github.com/ordishs/gocore"
 	"math"
 	"net/url"
 	"testing"
 	"time"
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -20,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -94,13 +94,16 @@ var (
 
 func TestAerospike(t *testing.T) {
 	gocore.Config().Set("utxostore_spendBatcherEnabled", "false")
+	gocore.Config().Set("utxostore_lastSpendBatcherEnabled", "false")
 	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
 	gocore.Config().Set("txmeta_store_getBatcherEnabled", "false")
+	gocore.Config().Set("utxostore_lastSpendBatcherEnabled", "false")
 	internalTest(t)
 }
 
 func TestAerospikeBatching(t *testing.T) {
 	gocore.Config().Set("utxostore_spendBatcherEnabled", "true")
+	gocore.Config().Set("utxostore_lastSpendBatcherEnabled", "true")
 	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "true")
 	gocore.Config().Set("txmeta_store_getBatcherEnabled", "true")
 	internalTest(t)
@@ -116,7 +119,7 @@ func internalTest(t *testing.T) {
 
 	// ubsv db client
 	var db utxostore.Interface
-	db, err = New(ulogger.TestLogger{}, aeroURL)
+	db, err = New(ulogger.New("utxo"), aeroURL)
 	require.NoError(t, err)
 
 	txMetaStore, err := _factory.New(ulogger.TestLogger{}, aeroURL)
@@ -136,6 +139,10 @@ func internalTest(t *testing.T) {
 		txMeta, err = txMetaStore.Create(context.Background(), tx)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
+
+		//spendObj := txmetastore.TxMetaAerospikeRecord{}
+		//err = client.GetObject(nil, key, &spendObj)
+		//require.NoError(t, err)
 
 		resp, err = db.Get(context.Background(), spend)
 		require.NoError(t, err)

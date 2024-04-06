@@ -6,8 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/aerospike/aerospike-client-go/v7/types"
-	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"golang.org/x/sync/errgroup"
 	"math"
 	"net/url"
@@ -17,9 +15,11 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
+	"github.com/aerospike/aerospike-client-go/v7/types"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -118,16 +118,24 @@ type batchSpend struct {
 	done  chan error
 }
 
+type batchLastSpend struct {
+	key  *aerospike.Key
+	hash chainhash.Hash
+	time int
+}
+
 type Store struct {
-	u            *url.URL
-	client       *uaerospike.Client
-	namespace    string
-	setName      string
-	logger       ulogger.Logger
-	blockHeight  atomic.Uint32
-	expiration   uint32
-	batchId      atomic.Uint64
-	spendBatcher *batcher.Batcher2[batchSpend]
+	u                *url.URL
+	client           *uaerospike.Client
+	namespace        string
+	setName          string
+	logger           ulogger.Logger
+	blockHeight      atomic.Uint32
+	expiration       uint32
+	batchId          atomic.Uint64
+	spendBatcher     *batcher.Batcher2[batchSpend]
+	lastSpendCh      chan *batchLastSpend
+	lastSpendBatcher *batcher.Batcher2[batchLastSpend]
 }
 
 var (
@@ -185,6 +193,22 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 		batchDuration, _ := gocore.Config().GetInt("utxostore_spendBatcherDurationMillis", 10)
 		duration := time.Duration(batchDuration) * time.Millisecond
 		s.spendBatcher = batcher.New[batchSpend](batchSize, duration, s.sendSpendBatch, true)
+	}
+
+	lastSpendBatcherEnabled := gocore.Config().GetBool("utxostore_lastSpendBatcherEnabled", true)
+	if lastSpendBatcherEnabled {
+		batchSize, _ := gocore.Config().GetInt("utxostore_lastSpendBatcherSize", 256)
+		batchDuration, _ := gocore.Config().GetInt("utxostore_lastSpendBatcherDurationMillis", 5)
+		duration := time.Duration(batchDuration) * time.Millisecond
+		s.lastSpendBatcher = batcher.New[batchLastSpend](batchSize, duration, s.sendLastSpendBatch, true)
+		s.lastSpendCh = make(chan *batchLastSpend, 1_000_000)
+
+		// start the worker
+		go func() {
+			for lastSpend := range s.lastSpendCh {
+				s.lastSpendBatcher.Put(lastSpend)
+			}
+		}()
 	}
 
 	return s, nil
@@ -281,18 +305,20 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 							}
 
 							utxoMap, ok := record.Bins["utxos"].(map[interface{}]interface{})
-							valueBytes, ok := utxoMap[spend.Hash.String()].([]byte)
 							if ok {
-								if len(valueBytes) == 32 {
-									spendingTxHash := chainhash.Hash(valueBytes)
-									if spendingTxHash.Equal(*spend.SpendingTxID) {
-										s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", spend.Hash.String(), batchId, spendingTxHash.String())
-										batch[idx].done <- nil
-									} else {
-										// spent by another transaction
-										batch[idx].done <- utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, &spendingTxHash)
+								valueBytes, ok := utxoMap[spend.Hash.String()].([]byte)
+								if ok {
+									if len(valueBytes) == 32 {
+										spendingTxHash := chainhash.Hash(valueBytes)
+										if spendingTxHash.Equal(*spend.SpendingTxID) {
+											s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", spend.Hash.String(), batchId, spendingTxHash.String())
+											batch[idx].done <- nil
+										} else {
+											// spent by another transaction
+											batch[idx].done <- utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, &spendingTxHash)
+										}
+										continue
 									}
-									continue
 								}
 							}
 						}
@@ -318,16 +344,24 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 						}
 						if spentUtxos == len(utxos) {
 							// mark document as spent and add expiration for TTL
-							ttlPolicy := util.GetAerospikeWritePolicy(0, s.expiration)
-							ttlPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-							_, err = s.client.Operate(ttlPolicy, batchRecord.BatchRec().Key, aerospike.PutOp(
-								aerospike.NewBin(
-									"lastSpend",
-									aerospike.NewIntegerValue(int(time.Now().Unix())),
-								),
-							))
-							if err != nil {
-								batch[idx].done <- fmt.Errorf("[SPEND_BATCH][%s] could not set lastSpend: %w", spend.Hash.String(), err)
+							if s.lastSpendBatcher != nil {
+								s.lastSpendBatcher.Put(&batchLastSpend{
+									key:  key,
+									hash: *spend.Hash,
+									time: int(time.Now().Unix()),
+								})
+							} else {
+								ttlPolicy := util.GetAerospikeWritePolicy(0, s.expiration)
+								ttlPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+								_, err = s.client.Operate(ttlPolicy, batchRecord.BatchRec().Key, aerospike.PutOp(
+									aerospike.NewBin(
+										"lastSpend",
+										aerospike.NewIntegerValue(int(time.Now().Unix())),
+									),
+								))
+								if err != nil {
+									batch[idx].done <- fmt.Errorf("[SPEND_BATCH][%s] could not set lastSpend: %w", spend.Hash.String(), err)
+								}
 							}
 						}
 					}
@@ -336,6 +370,57 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 
 			//s.logger.Warnf("[SPEND_BATCH][%s] successfully spent utxo in aerospike in batch %d", spend.Hash.String(), batchId)
 			batch[idx].done <- nil
+		}
+	}
+}
+
+// sendLastSpendBatch sends a batch of last spend times to aerospike
+// this is fire and forget, since it is not really a fatal thing if some of the records fail, it just means they won't get deleted
+// all failures will be added on a retry channel for further processing
+func (s *Store) sendLastSpendBatch(batch []*batchLastSpend) {
+	batchId := s.batchId.Add(1)
+	s.logger.Infof("[LAST_SPEND_BATCH] sending last spend time %d of %d items", batchId, len(batch))
+	defer func() {
+		s.logger.Debugf("[LAST_SPEND_BATCH] sending last spend time %d of %d item DONE", batchId, len(batch))
+	}()
+
+	batchPolicy := util.GetAerospikeBatchPolicy()
+
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, s.expiration) // set expiration
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
+
+	var err error
+	for idx, bItem := range batch {
+		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, bItem.key, aerospike.PutOp(
+			aerospike.NewBin(
+				"lastSpend",
+				aerospike.NewIntegerValue(int(time.Now().Unix())),
+			),
+		))
+	}
+
+	err = s.client.BatchOperate(batchPolicy, batchRecords)
+	if err != nil {
+		s.logger.Errorf("[LAST_SPEND_BATCH][%d] failed to batch last spend time aerospike map utxos in batchId %d: %v", batchId, len(batch), err)
+		// re-add all the items to the channel
+		for _, bItem := range batch {
+			s.lastSpendCh <- bItem
+		}
+	}
+
+	// batchOperate may have no errors, but some of the records may have failed
+	for idx, batchRecord := range batchRecords {
+		err = batchRecord.BatchRec().Err
+		if errors.Is(err, aerospike.ErrKeyNotFound) {
+			// key not found, no need to update
+			s.logger.Warnf("[LAST_SPEND_BATCH][%s] key not found in aerospike in last spend batch %d: %v", batch[idx].hash.String(), batchId, err)
+			continue
+		} else if err != nil {
+			s.logger.Errorf("[LAST_SPEND_BATCH][%s] error in aerospike last spend batch record, retrying: %d - %v", batch[idx].hash.String(), idx, err)
+			// re-add the item to the channel
+			s.lastSpendCh <- batch[idx]
 		}
 	}
 }
@@ -659,16 +744,24 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 				}
 				if spentUtxos == len(utxos) {
 					// mark document as spent and add expiration for TTL
-					ttlPolicy := util.GetAerospikeWritePolicy(0, s.expiration)
-					ttlPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-					_, err = s.client.Operate(ttlPolicy, key, aerospike.PutOp(
-						aerospike.NewBin(
-							"lastSpend",
-							aerospike.NewIntegerValue(int(time.Now().Unix())),
-						),
-					))
-					if err != nil {
-						return fmt.Errorf("could not set lastSpend: %w", err)
+					if s.lastSpendBatcher != nil {
+						s.lastSpendBatcher.Put(&batchLastSpend{
+							key:  key,
+							hash: *spend.Hash,
+							time: int(time.Now().Unix()),
+						})
+					} else {
+						ttlPolicy := util.GetAerospikeWritePolicy(0, s.expiration)
+						ttlPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+						_, err = s.client.Operate(ttlPolicy, key, aerospike.PutOp(
+							aerospike.NewBin(
+								"lastSpend",
+								aerospike.NewIntegerValue(int(time.Now().Unix())),
+							),
+						))
+						if err != nil {
+							return fmt.Errorf("could not set lastSpend: %w", err)
+						}
 					}
 				}
 			}

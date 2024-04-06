@@ -36,3 +36,14 @@ type Store interface {
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 }
+
+type TxMetaAerospikeRecord struct {
+	Tx             []byte                      `as:"tx" json:"tx"`
+	Fee            uint64                      `as:"fee" json:"fee"`
+	SizeInBytes    uint64                      `as:"size" json:"size"`
+	LockTime       uint32                      `as:"locktime" json:"locktime"`
+	Utxos          map[interface{}]interface{} `as:"utxos" json:"utxos"`
+	ParentTxHashes []byte                      `as:"parentTxHashes" json:"parent_tx_hashes"`
+	BlockIDs       []uint32                    `as:"blockIDs" json:"block_ids"`
+	IsCoinbase     bool                        `as:"isCoinbase" json:"is_coinbase"`
+}
