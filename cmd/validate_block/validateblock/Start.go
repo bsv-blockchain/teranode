@@ -76,41 +76,44 @@ func Start() {
 
 	logger.Infof("Validating block %s", filename)
 
-	buf := make([]byte, 80)
-	n, err := r.Read(buf)
+	valid, err := ValidateBlock(r, logger)
 	if err != nil {
-		logger.Errorf("%s", err)
+		logger.Errorf("Error during validation: %v", err)
 		return
 	}
 
+	if valid {
+		logger.Infof("Block is valid")
+	} else {
+		logger.Errorf("Block is NOT valid")
+	}
+
+	fmt.Println()
+}
+
+// ValidateBlock validates a Bitcoin block.
+func ValidateBlock(r io.Reader, logger ulogger.Logger) (bool, error) {
+	buf := make([]byte, 80)
+	n, err := r.Read(buf)
+	if err != nil {
+		return false, err
+	}
+
 	if n != 80 {
-		logger.Errorf("block header is not 80 bytes")
-		return
+		return false, errors.New("block header is not 80 bytes")
 	}
 
 	blockHeader, err := bc.NewBlockHeaderFromBytes(buf)
 	if err != nil {
-		logger.Errorf("%s", err)
-		return
+		return false, err
 	}
 
-	logger.Infof("Merkle root (from header): %s", blockHeader.HashMerkleRootStr())
+	txIDs := make([]string, 0)
 
 	// Read the varint of the number of transactions in the block
 	var txCount bt.VarInt
 	if _, err := txCount.ReadFrom(r); err != nil {
-		logger.Errorf("%s", err)
-		return
-	}
-
-	logger.Infof("TX count (from header):    %d", txCount)
-
-	txIDs := make([]string, 0, txCount)
-
-	percent := 0
-	percentStep := txCount / 100
-	if percentStep == 0 {
-		percentStep = 1
+		return false, err
 	}
 
 	for {
@@ -121,37 +124,21 @@ func Start() {
 				break
 			}
 
-			logger.Errorf("%s", err)
-			return
+			return false, err
 		}
 
 		txIDs = append(txIDs, tx.TxIDChainHash().String())
-
-		percent++
-
-		if percent%int(percentStep) == 0 {
-			fmt.Printf("\r%d%%", percent/int(percentStep))
-		}
 	}
-
-	fmt.Print("\r")
-	logger.Infof("TXID count:                %d", len(txIDs))
 
 	root, err := bc.BuildMerkleRoot(txIDs)
 	if err != nil {
 		logger.Errorf("%s", err)
-		return
+		return false, err
 	}
 
-	logger.Infof("Merkle root (calculated):  %s", root)
-
-	fmt.Println()
-
-	if root == blockHeader.HashMerkleRootStr() {
-		logger.Infof("Block is valid")
-	} else {
-		logger.Errorf("Block is NOT valid")
+	if root != blockHeader.HashMerkleRootStr() {
+		return false, nil
 	}
 
-	fmt.Println()
+	return true, nil
 }

@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -44,4 +45,5 @@ type Store interface {
 	GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error)
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
+	GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error)
 }
