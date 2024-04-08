@@ -330,37 +330,39 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 		} else {
 			response := batchRecord.BatchRec().Record
 			// check whether all utxos are spent
-			utxosValue, ok := response.Bins["utxos"].(aerospike.OpResults)
-			if ok {
-				if len(utxosValue) == 2 {
-					// utxos are in index 1 of the response
-					utxos, ok := utxosValue[1].(map[interface{}]interface{})
-					if ok {
-						spentUtxos := 0
-						for _, v := range utxos {
-							if v != nil {
-								spentUtxos++
+			if response.Bins != nil {
+				utxosValue, ok := response.Bins["utxos"].(aerospike.OpResults)
+				if ok {
+					if len(utxosValue) == 2 {
+						// utxos are in index 1 of the response
+						utxos, ok := utxosValue[1].(map[interface{}]interface{})
+						if ok {
+							spentUtxos := 0
+							for _, v := range utxos {
+								if v != nil {
+									spentUtxos++
+								}
 							}
-						}
-						if spentUtxos == len(utxos) {
-							// mark document as spent and add expiration for TTL
-							if s.lastSpendBatcher != nil {
-								s.lastSpendBatcher.Put(&batchLastSpend{
-									key:  key,
-									hash: *spend.Hash,
-									time: int(time.Now().Unix()),
-								})
-							} else {
-								ttlPolicy := util.GetAerospikeWritePolicy(0, s.expiration)
-								ttlPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-								_, err = s.client.Operate(ttlPolicy, batchRecord.BatchRec().Key, aerospike.PutOp(
-									aerospike.NewBin(
-										"lastSpend",
-										aerospike.NewIntegerValue(int(time.Now().Unix())),
-									),
-								))
-								if err != nil {
-									batch[idx].done <- fmt.Errorf("[SPEND_BATCH][%s] could not set lastSpend: %w", spend.Hash.String(), err)
+							if spentUtxos == len(utxos) {
+								// mark document as spent and add expiration for TTL
+								if s.lastSpendBatcher != nil {
+									s.lastSpendBatcher.Put(&batchLastSpend{
+										key:  key,
+										hash: *spend.Hash,
+										time: int(time.Now().Unix()),
+									})
+								} else {
+									ttlPolicy := util.GetAerospikeWritePolicy(0, s.expiration)
+									ttlPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+									_, err = s.client.Operate(ttlPolicy, batchRecord.BatchRec().Key, aerospike.PutOp(
+										aerospike.NewBin(
+											"lastSpend",
+											aerospike.NewIntegerValue(int(time.Now().Unix())),
+										),
+									))
+									if err != nil {
+										batch[idx].done <- fmt.Errorf("[SPEND_BATCH][%s] could not set lastSpend: %w", spend.Hash.String(), err)
+									}
 								}
 							}
 						}
