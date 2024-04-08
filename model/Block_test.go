@@ -37,12 +37,13 @@ func TestBlock_Bytes(t *testing.T) {
 			TransactionCount: 1,
 			SizeInBytes:      123,
 			Subtrees:         []*chainhash.Hash{},
+			Height:           800000,
 		}
 
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
 
-		assert.Equal(t, 93, len(blockBytes))
+		assert.Equal(t, 98, len(blockBytes))
 	})
 
 	t.Run("test block bytes", func(t *testing.T) {

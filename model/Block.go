@@ -203,11 +203,13 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, 
 	}, nil
 }
 
-func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
+func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {
 	startTime := time.Now()
+
 	defer func() {
 		prometheusBlockFromBytes.Observe(time.Since(startTime).Seconds())
 		if r := recover(); r != nil {
+			err = errors.New(errors.ERR_BLOCK_INVALID, "error creating block from bytes", r)
 			fmt.Println("Recovered in NewBlockFromBytes", r)
 		}
 	}()
@@ -218,9 +220,7 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 		return nil, errors.New(errors.ERR_BLOCK_INVALID, "block is too small")
 	}
 
-	block := &Block{}
-
-	var err error
+	block = &Block{}
 
 	// read the first 80 bytes as the block header
 	blockHeaderBytes := blockBytes[:80]
@@ -268,11 +268,11 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 		block.Subtrees = append(block.Subtrees, subtreeHash)
 	}
 
-	var coinbaseTx *bt.Tx
+	var coinbaseTx bt.Tx
 	if _, err := coinbaseTx.ReadFrom(buf); err != nil {
 		return nil, errors.New(errors.ERR_BLOCK_INVALID, "error reading coinbase tx", err)
 	}
-	block.CoinbaseTx = coinbaseTx
+	block.CoinbaseTx = &coinbaseTx
 
 	// Read in the block height
 	blockHeight64, err := wire.ReadVarInt(buf, 0)

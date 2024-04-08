@@ -278,8 +278,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			var aErr *aerospike.AerospikeError
 			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
 				s.logger.Warnf("[STORE_BATCH][%s:%d] txMeta already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
-				// batch[idx].done <- txmeta.NewErrTxmetaAlreadyExists(hash)
-				batch[idx].done <- nil
+				batch[idx].done <- txmeta.NewErrTxmetaAlreadyExists(hash)
 				continue
 			}
 

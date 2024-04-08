@@ -278,7 +278,7 @@ func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
 		bytes: blockBytes,
 	})
 
-	if err := tb.blockValidationClient.BlockFound(context.TODO(), block.Hash(), tb.baseUrl, legacyHeight, true); err != nil {
+	if err := tb.blockValidationClient.BlockFound(context.TODO(), block.Hash(), tb.baseUrl, true); err != nil {
 		return fmt.Errorf("error broadcasting block from %s: %w", tb.baseUrl, err)
 	}
 
