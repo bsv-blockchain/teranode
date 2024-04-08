@@ -275,7 +275,7 @@ func (u *BlockValidation) validateBlock(ctx context.Context, blockHash *chainhas
 		if iErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); err != nil {
 			u.logger.Errorf("[BlockValidation:start][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), iErr)
 		}
-		return fmt.Errorf("[BlockValidation:start][%s] block is not valid: %v", block.String(), err)
+		return fmt.Errorf("[BlockValidation:start][%s] InvalidateBlock block is not valid: %v", block.String(), err)
 	}
 
 	return nil
@@ -535,7 +535,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
 			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
-				u.logger.Errorf("[ValidateBlock][%s] block is not valid in background: %v", block.String(), err)
+				u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 				if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
 					// storage or processing error, block is not really invalid, but we need to re-validate
@@ -621,7 +621,7 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block) {
 func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	ctx := context.Background()
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
-		u.logger.Errorf("[ValidateBlock][%s] block is not valid in background: %v", blockData.block.String(), err)
+		u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		if errors.Is(err, errors.ErrStorageError) {
 			// storage error, block is not really invalid, but we need to re-validate
