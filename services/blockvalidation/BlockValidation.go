@@ -358,18 +358,45 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	} else {
 		// get the block from the blockchain
 		if block, err = u.blockchainClient.GetBlock(ctx, blockHash); err != nil {
-			return fmt.Errorf("[setMined][%s] failed to get block from blockchain: %v", blockHash.String(), err)
+			return fmt.Errorf("[setTxMined][%s] failed to get block from blockchain: %v", blockHash.String(), err)
 		}
 	}
 
 	// make sure all the subtrees are loaded in the block
 	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore)
 	if err != nil {
-		return fmt.Errorf("[setMined][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
+		return fmt.Errorf("[setTxMined][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
+	}
+
+	// check whether the parent block has been set to mined in the db
+	// keep on trying until the parent block has been set to mined
+	var blockNotMined []*model.Block
+	for {
+		blockNotMined, err = u.blockchainClient.GetBlocksMinedNotSet(ctx)
+		if err != nil {
+			u.logger.Errorf("[setTxMined][%s] failed to get blocks mined not set: %s", block.Hash().String(), err)
+		}
+
+		// check whether our parent block is in the list of not mined blocks
+		parentBlockMined := true
+		for _, b := range blockNotMined {
+			if b.Header.Hash().IsEqual(block.Header.HashPrevBlock) {
+				parentBlockMined = false
+				break
+			}
+		}
+
+		if parentBlockMined {
+			break
+		}
+
+		// wait for 5 seconds and try again
+		u.logger.Warnf("[setTxMined][%s] parent block not set to mined yet, waiting 5 seconds", block.Hash().String())
+		time.Sleep(5 * time.Second)
 	}
 
 	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, 1); err != nil || len(ids) != 1 {
-		return fmt.Errorf("[setMined][%s] failed to get block header ids: %v", blockHash.String(), err)
+		return fmt.Errorf("[setTxMined][%s] failed to get block header ids: %v", blockHash.String(), err)
 	}
 
 	blockID := ids[0]
@@ -382,7 +409,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		block,
 		blockID,
 	); err != nil {
-		return fmt.Errorf("[setMined][%s] error updating tx mined status: %w", block.Hash().String(), err)
+		return fmt.Errorf("[setTxMined][%s] error updating tx mined status: %w", block.Hash().String(), err)
 	}
 
 	// delete the block from the cache, if it was there
