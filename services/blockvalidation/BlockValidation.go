@@ -154,10 +154,14 @@ func (u *BlockValidation) start(ctx context.Context) {
 			for _, block := range blocksMinedNotSet {
 				blockHash := block.Hash()
 
+				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 				g.Go(func() error {
 					u.logger.Infof("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
 					if err := u.setTxMined(gCtx, blockHash); err != nil {
 						u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
+						u.setMinedChan <- blockHash
+					} else {
+						_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
 					}
 
 					return nil
@@ -203,11 +207,15 @@ func (u *BlockValidation) start(ctx context.Context) {
 				startTime := time.Now()
 				u.logger.Infof("[BlockValidation:start][%s] block setTxMined", blockHash.String())
 
+				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
+
 				err := u.setTxMined(ctx, blockHash)
 				if err != nil {
 					u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
 					// put the block back in the setMinedChan
 					u.setMinedChan <- blockHash
+				} else {
+					_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
 				}
 
 				u.logger.Infof("[BlockValidation:start][%s] block setTxMined DONE in %s", blockHash.String(), time.Since(startTime))
@@ -341,11 +349,6 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.Hash) (err error) {
 	var block *model.Block
 	var ids []uint32
-
-	_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
-	defer func() {
-		_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
-	}()
 
 	cachedBlock, blockWasAlreadyCached := u.lastValidatedBlocks.Get(*blockHash)
 	if blockWasAlreadyCached && cachedBlock != nil {
