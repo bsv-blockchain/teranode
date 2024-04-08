@@ -440,6 +440,20 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostor
 	return nil
 }
 
+func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
+
+	for _, input := range tx.Inputs {
+		prevTx, err := v.txMetaStore.Get(ctx, input.PreviousTxIDChainHash())
+		if err != nil {
+			return fmt.Errorf("can't get txmeta for tx: %w", err)
+		}
+		prevOut := prevTx.Tx.Outputs[input.PreviousTxOutIndex]
+		input.PreviousTxScript = prevOut.LockingScript
+		input.PreviousTxSatoshis = prevOut.Satoshis
+	}
+	return nil
+}
+
 func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) error {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "validateTransaction")
 	defer func() {
@@ -464,7 +478,10 @@ func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx, block
 	// 0) Check whether we have a complete transaction in extended format, with all input information
 	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
 	if !util.IsExtended(tx, blockHeight) {
-		return fmt.Errorf("transaction is not in extended format")
+		err := v.extendTransaction(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("can't extend transaction %s:%w", tx.TxIDChainHash(), err)
+		}
 	}
 
 	// 1) Neither lists of inputs or outputs are empty

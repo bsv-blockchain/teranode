@@ -19,13 +19,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	legacy_blockchain "github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
@@ -228,56 +226,11 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 			if err := subtree.AddNode(txHash, 0, txSize); err != nil {
 				return fmt.Errorf("Failed to add node (%s) to subtree: %w", txHash, err)
 			}
-
-			for _, input := range tx.Inputs {
-				// Lookup the previous tx in out txCache
-				var script *bscript.Script
-				var satoshis uint64
-
-				w, ok := tb.txCache.Get(*input.PreviousTxIDChainHash())
-
-				if ok {
-					prevTx, err := bt.NewTxFromBytes(w.bytes)
-					if err != nil {
-						return fmt.Errorf("Failed to create bt.Tx for previous tx (%s): %w", input.PreviousTxIDChainHash(), err)
-					}
-
-					script = prevTx.Outputs[input.PreviousTxOutIndex].LockingScript
-					satoshis = prevTx.Outputs[input.PreviousTxOutIndex].Satoshis
-
-				} else {
-					previousOutput, err := tb.chain.FetchUtxoEntry(wire.OutPoint{
-						Hash:  *input.PreviousTxIDChainHash(),
-						Index: input.PreviousTxOutIndex,
-					})
-
-					if err != nil {
-						return fmt.Errorf("Failed to lookup previous tx (%s:%d): %w", *input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, err)
-					}
-
-					if previousOutput == nil {
-						return fmt.Errorf("previous output not found for block %s, tx %s, prevTx %s, vout %d", block.Hash(), txHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
-					}
-
-					script = bscript.NewFromBytes(previousOutput.PkScript())
-					satoshis = uint64(previousOutput.Amount())
-				}
-
-				input.PreviousTxScript = script
-				input.PreviousTxSatoshis = satoshis
-
-			}
-
-			if !util.IsExtended(tx, uint32(currentHeight)) {
-				return fmt.Errorf("tx %s is not extended", txHash)
-			}
 		}
-
-		txBytesExtended := tx.ExtendedBytes()
 
 		// Add the tx to the cache
 		tb.txCache.Set(txHash, &wrapper{
-			bytes: txBytesExtended,
+			bytes: tx.Bytes(),
 		})
 
 	}
