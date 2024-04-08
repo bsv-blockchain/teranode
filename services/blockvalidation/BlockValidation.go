@@ -209,8 +209,39 @@ func (u *BlockValidation) start(ctx context.Context) {
 
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 
-				err := u.setTxMined(ctx, blockHash)
+				blockHeader, _, err := u.blockchainClient.GetBlockHeader(ctx, blockHash)
 				if err != nil {
+					u.logger.Errorf("[BlockValidation:start][%s] failed to get block header: %s", blockHash.String(), err)
+					// put the block back in the setMinedChan
+					go func() {
+						time.Sleep(5 * time.Second)
+						u.setMinedChan <- blockHash
+					}()
+					continue
+				}
+
+				parentBlockMined, err := u.isParentMined(ctx, blockHeader)
+				if err != nil {
+					u.logger.Errorf("[BlockValidation:start][%s] failed isParentMined: %s", blockHash.String(), err)
+					// put the block back in the setMinedChan
+					go func() {
+						time.Sleep(5 * time.Second)
+						u.setMinedChan <- blockHash
+					}()
+					continue
+				}
+
+				if !parentBlockMined {
+					u.logger.Infof("[BlockValidation:start][%s] parent block not mined yet, retrying", blockHash.String())
+					// put the block back in the setMinedChan
+					go func() {
+						time.Sleep(5 * time.Second)
+						u.setMinedChan <- blockHash
+					}()
+					continue
+				}
+
+				if err = u.setTxMined(ctx, blockHash); err != nil {
 					u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
 					// put the block back in the setMinedChan
 					u.setMinedChan <- blockHash
@@ -368,33 +399,6 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		return fmt.Errorf("[setTxMined][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
 	}
 
-	// check whether the parent block has been set to mined in the db
-	// keep on trying until the parent block has been set to mined
-	var blockNotMined []*model.Block
-	for {
-		blockNotMined, err = u.blockchainClient.GetBlocksMinedNotSet(ctx)
-		if err != nil {
-			u.logger.Errorf("[setTxMined][%s] failed to get blocks mined not set: %s", block.Hash().String(), err)
-		}
-
-		// check whether our parent block is in the list of not mined blocks
-		parentBlockMined := true
-		for _, b := range blockNotMined {
-			if b.Header.Hash().IsEqual(block.Header.HashPrevBlock) {
-				parentBlockMined = false
-				break
-			}
-		}
-
-		if parentBlockMined {
-			break
-		}
-
-		// wait for 5 seconds and try again
-		u.logger.Warnf("[setTxMined][%s] parent block not set to mined yet, waiting 5 seconds", block.Hash().String())
-		time.Sleep(5 * time.Second)
-	}
-
 	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, 1); err != nil || len(ids) != 1 {
 		return fmt.Errorf("[setTxMined][%s] failed to get block header ids: %v", blockHash.String(), err)
 	}
@@ -423,6 +427,26 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	}
 
 	return nil
+}
+
+// isParentMined: check whether the parent block has been set to mined in the db
+// keep on trying until the parent block has been set to mined
+func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.BlockHeader) (bool, error) {
+	blockNotMined, err := u.blockchainClient.GetBlocksMinedNotSet(ctx)
+	if err != nil {
+		return false, fmt.Errorf("[setTxMined][%s] failed to get blocks mined not set: %s", blockHeader.Hash().String(), err)
+	}
+
+	// check whether our parent block is in the list of not mined blocks
+	parentBlockMined := true
+	for _, b := range blockNotMined {
+		if b.Header.Hash().IsEqual(blockHeader.HashPrevBlock) {
+			parentBlockMined = false
+			break
+		}
+	}
+
+	return parentBlockMined, nil
 }
 
 func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *txmeta.Data) error {
