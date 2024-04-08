@@ -9,3 +9,6 @@ psql postgres://ubsv:ubsv@localhost:5432/coinbase -c "SET client_min_messages TO
 
 # Flush redis
 redis-cli FLUSHALL
+
+# Flush aerospike
+aql -c "truncate test.utxo;"

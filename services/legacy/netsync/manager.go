@@ -1304,11 +1304,6 @@ out:
 				}
 
 			case *blockMsg:
-				if err := sm.teranodeBridge.HandleBlock(msg.block); err != nil {
-					log.Errorf("Failed to process HandleBlock %s: %v", msg.block.Hash(), err)
-					break
-				}
-
 				sm.handleBlockMsg(msg)
 				if msg.reply != nil {
 					msg.reply <- struct{}{}

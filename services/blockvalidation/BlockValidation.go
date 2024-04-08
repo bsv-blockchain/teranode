@@ -776,7 +776,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(validateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
 
-	var blockHeight uint32 // Height 0 is before ForkID and Genesis activation
+	blockHeight := block.Height
 	if block.Header.Version > 1 {
 		var err error
 		blockHeight, err = block.ExtractCoinbaseHeight()

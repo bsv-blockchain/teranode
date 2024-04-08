@@ -175,6 +175,7 @@ type Block struct {
 	Subtrees          []*chainhash.Hash   `json:"subtrees"`
 	SubtreeSlices     []*util.Subtree     `json:"-"`
 	SubtreeMetaSlices []*util.SubtreeMeta `json:"-"`
+	Height            uint32              `json:"height"` // SAO - This can be left empty (i.e 0) as it is only used in legacy before the height was encoded in the coinbase tx (BIP-34)
 
 	// local
 	hash            *chainhash.Hash
@@ -189,7 +190,7 @@ type BlockBloomFilter struct {
 	CreationTime time.Time
 }
 
-func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64) (*Block, error) {
+func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64, blockHeight uint32) (*Block, error) {
 
 	return &Block{
 		Header:           header,
@@ -198,6 +199,7 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, 
 		TransactionCount: transactionCount,
 		SizeInBytes:      sizeInBytes,
 		subtreeLength:    uint64(len(subtrees)),
+		Height:           blockHeight,
 	}, nil
 }
 
@@ -266,10 +268,26 @@ func NewBlockFromBytes(blockBytes []byte) (*Block, error) {
 		block.Subtrees = append(block.Subtrees, subtreeHash)
 	}
 
-	coinbaseTxBytes, _ := io.ReadAll(buf) // read the rest of the bytes as the coinbase tx
-	block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTxBytes)
+	var coinbaseTx *bt.Tx
+	if _, err := coinbaseTx.ReadFrom(buf); err != nil {
+		return nil, errors.New(errors.ERR_BLOCK_INVALID, "error reading coinbase tx", err)
+	}
+	block.CoinbaseTx = coinbaseTx
+
+	// Read in the block height
+	blockHeight64, err := wire.ReadVarInt(buf, 0)
 	if err != nil {
-		return nil, errors.New(errors.ERR_BLOCK_INVALID, "error creating coinbase tx", err)
+		return nil, errors.New(errors.ERR_BLOCK_INVALID, "error reading block height", err)
+	}
+
+	block.Height = uint32(blockHeight64)
+
+	// If the height is also stored in the coinbase, we should use that instead
+	if block.Header.Version > 1 {
+		block.Height, err = block.ExtractCoinbaseHeight()
+		if err != nil {
+			return nil, errors.New(errors.ERR_BLOCK_INVALID, "error extracting coinbase height", err)
+		}
 	}
 
 	return block, nil
@@ -294,12 +312,7 @@ type MinedBlockStore interface {
 }
 
 func (b *Block) String() string {
-	height, err := util.ExtractCoinbaseHeight(b.CoinbaseTx)
-	if err != nil {
-		height = 0
-	}
-
-	return fmt.Sprintf("Block %s (height: %d, txCount: %d, size: %d", b.Hash().String(), height, b.TransactionCount, b.SizeInBytes)
+	return fmt.Sprintf("Block %s (height: %d, txCount: %d, size: %d", b.Hash().String(), b.Height, b.TransactionCount, b.SizeInBytes)
 }
 
 func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
@@ -358,7 +371,6 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 		return false, errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.Hash().String())
 	}
 
-	var height uint32
 	if b.Header.Version > 1 {
 		// We can only calculate the height from coinbase transactions in block versions 2 and higher
 
@@ -371,7 +383,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 		// TODO - do this another way, if necessary
 
 		// 5. Check that the coinbase transaction includes the correct block height.
-		height, err = b.ExtractCoinbaseHeight()
+		_, err := b.ExtractCoinbaseHeight()
 		if err != nil {
 			return false, errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] error extracting coinbase height: %v", b.Hash().String(), err)
 		}
@@ -399,8 +411,8 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 
 	// 9. Check that the total fees of the block are less than or equal to the block reward.
 	// 10. Check that the coinbase transaction includes the correct block reward.
-	if height > 0 {
-		err = b.checkBlockRewardAndFees(height)
+	if b.Height > 0 {
+		err = b.checkBlockRewardAndFees(b.Height)
 		if err != nil {
 			return false, err
 		}
@@ -992,6 +1004,11 @@ func (b *Block) Bytes() ([]byte, error) {
 	_, err = buf.Write(b.CoinbaseTx.Bytes())
 	if err != nil {
 		return nil, errors.New(errors.ERR_PROCESSING, "[BLOCK][%s] error writing coinbase tx", b.Hash().String(), err)
+	}
+
+	err = wire.WriteVarInt(buf, 0, uint64(b.Height))
+	if err != nil {
+		return nil, errors.New(errors.ERR_PROCESSING, "[BLOCK][%s] error writing height", b.Hash().String(), err)
 	}
 
 	return buf.Bytes(), nil

@@ -6,15 +6,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/aerospike/aerospike-client-go/v7/types"
-	"github.com/bitcoin-sv/ubsv/model"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
-	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"math"
 	"net/url"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/aerospike/aerospike-client-go/v7/types"
+	"github.com/bitcoin-sv/ubsv/model"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
@@ -277,7 +278,8 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			var aErr *aerospike.AerospikeError
 			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
 				s.logger.Warnf("[STORE_BATCH][%s:%d] txMeta already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
-				batch[idx].done <- txmeta.NewErrTxmetaAlreadyExists(hash)
+				// batch[idx].done <- txmeta.NewErrTxmetaAlreadyExists(hash)
+				batch[idx].done <- nil
 				continue
 			}
 
@@ -474,7 +476,7 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*txmeta.MissingTxHa
 					if ok {
 						parentTxHashes := make([]chainhash.Hash, len(parentTxHashesInterface)/32)
 						for i := 0; i < len(parentTxHashesInterface); i += 32 {
-							parentTxHashes[i] = chainhash.Hash(parentTxHashesInterface[i : i+32])
+							parentTxHashes[i/32] = chainhash.Hash(parentTxHashesInterface[i : i+32])
 						}
 						items[idx].Data.ParentTxHashes = parentTxHashes
 					}

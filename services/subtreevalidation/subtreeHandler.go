@@ -101,6 +101,16 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 
 	lockFile := path.Join(quorumPath, hash.String()) + ".lock"
 
+	// If the lock file already exists, the subtree is being processed by another node. However, the lock may be stale.
+	// If the lock file is older than the quorum timeout, it is considered stale and can be removed.
+	if info, err := os.Stat(lockFile); err == nil {
+		if time.Since(info.ModTime()) > quorumTimeout {
+			if err := os.Remove(lockFile); err != nil {
+				log.Printf("ERROR: failed to remove stale lock file %q: %v", lockFile, err)
+			}
+		}
+	}
+
 	// Attempt to acquire lock by atomically creating the lock file
 	// The O_CREATE|O_EXCL|O_WRONLY flags ensure the file is created only if it does not already exist
 	file, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
