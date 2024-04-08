@@ -481,19 +481,6 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
-	// get all 100 previous block headers on the main chain
-	u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
-	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
-	if err != nil {
-		return err
-	}
-
-	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
-	if err != nil {
-		return err
-	}
-	u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
-
 	// Add the coinbase transaction to the metaTxStore
 	// TODO why is this needed?
 	//u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx", block.Header.Hash().String())
@@ -533,6 +520,23 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		go func() {
 			defer optimisticMiningWg.Done()
 
+			// get all 100 previous block headers on the main chain
+			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
+			if err != nil {
+				u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
+				u.ReValidateBlock(block)
+				return
+			}
+
+			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
+			if err != nil {
+				u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
+				u.ReValidateBlock(block)
+				return
+			}
+			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
+
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
 			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 				u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
@@ -548,6 +552,23 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			}
 		}()
 	} else {
+		// get all 100 previous block headers on the main chain
+		u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+		blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
+		if err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
+			u.ReValidateBlock(block)
+			return fmt.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
+		}
+
+		blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
+		if err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
+			u.ReValidateBlock(block)
+			return fmt.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
+		}
+		u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
+
 		// validate the block
 		u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
 		if ok, err := block.Valid(spanCtx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
@@ -615,7 +636,9 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 func (u *BlockValidation) ReValidateBlock(block *model.Block) {
 	u.logger.Errorf("[ValidateBlock][%s] re-validating block", block.String())
-
+	u.revalidateBlockChan <- revalidateBlockData{
+		block: block,
+	}
 }
 
 func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
@@ -623,7 +646,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
 		u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
-		if errors.Is(err, errors.ErrStorageError) {
+		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
 			// storage error, block is not really invalid, but we need to re-validate
 			return err
 		} else {
