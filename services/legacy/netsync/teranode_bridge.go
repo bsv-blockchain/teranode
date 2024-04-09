@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	uerrors "github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
@@ -21,7 +22,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	txmetafactory "github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
@@ -204,8 +204,8 @@ func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
 
 		if tx.IsCoinbase() {
 			if _, err := tb.txmetaStore.Create(context.TODO(), tx, tx.LockTime); err != nil {
-				if errors.Is(err, utxo.ErrAlreadyExists) {
-					log.Debugf("Coinbase tx %s already exists in utxo store", txHash)
+				if uerr, ok := err.(*uerrors.Error); ok && uerr.Code == uerrors.ERR_NOT_FOUND {
+					log.Debugf("Coinbase tx %s already exists in map store - skipping", txHash)
 				} else {
 					return fmt.Errorf("Failed to store coinbase tx %s: %w", txHash, err)
 				}
