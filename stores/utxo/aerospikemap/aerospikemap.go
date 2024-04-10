@@ -504,6 +504,7 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 	}
 
 	policy := util.GetAerospikeReadPolicy()
+	policy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
 
 	value, aErr := s.client.Get(policy, key, binNames...)
 	if aErr != nil {
@@ -690,7 +691,10 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 
 		if errors.Is(err, aerospike.ErrFilteredOut) {
 			prometheusUtxoMapGet.Inc()
-			value, getErr := s.client.Get(util.GetAerospikeReadPolicy(), key, "utxos", "locktime")
+			errPolicy := util.GetAerospikeReadPolicy()
+			errPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
+
+			value, getErr := s.client.Get(errPolicy, key, "utxos", "locktime")
 			if getErr != nil {
 				return fmt.Errorf("could not see if the value was the same as before: %w", getErr)
 			}

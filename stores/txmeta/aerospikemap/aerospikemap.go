@@ -351,6 +351,8 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 	var value *aerospike.Record
 
 	readPolicy := util.GetAerospikeReadPolicy()
+	readPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
+
 	value, aeroErr = s.client.Get(readPolicy, key, bins...)
 	if aeroErr != nil {
 		return nil, aeroErr
@@ -406,6 +408,8 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*tx
 
 func (s *Store) MetaBatchDecorate(_ context.Context, items []*txmeta.MissingTxHash, fields ...string) error {
 	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
+
 	policy := util.GetAerospikeBatchReadPolicy()
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(items))
@@ -614,6 +618,8 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32
 	}
 
 	readPolicy := util.GetAerospikeReadPolicy()
+	readPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
+
 	record, err := s.client.Get(readPolicy, key, "blockIDs")
 	if err != nil {
 		return err
