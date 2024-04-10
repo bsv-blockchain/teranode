@@ -330,7 +330,7 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 		} else {
 			response := batchRecord.BatchRec().Record
 			// check whether all utxos are spent
-			if response.Bins != nil {
+			if response != nil && response.Bins != nil && response.Bins["utxos"] != nil {
 				utxosValue, ok := response.Bins["utxos"].(aerospike.OpResults)
 				if ok {
 					if len(utxosValue) == 2 {
@@ -368,6 +368,8 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 						}
 					}
 				}
+			} else {
+				s.logger.Warnf("[SPEND_BATCH][%s] utxos not found in aerospike in batch %d", spend.Hash.String(), batchId)
 			}
 
 			//s.logger.Warnf("[SPEND_BATCH][%s] successfully spent utxo in aerospike in batch %d", spend.Hash.String(), batchId)
