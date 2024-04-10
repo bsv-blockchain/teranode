@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/aerospike/aerospike-client-go/v7"
 	"io"
 	"runtime"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -678,6 +680,9 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 							headerErr := fmt.Errorf("currentBlockHeaderIDs: %v", currentBlockHeaderIDsMap)
 							headerErr = errors.Join(headerErr, fmt.Errorf("parent TxMeta: %v", parentTxMeta))
 
+							// TODO TEMP code, remove this when we are sure the parent tx is in the store
+							headerErr = b.getFromAerospike(headerErr, parentTxStruct)
+
 							txMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.txHash)
 							if err != nil {
 								headerErr = errors.Join(headerErr, fmt.Errorf("txMetaStore error getting transaction %s: %v", parentTxStruct.txHash.String(), err))
@@ -707,6 +712,32 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	}
 
 	return nil
+}
+
+func (b *Block) getFromAerospike(headerErr error, parentTxStruct missingParentTx) error {
+	aeroURL, _, _ := gocore.Config().GetURL("txmeta_store")
+	portStr := aeroURL.Port()
+	port, _ := strconv.Atoi(portStr)
+	client, aErr := aerospike.NewClient(aeroURL.Host, port)
+	if aErr != nil {
+		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike error: %w", aErr))
+	}
+
+	key, aeroErr := aerospike.NewKey(aeroURL.Path[1:], aeroURL.Query().Get("set"), &parentTxStruct.txHash)
+	if aeroErr != nil {
+		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike error: %w", aeroErr))
+		return headerErr
+	}
+
+	response, aErr := client.Get(nil, key)
+	if aErr != nil {
+		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike error: %w", aErr))
+		return headerErr
+	}
+
+	headerErr = errors.Join(headerErr, fmt.Errorf("aerospike response: %v", response))
+
+	return headerErr
 }
 
 func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store) ([]*util.Subtree, error) {

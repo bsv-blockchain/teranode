@@ -209,39 +209,7 @@ func (u *BlockValidation) start(ctx context.Context) {
 
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 
-				blockHeader, _, err := u.blockchainClient.GetBlockHeader(ctx, blockHash)
-				if err != nil {
-					u.logger.Errorf("[BlockValidation:start][%s] failed to get block header: %s", blockHash.String(), err)
-					// put the block back in the setMinedChan
-					go func() {
-						time.Sleep(5 * time.Second)
-						u.setMinedChan <- blockHash
-					}()
-					continue
-				}
-
-				parentBlockMined, err := u.isParentMined(ctx, blockHeader)
-				if err != nil {
-					u.logger.Errorf("[BlockValidation:start][%s] failed isParentMined: %s", blockHash.String(), err)
-					// put the block back in the setMinedChan
-					go func() {
-						time.Sleep(5 * time.Second)
-						u.setMinedChan <- blockHash
-					}()
-					continue
-				}
-
-				if !parentBlockMined {
-					u.logger.Infof("[BlockValidation:start][%s] parent block not mined yet, retrying", blockHash.String())
-					// put the block back in the setMinedChan
-					go func() {
-						time.Sleep(5 * time.Second)
-						u.setMinedChan <- blockHash
-					}()
-					continue
-				}
-
-				if err = u.setTxMined(ctx, blockHash); err != nil {
+				if err := u.setTxMined(ctx, blockHash); err != nil {
 					u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
 					// put the block back in the setMinedChan
 					u.setMinedChan <- blockHash
@@ -527,6 +495,22 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}
 
 	u.logger.Infof("[ValidateBlock][%s] called", block.Header.Hash().String())
+
+	for {
+		parentBlockMined, err := u.isParentMined(ctx, block.Header)
+		if err != nil {
+			u.logger.Errorf("[BlockValidation:start][%s] failed isParentMined: %s", block.Hash().String(), err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		if !parentBlockMined {
+			u.logger.Warnf("[BlockValidation:start][%s] parent block not mined yet, retrying", block.Hash().String())
+			time.Sleep(5 * time.Second)
+		} else {
+			break
+		}
+	}
 
 	// validate all the subtrees in the block
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
