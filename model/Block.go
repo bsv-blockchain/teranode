@@ -472,9 +472,16 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 	}
 
 	coinbaseReward := util.GetBlockSubsidyForHeight(height)
-	// TODO should this be != instead of > ?
-	if coinbaseOutputSatoshis != subtreeFees+coinbaseReward {
-		return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] fees paid (%d) are not equal to fees + block reward (%d)", b.Hash().String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
+
+	if height < 800_000 { // TODO - this is an arbitary number, we need to find the correct one
+		if coinbaseOutputSatoshis > subtreeFees+coinbaseReward {
+			return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] coinbase output (%d) is greated than fees + block subsidy (%d)", b.Hash().String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
+		}
+	} else {
+		// TODO should this be != instead of > ?
+		if coinbaseOutputSatoshis != subtreeFees+coinbaseReward {
+			return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] coinbase output (%d) is not equal to fees + block subsidy (%d)", b.Hash().String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
+		}
 	}
 
 	return nil
