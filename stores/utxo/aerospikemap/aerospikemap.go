@@ -6,12 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"golang.org/x/sync/errgroup"
 	"math"
 	"net/url"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
@@ -383,7 +384,7 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 // all failures will be added on a retry channel for further processing
 func (s *Store) sendLastSpendBatch(batch []*batchLastSpend) {
 	batchId := s.batchId.Add(1)
-	s.logger.Infof("[LAST_SPEND_BATCH] sending last spend time %d of %d items", batchId, len(batch))
+	s.logger.Debugf("[LAST_SPEND_BATCH] sending last spend time %d of %d items", batchId, len(batch))
 	defer func() {
 		s.logger.Debugf("[LAST_SPEND_BATCH] sending last spend time %d of %d item DONE", batchId, len(batch))
 	}()
