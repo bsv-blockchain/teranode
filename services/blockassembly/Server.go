@@ -796,8 +796,7 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 		subtreeHash := subtreeHash
 		g.Go(func() error {
 			// TODO this would be better as a batch operation
-			err = ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0)
-			if err != nil {
+			if err := ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0); err != nil {
 				// TODO should this retry? We are in a bad state when this happens
 				ba.logger.Errorf("[removeSubtreesTTL][%s][%s] failed to update subtree TTL: %v", block.Hash().String(), subtreeHash.String(), err)
 			}
