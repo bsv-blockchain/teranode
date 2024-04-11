@@ -660,8 +660,6 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 			}
 
 			if len(checkParentTxHashes) > 0 {
-				logger.Infof("[BLOCK][%s] checking parent transactions: %d", b.Hash().String(), len(checkParentTxHashes))
-
 				// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
 				parentG := errgroup.Group{}
 				parentG.SetLimit(1024 * 32)
@@ -732,7 +730,7 @@ func (b *Block) getFromAerospike(headerErr error, parentTxStruct missingParentTx
 	defer func() {
 		err := recover()
 		if err != nil {
-			fmt.Printf("Recovered in getFromAerospike: %v", err)
+			fmt.Printf("Recovered in getFromAerospike: %v\n", err)
 		}
 	}()
 
