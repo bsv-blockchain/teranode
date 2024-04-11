@@ -609,6 +609,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				n64 := binary.BigEndian.Uint64(subtreeNode.Hash[:])
 
 				for _, filter := range recentBlocksBloomFilters {
+
 					// check whether this bloom filter is on our chain
 					if _, found := currentBlockHeaderHashesMap[*filter.BlockHash]; !found {
 						continue

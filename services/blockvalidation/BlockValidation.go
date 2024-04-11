@@ -278,7 +278,12 @@ func (u *BlockValidation) validateBlock(ctx context.Context, blockHash *chainhas
 		return fmt.Errorf("[BlockValidation:start][%s] failed to get block header ids: %s", block.String(), err)
 	}
 
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
+	u.recentBlocksBloomFiltersMu.Lock()
+	bloomFilters := make([]*model.BlockBloomFilter, 0)
+	bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
+	u.recentBlocksBloomFiltersMu.Unlock()
+
+	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.txMetaStore, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
 		if iErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); err != nil {
 			u.logger.Errorf("[BlockValidation:start][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), iErr)
 		}
@@ -576,7 +581,13 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
 
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
-			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+
+			u.recentBlocksBloomFiltersMu.Lock()
+			bloomFilters := make([]*model.BlockBloomFilter, 0)
+			bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
+			u.recentBlocksBloomFiltersMu.Unlock()
+
+			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 				u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 				if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
@@ -609,7 +620,13 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 		// validate the block
 		u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
-		if ok, err := block.Valid(spanCtx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+
+		u.recentBlocksBloomFiltersMu.Lock()
+		bloomFilters := make([]*model.BlockBloomFilter, 0)
+		bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
+		u.recentBlocksBloomFiltersMu.Unlock()
+
+		if ok, err := block.Valid(spanCtx, u.logger, u.subtreeStore, u.txMetaStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 			return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
@@ -681,7 +698,13 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block) {
 
 func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	ctx := context.Background()
-	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.txMetaStore, u.recentBlocksBloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
+
+	u.recentBlocksBloomFiltersMu.Lock()
+	bloomFilters := make([]*model.BlockBloomFilter, 0)
+	bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
+	u.recentBlocksBloomFiltersMu.Unlock()
+
+	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.txMetaStore, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
 		u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
