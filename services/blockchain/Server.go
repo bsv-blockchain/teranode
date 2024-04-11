@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -11,6 +12,8 @@ import (
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -134,6 +137,65 @@ func (b *Blockchain) Start(ctx context.Context) error {
 			}
 		}
 	}()
+
+	httpAddress, ok := gocore.Config().Get("blockchain_httpListenAddress")
+	if !ok {
+		b.logger.Fatalf("[Miner] No blockchain_httpListenAddress specified")
+	} else {
+		e := echo.New()
+		e.HideBanner = true
+		e.HidePort = true
+
+		e.Use(middleware.Recover())
+
+		e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+			AllowOrigins: []string{"*"},
+			AllowMethods: []string{echo.GET},
+		}))
+
+		e.GET("/invalidate/:hash", func(c echo.Context) error {
+			hashStr := c.Param("hash")
+			hash, err := chainhash.NewHashFromStr(hashStr)
+			if err != nil {
+				return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
+			}
+
+			_, err = b.InvalidateBlock(ctx, &blockchain_api.InvalidateBlockRequest{
+				BlockHash: hash.CloneBytes(),
+			})
+
+			if err != nil {
+				return c.String(http.StatusInternalServerError, fmt.Sprintf("error invalidating block: %v", err))
+			}
+
+			return c.String(http.StatusOK, fmt.Sprintf("block invalidated: %s", hashStr))
+		})
+
+		e.GET("/revalidate/:hash", func(c echo.Context) error {
+			hashStr := c.Param("hash")
+			hash, err := chainhash.NewHashFromStr(hashStr)
+			if err != nil {
+				return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
+			}
+
+			_, err = b.RevalidateBlock(ctx, &blockchain_api.RevalidateBlockRequest{
+				BlockHash: hash.CloneBytes(),
+			})
+
+			if err != nil {
+				return c.String(http.StatusInternalServerError, fmt.Sprintf("error revalidating block: %v", err))
+			}
+
+			return c.String(http.StatusOK, fmt.Sprintf("block revalidated: %s", hashStr))
+		})
+
+		go func() {
+			if err := e.Start(httpAddress); err != nil {
+				b.logger.Errorf("[Blockchain] failed to start http server: %v", err)
+			}
+		}()
+
+	}
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
