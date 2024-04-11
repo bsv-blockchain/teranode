@@ -136,10 +136,10 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 
 				if subtreeIdx == 0 && idx == 0 {
 					// add the coinbase as the first transaction to be set to mined
-					node.Hash = *block.CoinbaseTx.TxIDChainHash()
+					hashes = append(hashes, block.CoinbaseTx.TxIDChainHash())
+				} else {
+					hashes = append(hashes, &node.Hash)
 				}
-
-				hashes = append(hashes, &node.Hash)
 
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
 					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, batch %d, for subtree %s in block %d", block.Hash().String(), len(hashes), idx/maxMinedBatchSize, subtree.RootHash().String(), blockID)
