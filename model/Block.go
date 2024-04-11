@@ -400,9 +400,9 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
-		if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(CoinbasePlaceholder) {
-			return false, errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.Hash().String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
-		}
+		//if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(CoinbasePlaceholder) {
+		//	return false, errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.Hash().String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
+		//}
 
 		//8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
 		//    making sure to replace the coinbase placeholder with the coinbase tx hash in the first subtree
