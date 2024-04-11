@@ -42,6 +42,8 @@ kustomization.yaml.bak
 
 *.dump
 
+*.log
+
 cmd/testUtil/compose/docker-compose.yml
 cmd/testUtil/compose/generator/scripts/postgres/init.sql
 docker-compose-generated.yml
