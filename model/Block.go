@@ -723,6 +723,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 }
 
 func (b *Block) getFromAerospike(headerErr error, parentTxStruct missingParentTx) error {
+	defer func() {
+		err := recover()
+		if err != nil {
+			fmt.Printf("Recovered in getFromAerospike: %v", err)
+		}
+	}()
+
 	aeroURL, _, _ := gocore.Config().GetURL("txmeta_store")
 	portStr := aeroURL.Port()
 	port, _ := strconv.Atoi(portStr)
@@ -731,7 +738,7 @@ func (b *Block) getFromAerospike(headerErr error, parentTxStruct missingParentTx
 		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike error: %w", aErr))
 	}
 
-	key, aeroErr := aerospike.NewKey(aeroURL.Path[1:], aeroURL.Query().Get("set"), &parentTxStruct.txHash)
+	key, aeroErr := aerospike.NewKey(aeroURL.Path[1:], aeroURL.Query().Get("set"), parentTxStruct.txHash.CloneBytes())
 	if aeroErr != nil {
 		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike error: %w", aeroErr))
 		return headerErr
