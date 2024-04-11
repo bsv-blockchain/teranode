@@ -506,7 +506,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		return fmt.Errorf("error getting reorg blocks: %w", err)
 	}
 
-	if (len(moveDownBlocks) > 10 || len(moveUpBlocks) > 10) && b.bestBlockHeight > 1000 {
+	if (len(moveDownBlocks) > 5 || len(moveUpBlocks) > 5) && b.bestBlockHeight > 1000 {
 		// large reorg, log it and Reset the block assembler
 		b.logger.Warnf("large reorg, moveDownBlocks: %d, moveUpBlocks: %d, resetting block assembly", len(moveDownBlocks), len(moveUpBlocks))
 		b.Reset()
