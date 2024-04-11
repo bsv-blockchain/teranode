@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/aerospike/aerospike-client-go/v7"
 	"io"
 	"runtime"
 	"sort"
@@ -13,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/aerospike/aerospike-client-go/v7"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
@@ -1088,7 +1089,7 @@ func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logg
 				// skip coinbase
 				continue
 			}
-			binary.BigEndian.PutUint64(subtree.Nodes[nodeIdx].Hash[:], n64)
+			binary.BigEndian.PutUint64(subtree.Nodes[nodeIdx].Hash.CloneBytes(), n64)
 			filter.Add(n64)
 		}
 	}
