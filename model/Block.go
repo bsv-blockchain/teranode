@@ -1078,7 +1078,11 @@ func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logg
 		if subtree == nil {
 			return nil, errors.New(errors.ERR_PROCESSING, "[BLOCK][%s] missing subtree %d", b.Hash().String(), idx)
 		}
-		for _, node := range subtree.Nodes {
+		for nodeIdx, node := range subtree.Nodes {
+			if idx == 0 && nodeIdx == 0 {
+				// skip coinbase
+				continue
+			}
 			binary.BigEndian.PutUint64(node.Hash[:], n64)
 			filter.Add(n64)
 		}
