@@ -47,6 +47,10 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 
 		block := &Block{}
 		block.CoinbaseTx = tx0
+		block.Subtrees = []*chainhash.Hash{
+			tx1.TxIDChainHash(),
+			tx2.TxIDChainHash(),
+		}
 		block.SubtreeSlices = []*util.Subtree{
 			{
 				Nodes: []util.SubtreeNode{

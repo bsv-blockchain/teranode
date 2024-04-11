@@ -130,15 +130,12 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 		subtree := subtree
 		g.Go(func() error {
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
-			for idx, node := range subtree.Nodes {
-				idx := idx
-				node := node
-
+			for idx := 0; idx < len(subtree.Nodes); idx++ {
 				if subtreeIdx == 0 && idx == 0 {
 					// add the coinbase as the first transaction to be set to mined
 					hashes = append(hashes, block.CoinbaseTx.TxIDChainHash())
 				} else {
-					hashes = append(hashes, &node.Hash)
+					hashes = append(hashes, &subtree.Nodes[idx].Hash)
 				}
 
 				if idx > 0 && idx%maxMinedBatchSize == 0 {

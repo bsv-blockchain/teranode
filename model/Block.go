@@ -504,7 +504,13 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 		subIdx := subIdx
 		subtree := subtree
 		g.Go(func() (err error) {
-			for txIdx, subtreeNode := range subtree.Nodes {
+			for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
+				if subIdx == 0 && txIdx == 0 {
+					continue
+				}
+
+				subtreeNode := subtree.Nodes[txIdx]
+
 				// in a tx map, Put is mutually exclusive, can only be called once per key
 				err = b.txMap.Put(subtreeNode.Hash, uint64((subIdx*len(subtree.Nodes))+txIdx))
 				if err != nil {
@@ -560,15 +566,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 			bloomStats.mu.Lock()
 			bloomStats.QueryCounter += uint64(len(subtree.Nodes))
 			bloomStats.mu.Unlock()
-			for snIdx, subtreeNode := range subtree.Nodes {
-				if subtreeNode.Hash.IsEqual(CoinbasePlaceholderHash) {
-					continue
-				}
-
+			for snIdx := 0; snIdx < len(subtree.Nodes); snIdx++ {
 				// ignore the very first transaction, is coinbase
 				if sIdx == 0 && snIdx == 0 {
 					continue
 				}
+
+				subtreeNode := subtree.Nodes[snIdx]
 
 				// if the subtree meta slice is loaded, we can use that instead of the txMetaStore
 				subtreeMetaSlice := b.SubtreeMetaSlices[sIdx]
