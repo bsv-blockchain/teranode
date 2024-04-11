@@ -863,10 +863,11 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 						_ = subtreeMetaReader.Close()
 					}()
 
-					b.SubtreeMetaSlices[i], err = util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
-					if err != nil {
-						logger.Warnf("[BLOCK][%s] failed to deserialize subtree meta %s: %w", b.Hash().String(), subtreeHash.String(), err)
-					}
+					// no need to check whether this fails or not, it's just a cache file and not critical
+					b.SubtreeMetaSlices[i], _ = util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
+					//if err != nil {
+					//	logger.Warnf("[BLOCK][%s] failed to deserialize subtree meta %s: %w", b.Hash().String(), subtreeHash.String(), err)
+					//}
 
 					return nil
 				}
