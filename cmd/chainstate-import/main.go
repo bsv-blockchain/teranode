@@ -13,13 +13,9 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/btcleveldb"
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/keys"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/btcsuite/goleveldb/leveldb"
-	"github.com/ordishs/gocore"
 
 	"github.com/btcsuite/goleveldb/leveldb/opt"
-
-	txmetafactory "github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
 )
 
 // bitcoin addresses
@@ -81,22 +77,22 @@ func main() {
 	}
 	defer db.Close()
 
-	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no txmeta_store setting found")
-	}
+	// txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// if !found {
+	// 	panic("no txmeta_store setting found")
+	// }
 
-	logger := ulogger.New("chainstate-importer")
+	// logger := ulogger.New("chainstate-importer")
 
-	txMetaStore, err := txmetafactory.New(logger, txMetaStoreURL)
-	if err != nil {
-		panic(err)
-	}
+	// txMetaStore, err := txmetafactory.New(logger, txMetaStoreURL)
+	// if err != nil {
+	// 	panic(err)
+	// }
 
-	_ = txMetaStore
+	// _ = txMetaStore
 
 	// Stats - keep track of interesting stats as we read through leveldb.
 	var totalAmount int64 = 0                                                                                                             // total amount of satoshis
