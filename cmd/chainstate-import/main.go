@@ -14,7 +14,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/btcleveldb"
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/keys"
 	"github.com/btcsuite/goleveldb/leveldb"
-	"github.com/libsv/go-bt/v2"
 
 	"github.com/btcsuite/goleveldb/leveldb/opt"
 )
@@ -311,9 +310,6 @@ func main() {
 
 			// txMetaStore.Create(ctx.TODO()) // create txmeta (transaction metadata) from the output results map
 
-			tx := bt.NewTx()
-			tx.AddOutput(&bt.Output{})
-
 			fmt.Printf("%v, %v, %v, %v, %v, %v, %v, %v\n",
 				txidStr,
 				vout,
@@ -329,14 +325,12 @@ func main() {
 			// Results
 			// -------
 
-			if i > 0 && i%100000 == 0 {
-				fmt.Printf("%d utxos processed\n", i) // Show progress at intervals.
-			}
-			// 812.18user 16.94system 12:44.04elapsed 108%CPU (0avgtext+0avgdata 55272maxresident)k
-			// 951.03user 27.91system 15:21.35elapsed 106%CPU (0avgtext+0avgdata 55896maxresident)k (after using packages)
-
 			// Increment Count
 			i++
+
+			if scriptType != "non-standard" {
+				break
+			}
 
 			if i == 1000 {
 				break
