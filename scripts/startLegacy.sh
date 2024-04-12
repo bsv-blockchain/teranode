@@ -1,5 +1,4 @@
-$ cat start.sh
-!/bin/bash
+#!/bin/bash
 
 LOGFILE=$(date -u +%Y-%m-%dT%H:%M:%S).log
 
