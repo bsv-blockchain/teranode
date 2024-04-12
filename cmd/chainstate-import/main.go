@@ -345,7 +345,7 @@ func main() {
 
 			switch scriptType {
 			case "p2pkh":
-			// case "p2pk":
+			case "p2pk":
 			case "p2sh":
 			case "p2ms":
 			case "non-standard":
