@@ -333,6 +333,10 @@ func main() {
 
 			// Increment Count
 			i++
+
+			if i == 1000 {
+				break
+			}
 		}
 	}
 	iter.Release() // Do not defer this, want to release iterator before closing database
