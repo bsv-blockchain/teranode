@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/btcleveldb"
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/keys"
 	"github.com/btcsuite/goleveldb/leveldb"
+	"github.com/libsv/go-bt/v2"
 
 	"github.com/btcsuite/goleveldb/leveldb/opt"
 )
@@ -44,10 +45,10 @@ func main() {
 	// Linux standard is already 4096 which is also "max" for more edit etc/security/limits.conf
 	if runtime.GOOS == "darwin" {
 		cmd2 := exec.Command("ulimit", "-n", "4096")
-		fmt.Println("setting ulimit 4096\n")
+		fmt.Println("setting ulimit 4096")
 		_, err := cmd2.Output()
 		if err != nil {
-			fmt.Println("setting new ulimit failed with %s\n", err)
+			fmt.Printf("setting new ulimit failed with %s\n", err)
 		}
 		defer exec.Command("ulimit", "-n", "1024")
 	}
@@ -269,7 +270,7 @@ func main() {
 			// Addresses - Get address from script (if possible), and set script type (P2PK, P2PKH, P2SH, P2MS, P2WPKH, P2WSH or P2TR)
 			// ---------
 
-			var scriptType string = "non-standard" // initialize script type
+			var scriptType string // initialize script type
 
 			switch {
 
@@ -309,6 +310,9 @@ func main() {
 			} // switch
 
 			// txMetaStore.Create(ctx.TODO()) // create txmeta (transaction metadata) from the output results map
+
+			tx := bt.NewTx()
+			tx.AddOutput(&bt.Output{})
 
 			fmt.Printf("%v, %v, %v, %v, %v, %v, %v, %v\n",
 				txidStr,
