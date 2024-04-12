@@ -341,7 +341,11 @@ func main() {
 			// Increment Count
 			i++
 
-			if scriptType == "p2sh" {
+			switch scriptType {
+			case "p2pkh":
+			case "p2sh":
+			case "non-standard":
+			default:
 				break
 			}
 
