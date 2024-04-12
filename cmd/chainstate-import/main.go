@@ -2,7 +2,6 @@ package main
 
 // local packages
 import (
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"os"
@@ -146,7 +145,6 @@ func main() {
 			for i := len(txidLE) - 1; i >= 0; i-- { // run backwards through the txid slice
 				txid = append(txid, txidLE[i]) // append each byte to the new byte slice
 			}
-			txidStr := hex.EncodeToString(txid) // add to output results map
 
 			// vout
 			index := key[33:]
@@ -264,8 +262,6 @@ func main() {
 				script = keys.DecompressPublicKey(script)
 			}
 
-			scriptStr := hex.EncodeToString(script)
-
 			// Addresses - Get address from script (if possible), and set script type (P2PK, P2PKH, P2SH, P2MS, P2WPKH, P2WSH or P2TR)
 			// ---------
 
@@ -273,15 +269,31 @@ func main() {
 
 			switch {
 
-			// P2PKH
-			case nsize == 0:
-				script = append([]byte{0x76, 0xa9, 0x14}, script...) // append P2PKH script to the front of the script
-				script = append(script, 0x88, 0xac)                  // append OP_EQUALVERIFY and OP_CHECKSIG to the end of the script
+			case nsize == 0: // P2PKH
 				scriptType = "p2pkh"
+				prefix := []byte{0x76, 0xa9, 0x14}
+				suffix := []byte{0x88, 0xac}
 
-			// P2SH
-			case nsize == 1:
+				newScript := make([]byte, len(prefix)+len(script)+len(suffix))
+
+				copy(newScript, prefix)
+				copy(newScript[len(prefix):], script)
+				copy(newScript[len(prefix)+len(script):], suffix)
+
+				script = newScript
+
+			case nsize == 1: // P2SH
 				scriptType = "p2sh"
+				prefix := []byte{0xa9, 0x14}
+				suffix := []byte{0x87}
+
+				newScript := make([]byte, len(prefix)+len(script)+len(suffix))
+
+				copy(newScript, prefix)
+				copy(newScript[len(prefix):], script)
+				copy(newScript[len(prefix)+len(script):], suffix)
+
+				script = newScript
 
 			// P2PK
 			case 1 < nsize && nsize < 6: // 2, 3, 4, 5
@@ -312,14 +324,13 @@ func main() {
 
 			// txMetaStore.Create(ctx.TODO()) // create txmeta (transaction metadata) from the output results map
 
-			fmt.Printf("%v, %v, %v, %v, %v, %v, %v, %v\n",
-				txidStr,
+			fmt.Printf("%x, %v, %v, %v, %v, %x, %v\n",
+				txid,
 				vout,
 				height,
 				coinbase,
 				amount,
-				nsize,
-				scriptStr,
+				script,
 				scriptType,
 			)
 
