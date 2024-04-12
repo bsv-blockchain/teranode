@@ -324,16 +324,6 @@ func main() {
 
 			// txMetaStore.Create(ctx.TODO()) // create txmeta (transaction metadata) from the output results map
 
-			fmt.Printf("%x, %v, %v, %v, %v, %x, %v\n",
-				txid,
-				vout,
-				height,
-				coinbase,
-				amount,
-				script,
-				scriptType,
-			)
-
 			// -------
 			// Results
 			// -------
@@ -344,12 +334,19 @@ func main() {
 			switch scriptType {
 			case "p2pkh":
 			case "p2sh":
+			case "p2ms":
 			case "non-standard":
 			default:
-				break
-			}
+				fmt.Printf("%x, %v, %v, %v, %v, %x, %v\n",
+					txid,
+					vout,
+					height,
+					coinbase,
+					amount,
+					script,
+					scriptType,
+				)
 
-			if i == 1000 {
 				break
 			}
 		}
