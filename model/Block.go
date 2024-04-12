@@ -736,12 +736,23 @@ func (b *Block) getFromAerospike(headerErr error, parentTxStruct missingParentTx
 		}
 	}()
 
-	aeroURL, _, _ := gocore.Config().GetURL("txmeta_store")
+	aeroURL, err, _ := gocore.Config().GetURL("txmeta_store")
+	if err != nil {
+		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike get URL error: %w", err))
+		return headerErr
+	}
+
 	portStr := aeroURL.Port()
-	port, _ := strconv.Atoi(portStr)
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike port error: %w", err))
+		return headerErr
+	}
+
 	client, aErr := aerospike.NewClient(aeroURL.Host, port)
 	if aErr != nil {
 		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike error: %w", aErr))
+		return headerErr
 	}
 
 	key, aeroErr := aerospike.NewKey(aeroURL.Path[1:], aeroURL.Query().Get("set"), parentTxStruct.txHash.CloneBytes())
