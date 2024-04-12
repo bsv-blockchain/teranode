@@ -666,48 +666,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				for _, parentTxStruct := range checkParentTxHashes {
 					parentTxStruct := parentTxStruct
 					parentG.Go(func() error {
-						// check whether the parent transaction has already been mined in a block on our chain
-						// we need to get back to the txMetaStore for this, to make sure we have the latest data
-						// two options: 1- parent is currently under validation, 2- parent is from forked chain.
-						// for the first situation we don't start validating the current block until the parent is validated.
-						parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
-						if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxStruct.parentTxHash)) {
-							logger.Errorf("[BLOCK][%s] error getting parent transaction %s from txMetaStore: %v", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
-							//return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
-							return nil
-						}
-						// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
-						if parentTxMeta == nil || parentTxMeta.IsCoinbase {
-							return nil
-						}
-
-						// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
-						foundInPreviousBlocks := make(map[uint32]struct{}, len(parentTxMeta.BlockIDs))
-						for _, blockID := range parentTxMeta.BlockIDs {
-							if _, found := currentBlockHeaderIDsMap[blockID]; found {
-								foundInPreviousBlocks[blockID] = struct{}{}
-							}
-						}
-						if len(foundInPreviousBlocks) != 1 {
-							// log out the block header IDs map
-							headerErr := fmt.Errorf("currentBlockHeaderIDs: %v", currentBlockHeaderIDsMap)
-							headerErr = errors.Join(headerErr, fmt.Errorf("parent TxMeta: %v", parentTxMeta))
-
-							// TODO TEMP code, remove this when we are sure the parent tx is in the store
-							headerErr = b.getFromAerospike(headerErr, parentTxStruct)
-
-							txMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.txHash)
-							if err != nil {
-								headerErr = errors.Join(headerErr, fmt.Errorf("txMetaStore error getting transaction %s: %v", parentTxStruct.txHash.String(), err))
-							} else {
-								headerErr = errors.Join(headerErr, fmt.Errorf("tx TxMeta: %v", txMeta))
-							}
-
-							logger.Errorf("[BLOCK][%s] parent transaction %s of tx %s is not valid on our current chain, found %d times: %v", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(foundInPreviousBlocks), headerErr)
-							//return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] parent transaction %s of tx %s is not valid on our current chain, found %d times", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(foundInPreviousBlocks), headerErr)
-						}
-
-						return nil
+						return b.checkParentExistsOnChain(gCtx, logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 					})
 				}
 
@@ -728,7 +687,52 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	return nil
 }
 
-func (b *Block) getFromAerospike(headerErr error, parentTxStruct missingParentTx) error {
+func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) error {
+	// check whether the parent transaction has already been mined in a block on our chain
+	// we need to get back to the txMetaStore for this, to make sure we have the latest data
+	// two options: 1- parent is currently under validation, 2- parent is from forked chain.
+	// for the first situation we don't start validating the current block until the parent is validated.
+	parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
+	if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxStruct.parentTxHash)) {
+		logger.Errorf("[BLOCK][%s] error getting parent transaction %s from txMetaStore: %v", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
+		//return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
+		return nil
+	}
+	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
+	if parentTxMeta == nil || parentTxMeta.IsCoinbase {
+		return nil
+	}
+
+	// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
+	foundInPreviousBlocks := make(map[uint32]struct{}, len(parentTxMeta.BlockIDs))
+	for _, blockID := range parentTxMeta.BlockIDs {
+		if _, found := currentBlockHeaderIDsMap[blockID]; found {
+			foundInPreviousBlocks[blockID] = struct{}{}
+		}
+	}
+	if len(foundInPreviousBlocks) != 1 {
+		// log out the block header IDs map
+		headerErr := fmt.Errorf("currentBlockHeaderIDs: %v", currentBlockHeaderIDsMap)
+		headerErr = errors.Join(headerErr, fmt.Errorf("parent TxMeta: %v", parentTxMeta))
+
+		// TODO TEMP code, remove this when we are sure the parent tx is in the store
+		headerErr = errors.Join(headerErr, b.getFromAerospike(parentTxStruct))
+
+		txMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.txHash)
+		if err != nil {
+			headerErr = errors.Join(headerErr, fmt.Errorf("txMetaStore error getting transaction %s: %v", parentTxStruct.txHash.String(), err))
+		} else {
+			headerErr = errors.Join(headerErr, fmt.Errorf("tx TxMeta: %v", txMeta))
+		}
+
+		logger.Errorf("[BLOCK][%s] parent transaction %s of tx %s is not valid on our current chain, found %d times: %v", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(foundInPreviousBlocks), headerErr)
+		//return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] parent transaction %s of tx %s is not valid on our current chain, found %d times", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(foundInPreviousBlocks), headerErr)
+	}
+
+	return nil
+}
+
+func (b *Block) getFromAerospike(parentTxStruct missingParentTx) error {
 	defer func() {
 		err := recover()
 		if err != nil {
@@ -738,38 +742,31 @@ func (b *Block) getFromAerospike(headerErr error, parentTxStruct missingParentTx
 
 	aeroURL, err, _ := gocore.Config().GetURL("txmeta_store")
 	if err != nil {
-		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike get URL error: %w", err))
-		return headerErr
+		return fmt.Errorf("aerospike get URL error: %w", err)
 	}
 
 	portStr := aeroURL.Port()
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike port error: %w", err))
-		return headerErr
+		return fmt.Errorf("aerospike port error: %w", err)
 	}
 
 	client, aErr := aerospike.NewClient(aeroURL.Host, port)
 	if aErr != nil {
-		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike error: %w", aErr))
-		return headerErr
+		return fmt.Errorf("aerospike error: %w", aErr)
 	}
 
 	key, aeroErr := aerospike.NewKey(aeroURL.Path[1:], aeroURL.Query().Get("set"), parentTxStruct.txHash.CloneBytes())
 	if aeroErr != nil {
-		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike error: %w", aeroErr))
-		return headerErr
+		return fmt.Errorf("aerospike error: %w", aeroErr)
 	}
 
 	response, aErr := client.Get(nil, key)
 	if aErr != nil {
-		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike error: %w", aErr))
-		return headerErr
+		return fmt.Errorf("aerospike error: %w", aErr)
 	}
 
-	headerErr = errors.Join(headerErr, fmt.Errorf("aerospike response: %v", response))
-
-	return headerErr
+	return fmt.Errorf("aerospike response: %v", response)
 }
 
 func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store) ([]*util.Subtree, error) {
