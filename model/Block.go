@@ -672,7 +672,9 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						// for the first situation we don't start validating the current block until the parent is validated.
 						parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
 						if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxStruct.parentTxHash)) {
-							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
+							logger.Errorf("[BLOCK][%s] error getting parent transaction %s from txMetaStore: %v", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
+							//return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
+							return nil
 						}
 						// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
 						if parentTxMeta == nil || parentTxMeta.IsCoinbase {
