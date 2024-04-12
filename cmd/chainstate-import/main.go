@@ -312,6 +312,18 @@ func main() {
 
 				scriptType = "p2pk"
 
+				// Set the prefix to the length of the script (OP_PUSH len(script))
+				prefix := []byte{byte(len(script))} // OP_PUSH len(script)
+				suffix := []byte{0xac}              // OP_CHECKSIG
+
+				newScript := make([]byte, len(prefix)+len(script)+len(suffix))
+
+				copy(newScript, prefix)
+				copy(newScript[len(prefix):], script)
+				copy(newScript[len(prefix)+len(script):], suffix)
+
+				script = newScript
+
 			// P2MS
 			case len(script) > 0 && script[len(script)-1] == 174: // if there is a script and if the last opcode is OP_CHECKMULTISIG (174) (0xae)
 				scriptType = "p2ms"
@@ -333,6 +345,7 @@ func main() {
 
 			switch scriptType {
 			case "p2pkh":
+			// case "p2pk":
 			case "p2sh":
 			case "p2ms":
 			case "non-standard":
