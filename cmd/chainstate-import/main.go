@@ -275,6 +275,8 @@ func main() {
 
 			// P2PKH
 			case nsize == 0:
+				script = append([]byte{0x76, 0xa9, 0x14}, script...) // append P2PKH script to the front of the script
+				script = append(script, 0x88, 0xac)                  // append OP_EQUALVERIFY and OP_CHECKSIG to the end of the script
 				scriptType = "p2pkh"
 
 			// P2SH
@@ -328,7 +330,7 @@ func main() {
 			// Increment Count
 			i++
 
-			if scriptType != "non-standard" {
+			if scriptType == "p2sh" {
 				break
 			}
 
