@@ -35,8 +35,6 @@ import (
 // Check OS type for file-handler limitations
 
 func main() {
-	var output map[string]interface{}
-
 	// Command Line Options (Flags)
 	chainstate := flag.String("db", "", "Location of bitcoin chainstate db.") // chainstate folder
 	flag.Parse()                                                              // execute command line parsing for all declared flags
@@ -94,10 +92,6 @@ func main() {
 
 	// _ = txMetaStore
 
-	// Stats - keep track of interesting stats as we read through leveldb.
-	var totalAmount int64 = 0                                                                                                             // total amount of satoshis
-	scriptTypeCount := map[string]int{"p2pk": 0, "p2pkh": 0, "p2sh": 0, "p2ms": 0, "p2wpkh": 0, "p2wsh": 0, "p2tr": 0, "non-standard": 0} // count each script type
-
 	// Declare obfuscateKey (a byte slice)
 	var obfuscateKey []byte // obfuscateKey := make([]byte, 0)
 
@@ -152,14 +146,13 @@ func main() {
 			for i := len(txidLE) - 1; i >= 0; i-- { // run backwards through the txid slice
 				txid = append(txid, txidLE[i]) // append each byte to the new byte slice
 			}
-			output["txid"] = hex.EncodeToString(txid) // add to output results map
+			txidStr := hex.EncodeToString(txid) // add to output results map
 
 			// vout
 			index := key[33:]
 
 			// convert varint128 index to an integer
 			vout := btcleveldb.Varint128Decode(index)
-			output["vout"] = fmt.Sprintf("%d", vout)
 
 			// -----
 			// Value
@@ -216,11 +209,9 @@ func main() {
 
 			// Height (first bits)
 			height := varintDecoded >> 1 // right-shift to remove last bit
-			output["height"] = fmt.Sprintf("%d", height)
 
 			// Coinbase (last bit)
 			coinbase := varintDecoded & 1 // AND to extract right-most bit
-			output["coinbase"] = fmt.Sprintf("%d", coinbase)
 
 			// Second Varint
 			// -------------
@@ -232,8 +223,6 @@ func main() {
 
 			// Amount
 			amount := btcleveldb.DecompressValue(varintDecoded) // int64
-			output["amount"] = fmt.Sprintf("%d", amount)
-			totalAmount += amount // add to stats
 
 			// Third Varint
 			// ------------
@@ -253,7 +242,6 @@ func main() {
 			varint, bytesRead = btcleveldb.Varint128Read(xor, offset) // start after last varint
 			offset += bytesRead
 			nsize := btcleveldb.Varint128Decode(varint) //
-			output["nsize"] = fmt.Sprintf("%d", nsize)
 
 			// Script (remaining bytes)
 			// ------
@@ -276,12 +264,11 @@ func main() {
 				script = keys.DecompressPublicKey(script)
 			}
 
-			output["script"] = hex.EncodeToString(script)
+			scriptStr := hex.EncodeToString(script)
 
 			// Addresses - Get address from script (if possible), and set script type (P2PK, P2PKH, P2SH, P2MS, P2WPKH, P2WSH or P2TR)
 			// ---------
 
-			var address string                     // initialize address variable
 			var scriptType string = "non-standard" // initialize script type
 
 			switch {
@@ -289,12 +276,10 @@ func main() {
 			// P2PKH
 			case nsize == 0:
 				scriptType = "p2pkh"
-				scriptTypeCount["p2pkh"] += 1
 
 			// P2SH
 			case nsize == 1:
 				scriptType = "p2sh"
-				scriptTypeCount["p2sh"] += 1
 
 			// P2PK
 			case 1 < nsize && nsize < 6: // 2, 3, 4, 5
@@ -312,37 +297,28 @@ func main() {
 				// }
 
 				scriptType = "p2pk"
-				scriptTypeCount["p2pk"] += 1
 
 			// P2MS
 			case len(script) > 0 && script[len(script)-1] == 174: // if there is a script and if the last opcode is OP_CHECKMULTISIG (174) (0xae)
 				scriptType = "p2ms"
-				scriptTypeCount["p2ms"] += 1
 
 			// Non-Standard (if the script type hasn't been identified and set then it remains as an unknown "non-standard" script)
 			default:
 				scriptType = "non-standard"
-				scriptTypeCount["non-standard"] += 1
 
 			} // switch
 
-			// add address and script type to results map
-			output["address"] = address
-			output["type"] = scriptType
-
 			// txMetaStore.Create(ctx.TODO()) // create txmeta (transaction metadata) from the output results map
 
-			fmt.Printf("%v: %v, %v, %v, %v, %v, %v, %v, %v, %v\n",
-				output["count"],
-				output["txid"],
-				output["vout"],
-				output["height"],
-				output["coinbase"],
-				output["amount"],
-				output["nsize"],
-				output["script"],
-				output["type"],
-				output["address"],
+			fmt.Printf("%v, %v, %v, %v, %v, %v, %v, %v\n",
+				txidStr,
+				vout,
+				height,
+				coinbase,
+				amount,
+				nsize,
+				scriptStr,
+				scriptType,
 			)
 
 			// -------
