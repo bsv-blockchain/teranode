@@ -84,7 +84,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 		difficultyAdjustmentWindow: difficultyAdjustmentWindow,
 		difficultyAdjustment:       difficultyAdjustment,
 		defaultMiningNBits:         &defaultMiningBits,
-		resetCh:                    make(chan struct{}),
+		resetCh:                    make(chan struct{}, 2),
 		resetWaitCount:             atomic.Int32{},
 		resetWaitTime:              atomic.Int32{},
 	}

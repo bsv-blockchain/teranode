@@ -672,7 +672,9 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						// for the first situation we don't start validating the current block until the parent is validated.
 						parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
 						if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxStruct.parentTxHash)) {
-							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
+							logger.Errorf("[BLOCK][%s] error getting parent transaction %s from txMetaStore: %v", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
+							//return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
+							return nil
 						}
 						// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
 						if parentTxMeta == nil || parentTxMeta.IsCoinbase {
@@ -734,12 +736,23 @@ func (b *Block) getFromAerospike(headerErr error, parentTxStruct missingParentTx
 		}
 	}()
 
-	aeroURL, _, _ := gocore.Config().GetURL("txmeta_store")
+	aeroURL, err, _ := gocore.Config().GetURL("txmeta_store")
+	if err != nil {
+		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike get URL error: %w", err))
+		return headerErr
+	}
+
 	portStr := aeroURL.Port()
-	port, _ := strconv.Atoi(portStr)
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike port error: %w", err))
+		return headerErr
+	}
+
 	client, aErr := aerospike.NewClient(aeroURL.Host, port)
 	if aErr != nil {
 		headerErr = errors.Join(headerErr, fmt.Errorf("aerospike error: %w", aErr))
+		return headerErr
 	}
 
 	key, aeroErr := aerospike.NewKey(aeroURL.Path[1:], aeroURL.Query().Get("set"), parentTxStruct.txHash.CloneBytes())
