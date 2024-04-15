@@ -212,15 +212,6 @@ func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) 
 	return nil
 }
 
-func (st *Subtree) Clone() (*Subtree, error) {
-	subtreeCloneBytes, err := st.Serialize()
-	if err != nil {
-		return nil, err
-	}
-
-	return NewSubtreeFromBytes(subtreeCloneBytes)
-}
-
 func (st *Subtree) RootHash() *chainhash.Hash {
 	if st.rootHash != nil {
 		return st.rootHash
@@ -241,20 +232,19 @@ func (st *Subtree) RootHash() *chainhash.Hash {
 	return st.rootHash
 }
 
-func (st *Subtree) RootHashWithReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) *chainhash.Hash {
+func (st *Subtree) RootHashWithReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) (*chainhash.Hash, error) {
 	// clone the subtree, so we do not overwrite anything in it
-	subtreeClone, _ := st.Clone()
-
+	subtreeClone := st.Duplicate()
 	subtreeClone.ReplaceRootNode(node, fee, sizeInBytes)
 
 	// calculate rootHash
 	store, err := BuildMerkleTreeStoreFromBytes(subtreeClone.Nodes)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	rootHash := chainhash.Hash((*store)[len(*store)-1][:])
-	return &rootHash
+	return &rootHash, nil
 }
 
 func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {

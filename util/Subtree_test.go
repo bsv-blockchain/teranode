@@ -75,7 +75,8 @@ func Test_RootHashWithReplaceRootNode(t *testing.T) {
 		rootHash := st.RootHash()
 		assert.Equal(t, "b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225", rootHash.String())
 
-		rootHash2 := st.RootHashWithReplaceRootNode(hash4, 111, 0)
+		rootHash2, err := st.RootHashWithReplaceRootNode(hash4, 111, 0)
+		require.NoError(t, err)
 		assert.NotEqual(t, rootHash, rootHash2)
 		assert.Equal(t, "dfec71cf72403643187e9e02d7c436e87251fa098cffa54d182022153da3d09a", rootHash2.String())
 	})
@@ -323,8 +324,8 @@ func Test_Serialize(t *testing.T) {
 	})
 }
 
-func Test_Clone(t *testing.T) {
-	t.Run("Clone", func(t *testing.T) {
+func Test_Duplicate(t *testing.T) {
+	t.Run("Duplicate", func(t *testing.T) {
 		st, err := NewTree(2)
 		require.NoError(t, err)
 
@@ -341,8 +342,7 @@ func Test_Clone(t *testing.T) {
 		_ = st.AddNode(*hash3, 111, 0)
 		_ = st.AddNode(*hash4, 111, 0)
 
-		newSubtree, err := st.Clone()
-		require.NoError(t, err)
+		newSubtree := st.Duplicate()
 
 		require.NoError(t, err)
 		assert.Equal(t, st.Fees, newSubtree.Fees)
@@ -373,9 +373,7 @@ func Test_Clone(t *testing.T) {
 		_ = st.AddNode(*hash3, 111, 0)
 		_ = st.AddNode(*hash4, 111, 0)
 
-		newSubtree, err := st.Clone()
-		require.NoError(t, err)
-
+		newSubtree := st.Duplicate()
 		newSubtree.ReplaceRootNode(hash4, 111, 0)
 		assert.NotEqual(t, st.RootHash(), newSubtree.RootHash())
 	})

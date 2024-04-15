@@ -179,9 +179,10 @@ type Block struct {
 	Height           uint32            `json:"height"` // SAO - This can be left empty (i.e 0) as it is only used in legacy before the height was encoded in the coinbase tx (BIP-34)
 
 	// local
-	hash          *chainhash.Hash
-	subtreeLength uint64
-	txMap         util.TxMap
+	hash            *chainhash.Hash
+	subtreeLength   uint64
+	subtreeSlicesMu sync.RWMutex
+	txMap           util.TxMap
 }
 
 type BlockBloomFilter struct {
@@ -465,7 +466,8 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 	}
 
 	subtreeFees := uint64(0)
-	for _, subtree := range b.SubtreeSlices {
+	for i := 0; i < len(b.SubtreeSlices); i++ {
+		subtree := b.SubtreeSlices[i]
 		subtreeFees += subtree.Fees
 	}
 
@@ -498,9 +500,9 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	g.SetLimit(concurrency)
 
 	b.txMap = util.NewSplitSwissMapUint64(int(b.TransactionCount))
-	for subIdx, subtree := range b.SubtreeSlices {
+	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
 		subIdx := subIdx
-		subtree := subtree
+		subtree := b.SubtreeSlices[subIdx]
 		g.Go(func() (err error) {
 			for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
 				if subIdx == 0 && txIdx == 0 {
@@ -556,9 +558,9 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
 
-	for sIdx, subtree := range b.SubtreeSlices {
+	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
+		subtree := b.SubtreeSlices[sIdx]
 		sIdx := sIdx
-		subtree := subtree
 		g.Go(func() (err error) {
 			subtreeHash := subtree.RootHash()
 			checkParentTxHashes := make([]missingParentTx, 0, len(subtree.Nodes))
@@ -821,6 +823,11 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		prometheusBlockGetAndValidateSubtrees.Observe(time.Since(startTime).Seconds())
 	}()
 
+	b.subtreeSlicesMu.Lock()
+	defer func() {
+		b.subtreeSlicesMu.Unlock()
+	}()
+
 	if len(b.Subtrees) == len(b.SubtreeSlices) {
 		// already loaded
 		return nil
@@ -904,13 +911,14 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	// check that the size of all subtrees is the same
 	var subtreeSize int
 	nrOfSubtrees := len(b.Subtrees)
-	for i, subtree := range b.SubtreeSlices {
-		if i == 0 {
+	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
+		subtree := b.SubtreeSlices[sIdx]
+		if sIdx == 0 {
 			subtreeSize = subtree.Length()
 		} else {
 			// all subtrees need to be the same size as the first tree, except the last one
-			if subtree.Length() != subtreeSize && i != nrOfSubtrees-1 {
-				return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] subtree %d has length %d, expected %d", b.Hash().String(), i, subtree.Length(), subtreeSize)
+			if subtree.Length() != subtreeSize && sIdx != nrOfSubtrees-1 {
+				return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] subtree %d has length %d, expected %d", b.Hash().String(), sIdx, subtree.Length(), subtreeSize)
 			}
 		}
 	}
@@ -956,18 +964,17 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	}()
 
 	hashes := make([]chainhash.Hash, len(b.Subtrees))
-	for i, subtree := range b.SubtreeSlices {
-		if i == 0 {
-			subtreeCopy, err := subtree.Clone()
-			if err != nil {
-				return errors.New(errors.ERR_PROCESSING, "[BLOCK][%s] error cloning subtree", b.Hash().String(), err)
-			}
-
+	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
+		subtree := b.SubtreeSlices[sIdx]
+		if sIdx == 0 {
 			// We need to inject the coinbase tx id into the first position of the first subtree
-			subtreeCopy.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size()))
-			hashes[i] = *subtreeCopy.RootHash()
+			rootHash, err := subtree.RootHashWithReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size()))
+			if err != nil {
+				return errors.New(errors.ERR_PROCESSING, "[BLOCK][%s] error replacing root node in subtree", b.Hash().String(), err)
+			}
+			hashes[sIdx] = *rootHash
 		} else {
-			hashes[i] = *subtree.RootHash()
+			hashes[sIdx] = *subtree.RootHash()
 		}
 	}
 
@@ -1121,12 +1128,13 @@ func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logg
 
 	var n64 uint64
 	// insert all transaction ids first 8 bytes to the filter
-	for idx, subtree := range b.SubtreeSlices {
+	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
+		subtree := b.SubtreeSlices[sIdx]
 		if subtree == nil {
-			return nil, errors.New(errors.ERR_PROCESSING, "[BLOCK][%s] missing subtree %d", b.Hash().String(), idx)
+			return nil, errors.New(errors.ERR_PROCESSING, "[BLOCK][%s] missing subtree %d", b.Hash().String(), sIdx)
 		}
 		for nodeIdx := 0; nodeIdx < len(subtree.Nodes); nodeIdx++ {
-			if idx == 0 && nodeIdx == 0 {
+			if sIdx == 0 && nodeIdx == 0 {
 				// skip coinbase
 				continue
 			}
