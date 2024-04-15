@@ -958,11 +958,17 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 	hashes := make([]chainhash.Hash, len(b.Subtrees))
 	for i, subtree := range b.SubtreeSlices {
 		if i == 0 {
-			// We need to inject the coinbase txid into the first position of the first subtree
-			subtree.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size()))
-		}
+			subtreeCopy, err := subtree.Clone()
+			if err != nil {
+				return errors.New(errors.ERR_PROCESSING, "[BLOCK][%s] error cloning subtree", b.Hash().String(), err)
+			}
 
-		hashes[i] = *subtree.RootHash()
+			// We need to inject the coinbase tx id into the first position of the first subtree
+			subtreeCopy.ReplaceRootNode(b.CoinbaseTx.TxIDChainHash(), 0, uint64(b.CoinbaseTx.Size()))
+			hashes[i] = *subtreeCopy.RootHash()
+		} else {
+			hashes[i] = *subtree.RootHash()
+		}
 	}
 
 	var calculatedMerkleRootHash *chainhash.Hash

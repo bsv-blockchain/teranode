@@ -212,6 +212,15 @@ func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) 
 	return nil
 }
 
+func (st *Subtree) Clone() (*Subtree, error) {
+	subtreeCloneBytes, err := st.Serialize()
+	if err != nil {
+		return nil, err
+	}
+
+	return NewSubtreeFromBytes(subtreeCloneBytes)
+}
+
 func (st *Subtree) RootHash() *chainhash.Hash {
 	if st.rootHash != nil {
 		return st.rootHash
