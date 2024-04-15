@@ -34,23 +34,51 @@ func TestNewTree(t *testing.T) {
 }
 
 func TestRootHash(t *testing.T) {
-	st, err := NewTree(2)
-	require.NoError(t, err)
+	t.Run("root hash", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
 
-	if st.Size() != 4 {
-		t.Errorf("expected size to be 4, got %d", st.Size())
-	}
-	hash1, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
-	hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
-	hash3, _ := chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
-	hash4, _ := chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
-	_ = st.AddNode(*hash1, 111, 0)
-	_ = st.AddNode(*hash2, 111, 0)
-	_ = st.AddNode(*hash3, 111, 0)
-	_ = st.AddNode(*hash4, 111, 0)
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+		hash1, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+		hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
+		hash3, _ := chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
+		hash4, _ := chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
+		_ = st.AddNode(*hash1, 111, 0)
+		_ = st.AddNode(*hash2, 111, 0)
+		_ = st.AddNode(*hash3, 111, 0)
+		_ = st.AddNode(*hash4, 111, 0)
 
-	rootHash := st.RootHash()
-	assert.Equal(t, "b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225", rootHash.String())
+		rootHash := st.RootHash()
+		assert.Equal(t, "b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225", rootHash.String())
+	})
+}
+
+func Test_RootHashWithReplaceRootNode(t *testing.T) {
+	t.Run("root hash with replace root node", func(t *testing.T) {
+		st, err := NewTree(2)
+		require.NoError(t, err)
+
+		if st.Size() != 4 {
+			t.Errorf("expected size to be 4, got %d", st.Size())
+		}
+		hash1, _ := chainhash.NewHashFromStr("97af9ad3583e2f83fc1e44e475e3a3ee31ec032449cc88b491479ef7d187c115")
+		hash2, _ := chainhash.NewHashFromStr("7ce05dda56bc523048186c0f0474eb21c92fe35de6d014bd016834637a3ed08d")
+		hash3, _ := chainhash.NewHashFromStr("3070fb937289e24720c827cbc24f3fce5c361cd7e174392a700a9f42051609e0")
+		hash4, _ := chainhash.NewHashFromStr("d3cde0ab7142cc99acb31c5b5e1e941faed1c5cf5f8b63ed663972845d663487")
+		_ = st.AddNode(*hash1, 111, 0)
+		_ = st.AddNode(*hash2, 111, 0)
+		_ = st.AddNode(*hash3, 111, 0)
+		_ = st.AddNode(*hash4, 111, 0)
+
+		rootHash := st.RootHash()
+		assert.Equal(t, "b47df6aa4fe0a1d3841c635444be4e33eb8cdc2f2e929ced06d0a8454fb28225", rootHash.String())
+
+		rootHash2 := st.RootHashWithReplaceRootNode(hash4, 111, 0)
+		assert.NotEqual(t, rootHash, rootHash2)
+		assert.Equal(t, "dfec71cf72403643187e9e02d7c436e87251fa098cffa54d182022153da3d09a", rootHash2.String())
+	})
 }
 
 func TestRootHashSimon(t *testing.T) {
