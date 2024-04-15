@@ -359,8 +359,6 @@ func main() {
 					script,
 					scriptType,
 				)
-
-				break
 			}
 		}
 	}
