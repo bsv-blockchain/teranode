@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -171,20 +170,18 @@ func (bs *BloomStats) BloomFilterStatsProcessor(ctx context.Context) {
 }
 
 type Block struct {
-	Header            *BlockHeader        `json:"header"`
-	CoinbaseTx        *bt.Tx              `json:"coinbase_tx"`
-	TransactionCount  uint64              `json:"transaction_count"`
-	SizeInBytes       uint64              `json:"size_in_bytes"`
-	Subtrees          []*chainhash.Hash   `json:"subtrees"`
-	SubtreeSlices     []*util.Subtree     `json:"-"`
-	SubtreeMetaSlices []*util.SubtreeMeta `json:"-"`
-	Height            uint32              `json:"height"` // SAO - This can be left empty (i.e 0) as it is only used in legacy before the height was encoded in the coinbase tx (BIP-34)
+	Header           *BlockHeader      `json:"header"`
+	CoinbaseTx       *bt.Tx            `json:"coinbase_tx"`
+	TransactionCount uint64            `json:"transaction_count"`
+	SizeInBytes      uint64            `json:"size_in_bytes"`
+	Subtrees         []*chainhash.Hash `json:"subtrees"`
+	SubtreeSlices    []*util.Subtree   `json:"-"`
+	Height           uint32            `json:"height"` // SAO - This can be left empty (i.e 0) as it is only used in legacy before the height was encoded in the coinbase tx (BIP-34)
 
 	// local
-	hash            *chainhash.Hash
-	subtreeLength   uint64
-	subtreeSlicesMu sync.RWMutex
-	txMap           util.TxMap
+	hash          *chainhash.Hash
+	subtreeLength uint64
+	txMap         util.TxMap
 }
 
 type BlockBloomFilter struct {
@@ -437,7 +434,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// TODO - Re-enable order checking in all cases
 	if !gocore.Config().GetBool("startLegacy", false) {
 		if txMetaStore != nil {
-			err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats)
+			err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats)
 			if err != nil {
 				return false, err
 			}
@@ -534,7 +531,9 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) error {
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, subtreeStore blob.Store,
+	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) error {
+
 	if b.txMap == nil {
 		return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] txMap is nil, cannot check transaction order", b.Hash().String())
 	}
@@ -560,8 +559,27 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	for sIdx, subtree := range b.SubtreeSlices {
 		sIdx := sIdx
 		subtree := subtree
-		g.Go(func() error {
+		g.Go(func() (err error) {
+			subtreeHash := subtree.RootHash()
 			checkParentTxHashes := make([]missingParentTx, 0, len(subtree.Nodes))
+
+			// if the subtree meta slice is loaded, we can use that instead of the txMetaStore
+			var subtreeMetaSlice *util.SubtreeMeta
+			retries := 0
+			for {
+				subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, subtreeStore, *subtreeHash, subtree)
+				if err != nil {
+					if retries < 3 {
+						retries++
+						logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice, retrying: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
+						time.Sleep(1 * time.Second)
+						continue
+					}
+					logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
+				}
+
+				break
+			}
 
 			var parentTxHashes []chainhash.Hash
 			bloomStats.mu.Lock()
@@ -575,31 +593,43 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 				subtreeNode := subtree.Nodes[snIdx]
 
-				// if the subtree meta slice is loaded, we can use that instead of the txMetaStore
-				subtreeMetaSlice := b.SubtreeMetaSlices[sIdx]
-
 				txIdx, ok := b.txMap.Get(subtreeNode.Hash)
 				if !ok {
-					return errors.New(errors.ERR_NOT_FOUND, "[BLOCK][%s] transaction %s is not in the txMap", b.Hash().String(), subtreeNode.Hash.String())
+					return errors.New(errors.ERR_NOT_FOUND, "[BLOCK][%s][%s:%d]:%d transaction %s is not in the txMap", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
 				}
 
 				if subtreeMetaSlice != nil {
 					parentTxHashes = subtreeMetaSlice.ParentTxHashes[snIdx]
 				} else {
 					// get from the txMetaStore
-					txMeta, err := txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
-					if err != nil {
-						if errors.Is(err, txmetastore.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
-							return errors.New(errors.ERR_NOT_FOUND, "[BLOCK][%s] transaction %s could not be found in tx txMetaStore", b.Hash().String(), subtreeNode.Hash.String(), err)
+					var txMeta *txmetastore.Data
+					retries = 0
+					for {
+						txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
+						if err != nil {
+							if retries < 3 {
+								retries++
+								logger.Errorf("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore, retrying: %v", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
+								time.Sleep(1 * time.Second)
+								continue
+							}
+
+							if errors.Is(err, txmetastore.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
+								return errors.New(errors.ERR_NOT_FOUND, "[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
+							}
+							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
 						}
-						return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting transaction %s from txMetaStore", b.Hash().String(), subtreeNode.Hash.String(), err)
-					} else if txMeta == nil {
+
+						break
+					}
+
+					if txMeta == nil {
 						return fmt.Errorf("transaction %s is not blessed", subtreeNode.Hash.String())
 					}
 					parentTxHashes = txMeta.ParentTxHashes
 				}
 				if parentTxHashes == nil {
-					return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] transaction %s could not be found in tx meta data", b.Hash().String(), subtreeNode.Hash.String())
+					return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx meta data", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
 				}
 
 				// check whether the transaction has recently been mined in a block on our chain
@@ -629,12 +659,12 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 							if errors.Is(err, txmetastore.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
 								continue
 							}
-							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting transaction %s from txMetaStore", b.Hash().String(), subtreeNode.Hash.String(), err)
+							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
 						}
 
 						for _, blockID := range txMeta.BlockIDs {
 							if _, found := currentBlockHeaderIDsMap[blockID]; found {
-								return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] transaction %s has already been mined in block %d", b.Hash().String(), subtreeNode.Hash.String(), blockID)
+								return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s][%s:%d]:%d transaction %s has already been mined in block %d", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), blockID)
 							}
 						}
 						bloomStats.mu.Lock()
@@ -648,7 +678,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					if foundInSameBlock {
 						// parent tx was found in the same block as our tx, check idx
 						if parentTxIdx > txIdx {
-							return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] transaction %s comes before parent transaction %s in block", b.Hash().String(), subtreeNode.Hash.String(), parentTxHash.String())
+							return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s][%s:%d]:%d transaction %s comes before parent transaction %s in block", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), parentTxHash.String())
 						}
 
 						// if the parent is in the same block, we have already checked whether it is on the same chain
@@ -791,18 +821,12 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		prometheusBlockGetAndValidateSubtrees.Observe(time.Since(startTime).Seconds())
 	}()
 
-	b.subtreeSlicesMu.Lock()
-	defer func() {
-		b.subtreeSlicesMu.Unlock()
-	}()
-
 	if len(b.Subtrees) == len(b.SubtreeSlices) {
 		// already loaded
 		return nil
 	}
 
 	b.SubtreeSlices = make([]*util.Subtree, len(b.Subtrees))
-	b.SubtreeMetaSlices = make([]*util.SubtreeMeta, len(b.Subtrees))
 
 	var sizeInBytes atomic.Uint64
 	var txCount atomic.Uint64
@@ -866,23 +890,6 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 
 					}
 
-					// get subtree meta
-					subtreeMetaReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("meta"))
-					if err != nil {
-						// this is just an optimization, we can always get the data from the txmeta store
-						// logger.Warnf("failed to get subtree meta %s: %w", subtreeHash.String(), err)
-						return nil
-					}
-					defer func() {
-						_ = subtreeMetaReader.Close()
-					}()
-
-					// no need to check whether this fails or not, it's just a cache file and not critical
-					b.SubtreeMetaSlices[i], _ = util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
-					//if err != nil {
-					//	logger.Warnf("[BLOCK][%s] failed to deserialize subtree meta %s: %w", b.Hash().String(), subtreeHash.String(), err)
-					//}
-
 					return nil
 				}
 			})
@@ -915,6 +922,25 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	// TODO something with conflicts
 
 	return nil
+}
+
+func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore blob.Store, subtreeHash chainhash.Hash, subtree *util.Subtree) (*util.SubtreeMeta, error) {
+	// get subtree meta
+	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], options.WithFileExtension("meta"))
+	if err != nil {
+		return nil, fmt.Errorf("[BLOCK][%s][%s] failed to get subtree meta: %w", b.Hash().String(), subtreeHash.String(), err)
+	}
+	defer func() {
+		_ = subtreeMetaReader.Close()
+	}()
+
+	// no need to check whether this fails or not, it's just a cache file and not critical
+	subtreeMetaSlice, err := util.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
+	if err != nil {
+		return nil, fmt.Errorf("[BLOCK][%s][%s] failed to deserialize subtree meta: %w", b.Hash().String(), subtreeHash.String(), err)
+	}
+
+	return subtreeMetaSlice, nil
 }
 
 func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {

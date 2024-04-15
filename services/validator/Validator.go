@@ -311,7 +311,7 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 	if err != nil {
 		if errors.Is(err, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
 			// this does not need to be a warning, it's just a duplicate validation request
-			return nil, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())
+			return nil, err
 		}
 
 		if reverseErr := v.reverseSpends(txMetaSpan, spentUtxos); reverseErr != nil {

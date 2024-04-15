@@ -594,9 +594,11 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 					// storage or processing error, block is not really invalid, but we need to re-validate
 					u.ReValidateBlock(block)
 				} else {
-					if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
-						u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
-					}
+					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", block.String(), err)
+					// TODO TEMP disable invalidation in the scaling test
+					//if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
+					//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
+					//}
 				}
 			}
 		}()
