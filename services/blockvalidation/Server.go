@@ -262,19 +262,19 @@ func (u *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	kafkaBlocksValidateConfigURL, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
-	if err == nil && ok {
-		u.logger.Infof("[BlockValidation] starting block validation Kafka client on address: %s, with %d workers", kafkaBlocksValidateConfigURL.String(), 1)
-
-		util.StartKafkaListener(ctx, u.logger, kafkaBlocksValidateConfigURL, 1, "BlockValidation", "blockvalidation", func(_ context.Context, blockHashBytes []byte, _ []byte) error {
-			blockHash, err := chainhash.NewHash(blockHashBytes)
-			if err != nil {
-				u.logger.Errorf("[BlockValidation] failed to parse block hash from kafka: %v", err)
-				return nil
-			}
-			return u.blockValidation.validateBlock(ctx, blockHash)
-		})
-	}
+	//kafkaBlocksValidateConfigURL, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
+	//if err == nil && ok {
+	//	u.logger.Infof("[BlockValidation] starting block validation Kafka client on address: %s, with %d workers", kafkaBlocksValidateConfigURL.String(), 1)
+	//
+	//	util.StartKafkaListener(ctx, u.logger, kafkaBlocksValidateConfigURL, 1, "BlockValidation", "blockvalidation", func(_ context.Context, blockHashBytes []byte, _ []byte) error {
+	//		blockHash, err := chainhash.NewHash(blockHashBytes)
+	//		if err != nil {
+	//			u.logger.Errorf("[BlockValidation] failed to parse block hash from kafka: %v", err)
+	//			return nil
+	//		}
+	//		return u.blockValidation.validateBlock(ctx, blockHash)
+	//	})
+	//}
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, u.logger, "blockvalidation", func(server *grpc.Server) {

@@ -255,7 +255,8 @@ func (u *BlockValidation) start(ctx context.Context) {
 	}()
 }
 
-func (u *BlockValidation) validateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+// validateBlock()
+func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) error {
 	startTime := time.Now()
 	u.logger.Infof("[BlockValidation:start][%s] validate block", blockHash.String())
 	defer func() {
@@ -278,6 +279,7 @@ func (u *BlockValidation) validateBlock(ctx context.Context, blockHash *chainhas
 		return fmt.Errorf("[BlockValidation:start][%s] failed to get block header ids: %s", block.String(), err)
 	}
 
+	// make a copy of the recent bloom filters, so we don't get race conditions if the bloom filters are updated
 	u.recentBlocksBloomFiltersMu.Lock()
 	bloomFilters := make([]*model.BlockBloomFilter, 0)
 	bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
@@ -701,6 +703,7 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block) {
 func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	ctx := context.Background()
 
+	// make a copy of the recent bloom filters, so we don't get race conditions if the bloom filters are updated
 	u.recentBlocksBloomFiltersMu.Lock()
 	bloomFilters := make([]*model.BlockBloomFilter, 0)
 	bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
@@ -713,9 +716,11 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 			// storage error, block is not really invalid, but we need to re-validate
 			return err
 		} else {
-			if err = u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); err != nil {
-				u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), err)
-			}
+			u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", blockData.block.String(), err)
+			// TODO TEMP disable invalidation in the scaling test
+			//if err = u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); err != nil {
+			//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), err)
+			//}
 		}
 	}
 

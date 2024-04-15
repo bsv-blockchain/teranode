@@ -49,16 +49,16 @@ type BlockAssembly struct {
 	blockAssembler *BlockAssembler
 	logger         ulogger.Logger
 
-	blockchainClient        blockchain.ClientI
-	txStore                 blob.Store
-	utxoStore               utxostore.Interface
-	txMetaStore             txmeta_store.Store
-	subtreeStore            blob.Store
-	subtreeTTL              time.Duration
-	jobStore                *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
-	blockSubmissionChan     chan *BlockSubmissionRequest
-	blockAssemblyDisabled   bool
-	blockValidKafkaProducer util.KafkaProducerI
+	blockchainClient      blockchain.ClientI
+	txStore               blob.Store
+	utxoStore             utxostore.Interface
+	txMetaStore           txmeta_store.Store
+	subtreeStore          blob.Store
+	subtreeTTL            time.Duration
+	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
+	blockSubmissionChan   chan *BlockSubmissionRequest
+	blockAssemblyDisabled bool
+	//blockValidKafkaProducer util.KafkaProducerI
 }
 
 type subtreeRetrySend struct {
@@ -125,13 +125,14 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	// init the block assembler for this server
 	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.txMetaStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
 
-	kafkaBlocksValidateConfig, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
-	if err == nil && ok {
-		_, ba.blockValidKafkaProducer, err = util.ConnectToKafka(kafkaBlocksValidateConfig)
-		if err != nil {
-			return fmt.Errorf("[BlockAssembly:Init] unable to connect to kafka for block validation: %v", err)
-		}
-	}
+	// Turned off for now, will be used to validate own blocks
+	//kafkaBlocksValidateConfig, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
+	//if err == nil && ok {
+	//	_, ba.blockValidKafkaProducer, err = util.ConnectToKafka(kafkaBlocksValidateConfig)
+	//	if err != nil {
+	//		return fmt.Errorf("[BlockAssembly:Init] unable to connect to kafka for block validation: %v", err)
+	//	}
+	//}
 
 	// start the new subtree retry processor in the background
 	go func() {
