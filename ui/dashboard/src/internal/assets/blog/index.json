@@ -41,6 +41,13 @@
       "slug": "final-enhancements",
       "path": "final-enhancements.md",
       "timestamp": "1711460640000"
+    },
+    {
+      "title": "Why we let it run after failure",
+      "summary": "Failures are not always bad, we can learn a lot from them",
+      "slug": "run-after-failure",
+      "path": "run-after-failure.md",
+      "timestamp": "1713169726969"
     }
   ]
 }
