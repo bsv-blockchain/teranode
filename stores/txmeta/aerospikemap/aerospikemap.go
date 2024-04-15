@@ -299,15 +299,26 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 		})
 	}
 
-	err := s.MetaBatchDecorate(context.Background(), items)
-	if err != nil {
-		// mark all items as errored
-		for _, bItem := range batch {
-			bItem.done <- batchGetItemData{
-				Err: err,
+	retries := 0
+	for {
+		if err := s.MetaBatchDecorate(context.Background(), items); err != nil {
+			if retries < 3 {
+				retries++
+				s.logger.Errorf("failed to get batch of txmeta: %v", err)
+				time.Sleep(time.Duration(retries) * time.Second)
+				continue
 			}
+
+			// mark all items as errored
+			for _, bItem := range batch {
+				bItem.done <- batchGetItemData{
+					Err: err,
+				}
+			}
+			return
 		}
-		return
+
+		break
 	}
 
 	for _, item := range items {
