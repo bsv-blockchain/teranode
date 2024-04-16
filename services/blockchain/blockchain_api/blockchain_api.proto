@@ -15,6 +15,7 @@ service BlockchainAPI {
   // AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
   rpc AddBlock (AddBlockRequest) returns (google.protobuf.Empty) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
+  rpc GetBlocks (GetBlocksRequest) returns (GetBlocksResponse) {}
   rpc GetBlockByHeight (GetBlockByHeightRequest) returns (GetBlockResponse) {}
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
   rpc GetBlockGraphData (GetBlockGraphDataRequest) returns (model.BlockDataPoints) {}
@@ -61,6 +62,17 @@ message AddBlockRequest {
 // swagger:model GetBlockRequest
 message GetBlockRequest {
   bytes hash = 1;
+}
+
+// swagger:model GetBlocksRequest
+message GetBlocksRequest {
+  bytes hash = 1;
+  uint32 count = 2;
+}
+
+// swagger:model GetBlocksResponse
+message GetBlocksResponse {
+  repeated bytes blocks = 1;
 }
 
 // swagger:model GetBlockByHeightRequest

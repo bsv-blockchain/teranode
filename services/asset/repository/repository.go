@@ -173,6 +173,17 @@ func (r *Repository) GetLastNBlocks(ctx context.Context, n int64, includeOrphans
 	return blockInfo, nil
 }
 
+func (r *Repository) GetBlocks(ctx context.Context, hash *chainhash.Hash, n uint32) ([]*model.Block, error) {
+	r.logger.Debugf("[Repository] GetNBlocks: %d", n)
+
+	blocks, err := r.BlockchainClient.GetBlocks(ctx, hash, n)
+	if err != nil {
+		return nil, err
+	}
+
+	return blocks, nil
+}
+
 func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	r.logger.Debugf("[Repository] GetBlockHeaders: %s", hash.String())
 	blockHeaders, heights, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, numberOfHeaders)

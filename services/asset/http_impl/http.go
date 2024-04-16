@@ -117,6 +117,10 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 
 	apiGroup.GET("/blocks", h.GetBlocks)
 
+	apiGroup.GET("/blocks/:hash", h.GetNBlocks(BINARY_STREAM))
+	apiGroup.GET("/blocks/:hash/hex", h.GetNBlocks(HEX))
+	apiGroup.GET("/blocks/:hash/json", h.GetNBlocks(JSON))
+
 	apiGroup.GET("/block/:hash", h.GetBlockByHash(BINARY_STREAM))
 	apiGroup.GET("/block/:hash/hex", h.GetBlockByHash(HEX))
 	apiGroup.GET("/block/:hash/json", h.GetBlockByHash(JSON))

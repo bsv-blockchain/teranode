@@ -323,6 +323,38 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}, nil
 }
 
+func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlocksRequest) (*blockchain_api.GetBlocksResponse, error) {
+	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlocks", b.stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	prometheusBlockchainGetBlockHeaders.Inc()
+
+	startHash, err := chainhash.NewHash(req.Hash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
+	}
+
+	blocks, err := b.store.GetBlocks(ctx1, startHash, req.Count)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blocks))
+	for i, block := range blocks {
+		blockBytes, err := block.Bytes()
+		if err != nil {
+			return nil, errors.WrapGRPC(err)
+		}
+		blockHeaderBytes[i] = blockBytes
+	}
+
+	return &blockchain_api.GetBlocksResponse{
+		Blocks: blockHeaderBytes,
+	}, nil
+}
+
 func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_api.GetBlockByHeightRequest) (*blockchain_api.GetBlockResponse, error) {
 	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlock", b.stats)
 	defer func() {
