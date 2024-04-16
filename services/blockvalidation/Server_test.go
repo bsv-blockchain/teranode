@@ -237,3 +237,36 @@ func TestTtlCache(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	assert.Equal(t, 0, cache.Len())
 }
+
+func TestBlockHeadersN(t *testing.T) {
+	var catchupBlockHeaders []*model.BlockHeader
+	for i := 997; i >= 0; i-- {
+		catchupBlockHeaders = append(catchupBlockHeaders, &model.BlockHeader{
+			Version:        uint32(i),
+			HashPrevBlock:  &chainhash.Hash{},
+			HashMerkleRoot: &chainhash.Hash{},
+		})
+	}
+
+	batchSize := 202
+	batches := getBlockBatchGets(catchupBlockHeaders, batchSize)
+	assert.Len(t, batches, 5)
+	assert.Equal(t, 202, int(batches[0].size))
+	assert.Equal(t, catchupBlockHeaders[201].String(), batches[0].hash.String())
+	assert.Equal(t, 202, int(batches[1].size))
+	assert.Equal(t, catchupBlockHeaders[403].String(), batches[1].hash.String())
+	assert.Equal(t, 202, int(batches[2].size))
+	assert.Equal(t, catchupBlockHeaders[605].String(), batches[2].hash.String())
+	assert.Equal(t, 202, int(batches[3].size))
+	assert.Equal(t, catchupBlockHeaders[807].String(), batches[3].hash.String())
+	assert.Equal(t, 190, int(batches[4].size))
+	assert.Equal(t, catchupBlockHeaders[997].String(), batches[4].hash.String())
+
+	batchSize = 500
+	batches = getBlockBatchGets(catchupBlockHeaders, batchSize)
+	assert.Len(t, batches, 2)
+	assert.Equal(t, 500, int(batches[0].size))
+	assert.Equal(t, catchupBlockHeaders[499].String(), batches[0].hash.String())
+	assert.Equal(t, 498, int(batches[1].size))
+	assert.Equal(t, catchupBlockHeaders[997].String(), batches[1].hash.String())
+}

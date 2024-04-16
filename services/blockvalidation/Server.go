@@ -1,11 +1,14 @@
 package blockvalidation
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"runtime"
+	"slices"
 	"strconv"
 	"time"
 
@@ -557,6 +560,36 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl str
 	return block, nil
 }
 
+func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, baseUrl string) ([]*model.Block, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "getBlocks", u.stats)
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:getBlocks")
+	defer func() {
+		span.Finish()
+		stat.AddTime(start)
+	}()
+
+	blockBytes, err := util.DoHTTPRequest(spanCtx, fmt.Sprintf("%s/blocks/%s?n=%d", baseUrl, hash.String(), n))
+	if err != nil {
+		return nil, fmt.Errorf("[getBlocks][%s] failed to get blocks from peer [%w]", hash.String(), err)
+	}
+
+	blockReader := bytes.NewReader(blockBytes)
+
+	blocks := make([]*model.Block, 0)
+	for {
+		block, err := model.NewBlockFromReader(blockReader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("[getBlocks][%s] failed to create block from bytes [%w]", hash.String(), err)
+		}
+		blocks = append(blocks, block)
+	}
+
+	return blocks, nil
+}
+
 func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "getBlockHeaders", u.stats)
 	defer func() {
@@ -678,17 +711,28 @@ LOOP:
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(catchupConcurrency)
 	g.Go(func() error {
-		var blockHeader *model.BlockHeader
-		for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
-			blockHeader = catchupBlockHeaders[i]
+		batches := getBlockBatchGets(catchupBlockHeaders, 100)
+		// reverse the batches, so we get the oldest blocks first
+		slices.Reverse(batches)
 
-			// TODO get blocks in batches
-			block, err := u.getBlock(gCtx, blockHeader.Hash(), baseURL)
+		u.logger.Debugf("[catchup][%s] getting %d batches", fromBlock.Hash().String(), len(batches))
+
+		var blocks []*model.Block
+		for _, batch := range batches {
+			u.logger.Debugf("[catchup][%s] getting %d blocks from %s", fromBlock.Hash().String(), batch.size, batch.hash.String())
+
+			blocks, err = u.getBlocks(gCtx, &batch.hash, batch.size, baseURL)
 			if err != nil {
-				return errors.Join(fmt.Errorf("[catchup][%s] failed to get block [%s]", fromBlock.Hash().String(), blockHeader.String()), err)
+				return errors.Join(fmt.Errorf("[catchup][%s] failed to get %d blocks [%s]", fromBlock.Hash().String(), batch.size, batch.hash.String()), err)
 			}
 
-			validateBlocksChan <- block
+			u.logger.Debugf("[catchup][%s] got %d blocks from %s", fromBlock.Hash().String(), len(blocks), batch.hash.String())
+
+			// reverse the blocks, so they are in the correct order, we get them newest to oldest from the other node
+			slices.Reverse(blocks)
+			for _, block := range blocks {
+				validateBlocksChan <- block
+			}
 		}
 
 		// close the channel to signal that all blocks have been processed
@@ -706,6 +750,34 @@ LOOP:
 	}
 
 	return nil
+}
+
+type blockBatchGet struct {
+	hash chainhash.Hash
+	size uint32
+}
+
+func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) []blockBatchGet {
+	batches := make([]blockBatchGet, 0)
+
+	var useBlockHeaders []*model.BlockHeader
+	for i := 0; i < len(catchupBlockHeaders); i += batchSize {
+		start := i
+		end := i + batchSize
+		if end > len(catchupBlockHeaders)-1 {
+			useBlockHeaders = catchupBlockHeaders[start:]
+		} else {
+			useBlockHeaders = catchupBlockHeaders[start:end]
+		}
+
+		lastHash := useBlockHeaders[len(useBlockHeaders)-1].Hash()
+		batches = append(batches, blockBatchGet{
+			hash: *lastHash,
+			size: uint32(len(useBlockHeaders)),
+		})
+	}
+
+	return batches
 }
 
 func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
