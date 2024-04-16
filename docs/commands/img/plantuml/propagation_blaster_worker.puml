@@ -1,0 +1,26 @@
+@startuml PropagationBlaster Worker Function
+
+participant "Worker" as Worker
+participant "Propagation\nService" as Propagation
+
+== Worker Loop ==
+loop Each Transaction
+    Worker -> Worker: Generate new transaction
+
+    Worker -> Worker: Sign transaction
+
+    alt Broadcast Protocol is Stream
+        Worker -> Propagation: ProcessTransaction(tx.ExtendedBytes())
+
+    else Broadcast Protocol is HTTP
+        Worker -> Propagation: sendToPropagationServer(ctx, logger, tx.ExtendedBytes());
+        Propagation --> Worker: HTTP response
+
+    else Broadcast Protocol is gRPC
+        Worker -> Propagation: sendToPropagationServer(ctx, logger, tx.ExtendedBytes());
+        Propagation --> Worker: gRPC response
+
+    end
+end
+
+@enduml

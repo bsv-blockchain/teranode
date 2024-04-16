@@ -1,0 +1,73 @@
+@startuml ChainIntegrity Test Logic
+
+participant "ChainIntegrity Service" as CI
+participant "Logger" as Log
+database "BlockchainDB" as BDB
+database "UTXOStore" as UTXO
+database "TXStore" as TX
+database "SubtreeStore" as Subtree
+
+CI -> BDB: GetBestBlockHeader()
+BDB --> CI: Return bestBlockHeader
+CI -> BDB: GetBlockHeaders(bestBlockHeader.Hash(), 100000)
+BDB --> CI: Return blockHeaders
+
+loop for each blockHeader in blockHeaders
+    CI -> Log: Log checking block header
+    alt previousBlockHeader exists
+        CI -> CI: Verify HashPrevBlock == previousBlock's Hash
+        alt Hashes do not match
+            CI -> Log: Log error
+        end
+    end
+end
+
+CI -> Log: Log block headers are valid
+
+CI -> CI: Initialize transactionMap
+
+CI -> Log: Log checking blocks/subtrees
+
+loop for each blockHeader in reverse order
+    CI -> BDB: GetBlock(blockHeader.Hash())
+    BDB --> CI: Return block, height
+    CI -> Log: Log checking block
+    alt block.CoinbaseTx is valid
+        CI -> Log: Log valid coinbase transaction
+        CI -> CI: Check coinbase UTXOs creation
+        loop for each output in CoinbaseTx
+            CI -> UTXO: Get(coinbaseTxID, vout)
+            UTXO --> CI: Return UTXO details
+            alt UTXO not found
+                CI -> Log: Log UTXO does not exist
+            else
+                CI -> Log: Log UTXO exists
+            end
+        end
+        CI -> CI: Extract and validate coinbase height
+    else
+        CI -> Log: Log invalid coinbase transaction
+    end
+
+    CI -> CI: Add coinbase to transactionMap
+
+    loop for each subtreeHash in block.Subtrees
+        CI -> Subtree: Get(subtreeHash)
+        Subtree --> CI: Return subtreeBytes
+        CI -> CI: Parse subtreeBytes into subtree
+        loop for each node in subtree.Nodes
+            CI -> CI: Check transaction existence and validation
+            CI -> TX: Get(node.Hash)
+            TX --> CI: Return txBytes
+            CI -> CI: Parse txBytes into btTx
+            CI -> CI: Validate inputs and outputs of btTx
+        end
+        CI -> Log: Log subtree transactions and fees
+        CI -> CI: Check if subtreeFees match subtree.Fees
+    end
+    CI -> CI: Calculate and validate block fees
+end
+
+left footer " Last Modified On: 15-April-2024. © 2024 Bitcoin SV. All rights reserved."
+
+@enduml
