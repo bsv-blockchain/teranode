@@ -236,7 +236,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 		utxos := make(map[interface{}]interface{})
 		for _, utxoHash := range utxoHashes {
-			utxos[utxoHash.String()] = aerospike.NewNullValue()
+			utxos[utxoHash.String()] = aerospike.NewStringValue("")
 		}
 
 		parentTxHashesInterface := make([]byte, 0, 32*len(bItem.txMeta.ParentTxHashes))
@@ -252,6 +252,8 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			aerospike.PutOp(aerospike.NewBin("sizeInBytes", int(bItem.txMeta.SizeInBytes))),
 			aerospike.PutOp(aerospike.NewBin("locktime", int(bItem.tx.LockTime))),
 			aerospike.PutOp(aerospike.NewBin("utxos", aerospike.NewMapValue(utxos))),
+			aerospike.PutOp(aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(len(utxos)))),
+			aerospike.PutOp(aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0))),
 			aerospike.PutOp(aerospike.NewBin("parentTxHashes", parentTxHashesInterface)),
 			aerospike.PutOp(aerospike.NewBin("blockIDs", blockIDs)),
 			aerospike.PutOp(aerospike.NewBin("isCoinbase", bItem.tx.IsCoinbase())),
@@ -682,7 +684,7 @@ func getBinsToStore(ctx context.Context, tx *bt.Tx, lockTime uint32) (*txmeta.Da
 			}
 			return nil, nil, fmt.Errorf("context cancelled getBinsToStore#1 %d of %d utxos", i, len(utxoHashes))
 		default:
-			utxos[utxoHash.String()] = aerospike.NewNullValue()
+			utxos[utxoHash.String()] = aerospike.NewStringValue("")
 		}
 	}
 
@@ -699,6 +701,8 @@ func getBinsToStore(ctx context.Context, tx *bt.Tx, lockTime uint32) (*txmeta.Da
 		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(int(txMeta.SizeInBytes))),
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(lockTime))),
 		aerospike.NewBin("utxos", aerospike.NewMapValue(utxos)),
+		aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(len(utxos))),
+		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
 		aerospike.NewBin("parentTxHashes", parentTxHashesInterface),
 		aerospike.NewBin("blockIDs", blockIDs),
 		aerospike.NewBin("isCoinbase", tx.IsCoinbase()),

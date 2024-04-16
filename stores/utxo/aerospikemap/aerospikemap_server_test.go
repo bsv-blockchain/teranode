@@ -1,4 +1,4 @@
-//go:build aerospike
+// //go:build aerospike
 
 package aerospikemap
 
@@ -39,9 +39,10 @@ var (
 	utxoHash3, _ = util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[3], 3)
 	utxoHash4, _ = util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[4], 4)
 	spend        = &utxostore.Spend{
-		TxID: tx.TxIDChainHash(),
-		Vout: 0,
-		Hash: utxoHash0,
+		TxID:         tx.TxIDChainHash(),
+		Vout:         0,
+		Hash:         utxoHash0,
+		SpendingTxID: hash,
 	}
 	hash, _  = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
 	hash2, _ = chainhash.NewHashFromStr("663bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c8")
@@ -197,7 +198,7 @@ func internalTest(t *testing.T) {
 			utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[i], uint32(i))
 			utxo, ok := utxos[utxoHash.String()]
 			require.True(t, ok)
-			assert.Nil(t, utxo)
+			assert.Equal(t, "", utxo)
 		}
 		parentTxHashes, ok := value.Bins["parentTxHashes"].([]byte)
 		require.True(t, ok)
@@ -228,6 +229,48 @@ func internalTest(t *testing.T) {
 
 		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
+		require.True(t, ok)
+		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
+		require.True(t, ok)
+		require.Equal(t, hash[:], utxoSpendTxID)
+
+		// try to spend with different txid
+		err = db.Spend(context.Background(), spends2)
+		require.ErrorIs(t, err, utxostore.ErrTypeSpent)
+
+		// get the doc to check expiry etc.
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		_, ok = value.Bins["lastSpend"].(int)
+		require.False(t, ok)
+		require.Equal(t, value.Expiration, uint32(math.MaxUint32))
+	})
+
+	t.Run("aerospike spend lua", func(t *testing.T) {
+		cleanDB(t, client, tx)
+		txMeta, err = txMetaStore.Create(context.Background(), tx)
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+
+		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
+		ret, aErr := client.Execute(wPolicy, key, luaSpendFunction, "spend",
+			aero.NewValue(spends[0].Hash.String()),
+			aero.NewValue(spends[0].SpendingTxID.CloneBytes()),
+			aero.NewValue(100),
+			aero.NewValue(time.Now().Unix()),
+			aero.NewValue(32), // ttl
+		)
+		require.NoError(t, aErr)
+		assert.Equal(t, "OK", ret)
+
+		//err = db.Spend(context.Background(), spends)
+		//require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
@@ -376,7 +419,7 @@ func internalTest(t *testing.T) {
 		require.True(t, ok)
 		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
 		require.True(t, ok)
-		require.Nil(t, utxoSpendTxID)
+		require.Equal(t, "", utxoSpendTxID)
 
 		_ = db.SetBlockHeight(1001)
 
@@ -420,7 +463,7 @@ func internalTest(t *testing.T) {
 		require.True(t, ok)
 		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
 		require.True(t, ok)
-		require.Nil(t, utxoSpendTxID)
+		require.Equal(t, "", utxoSpendTxID)
 
 		time.Sleep(2 * time.Second)
 

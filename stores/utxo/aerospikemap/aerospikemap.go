@@ -4,6 +4,7 @@ package aerospikemap
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"math"
@@ -28,6 +29,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
+
+//go:embed spend.lua
+var spendLUA []byte
+
+var luaSpendFunction = "spend_v2"
 
 var (
 	prometheusUtxoMapGet prometheus.Counter
@@ -212,6 +218,36 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 		}()
 	}
 
+	useSpendLuaScript := gocore.Config().GetBool("utxostore_useSpendLuaScript", true)
+	if useSpendLuaScript {
+		udfs, err := client.ListUDF(nil)
+		if err != nil {
+			return nil, err
+		}
+		// check whether we go the spend lua script in the lust
+		foundScript := false
+		for _, udf := range udfs {
+			if udf.Filename == luaSpendFunction+".lua" {
+				// we found the script, no need to register it again
+				foundScript = true
+				break
+			}
+		}
+
+		if !foundScript {
+			// update the version of the lua script when a new version is launched, do not re-use the old one
+			registerSpendLua, err := client.RegisterUDF(nil, spendLUA, luaSpendFunction+".lua", aerospike.LUA)
+			if err != nil {
+				return nil, err
+			}
+
+			err = <-registerSpendLua.OnComplete()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	return s, nil
 }
 
@@ -253,10 +289,10 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 			),
 			aerospike.ExpEq(aerospike.ExpMapGetByKey(
 				aerospike.MapReturnType.VALUE,
-				aerospike.ExpTypeNIL,
+				aerospike.ExpTypeSTRING,
 				aerospike.ExpStringVal(bItem.spend.Hash.String()),
 				aerospike.ExpMapBin("utxos"),
-			), aerospike.ExpNilValue()),
+			), aerospike.ExpStringVal("")),
 		)
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, []*aerospike.Operation{
 			aerospike.MapPutOp(
@@ -340,7 +376,7 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 						if ok {
 							spentUtxos := 0
 							for _, v := range utxos {
-								if v != nil {
+								if v != "" {
 									spentUtxos++
 								}
 							}
@@ -668,10 +704,10 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 		// spent check - value of utxo hash in map should be nil
 		aerospike.ExpEq(aerospike.ExpMapGetByKey(
 			aerospike.MapReturnType.VALUE,
-			aerospike.ExpTypeNIL,
+			aerospike.ExpTypeSTRING,
 			aerospike.ExpStringVal(spend.Hash.String()),
 			aerospike.ExpMapBin("utxos"),
-		), aerospike.ExpNilValue()),
+		), aerospike.ExpStringVal("")),
 	)
 
 	response, err := s.client.Operate(policy, key, []*aerospike.Operation{
@@ -747,7 +783,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 			if ok {
 				spentUtxos := 0
 				for _, v := range utxos {
-					if v != nil {
+					if v != "" {
 						spentUtxos++
 					}
 				}
