@@ -2,8 +2,10 @@ package http_impl
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"net/http"
 	"time"
 
@@ -25,6 +27,7 @@ type HTTP struct {
 	e              *echo.Echo
 	notificationCh chan *asset_api.Notification
 	startTime      time.Time
+	privKey        crypto.PrivKey
 }
 
 func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan *asset_api.Notification) (*HTTP, error) {
@@ -52,6 +55,24 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 		e:              e,
 		notificationCh: notificationCh,
 		startTime:      time.Now(),
+	}
+
+	// add the private key for signing responses
+	if gocore.Config().GetBool("http_sign_response", false) {
+		privateKey, _ := gocore.Config().Get("p2p_private_key")
+		if privateKey != "" {
+			privKeyBytes, err := hex.DecodeString(privateKey)
+			if err != nil {
+				logger.Errorf("failed to decode private key: %s", err.Error())
+			} else {
+				privKey, err := crypto.UnmarshalEd25519PrivateKey(privKeyBytes)
+				if err != nil {
+					logger.Errorf("failed to unmarshal private key: %s", err.Error())
+				} else {
+					h.privKey = privKey
+				}
+			}
+		}
 	}
 
 	e.GET("/alive", func(c echo.Context) error {
@@ -203,5 +224,21 @@ func (h *HTTP) Stop(ctx context.Context) error {
 
 func (h *HTTP) AddHTTPHandler(pattern string, handler http.Handler) error {
 	h.e.GET(pattern, echo.WrapHandler(handler))
+	return nil
+}
+
+func (h *HTTP) Sign(resp *echo.Response, hash []byte) error {
+	// sign the response
+	if h.privKey != nil {
+		// sign the response
+		signature, err := h.privKey.Sign(hash)
+		if err != nil {
+			return err
+		}
+
+		// add the signature to the response
+		resp.Header().Set("X-Signature", hex.EncodeToString(signature))
+	}
+
 	return nil
 }

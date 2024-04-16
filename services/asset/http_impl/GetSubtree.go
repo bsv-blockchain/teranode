@@ -51,6 +51,10 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 
 		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
 
+		// sign the response, if the private key is set, ignore error
+		// do this before any output is sent to the client, this adds a signature to the response header
+		_ = h.Sign(c.Response(), hash.CloneBytes())
+
 		// At this point, the subtree contains all the fees and sizes for the transactions in the subtree.
 
 		if mode == JSON {

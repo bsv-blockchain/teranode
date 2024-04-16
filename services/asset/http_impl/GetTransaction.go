@@ -34,6 +34,10 @@ func (h *HTTP) GetTransaction(mode ReadMode) func(c echo.Context) error {
 			}
 		}
 
+		// sign the response, if the private key is set, ignore error
+		// do this before any output is sent to the client, this adds a signature to the response header
+		_ = h.Sign(c.Response(), hash.CloneBytes())
+
 		prometheusAssetHttpGetTransaction.WithLabelValues("OK", "200").Inc()
 
 		switch mode {

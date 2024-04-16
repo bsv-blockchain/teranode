@@ -41,6 +41,11 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
+
+		// sign the response, if the private key is set, ignore error
+		// do this before any output is sent to the client, this adds a signature to the response header
+		_ = h.Sign(c.Response(), block.Header.Hash().CloneBytes())
+
 		prometheusAssetHttpGetBlock.WithLabelValues("OK", "200").Inc()
 
 		if mode == JSON {
@@ -90,6 +95,10 @@ func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
+
+		// sign the response, if the private key is set, ignore error
+		// do this before any output is sent to the client, this adds a signature to the response header
+		_ = h.Sign(c.Response(), hash.CloneBytes())
 
 		prometheusAssetHttpGetBlock.WithLabelValues("OK", "200").Inc()
 
