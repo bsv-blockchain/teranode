@@ -42,7 +42,7 @@ jobs:
         service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
 
     - name: SonarQube Scan
-      uses: sonarsource/sonarqube-scan-action@master
+      uses: sonarsource/sonarqube-scan-action@v2.0.1
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: https://sonarqube.ubsv.dev
