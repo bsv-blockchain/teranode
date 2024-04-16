@@ -230,8 +230,39 @@ func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {
 		return nil, errors.New(errors.ERR_BLOCK_INVALID, "invalid block header", err)
 	}
 
-	// create new buffer reader for the block bytes
-	buf := bytes.NewReader(blockBytes[80:])
+	return readBlockFromReader(block, bytes.NewReader(blockBytes[80:]))
+}
+
+func NewBlockFromReader(blockReader io.Reader) (block *Block, err error) {
+	startTime := time.Now()
+
+	defer func() {
+		prometheusBlockFromBytes.Observe(time.Since(startTime).Seconds())
+		if r := recover(); r != nil {
+			err = errors.New(errors.ERR_BLOCK_INVALID, "error creating block from reader", r)
+			fmt.Println("Recovered in NewBlockFromReader", r)
+		}
+	}()
+
+	block = &Block{}
+
+	blockHeaderBytes := make([]byte, 80)
+	// read the first 80 bytes as the block header
+	_, err = io.ReadFull(blockReader, blockHeaderBytes)
+	if err != nil {
+		return nil, errors.New(errors.ERR_BLOCK_INVALID, "error reading block header", err)
+	}
+
+	block.Header, err = NewBlockHeaderFromBytes(blockHeaderBytes)
+	if err != nil {
+		return nil, errors.New(errors.ERR_BLOCK_INVALID, "invalid block header", err)
+	}
+
+	return readBlockFromReader(block, blockReader)
+}
+
+func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
+	var err error
 
 	// read the transaction count
 	block.TransactionCount, err = wire.ReadVarInt(buf, 0)
