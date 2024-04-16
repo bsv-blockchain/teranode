@@ -110,17 +110,15 @@ func TestAerospikeBatching(t *testing.T) {
 	internalTest(t)
 }
 
+var aeroURL, _ = url.Parse(fmt.Sprintf("aerospikemap://%s:%d/%s?set=%s", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet))
+
 func internalTest(t *testing.T) {
 	// raw client to be able to do gets and cleanup
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospikemap://%s:%d/%s?set=%s", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet))
-	require.NoError(t, err)
-
 	// ubsv db client
-	var db utxostore.Interface
-	db, err = New(ulogger.New("utxo"), aeroURL)
+	db, err := New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
 	txMetaStore, err := _factory.New(ulogger.TestLogger{}, aeroURL)
@@ -290,6 +288,35 @@ func internalTest(t *testing.T) {
 		_, ok = value.Bins["lastSpend"].(int)
 		require.False(t, ok)
 		require.Equal(t, value.Expiration, uint32(math.MaxUint32))
+	})
+
+	t.Run("aerospike spend all lua", func(t *testing.T) {
+		cleanDB(t, client, tx)
+		txMeta, err = txMetaStore.Create(context.Background(), tx)
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+
+		for _, s := range spendsAll {
+			ret, aErr := client.Execute(wPolicy, key, luaSpendFunction, "spend",
+				aero.NewValue(s.Hash.String()),
+				aero.NewValue(s.SpendingTxID.CloneBytes()),
+				aero.NewValue(100),
+				aero.NewValue(time.Now().Unix()),
+				aero.NewValue(32), // ttl
+			)
+			require.NoError(t, aErr)
+			assert.Equal(t, "OK", ret)
+		}
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
+		require.True(t, ok)
+		utxoSpendTxID, ok := utxoMap[spendsAll[0].Hash.String()]
+		require.True(t, ok)
+		require.Equal(t, hash2[:], utxoSpendTxID)
 	})
 
 	t.Run("aerospike spend all and expire", func(t *testing.T) {
@@ -480,7 +507,61 @@ func internalTest(t *testing.T) {
 	})
 }
 
-func cleanDB(t *testing.T, client *aero.Client, tx *bt.Tx) {
+func BenchmarkSpend(b *testing.B) {
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(b, aeroErr)
+
+	db, err := New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(b, err)
+
+	txMetaStore, err := _factory.New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(b, err)
+
+	b.Run("aerospike spend", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			cleanDB(b, client, tx)
+			txMeta, err := txMetaStore.Create(context.Background(), tx)
+			assert.NotNil(b, txMeta)
+			require.NoError(b, err)
+
+			err = db.Spend(context.Background(), spendsAll)
+			require.NoError(b, err)
+		}
+	})
+}
+
+func BenchmarkLuaSpend(b *testing.B) {
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(b, aeroErr)
+
+	txMetaStore, err := _factory.New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(b, err)
+
+	b.Run("aerospike spend lua", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			cleanDB(b, client, tx)
+			txMeta, err := txMetaStore.Create(context.Background(), tx)
+			assert.NotNil(b, txMeta)
+			require.NoError(b, err)
+
+			wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+
+			for _, s := range spendsAll {
+				ret, aErr := client.Execute(wPolicy, key, luaSpendFunction, "spend",
+					aero.NewValue(s.Hash.String()),
+					aero.NewValue(s.SpendingTxID.CloneBytes()),
+					aero.NewValue(100),
+					aero.NewValue(time.Now().Unix()),
+					aero.NewValue(32), // ttl
+				)
+				require.NoError(b, aErr)
+				assert.Equal(b, "OK", ret)
+			}
+		}
+	})
+}
+
+func cleanDB(t testing.TB, client *aero.Client, tx *bt.Tx) {
 	key, _ = aero.NewKey(aerospikeNamespace, aerospikeSet, tx.TxIDChainHash().CloneBytes())
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	_, err := client.Delete(policy, key)

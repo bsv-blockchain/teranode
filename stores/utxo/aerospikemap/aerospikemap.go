@@ -33,7 +33,7 @@ import (
 //go:embed spend.lua
 var spendLUA []byte
 
-var luaSpendFunction = "spend_v2"
+var luaSpendFunction = "spend_v1"
 
 var (
 	prometheusUtxoMapGet prometheus.Counter

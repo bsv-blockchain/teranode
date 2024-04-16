@@ -49,9 +49,10 @@ function spend(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime,
     rec['utxos'] = utxos
     rec['spentUtxos'] = rec['spentUtxos'] + 1
 
-    -- check whether all utxos gave been spent
+    -- check whether all utxos have been spent
     if rec['spentUtxos'] == rec['nrUtxos'] then
-        rec.set_ttl(rec, ttl)
+        rec['lastSpend'] = currentUnixTime
+        record.set_ttl(rec, ttl)
     end
 
     aerospike:update(rec)
