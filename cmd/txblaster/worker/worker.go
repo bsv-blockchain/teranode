@@ -178,10 +178,10 @@ func NewWorker(
 		rateLimiter = rate.NewLimiter(rate.Every(rateLimitDuration), 1)
 	}
 
-	var rollingCache *RollingCache
-	if useQuic {
-		NewRollingCache(100)
-	}
+	//var rollingCache *RollingCache
+	//if useQuic {
+	//	rollingCache = NewRollingCache(100)
+	//}
 
 	return &Worker{
 		logger:            logger,
@@ -201,7 +201,7 @@ func NewWorker(
 		address:           address,
 		utxoChan:          make(chan *bt.UTXO, 1000),
 		topic:             topic,
-		sentTxCache:       rollingCache,
+		sentTxCache:       nil,
 	}, nil
 }
 
@@ -213,9 +213,9 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("error getting utxo from coinbaseTracker %s: %v", w.address.AddressString, err)
 	}
 
-	if w.sentTxCache != nil {
-		w.sentTxCache.Add(tx.TxIDChainHash().String())
-	}
+	//if w.sentTxCache != nil {
+	//	w.sentTxCache.Add(tx.TxIDChainHash().String())
+	//}
 
 	for outerRetry := 0; outerRetry < 3; outerRetry++ {
 		responses, err := w.distributors[rand.Intn(len(w.distributors))].SendTransaction(ctx, tx)
@@ -297,11 +297,11 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 					continue
 				}
 				w.logger.Debugf("Rejected tx msg: txId %s\n", rejectedTxMsg.TxId)
-				if w.sentTxCache != nil && w.sentTxCache.Contains(rejectedTxMsg.TxId) {
-					w.logger.Errorf("Rejected txId %s found in sentTxCache", rejectedTxMsg.TxId)
-					// TODO (I think) use error channel to kill worker
-					return
-				}
+				//if w.sentTxCache != nil && w.sentTxCache.Contains(rejectedTxMsg.TxId) {
+				//	w.logger.Errorf("Rejected txId %s found in sentTxCache", rejectedTxMsg.TxId)
+				//	// TODO (I think) use error channel to kill worker
+				//	return
+				//}
 			}
 		}()
 
@@ -371,9 +371,9 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 		return nil, fmt.Errorf("error filling tx inputs: %v", err)
 	}
 
-	if w.sentTxCache != nil {
-		w.sentTxCache.Add(tx.TxIDChainHash().String())
-	}
+	//if w.sentTxCache != nil {
+	//	w.sentTxCache.Add(tx.TxIDChainHash().String())
+	//}
 
 	// select 1 distributor at random
 	d := w.distributors[rand.Intn(len(w.distributors))]
