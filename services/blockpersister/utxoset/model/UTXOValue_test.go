@@ -11,10 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewUTXO(t *testing.T) {
+func TestNewUTXOValue(t *testing.T) {
 	script := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 
-	utxo := model.NewUTXO(1000, 42, script)
+	utxo := model.NewUTXOValue(1000, 42, script)
 
 	assert.Equal(t, script, utxo.Script)
 	assert.Equal(t, uint64(1000), utxo.Value)
@@ -26,9 +26,9 @@ func TestEqual(t *testing.T) {
 	script1 := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 	script2 := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 
-	utxo1 := model.NewUTXO(1000, 42, script1)
-	utxo2 := model.NewUTXO(1000, 42, script2)
-	utxo3 := model.NewUTXO(1000, 43, script1)
+	utxo1 := model.NewUTXOValue(1000, 42, script1)
+	utxo2 := model.NewUTXOValue(1000, 42, script2)
+	utxo3 := model.NewUTXOValue(1000, 43, script1)
 
 	assert.Equal(t, utxo1, utxo2)
 	assert.True(t, utxo1.Equal(utxo2))
@@ -36,24 +36,24 @@ func TestEqual(t *testing.T) {
 	assert.False(t, utxo1.Equal(utxo3))
 }
 
-func TestNewUTXOFromBytes(t *testing.T) {
+func TestNewUTXOValueFromBytes(t *testing.T) {
 	script := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 
-	utxo := model.NewUTXO(1000, 42, script)
+	utxo := model.NewUTXOValue(1000, 42, script)
 
 	b := utxo.Bytes()
 
-	utxo2 := model.NewUTXOFromBytes(b)
+	utxo2 := model.NewUTXOValueFromBytes(b)
 
 	assert.Equal(t, utxo, utxo2)
 }
 
-func TestNewUTXOFromReader(t *testing.T) {
+func TestNewUTXOValueFromReader(t *testing.T) {
 	script1 := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 	script2 := []byte{0x05, 0x06, 0x07, 0x08, 0x09}
 
-	utxo1 := model.NewUTXO(1001, 42, script1)
-	utxo2 := model.NewUTXO(1002, 0, script2)
+	utxo1 := model.NewUTXOValue(1001, 42, script1)
+	utxo2 := model.NewUTXOValue(1002, 0, script2)
 
 	assert.NotEqual(t, utxo1, utxo2)
 
@@ -73,10 +73,10 @@ func TestNewUTXOFromReader(t *testing.T) {
 	// Test the Read(io.Reader) method
 	r := bufio.NewReader(buf)
 
-	utxo3, err := model.NewUTXOFromReader(r)
+	utxo3, err := model.NewUTXOValueFromReader(r)
 	require.NoError(t, err)
 
-	utxo4, err := model.NewUTXOFromReader(r)
+	utxo4, err := model.NewUTXOValueFromReader(r)
 	require.NoError(t, err)
 
 	assert.Equal(t, utxo1, utxo3)

@@ -7,22 +7,22 @@ import (
 	"io"
 )
 
-type UTXO struct {
+type UTXOValue struct {
 	Value    uint64
 	Locktime uint32
 	Script   []byte
 }
 
-func NewUTXO(value uint64, locktime uint32, script []byte) *UTXO {
-	return &UTXO{
+func NewUTXOValue(value uint64, locktime uint32, script []byte) *UTXOValue {
+	return &UTXOValue{
 		Value:    value,
 		Locktime: locktime,
 		Script:   script,
 	}
 }
 
-func NewUTXOFromBytes(b []byte) *UTXO {
-	u := new(UTXO)
+func NewUTXOValueFromBytes(b []byte) *UTXOValue {
+	u := new(UTXOValue)
 
 	u.Value = binary.LittleEndian.Uint64(b[:8])
 	u.Locktime = binary.LittleEndian.Uint32(b[8:12])
@@ -35,8 +35,8 @@ func NewUTXOFromBytes(b []byte) *UTXO {
 	return u
 }
 
-func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
-	u := new(UTXO)
+func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
+	u := new(UTXOValue)
 
 	// Read the value
 	if err := binary.Read(r, binary.LittleEndian, &u.Value); err != nil {
@@ -62,7 +62,7 @@ func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 	return u, nil
 }
 
-func (u *UTXO) Bytes() []byte {
+func (u *UTXOValue) Bytes() []byte {
 	b := make([]byte, 8+4+4+len(u.Script))
 
 	// Write the value to the first 8 bytes
@@ -80,7 +80,7 @@ func (u *UTXO) Bytes() []byte {
 	return b
 }
 
-func (u *UTXO) Write(w io.Writer) error {
+func (u *UTXOValue) Write(w io.Writer) error {
 	// Write the value
 	if err := binary.Write(w, binary.LittleEndian, u.Value); err != nil {
 		return fmt.Errorf("error writing value: %w", err)
@@ -104,6 +104,6 @@ func (u *UTXO) Write(w io.Writer) error {
 	return nil
 }
 
-func (u *UTXO) Equal(other *UTXO) bool {
+func (u *UTXOValue) Equal(other *UTXOValue) bool {
 	return u.Value == other.Value && u.Locktime == other.Locktime && bytes.Equal(u.Script, other.Script)
 }
