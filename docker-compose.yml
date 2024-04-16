@@ -21,6 +21,15 @@ x-common-env: &common-env
   KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
   KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
 
+x-aerospike-base: &aerospike-base
+  image: aerospike:ce-6.4.0.7_2
+  # mem_limit: 1024m
+  networks:
+    - ubsv-network
+  command: --config-file /etc/aerospike.conf    
+  volumes:
+    - ./deploy/dev/aerospike.conf:/etc/aerospike.conf
+
 networks:
   ubsv-network:
     name: my-ubsv-network
@@ -52,6 +61,7 @@ services:
     expose:
       - 5432
     volumes:
+      - ./deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
       - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
@@ -61,40 +71,19 @@ services:
 
   aerospike-1:
     container_name: aerospike-1
-    image: aerospike/aerospike-server:latest
-    networks:
-      - ubsv-network
-    environment:
-      REPL_FACTOR: 0
-      MEM_GB: 1
-      DEFAULT_TTL: 30d
-      STORAGE_GB: 4
+    <<: *aerospike-base
     ports:
       - 3100:3000
 
   aerospike-2:
     container_name: aerospike-2
-    image: aerospike/aerospike-server:latest
-    networks:
-      - ubsv-network
-    environment:
-      REPL_FACTOR: 0
-      MEM_GB: 1
-      DEFAULT_TTL: 30d
-      STORAGE_GB: 4
+    <<: *aerospike-base
     ports:
       - 3200:3000
 
   aerospike-3:
     container_name: aerospike-3
-    image: aerospike/aerospike-server:latest
-    networks:
-      - ubsv-network
-    environment:
-      REPL_FACTOR: 0
-      MEM_GB: 1
-      DEFAULT_TTL: 30d
-      STORAGE_GB: 4
+    <<: *aerospike-base
     ports:
       - 3300:3000
 
@@ -104,6 +93,7 @@ services:
   #     - "2181:2181"
 
   kafka-1:
+    container_name: kafka-1
     image: bitnami/kafka:latest
     # hostname: localhost
     networks:
@@ -118,6 +108,7 @@ services:
     #   - /var/run/docker.sock:/var/run/docker.sock
 
   kafka-2:
+    container_name: kafka-2
     image: bitnami/kafka:latest
     # hostname: localhost
     networks:
@@ -132,6 +123,7 @@ services:
   #     - /var/run/docker.sock:/var/run/docker.sock
 
   kafka-3:
+    container_name: kafka-3
     image: bitnami/kafka:latest
     # hostname: localhost
     networks:
@@ -146,6 +138,7 @@ services:
     #   - /var/run/docker.sock:/var/run/docker.sock
 
   ubsv-1:
+    container_name: ubsv-1
     <<: *ubsv-base
     depends_on:
       - kafka-1
@@ -155,8 +148,8 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
       logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      txmeta_store: aerospike://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      utxostore: aerospikemap://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospikemap://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
       subtreestore: file:///data/ubsv1/subtreestore
@@ -171,6 +164,7 @@ services:
       - "19091:9091"
 
   ubsv-2:
+    container_name: ubsv-2
     <<: *ubsv-base
     depends_on:
       - kafka-2
@@ -180,8 +174,8 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
       logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      txmeta_store: aerospike://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      utxostore: aerospikemap://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospikemap://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
       subtreestore: file:///data/ubsv2/subtreestore
@@ -196,6 +190,7 @@ services:
       - "29091:9091"
 
   ubsv-3:
+    container_name: ubsv-3
     <<: *ubsv-base
     depends_on:
       - kafka-3
@@ -205,8 +200,8 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv3"
       logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      txmeta_store: aerospike://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      utxostore: aerospikemap://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospikemap://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
       subtreestore: file:///data/ubsv3/subtreestore
@@ -221,6 +216,7 @@ services:
       - "39091:9091"
 
   tx-blaster-1:
+    container_name: tx-blaster-1
     <<: *ubsv-base
     depends_on:
       - ubsv-1
@@ -249,6 +245,7 @@ services:
       # - ./data/txblaster.log:/app/data/txblaster.log
 
   tx-blaster-2:
+    container_name: tx-blaster-2
     <<: *ubsv-base
     depends_on:
       - ubsv-1
@@ -277,6 +274,7 @@ services:
       # - ./data/txblaster.log:/app/data/txblaster.log
 
   tx-blaster-3:
+    container_name: tx-blaster-3
     <<: *ubsv-base
     depends_on:
       - ubsv-1

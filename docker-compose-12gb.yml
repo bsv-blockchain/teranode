@@ -6,10 +6,12 @@ version: '3.8'
 x-ubsv-base:
   &ubsv-base
   image: ubsv:latest
-  mem_limit: 2621m
+  mem_limit: 2g
   depends_on:
     - postgres-shared
     - kafka-shared
+  # environment:
+    # GOGC: "50"
   networks:
     - ubsv-network
   volumes:
@@ -24,16 +26,19 @@ x-common-env: &common-env
   KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
   KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
   KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+  KAFKA_HEAP_OPTS: "-Xms256M -Xmx256M"
+  KAFKA_BUFFER_MEMORY: "33554432"  # Example buffer.memory setting (32MB)
+  KAFKA_BATCH_SIZE: "8096"        # Example batch.size setting (16KB)
+
 
 x-aerospike-base: &aerospike-base
-  image: aerospike/aerospike-server:latest
-  mem_limit: 512m
+  image: aerospike:ce-6.4.0.7_2
+  mem_limit: 1024m
   networks:
     - ubsv-network
-  # environment:
-    # REPL_FACTOR: 1
-    # MEM_GB: 0.5
-    # STORAGE_GB: 1
+  command: --config-file /etc/aerospike.conf    
+  volumes:
+    - ./deploy/dev/aerospike.conf:/etc/aerospike.conf
 
 networks:
   ubsv-network:
@@ -55,7 +60,7 @@ services:
   postgres-shared:
     container_name: postgres-shared
     image: postgres:latest
-    mem_limit: 256m
+    mem_limit: 128m
     networks:
       - ubsv-network
     environment:
@@ -80,24 +85,18 @@ services:
     <<: *aerospike-base
     ports:
       - 3100:3000
-    volumes:
-      - ./deploy/dev/aerospike-1.conf:/etc/aerospike/aerospike.conf
 
   aerospike-2:
     container_name: aerospike-2
     <<: *aerospike-base
     ports:
       - 3200:3000
-    volumes:
-      - ./deploy/dev/aerospike-2.conf:/etc/aerospike/aerospike.conf
 
   aerospike-3:
     container_name: aerospike-3
     <<: *aerospike-base
     ports:
       - 3300:3000
-    volumes:
-      - ./deploy/dev/aerospike-3.conf:/etc/aerospike/aerospike.conf
 
   kafka-shared:
     container_name: kafka-shared
@@ -123,8 +122,8 @@ services:
       logLevel: "INFO"
       # utxostore: postgres://miner1:miner1@postgres-shared:5432/ubsv1
       # txmeta_store: postgres://miner1:miner1@postgres-shared:5432/ubsv1
-      utxostore: aerospike://aerospike-1:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
-      txmeta_store: aerospike://aerospike-1:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
+      utxostore: aerospikemap://aerospike-1:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
+      txmeta_store: aerospikemap://aerospike-1:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
       blockchain_store: postgres://miner1:miner1@postgres-shared:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres-shared:5432/coinbase1
       subtreestore: file:///data/ubsv1/subtreestore
@@ -149,8 +148,8 @@ services:
       logLevel: "INFO"
       # utxostore: postgres://miner2:miner2@postgres-shared:5432/ubsv2
       # txmeta_store: postgres://miner2:miner2@postgres-shared:5432/ubsv2
-      utxostore: aerospike://aerospike-2:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
-      txmeta_store: aerospike://aerospike-2:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
+      utxostore: aerospikemap://aerospike-2:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
+      txmeta_store: aerospikemap://aerospike-2:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
       blockchain_store: postgres://miner2:miner2@postgres-shared:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres-shared:5432/coinbase2
       subtreestore: file:///data/ubsv2/subtreestore
@@ -175,8 +174,8 @@ services:
       logLevel: "INFO"
       # utxostore: postgres://miner3:miner3@postgres-shared:5432/ubsv3
       # txmeta_store: postgres://miner3:miner3@postgres-shared:5432/ubsv3
-      utxostore: aerospike://aerospike-3:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
-      txmeta_store: aerospike://aerospike-3:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
+      utxostore: aerospikemap://aerospike-3:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
+      txmeta_store: aerospikemap://aerospike-3:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
       blockchain_store: postgres://miner3:miner3@postgres-shared:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres-shared:5432/coinbase3
       subtreestore: file:///data/ubsv3/subtreestore
@@ -193,12 +192,13 @@ services:
   tx-blaster-1:
     container_name: tx-blaster-1
     <<: *ubsv-base
-    mem_limit: 768m
+    mem_limit: 2048m
     depends_on:
       - ubsv-1
       - ubsv-2
       - ubsv-3
     environment:
+      GOGC: "50"
       SETTINGS_CONTEXT: "docker.ci"
       tx_blaster_profilerAddr: ":9092"
       asset_httpAddress: "http://ubsv-1:8090"
@@ -210,14 +210,14 @@ services:
       coinbase_assetGrpcAddress: ubsv-1:8091
       # p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
       propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
-    command: ["/app/blaster.run", "-workers=10", "-print=0", "-profile=:9092", "-log=0", "-limit=1000", "--quic=false"]
+    command: ["/app/blaster.run", "-workers=2", "-print=0", "-profile=:9092", "-log=0", "--quic=false"]
     networks:
       - ubsv-network
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/txblaster1:/app/data
     ports:
-      - "49091:9091"
+      - "9092:9092"
 
 
   prometheus:
@@ -231,3 +231,15 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
 
+
+  # exporter1:
+  #   image: aerospike/aerospike-prometheus-exporter:latest
+  #   container_name: exporter1
+  #   environment:
+  #     AS_HOST: "aerospike-1"
+  #     AS_PORT: "3000"
+  #     METRIC_LABELS: "type='development',source='aerospike'"
+  #   ports:
+  #     - "9145:9145"
+  #   networks:
+  #     - ubsv-network

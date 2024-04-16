@@ -5,13 +5,22 @@ x-ubsv-base:
   &ubsv-base
   image: ubsv:latest
   depends_on:
-    - postgres
+    - postgres-shared
   networks:
     - ubsv-network
   volumes:
     - ./data:/app/data
   expose:
     - 8081-8093
+
+x-aerospike-base: &aerospike-base
+  image: aerospike:ce-6.4.0.7_2
+  mem_limit: 1024m
+  networks:
+    - ubsv-network
+  command: --config-file /etc/aerospike.conf    
+  volumes:
+    - ./deploy/dev/aerospike.conf:/etc/aerospike.conf
 
 networks:
   ubsv-network:
@@ -30,7 +39,7 @@ services:
     - ubsv-network
     entrypoint: ["pwd"]
 
-  postgres:
+  postgres-shared:
     container_name: postgres
     image: postgres:latest
     networks:
@@ -40,10 +49,11 @@ services:
       POSTGRES_PASSWORD: really_strong_password_change_me
       POSTGRES_DB: postgres
     ports:
-      - 5432:5432
+      - 15432:5432
     expose:
       - 5432
     volumes:
+      - ./deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
       - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
@@ -53,40 +63,19 @@ services:
 
   aerospike-1:
     container_name: aerospike-1
-    image: aerospike/aerospike-server:latest
-    networks:
-      - ubsv-network
-    environment:
-      REPL_FACTOR: 0
-      MEM_GB: 1
-      DEFAULT_TTL: 30d
-      STORAGE_GB: 4
+    <<: *aerospike-base
     ports:
       - 3100:3000
 
   aerospike-2:
     container_name: aerospike-2
-    image: aerospike/aerospike-server:latest
-    networks:
-      - ubsv-network
-    environment:
-      REPL_FACTOR: 0
-      MEM_GB: 1
-      DEFAULT_TTL: 30d
-      STORAGE_GB: 4
+    <<: *aerospike-base
     ports:
       - 3200:3000
 
   aerospike-3:
     container_name: aerospike-3
-    image: aerospike/aerospike-server:latest
-    networks:
-      - ubsv-network
-    environment:
-      REPL_FACTOR: 0
-      MEM_GB: 1
-      DEFAULT_TTL: 30d
-      STORAGE_GB: 4
+    <<: *aerospike-base
     ports:
       - 3300:3000
 
@@ -211,10 +200,11 @@ services:
       - kafka-3
 
   ubsv-1:
+    container_name: ubsv-1
     <<: *ubsv-base
     depends_on:
       - aerospike-1
-      - postgres
+      - postgres-shared
       - kafka-console-1
     entrypoint: ["/app/wait.sh", "aerospike-1", "3000", "2", "--", "/app/wait.sh", "kafka-1", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
@@ -249,10 +239,11 @@ services:
       - "19091:9091"
 
   ubsv-2:
+    container_name: ubsv-2
     <<: *ubsv-base
     depends_on:
       - aerospike-2
-      - postgres
+      - postgres-shared
       - kafka-console-2
     entrypoint: ["/app/wait.sh", "aerospike-2", "3000", "2", "--", "/app/wait.sh", "kafka-2", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
@@ -286,10 +277,11 @@ services:
       - "29091:9091"
 
   ubsv-3:
+    container_name: ubsv-3
     <<: *ubsv-base
     depends_on:
       - aerospike-3
-      - postgres
+      - postgres-shared
       - kafka-console-3
     entrypoint: ["/app/wait.sh", "aerospike-3", "3000", "2", "--", "/app/wait.sh", "kafka-3", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
@@ -323,6 +315,7 @@ services:
       - "39091:9091"
 
   tx-blaster-1:
+    container_name: tx-blaster-1
     <<: *ubsv-base
     depends_on:
       - ubsv-1
@@ -352,6 +345,7 @@ services:
       # - ./data/txblaster.log:/app/data/txblaster.log
 
   tx-blaster-2:
+    container_name: tx-blaster-2
     <<: *ubsv-base
     depends_on:
       - ubsv-1
@@ -381,6 +375,7 @@ services:
       # - ./data/txblaster.log:/app/data/txblaster.log
 
   tx-blaster-3:
+    container_name: tx-blaster-31
     <<: *ubsv-base
     depends_on:
       - ubsv-1
