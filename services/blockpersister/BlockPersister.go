@@ -57,6 +57,28 @@ func newBlockPersister(ctx context.Context, logger ulogger.Logger, storeUrl *url
 		bp.blockStore = store
 	}
 
+	// clean old files from working dir
+	dir, ok := gocore.Config().Get("blockPersister_workingDir")
+	if ok {
+		logger.Infof("[BlockPersister] Cleaning old files from working dir: %s", dir)
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			logger.Fatalf("error reading working dir: %v", err)
+		}
+		for _, file := range files {
+			fileInfo, err := file.Info()
+			if err != nil {
+				logger.Errorf("error reading file info: %v", err)
+			}
+			if time.Since(fileInfo.ModTime()) > 30*time.Minute {
+				logger.Infof("removing old file: %s", file.Name())
+				if err = os.Remove(path.Join(dir, file.Name())); err != nil {
+					logger.Errorf("error removing old file: %v", err)
+				}
+			}
+		}
+	}
+
 	// Start the upload worker
 	go func() {
 		for {
