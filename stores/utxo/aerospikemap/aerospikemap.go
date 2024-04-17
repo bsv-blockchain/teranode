@@ -392,7 +392,6 @@ func (s *Store) sendLastSpendBatch(batch []*batchLastSpend) {
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, s.expiration) // set expiration
-	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 
@@ -401,7 +400,7 @@ func (s *Store) sendLastSpendBatch(batch []*batchLastSpend) {
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, bItem.key, aerospike.PutOp(
 			aerospike.NewBin(
 				"lastSpend",
-				aerospike.NewIntegerValue(int(time.Now().Unix())),
+				aerospike.NewIntegerValue(bItem.time),
 			),
 		))
 	}
@@ -413,6 +412,7 @@ func (s *Store) sendLastSpendBatch(batch []*batchLastSpend) {
 		for _, bItem := range batch {
 			s.lastSpendCh <- bItem
 		}
+		return
 	}
 
 	// batchOperate may have no errors, but some of the records may have failed
