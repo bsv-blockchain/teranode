@@ -125,6 +125,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(maxMinedRoutines)
 
+	maxRetries := 10
 	for subtreeIdx, subtree := range block.SubtreeSlices {
 		subtreeIdx := subtreeIdx
 		subtree := subtree
@@ -140,18 +141,20 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
 					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, batch %d, for subtree %s in block %d", block.Hash().String(), len(hashes), idx/maxMinedBatchSize, block.Subtrees[subtreeIdx].String(), blockID)
-					for retries := 0; retries < 3; retries++ {
+					retries := 0
+					for {
 						if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
-							if retries >= 2 {
+							if retries >= maxRetries {
 								return fmt.Errorf("[UpdateTxMinedStatus][%s] error setting mined tx: %v", block.Hash().String(), err)
 							} else {
-								backoff := time.Duration(2^retries) * time.Second
+								backoff := time.Duration(1+(2*retries)) * time.Second
 								logger.Warnf("[UpdateTxMinedStatus][%s] error setting mined tx, retrying in %s: %v", block.Hash().String(), backoff.String(), err)
 								time.Sleep(backoff)
 							}
 						} else {
 							break
 						}
+						retries++
 					}
 
 					hashes = make([]*chainhash.Hash, 0, maxMinedBatchSize)
@@ -159,9 +162,21 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 			}
 
 			if len(hashes) > 0 {
-				logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, remainder batch, for subtree %s in block %d", block.Hash().String(), len(hashes), block.Subtrees[subtreeIdx].String(), blockID)
-				if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
-					return fmt.Errorf("[UpdateTxMinedStatus][%s] error setting mined tx: %v", block.Hash().String(), err)
+				retries := 0
+				for {
+					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, remainder batch, for subtree %s in block %d", block.Hash().String(), len(hashes), block.Subtrees[subtreeIdx].String(), blockID)
+					if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
+						if retries >= maxRetries {
+							return fmt.Errorf("[UpdateTxMinedStatus][%s] error setting remainder batch mined tx: %v", block.Hash().String(), err)
+						} else {
+							backoff := time.Duration(1+(2*retries)) * time.Second
+							logger.Warnf("[UpdateTxMinedStatus][%s] error setting remainder batch mined tx, retrying in %s: %v", block.Hash().String(), backoff.String(), err)
+							time.Sleep(backoff)
+						}
+						retries++
+					} else {
+						break
+					}
 				}
 			}
 
