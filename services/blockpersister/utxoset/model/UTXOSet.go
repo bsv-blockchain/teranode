@@ -1,9 +1,12 @@
 package model
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
+	"path"
 
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -63,6 +66,20 @@ func NewUTXOSetFromReader(r io.Reader) (*UTXOSet, error) {
 	}
 
 	return us, nil
+}
+
+func (us *UTXOSet) Persist(folder string) error {
+	filename := path.Join(folder, fmt.Sprintf("%s_%d.utxoset", us.blockHash.String(), us.blockHeight))
+	f, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("error creating file: %w", err)
+	}
+	defer f.Close()
+
+	// Create a buffered writer
+	w := bufio.NewWriter(f)
+
+	return us.Write(w)
 }
 
 func (us *UTXOSet) Write(w io.Writer) error {

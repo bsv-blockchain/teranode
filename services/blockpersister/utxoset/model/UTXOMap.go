@@ -9,7 +9,7 @@ import (
 // UTXOKey represents a bitcoin transaction outpoint, i.e. the transaction ID and the output index.
 // It is used as a key in the UTXOMap and is hashable.
 type UTXOMap struct {
-	mapIfc[UTXOKey, *UTXOValue]
+	genericMap[UTXOKey, *UTXOValue]
 }
 
 func newUTXOMap() UTXOMap {

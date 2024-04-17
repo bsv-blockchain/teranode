@@ -7,7 +7,8 @@ import (
 	"github.com/dolthub/swiss"
 )
 
-type mapIfc[K comparable, V any] interface {
+// genericMap is an interface that defines the methods that a map must implement
+type genericMap[K comparable, V any] interface {
 	Put(K, V)
 	Get(K) (V, bool)
 	Delete(K) bool
@@ -16,33 +17,35 @@ type mapIfc[K comparable, V any] interface {
 	Length() int
 }
 
+// hashable is a custom interface that defines a method that must be implemented by a type in order to be used as a key in a splitSwiss map
 type hashable interface {
 	Hash(mod uint16) uint16
 }
 
+// make a composite interface that combines the comparable and hashable interfaces
 type comparableAndHashable interface {
-	hashable
-	comparable
+	comparable // This is a Go built-in interface
+	hashable   // This is a custom interface defined above
 }
 
 type splitSwissMap[K comparableAndHashable, V any] struct {
-	m           map[uint16]mapIfc[K, V]
+	m           map[uint16]genericMap[K, V]
 	nrOfBuckets uint16
 }
 
-func newSplitSwissMap[K comparableAndHashable, V any](length int) mapIfc[K, V] {
-	m := &splitSwissMap[K, V]{
-		m:           make(map[uint16]mapIfc[K, V], 1024),
+func newSplitSwissMap[K comparableAndHashable, V any](length int) genericMap[K, V] {
+	ssm := &splitSwissMap[K, V]{
+		m:           make(map[uint16]genericMap[K, V], 1024),
 		nrOfBuckets: 1024,
 	}
 
-	splitLength := int(math.Ceil(float64(length) / float64(m.nrOfBuckets)))
+	splitLength := int(math.Ceil(float64(length) / float64(ssm.nrOfBuckets)))
 
-	for i := uint16(0); i <= m.nrOfBuckets; i++ {
-		m.m[i] = newSwissMap[K, V](splitLength)
+	for i := uint16(0); i < uint16(len(ssm.m)); i++ {
+		ssm.m[i] = newSwissMap[K, V](splitLength)
 	}
 
-	return m
+	return ssm
 }
 
 func (ssm *splitSwissMap[K, V]) Put(k K, v V) {
@@ -82,7 +85,7 @@ type swissMap[K comparable, V any] struct {
 	length int
 }
 
-func newSwissMap[K comparable, V any](length int) mapIfc[K, V] {
+func newSwissMap[K comparable, V any](length int) genericMap[K, V] {
 	return &swissMap[K, V]{
 		m: swiss.NewMap[K, V](uint32(length)),
 	}
