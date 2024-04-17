@@ -30,6 +30,7 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		}
 	case "memory":
 		store = memory.New()
+
 	case "file":
 		store, err = file.New(logger, "."+storeUrl.Path) // relative
 		if err != nil {

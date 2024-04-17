@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -103,7 +104,6 @@ func newBlockPersister(ctx context.Context, logger ulogger.Logger, storeUrl *url
 				if err = bp.blockStore.SetFromReader(ctx,
 					hash.CloneBytes(),
 					bufferedReader,
-					options.WithFileName(hash.String()),
 					options.WithSubDirectory("blocks"),
 				); err != nil {
 					bp.logger.Errorf("[BlockPersister] error writing file to store, retrying: %v", err)
@@ -176,10 +176,16 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 		return fmt.Errorf("[BlockPersister] error writing coinbase tx: %w", err)
 	}
 
+	// Create a new UTXO diff
+	utxoDiff := utxo_model.NewUTXODiff(block.Header.Hash(), block.Height)
+
+	// Add coinbase utxos to the utxo diff
+	utxoDiff.ProcessTx(block.CoinbaseTx)
+
 	for i, subtreeHash := range block.Subtrees {
 		bp.logger.Infof("[BlockPersister] Processing subtree %s (%d / %d)", subtreeHash.String(), i+1, len(block.Subtrees))
 
-		if err = bp.processSubtree(ctx, *subtreeHash, w); err != nil {
+		if err = bp.processSubtree(ctx, *subtreeHash, w, utxoDiff); err != nil {
 			return fmt.Errorf("[BlockPersister] error processing subtree %d [%s]: %w", i, subtreeHash.String(), err)
 		}
 	}
@@ -208,10 +214,68 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 
 	bp.logger.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
 
+	folder, _ := gocore.Config().Get("utxoPersister_workingDir", os.TempDir())
+
+	if err := utxoDiff.Persist(folder); err != nil {
+		return fmt.Errorf("[BlockPersister] error persisting utxo diff: %w", err)
+	}
+
+	// fmt.Println("UTXODiff block hash:", utxoDiff.BlockHash)
+	// fmt.Println("UTXODiff block height:", utxoDiff.BlockHeight)
+
+	// fmt.Println("UTXODiff removed UTXOs:")
+	// utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+	// 	fmt.Printf("%v %v\n", &uk, uv)
+	// 	return
+	// })
+
+	// fmt.Println("UTXODiff added UTXOs:")
+	// var i int
+	// utxoDiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+	// 	fmt.Printf("%d: %v %v\n", i, &uk, uv)
+	// 	i++
+	// 	return
+	// })
+
+	// f, err = os.Open(fmt.Sprintf("data/blockpersister/%s_%d.utxodiff", utxoDiff.BlockHash.String(), utxoDiff.BlockHeight))
+	// if err != nil {
+	// 	return fmt.Errorf("error opening file: %w", err)
+	// }
+	// defer f.Close()
+
+	// r := bufio.NewReader(f)
+
+	// utxodiff, err := utxo_model.NewUTXODiffFromReader(r)
+	// if err != nil {
+	// 	return fmt.Errorf("error reading utxodiff: %w", err)
+	// }
+
+	// fmt.Println("UTXODiff block hash:", utxodiff.BlockHash)
+	// fmt.Println("UTXODiff block height:", utxodiff.BlockHeight)
+
+	// fmt.Println("UTXODiff removed UTXOs:")
+	// utxodiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+	// 	fmt.Printf("%v %v\n", &uk, uv)
+	// 	return
+	// })
+
+	// fmt.Println("UTXODiff added UTXOs:")
+	// var j int
+	// utxodiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+	// 	fmt.Printf("%d: %v %v\n", j, &uk, uv)
+	// 	j++
+	// 	return
+	// })
+
+	// TODO: Persist the UTXO set with the current block hash
+	// Load the UTXO set for block.header.previousHash
+	// Apply all the diffs to the UTXO set
+	// Persist the UTXO set with the current block hash
+
 	return nil
 }
 
-func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainhash.Hash, w io.Writer) error {
+func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainhash.Hash, w io.Writer, utxoDiff *utxo_model.UTXODiff) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -309,6 +373,9 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 		if _, err := w.Write(data.Data.Tx.Bytes()); err != nil {
 			return fmt.Errorf("[BlockPersister] error writing tx to file: %w", err)
 		}
+
+		// Process the utxo diff...
+		utxoDiff.ProcessTx(data.Data.Tx)
 	}
 
 	txCount = len(txHashes)

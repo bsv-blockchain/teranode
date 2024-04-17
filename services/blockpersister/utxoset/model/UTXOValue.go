@@ -36,6 +36,16 @@ func NewUTXOValueFromBytes(b []byte) *UTXOValue {
 }
 
 func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
+	// Read the marker
+	marker := make([]byte, 1)
+	if _, err := r.Read(marker); err != nil {
+		return nil, err
+	}
+
+	if marker[0] == 0x00 {
+		return nil, nil
+	}
+
 	u := new(UTXOValue)
 
 	// Read the value
@@ -81,6 +91,17 @@ func (u *UTXOValue) Bytes() []byte {
 }
 
 func (u *UTXOValue) Write(w io.Writer) error {
+	if u == nil {
+		if _, err := w.Write([]byte{0x00}); err != nil {
+			return fmt.Errorf("error writing nil marker: %w", err)
+		}
+		return nil
+	}
+
+	if _, err := w.Write([]byte{0x01}); err != nil {
+		return fmt.Errorf("error writing not nil marker: %w", err)
+	}
+
 	// Write the value
 	if err := binary.Write(w, binary.LittleEndian, u.Value); err != nil {
 		return fmt.Errorf("error writing value: %w", err)
@@ -106,4 +127,8 @@ func (u *UTXOValue) Write(w io.Writer) error {
 
 func (u *UTXOValue) Equal(other *UTXOValue) bool {
 	return u.Value == other.Value && u.Locktime == other.Locktime && bytes.Equal(u.Script, other.Script)
+}
+
+func (u *UTXOValue) String() string {
+	return fmt.Sprintf("%v / %v - %x", u.Value, u.Locktime, u.Script)
 }
