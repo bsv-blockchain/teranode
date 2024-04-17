@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  # - job_name: "prometheus"
+  #   static_configs:
+  #     - targets: ["localhost:9090"]
+
+  - job_name: "ubsv-2"
+    static_configs:
+      - targets: ["ubsv-2:9091"]
+  - job_name: "aerospike-exporter-2"
+    static_configs:
+      - targets: ["aerospike-exporter-2:9145"]

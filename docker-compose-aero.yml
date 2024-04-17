@@ -87,15 +87,10 @@ services:
     ports:
       - 3300:3000
 
-# zookeeper-1:
-  #   image: confluentinc/cp-zookeeper:latest
-  #   ports:
-  #     - "2181:2181"
-
-  kafka-1:
-    container_name: kafka-1
+  kafka-shared:
+    container_name: kafka-shared
     image: bitnami/kafka:latest
-    # hostname: localhost
+    mem_limit: 384m
     networks:
       - ubsv-network
     ports:
@@ -103,48 +98,16 @@ services:
       - "19093:9093"
     environment:
       <<: *common-env
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@kafka-1:9093"
-    # volumes:
-    #   - /var/run/docker.sock:/var/run/docker.sock
-
-  kafka-2:
-    container_name: kafka-2
-    image: bitnami/kafka:latest
-    # hostname: localhost
-    networks:
-      - ubsv-network
-    ports:
-      - "29092:9092"
-      - "29093:9093"
-    environment:
-      <<: *common-env
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@kafka-2:9093"
-  # volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-
-  kafka-3:
-    container_name: kafka-3
-    image: bitnami/kafka:latest
-    # hostname: localhost
-    networks:
-      - ubsv-network
-    ports:
-      - "39092:9092"
-      - "39093:9093"
-    environment:
-      <<: *common-env
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@kafka-3:9093"
-    # volumes:
-    #   - /var/run/docker.sock:/var/run/docker.sock
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@kafka-shared:9093"
 
   ubsv-1:
     container_name: ubsv-1
     <<: *ubsv-base
     depends_on:
-      - kafka-1
+      - kafka-shared
       - aerospike-1
       - postgres
-    entrypoint: ["/app/wait.sh", "aerospike-1", "3000", "2", "--", "/app/wait.sh", "kafka-1", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "aerospike-1", "3000", "2", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv1"
       logLevel: "DEBUG"
@@ -167,10 +130,10 @@ services:
     container_name: ubsv-2
     <<: *ubsv-base
     depends_on:
-      - kafka-2
+      - kafka-shared
       - aerospike-2
       - postgres
-    entrypoint: ["/app/wait.sh", "aerospike-2", "3000", "2", "--", "/app/wait.sh", "kafka-2", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "aerospike-2", "3000", "2", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv2"
       logLevel: "DEBUG"
@@ -193,10 +156,10 @@ services:
     container_name: ubsv-3
     <<: *ubsv-base
     depends_on:
-      - kafka-3
+      - kafka-shared
       - aerospike-3
       - postgres
-    entrypoint: ["/app/wait.sh", "aerospike-3", "3000", "2", "--", "/app/wait.sh", "kafka-3", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "aerospike-3", "3000", "2", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.ci.ubsv3"
       logLevel: "DEBUG"
