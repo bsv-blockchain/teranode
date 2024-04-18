@@ -647,9 +647,9 @@ func (s *Store) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Respo
 	if value != nil {
 		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		if ok {
-			spendingTxIdBytes, ok := utxoMap[spend.Hash.String()].(string)
-			if ok && spendingTxIdBytes != "" {
-				spendingTxId, err = chainhash.NewHashFromStr(spendingTxIdBytes)
+			spendingTxIdStr, ok := utxoMap[spend.Hash.String()].(string)
+			if ok && spendingTxIdStr != "" {
+				spendingTxId, err = chainhash.NewHashFromStr(spendingTxIdStr)
 				if err != nil {
 					return nil, fmt.Errorf("chainhash error: %w", err)
 				}
