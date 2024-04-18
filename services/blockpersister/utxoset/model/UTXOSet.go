@@ -13,25 +13,22 @@ import (
 
 // UTXOSet is a map of UTXOs.
 type UTXOSet struct {
-	BlockHash   chainhash.Hash // This is the block hash that is the last block in the chain with these UTXOs.
-	BlockHeight uint32
-	Current     UTXOMap
+	BlockHash chainhash.Hash // This is the block hash that is the last block in the chain with these UTXOs.
+	Current   UTXOMap
 }
 
 // NewUTXOMap creates a new UTXOMap.
-func NewUTXOSet(blockHash *chainhash.Hash, blockHeight uint32) *UTXOSet {
+func NewUTXOSet(blockHash *chainhash.Hash) *UTXOSet {
 	return &UTXOSet{
-		BlockHash:   *blockHash,
-		BlockHeight: blockHeight,
-		Current:     newUTXOMap(),
+		BlockHash: *blockHash,
+		Current:   newUTXOMap(),
 	}
 }
 
-func NewUTXOSetFromPrevious(blockHash *chainhash.Hash, blockHeight uint32, previousUTXOSet *UTXOSet) *UTXOSet {
+func NewUTXOSetFromPrevious(blockHash *chainhash.Hash, previousUTXOSet *UTXOSet) *UTXOSet {
 	us := &UTXOSet{
-		BlockHash:   *blockHash,
-		BlockHeight: blockHeight,
-		Current:     newUTXOMap(),
+		BlockHash: *blockHash,
+		Current:   newUTXOMap(),
 	}
 
 	previousUTXOSet.Current.Iter(func(uk UTXOKey, uv *UTXOValue) (stop bool) {
@@ -62,12 +59,7 @@ func NewUTXOSetFromReader(r io.Reader) (*UTXOSet, error) {
 		return nil, fmt.Errorf("error reading block hash: %w", err)
 	}
 
-	var blockHeight uint32
-	if err := binary.Read(r, binary.LittleEndian, &blockHeight); err != nil {
-		return nil, fmt.Errorf("error reading block height: %w", err)
-	}
-
-	us := NewUTXOSet(blockHash, blockHeight)
+	us := NewUTXOSet(blockHash)
 
 	if err := us.Current.Read(r); err != nil {
 		return nil, err
@@ -76,9 +68,9 @@ func NewUTXOSetFromReader(r io.Reader) (*UTXOSet, error) {
 	return us, nil
 }
 
-func LoadUTXOSet(folder string, blockHash chainhash.Hash, height uint32) (*UTXOSet, error) {
+func LoadUTXOSet(folder string, blockHash chainhash.Hash) (*UTXOSet, error) {
 	// Load the UTXO set from disk
-	filename := path.Join(folder, fmt.Sprintf("%s_%d.utxoset", blockHash.String(), height))
+	filename := path.Join(folder, fmt.Sprintf("%s.utxoset", blockHash.String()))
 
 	f, err := os.Open(filename)
 	if err != nil {
@@ -123,11 +115,6 @@ func (us *UTXOSet) Persist(filename string) error {
 func (us *UTXOSet) Write(w io.Writer) error {
 	if _, err := w.Write(us.BlockHash[:]); err != nil {
 		return fmt.Errorf("error writing block hash: %w", err)
-	}
-
-	// Write the block height
-	if err := binary.Write(w, binary.LittleEndian, us.BlockHeight); err != nil {
-		return fmt.Errorf("error writing block height: %w", err)
 	}
 
 	// Write the number of UTXOs

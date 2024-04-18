@@ -2,7 +2,6 @@ package model
 
 import (
 	"bufio"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -13,19 +12,17 @@ import (
 
 // UTXODiff is a map of UTXOs.
 type UTXODiff struct {
-	BlockHash   chainhash.Hash // This is the block hash that is the last block in the chain with these UTXOs.
-	BlockHeight uint32
-	Added       UTXOMap
-	Removed     UTXOMap
+	BlockHash chainhash.Hash // This is the block hash that is the last block in the chain with these UTXOs.
+	Added     UTXOMap
+	Removed   UTXOMap
 }
 
 // NewUTXOMap creates a new UTXODiff.
-func NewUTXODiff(blockHash *chainhash.Hash, blockHeight uint32) *UTXODiff {
+func NewUTXODiff(blockHash *chainhash.Hash) *UTXODiff {
 	return &UTXODiff{
-		BlockHash:   *blockHash,
-		BlockHeight: blockHeight,
-		Added:       newUTXOMap(),
-		Removed:     newUTXOMap(),
+		BlockHash: *blockHash,
+		Added:     newUTXOMap(),
+		Removed:   newUTXOMap(),
 	}
 }
 
@@ -70,12 +67,7 @@ func NewUTXODiffFromReader(r io.Reader) (*UTXODiff, error) {
 		return nil, fmt.Errorf("error reading block hash: %w", err)
 	}
 
-	var blockHeight uint32
-	if err := binary.Read(r, binary.LittleEndian, &blockHeight); err != nil {
-		return nil, fmt.Errorf("error reading block height: %w", err)
-	}
-
-	us := NewUTXODiff(blockHash, blockHeight)
+	us := NewUTXODiff(blockHash)
 
 	if err := us.Removed.Read(r); err != nil {
 		return nil, err
@@ -125,11 +117,6 @@ func (us *UTXODiff) Persist(filename string) error {
 func (us *UTXODiff) Write(w io.Writer) error {
 	if _, err := w.Write(us.BlockHash[:]); err != nil {
 		return fmt.Errorf("error writing block hash: %w", err)
-	}
-
-	// Write the block height
-	if err := binary.Write(w, binary.LittleEndian, us.BlockHeight); err != nil {
-		return fmt.Errorf("error writing block height: %w", err)
 	}
 
 	if err := us.Removed.Write(w); err != nil {

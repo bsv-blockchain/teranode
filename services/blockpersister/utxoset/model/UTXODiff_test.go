@@ -16,7 +16,7 @@ func TestNewUTXODiffFromReader(t *testing.T) {
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 
 	// Create a new UTXODiff
-	ud1 := NewUTXODiff(&hash, 22)
+	ud1 := NewUTXODiff(&hash)
 
 	b := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 
@@ -53,7 +53,6 @@ func TestNewUTXODiffFromReader(t *testing.T) {
 
 	// Check the UTXOMap is the same
 	assert.Equal(t, ud1.BlockHash, ud2.BlockHash)
-	assert.Equal(t, ud1.BlockHeight, ud2.BlockHeight)
 	assert.Equal(t, ud1.Added.Length(), ud2.Added.Length())
 	assert.Equal(t, ud1.Removed.Length(), ud2.Removed.Length())
 }
@@ -83,7 +82,7 @@ func TestNewUTXODiffFromReaderWithProcessTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new UTXODiff
-	ud1 := NewUTXODiff(&hash, 22)
+	ud1 := NewUTXODiff(&hash)
 
 	ud1.ProcessTx(tx)
 
@@ -107,7 +106,6 @@ func TestNewUTXODiffFromReaderWithProcessTx(t *testing.T) {
 
 	// Check the UTXOMap is the same
 	assert.Equal(t, ud1.BlockHash, ud2.BlockHash)
-	assert.Equal(t, ud1.BlockHeight, ud2.BlockHeight)
 	assert.Equal(t, ud1.Added.Length(), ud2.Added.Length())
 	assert.Equal(t, ud1.Removed.Length(), ud2.Removed.Length())
 }

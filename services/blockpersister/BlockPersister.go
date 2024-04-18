@@ -179,7 +179,7 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 	}
 
 	// Create a new UTXO diff
-	utxoDiff := utxo_model.NewUTXODiff(block.Header.Hash(), block.Height)
+	utxoDiff := utxo_model.NewUTXODiff(block.Header.Hash())
 
 	// Add coinbase utxos to the utxo diff
 	utxoDiff.ProcessTx(block.CoinbaseTx)
@@ -222,7 +222,7 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 	// 1. Persist it to disk
 	folder, _ := gocore.Config().Get("utxoPersister_workingDir", os.TempDir())
 
-	filename = path.Join(folder, fmt.Sprintf("%s_%d.utxodiff", block.Header.Hash().String(), block.Height))
+	filename = path.Join(folder, fmt.Sprintf("%s.utxodiff", block.Header.Hash().String()))
 
 	if err := utxoDiff.Persist(filename); err != nil {
 		return fmt.Errorf("[BlockPersister] error persisting utxo diff: %w", err)
@@ -238,14 +238,14 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 	previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
 	if !found {
 		// Load the UTXOSet from disk
-		previousUTXOSet, err = utxo_model.LoadUTXOSet(folder, *block.Header.HashPrevBlock, 0) // TODO: fix height
+		previousUTXOSet, err = utxo_model.LoadUTXOSet(folder, *block.Header.HashPrevBlock)
 		if err != nil {
 			return fmt.Errorf("error loading UTXOSet %s: %w", *block.Header.HashPrevBlock, err)
 		}
 	}
 
 	// 1. Create a new UTXOSet for this block from the previous UTXOSet
-	utxoSet := utxo_model.NewUTXOSetFromPrevious(block.Header.Hash(), block.Height, previousUTXOSet)
+	utxoSet := utxo_model.NewUTXOSetFromPrevious(block.Header.Hash(), previousUTXOSet)
 
 	// 2. Remove all spent UTXOs
 	utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
@@ -259,7 +259,7 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 		return
 	})
 
-	filename = path.Join(folder, fmt.Sprintf("%s_%d.utxoset", block.Header.Hash().String(), block.Height))
+	filename = path.Join(folder, fmt.Sprintf("%s.utxoset", block.Header.Hash().String()))
 
 	if err := utxoSet.Persist(filename); err != nil {
 		return fmt.Errorf("[BlockPersister] error persisting utxo set: %w", err)

@@ -15,7 +15,7 @@ func TestNewUTXOSetFromReader(t *testing.T) {
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 
 	// Create a new UTXOMap
-	us1 := NewUTXOSet(&hash, 22)
+	us1 := NewUTXOSet(&hash)
 
 	b := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 
@@ -41,7 +41,6 @@ func TestNewUTXOSetFromReader(t *testing.T) {
 
 	// Check the UTXOMap is the same
 	assert.Equal(t, us1.BlockHash, us2.BlockHash)
-	assert.Equal(t, us1.BlockHeight, us2.BlockHeight)
 	assert.Equal(t, us1.Current.Length(), us2.Current.Length())
 
 	// Check the UTXOs are the same
