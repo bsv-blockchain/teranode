@@ -51,3 +51,4 @@ chainextract.log
 
 current
 
+deploy/dev/grafana/grafana.db/
