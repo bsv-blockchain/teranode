@@ -195,7 +195,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				// wait for the reset to complete before getting a new mining candidate
 				// 2 blocks && at least 20 minutes
 				if b.resetWaitCount.Load() > 0 || int32(time.Now().Unix()) <= b.resetWaitTime.Load() {
-					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d", b.resetWaitCount.Load())
+					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitTime.Load()), 0).String())
 					responseCh <- &miningCandidateResponse{
 						err: fmt.Errorf("waiting for reset to complete"),
 					}
