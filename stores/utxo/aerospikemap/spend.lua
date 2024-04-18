@@ -6,18 +6,18 @@
 -- ttl number - the time-to-live for the UTXO
 function spend(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
     if not aerospike:exists(rec) then
-        return "TX not found"
+        return "ERROR:TX not found"
     end
 
     -- Get the utxo value from the utxos map
     local utxos = rec['utxos']
     if utxos == nil then
-        return "UTXOs map not found"
+        return "ERROR:UTXOs map not found"
     end
 
     existingSpendingTxID = utxos[utxoHash]
     if existingSpendingTxID == nil then
-        return "UTXO not found"
+        return "ERROR:UTXO not found"
     end
 
     lockTime = rec['locktime']
@@ -53,6 +53,10 @@ function spend(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime,
     if rec['spentUtxos'] == rec['nrUtxos'] then
         rec['lastSpend'] = currentUnixTime
         record.set_ttl(rec, ttl)
+    else
+        -- why is this needed? the record should already have a non expiring ttl
+        -- tests showed the ttl being set to some default value
+        record.set_ttl(rec, -1)
     end
 
     aerospike:update(rec)

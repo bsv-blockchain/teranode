@@ -99,6 +99,7 @@ func TestAerospike(t *testing.T) {
 	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
 	gocore.Config().Set("txmeta_store_getBatcherEnabled", "false")
 	gocore.Config().Set("utxostore_lastSpendBatcherEnabled", "false")
+	gocore.Config().Set("utxostore_useSpendLuaScript", "false")
 	internalTest(t)
 }
 
@@ -107,6 +108,16 @@ func TestAerospikeBatching(t *testing.T) {
 	gocore.Config().Set("utxostore_lastSpendBatcherEnabled", "true")
 	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "true")
 	gocore.Config().Set("txmeta_store_getBatcherEnabled", "true")
+	gocore.Config().Set("utxostore_useSpendLuaScript", "false")
+	internalTest(t)
+}
+
+func TestAerospikeBatchingLua(t *testing.T) {
+	gocore.Config().Set("utxostore_spendBatcherEnabled", "true")
+	gocore.Config().Set("utxostore_lastSpendBatcherEnabled", "true")
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "true")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "true")
+	gocore.Config().Set("utxostore_useSpendLuaScript", "true")
 	internalTest(t)
 }
 
@@ -234,7 +245,7 @@ func internalTest(t *testing.T) {
 		require.True(t, ok)
 		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
 		require.True(t, ok)
-		require.Equal(t, hash[:], utxoSpendTxID)
+		require.Equal(t, hash.String(), utxoSpendTxID)
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends2)
@@ -249,6 +260,10 @@ func internalTest(t *testing.T) {
 	})
 
 	t.Run("aerospike spend lua", func(t *testing.T) {
+		if !gocore.Config().GetBool("utxostore_useSpendLuaScript") {
+			t.Skip("lua script not enabled")
+		}
+
 		cleanDB(t, client, tx)
 		txMeta, err = txMetaStore.Create(context.Background(), tx)
 		assert.NotNil(t, txMeta)
@@ -259,7 +274,7 @@ func internalTest(t *testing.T) {
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
 		ret, aErr := client.Execute(wPolicy, key, luaSpendFunction, "spend",
 			aero.NewValue(spends[0].Hash.String()),
-			aero.NewValue(spends[0].SpendingTxID.CloneBytes()),
+			aero.NewValue(spends[0].SpendingTxID.String()),
 			aero.NewValue(100),
 			aero.NewValue(time.Now().Unix()),
 			aero.NewValue(32), // ttl
@@ -267,8 +282,8 @@ func internalTest(t *testing.T) {
 		require.NoError(t, aErr)
 		assert.Equal(t, "OK", ret)
 
-		//err = db.Spend(context.Background(), spends)
-		//require.NoError(t, err)
+		err = db.Spend(context.Background(), spends)
+		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
@@ -276,7 +291,7 @@ func internalTest(t *testing.T) {
 		require.True(t, ok)
 		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
 		require.True(t, ok)
-		require.Equal(t, hash[:], utxoSpendTxID)
+		require.Equal(t, hash.String(), utxoSpendTxID)
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends2)
@@ -291,6 +306,10 @@ func internalTest(t *testing.T) {
 	})
 
 	t.Run("aerospike spend all lua", func(t *testing.T) {
+		if !gocore.Config().GetBool("utxostore_useSpendLuaScript") {
+			t.Skip("lua script not enabled")
+		}
+
 		cleanDB(t, client, tx)
 		txMeta, err = txMetaStore.Create(context.Background(), tx)
 		assert.NotNil(t, txMeta)
@@ -301,7 +320,7 @@ func internalTest(t *testing.T) {
 		for _, s := range spendsAll {
 			ret, aErr := client.Execute(wPolicy, key, luaSpendFunction, "spend",
 				aero.NewValue(s.Hash.String()),
-				aero.NewValue(s.SpendingTxID.CloneBytes()),
+				aero.NewValue(s.SpendingTxID.String()),
 				aero.NewValue(100),
 				aero.NewValue(time.Now().Unix()),
 				aero.NewValue(32), // ttl
@@ -316,7 +335,32 @@ func internalTest(t *testing.T) {
 		require.True(t, ok)
 		utxoSpendTxID, ok := utxoMap[spendsAll[0].Hash.String()]
 		require.True(t, ok)
-		require.Equal(t, hash2[:], utxoSpendTxID)
+		require.Equal(t, hash2.String(), utxoSpendTxID)
+	})
+
+	t.Run("aerospike lua errors", func(t *testing.T) {
+		if !gocore.Config().GetBool("utxostore_useSpendLuaScript") {
+			t.Skip("lua script not enabled")
+		}
+
+		cleanDB(t, client, tx)
+		txMeta, err = txMetaStore.Create(context.Background(), tx)
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+
+		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
+		fakeKey, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, []byte{})
+		ret, aErr := client.Execute(wPolicy, fakeKey, luaSpendFunction, "spend",
+			aero.NewValue(spends[0].Hash.String()),
+			aero.NewValue(spends[0].SpendingTxID.String()),
+			aero.NewValue(100),
+			aero.NewValue(time.Now().Unix()),
+			aero.NewValue(32), // ttl
+		)
+		require.NoError(t, aErr)
+		assert.Equal(t, "ERROR:TX not found", ret)
 	})
 
 	t.Run("aerospike spend all and expire", func(t *testing.T) {
@@ -335,7 +379,7 @@ func internalTest(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			utxoSpendTxID, ok := utxoMap[spendsAll[i].Hash.String()]
 			require.True(t, ok)
-			require.Equal(t, hash2[:], utxoSpendTxID)
+			require.Equal(t, hash2.String(), utxoSpendTxID)
 		}
 
 		// try to spend with different txid
@@ -360,7 +404,7 @@ func internalTest(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			utxoSpendTxID, ok := utxoMap[spendsAll[i].Hash.String()]
 			require.True(t, ok)
-			require.Equal(t, hash2[:], utxoSpendTxID)
+			require.Equal(t, hash2.String(), utxoSpendTxID)
 		}
 
 		// try to spend with different txid
@@ -400,7 +444,7 @@ func internalTest(t *testing.T) {
 		require.True(t, ok)
 		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
 		require.True(t, ok)
-		require.Equal(t, hash[:], utxoSpendTxID)
+		require.Equal(t, hash.String(), utxoSpendTxID)
 
 		// try to reset the utxo
 		err = db.UnSpend(context.Background(), []*utxostore.Spend{{
@@ -459,7 +503,7 @@ func internalTest(t *testing.T) {
 		require.True(t, ok)
 		utxoSpendTxID, ok = utxoMap[spends[0].Hash.String()]
 		require.True(t, ok)
-		require.Equal(t, hash[:], utxoSpendTxID)
+		require.Equal(t, hash.String(), utxoSpendTxID)
 	})
 
 	t.Run("aerospike unix time locktime", func(t *testing.T) {
@@ -503,7 +547,7 @@ func internalTest(t *testing.T) {
 		require.True(t, ok)
 		utxoSpendTxID, ok = utxoMap[spends[0].Hash.String()]
 		require.True(t, ok)
-		require.Equal(t, hash[:], utxoSpendTxID)
+		require.Equal(t, hash.String(), utxoSpendTxID)
 	})
 }
 
