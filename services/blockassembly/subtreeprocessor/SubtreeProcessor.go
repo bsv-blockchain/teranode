@@ -83,6 +83,7 @@ type SubtreeProcessor struct {
 	txMetaStore               txmeta.Store
 	logger                    ulogger.Logger
 	stat                      *gocore.Stat
+	currentRunningState       atomic.Value
 }
 
 var (
@@ -140,18 +141,22 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		txMetaStore:               txMetaStore,
 		logger:                    logger,
 		stat:                      gocore.NewStat("subtreeProcessor").NewStat("Add", false),
+		currentRunningState:       atomic.Value{},
 	}
+	stp.currentRunningState.Store("starting")
 
 	for _, opts := range options {
 		opts(stp)
 	}
 
+	stp.currentRunningState.Store("running")
 	go func() {
 		var txReq *txIDAndFee
 		var err error
 		for {
 			select {
 			case getSubtreesChan := <-stp.getSubtreesChan:
+				stp.currentRunningState.Store("getSubtrees")
 				logger.Infof("[SubtreeProcessor] get current subtrees")
 				chainedCount := stp.chainedSubtreeCount.Load()
 				completeSubtrees := make([]*util.Subtree, 0, chainedCount)
@@ -187,14 +192,18 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 
 				getSubtreesChan <- completeSubtrees
 				logger.Infof("[SubtreeProcessor] get current subtrees DONE")
+				stp.currentRunningState.Store("running")
 
 			case reorgReq := <-stp.reorgBlockChan:
+				stp.currentRunningState.Store("reorg")
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor: %d, %d", len(reorgReq.moveDownBlocks), len(reorgReq.moveUpBlocks))
 				err = stp.reorgBlocks(ctx, reorgReq.moveDownBlocks, reorgReq.moveUpBlocks)
 				reorgReq.errChan <- err
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor DONE: %d, %d", len(reorgReq.moveDownBlocks), len(reorgReq.moveUpBlocks))
+				stp.currentRunningState.Store("running")
 
 			case moveUpReq := <-stp.moveUpBlockChan:
+				stp.currentRunningState.Store("moveUpBlock")
 				logger.Infof("[SubtreeProcessor][%s] moveUpBlock subtree processor", moveUpReq.block.String())
 				err = stp.moveUpBlock(ctx, moveUpReq.block, false)
 				if err == nil {
@@ -202,14 +211,20 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 				}
 				moveUpReq.errChan <- err
 				logger.Infof("[SubtreeProcessor][%s] moveUpBlock subtree processor DONE", moveUpReq.block.String())
+				stp.currentRunningState.Store("running")
 
 			case <-stp.deDuplicateTransactionsCh:
+				stp.currentRunningState.Store("deDuplicateTransactions")
 				stp.deDuplicateTransactions()
+				stp.currentRunningState.Store("running")
 
 			case resetBlocks := <-stp.resetCh:
+				stp.currentRunningState.Store("resetBlocks")
 				stp.reset(resetBlocks.blockHeader, resetBlocks.moveDownBlocks, resetBlocks.moveUpBlocks, resetBlocks.responseCh)
+				stp.currentRunningState.Store("running")
 
 			default:
+				stp.currentRunningState.Store("dequeue")
 				nrProcessed := 0
 				mapLength := stp.removeMap.Length()
 				// set the validFromMillis to the current time minus the double spend window - so in the past
@@ -242,11 +257,16 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 						break
 					}
 				}
+				stp.currentRunningState.Store("running")
 			}
 		}
 	}()
 
 	return stp
+}
+
+func (stp *SubtreeProcessor) GetCurrentRunningState() string {
+	return stp.currentRunningState.Load().(string)
 }
 
 // Reset resets the subtree processor, removing all subtrees and transactions

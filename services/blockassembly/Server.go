@@ -829,3 +829,15 @@ func (ba *BlockAssembly) ResetBlockAssembly(_ context.Context, _ *blockassembly_
 	ba.blockAssembler.Reset()
 	return &blockassembly_api.EmptyMessage{}, nil
 }
+
+func (ba *BlockAssembly) GetBlockAssemblyState(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.StateMessage, error) {
+	return &blockassembly_api.StateMessage{
+		BlockAssemblyState:    ba.blockAssembler.GetCurrentRunningState(),
+		SubtreeProcessorState: ba.blockAssembler.subtreeProcessor.GetCurrentRunningState(),
+		ResetWaitCount:        uint32(ba.blockAssembler.resetWaitCount.Load()),
+		ResetWaitTime:         uint32(ba.blockAssembler.resetWaitTime.Load()),
+		SubtreeCount:          uint32(ba.blockAssembler.SubtreeCount()),
+		TxCount:               ba.blockAssembler.TxCount(),
+		QueueCount:            ba.blockAssembler.QueueLength(),
+	}, nil
+}
