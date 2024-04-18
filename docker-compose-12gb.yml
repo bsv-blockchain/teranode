@@ -264,7 +264,7 @@ services:
     networks:
       - ubsv-network
     volumes:
-      - ./prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
   prometheus-2:
     container_name: prometheus-2
@@ -275,7 +275,7 @@ services:
     networks:
       - ubsv-network
     volumes:
-      - ./prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
 
   prometheus-3:
     container_name: prometheus-3
@@ -286,7 +286,7 @@ services:
     networks:
       - ubsv-network
     volumes:
-      - ./prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
 
   grafana:
     container_name: grafana
