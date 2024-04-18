@@ -348,23 +348,21 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 
 							utxoMap, ok := record.Bins["utxos"].(map[interface{}]interface{})
 							if ok {
-								valueBytes, ok := utxoMap[spend.Hash.String()].(string)
+								valueStr, ok := utxoMap[spend.Hash.String()].(string)
 								if ok {
-									if len(valueBytes) == 32 {
-										spendingTxHash, err := chainhash.NewHashFromStr(valueBytes)
-										if err != nil {
-											batch[idx].done <- fmt.Errorf("[SPEND_BATCH][%s] could not parse spending tx hash: %w", spend.Hash.String(), err)
-											continue
-										}
-										if spendingTxHash.Equal(*spend.SpendingTxID) {
-											s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", spend.Hash.String(), batchId, spendingTxHash.String())
-											batch[idx].done <- nil
-										} else {
-											// spent by another transaction
-											batch[idx].done <- utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxHash)
-										}
+									spendingTxHash, err := chainhash.NewHashFromStr(valueStr)
+									if err != nil {
+										batch[idx].done <- fmt.Errorf("[SPEND_BATCH][%s] could not parse spending tx hash: %w", spend.Hash.String(), err)
 										continue
 									}
+									if spendingTxHash.Equal(*spend.SpendingTxID) {
+										s.logger.Warnf("[SPEND_BATCH][%s] spend already exists in batch %d for tx %s, skipping", spend.Hash.String(), batchId, spendingTxHash.String())
+										batch[idx].done <- nil
+									} else {
+										// spent by another transaction
+										batch[idx].done <- utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxHash)
+									}
+									continue
 								}
 							}
 						}
@@ -480,15 +478,15 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						batch[idx].done <- nil
 					case "SPENT":
 						// spent by another transaction
-						spendingTxID, err := chainhash.NewHashFromStr(responseMsgParts[1])
-						if err != nil {
-							batch[idx].done <- fmt.Errorf("[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.Hash.String(), err)
+						spendingTxID, hashErr := chainhash.NewHashFromStr(responseMsgParts[1])
+						if hashErr != nil {
+							batch[idx].done <- fmt.Errorf("[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.Hash.String(), hashErr)
 						}
 						batch[idx].done <- utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxID)
 					case "LOCKED":
-						locktime, err := strconv.ParseUint(responseMsgParts[1], 10, 32)
-						if err != nil {
-							batch[idx].done <- fmt.Errorf("[SPEND_BATCH_LUA][%s] could not parse locktime: %w", spend.Hash.String(), err)
+						locktime, hashErr := strconv.ParseUint(responseMsgParts[1], 10, 32)
+						if hashErr != nil {
+							batch[idx].done <- fmt.Errorf("[SPEND_BATCH_LUA][%s] could not parse locktime: %w", spend.Hash.String(), hashErr)
 						}
 						batch[idx].done <- utxostore.NewErrLockTime(uint32(locktime), s.blockHeight.Load())
 					case "ERROR":
@@ -837,15 +835,18 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxostore.Spend)
 			utxosValue, ok := value.Bins["utxos"].(map[interface{}]interface{})
 			if ok {
 				// get utxo from map
-				valueBytes, ok := utxosValue[spend.Hash.String()].([]byte)
+				valueStr, ok := utxosValue[spend.Hash.String()].(string)
 				if ok {
-					valueHash := chainhash.Hash(valueBytes)
-					if spend.TxID.Equal(valueHash) {
+					valueHash, err := chainhash.NewHashFromStr(valueStr)
+					if err != nil {
+						return utxostore.ErrChainHash
+					}
+					if spend.TxID.Equal(*valueHash) {
 						prometheusUtxoMapReSpend.Inc()
 						return nil
 					} else {
 						prometheusUtxoMapSpendSpent.Inc()
-						spendingTxHash, err := chainhash.NewHash(valueBytes)
+						spendingTxHash, err := chainhash.NewHashFromStr(valueStr)
 						if err != nil {
 							return utxostore.ErrChainHash
 						}

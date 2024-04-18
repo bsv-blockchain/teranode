@@ -30,27 +30,6 @@ var (
 	coinbaseKey *aero.Key
 )
 
-func TestGetRecord(t *testing.T) {
-	hash, err := chainhash.NewHashFromStr("f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16")
-	require.NoError(t, err)
-
-	client, err := aero.NewClient("localhost", 3000)
-	require.NoError(t, err)
-
-	key, err := aero.NewKey("test", "utxo", hash.CloneBytes())
-	require.NoError(t, err)
-
-	record, err := client.Get(nil, key)
-	require.NoError(t, err)
-
-	t.Logf("tx: %x", record.Bins["tx"])
-	t.Logf("fee: %d", record.Bins["fee"])
-	t.Logf("sizeInBytes: %d", record.Bins["sizeInBytes"])
-	t.Logf("parentTxHashes: %x", record.Bins["parentTxHashes"])
-	t.Logf("blockIDs: %v", record.Bins["blockIDs"])
-	t.Logf("isCoinbase: %t", record.Bins["isCoinbase"])
-}
-
 func TestAerospike(t *testing.T) {
 	gocore.Config().Set("utxostore_spendBatcherEnabled", "false")
 	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
