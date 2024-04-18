@@ -15,8 +15,8 @@ type UTXOKey struct {
 }
 
 // NewUTXOKey creates a new Outpoint.
-func NewUTXOKey(txID chainhash.Hash, index uint32) *UTXOKey {
-	return &UTXOKey{
+func NewUTXOKey(txID chainhash.Hash, index uint32) UTXOKey {
+	return UTXOKey{
 		TxID:  txID,
 		Index: index,
 	}
@@ -93,9 +93,9 @@ func (k *UTXOKey) Write(w io.Writer) error {
 // String returns a string representation of the Outpoint, formatted as "txid:index". In this case,
 // the txid is the big-endian representation of the transaction ID in hex format (64 characters).
 func (k *UTXOKey) String() string {
-	return fmt.Sprintf("%v:%d", k.TxID, k.Index)
+	return fmt.Sprintf("%v:%8d", k.TxID, k.Index)
 }
 
-func (k *UTXOKey) Equal(other *UTXOKey) bool {
+func (k *UTXOKey) Equal(other UTXOKey) bool {
 	return k.TxID.IsEqual(&other.TxID) && k.Index == other.Index
 }

@@ -151,5 +151,5 @@ func (u *UTXOValue) Equal(other *UTXOValue) bool {
 }
 
 func (u *UTXOValue) String() string {
-	return fmt.Sprintf("%v / %v - %x", u.Value, u.Locktime, u.Script)
+	return fmt.Sprintf("%10d / %8d - %x", u.Value, u.Locktime, u.Script)
 }

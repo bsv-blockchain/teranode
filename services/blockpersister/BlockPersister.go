@@ -27,6 +27,7 @@ import (
 type blockPersisterUpload struct {
 	blockHeader *model.BlockHeader
 	filename    string
+	extension   string
 }
 
 type blockPersister struct {
@@ -105,6 +106,7 @@ func newBlockPersister(ctx context.Context, logger ulogger.Logger, storeUrl *url
 					hash.CloneBytes(),
 					bufferedReader,
 					options.WithSubDirectory("blocks"),
+					options.WithFileExtension(upload.extension),
 				); err != nil {
 					bp.logger.Errorf("[BlockPersister] error writing file to store, retrying: %v", err)
 					bp.uploadCh <- upload
@@ -209,68 +211,67 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 		bp.uploadCh <- blockPersisterUpload{
 			blockHeader: block.Header,
 			filename:    filename,
+			extension:   "block",
 		}
 	}
 
 	bp.logger.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
 
+	// At this point, we have a complete UTXODiff for this block.
+
+	// 1. Persist it to disk
 	folder, _ := gocore.Config().Get("utxoPersister_workingDir", os.TempDir())
 
-	if err := utxoDiff.Persist(folder); err != nil {
+	filename = path.Join(folder, fmt.Sprintf("%s_%d.utxodiff", block.Header.Hash().String(), block.Height))
+
+	if err := utxoDiff.Persist(filename); err != nil {
 		return fmt.Errorf("[BlockPersister] error persisting utxo diff: %w", err)
 	}
 
-	// fmt.Println("UTXODiff block hash:", utxoDiff.BlockHash)
-	// fmt.Println("UTXODiff block height:", utxoDiff.BlockHeight)
+	bp.uploadCh <- blockPersisterUpload{
+		blockHeader: block.Header,
+		filename:    filename,
+		extension:   "utxodiff",
+	}
 
-	// fmt.Println("UTXODiff removed UTXOs:")
-	// utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-	// 	fmt.Printf("%v %v\n", &uk, uv)
-	// 	return
-	// })
+	// 2. Now we need to apply this UTXODiff to the UTXOSet for the previous block
+	previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
+	if !found {
+		// Load the UTXOSet from disk
+		previousUTXOSet, err = utxo_model.LoadUTXOSet(folder, *block.Header.HashPrevBlock, 0) // TODO: fix height
+		if err != nil {
+			return fmt.Errorf("error loading UTXOSet %s: %w", *block.Header.HashPrevBlock, err)
+		}
+	}
 
-	// fmt.Println("UTXODiff added UTXOs:")
-	// var i int
-	// utxoDiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-	// 	fmt.Printf("%d: %v %v\n", i, &uk, uv)
-	// 	i++
-	// 	return
-	// })
+	// 1. Create a new UTXOSet for this block from the previous UTXOSet
+	utxoSet := utxo_model.NewUTXOSetFromPrevious(block.Header.Hash(), block.Height, previousUTXOSet)
 
-	// f, err = os.Open(fmt.Sprintf("data/blockpersister/%s_%d.utxodiff", utxoDiff.BlockHash.String(), utxoDiff.BlockHeight))
-	// if err != nil {
-	// 	return fmt.Errorf("error opening file: %w", err)
-	// }
-	// defer f.Close()
+	// 2. Remove all spent UTXOs
+	utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+		utxoSet.Delete(uk)
+		return
+	})
 
-	// r := bufio.NewReader(f)
+	// 3. Add all new UTXOs
+	utxoDiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+		utxoSet.Add(uk, uv)
+		return
+	})
 
-	// utxodiff, err := utxo_model.NewUTXODiffFromReader(r)
-	// if err != nil {
-	// 	return fmt.Errorf("error reading utxodiff: %w", err)
-	// }
+	filename = path.Join(folder, fmt.Sprintf("%s_%d.utxoset", block.Header.Hash().String(), block.Height))
 
-	// fmt.Println("UTXODiff block hash:", utxodiff.BlockHash)
-	// fmt.Println("UTXODiff block height:", utxodiff.BlockHeight)
+	if err := utxoSet.Persist(filename); err != nil {
+		return fmt.Errorf("[BlockPersister] error persisting utxo set: %w", err)
+	}
 
-	// fmt.Println("UTXODiff removed UTXOs:")
-	// utxodiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-	// 	fmt.Printf("%v %v\n", &uk, uv)
-	// 	return
-	// })
+	bp.uploadCh <- blockPersisterUpload{
+		blockHeader: block.Header,
+		filename:    filename,
+		extension:   "utxoset",
+	}
 
-	// fmt.Println("UTXODiff added UTXOs:")
-	// var j int
-	// utxodiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-	// 	fmt.Printf("%d: %v %v\n", j, &uk, uv)
-	// 	j++
-	// 	return
-	// })
-
-	// TODO: Persist the UTXO set with the current block hash
-	// Load the UTXO set for block.header.previousHash
-	// Apply all the diffs to the UTXO set
-	// Persist the UTXO set with the current block hash
+	utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)
 
 	return nil
 }

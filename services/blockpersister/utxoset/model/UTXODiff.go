@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -35,16 +34,16 @@ func (us *UTXODiff) Add(txID chainhash.Hash, index uint32, value uint64, locktim
 	uk := NewUTXOKey(txID, index)
 	uv := NewUTXOValue(value, locktime, script)
 
-	us.Added.Put(*uk, uv)
+	us.Added.Put(uk, uv)
 }
 
 func (us *UTXODiff) Delete(txID chainhash.Hash, index uint32) {
 	uk := NewUTXOKey(txID, index)
 
-	if us.Added.Exists(*uk) {
-		us.Added.Delete(*uk)
+	if us.Added.Exists(uk) {
+		us.Added.Delete(uk)
 	} else {
-		us.Removed.Put(*uk, nil)
+		us.Removed.Put(uk, nil)
 	}
 }
 
@@ -89,13 +88,13 @@ func NewUTXODiffFromReader(r io.Reader) (*UTXODiff, error) {
 	return us, nil
 }
 
-func (us *UTXODiff) Persist(folder string) error {
+func (us *UTXODiff) Persist(filename string) error {
 	var err error
+	var f *os.File
 
-	filename := path.Join(folder, fmt.Sprintf("%s_%d.utxodiff", us.BlockHash.String(), us.BlockHeight))
 	tmpFilename := filename + ".tmp"
 
-	f, err := os.Create(tmpFilename)
+	f, err = os.Create(tmpFilename)
 	if err != nil {
 		return fmt.Errorf("error creating file: %w", err)
 	}
