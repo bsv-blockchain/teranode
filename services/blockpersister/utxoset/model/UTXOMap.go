@@ -55,7 +55,7 @@ func (um *UTXOMap) Write(w io.Writer) error {
 
 	// Write each UTXO
 	um.Iter(func(key UTXOKey, val *UTXOValue) (stop bool) {
-		if err = key.Write(w, count); err != nil {
+		if err = key.Write(w); err != nil {
 			stop = true
 			return
 		}
