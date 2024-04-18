@@ -296,7 +296,10 @@ services:
     networks:
       - ubsv-network
     volumes:
-      - ./grafana:/var/lib/grafana
+      - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
     depends_on:
       - prometheus-1
       - prometheus-2
