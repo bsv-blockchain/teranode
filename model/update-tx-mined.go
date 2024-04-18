@@ -106,7 +106,7 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 }
 
 func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore txMinedStatus, block *Block, blockID uint32) error {
-
+	timeStart := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "UpdateTxMinedStatus")
 	defer func() {
 		span.Finish()
@@ -188,7 +188,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 		return fmt.Errorf("[UpdateTxMinedStatus][%s] error updating tx mined status: %w", block.Hash().String(), err)
 	}
 
-	logger.Infof("[UpdateTxMinedStatus][%s] blockID %d DONE", block.Hash().String(), blockID)
+	logger.Infof("[UpdateTxMinedStatus][%s] blockID %d DONE in %s", block.Hash().String(), blockID, time.Since(timeStart).String())
 
 	return nil
 }
