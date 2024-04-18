@@ -231,12 +231,53 @@ services:
   #     - ./settings_local.conf:/app/settings_local.conf
   #     - ./data/txblaster2:/app/data
   #     # - ./data/txblaster.log:/app/data/txblaster.log
-  prometheus:
+
+  prometheus-1:
+    container_name: prometheus-1
     image: prom/prometheus:v2.44.0
+    mem_limit: 64m
     ports:
-      - "9090:9090"
+      - "19090:9090"
     networks:
       - ubsv-network
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-# Add more ubsv nodes as needed
+      - ./prometheus/prometheus-1.yml:/etc/prometheus/prometheus-1.yml
+
+  prometheus-2:
+    container_name: prometheus-2
+    image: prom/prometheus:v2.44.0
+    mem_limit: 64m
+    ports:
+      - "29090:9090"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./prometheus/prometheus-2.yml:/etc/prometheus/prometheus-2.yml
+
+  prometheus-3:
+    container_name: prometheus-3
+    image: prom/prometheus:v2.44.0
+    mem_limit: 64m
+    ports:
+      - "39090:9090"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./prometheus/prometheus-3.yml:/etc/prometheus/prometheus-3.yml
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
+    depends_on:
+      - prometheus-1
+      - prometheus-2
+      - prometheus-3
