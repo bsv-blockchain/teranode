@@ -33,7 +33,7 @@ type splitMap[K comparableAndHashable, V any] struct {
 	nrOfBuckets uint16
 }
 
-func newSplitSwissMap[K comparableAndHashable, V any](length int) genericMap[K, V] {
+func NewSplitSwissMap[K comparableAndHashable, V any](length int) genericMap[K, V] {
 	ssm := &splitMap[K, V]{
 		m:           make(map[uint16]genericMap[K, V], 1024),
 		nrOfBuckets: 1024,
@@ -48,14 +48,14 @@ func newSplitSwissMap[K comparableAndHashable, V any](length int) genericMap[K, 
 	return ssm
 }
 
-func newSplitGoMap[K comparableAndHashable, V any](length int) genericMap[K, V] {
+func NewSplitGoMap[K comparableAndHashable, V any](length int) genericMap[K, V] {
 	ssm := &splitMap[K, V]{
 		m:           make(map[uint16]genericMap[K, V], 1024),
 		nrOfBuckets: 1024,
 	}
 
 	for i := uint16(0); i <= uint16(ssm.nrOfBuckets); i++ {
-		ssm.m[i] = newGoMap[K, V]()
+		ssm.m[i] = NewGoMap[K, V]()
 	}
 
 	return ssm
@@ -156,7 +156,7 @@ type goMap[K comparable, V any] struct {
 	m  map[K]V
 }
 
-func newGoMap[K comparable, V any]() genericMap[K, V] {
+func NewGoMap[K comparable, V any]() genericMap[K, V] {
 	return &goMap[K, V]{
 		m: make(map[K]V),
 	}

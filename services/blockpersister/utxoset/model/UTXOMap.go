@@ -14,7 +14,7 @@ type UTXOMap struct {
 
 func newUTXOMap() UTXOMap {
 	return UTXOMap{
-		newSplitSwissMap[UTXOKey, *UTXOValue](1024),
+		NewSplitSwissMap[UTXOKey, *UTXOValue](1024),
 	}
 }
 
