@@ -195,7 +195,7 @@ func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
 		expiration:  expiration,
 	}
 
-	useSpendLuaScript := gocore.Config().GetBool("utxostore_useSpendLuaScript", true)
+	useSpendLuaScript := gocore.Config().GetBool("utxostore_useSpendLuaScript", false)
 	if useSpendLuaScript {
 		udfs, err := client.ListUDF(nil)
 		if err != nil {
