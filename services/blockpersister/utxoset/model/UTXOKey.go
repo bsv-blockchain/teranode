@@ -60,7 +60,7 @@ func (k *UTXOKey) Bytes() []byte {
 func NewUTXOKeyFromReader(r io.Reader) (*UTXOKey, error) {
 	o := new(UTXOKey)
 
-	if _, err := r.Read(o.TxID[:]); err != nil {
+	if _, err := io.ReadFull(r, o.TxID[:]); err != nil {
 		return nil, fmt.Errorf("error reading txid: %w", err)
 	}
 
@@ -72,8 +72,15 @@ func NewUTXOKeyFromReader(r io.Reader) (*UTXOKey, error) {
 }
 
 func (k *UTXOKey) Write(w io.Writer) error {
-	if _, err := w.Write(k.TxID[:]); err != nil {
+	var n int
+	var err error
+
+	if n, err = w.Write(k.TxID[:]); err != nil {
 		return fmt.Errorf("error writing txid: %w", err)
+	}
+
+	if n != 32 {
+		return fmt.Errorf("invalid txid length: %d", n)
 	}
 
 	if err := binary.Write(w, binary.LittleEndian, k.Index); err != nil {

@@ -61,23 +61,23 @@ func TestNewUTXODiffFromReader(t *testing.T) {
 func TestNewUTXODiffFromReaderWithProcessTx(t *testing.T) {
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 
+	var err error
+
 	tx := bt.NewTx()
 
-	err := tx.From(hash.String(), 42, "0011", 1024)
-	require.NoError(t, err)
-	err = tx.From(hash.String(), 43, "0011", 1024)
-	require.NoError(t, err)
-	err = tx.From(hash.String(), 44, "0011", 1024)
-	require.NoError(t, err)
+	numberOfInputs := 0
 
-	err = tx.PayToAddress("1MM6xtKRdUAHQ4hZkqwVGf8wnDuYu1dHPA", 100)
-	require.NoError(t, err)
-	err = tx.PayToAddress("1MM6xtKRdUAHQ4hZkqwVGf8wnDuYu1dHPA", 100)
-	require.NoError(t, err)
-	err = tx.PayToAddress("1MM6xtKRdUAHQ4hZkqwVGf8wnDuYu1dHPA", 100)
-	require.NoError(t, err)
-	err = tx.PayToAddress("1MM6xtKRdUAHQ4hZkqwVGf8wnDuYu1dHPA", 100)
-	require.NoError(t, err)
+	for i := 0; i < numberOfInputs; i++ {
+		err := tx.From(hash.String(), uint32(i), "0011", 1024)
+		require.NoError(t, err)
+	}
+
+	numberOfOutputs := 60
+
+	for i := 0; i < numberOfOutputs; i++ {
+		err = tx.PayToAddress("1MM6xtKRdUAHQ4hZkqwVGf8wnDuYu1dHPA", 100)
+		require.NoError(t, err)
+	}
 
 	err = tx.AddOpReturnOutput([]byte("hello world"))
 	require.NoError(t, err)
@@ -87,8 +87,8 @@ func TestNewUTXODiffFromReaderWithProcessTx(t *testing.T) {
 
 	ud1.ProcessTx(tx)
 
-	assert.Equal(t, 4, ud1.Added.Length())
-	assert.Equal(t, 3, ud1.Removed.Length())
+	assert.Equal(t, numberOfInputs, ud1.Removed.Length())
+	assert.Equal(t, numberOfOutputs, ud1.Added.Length())
 
 	buf := new(bytes.Buffer)
 	w := bufio.NewWriter(buf)

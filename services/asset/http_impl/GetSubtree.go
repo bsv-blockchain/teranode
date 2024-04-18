@@ -116,18 +116,18 @@ type SubtreeNodesReader struct {
 
 func NewSubtreeNodesReader(subtreeReader io.Reader) (*SubtreeNodesReader, error) {
 	// Read the root hash and skip
-	if _, err := subtreeReader.Read(make([]byte, 32)); err != nil {
+	if _, err := io.ReadFull(subtreeReader, make([]byte, 32)); err != nil {
 		return nil, err
 	}
 
 	b := make([]byte, 8)
-	if _, err := subtreeReader.Read(b); err != nil { // fee
+	if _, err := io.ReadFull(subtreeReader, b); err != nil { // fee
 		return nil, err
 	}
-	if _, err := subtreeReader.Read(b); err != nil { // sizeInBytes
+	if _, err := io.ReadFull(subtreeReader, b); err != nil { // sizeInBytes
 		return nil, err
 	}
-	if _, err := subtreeReader.Read(b); err != nil { // numberOfLeaves
+	if _, err := io.ReadFull(subtreeReader, b); err != nil { // numberOfLeaves
 		return nil, err
 	}
 	itemCount := binary.LittleEndian.Uint64(b)

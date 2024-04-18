@@ -33,7 +33,7 @@ func (um *UTXOMap) Read(r io.Reader) error {
 
 		val, err := NewUTXOValueFromReader(r)
 		if err != nil {
-			return fmt.Errorf("Error reading record value %d: %w", i, err)
+			return fmt.Errorf("Error reading a value record %d: : %w", i, err)
 		}
 
 		um.Put(*key, val)
@@ -55,7 +55,7 @@ func (um *UTXOMap) Write(w io.Writer) error {
 
 	// Write each UTXO
 	um.Iter(func(key UTXOKey, val *UTXOValue) (stop bool) {
-		if err = key.Write(w); err != nil {
+		if err = key.Write(w, count); err != nil {
 			stop = true
 			return
 		}

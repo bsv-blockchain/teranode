@@ -26,13 +26,13 @@ func TestSubtreeReader(t *testing.T) {
 
 	buf := make([]byte, 32)
 
-	n, err := r.Read(buf)
+	n, err := io.ReadFull(r, buf)
 	require.NoError(t, err)
 	assert.Equal(t, 32, n)
 	assert.Equal(t, "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", hex.EncodeToString(buf))
 
 	for i := 1; i < r.itemCount; i++ {
-		n, err := r.Read(buf)
+		n, err := io.ReadFull(r, buf)
 		require.NoError(t, err)
 		assert.Equal(t, 32, n)
 		// t.Logf("Read %s", hex.EncodeToString(buf))
@@ -43,7 +43,7 @@ func TestSubtreeReader(t *testing.T) {
 
 	assert.Equal(t, 161, r.itemsRead)
 
-	n, err = r.Read(buf)
+	n, err = io.ReadFull(r, buf)
 	assert.ErrorIs(t, err, io.EOF)
 	assert.Equal(t, 0, n)
 }

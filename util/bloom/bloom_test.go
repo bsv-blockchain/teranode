@@ -6,11 +6,13 @@ import (
 	"bufio"
 	"crypto/rand"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/util"
+	"io"
 	"os"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/util"
 
 	"github.com/greatroar/blobloom"
 )
@@ -46,7 +48,7 @@ func TestBloomFilter2(t *testing.T) {
 
 		for i := 0; i < numTxids; i++ {
 			txids[i] = make([]byte, 32)
-			_, err = r.Read(txids[i])
+			_, err = io.ReadFull(r, txids[i])
 			if err != nil {
 				t.Fatal(err)
 			}

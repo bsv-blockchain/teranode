@@ -50,7 +50,7 @@ func (us *UTXOSet) Delete(txID chainhash.Hash, index uint32) {
 func NewUTXOSetFromReader(r io.Reader) (*UTXOSet, error) {
 	blockHash := new(chainhash.Hash)
 
-	if _, err := r.Read(blockHash[:]); err != nil {
+	if _, err := io.ReadFull(r, blockHash[:]); err != nil {
 		return nil, fmt.Errorf("error reading block hash: %w", err)
 	}
 
@@ -97,19 +97,25 @@ func (us *UTXOSet) Write(w io.Writer) error {
 		return fmt.Errorf("error writing number of UTXOs: %w", err)
 	}
 
+	var err error
+
 	us.m.Iter(func(uk UTXOKey, uv *UTXOValue) (stop bool) {
-		if err := uk.Write(w); err != nil {
+		if err = uk.Write(w); err != nil {
 			stop = true
 			return
 		}
 
-		if err := uv.Write(w); err != nil {
+		if err = uv.Write(w); err != nil {
 			stop = true
 			return
 		}
 
 		return
 	})
+
+	if err != nil {
+		return fmt.Errorf("Failed to write UTXO set: %w", err)
+	}
 
 	return nil
 }

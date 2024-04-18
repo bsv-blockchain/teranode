@@ -67,7 +67,7 @@ func (us *UTXODiff) ProcessTx(tx *bt.Tx) {
 func NewUTXODiffFromReader(r io.Reader) (*UTXODiff, error) {
 	blockHash := new(chainhash.Hash)
 
-	if _, err := r.Read(blockHash[:]); err != nil {
+	if _, err := io.ReadFull(r, blockHash[:]); err != nil {
 		return nil, fmt.Errorf("error reading block hash: %w", err)
 	}
 
@@ -94,10 +94,6 @@ func (us *UTXODiff) Persist(folder string) error {
 
 	filename := path.Join(folder, fmt.Sprintf("%s_%d.utxodiff", us.BlockHash.String(), us.BlockHeight))
 	tmpFilename := filename + ".tmp"
-
-	if us.Added.Length() > 1 {
-		fmt.Printf("Persisting %d UTXOs to %s\n", us.Added.Length(), filename)
-	}
 
 	f, err := os.Create(tmpFilename)
 	if err != nil {

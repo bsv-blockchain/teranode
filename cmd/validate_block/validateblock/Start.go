@@ -94,7 +94,7 @@ func Start() {
 // ValidateBlock validates a Bitcoin block.
 func ValidateBlock(r io.Reader, logger ulogger.Logger) (bool, error) {
 	buf := make([]byte, 80)
-	n, err := r.Read(buf)
+	n, err := io.ReadFull(r, buf)
 	if err != nil {
 		return false, err
 	}

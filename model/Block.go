@@ -1082,7 +1082,7 @@ func (b *Block) SubTreesFromBytes(subtreesBytes []byte) error {
 	var subtreeBytes [32]byte
 	var subtreeHash *chainhash.Hash
 	for i := uint64(0); i < subTreeCount; i++ {
-		_, err = buf.Read(subtreeBytes[:])
+		_, err = io.ReadFull(buf, subtreeBytes[:])
 		if err != nil {
 			return errors.New(errors.ERR_PROCESSING, "[BLOCK][%s] error reading subtree hash", b.Hash().String(), err)
 		}

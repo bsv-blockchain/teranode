@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -19,7 +18,7 @@ func main() {
 		_ = f.Close()
 	}()
 
-	r := bufio.NewReader(f)
+	// r := bufio.NewReader(f)
 
 	// Check if there was an error opening the file
 	if err != nil {
@@ -30,7 +29,7 @@ func main() {
 	}
 
 	if strings.HasSuffix(filename, ".utxodiff") {
-		utxodiff, err := model.NewUTXODiffFromReader(r)
+		utxodiff, err := model.NewUTXODiffFromReader(f)
 		if err != nil {
 			fmt.Println("error reading utxodiff:", err)
 			os.Exit(1)

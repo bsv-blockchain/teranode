@@ -38,7 +38,7 @@ func NewUTXOValueFromBytes(b []byte) *UTXOValue {
 func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
 	// Read the marker
 	marker := make([]byte, 1)
-	if _, err := r.Read(marker); err != nil {
+	if _, err := io.ReadFull(r, marker); err != nil {
 		return nil, err
 	}
 
@@ -53,10 +53,18 @@ func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
 		return nil, err
 	}
 
+	// if u.Value != 100 {
+	// 	return nil, fmt.Errorf("invalid value, expected %d, got %d", 100, u.Value)
+	// }
+
 	// Read the locktime
 	if err := binary.Read(r, binary.LittleEndian, &u.Locktime); err != nil {
 		return nil, err
 	}
+
+	// if u.Locktime != 0 {
+	// 	return nil, fmt.Errorf("invalid locktime, expected %d, got %d", 0, u.Locktime)
+	// }
 
 	// Read the script length
 	var length uint32
@@ -64,15 +72,28 @@ func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
 		return nil, err
 	}
 
+	// if length != 25 {
+	// 	return nil, fmt.Errorf("invalid script length: %d", length)
+	// }
+
 	u.Script = make([]byte, length)
-	if _, err := r.Read(u.Script); err != nil {
+	if _, err := io.ReadFull(r, u.Script); err != nil {
 		return nil, err
 	}
+
+	// expected, _ := hex.DecodeString("76a914df2fd021d3db1504cca2d63e082665171bda420288ac")
+	// if !bytes.Equal(u.Script, expected) {
+	// 	return nil, fmt.Errorf("invalid script: %x", u.Script)
+	// }
 
 	return u, nil
 }
 
 func (u *UTXOValue) Bytes() []byte {
+	if u == nil {
+		return nil
+	}
+
 	b := make([]byte, 8+4+4+len(u.Script))
 
 	// Write the value to the first 8 bytes
