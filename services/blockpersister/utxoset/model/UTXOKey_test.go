@@ -92,7 +92,7 @@ func TestUTXOKeyString(t *testing.T) {
 	require.NoError(t, err)
 
 	op := model.NewUTXOKey(*hash, 1)
-	expected := "0000000000000000000000000000000000000000000000000000000000000001:1"
+	expected := "0000000000000000000000000000000000000000000000000000000000000001:       1"
 	if op.String() != expected {
 		t.Errorf("String() failed, expected %s, got %s", expected, op.String())
 	}
