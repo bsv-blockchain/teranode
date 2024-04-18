@@ -265,13 +265,88 @@ services:
       - ./data/txblaster2:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
 
-  prometheus:
-    image: prom/prometheus:v2.44.0
+  aerospike-exporter-1:
+    image: aerospike/aerospike-prometheus-exporter:latest
+    container_name: aerospike-exporter-1
+    environment:
+      AS_HOST: "aerospike-1"
+      AS_PORT: "3000"
+      METRIC_LABELS: "type='development',source='aerospike'"
     ports:
-      - "9090:9090"
+      - "19145:9145"
+    networks:
+      - ubsv-network
+
+  aerospike-exporter-2:
+    image: aerospike/aerospike-prometheus-exporter:latest
+    container_name: aerospike-exporter-2
+    environment:
+      AS_HOST: "aerospike-2"
+      AS_PORT: "3000"
+      METRIC_LABELS: "type='development',source='aerospike'"
+    ports:
+      - "29145:9145"
+    networks:
+      - ubsv-network
+
+  aerospike-exporter-3:
+    image: aerospike/aerospike-prometheus-exporter:latest
+    container_name: aerospike-exporter-3
+    environment:
+      AS_HOST: "aerospike-3"
+      AS_PORT: "3000"
+      METRIC_LABELS: "type='development',source='aerospike'"
+    ports:
+      - "39145:9145"
+    networks:
+      - ubsv-network
+
+  prometheus-1:
+    container_name: prometheus-1
+    image: prom/prometheus:v2.44.0
+    mem_limit: 64m
+    ports:
+      - "19090:9090"
     networks:
       - ubsv-network
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
-# Add more ubsv nodes as needed
+  prometheus-2:
+    container_name: prometheus-2
+    image: prom/prometheus:v2.44.0
+    mem_limit: 64m
+    ports:
+      - "29090:9090"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
+
+  prometheus-3:
+    container_name: prometheus-3
+    image: prom/prometheus:v2.44.0
+    mem_limit: 64m
+    ports:
+      - "39090:9090"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
+    depends_on:
+      - prometheus-1
+      - prometheus-2
+      - prometheus-3
