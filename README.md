@@ -307,7 +307,7 @@ The system uses a number of different store technologies to store data. Differen
   - Subtree Store: For shared subtree data
     - /data/subtreestore
   - TX Store: For shared transaction data
-    - /data/txstore
+    - /data/blockstore
   - These volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services.
   - Files are deleted from the base directory of each file store after 360 minutes (6 hours).
   - No file-locking is provided, so the application must be aware of when a file-write is completed and it is safe to be read by other services.
@@ -317,11 +317,11 @@ The system uses a number of different store technologies to store data. Differen
   - Once data is archived off to S3, the best way to read it again is using S3 direct API calls
   - Linked S3 archive buckets:
     - ap-ubsv-subtree-store
-    - ap-ubsv-txstore
+    - ap-ubsv-block-store
     - eu-ubsv-subtree-store
-    - eu-ubsv-txstore
+    - eu-ubsv-block-store
     - us-ubsv-subtree-store
-    - us-ubsv-txstore
+    - us-ubsv-block-store
 
 
 ---
