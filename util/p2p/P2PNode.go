@@ -524,7 +524,7 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsD
 
 		err = host.Connect(ctx, *peerInfo)
 		if err != nil {
-			s.logger.Errorf(fmt.Sprintf("[P2PNode] failed to connect to bootstrap address %s: %v", ba, err))
+			s.logger.Infof(fmt.Sprintf("[P2PNode] failed to connect to bootstrap address %s: %v", ba, err))
 			return nil
 		}
 	}
