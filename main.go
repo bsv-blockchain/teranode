@@ -242,7 +242,7 @@ func main() {
 	}
 
 	if startBlockPersister {
-		if err = sm.AddService("BlockPersister", blockpersister.New(
+		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
 			logger,
 			getSubtreeStore(logger),
 			getTxMetaStore(logger),

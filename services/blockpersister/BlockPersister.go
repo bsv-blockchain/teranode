@@ -15,7 +15,6 @@ import (
 	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -24,28 +23,20 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type blockPersisterUpload struct {
-	blockHeader *model.BlockHeader
-	filename    string
-	extension   string
-}
-
 type blockPersister struct {
 	logger       ulogger.Logger
 	subtreeStore reader
 	txStore      decorator
 	blockStore   blob.Store
-	uploadCh     chan blockPersisterUpload
 	stats        *gocore.Stat
 }
 
-func newBlockPersister(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, subtreeStore reader, txStore decorator) *blockPersister {
+func newBlockPersister(logger ulogger.Logger, storeUrl *url.URL, subtreeStore reader, txStore decorator) *blockPersister {
 
 	bp := &blockPersister{
 		logger:       logger,
 		subtreeStore: subtreeStore,
 		txStore:      txStore,
-		uploadCh:     make(chan blockPersisterUpload, 100),
 		stats:        gocore.NewStat("blockpersister"),
 	}
 
@@ -80,50 +71,6 @@ func newBlockPersister(ctx context.Context, logger ulogger.Logger, storeUrl *url
 			}
 		}
 	}
-
-	// Start the upload worker
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case upload := <-bp.uploadCh:
-				r, err := os.Open(upload.filename)
-				if err != nil {
-					bp.logger.Errorf("[BlockPersister] error opening file %s: %v", upload.filename, err)
-				}
-				defer func() {
-					_ = r.Close()
-				}()
-
-				// create buffered reader for uploading
-				bufferedReader := io.NopCloser(bufio.NewReaderSize(r, 1024*1024*16)) // 16MB buffer
-
-				hash := upload.blockHeader.Hash()
-
-				// Write the file to the store
-				if err = bp.blockStore.SetFromReader(ctx,
-					hash.CloneBytes(),
-					bufferedReader,
-					options.WithSubDirectory("blocks"),
-					options.WithFileExtension(upload.extension),
-				); err != nil {
-					bp.logger.Errorf("[BlockPersister] error writing file to store, retrying: %v", err)
-					bp.uploadCh <- upload
-					continue
-				}
-
-				bp.logger.Infof("[BlockPersister] Wrote block %s to store", upload.blockHeader.Hash().String())
-
-				// Remove the file
-				if err = os.Remove(upload.filename); err != nil {
-					bp.logger.Errorf("[BlockPersister] error removing file %s: %v", upload.filename, err)
-				}
-
-				bp.logger.Infof("[BlockPersister] Removed file %s", upload.filename)
-			}
-		}
-	}()
 
 	return bp
 }
@@ -206,15 +153,6 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 
 	bp.logger.Infof("[BlockPersister] Wrote block %s to file %s", block.Header.Hash().String(), filename)
 
-	// Write the file to a store (e.g. S3)
-	if bp.blockStore != nil {
-		bp.uploadCh <- blockPersisterUpload{
-			blockHeader: block.Header,
-			filename:    filename,
-			extension:   "block",
-		}
-	}
-
 	bp.logger.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
 
 	// At this point, we have a complete UTXODiff for this block.
@@ -226,12 +164,6 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 
 	if err := utxoDiff.Persist(filename); err != nil {
 		return fmt.Errorf("[BlockPersister] error persisting utxo diff: %w", err)
-	}
-
-	bp.uploadCh <- blockPersisterUpload{
-		blockHeader: block.Header,
-		filename:    filename,
-		extension:   "utxodiff",
 	}
 
 	// 2. Now we need to apply this UTXODiff to the UTXOSet for the previous block
@@ -263,12 +195,6 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 
 	if err := utxoSet.Persist(filename); err != nil {
 		return fmt.Errorf("[BlockPersister] error persisting utxo set: %w", err)
-	}
-
-	bp.uploadCh <- blockPersisterUpload{
-		blockHeader: block.Header,
-		filename:    filename,
-		extension:   "utxoset",
 	}
 
 	utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)
