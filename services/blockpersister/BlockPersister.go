@@ -145,7 +145,7 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 	dir, _ := gocore.Config().Get("blockPersister_workingDir", os.TempDir())
 
 	// Open file
-	filename := path.Join(dir, block.Header.Hash().String()+".dat")
+	filename := path.Join(dir, fmt.Sprintf("%s.block", block.Header.Hash().String()))
 	tmpFilename := filename + ".tmp"
 
 	f, err := os.Create(tmpFilename)

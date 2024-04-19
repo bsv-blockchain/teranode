@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -146,7 +147,7 @@ func TestBlock(t *testing.T) {
 	err = persister.blockFinalHandler(context.Background(), nil, b)
 	require.NoError(t, err)
 
-	filename := path.Join(os.TempDir(), block.Header.Hash().String()+".dat")
+	filename := path.Join(os.TempDir(), fmt.Sprintf("%s.block", block.Header.Hash().String()))
 
 	fileData, err := os.ReadFile(filename)
 	require.NoError(t, err)
