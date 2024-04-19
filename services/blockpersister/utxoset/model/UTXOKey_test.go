@@ -92,7 +92,7 @@ func TestUTXOKeyString(t *testing.T) {
 	require.NoError(t, err)
 
 	op := model.NewUTXOKey(*hash, 1)
-	expected := "0000000000000000000000000000000000000000000000000000000000000001:1"
+	expected := "0000000000000000000000000000000000000000000000000000000000000001:       1"
 	if op.String() != expected {
 		t.Errorf("String() failed, expected %s, got %s", expected, op.String())
 	}
@@ -109,30 +109,30 @@ func TestUTXOKeyAsKey(t *testing.T) {
 	require.NoError(t, err)
 
 	key1 := model.NewUTXOKey(*hash1, 0)
-	m[*key1] = 1
+	m[key1] = 1
 	assert.Len(t, m, 1, "Expected length 1")
 
-	n, ok := m[*key1]
+	n, ok := m[key1]
 	assert.True(t, ok, "Expected true")
 	assert.Equal(t, 1, n, "Expected 1, got %d", n)
 
 	key2 := model.NewUTXOKey(*hash2, 0)
-	m[*key2] = 2
+	m[key2] = 2
 	assert.Len(t, m, 1, "Expected length 1")
 
-	n, ok = m[*key1]
+	n, ok = m[key1]
 	assert.True(t, ok, "Expected true")
 	assert.Equal(t, 2, n, "Expected 2, got %d", n)
 
 	key3 := model.NewUTXOKey(*hash1, 1)
-	m[*key3] = 3
+	m[key3] = 3
 	assert.Len(t, m, 2, "Expected length 2")
 
-	n, ok = m[*key3]
+	n, ok = m[key3]
 	assert.True(t, ok, "Expected true")
 	assert.Equal(t, 3, n, "Expected 3, got %d", n)
 
-	delete(m, *key1)
+	delete(m, key1)
 	assert.Len(t, m, 1, "Expected length 1")
 }
 
@@ -182,9 +182,9 @@ func TestNewUTXOKeyFromReader(t *testing.T) {
 	key4, err := model.NewUTXOKeyFromReader(r)
 	require.NoError(t, err)
 
-	assert.Equal(t, key1, key3, "Expected keys to be equal")
-	assert.Equal(t, key2, key4, "Expected keys to be equal")
-	assert.NotEqual(t, key1, key4, "Expected keys to be different")
+	assert.Equal(t, key1, *key3, "Expected keys to be equal")
+	assert.Equal(t, key2, *key4, "Expected keys to be equal")
+	assert.NotEqual(t, key1, *key4, "Expected keys to be different")
 	assert.Equal(t, uint32(1), key3.Index)
 	assert.Equal(t, uint32(2), key4.Index)
 }

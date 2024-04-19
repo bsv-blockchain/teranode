@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -26,6 +27,7 @@ import (
 type blockPersisterUpload struct {
 	blockHeader *model.BlockHeader
 	filename    string
+	extension   string
 }
 
 type blockPersister struct {
@@ -57,6 +59,28 @@ func newBlockPersister(ctx context.Context, logger ulogger.Logger, storeUrl *url
 		bp.blockStore = store
 	}
 
+	// clean old files from working dir
+	dir, ok := gocore.Config().Get("blockPersister_workingDir")
+	if ok {
+		logger.Infof("[BlockPersister] Cleaning old files from working dir: %s", dir)
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			logger.Fatalf("error reading working dir: %v", err)
+		}
+		for _, file := range files {
+			fileInfo, err := file.Info()
+			if err != nil {
+				logger.Errorf("error reading file info: %v", err)
+			}
+			if time.Since(fileInfo.ModTime()) > 30*time.Minute {
+				logger.Infof("removing old file: %s", file.Name())
+				if err = os.Remove(path.Join(dir, file.Name())); err != nil {
+					logger.Errorf("error removing old file: %v", err)
+				}
+			}
+		}
+	}
+
 	// Start the upload worker
 	go func() {
 		for {
@@ -81,8 +105,8 @@ func newBlockPersister(ctx context.Context, logger ulogger.Logger, storeUrl *url
 				if err = bp.blockStore.SetFromReader(ctx,
 					hash.CloneBytes(),
 					bufferedReader,
-					options.WithFileName(hash.String()),
 					options.WithSubDirectory("blocks"),
+					options.WithFileExtension(upload.extension),
 				); err != nil {
 					bp.logger.Errorf("[BlockPersister] error writing file to store, retrying: %v", err)
 					bp.uploadCh <- upload
@@ -154,10 +178,16 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 		return fmt.Errorf("[BlockPersister] error writing coinbase tx: %w", err)
 	}
 
+	// Create a new UTXO diff
+	utxoDiff := utxo_model.NewUTXODiff(block.Header.Hash())
+
+	// Add coinbase utxos to the utxo diff
+	utxoDiff.ProcessTx(block.CoinbaseTx)
+
 	for i, subtreeHash := range block.Subtrees {
 		bp.logger.Infof("[BlockPersister] Processing subtree %s (%d / %d)", subtreeHash.String(), i+1, len(block.Subtrees))
 
-		if err = bp.processSubtree(ctx, *subtreeHash, w); err != nil {
+		if err = bp.processSubtree(ctx, *subtreeHash, w, utxoDiff); err != nil {
 			return fmt.Errorf("[BlockPersister] error processing subtree %d [%s]: %w", i, subtreeHash.String(), err)
 		}
 	}
@@ -181,15 +211,72 @@ func (bp *blockPersister) blockFinalHandler(ctx context.Context, _ []byte, block
 		bp.uploadCh <- blockPersisterUpload{
 			blockHeader: block.Header,
 			filename:    filename,
+			extension:   "block",
 		}
 	}
 
 	bp.logger.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
 
+	// At this point, we have a complete UTXODiff for this block.
+
+	// 1. Persist it to disk
+	folder, _ := gocore.Config().Get("utxoPersister_workingDir", os.TempDir())
+
+	filename = path.Join(folder, fmt.Sprintf("%s.utxodiff", block.Header.Hash().String()))
+
+	if err := utxoDiff.Persist(filename); err != nil {
+		return fmt.Errorf("[BlockPersister] error persisting utxo diff: %w", err)
+	}
+
+	bp.uploadCh <- blockPersisterUpload{
+		blockHeader: block.Header,
+		filename:    filename,
+		extension:   "utxodiff",
+	}
+
+	// 2. Now we need to apply this UTXODiff to the UTXOSet for the previous block
+	previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
+	if !found {
+		// Load the UTXOSet from disk
+		previousUTXOSet, err = utxo_model.LoadUTXOSet(folder, *block.Header.HashPrevBlock)
+		if err != nil {
+			return fmt.Errorf("error loading UTXOSet %s: %w", *block.Header.HashPrevBlock, err)
+		}
+	}
+
+	// 1. Create a new UTXOSet for this block from the previous UTXOSet
+	utxoSet := utxo_model.NewUTXOSetFromPrevious(block.Header.Hash(), previousUTXOSet)
+
+	// 2. Remove all spent UTXOs
+	utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+		utxoSet.Delete(uk)
+		return
+	})
+
+	// 3. Add all new UTXOs
+	utxoDiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+		utxoSet.Add(uk, uv)
+		return
+	})
+
+	filename = path.Join(folder, fmt.Sprintf("%s.utxoset", block.Header.Hash().String()))
+
+	if err := utxoSet.Persist(filename); err != nil {
+		return fmt.Errorf("[BlockPersister] error persisting utxo set: %w", err)
+	}
+
+	bp.uploadCh <- blockPersisterUpload{
+		blockHeader: block.Header,
+		filename:    filename,
+		extension:   "utxoset",
+	}
+
+	utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)
+
 	return nil
 }
 
-func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainhash.Hash, w io.Writer) error {
+func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainhash.Hash, w io.Writer, utxoDiff *utxo_model.UTXODiff) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -287,6 +374,9 @@ func (bp *blockPersister) processSubtree(ctx context.Context, subtreeHash chainh
 		if _, err := w.Write(data.Data.Tx.Bytes()); err != nil {
 			return fmt.Errorf("[BlockPersister] error writing tx to file: %w", err)
 		}
+
+		// Process the utxo diff...
+		utxoDiff.ProcessTx(data.Data.Tx)
 	}
 
 	txCount = len(txHashes)

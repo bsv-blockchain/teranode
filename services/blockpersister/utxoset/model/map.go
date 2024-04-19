@@ -28,13 +28,13 @@ type comparableAndHashable interface {
 	hashable   // This is a custom interface defined above
 }
 
-type splitSwissMap[K comparableAndHashable, V any] struct {
+type splitMap[K comparableAndHashable, V any] struct {
 	m           map[uint16]genericMap[K, V]
 	nrOfBuckets uint16
 }
 
-func newSplitSwissMap[K comparableAndHashable, V any](length int) genericMap[K, V] {
-	ssm := &splitSwissMap[K, V]{
+func NewSplitSwissMap[K comparableAndHashable, V any](length int) genericMap[K, V] {
+	ssm := &splitMap[K, V]{
 		m:           make(map[uint16]genericMap[K, V], 1024),
 		nrOfBuckets: 1024,
 	}
@@ -48,29 +48,42 @@ func newSplitSwissMap[K comparableAndHashable, V any](length int) genericMap[K, 
 	return ssm
 }
 
-func (ssm *splitSwissMap[K, V]) Put(k K, v V) {
+func NewSplitGoMap[K comparableAndHashable, V any](length int) genericMap[K, V] {
+	ssm := &splitMap[K, V]{
+		m:           make(map[uint16]genericMap[K, V], 1024),
+		nrOfBuckets: 1024,
+	}
+
+	for i := uint16(0); i <= uint16(ssm.nrOfBuckets); i++ {
+		ssm.m[i] = NewGoMap[K, V]()
+	}
+
+	return ssm
+}
+
+func (ssm *splitMap[K, V]) Put(k K, v V) {
 	ssm.m[k.Hash(ssm.nrOfBuckets)].Put(k, v)
 }
 
-func (ssm *splitSwissMap[K, V]) Get(k K) (V, bool) {
+func (ssm *splitMap[K, V]) Get(k K) (V, bool) {
 	return ssm.m[k.Hash(ssm.nrOfBuckets)].Get(k)
 }
 
-func (ssm *splitSwissMap[K, V]) Delete(k K) bool {
+func (ssm *splitMap[K, V]) Delete(k K) bool {
 	return ssm.m[k.Hash(ssm.nrOfBuckets)].Delete(k)
 }
 
-func (ssm *splitSwissMap[K, V]) Iter(cb func(K, V) (stop bool)) {
+func (ssm *splitMap[K, V]) Iter(cb func(K, V) (stop bool)) {
 	for i := uint16(0); i <= ssm.nrOfBuckets; i++ {
 		ssm.m[i].Iter(cb)
 	}
 }
 
-func (ssm *splitSwissMap[K, V]) Exists(k K) bool {
+func (ssm *splitMap[K, V]) Exists(k K) bool {
 	return ssm.m[k.Hash(ssm.nrOfBuckets)].Exists(k)
 }
 
-func (ssm *splitSwissMap[K, V]) Length() int {
+func (ssm *splitMap[K, V]) Length() int {
 	length := 0
 	for i := uint16(0); i <= ssm.nrOfBuckets; i++ {
 		length += ssm.m[i].Length()
@@ -136,4 +149,64 @@ func (s *swissMap[K, V]) Length() int {
 	defer s.mu.RUnlock()
 
 	return s.length
+}
+
+type goMap[K comparable, V any] struct {
+	mu sync.RWMutex
+	m  map[K]V
+}
+
+func NewGoMap[K comparable, V any]() genericMap[K, V] {
+	return &goMap[K, V]{
+		m: make(map[K]V),
+	}
+}
+
+func (s *goMap[K, V]) Put(k K, v V) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.m[k] = v
+}
+
+func (s *goMap[K, V]) Get(k K) (V, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	v, ok := s.m[k]
+	return v, ok
+}
+
+func (s *goMap[K, V]) Delete(k K) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.m, k)
+	return true
+}
+
+func (s *goMap[K, V]) Iter(cb func(K, V) (stop bool)) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for k, v := range s.m {
+		if cb(k, v) {
+			return
+		}
+	}
+}
+
+func (s *goMap[K, V]) Exists(k K) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	_, ok := s.m[k]
+	return ok
+}
+
+func (s *goMap[K, V]) Length() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return len(s.m)
 }

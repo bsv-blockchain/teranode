@@ -733,7 +733,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					})
 				}
 
-				if err := parentG.Wait(); err != nil {
+				if err = parentG.Wait(); err != nil {
 					// just return the error from above
 					return err
 				}
@@ -757,9 +757,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	// for the first situation we don't start validating the current block until the parent is validated.
 	parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
 	if err != nil && !errors.Is(err, txmetastore.NewErrTxmetaNotFound(&parentTxStruct.parentTxHash)) {
-		logger.Errorf("[BLOCK][%s] error getting parent transaction %s from txMetaStore: %v", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
-		//return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
-		return nil
+		return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
 	}
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
 	if parentTxMeta == nil || parentTxMeta.IsCoinbase {
@@ -788,8 +786,8 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 			headerErr = errors.Join(headerErr, fmt.Errorf("tx TxMeta: %v", txMeta))
 		}
 
-		logger.Errorf("[BLOCK][%s] parent transaction %s of tx %s is not valid on our current chain, found %d times: %v", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(foundInPreviousBlocks), headerErr)
-		//return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] parent transaction %s of tx %s is not valid on our current chain, found %d times", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(foundInPreviousBlocks), headerErr)
+		// logger.Errorf("[BLOCK][%s] parent transaction %s of tx %s is not valid on our current chain, found %d times: %v", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(foundInPreviousBlocks), headerErr)
+		return errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] parent transaction %s of tx %s is not valid on our current chain, found %d times", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String(), len(foundInPreviousBlocks), headerErr)
 	}
 
 	return nil
@@ -1084,7 +1082,7 @@ func (b *Block) SubTreesFromBytes(subtreesBytes []byte) error {
 	var subtreeBytes [32]byte
 	var subtreeHash *chainhash.Hash
 	for i := uint64(0); i < subTreeCount; i++ {
-		_, err = buf.Read(subtreeBytes[:])
+		_, err = io.ReadFull(buf, subtreeBytes[:])
 		if err != nil {
 			return errors.New(errors.ERR_PROCESSING, "[BLOCK][%s] error reading subtree hash", b.Hash().String(), err)
 		}

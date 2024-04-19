@@ -2,30 +2,27 @@ package model
 
 import (
 	"bufio"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
-	"path"
 
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // UTXODiff is a map of UTXOs.
 type UTXODiff struct {
-	blockHash   chainhash.Hash // This is the block hash that is the last block in the chain with these UTXOs.
-	blockHeight uint32
-	added       UTXOMap
-	removed     UTXOMap
+	BlockHash chainhash.Hash // This is the block hash that is the last block in the chain with these UTXOs.
+	Added     UTXOMap
+	Removed   UTXOMap
 }
 
 // NewUTXOMap creates a new UTXODiff.
-func NewUTXODiff(blockHash *chainhash.Hash, blockHeight uint32) *UTXODiff {
+func NewUTXODiff(blockHash *chainhash.Hash) *UTXODiff {
 	return &UTXODiff{
-		blockHash:   *blockHash,
-		blockHeight: blockHeight,
-		added:       newUTXOMap(),
-		removed:     newUTXOMap(),
+		BlockHash: *blockHash,
+		Added:     newUTXOMap(),
+		Removed:   newUTXOMap(),
 	}
 }
 
@@ -34,105 +31,101 @@ func (us *UTXODiff) Add(txID chainhash.Hash, index uint32, value uint64, locktim
 	uk := NewUTXOKey(txID, index)
 	uv := NewUTXOValue(value, locktime, script)
 
-	us.added.Put(*uk, uv)
+	us.Added.Put(uk, uv)
 }
 
 func (us *UTXODiff) Delete(txID chainhash.Hash, index uint32) {
 	uk := NewUTXOKey(txID, index)
 
-	if us.added.Exists(*uk) {
-		us.added.Delete(*uk)
+	if us.Added.Exists(uk) {
+		us.Added.Delete(uk)
 	} else {
-		us.removed.Put(*uk, nil)
+		us.Removed.Put(uk, nil)
+	}
+}
+
+func (us *UTXODiff) ProcessTx(tx *bt.Tx) {
+	if !tx.IsCoinbase() {
+		for _, input := range tx.Inputs {
+			us.Delete(*input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
+		}
+	}
+
+	for i, output := range tx.Outputs {
+		if output.LockingScript.IsData() {
+			continue
+		}
+
+		us.Add(*tx.TxIDChainHash(), uint32(i), output.Satoshis, tx.LockTime, *output.LockingScript)
 	}
 }
 
 func NewUTXODiffFromReader(r io.Reader) (*UTXODiff, error) {
 	blockHash := new(chainhash.Hash)
 
-	if _, err := r.Read(blockHash[:]); err != nil {
+	if _, err := io.ReadFull(r, blockHash[:]); err != nil {
 		return nil, fmt.Errorf("error reading block hash: %w", err)
 	}
 
-	var blockHeight uint32
-	if err := binary.Read(r, binary.LittleEndian, &blockHeight); err != nil {
-		return nil, fmt.Errorf("error reading block height: %w", err)
-	}
+	us := NewUTXODiff(blockHash)
 
-	us := NewUTXODiff(blockHash, blockHeight)
-
-	if err := us.removed.Read(r); err != nil {
+	if err := us.Removed.Read(r); err != nil {
 		return nil, err
 	}
 
-	if err := us.added.Read(r); err != nil {
+	if err := us.Added.Read(r); err != nil {
 		return nil, err
 	}
 
 	return us, nil
 }
 
-func (us *UTXODiff) Persist(folder string) error {
-	filename := path.Join(folder, fmt.Sprintf("%s_%d.utxodiff", us.blockHash.String(), us.blockHeight))
-	f, err := os.Create(filename)
+func (us *UTXODiff) Persist(filename string) error {
+	var err error
+	var f *os.File
+
+	tmpFilename := filename + ".tmp"
+
+	f, err = os.Create(tmpFilename)
 	if err != nil {
 		return fmt.Errorf("error creating file: %w", err)
 	}
-	defer f.Close()
+
+	defer func() {
+		_ = f.Close()
+
+		if err != nil {
+			_ = os.Rename(tmpFilename, filename+".error")
+		} else {
+			_ = os.Rename(tmpFilename, filename)
+		}
+	}()
 
 	// Create a buffered writer
 	w := bufio.NewWriter(f)
+	defer func() {
+		_ = w.Flush()
+	}()
 
-	return us.Write(w)
+	if err := us.Write(w); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (us *UTXODiff) Write(w io.Writer) error {
-	if _, err := w.Write(us.blockHash[:]); err != nil {
+	if _, err := w.Write(us.BlockHash[:]); err != nil {
 		return fmt.Errorf("error writing block hash: %w", err)
 	}
 
-	// Write the block height
-	if err := binary.Write(w, binary.LittleEndian, us.blockHeight); err != nil {
-		return fmt.Errorf("error writing block height: %w", err)
+	if err := us.Removed.Write(w); err != nil {
+		return fmt.Errorf("error writing removed UTXOs: %w", err)
 	}
 
-	// Write the number of removed UTXOs
-	if err := binary.Write(w, binary.LittleEndian, uint32(us.removed.Length())); err != nil {
-		return fmt.Errorf("error writing number of removed UTXOs: %w", err)
+	if err := us.Added.Write(w); err != nil {
+		return fmt.Errorf("error writing added UTXOs: %w", err)
 	}
-
-	us.removed.Iter(func(uk UTXOKey, uv *UTXOValue) (stop bool) {
-		if err := uk.Write(w); err != nil {
-			stop = true
-			return
-		}
-
-		if err := uv.Write(w); err != nil {
-			stop = true
-			return
-		}
-
-		return
-	})
-
-	// Write the number of added UTXOs
-	if err := binary.Write(w, binary.LittleEndian, uint32(us.added.Length())); err != nil {
-		return fmt.Errorf("error writing number of added UTXOs: %w", err)
-	}
-
-	us.added.Iter(func(uk UTXOKey, uv *UTXOValue) (stop bool) {
-		if err := uk.Write(w); err != nil {
-			stop = true
-			return
-		}
-
-		if err := uv.Write(w); err != nil {
-			stop = true
-			return
-		}
-
-		return
-	})
 
 	return nil
 }

@@ -25,7 +25,12 @@ func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 			return err
 		}
 
-		utxoResponse, err := h.repository.GetUtxo(c.Request().Context(), hash)
+		utxoResponse, err := h.repository.GetUtxo(c.Request().Context(), &utxo.Spend{
+			TxID:         nil,
+			Vout:         0,
+			Hash:         hash,
+			SpendingTxID: nil,
+		})
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())

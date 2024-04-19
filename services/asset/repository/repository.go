@@ -265,8 +265,8 @@ func (r *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (
 	return subtree, int(numNodes), nil
 }
 
-func (r *Repository) GetUtxoBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
-	resp, err := r.GetUtxo(ctx, hash)
+func (r *Repository) GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byte, error) {
+	resp, err := r.GetUtxo(ctx, spend)
 	if err != nil {
 		return nil, err
 	}
@@ -274,9 +274,9 @@ func (r *Repository) GetUtxoBytes(ctx context.Context, hash *chainhash.Hash) ([]
 	return resp.SpendingTxID.CloneBytes(), nil
 }
 
-func (r *Repository) GetUtxo(ctx context.Context, hash *chainhash.Hash) (*utxo.Response, error) {
-	r.logger.Debugf("[Repository] GetUtxo: %s", hash.String())
-	resp, err := r.UtxoStore.Get(ctx, &utxo.Spend{Hash: hash})
+func (r *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.Response, error) {
+	r.logger.Debugf("[Repository] GetUtxo: %s", spend.Hash.String())
+	resp, err := r.UtxoStore.Get(ctx, spend)
 	if err != nil {
 		return nil, err
 	}

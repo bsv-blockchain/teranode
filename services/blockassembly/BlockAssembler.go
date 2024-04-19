@@ -56,6 +56,7 @@ type BlockAssembler struct {
 	resetCh                    chan struct{}
 	resetWaitCount             atomic.Int32
 	resetWaitTime              atomic.Int32
+	currentRunningState        atomic.Value
 }
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore txmeta.Store,
@@ -87,7 +88,9 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 		resetCh:                    make(chan struct{}, 2),
 		resetWaitCount:             atomic.Int32{},
 		resetWaitTime:              atomic.Int32{},
+		currentRunningState:        atomic.Value{},
 	}
+	b.currentRunningState.Store("starting")
 
 	return b
 }
@@ -129,6 +132,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 		var bestBlockchainBlockHeader *model.BlockHeader
 		var meta *model.BlockHeaderMeta
 
+		b.currentRunningState.Store("running")
 		for {
 			select {
 			case <-ctx.Done():
@@ -138,6 +142,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				return
 
 			case <-b.resetCh:
+				b.currentRunningState.Store("resetting")
 				bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
 				if err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error getting best block header: %v", err)
@@ -182,13 +187,15 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.resetWaitTime.Store(int32(time.Now().Add(20 * time.Minute).Unix()))
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
+				b.currentRunningState.Store("running")
 
 			case responseCh := <-b.miningCandidateCh:
+				b.currentRunningState.Store("miningCandidate")
 				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
 				// wait for the reset to complete before getting a new mining candidate
 				// 2 blocks && at least 20 minutes
 				if b.resetWaitCount.Load() > 0 || int32(time.Now().Unix()) <= b.resetWaitTime.Load() {
-					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d", b.resetWaitCount.Load())
+					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitTime.Load()), 0).String())
 					responseCh <- &miningCandidateResponse{
 						err: fmt.Errorf("waiting for reset to complete"),
 					}
@@ -201,8 +208,10 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					}
 				}
 				// stat.AddTime(start)
+				b.currentRunningState.Store("running")
 
 			case notification := <-b.blockchainSubscriptionCh:
+				b.currentRunningState.Store("blockchainSubscription")
 				switch notification.Type {
 				case model.NotificationType_Block:
 					// _, _, ctx := util.NewStatFromContext(context, "blockchainSubscriptionCh", channelStats)
@@ -221,6 +230,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 						continue
 					} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Hash()) { // if the bestBlockchainBlockHeader's previous block is not the same as the current best block header, reorg
 						b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Hash())
+						b.currentRunningState.Store("reorging")
 						err = b.handleReorg(ctx, bestBlockchainBlockHeader)
 						if err != nil {
 							b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
@@ -233,6 +243,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 							continue
 						}
 
+						b.currentRunningState.Store("movingUp")
 						if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
 							b.logger.Errorf("[BlockAssembler][%s] error moveUpBlock in subtree processor: %v", bestBlockchainBlockHeader.Hash(), err)
 							continue
@@ -266,9 +277,14 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 					b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), meta.Height)
 				}
+				b.currentRunningState.Store("running")
 			}
 		}
 	}()
+}
+
+func (b *BlockAssembler) GetCurrentRunningState() string {
+	return b.currentRunningState.Load().(string)
 }
 
 func (b *BlockAssembler) Start(ctx context.Context) (err error) {

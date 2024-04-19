@@ -104,7 +104,7 @@ func loadBlocks(filename string) (blocks []*bsvutil.Block, err error) {
 		rbytes := make([]byte, blocklen)
 
 		// read block
-		dr.Read(rbytes)
+		io.ReadFull(dr, rbytes)
 
 		block, err = bsvutil.NewBlockFromBytes(rbytes)
 		if err != nil {

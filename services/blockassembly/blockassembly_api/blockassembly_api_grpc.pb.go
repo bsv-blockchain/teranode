@@ -28,6 +28,7 @@ const (
 	BlockAssemblyAPI_SubmitMiningSolution_FullMethodName     = "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution"
 	BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/DeDuplicateBlockAssembly"
 	BlockAssemblyAPI_ResetBlockAssembly_FullMethodName       = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssembly"
+	BlockAssemblyAPI_GetBlockAssemblyState_FullMethodName    = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyState"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -50,6 +51,8 @@ type BlockAssemblyAPIClient interface {
 	DeDuplicateBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
 	// Reset transaction in block assembly subtree processor.
 	ResetBlockAssembly(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*EmptyMessage, error)
+	// Get the block assembly state.
+	GetBlockAssemblyState(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*StateMessage, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -132,6 +135,15 @@ func (c *blockAssemblyAPIClient) ResetBlockAssembly(ctx context.Context, in *Emp
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) GetBlockAssemblyState(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*StateMessage, error) {
+	out := new(StateMessage)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetBlockAssemblyState_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockAssemblyAPIServer is the server API for BlockAssemblyAPI service.
 // All implementations must embed UnimplementedBlockAssemblyAPIServer
 // for forward compatibility
@@ -152,6 +164,8 @@ type BlockAssemblyAPIServer interface {
 	DeDuplicateBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error)
 	// Reset transaction in block assembly subtree processor.
 	ResetBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error)
+	// Get the block assembly state.
+	GetBlockAssemblyState(context.Context, *EmptyMessage) (*StateMessage, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -182,6 +196,9 @@ func (UnimplementedBlockAssemblyAPIServer) DeDuplicateBlockAssembly(context.Cont
 }
 func (UnimplementedBlockAssemblyAPIServer) ResetBlockAssembly(context.Context, *EmptyMessage) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResetBlockAssembly not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyState(context.Context, *EmptyMessage) (*StateMessage, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockAssemblyState not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 
@@ -340,6 +357,24 @@ func _BlockAssemblyAPI_ResetBlockAssembly_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_GetBlockAssemblyState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).GetBlockAssemblyState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_GetBlockAssemblyState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).GetBlockAssemblyState(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockAssemblyAPI_ServiceDesc is the grpc.ServiceDesc for BlockAssemblyAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -378,6 +413,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResetBlockAssembly",
 			Handler:    _BlockAssemblyAPI_ResetBlockAssembly_Handler,
+		},
+		{
+			MethodName: "GetBlockAssemblyState",
+			Handler:    _BlockAssemblyAPI_GetBlockAssemblyState_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

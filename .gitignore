@@ -3,7 +3,6 @@
 build/
 data/
 *.run
-ubsv
 .DS_Store
 *.pprof
 .idea/
@@ -51,3 +50,4 @@ chainextract.log
 
 current
 
+deploy/dev/grafana/grafana.db/

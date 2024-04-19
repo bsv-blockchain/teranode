@@ -284,9 +284,10 @@ func Start() {
 										continue
 									}
 									utxo, err := utxoStore.Get(ctx, &utxostore.Spend{
-										TxID: btTx.TxIDChainHash(),
-										Vout: uint32(inputIdx),
-										Hash: utxoHash,
+										TxID:         input.PreviousTxIDChainHash(),
+										SpendingTxID: btTx.TxIDChainHash(),
+										Vout:         uint32(inputIdx),
+										Hash:         utxoHash,
 									})
 									if err != nil {
 										logger.Errorf("failed to get parent utxo %s from utxo store: %s", utxoHash, err)

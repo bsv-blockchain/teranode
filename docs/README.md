@@ -274,7 +274,7 @@ Here are some key points about IPv6 multicast:
 
 6. **Routing:** Multicast routing protocols, such as Protocol Independent Multicast (PIM), are used to manage and control the forwarding of multicast traffic within an IPv6 network. These protocols ensure that multicast data reaches the intended recipients efficiently.
 
-**NOTE:** IPv6 Multicast support is currently not implemented as our current hosting platform, Amazon Web Services, does not support the correct features we require. Specifically, there is no support for MLDv1 or MLDv2 within a VPC subnet, no multicast packets over VPC peering connections, and also strict restrictions on network service architecture which would impose additional costs and require complex engineering to workaround.
+**NOTE:** IPv6 Multicast support is currently not enabled or configured in the test infrastructure as our current hosting platform, Amazon Web Services, does not support the correct features we require. Specifically, there is no support for MLDv1 or MLDv2 within a VPC subnet, no multicast packets over VPC peering connections without using a cumbersome and costly service, and also strict restrictions on network service architecture which would impose additional costs and require complex engineering to workaround. We have multicast support written inside the codebase but this needs more implementation and testing to be effective as a true solution.
 
 ### 7.6. Stores
 
@@ -306,8 +306,8 @@ The system uses a number of different store technologies to store data. Differen
   - Clustered, high-availability, low-latency shared filesystems provided by AWS FSx for Lustre service.
   - Subtree Store: For shared subtree data
     - /data/subtreestore
-  - TX Store: For shared transaction data
-    - /data/txstore
+  - Block Store: For shared block data
+    - /data/blockstore
   - These volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services.
   - Files are deleted from the base directory of each file store after 360 minutes (6 hours).
   - No file-locking is provided, so the application must be aware of when a file-write is completed and it is safe to be read by other services.
@@ -316,12 +316,12 @@ The system uses a number of different store technologies to store data. Differen
   - File data on all objects within the /s3 subfolder are released from the filesystem every hour, within a 30 minute flexible time window. The filesystem metadata will still be available, but the actual file contents will be cleared.
   - Once data is archived off to S3, the best way to read it again is using S3 direct API calls
   - Linked S3 archive buckets:
-    - ap-ubsv-subtree-store
-    - ap-ubsv-txstore
-    - eu-ubsv-subtree-store
-    - eu-ubsv-txstore
-    - us-ubsv-subtree-store
-    - us-ubsv-txstore
+    - s3://ap-ubsv-subtree-store
+    - s3://ap-ubsv-block-store
+    - s3://eu-ubsv-subtree-store
+    - s3://eu-ubsv-block-store
+    - s3://us-ubsv-subtree-store
+    - s3://us-ubsv-block-store
 
 
 ---

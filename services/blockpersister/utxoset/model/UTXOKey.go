@@ -15,8 +15,8 @@ type UTXOKey struct {
 }
 
 // NewUTXOKey creates a new Outpoint.
-func NewUTXOKey(txID chainhash.Hash, index uint32) *UTXOKey {
-	return &UTXOKey{
+func NewUTXOKey(txID chainhash.Hash, index uint32) UTXOKey {
+	return UTXOKey{
 		TxID:  txID,
 		Index: index,
 	}
@@ -60,7 +60,7 @@ func (k *UTXOKey) Bytes() []byte {
 func NewUTXOKeyFromReader(r io.Reader) (*UTXOKey, error) {
 	o := new(UTXOKey)
 
-	if _, err := r.Read(o.TxID[:]); err != nil {
+	if _, err := io.ReadFull(r, o.TxID[:]); err != nil {
 		return nil, fmt.Errorf("error reading txid: %w", err)
 	}
 
@@ -72,8 +72,15 @@ func NewUTXOKeyFromReader(r io.Reader) (*UTXOKey, error) {
 }
 
 func (k *UTXOKey) Write(w io.Writer) error {
-	if _, err := w.Write(k.TxID[:]); err != nil {
+	var n int
+	var err error
+
+	if n, err = w.Write(k.TxID[:]); err != nil {
 		return fmt.Errorf("error writing txid: %w", err)
+	}
+
+	if n != 32 {
+		return fmt.Errorf("invalid txid length: %d", n)
 	}
 
 	if err := binary.Write(w, binary.LittleEndian, k.Index); err != nil {
@@ -86,9 +93,9 @@ func (k *UTXOKey) Write(w io.Writer) error {
 // String returns a string representation of the Outpoint, formatted as "txid:index". In this case,
 // the txid is the big-endian representation of the transaction ID in hex format (64 characters).
 func (k *UTXOKey) String() string {
-	return fmt.Sprintf("%v:%d", k.TxID, k.Index)
+	return fmt.Sprintf("%v:%8d", k.TxID, k.Index)
 }
 
-func (k *UTXOKey) Equal(other *UTXOKey) bool {
+func (k *UTXOKey) Equal(other UTXOKey) bool {
 	return k.TxID.IsEqual(&other.TxID) && k.Index == other.Index
 }
