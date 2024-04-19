@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -73,58 +72,29 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 		txHashes[i] = subtree.Nodes[i].Hash
 	}
 
-	abandonTxThreshold, _ := gocore.Config().GetInt("blockvalidation_subtree_validation_abandon_threshold", 10000)
-	maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
-	retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
-	if err != nil {
-		panic(fmt.Sprintf("invalid value for blockvalidation_fail_fast_validation_retry_sleep: %v", err))
-	}
-
 	// txMetaSlice will be populated with the txMeta data for each txHash
-	// in the retry attempts, only the tx hashes that are missing will be retried, not the whole subtree
 	txMetaSlice := make([]*txmeta.Data, len(txHashes))
 
-	for attempt := 1; attempt <= maxRetries+1; attempt++ {
-		prometheusBlockPersisterValidateSubtreeRetry.Inc()
+	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
-		if attempt > maxRetries {
-			u.logger.Infof("[validateSubtreeInternal][%s] [attempt #%d] final attempt to process subtree, this time with full checks enabled", subtreeHash.String(), attempt)
-		} else {
-			u.logger.Infof("[validateSubtreeInternal][%s] [attempt #%d] (fail fast=false) process %d txs from subtree", subtreeHash.String(), attempt, len(txHashes))
-		}
+	// 1. First attempt to load the txMeta from the cache...
+	missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice)
+	if err != nil {
+		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from cache", subtreeHash.String()), err)
+	}
 
-		// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
+	if missed > 0 {
+		batched := gocore.Config().GetBool("blockvalidation_batchMissingTransactions", true)
 
-		// 1. First attempt to load the txMeta from the cache...
-		missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice, false)
+		// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
+		missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, batched)
 		if err != nil {
-			if errors.Is(err, errors.ErrThresholdExceeded) {
-				u.logger.Warnf("[validateSubtreeInternal][%s] [attempt #%d] too many missing txmeta entries in cache (fail fast check only, will retry)", subtreeHash.String(), attempt)
-				time.Sleep(retrySleepDuration)
-				continue
-			}
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", subtreeHash.String(), attempt), err)
+			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String()), err)
 		}
+	}
 
-		if abandonTxThreshold > 0 && missed > abandonTxThreshold {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] [attempt #%d] abandoned - too many missing txmeta entries", subtreeHash.String(), attempt), err)
-		}
-
-		if missed > 0 {
-			batched := gocore.Config().GetBool("blockvalidation_batchMissingTransactions", true)
-
-			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-			missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, batched, false)
-			if err != nil {
-				return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from store", subtreeHash.String(), attempt), err)
-			}
-		}
-
-		if missed > 0 {
-			return fmt.Errorf("[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from store", subtreeHash.String(), attempt)
-		}
-
-		break
+	if missed > 0 {
+		return fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String())
 	}
 
 	for i := 0; i < len(txMetaSlice); i++ {

@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"sync/atomic"
 
-	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -15,7 +14,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, batched bool, failFast bool) (int, error) {
+func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, batched bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, fmt.Errorf("txHashes and txMetaSlice must be the same length")
 	}
@@ -25,7 +24,6 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024)
 	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStor_Concurrency", util.Max(4, runtime.NumCPU()/2))
-	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStore_MissingTxThreshold", 0)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)
@@ -73,10 +71,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 				default:
 					for _, data := range missingTxHashesCompacted {
 						if data.Data == nil || data.Err != nil {
-							newMissed := missed.Add(1)
-							if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
-								return errors.ErrThresholdExceeded
-							}
+							missed.Add(1)
 							continue
 						}
 						txMetaSlice[data.Idx] = data.Data
@@ -126,10 +121,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 							}
 						}
 
-						newMissed := missed.Add(1)
-						if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
-							return errors.ErrThresholdExceeded
-						}
+						missed.Add(1)
 					}
 				}
 

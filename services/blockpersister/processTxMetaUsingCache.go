@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"sync/atomic"
 
-	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
@@ -16,7 +15,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, failFast bool) (int, error) {
+func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, fmt.Errorf("txHashes and txMetaSlice must be the same length")
 	}
@@ -26,7 +25,6 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingCache_BatchSize", 1024)
 	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingCache_Concurrency", util.Max(4, runtime.NumCPU()/2))
-	missingTxThreshold, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingCache_MissingTxThreshold", 1)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)
@@ -71,10 +69,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 						continue
 					}
 
-					newMissed := missed.Add(1)
-					if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
-						return errors.ErrThresholdExceeded
-					}
+					missed.Add(1)
 				}
 			}
 
