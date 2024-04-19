@@ -915,6 +915,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) (err err
 			}
 			return fmt.Errorf("context cancelled un-spending %d of %d utxos", i, len(spends))
 		default:
+			s.logger.Warnf("unspending utxo %s of tx %s:%d, spending tx: %s", spend.Hash.String(), spend.TxID.String(), spend.Vout, spend.SpendingTxID.String())
 			if err = s.unSpend(ctx, spend); err != nil {
 				return err
 			}
@@ -937,7 +938,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxostore.Spend) error {
 		aerospike.DefaultMapPolicy(),
 		"utxos",
 		spend.Hash.String(),
-		nil,
+		aerospike.NewStringValue(""),
 	))
 
 	prometheusUtxoMapReset.Inc()
