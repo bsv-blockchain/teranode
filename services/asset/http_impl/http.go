@@ -101,6 +101,10 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 
 	apiGroup.GET("/txmeta/:hash/json", h.GetTransactionMeta(JSON))
 
+	apiGroup.GET("/txmeta_raw/:hash", h.GetTxMetaByTXID(BINARY_STREAM))
+	apiGroup.GET("/txmeta_raw/:hash/hex", h.GetTxMetaByTXID(HEX))
+	apiGroup.GET("/txmeta_raw/:hash/json", h.GetTxMetaByTXID(JSON))
+
 	apiGroup.GET("/subtree/:hash", h.GetSubtree(BINARY_STREAM))
 	apiGroup.GET("/subtree/:hash/hex", h.GetSubtree(HEX))
 	apiGroup.GET("/subtree/:hash/json", h.GetSubtree(JSON))
