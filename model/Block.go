@@ -729,7 +729,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				for _, parentTxStruct := range checkParentTxHashes {
 					parentTxStruct := parentTxStruct
 					parentG.Go(func() error {
-						return b.checkParentExistsOnChain(gCtx, logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+						return b.checkParentExistsOnChain(gCtx, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 					})
 				}
 
@@ -750,7 +750,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	return nil
 }
 
-func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore txmetastore.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) error {
+func (b *Block) checkParentExistsOnChain(gCtx context.Context, txMetaStore txmetastore.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) error {
 	// check whether the parent transaction has already been mined in a block on our chain
 	// we need to get back to the txMetaStore for this, to make sure we have the latest data
 	// two options: 1- parent is currently under validation, 2- parent is from forked chain.

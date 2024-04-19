@@ -3,10 +3,11 @@ package errors
 import (
 	"errors"
 	"fmt"
-	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/stretchr/testify/assert"
 	"strings"
 	"testing"
+
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -249,4 +250,14 @@ func TestStorageError(t *testing.T) {
 	assert.Equal(t, "error getting transaction 0000000000000000000000000000000000000000000000000000000000000000 from txMetaStore", err.Message)
 	assert.True(t, Is(err, ErrStorageError), "expected error to be of type ERR_STORAGE_ERROR")
 	assert.True(t, Is(err, otherError), "expected error to be of type otherError")
+}
+
+func Test_JoinWithMultipleErrs(t *testing.T) {
+	err1 := New(ERR_NOT_FOUND, "not found")
+	err2 := New(ERR_BLOCK_NOT_FOUND, "block not found")
+	err3 := New(ERR_INVALID_ARGUMENT, "invalid argument")
+
+	joinedErr := Join(err1, err2, err3)
+	assert.NotNil(t, joinedErr)
+	assert.Equal(t, "3: not found, 10: block not found, 1: invalid argument", joinedErr.Error())
 }

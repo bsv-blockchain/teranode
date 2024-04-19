@@ -3,6 +3,7 @@ package errors
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -178,7 +179,16 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 }
 
 func Join(errs ...error) error {
-	return errors.Join(errs...)
+	var messages []string
+	for _, err := range errs {
+		if err != nil {
+			messages = append(messages, err.Error())
+		}
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+	return fmt.Errorf(strings.Join(messages, ", "))
 }
 
 func Is(err, target error) bool {
