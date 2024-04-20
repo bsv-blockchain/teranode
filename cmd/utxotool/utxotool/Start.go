@@ -2,16 +2,23 @@ package utxotool
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"time"
 
 	"strings"
 
 	block_model "github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 )
 
 func Start() {
@@ -24,72 +31,70 @@ func Start() {
 		return
 	}
 
-	filename := os.Args[1]
+	path := os.Args[1]
 
-	// // Get the file extension
-	// ext := strings.TrimPrefix(filename, strings.TrimSuffix(filename, "."))
+	dir, file := filepath.Split(path)
 
-	// // if ext == "" {
-	// // 	fmt.Printf("Usage: utxotool <filename | hash>.[block | utxoset | utxodiff]\n\n")
-	// // 	return
-	// // }
+	// Get the file extension
+	ext := filepath.Ext(file)
 
-	// filenameWithoutSuffix := strings.TrimSuffix(filename, "."+ext)
+	fileWithoutExtension := strings.TrimSuffix(file, ext)
 
-	// start := time.Now()
-	// defer func() {
-	// 	logger.Infof("Time taken: %s", time.Since(start))
-	// }()
-
-	// var r io.Reader
-	// var err error
-
-	// if hash, err := chainhash.NewHashFromStr(filenameWithoutSuffix); err == nil {
-	// 	// This is a valid hash, so we'll assume it's a block hash and read it from the store
-	// 	persistURL, err, ok := gocore.Config().GetURL("blockPersister_persistURL")
-	// 	if err != nil || !ok {
-	// 		logger.Fatalf("Error getting blockpersister_store URL: %v", err)
-	// 	}
-
-	// 	store, err := blob.NewStore(logger, persistURL)
-	// 	if err != nil {
-	// 		logger.Errorf("failed to open store at %s: %s", persistURL, err)
-	// 		return
-	// 	}
-
-	// 	rc, err := store.GetIoReader(context.Background(), nil, options.WithFileName(hash.String()), options.WithSubDirectory("blocks"), options.WithFileExtension(ext))
-	// 	if err != nil {
-	// 		logger.Errorf("error getting reader from store: %s", err)
-	// 		return
-	// 	}
-
-	// 	r = rc
-	// 	defer rc.Close()
-
-	// } else {
-	// 	f, err := os.Open(filename)
-	// 	if err != nil {
-	// 		logger.Errorf("error opening file: %v", err)
-	// 		return
-	// 	}
-
-	// 	r = f
-	// 	defer f.Close()
-	// }
-
-	f, err := os.Open(filename)
-	if err != nil {
-		logger.Errorf("error opening file: %v", err)
+	if ext == "" {
+		fmt.Printf("Usage: utxotool <filename | hash>.[block | utxoset | utxodiff]\n\n")
 		return
 	}
 
+	start := time.Now()
+	defer func() {
+		logger.Infof("Time taken: %s", time.Since(start))
+	}()
+
+	var r io.Reader
+	var err error
+
+	hash, err := chainhash.NewHashFromStr(fileWithoutExtension)
+
+	if dir == "" && err == nil {
+		// This is a valid hash, so we'll assume it's a block hash and read it from the store
+		persistURL, err, ok := gocore.Config().GetURL("blockPersister_persistURL")
+		if err != nil || !ok {
+			logger.Fatalf("Error getting blockpersister_store URL: %v", err)
+		}
+
+		store, err := blob.NewStore(logger, persistURL)
+		if err != nil {
+			logger.Errorf("failed to open store at %s: %s", persistURL, err)
+			return
+		}
+
+		rc, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension(ext))
+		if err != nil {
+			logger.Errorf("error getting reader from store: %s", err)
+			return
+		}
+
+		r = rc
+		defer rc.Close()
+
+	} else {
+		f, err := os.Open(path)
+		if err != nil {
+			logger.Errorf("error opening file: %v", err)
+			return
+		}
+
+		r = f
+		defer f.Close()
+	}
+
 	// Wrap the reader with a buffered reader
-	r := bufio.NewReaderSize(f, 1024*1024)
+	r = bufio.NewReaderSize(r, 1024*1024)
 
-	logger.Infof("Reading file %s", filename)
+	logger.Infof("Reading file %s", path)
 
-	switch {
-	case strings.HasSuffix(filename, ".utxodiff"):
+	switch ext {
+	case ".utxodiff":
 		utxodiff, err := model.NewUTXODiffFromReader(r)
 		if err != nil {
 			fmt.Println("error reading utxodiff:", err)
@@ -110,7 +115,7 @@ func Start() {
 			return
 		})
 
-	case strings.HasSuffix(filename, ".utxoset"):
+	case ".utxoset":
 		utxoSet, err := model.NewUTXOSetFromReader(r)
 		if err != nil {
 			fmt.Println("error reading utxoSet:", err)
@@ -125,7 +130,7 @@ func Start() {
 			return
 		})
 
-	case strings.HasSuffix(filename, ".block"):
+	case ".block":
 		blockHeaderBytes := make([]byte, 80)
 		// read the first 80 bytes as the block header
 		_, err = io.ReadFull(r, blockHeaderBytes)
