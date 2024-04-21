@@ -14,6 +14,6 @@ The key changes were primarily focused on the distributed database layer. When d
 
 ## Looking Ahead
 
-While celebrating this achievement, we recognize that there’s always room for improvement. Our future work includes stability enhancements to comfortably surpass 1M TPS, providing us with a buffer and reaction time in case of unexpected issues. Currently, we’re observing throughput dips when mining massive blocks with over 500,000 transactions, and our team is actively working on optimizing these processes.
+While celebrating this achievement, we recognize that there’s always room for improvement. Our future work includes stability enhancements to comfortably surpass 1M TPS, providing us with a buffer and reaction time in case of unexpected issues. Currently, we’re observing throughput dips when mining massive blocks with over 500 million transactions, and our team is actively working on optimizing these processes.
 
 We’re incredibly proud of our team’s dedication and the progress we’ve made with Teranode. Stay tuned for more updates as we continue to push the boundaries of what’s possible in blockchain technology!
