@@ -60,6 +60,9 @@ var appCount int
 func init() {
 	gocore.SetInfo(progname, version, commit)
 
+	// Call the gocore.Log function to initialize the logger and start the Unix domain socket that allows us to configure settings at runtime.
+	gocore.Log(progname)
+
 	gocore.AddAppPayloadFn("CONFIG", func() interface{} {
 		return gocore.Config().GetAll()
 	})
