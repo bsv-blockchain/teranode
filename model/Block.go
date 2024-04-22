@@ -767,6 +767,8 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, txMetaStore txmet
 	// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
 	foundInPreviousBlocks := make(map[uint32]struct{}, len(parentTxMeta.BlockIDs))
 	for _, blockID := range parentTxMeta.BlockIDs {
+		// TODO it is possible that the parent is much mich older, and does not exist on the current chain of last 100 blocks
+		//      maybe check whether the block ID in the parent is older (lower number) than the lowest blockID in the current chain map?
 		if _, found := currentBlockHeaderIDsMap[blockID]; found {
 			foundInPreviousBlocks[blockID] = struct{}{}
 		}

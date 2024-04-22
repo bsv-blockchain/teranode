@@ -250,8 +250,6 @@ func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options)
 		return false, err
 	}
 
-	s.logger.Infof("[Lustre] Exists: %s", fileName)
-
 	_, err = os.Stat(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
