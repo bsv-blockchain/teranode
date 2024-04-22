@@ -3,12 +3,14 @@ package blockpersister
 import (
 	"context"
 	"net/url"
+	"os"
+	"path"
 	"runtime"
 	"strconv"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
-	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/google/uuid"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -41,12 +43,26 @@ func New(
 		stats:        gocore.NewStat("blockpersister"),
 	}
 
-	// create a caching tx meta store
-	if gocore.Config().GetBool("blockpersister_txMetaCacheEnabled", true) {
-		logger.Infof("Using cached version of tx meta store")
-		u.txMetaStore = txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, txMetaStore)
-	} else {
-		u.txMetaStore = txMetaStore
+	// clean old files from working dir
+	dir, ok := gocore.Config().Get("blockPersister_workingDir")
+	if ok {
+		logger.Infof("[BlockPersister] Cleaning old files from working dir: %s", dir)
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			logger.Fatalf("error reading working dir: %v", err)
+		}
+		for _, file := range files {
+			fileInfo, err := file.Info()
+			if err != nil {
+				logger.Errorf("error reading file info: %v", err)
+			}
+			if time.Since(fileInfo.ModTime()) > 30*time.Minute {
+				logger.Infof("removing old file: %s", file.Name())
+				if err = os.Remove(path.Join(dir, file.Name())); err != nil {
+					logger.Errorf("error removing old file: %v", err)
+				}
+			}
+		}
 	}
 
 	return u

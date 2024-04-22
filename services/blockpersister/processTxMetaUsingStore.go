@@ -60,7 +60,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					}
 				}
 
-				if err := u.txMetaStore.MetaBatchDecorate(gCtx, missingTxHashesCompacted, "fee", "sizeInBytes", "parentTxHashes", "blockIDs"); err != nil {
+				if err := u.txMetaStore.MetaBatchDecorate(gCtx, missingTxHashesCompacted, "tx"); err != nil {
 					return err
 				}
 

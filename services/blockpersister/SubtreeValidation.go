@@ -77,20 +77,12 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
-	// 1. First attempt to load the txMeta from the cache...
-	missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice)
+	batched := gocore.Config().GetBool("blockvalidation_batchMissingTransactions", true)
+
+	// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
+	missed, err := u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, batched)
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from cache", subtreeHash.String()), err)
-	}
-
-	if missed > 0 {
-		batched := gocore.Config().GetBool("blockvalidation_batchMissingTransactions", true)
-
-		// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-		missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, batched)
-		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String()), err)
-		}
+		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String()), err)
 	}
 
 	if missed > 0 {

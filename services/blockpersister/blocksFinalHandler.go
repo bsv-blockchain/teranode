@@ -56,138 +56,141 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 			return
 		}
 
-		block, err := model.NewBlockFromBytes(msg.Message.Value)
-		if err != nil {
-			u.logger.Errorf("[BlockPersister] error creating block from bytes: %w", err)
+		if err := u.persistBlock(ctx, hash, msg.Message.Value); err != nil {
+			u.logger.Errorf("Error persisting block %s: %v", hash.String(), err)
 			return
 		}
-
-		u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
-
-		dir, _ := gocore.Config().Get("blockPersister_workingDir", os.TempDir())
-
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			log.Fatalf("Failed to create block persister folder %s: %v", dir, err)
-		}
-
-		// Open file
-		filename := path.Join(dir, fmt.Sprintf("%s.block", block.Header.Hash().String()))
-		tmpFilename := filename + ".tmp"
-
-		f, err := os.Create(tmpFilename)
-		if err != nil {
-			u.logger.Errorf("[BlockPersister] error creating file: %w", err)
-			return
-		}
-
-		defer func() {
-			_ = f.Close()
-			_ = os.Remove(tmpFilename)
-		}()
-
-		w := bufio.NewWriter(f)
-
-		// Write 80 byte block header
-		n, err := w.Write(block.Header.Bytes())
-		if err != nil {
-			u.logger.Errorf("[BlockPersister] error writing block header: %w", err)
-			return
-		}
-		if n != 80 {
-			u.logger.Errorf("[BlockPersister] error writing block header: wrote %d bytes, expected 80", n)
-			return
-		}
-
-		// Write varint of number of tx's
-		if err = wire.WriteVarInt(w, 0, block.TransactionCount); err != nil {
-			u.logger.Errorf("[BlockPersister] error writing transaction count: %w", err)
-			return
-		}
-
-		if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
-			u.logger.Errorf("[BlockPersister] error writing coinbase tx: %w", err)
-			return
-		}
-
-		// Create a new UTXO diff
-		utxoDiff := utxo_model.NewUTXODiff(block.Header.Hash())
-
-		// Add coinbase utxos to the utxo diff
-		utxoDiff.ProcessTx(block.CoinbaseTx)
-
-		for _, subtreeHash := range block.Subtrees {
-			// Call the validateSubtreeInternal method
-			if err = u.processSubtree(ctx, *subtreeHash, w, utxoDiff); err != nil {
-				u.logger.Errorf("Failed to process subtree %s: %v", hash.String(), err)
-			}
-		}
-
-		if err = w.Flush(); err != nil {
-			u.logger.Errorf("[BlockPersister] error flushing writer: %w", err)
-			return
-		}
-
-		if err = f.Close(); err != nil {
-			u.logger.Errorf("[BlockPersister] error closing file: %w", err)
-			return
-		}
-
-		if err = os.Rename(tmpFilename, filename); err != nil {
-			u.logger.Errorf("[BlockPersister] error renaming file: %w", err)
-			return
-		}
-
-		u.logger.Infof("[BlockPersister] Wrote block %s to file %s", block.Header.Hash().String(), filename)
-
-		u.logger.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
-
-		// At this point, we have a complete UTXODiff for this block.
-
-		// 1. Persist it to disk
-		folder, _ := gocore.Config().Get("utxoPersister_workingDir", os.TempDir())
-
-		filename = path.Join(folder, fmt.Sprintf("%s.utxodiff", block.Header.Hash().String()))
-
-		if err := utxoDiff.Persist(filename); err != nil {
-			u.logger.Errorf("[BlockPersister] error persisting utxo diff: %w", err)
-			return
-		}
-
-		// 2. Now we need to apply this UTXODiff to the UTXOSet for the previous block
-		previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
-		if !found {
-			// Load the UTXOSet from disk
-			previousUTXOSet, err = utxo_model.LoadUTXOSet(folder, *block.Header.HashPrevBlock)
-			if err != nil {
-				u.logger.Errorf("error loading UTXOSet %s: %w", *block.Header.HashPrevBlock, err)
-				return
-			}
-		}
-
-		// 1. Create a new UTXOSet for this block from the previous UTXOSet
-		utxoSet := utxo_model.NewUTXOSetFromPrevious(block.Header.Hash(), previousUTXOSet)
-
-		// 2. Remove all spent UTXOs
-		utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-			utxoSet.Delete(uk)
-			return
-		})
-
-		// 3. Add all new UTXOs
-		utxoDiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-			utxoSet.Add(uk, uv)
-			return
-		})
-
-		filename = path.Join(folder, fmt.Sprintf("%s.utxoset", block.Header.Hash().String()))
-
-		if err := utxoSet.Persist(filename); err != nil {
-			u.logger.Errorf("[BlockPersister] error persisting utxo set: %w", err)
-			return
-		}
-
-		utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)
 	}
+}
+
+func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error {
+	block, err := model.NewBlockFromBytes(blockBytes)
+	if err != nil {
+		return fmt.Errorf("error creating block from bytes: %w", err)
+	}
+
+	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
+
+	dir, _ := gocore.Config().Get("blockPersister_workingDir", os.TempDir())
+
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Fatalf("Failed to create block persister folder %s: %v", dir, err)
+	}
+
+	// Open file
+	filename := path.Join(dir, fmt.Sprintf("%s.block", block.Header.Hash().String()))
+	tmpFilename := filename + ".tmp"
+
+	f, err := os.Create(tmpFilename)
+	if err != nil {
+		return fmt.Errorf("error creating file: %w", err)
+	}
+
+	defer func() {
+		_ = f.Close()
+		_ = os.Remove(tmpFilename)
+	}()
+
+	w := bufio.NewWriter(f)
+
+	// Write 80 byte block header
+	n, err := w.Write(block.Header.Bytes())
+	if err != nil {
+		return fmt.Errorf("error writing block header: %w", err)
+	}
+	if n != 80 {
+		return fmt.Errorf("error writing block header: wrote %d bytes, expected 80", n)
+	}
+
+	// Write varint of number of tx's
+	if err = wire.WriteVarInt(w, 0, block.TransactionCount); err != nil {
+		return fmt.Errorf("error writing transaction count: %w", err)
+	}
+
+	if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
+		return fmt.Errorf("error writing coinbase tx: %w", err)
+	}
+
+	// Create a new UTXO diff
+	utxoDiff := utxo_model.NewUTXODiff(block.Header.Hash())
+
+	// Add coinbase utxos to the utxo diff
+	utxoDiff.ProcessTx(block.CoinbaseTx)
+
+	for _, subtreeHash := range block.Subtrees {
+		// Call the validateSubtreeInternal method
+		if err = u.processSubtree(ctx, *subtreeHash, w, utxoDiff); err != nil {
+			return fmt.Errorf(" subtree %s: %v", hash.String(), err)
+		}
+	}
+
+	if err = w.Flush(); err != nil {
+		return fmt.Errorf("error flushing writer: %w", err)
+	}
+
+	if err = f.Close(); err != nil {
+		return fmt.Errorf("error closing file: %w", err)
+	}
+
+	if err = os.Rename(tmpFilename, filename); err != nil {
+		return fmt.Errorf("error renaming file: %w", err)
+	}
+
+	u.logger.Infof("[BlockPersister] Wrote block %s to file %s", block.Header.Hash().String(), filename)
+
+	u.logger.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
+
+	// At this point, we have a complete UTXODiff for this block.
+
+	// 1. Persist it to disk
+	folder, _ := gocore.Config().Get("utxoPersister_workingDir", os.TempDir())
+
+	// Create the folder if it doesn't exist
+	if err := os.MkdirAll(folder, 0755); err != nil {
+		return fmt.Errorf("error creating folder: %w", err)
+	}
+
+	filename = path.Join(folder, fmt.Sprintf("%s.utxodiff", block.Header.Hash().String()))
+
+	if err := utxoDiff.Persist(filename); err != nil {
+		return fmt.Errorf("error persisting utxo diff: %w", err)
+	}
+
+	// 2. Now we need to apply this UTXODiff to the UTXOSet for the previous block
+	previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
+	if !found {
+		// Load the UTXOSet from disk
+		previousUTXOSet, err = utxo_model.LoadUTXOSet(folder, *block.Header.HashPrevBlock)
+		if err != nil {
+			return fmt.Errorf("OSet %s: %w", *block.Header.HashPrevBlock, err)
+		}
+	}
+
+	// 1. Create a new UTXOSet for this block from the previous UTXOSet
+	utxoSet := utxo_model.NewUTXOSetFromPrevious(block.Header.Hash(), previousUTXOSet)
+
+	// 2. Remove all spent UTXOs
+	utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+		utxoSet.Delete(uk)
+		return
+	})
+
+	// 3. Add all new UTXOs
+	utxoDiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+		utxoSet.Add(uk, uv)
+
+		return
+	})
+
+	filename = path.Join(folder, fmt.Sprintf("%s.utxoset", block.Header.Hash().String()))
+
+	if err := utxoSet.Persist(filename); err != nil {
+		return fmt.Errorf("error persisting utxo set: %w", err)
+	}
+
+	utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)
+
+	return nil
 }
 
 type Exister interface {
