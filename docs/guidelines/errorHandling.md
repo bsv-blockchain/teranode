@@ -3,6 +3,19 @@
 
 ## Index
 
+
+1. [Introduction](#1-introduction)
+- [1.1. Go Errors](#11-go-errors)
+- [1.2. Go Errors Best Practices](#12-go-errors---best-practices)
+- [1.3. Sentinel Errors](#13-sentinel-errors)
+- [1.4 Wrapping Errors](#14-wrapping-errors)
+2. [Error Handling in Teranode](#2-error-handling-in-teranode)
+- [2.1. Error Handling Strategy](#21-error-handling-strategy)
+- [2.2. Sentinel Errors in Teranode](#22-sentinel-errors-in-teranode)
+- [2.3. Error Wrapping in Teranode](#23-error-wrapping-in-teranode)
+- [2.4. gRPC Error Wrapping in Teranode](#24-grpc-error-wrapping-in-teranode)
+- [2.6. Unit Tests](#26-unit-tests)
+
 ## 1. Introduction
 
 ### 1.1. Go Errors
