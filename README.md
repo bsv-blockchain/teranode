@@ -405,8 +405,7 @@ For naming conventions please check the [Naming Conventions](docs/guidelines/nam
 
 ### 8.3. Error Handling
 
--- TODO
-
+For error handling conventions please check the [Error Handling](docs/guidelines/errorHandling.md).
 
 ---
 

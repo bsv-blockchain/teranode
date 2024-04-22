@@ -1,5 +1,47 @@
 # 📘 Coding Standards
 
+
+## Index
+
+- [Naming Conventions](#naming-conventions)
+  - [Introduction](#introduction)
+  - [General Principles](#general-principles)
+    - [Clarity and Readability Over Brevity](#clarity-and-readability-over-brevity)
+    - [Consistency Within the Project](#consistency-within-the-project)
+    - [Use of Descriptive Names, Avoiding Generic Names When Possible](#use-of-descriptive-names-avoiding-generic-names-when-possible)
+  - [Package Names](#package-names)
+    - [Short, Lowercase, and One-word Names](#short-lowercase-and-one-word-names)
+    - [Avoidance of Common Names Like "util" or "helper"](#avoidance-of-common-names-like-util-or-helper)
+    - [Examples and Exceptions](#examples-and-exceptions)
+  - [Variable Names](#variable-names)
+    - [Short Yet Descriptive Names](#short-yet-descriptive-names)
+    - [CamelCase for Exportable Variables and camelCase for Internal Variables](#camelcase-for-exportable-variables-and-camelcase-for-internal-variables)
+    - [Common Idioms](#common-idioms)
+  - [Function Names](#function-names)
+    - [Use of Descriptive Verbs and Nouns](#use-of-descriptive-verbs-and-nouns)
+    - [Naming Conventions for Constructors, Getters, and Setters](#naming-conventions-for-constructors-getters-and-setters)
+    - [Error Handling Functions and Their Naming Patterns](#error-handling-functions-and-their-naming-patterns)
+  - [Interface Names](#interface-names)
+    - [Single Method Interfaces with "-er" Suffix](#single-method-interfaces-with--er-suffix)
+    - [Use of Descriptive Names for More Complex Interfaces](#use-of-descriptive-names-for-more-complex-interfaces)
+  - [Type Names](#type-names)
+    - [Avoidance of Redundant or Tautological Names](#avoidance-of-redundant-or-tautological-names)
+    - [Use of Clear and Specific Names for Custom Types](#use-of-clear-and-specific-names-for-custom-types)
+  - [Commenting](#commenting)
+    - [Best Practices for Writing Clear and Helpful Comments](#best-practices-for-writing-clear-and-helpful-comments)
+  - [Error Handling](#error-handling)
+    - [Effective Use of Go's Error Handling Paradigm](#effective-use-of-gos-error-handling-paradigm)
+    - [Patterns for Error Creation, Propagation, and Checking](#patterns-for-error-creation-propagation-and-checking)
+  - [Concurrency](#concurrency)
+    - [Best Practices for Using Goroutines and Channels](#best-practices-for-using-goroutines-and-channels)
+    - [Patterns for Avoiding Common Concurrency Pitfalls](#patterns-for-avoiding-common-concurrency-pitfalls)
+  - [Testing](#testing)
+    - [Writing Effective Unit Tests Using the "testing" Package](#writing-effective-unit-tests-using-the-testing-package)
+    - [Use of Table-Driven Tests for Comprehensive Coverage](#use-of-table-driven-tests-for-comprehensive-coverage)
+  - [Dependency Management](#dependency-management)
+    - [Use of Modules for Managing Dependencies](#use-of-modules-for-managing-dependencies)
+    - [Strategies for Keeping Dependencies Up to Date and Secure](#strategies-for-keeping-dependencies-up-to-date-and-secure)
+
 ## Naming Conventions
 
 ### Introduction
