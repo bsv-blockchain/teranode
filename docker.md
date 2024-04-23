@@ -27,6 +27,13 @@ echo $CERT | docker login --username AWS --password-stdin 434394763103.dkr.ecr.e
 $ docker compose up -d
 ```
 It will mine the initial blocks, generate splitting coinbase txs and run 3 blasters.
+
+
+## to see what containers are running with memory usage, etc
+```
+$ docker stats
+```
+
 ## run with a subset of services (this example sparks up a single node)
 ```
 $ docker compose up ubsv-1 -d
