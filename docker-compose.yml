@@ -5,6 +5,7 @@ x-ubsv-base:
   image: ubsv:latest
   depends_on:
     - postgres
+    - kafka-shared
   networks:
     - ubsv-network
   volumes:
@@ -61,8 +62,8 @@ services:
     networks:
       - ubsv-network
     ports:
-      - "19092:9092"
-      - "19093:9093"
+      - "49092:9092"
+      - "49093:9093"
     environment:
       <<: *common-env
       KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@kafka-shared:9093"
