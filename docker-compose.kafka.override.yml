@@ -1,0 +1,143 @@
+version: '3.8'
+
+services:
+  kafka-1:
+    container_name: kafka-1
+    image: vectorized/redpanda:latest
+    networks:
+      - ubsv-network
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka-1:9092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:9093
+    ports:
+      - 18181:8081
+      - 19092:9092
+      - 19093:9093
+
+  kafka-console-1:
+    container_name: kafka-console-1
+    image: docker.redpanda.com/redpandadata/console:latest
+    networks:
+      - ubsv-network
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["kafka-1:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://kafka-1:8081"]
+    ports:
+      - "18080:8080"
+    depends_on:
+      - kafka-1
+
+  kafka-2:
+    container_name: kafka-2
+    image: vectorized/redpanda:latest
+    networks:
+      - ubsv-network
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka-2:9092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:9093
+    ports:
+      - 28181:8081
+      - 29092:9092
+      - 29093:9093
+
+  kafka-console-2:
+    container_name: kafka-console-2
+    image: docker.redpanda.com/redpandadata/console:latest
+    networks:
+      - ubsv-network
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["kafka-2:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://kafka-2:8081"]
+    ports:
+      - "28080:8080"
+    depends_on:
+      - kafka-2
+
+  kafka-3:
+    container_name: kafka-3
+    image: vectorized/redpanda:latest
+    networks:
+      - ubsv-network
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka-3:9092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:9093
+    ports:
+      - 38181:8081
+      - 39092:9092
+      - 39093:9093
+
+  kafka-console-3:
+    container_name: kafka-console-3
+    networks:
+      - ubsv-network
+    image: docker.redpanda.com/redpandadata/console:latest
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["kafka-3:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://kafka-3:8081"]
+    ports:
+      - "38080:8080"
+    depends_on:
+      - kafka-3
+
+  ubsv-1:
+    depends_on:
+      - kafka-1
+      - kafka-console-1
+    environment:
+      KAFKA_HOSTS: "kafka-1:9092"
+
+  ubsv-2:
+    depends_on:
+      - kafka-2
+      - kafka-console-2
+    environment:
+      KAFKA_HOSTS: "kafka-2:9092"
+
+  ubsv-3:
+    depends_on:
+      - kafka-3
+      - kafka-console-3
+    environment:
+      KAFKA_HOSTS: "kafka-3:9092"
