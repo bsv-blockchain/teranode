@@ -101,6 +101,8 @@ type ImprovedCache struct {
 // NewImprovedCache returns new cache with the given maxBytes capacity in bytes.
 // trimRatioSetting is the percentage of the chunks to be removed when the chunks are full, default is 25%.
 func NewImprovedCache(maxBytes int, bucketType types.BucketType) *ImprovedCache {
+	LogCacheSize() // log whether we are using small or large cache
+
 	if maxBytes <= 0 {
 		panic(fmt.Errorf("maxBytes must be greater than 0; got %d", maxBytes))
 	}
