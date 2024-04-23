@@ -23,11 +23,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
 	"github.com/bitcoin-sv/ubsv/cmd/chainintegrity/chainintegrity"
+	"github.com/bitcoin-sv/ubsv/cmd/filereader/filereader"
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	"github.com/bitcoin-sv/ubsv/cmd/utxostore_blaster/utxostore_blaster"
-	"github.com/bitcoin-sv/ubsv/cmd/utxotool/utxotool"
 	"github.com/bitcoin-sv/ubsv/cmd/validate_block/validateblock"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
@@ -112,9 +112,9 @@ func main() {
 		utxostore_blaster.Init()
 		utxostore_blaster.Start()
 		return
-	case "utxotool.run":
-		// utxotool.Init()
-		utxotool.Start()
+	case "filereader.run":
+		// filereader.Init()
+		filereader.Start()
 		return
 	}
 

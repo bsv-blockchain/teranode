@@ -1,4 +1,4 @@
-package utxotool
+package filereader
 
 import (
 	"bufio"
@@ -27,7 +27,7 @@ func Start() {
 	fmt.Println()
 
 	if len(os.Args) < 2 {
-		fmt.Printf("Usage: utxotool <filename | hash>.[block | utxoset | utxodiff]\n\n")
+		fmt.Printf("Usage: filereader <filename | hash>.[block | utxoset | utxodiff]\n\n")
 		return
 	}
 
@@ -41,7 +41,7 @@ func Start() {
 	fileWithoutExtension := strings.TrimSuffix(file, ext)
 
 	if ext == "" {
-		fmt.Printf("Usage: utxotool <filename | hash>.[block | utxoset | utxodiff]\n\n")
+		fmt.Printf("Usage: filereader <filename | hash>.[block | utxoset | utxodiff]\n\n")
 		return
 	}
 
@@ -103,13 +103,13 @@ func Start() {
 
 		fmt.Println("UTXODiff block hash:", utxodiff.BlockHash)
 
-		fmt.Println("UTXODiff removed UTXOs:")
+		fmt.Printf("UTXODiff removed %d UTXOs:\n", utxodiff.Removed.Length())
 		utxodiff.Removed.Iter(func(uk model.UTXOKey, uv *model.UTXOValue) (stop bool) {
 			fmt.Printf("%v %v\n", &uk, uv)
 			return
 		})
 
-		fmt.Println("UTXODiff added UTXOs:")
+		fmt.Printf("UTXODiff added %d UTXOs:\n", utxodiff.Added.Length())
 		utxodiff.Added.Iter(func(uk model.UTXOKey, uv *model.UTXOValue) (stop bool) {
 			fmt.Printf("%v %v\n", &uk, uv)
 			return
@@ -124,7 +124,7 @@ func Start() {
 
 		fmt.Println("UTXOSet block hash:", utxoSet.BlockHash)
 
-		fmt.Println("UTXOSet UTXOs:")
+		fmt.Printf("UTXOSet with %d UTXOs:\n", utxoSet.Current.Length())
 		utxoSet.Current.Iter(func(uk model.UTXOKey, uv *model.UTXOValue) (stop bool) {
 			fmt.Printf("%v %v\n", &uk, uv)
 			return
