@@ -1,13 +1,16 @@
 package blockpersister
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -15,7 +18,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash, w io.Writer, utxoDiff *utxo_model.UTXODiff) error {
+func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash, utxoDiff *utxo_model.UTXODiff) error {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
@@ -67,26 +70,60 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 		return fmt.Errorf("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String())
 	}
 
-	for i := 0; i < len(txMetaSlice); i++ {
-		if model.CoinbasePlaceholderHash.Equal(txHashes[i]) {
-			if i != 0 {
-				return fmt.Errorf("[BlockPersister] coinbase tx is not first in subtree (%d)", i)
+	reader, writer := io.Pipe()
+
+	bufferedWriter := bufio.NewWriter(writer)
+
+	go func() {
+		defer func() {
+			// Flush the buffer and close the writer with error handling
+			if err := bufferedWriter.Flush(); err != nil {
+				u.logger.Errorf("error flushing writer: %v", err)
+				writer.CloseWithError(err)
+				return
 			}
-			// The coinbase tx is not in the txmeta store and has been added to the block already
-			continue
+
+			if err := writer.CloseWithError(nil); err != nil {
+				u.logger.Errorf("error closing writer: %v", err)
+			}
+		}()
+
+		// Write the number of txs in the subtree
+		if err := binary.Write(bufferedWriter, binary.LittleEndian, uint32(len(txMetaSlice))); err != nil {
+			u.logger.Errorf("error writing number of txs: %v", err)
+			writer.CloseWithError(err)
+			return
 		}
 
-		if w != nil {
-			if _, err := w.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
-				return fmt.Errorf("[BlockPersister] error writing tx to file: %w", err)
+		for i := 0; i < len(txMetaSlice); i++ {
+			if model.CoinbasePlaceholderHash.Equal(txHashes[i]) {
+				// The coinbase tx is not in the txmeta store so we add in a special coinbase placeholder tx
+				if i != 0 {
+					err := fmt.Errorf("[BlockPersister] coinbase tx is not first in subtree (%d)", i)
+					u.logger.Errorf(err.Error())
+					writer.CloseWithError(err)
+					return
+				}
+
+				if _, err := bufferedWriter.Write(model.CoinbasePlaceholderTx.Bytes()); err != nil {
+					u.logger.Errorf("error writing coinbase tx: %v", err)
+					writer.CloseWithError(err)
+					return
+				}
+			} else {
+				if _, err := bufferedWriter.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
+					u.logger.Errorf("error writing tx: %v", err)
+					writer.CloseWithError(err)
+					return
+				}
+
+				if utxoDiff != nil {
+					// Process the utxo diff...
+					utxoDiff.ProcessTx(txMetaSlice[i].Tx)
+				}
 			}
 		}
+	}()
 
-		if utxoDiff != nil {
-			// Process the utxo diff...
-			utxoDiff.ProcessTx(txMetaSlice[i].Tx)
-		}
-	}
-
-	return nil
+	return u.blockStore.SetFromReader(ctx, subtreeHash[:], reader, options.WithFileExtension("subtree"), options.WithPrefixDirectory(4))
 }

@@ -7,18 +7,19 @@ import (
 	"io"
 	"os"
 	"path"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -76,67 +77,27 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
 
-	reader, writer := io.Pipe()
+	concurrency, _ := gocore.Config().GetInt("blockpersister_concurrency", util.Max(64, runtime.NumCPU()/2))
 
-	bufferedWriter := bufio.NewWriter(writer)
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(concurrency)
 
 	// Create a new UTXO diff
 	utxoDiff := utxo_model.NewUTXODiff(u.logger, block.Header.Hash())
 
-	go func() {
-		defer func() {
-			// Flush the buffer and close the writer with error handling
-			if err := bufferedWriter.Flush(); err != nil {
-				u.logger.Errorf("Error flushing writer: %v", err)
-			}
+	// Add coinbase utxos to the utxo diff
+	utxoDiff.ProcessTx(block.CoinbaseTx)
 
-			if err := writer.CloseWithError(nil); err != nil {
-				u.logger.Errorf("Error closing writer: %v", err)
-			}
-		}()
+	for _, subtreeHash := range block.Subtrees {
+		subtreeHash := subtreeHash
 
-		// Write 80 byte block header
-		n, err := bufferedWriter.Write(block.Header.Bytes())
-		if err != nil {
-			u.logger.Errorf("Error writing block header: %v", err)
-			writer.CloseWithError(err)
-			return
-		}
-		if n != 80 {
-			err := fmt.Errorf("error writing block header: wrote %d bytes, expected 80", n)
-			u.logger.Errorf("%v", err)
-			writer.CloseWithError(err)
-			return
-		}
+		g.Go(func() error {
+			return u.processSubtree(gCtx, *subtreeHash, utxoDiff)
+		})
+	}
 
-		// Write varint of number of tx's
-		if err = wire.WriteVarInt(bufferedWriter, 0, block.TransactionCount); err != nil {
-			u.logger.Errorf("Error writing transaction count: %v", err)
-			writer.CloseWithError(err)
-			return
-		}
-
-		if _, err = bufferedWriter.Write(block.CoinbaseTx.Bytes()); err != nil {
-			u.logger.Errorf("Error writing coinbase tx: %v", err)
-			writer.CloseWithError(err)
-			return
-		}
-
-		// Add coinbase utxos to the utxo diff
-		utxoDiff.ProcessTx(block.CoinbaseTx)
-
-		for _, subtreeHash := range block.Subtrees {
-			// Call the validateSubtreeInternal method
-			if err = u.processSubtree(ctx, *subtreeHash, bufferedWriter, utxoDiff); err != nil {
-				u.logger.Errorf("Failed to process subtree %s: %v", subtreeHash.String(), err)
-				writer.CloseWithError(err)
-				return
-			}
-		}
-	}()
-
-	if err := u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithPrefixDirectory(10)); err != nil {
-		return fmt.Errorf("error persisting block: %w", err)
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("error processing subtrees: %w", err)
 	}
 
 	// At this point, we have a complete UTXODiff for this block.
@@ -175,6 +136,36 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	}
 
 	utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)
+
+	// Finally, write the block file
+	reader, writer := io.Pipe()
+
+	bufferedWriter := bufio.NewWriter(writer)
+
+	go func() {
+		defer func() {
+			// Flush the buffer and close the writer with error handling
+			if err := bufferedWriter.Flush(); err != nil {
+				u.logger.Errorf("Error flushing writer: %v", err)
+			}
+
+			if err := writer.CloseWithError(nil); err != nil {
+				u.logger.Errorf("Error closing writer: %v", err)
+			}
+		}()
+
+		// Write 80 byte block header
+		_, err := bufferedWriter.Write(blockBytes)
+		if err != nil {
+			u.logger.Errorf("Error writing block: %v", err)
+			writer.CloseWithError(err)
+			return
+		}
+	}()
+
+	if err := u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithPrefixDirectory(10)); err != nil {
+		return fmt.Errorf("error persisting block: %w", err)
+	}
 
 	return nil
 }

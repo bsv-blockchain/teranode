@@ -2,20 +2,22 @@ package model
 
 import (
 	"sync"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils/expiringmap"
 )
 
 type utxoSetCache struct {
 	mu sync.RWMutex
 	l  ulogger.Logger
-	m  map[chainhash.Hash]*UTXOSet
+	m  *expiringmap.ExpiringMap[chainhash.Hash, *UTXOSet]
 }
 
 var UTXOSetCache = &utxoSetCache{
 	l: ulogger.NewZeroLogger("UTXOSetCache"),
-	m: make(map[chainhash.Hash]*UTXOSet),
+	m: expiringmap.New[chainhash.Hash, *UTXOSet](30 * time.Minute),
 }
 
 func (c *utxoSetCache) Get(hash chainhash.Hash) (*UTXOSet, bool) {
@@ -27,7 +29,7 @@ func (c *utxoSetCache) Get(hash chainhash.Hash) (*UTXOSet, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	utxoSet, ok := c.m[hash]
+	utxoSet, ok := c.m.Get(hash)
 	if !ok {
 		return nil, false
 	}
@@ -39,5 +41,5 @@ func (c *utxoSetCache) Put(hash chainhash.Hash, utxoSet *UTXOSet) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.m[hash] = utxoSet
+	c.m.Set(hash, utxoSet)
 }

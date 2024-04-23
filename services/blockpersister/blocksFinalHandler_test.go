@@ -174,8 +174,11 @@ func TestBlock(t *testing.T) {
 	err = persister.persistBlock(context.Background(), mockStore.subtrees[0].RootHash(), b)
 	require.NoError(t, err)
 
-	btest, err := blockStore.Get(context.Background(), mockStore.subtrees[0].RootHash()[:], options.WithFileExtension("block"))
+	newBlockBytes, err := blockStore.Get(context.Background(), mockStore.subtrees[0].RootHash()[:], options.WithFileExtension("block"))
 	require.NoError(t, err)
 
-	assert.Equal(t, blockBytes, btest)
+	newBlockModel, err := model.NewBlockFromBytes(newBlockBytes)
+	require.NoError(t, err)
+
+	assert.Equal(t, block.Header.Hash().String(), newBlockModel.Header.Hash().String())
 }
