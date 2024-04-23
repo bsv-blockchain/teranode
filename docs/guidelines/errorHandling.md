@@ -251,25 +251,34 @@ The `New` function in Teranode's error package creates and returns a pointer to 
 
 ```go
 func New(code ERR, message string, params ...interface{}) *Error {
-    var wErr error
+	var wErr error
 
-    if len(params) > 0 {
-        // Check if the last parameter is an error to be wrapped
-        if err, ok := params[len(params)-1].(error); ok {
-            wErr = err
-            params = params[:len(params)-1] // Remove the last parameter as it's the error
-        }
-    }
+	// sprintf the message with the params except the last one if the last one is an error
+	if len(params) > 0 {
+		if err, ok := params[len(params)-1].(error); ok {
+			wErr = err
+			params = params[:len(params)-1]
+		}
+	}
 
-    if len(params) > 0 {
-        message = fmt.Sprintf(message, params...) // Format message with remaining params
-    }
+	if len(params) > 0 {
+		message = fmt.Sprintf(message, params...)
+	}
 
-    return &Error{
-        Code:       code,
-        Message:    message,
-        WrappedErr: wErr,
-    }
+	// Check the code exists in the ErrorConstants enum
+	if _, ok := ERR_name[int32(code)]; !ok {
+		return &Error{
+			Code:       code,
+			Message:    "invalid error code",
+			WrappedErr: wErr,
+		}
+	}
+
+	return &Error{
+		Code:       code,
+		Message:    message,
+		WrappedErr: wErr,
+	}
 }
 ```
 

@@ -51,9 +51,6 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("Error: %s (error code: %d),  %v: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
 }
 
-// errors.WrapGRPC(errros.New() )
-// fmt.Errorf -> errors.New() will be replaced.
-
 // Is reports whether error codes match.
 func (e *Error) Is(target error) bool {
 	var ue *Error
@@ -161,18 +158,8 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 		return codes.Unknown
 	case ERR_INVALID_ARGUMENT:
 		return codes.InvalidArgument
-	// case ERR_NOT_FOUND:
-	// 	return codes.NotFound
-	// case ERR_BLOCK_NOT_FOUND:
-	// 	return codes.NotFound
 	case ERR_THRESHOLD_EXCEEDED:
 		return codes.ResourceExhausted
-	// case ERR_INVALID_BLOCK:
-	// 	return codes.Internal
-	// case ERR_INVALID_TX_DOUBLE_SPEND:
-	// 	return codes.Internal
-	// case ERR_SERVICE_UNAVAILABLE:
-	// 	return codes.Unavailable
 	default:
 		return codes.Internal
 	}
