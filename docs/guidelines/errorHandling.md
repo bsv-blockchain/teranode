@@ -14,7 +14,9 @@
 - [2.2. Sentinel Errors in Teranode](#22-sentinel-errors-in-teranode)
 - [2.3. Error Wrapping in Teranode](#23-error-wrapping-in-teranode)
 - [2.4. gRPC Error Wrapping in Teranode](#24-grpc-error-wrapping-in-teranode)
-- [2.6. Unit Tests](#26-unit-tests)
+- [2.6. Error Protobuf](#26-error-protobuf)
+- [2.7. Unit Tests](#27-unit-tests)
+
 
 ## 1. Introduction
 
@@ -450,6 +452,14 @@ This is then interpreted by the Client (`GetBlock` in the Blockchain `Client.go`
 
 From this point on, the service invoking the blockchain client can handle the error as a Teranode error, even though it was originally delivered as a gRPC error.
 
-### 2.6. Unit Tests
+### 2.6. Error Protobuf
+
+`error.proto` defines a protocol buffer message for error handling in Teranode. This file specifies the structure of error messages, including error codes and messages, using the Protobuf language.
+
+The `enum ERR` defines an enumeration of possible error codes with explicit values (e.g., `UNKNOWN = 0; INVALID_ARGUMENT = 1;`). These enums help standardize error handling across different Teranode services that interact with each other.
+
+Use `protoc-gen-go` to compile the proto file.
+
+### 2.7. Unit Tests
 
 Extensive unit tests are available under the `errors` package (`Error_test.go`). Should you add any new functionality or scenario, it is recommended to update the unit tests to ensure that the error handling logic remains consistent and reliable.
