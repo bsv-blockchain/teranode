@@ -109,3 +109,8 @@ usbv-1 http://localhost:18090
 usbv-2 http://localhost:28090
 
 usbv-3 http://localhost:38090
+
+## grafana
+
+http://localhost:3000
+(The very first time you use this the login is admin/admin)
