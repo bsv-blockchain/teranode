@@ -25,8 +25,8 @@ COPY . /app
 ENV CGO_ENABLED=1
 RUN echo "Building git sha: ${GITHUB_SHA}"
 
-RUN RACE=true make build -j 32
-RUN RACE=true make build-tx-blaster -j 32
+RUN RACE=true TXMETA_SMALL_TAG=true make build -j 32
+RUN RACE=true TXMETA_SMALL_TAG=true make build-tx-blaster -j 32
 
 # RUN_IMG should be overritten by --build-args
 FROM --platform=linux/amd64 ${RUN_IMG} as linux-amd64

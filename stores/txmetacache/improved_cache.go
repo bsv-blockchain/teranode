@@ -35,9 +35,13 @@ const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const bucketsCount = 8 * 1024
+/*
+See improve_cache_const_large.go for large cache settings
+See improve_cache_const_small.go for small cache settings
 
+const bucketsCount = 8 * 1024
 const chunkSize = maxValueSizeKB * 2 * 1024 // 4 KB
+*/
 
 const bucketSizeBits = 40
 
