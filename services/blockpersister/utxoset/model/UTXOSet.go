@@ -2,24 +2,29 @@ package model
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
-	"os"
-	"path"
 
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"golang.org/x/sync/errgroup"
 )
 
 // UTXOSet is a map of UTXOs.
 type UTXOSet struct {
+	logger    ulogger.Logger
 	BlockHash chainhash.Hash // This is the block hash that is the last block in the chain with these UTXOs.
 	Current   UTXOMap
 }
 
 // NewUTXOMap creates a new UTXOMap.
-func NewUTXOSet(blockHash *chainhash.Hash) *UTXOSet {
+func NewUTXOSet(logger ulogger.Logger, blockHash *chainhash.Hash) *UTXOSet {
 	return &UTXOSet{
+		logger:    logger,
 		BlockHash: *blockHash,
 		Current:   newUTXOMap(),
 	}
@@ -52,14 +57,14 @@ func (us *UTXOSet) Delete(uk UTXOKey) {
 	us.Current.Delete(uk)
 }
 
-func NewUTXOSetFromReader(r io.Reader) (*UTXOSet, error) {
+func NewUTXOSetFromReader(logger ulogger.Logger, r io.Reader) (*UTXOSet, error) {
 	blockHash := new(chainhash.Hash)
 
 	if _, err := io.ReadFull(r, blockHash[:]); err != nil {
 		return nil, fmt.Errorf("error reading block hash: %w", err)
 	}
 
-	us := NewUTXOSet(blockHash)
+	us := NewUTXOSet(logger, blockHash)
 
 	if err := us.Current.Read(r); err != nil {
 		return nil, err
@@ -68,48 +73,47 @@ func NewUTXOSetFromReader(r io.Reader) (*UTXOSet, error) {
 	return us, nil
 }
 
-func LoadUTXOSet(folder string, blockHash chainhash.Hash) (*UTXOSet, error) {
-	// Load the UTXO set from disk
-	filename := path.Join(folder, fmt.Sprintf("%s.utxoset", blockHash.String()))
-
-	f, err := os.Open(filename)
+func LoadUTXOSet(store blob.Store, hash chainhash.Hash) (*UTXOSet, error) {
+	reader, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension("utxoset"), options.WithPrefixDirectory(10))
 	if err != nil {
-		return nil, fmt.Errorf("error opening file: %w", err)
+		return nil, fmt.Errorf("error getting reader: %w", err)
 	}
-	defer f.Close()
 
-	// Use a buffered reader
-	r := bufio.NewReader(f)
-
-	return NewUTXOSetFromReader(r)
+	return NewUTXOSetFromReader(ulogger.NewZeroLogger("UTXOSet"), reader)
 }
 
-func (us *UTXOSet) Persist(filename string) error {
-	var err error
-	var f *os.File
+func (us *UTXOSet) Persist(ctx context.Context, store blob.Store) error {
+	g, ctx := errgroup.WithContext(ctx)
 
-	tmpFilename := filename + ".tmp"
+	reader, writer := io.Pipe()
 
-	f, err = os.Create(tmpFilename)
-	if err != nil {
-		return fmt.Errorf("error creating file: %w", err)
-	}
+	bufferedWriter := bufio.NewWriter(writer)
 
-	defer func() {
-		_ = f.Close()
+	g.Go(func() error {
+		defer func() {
+			// Flush the buffer and close the writer with error handling
+			if err := bufferedWriter.Flush(); err != nil {
+				us.logger.Errorf("error flushing writer: %v", err)
+			}
 
-		if err != nil {
-			_ = os.Rename(tmpFilename, filename+".error")
-		} else {
-			_ = os.Rename(tmpFilename, filename)
+			if err := writer.CloseWithError(nil); err != nil {
+				us.logger.Errorf("error closing writer: %v", err)
+			}
+		}()
+
+		if err := us.Write(bufferedWriter); err != nil {
+			writer.CloseWithError(err)
+			return err
 		}
-	}()
 
-	// Create a buffered writer
-	w := bufio.NewWriter(f)
-	defer w.Flush()
+		return nil
+	})
 
-	return us.Write(w)
+	g.Go(func() error {
+		return store.SetFromReader(ctx, us.BlockHash[:], reader, options.WithFileExtension("utxoset"), options.WithPrefixDirectory(10))
+	})
+
+	return g.Wait()
 }
 
 func (us *UTXOSet) Write(w io.Writer) error {

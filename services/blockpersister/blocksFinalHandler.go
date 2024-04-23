@@ -3,14 +3,15 @@ package blockpersister
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path"
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
@@ -18,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -45,7 +47,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 			return
 		}
 
-		gotLock, _, err := tryLockIfNotExists(ctx, u.subtreeStore, hash)
+		gotLock, _, err := tryLockIfNotExists(ctx, u.blockStore, hash)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
 			return
@@ -57,7 +59,11 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 		}
 
 		if err := u.persistBlock(ctx, hash, msg.Message.Value); err != nil {
-			u.logger.Errorf("Error persisting block %s: %v", hash.String(), err)
+			if errors.Is(err, errors.ErrNotFound) {
+				u.logger.Warnf("PreviousBlock %s not found, so UTXOSet not processed", hash.String())
+			} else {
+				u.logger.Errorf("Error persisting block %s: %v", hash.String(), err)
+			}
 			return
 		}
 	}
@@ -71,88 +77,75 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
 
-	dir, _ := gocore.Config().Get("blockPersister_workingDir", os.TempDir())
+	reader, writer := io.Pipe()
 
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Fatalf("Failed to create block persister folder %s: %v", dir, err)
-	}
-
-	// Open file
-	filename := path.Join(dir, fmt.Sprintf("%s.block", block.Header.Hash().String()))
-	tmpFilename := filename + ".tmp"
-
-	f, err := os.Create(tmpFilename)
-	if err != nil {
-		return fmt.Errorf("error creating file: %w", err)
-	}
-
-	defer func() {
-		_ = f.Close()
-		_ = os.Remove(tmpFilename)
-	}()
-
-	w := bufio.NewWriter(f)
-
-	// Write 80 byte block header
-	n, err := w.Write(block.Header.Bytes())
-	if err != nil {
-		return fmt.Errorf("error writing block header: %w", err)
-	}
-	if n != 80 {
-		return fmt.Errorf("error writing block header: wrote %d bytes, expected 80", n)
-	}
-
-	// Write varint of number of tx's
-	if err = wire.WriteVarInt(w, 0, block.TransactionCount); err != nil {
-		return fmt.Errorf("error writing transaction count: %w", err)
-	}
-
-	if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
-		return fmt.Errorf("error writing coinbase tx: %w", err)
-	}
+	bufferedWriter := bufio.NewWriter(writer)
 
 	// Create a new UTXO diff
-	utxoDiff := utxo_model.NewUTXODiff(block.Header.Hash())
+	utxoDiff := utxo_model.NewUTXODiff(u.logger, block.Header.Hash())
 
-	// Add coinbase utxos to the utxo diff
-	utxoDiff.ProcessTx(block.CoinbaseTx)
+	g, gCtx := errgroup.WithContext(ctx)
 
-	for _, subtreeHash := range block.Subtrees {
-		// Call the validateSubtreeInternal method
-		if err = u.processSubtree(ctx, *subtreeHash, w, utxoDiff); err != nil {
-			return fmt.Errorf(" subtree %s: %v", hash.String(), err)
+	g.Go(func() error {
+		defer func() {
+			// Flush the buffer and close the writer with error handling
+			if err := bufferedWriter.Flush(); err != nil {
+				u.logger.Errorf("Error flushing writer: %v", err)
+			}
+
+			if err := writer.CloseWithError(nil); err != nil {
+				u.logger.Errorf("Error closing writer: %v", err)
+			}
+		}()
+
+		// Write 80 byte block header
+		n, err := bufferedWriter.Write(block.Header.Bytes())
+		if err != nil {
+			writer.CloseWithError(err)
+			return fmt.Errorf("error writing block header: %w", err)
 		}
+		if n != 80 {
+			err := fmt.Errorf("error writing block header: wrote %d bytes, expected 80", n)
+			writer.CloseWithError(err)
+			return err
+		}
+
+		// Write varint of number of tx's
+		if err = wire.WriteVarInt(bufferedWriter, 0, block.TransactionCount); err != nil {
+			writer.CloseWithError(err)
+			return fmt.Errorf("error writing transaction count: %w", err)
+		}
+
+		if _, err = bufferedWriter.Write(block.CoinbaseTx.Bytes()); err != nil {
+			writer.CloseWithError(err)
+			return fmt.Errorf("error writing coinbase tx: %w", err)
+		}
+
+		// Add coinbase utxos to the utxo diff
+		utxoDiff.ProcessTx(block.CoinbaseTx)
+
+		for _, subtreeHash := range block.Subtrees {
+			// Call the validateSubtreeInternal method
+			if err = u.processSubtree(gCtx, *subtreeHash, bufferedWriter, utxoDiff); err != nil {
+				writer.CloseWithError(err)
+				return fmt.Errorf(" subtree %s: %v", hash.String(), err)
+			}
+		}
+
+		return nil
+	})
+
+	g.Go(func() error {
+		// Write the block to the block store
+		return u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithPrefixDirectory(10))
+	})
+
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("error processing block %s: %w", hash.String(), err)
 	}
-
-	if err = w.Flush(); err != nil {
-		return fmt.Errorf("error flushing writer: %w", err)
-	}
-
-	if err = f.Close(); err != nil {
-		return fmt.Errorf("error closing file: %w", err)
-	}
-
-	if err = os.Rename(tmpFilename, filename); err != nil {
-		return fmt.Errorf("error renaming file: %w", err)
-	}
-
-	u.logger.Infof("[BlockPersister] Wrote block %s to file %s", block.Header.Hash().String(), filename)
-
-	u.logger.Infof("[BlockPersister] Finished processing block %s", block.Header.Hash().String())
 
 	// At this point, we have a complete UTXODiff for this block.
-
-	// 1. Persist it to disk
-	folder, _ := gocore.Config().Get("utxoPersister_workingDir", os.TempDir())
-
-	// Create the folder if it doesn't exist
-	if err := os.MkdirAll(folder, 0755); err != nil {
-		return fmt.Errorf("error creating folder: %w", err)
-	}
-
-	filename = path.Join(folder, fmt.Sprintf("%s.utxodiff", block.Header.Hash().String()))
-
-	if err := utxoDiff.Persist(filename); err != nil {
+	if err := utxoDiff.Persist(ctx, u.blockStore); err != nil {
 		return fmt.Errorf("error persisting utxo diff: %w", err)
 	}
 
@@ -160,7 +153,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
 	if !found {
 		// Load the UTXOSet from disk
-		previousUTXOSet, err = utxo_model.LoadUTXOSet(folder, *block.Header.HashPrevBlock)
+		previousUTXOSet, err = utxo_model.LoadUTXOSet(u.blockStore, *block.Header.HashPrevBlock)
 		if err != nil {
 			return fmt.Errorf("OSet %s: %w", *block.Header.HashPrevBlock, err)
 		}
@@ -182,9 +175,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return
 	})
 
-	filename = path.Join(folder, fmt.Sprintf("%s.utxoset", block.Header.Hash().String()))
-
-	if err := utxoSet.Persist(filename); err != nil {
+	if err := utxoSet.Persist(ctx, u.blockStore); err != nil {
 		return fmt.Errorf("error persisting utxo set: %w", err)
 	}
 
@@ -206,8 +197,8 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 		return false, true, nil
 	}
 
-	quorumPath, _ := gocore.Config().Get("subtree_quorum_path", "")
-	quorumTimeout, _, _ := gocore.Config().GetDuration("subtree_quorum_timeout", 30*time.Second)
+	quorumPath, _ := gocore.Config().Get("block_quorum_path", "")
+	quorumTimeout, _, _ := gocore.Config().GetDuration("block_quorum_timeout", 30*time.Second)
 
 	if quorumPath == "" {
 		return true, false, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked

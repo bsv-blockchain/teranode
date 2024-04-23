@@ -3,15 +3,10 @@ package blockpersister
 import (
 	"context"
 	"net/url"
-	"os"
-	"path"
 	"runtime"
 	"strconv"
-	"time"
 
 	"golang.org/x/sync/errgroup"
-
-	"github.com/google/uuid"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -24,6 +19,7 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	logger       ulogger.Logger
+	blockStore   blob.Store
 	subtreeStore blob.Store
 	txMetaStore  txmeta_store.Store
 	stats        *gocore.Stat
@@ -32,38 +28,40 @@ type Server struct {
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
+	blockStore blob.Store,
 	subtreeStore blob.Store,
 	txMetaStore txmeta.Store,
 ) *Server {
 
 	u := &Server{
 		logger:       logger,
+		blockStore:   blockStore,
 		subtreeStore: subtreeStore,
 		txMetaStore:  txMetaStore,
 		stats:        gocore.NewStat("blockpersister"),
 	}
 
 	// clean old files from working dir
-	dir, ok := gocore.Config().Get("blockPersister_workingDir")
-	if ok {
-		logger.Infof("[BlockPersister] Cleaning old files from working dir: %s", dir)
-		files, err := os.ReadDir(dir)
-		if err != nil {
-			logger.Fatalf("error reading working dir: %v", err)
-		}
-		for _, file := range files {
-			fileInfo, err := file.Info()
-			if err != nil {
-				logger.Errorf("error reading file info: %v", err)
-			}
-			if time.Since(fileInfo.ModTime()) > 30*time.Minute {
-				logger.Infof("removing old file: %s", file.Name())
-				if err = os.Remove(path.Join(dir, file.Name())); err != nil {
-					logger.Errorf("error removing old file: %v", err)
-				}
-			}
-		}
-	}
+	// dir, ok := gocore.Config().Get("blockPersister_workingDir")
+	// if ok {
+	// 	logger.Infof("[BlockPersister] Cleaning old files from working dir: %s", dir)
+	// 	files, err := os.ReadDir(dir)
+	// 	if err != nil {
+	// 		logger.Fatalf("error reading working dir: %v", err)
+	// 	}
+	// 	for _, file := range files {
+	// 		fileInfo, err := file.Info()
+	// 		if err != nil {
+	// 			logger.Errorf("error reading file info: %v", err)
+	// 		}
+	// 		if time.Since(fileInfo.ModTime()) > 30*time.Minute {
+	// 			logger.Infof("removing old file: %s", file.Name())
+	// 			if err = os.Remove(path.Join(dir, file.Name())); err != nil {
+	// 				logger.Errorf("error removing old file: %v", err)
+	// 			}
+	// 		}
+	// 	}
+	// }
 
 	return u
 }
@@ -115,31 +113,6 @@ func (u *Server) Start(ctx context.Context) error {
 				return nil
 			})
 		})
-	}
-
-	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
-	if err == nil && ok {
-		var partitions int
-		if partitions, err = strconv.Atoi(txmetaKafkaURL.Query().Get("partitions")); err != nil {
-			u.logger.Fatalf("[BlockPersister] unable to parse Kafka partitions from %s: %s", txmetaKafkaURL, err)
-		}
-
-		consumerRatio := util.GetQueryParamInt(txmetaKafkaURL, "consumer_ratio", 8)
-		if consumerRatio < 1 {
-			consumerRatio = 1
-		}
-
-		consumerCount := partitions / consumerRatio
-		if consumerCount < 0 {
-			consumerCount = 1
-		}
-
-		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
-		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
-		groupID := "blockpersister-" + uuid.New().String()
-
-		u.logger.Infof("Starting %d Kafka consumers for tx meta messages", consumerCount)
-		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, consumerCount, u.txmetaHandler)
 	}
 
 	<-ctx.Done()

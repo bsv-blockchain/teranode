@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +16,7 @@ func TestNewUTXOSetFromReader(t *testing.T) {
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 
 	// Create a new UTXOMap
-	us1 := NewUTXOSet(&hash)
+	us1 := NewUTXOSet(ulogger.TestLogger{}, &hash)
 
 	b := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 
@@ -36,7 +37,7 @@ func TestNewUTXOSetFromReader(t *testing.T) {
 
 	// Read the UTXOMap from the buffer
 	r := bufio.NewReader(buf)
-	us2, err := NewUTXOSetFromReader(r)
+	us2, err := NewUTXOSetFromReader(ulogger.TestLogger{}, r)
 	require.NoError(t, err)
 
 	// Check the UTXOMap is the same

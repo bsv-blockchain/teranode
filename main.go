@@ -247,6 +247,7 @@ func main() {
 	if startBlockPersister {
 		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
 			logger,
+			getBlockStore(logger),
 			getSubtreeStore(logger),
 			getTxMetaStore(logger),
 		)); err != nil {

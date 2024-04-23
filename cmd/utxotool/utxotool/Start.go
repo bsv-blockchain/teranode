@@ -95,9 +95,9 @@ func Start() {
 
 	switch ext {
 	case ".utxodiff":
-		utxodiff, err := model.NewUTXODiffFromReader(r)
+		utxodiff, err := model.NewUTXODiffFromReader(logger, r)
 		if err != nil {
-			fmt.Println("error reading utxodiff:", err)
+			logger.Errorf("error reading utxodiff:", err)
 			os.Exit(1)
 		}
 
@@ -116,9 +116,9 @@ func Start() {
 		})
 
 	case ".utxoset":
-		utxoSet, err := model.NewUTXOSetFromReader(r)
+		utxoSet, err := model.NewUTXOSetFromReader(logger, r)
 		if err != nil {
-			fmt.Println("error reading utxoSet:", err)
+			logger.Errorf("error reading utxoSet:", err)
 			os.Exit(1)
 		}
 
@@ -135,13 +135,13 @@ func Start() {
 		// read the first 80 bytes as the block header
 		_, err = io.ReadFull(r, blockHeaderBytes)
 		if err != nil {
-			fmt.Println("error reading block header:", err)
+			logger.Errorf("error reading block header:", err)
 			os.Exit(1)
 		}
 
 		header, err := block_model.NewBlockHeaderFromBytes(blockHeaderBytes)
 		if err != nil {
-			fmt.Println("error creating block header:", err)
+			logger.Errorf("error creating block header:", err)
 			os.Exit(1)
 		}
 
@@ -150,14 +150,14 @@ func Start() {
 		// read the transaction count
 		numTransactions, err := wire.ReadVarInt(r, 0)
 		if err != nil {
-			fmt.Println("error reading transaction count:", err)
+			logger.Errorf("error reading transaction count:", err)
 			os.Exit(1)
 		}
 
 		fmt.Println("Number of transactions:", numTransactions)
 
 	default:
-		fmt.Println("unknown file type")
+		logger.Errorf("unknown file type")
 		os.Exit(1)
 	}
 

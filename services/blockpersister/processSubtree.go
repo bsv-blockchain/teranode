@@ -9,33 +9,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 )
-
-func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []byte) error {
-	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
-		return cache.SetCacheFromBytes(key, txMetaBytes)
-	}
-
-	return nil
-}
-
-func (u *Server) DelTxMetaCache(ctx context.Context, hash *chainhash.Hash) error {
-	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
-		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:DelTxMetaCache")
-		defer func() {
-			span.Finish()
-		}()
-
-		return cache.Delete(ctx, hash)
-	}
-
-	return nil
-}
 
 func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash, w io.Writer, utxoDiff *utxo_model.UTXODiff) error {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")

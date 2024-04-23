@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"os"
-	"path"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -18,7 +16,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -157,7 +154,9 @@ func TestBlock(t *testing.T) {
 	err = subtreeStore.Set(context.Background(), mockStore.subtrees[0].RootHash()[:], subtreeBytes)
 	require.NoError(t, err)
 
-	persister := New(context.Background(), ulogger.TestLogger{}, subtreeStore, mockStore)
+	blockStore := memory.New()
+
+	persister := New(context.Background(), ulogger.TestLogger{}, blockStore, subtreeStore, mockStore)
 
 	var block model.Block
 
@@ -175,16 +174,8 @@ func TestBlock(t *testing.T) {
 	err = persister.persistBlock(context.Background(), mockStore.subtrees[0].RootHash(), b)
 	require.NoError(t, err)
 
-	folder, _ := gocore.Config().Get("utxoPersister_workingDir", os.TempDir())
-
-	filename := path.Join(folder, fmt.Sprintf("%s.block", block.Header.Hash().String()))
-
-	fileData, err := os.ReadFile(filename)
+	btest, err := blockStore.Get(context.Background(), mockStore.subtrees[0].RootHash()[:], options.WithFileExtension("block"))
 	require.NoError(t, err)
 
-	assert.Equal(t, blockBytes, fileData)
-
-	t.Logf("File written to: %s", filename)
-	// err = os.Remove(filename)
-	// require.NoError(t, err)
+	assert.Equal(t, blockBytes, btest)
 }

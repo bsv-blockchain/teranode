@@ -11,4 +11,7 @@ psql postgres://ubsv:ubsv@localhost:5432/coinbase -c "SET client_min_messages TO
 redis-cli FLUSHALL
 
 # Flush aerospike
-aql -c "truncate test.utxo;"
+# aql -c "truncate test.utxo;"
+
+asinfo -h localhost -v "truncate-namespace:namespace=ubsv-store"
+asinfo -h localhost -v "truncate-namespace:namespace=test"
