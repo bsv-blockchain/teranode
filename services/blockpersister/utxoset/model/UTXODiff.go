@@ -11,7 +11,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"golang.org/x/sync/errgroup"
 )
 
 // UTXODiff is a map of UTXOs.
@@ -87,14 +86,11 @@ func NewUTXODiffFromReader(logger ulogger.Logger, r io.Reader) (*UTXODiff, error
 }
 
 func (ud *UTXODiff) Persist(ctx context.Context, store blob.Store) error {
-
-	g, ctx := errgroup.WithContext(ctx)
-
 	reader, writer := io.Pipe()
 
 	bufferedWriter := bufio.NewWriter(writer)
 
-	g.Go(func() error {
+	go func() {
 		defer func() {
 			// Flush the buffer and close the writer with error handling
 			if err := bufferedWriter.Flush(); err != nil {
@@ -107,18 +103,13 @@ func (ud *UTXODiff) Persist(ctx context.Context, store blob.Store) error {
 		}()
 
 		if err := ud.Write(bufferedWriter); err != nil {
+			ud.logger.Errorf("error writing UTXO diff: %v", err)
 			writer.CloseWithError(err)
-			return err
+			return
 		}
+	}()
 
-		return nil
-	})
-
-	g.Go(func() error {
-		return store.SetFromReader(ctx, ud.BlockHash[:], reader, options.WithFileExtension("utxodiff"), options.WithPrefixDirectory(10))
-	})
-
-	return g.Wait()
+	return store.SetFromReader(ctx, ud.BlockHash[:], reader, options.WithFileExtension("utxodiff"), options.WithPrefixDirectory(10))
 }
 
 func (ud *UTXODiff) Write(w io.Writer) error {

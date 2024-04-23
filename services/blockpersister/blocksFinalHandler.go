@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path"
 	"sync"
@@ -16,10 +15,10 @@ import (
 	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -47,7 +46,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 			return
 		}
 
-		gotLock, _, err := tryLockIfNotExists(ctx, u.blockStore, hash)
+		gotLock, _, err := tryLockIfNotExists(ctx, u.logger, u.blockStore, hash)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
 			return
@@ -84,9 +83,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	// Create a new UTXO diff
 	utxoDiff := utxo_model.NewUTXODiff(u.logger, block.Header.Hash())
 
-	g, gCtx := errgroup.WithContext(ctx)
-
-	g.Go(func() error {
+	go func() {
 		defer func() {
 			// Flush the buffer and close the writer with error handling
 			if err := bufferedWriter.Flush(); err != nil {
@@ -101,24 +98,28 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		// Write 80 byte block header
 		n, err := bufferedWriter.Write(block.Header.Bytes())
 		if err != nil {
+			u.logger.Errorf("Error writing block header: %v", err)
 			writer.CloseWithError(err)
-			return fmt.Errorf("error writing block header: %w", err)
+			return
 		}
 		if n != 80 {
 			err := fmt.Errorf("error writing block header: wrote %d bytes, expected 80", n)
+			u.logger.Errorf("%v", err)
 			writer.CloseWithError(err)
-			return err
+			return
 		}
 
 		// Write varint of number of tx's
 		if err = wire.WriteVarInt(bufferedWriter, 0, block.TransactionCount); err != nil {
+			u.logger.Errorf("Error writing transaction count: %v", err)
 			writer.CloseWithError(err)
-			return fmt.Errorf("error writing transaction count: %w", err)
+			return
 		}
 
 		if _, err = bufferedWriter.Write(block.CoinbaseTx.Bytes()); err != nil {
+			u.logger.Errorf("Error writing coinbase tx: %v", err)
 			writer.CloseWithError(err)
-			return fmt.Errorf("error writing coinbase tx: %w", err)
+			return
 		}
 
 		// Add coinbase utxos to the utxo diff
@@ -126,22 +127,16 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 		for _, subtreeHash := range block.Subtrees {
 			// Call the validateSubtreeInternal method
-			if err = u.processSubtree(gCtx, *subtreeHash, bufferedWriter, utxoDiff); err != nil {
+			if err = u.processSubtree(ctx, *subtreeHash, bufferedWriter, utxoDiff); err != nil {
+				u.logger.Errorf("Failed to process subtree %s: %v", subtreeHash.String(), err)
 				writer.CloseWithError(err)
-				return fmt.Errorf(" subtree %s: %v", hash.String(), err)
+				return
 			}
 		}
+	}()
 
-		return nil
-	})
-
-	g.Go(func() error {
-		// Write the block to the block store
-		return u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithPrefixDirectory(10))
-	})
-
-	if err := g.Wait(); err != nil {
-		return fmt.Errorf("error processing block %s: %w", hash.String(), err)
+	if err := u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithPrefixDirectory(10)); err != nil {
+		return fmt.Errorf("error persisting block: %w", err)
 	}
 
 	// At this point, we have a complete UTXODiff for this block.
@@ -188,7 +183,7 @@ type Exister interface {
 	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
 }
 
-func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Hash) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
+func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exister, hash *chainhash.Hash) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
 	b, err := exister.Exists(ctx, hash[:])
 	if err != nil {
 		return false, false, err
@@ -205,9 +200,9 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 	}
 
 	once.Do(func() {
-		log.Printf("creating subtree quorum path: %s", quorumPath)
+		logger.Infof("Creating block quorum path %s", quorumPath)
 		if err := os.MkdirAll(quorumPath, 0755); err != nil {
-			log.Fatalf("Failed to create subtree quorum path: %v", err)
+			logger.Fatalf("Failed to create block quorum path: %v", err)
 		}
 	})
 
@@ -218,7 +213,7 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 	if info, err := os.Stat(lockFile); err == nil {
 		if time.Since(info.ModTime()) > quorumTimeout {
 			if err := os.Remove(lockFile); err != nil {
-				log.Printf("ERROR: failed to remove stale lock file %q: %v", lockFile, err)
+				logger.Warnf("failed to remove stale lock file %q: %v", lockFile, err)
 			}
 		}
 	}
@@ -237,7 +232,7 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 
 	// Close the file immediately after creating it
 	if err := file.Close(); err != nil {
-		log.Printf("ERROR: failed to close lock file %q: %v", lockFile, err)
+		logger.Warnf("failed to close lock file %q: %v", lockFile, err)
 	}
 
 	go func() {
@@ -248,7 +243,7 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 		}
 
 		if err := os.Remove(lockFile); err != nil {
-			log.Printf("ERROR: failed to remove lock file %q: %v", lockFile, err)
+			logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
 		}
 	}()
 

@@ -3,13 +3,13 @@ package subtreevalidation
 import (
 	"context"
 	"errors"
-	"log"
 	"os"
 	"path"
 	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -47,7 +47,7 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) {
 
 		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseUrl)
 
-		gotLock, _, err := tryLockIfNotExists(ctx, u.subtreeStore, hash)
+		gotLock, _, err := tryLockIfNotExists(ctx, u.logger, u.subtreeStore, hash)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
 			return
@@ -76,7 +76,7 @@ type Exister interface {
 	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
 }
 
-func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Hash) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
+func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exister, hash *chainhash.Hash) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
 	b, err := exister.Exists(ctx, hash[:])
 	if err != nil {
 		return false, false, err
@@ -93,9 +93,9 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 	}
 
 	once.Do(func() {
-		log.Printf("creating subtree quorum path: %s", quorumPath)
+		logger.Infof("Creating subtree quorum path: %s", quorumPath)
 		if err := os.MkdirAll(quorumPath, 0755); err != nil {
-			log.Fatalf("Failed to create subtree quorum path: %v", err)
+			logger.Fatalf("Failed to create subtree quorum path: %v", err)
 		}
 	})
 
@@ -106,7 +106,7 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 	if info, err := os.Stat(lockFile); err == nil {
 		if time.Since(info.ModTime()) > quorumTimeout {
 			if err := os.Remove(lockFile); err != nil {
-				log.Printf("ERROR: failed to remove stale lock file %q: %v", lockFile, err)
+				logger.Warnf("failed to remove stale lock file %q: %v", lockFile, err)
 			}
 		}
 	}
@@ -125,7 +125,7 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 
 	// Close the file immediately after creating it
 	if err := file.Close(); err != nil {
-		log.Printf("ERROR: failed to close lock file %q: %v", lockFile, err)
+		logger.Warnf("failed to close lock file %q: %v", lockFile, err)
 	}
 
 	go func() {
@@ -136,7 +136,7 @@ func tryLockIfNotExists(ctx context.Context, exister Exister, hash *chainhash.Ha
 		}
 
 		if err := os.Remove(lockFile); err != nil {
-			log.Printf("ERROR: failed to remove lock file %q: %v", lockFile, err)
+			logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
 		}
 	}()
 
