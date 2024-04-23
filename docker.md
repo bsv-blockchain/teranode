@@ -52,32 +52,53 @@ $ docker compose down
 
 ## Note, if you need to run tx-baster separately on a cmd shell use
 ```
-cd cmd/txblaster
-logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv1 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
-logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv2 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
-logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv3 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
+$ cd cmd/txblaster
+$ logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv1 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
+$ logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv2 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
+$ logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv3 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false
 ```
 
 ## To override the base compose to use Aerospike services
 ```
-docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml up
-docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml down
+$ docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml up
+$ docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml down
 ```
 
 ## To override the base compose to use dedicated kafka services for each node
 ```
-docker compose -f docker-compose.yml -f docker-compose.kafka.override.yml up
-docker compose -f docker-compose.yml -f docker-compose.kafka.override.yml down
+$ docker compose -f docker-compose.yml -f docker-compose.kafka.override.yml up
+$ docker compose -f docker-compose.yml -f docker-compose.kafka.override.yml down
 ```
 
 ## To override the base compose to use more than 1 tx-blaster
 ```
-docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml up
-docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml down
+$ docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml up
+$ docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml down
 ```
 
 ## To override the base compose to run on a 16GB macbook with 12GB allocated to Docker
 ```
-docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml -f docker-compose.12gb.override.yml up
-docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml -f docker-compose.12gb.override.yml down
+$ docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml -f docker-compose.12gb.override.yml up
+$ docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml -f docker-compose.12gb.override.yml down
 ```
+
+## To tail the log files of everything
+```
+$ docker compose logs
+```
+
+## To tail the log files of a specific service
+```
+$ docker compose logs ubsv-1
+```
+
+## URLs for viewing dashboards
+
+Most of the ports you are familiair with are mapped to unique ports spanning all 3 nodes.
+Prepend the port number with 1, 2 or 3 to specify which node you need.
+
+usbv-1 http://localhost:18090
+
+usbv-2 http://localhost:28090
+
+usbv-3 http://localhost:38090
