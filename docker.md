@@ -42,3 +42,25 @@ Occasionally, ubsv-1, ubsv-2 or ubsv-3 fail to start because aerospike/postgres 
 `logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv1 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false`
 `logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv2 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false`
 `logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv3 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false`
+
+## Note, if you need to run tx-baster separately on a cmd shell use
+` cd cmd/txblaster`
+`logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv1 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false`
+`logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv2 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false`
+`logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv3 go run . -workers=1000 -print=0 -profile=:9092 -log=0  -quic=false`
+
+## To override the base compose to use Aerospike services
+`docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml up`
+`docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml down`
+
+## To override the base compose to use dedicated kafka services for each node
+`docker compose -f docker-compose.yml -f docker-compose.kafka.override.yml up`
+`docker compose -f docker-compose.yml -f docker-compose.kafka.override.yml down`
+
+## To override the base compose to use more than 1 tx-blaster
+`docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml up`
+`docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml down`
+
+## To override the base compose to run on a 16GB macbook with 12GB allocated to Docker
+`docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml -f docker-compose.12gb.override.yml up`
+`docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml -f docker-compose.12gb.override.yml down`
