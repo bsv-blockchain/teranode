@@ -77,6 +77,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
 
 	concurrency, _ := gocore.Config().GetInt("blockpersister_concurrency", 8)
+	u.logger.Infof("[BlockPersister] Processing subtrees with concurrency %d", concurrency)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
@@ -92,7 +93,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		i := i
 
 		g.Go(func() error {
-			u.logger.Debugf("[BlockPersister] processing subtree %d / %d [%s]", i, len(block.Subtrees), subtreeHash.String())
+			u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i, len(block.Subtrees), subtreeHash.String())
 
 			return u.processSubtree(gCtx, *subtreeHash, utxoDiff)
 		})
@@ -102,44 +103,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return fmt.Errorf("error processing subtrees: %w", err)
 	}
 
-	// At this point, we have a complete UTXODiff for this block.
-	if err := utxoDiff.Persist(ctx, u.blockStore); err != nil {
-		return fmt.Errorf("error persisting utxo diff: %w", err)
-	}
-
-	// 2. Now we need to apply this UTXODiff to the UTXOSet for the previous block
-	previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
-	if !found {
-		// Load the UTXOSet from disk
-		previousUTXOSet, err = utxo_model.LoadUTXOSet(u.blockStore, *block.Header.HashPrevBlock)
-		if err != nil {
-			return fmt.Errorf("OSet %s: %w", *block.Header.HashPrevBlock, err)
-		}
-	}
-
-	// 1. Create a new UTXOSet for this block from the previous UTXOSet
-	utxoSet := utxo_model.NewUTXOSetFromPrevious(block.Header.Hash(), previousUTXOSet)
-
-	// 2. Remove all spent UTXOs
-	utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-		utxoSet.Delete(uk)
-		return
-	})
-
-	// 3. Add all new UTXOs
-	utxoDiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-		utxoSet.Add(uk, uv)
-
-		return
-	})
-
-	if err := utxoSet.Persist(ctx, u.blockStore); err != nil {
-		return fmt.Errorf("error persisting utxo set: %w", err)
-	}
-
-	utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)
-
-	// Finally, write the block file
+	// Now, write the block file
 	reader, writer := io.Pipe()
 
 	bufferedWriter := bufio.NewWriter(writer)
@@ -171,7 +135,48 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return fmt.Errorf("[BlockPersister] error persisting block: %w", err)
 	}
 
-	return u.blockStore.SetTTL(ctx, hash[:], 0, options.WithFileExtension("block"))
+	if err := u.blockStore.SetTTL(ctx, hash[:], 0, options.WithFileExtension("block")); err != nil {
+		return fmt.Errorf("[BlockPersister] error persisting block: %w", err)
+	}
+
+	// At this point, we have a complete UTXODiff for this block.
+	if err := utxoDiff.Persist(ctx, u.blockStore); err != nil {
+		return fmt.Errorf("error persisting utxo diff: %w", err)
+	}
+
+	// 2. Now we need to apply this UTXODiff to the UTXOSet for the previous block
+	previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
+	if !found {
+		// Load the UTXOSet from disk
+		previousUTXOSet, err = utxo_model.LoadUTXOSet(u.blockStore, *block.Header.HashPrevBlock)
+		if err != nil {
+			return fmt.Errorf("LoadUTXOSet %s: %w", *block.Header.HashPrevBlock, err)
+		}
+	}
+
+	// 1. Create a new UTXOSet for this block from the previous UTXOSet
+	utxoSet := utxo_model.NewUTXOSetFromPrevious(block.Header.Hash(), previousUTXOSet)
+
+	// 2. Remove all spent UTXOs
+	utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+		utxoSet.Delete(uk)
+		return
+	})
+
+	// 3. Add all new UTXOs
+	utxoDiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
+		utxoSet.Add(uk, uv)
+
+		return
+	})
+
+	if err := utxoSet.Persist(ctx, u.blockStore); err != nil {
+		return fmt.Errorf("error persisting utxo set: %w", err)
+	}
+
+	utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)
+
+	return nil
 }
 
 type Exister interface {
