@@ -16,6 +16,7 @@ import (
 	block_model "github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
+	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -26,6 +27,7 @@ import (
 
 var verbose bool
 var verify bool
+var old bool
 
 func Start() {
 	logger := ulogger.TestLogger{}
@@ -33,6 +35,7 @@ func Start() {
 	// Define command line arguments
 	flag.BoolVar(&verbose, "verbose", false, "verbose output")
 	flag.BoolVar(&verify, "verify", false, "verify all stored data")
+	flag.BoolVar(&old, "old", false, "old format")
 
 	flag.Parse()
 
@@ -81,29 +84,45 @@ func verifyChain() error {
 
 	blockStore := getBlockStore(logger)
 
+	var o []options.Options
+
+	ext := ".block"
+	if old {
+		ext = ".blockold"
+	}
+
+	o = append(o, options.WithSubDirectory("blocks"))
+	o = append(o, options.WithPrefixDirectory(10))
+
+	if !old {
+		o = append(o, options.WithFileExtension("block"))
+	}
+
 	// Verify all blocks in reverse order (as it's easier)
-	header, _, err := blockchain.GetBestBlockHeader(context.Background())
+	header, meta, err := blockchain.GetBestBlockHeader(context.Background())
 	if err != nil {
 		return fmt.Errorf("error getting best block header: %w", err)
 	}
 
 	for {
-		r, err := blockStore.GetIoReader(context.Background(), header.Hash()[:], options.WithFileExtension("block"), options.WithPrefixDirectory(10))
+		r, err := blockStore.GetIoReader(context.Background(), header.Hash()[:], o...)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) {
-				fmt.Printf("%s: NOT FOUND\n", header.Hash())
+				fmt.Printf("%s (%d): NOT FOUND\n", header.Hash(), meta.Height)
 			} else {
 				return fmt.Errorf("error getting block reader: %w", err)
 			}
 		}
 
 		if err == nil {
-			if err := readFile(".block", logger, r, ""); err != nil {
+			if err := readFile(ext, logger, r, ""); err != nil {
 				return fmt.Errorf("error reading block: %w", err)
+			} else {
+				fmt.Printf("%s (%d): FOUND with %d transactions\n", header.Hash(), meta.Height, meta.TxCount)
 			}
 		}
 
-		header, _, err = blockchain.GetBlockHeader(context.Background(), header.HashPrevBlock)
+		header, meta, err = blockchain.GetBlockHeader(context.Background(), header.HashPrevBlock)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) {
 				break
@@ -170,6 +189,21 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 		num := readSubtree(r, logger, verbose)
 		fmt.Printf("Number of transactions: %d\n", num)
 
+	case ".blockold":
+		blockHeaderBytes := make([]byte, 80)
+		// read the first 80 bytes as the block header
+		if _, err := io.ReadFull(r, blockHeaderBytes); err != nil {
+			return errors.New(errors.ERR_BLOCK_INVALID, "error reading block header", err)
+		}
+
+		// read the transaction count
+		txCount, err := wire.ReadVarInt(r, 0)
+		if err != nil {
+			return errors.New(errors.ERR_BLOCK_INVALID, "error reading transaction count", err)
+		}
+
+		fmt.Printf("\t%d transactions\n", txCount)
+
 	case ".block":
 		block, err := block_model.NewBlockFromReader(r)
 		if err != nil {
@@ -177,7 +211,6 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 		}
 
 		if verify {
-			fmt.Printf("%s: FOUND with %d transactions\n", block.Hash(), block.TransactionCount)
 			return nil
 		}
 
@@ -206,7 +239,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 }
 
 func usage() {
-	fmt.Printf("Usage: filereader [-verbose] <filename | hash>.[block | subtree | utxoset | utxodiff] | -verify\n\n")
+	fmt.Printf("Usage: filereader [-verbose] <filename | hash>.[block | subtree | utxoset | utxodiff] | -verify [-old]\n\n")
 	os.Exit(1)
 }
 
@@ -278,7 +311,7 @@ func getBlockStore(logger ulogger.Logger) blob.Store {
 		panic("blockstore config not found")
 	}
 
-	blockStore, err := blob.NewStore(logger, blockStoreUrl, options.WithPrefixDirectory(10))
+	blockStore, err := blob.NewStore(logger, blockStoreUrl)
 	if err != nil {
 		panic(err)
 	}

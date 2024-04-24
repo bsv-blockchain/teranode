@@ -306,7 +306,7 @@ func (s *Lustre) getFileNameForPersist(filename string) string {
 func (s *Lustre) getFileNameForGet(hash []byte, opts ...options.Options) (string, error) {
 	fileName := s.filename(hash)
 
-	fileOptions := options.NewSetOptions(opts...)
+	fileOptions := options.NewSetOptions(nil, opts...)
 
 	if fileOptions.Extension != "" {
 		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
@@ -320,7 +320,7 @@ func (s *Lustre) getFileNameForSet(hash []byte, opts ...options.Options) (string
 		return "", err
 	}
 
-	fileOptions := options.NewSetOptions(opts...)
+	fileOptions := options.NewSetOptions(nil, opts...)
 
 	if fileOptions.TTL <= 0 {
 		// the file should be persisted
