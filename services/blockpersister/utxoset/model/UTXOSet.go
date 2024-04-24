@@ -74,7 +74,7 @@ func NewUTXOSetFromReader(logger ulogger.Logger, r io.Reader) (*UTXOSet, error) 
 }
 
 func LoadUTXOSet(store blob.Store, hash chainhash.Hash) (*UTXOSet, error) {
-	reader, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension("utxoset"), options.WithPrefixDirectory(10))
+	reader, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension("utxoset"))
 	if err != nil {
 		return nil, fmt.Errorf("error getting reader: %w", err)
 	}
@@ -112,7 +112,7 @@ func (us *UTXOSet) Persist(ctx context.Context, store blob.Store) error {
 		return fmt.Errorf("[BlockPersister] error persisting utxodiff: %w", err)
 	}
 
-	return store.SetTTL(ctx, us.BlockHash[:], 0)
+	return store.SetTTL(ctx, us.BlockHash[:], 0, options.WithFileExtension("utxoset"))
 }
 
 func (us *UTXOSet) Write(w io.Writer) error {

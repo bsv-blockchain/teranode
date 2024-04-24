@@ -375,11 +375,16 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 func (g *S3) getObjectKey(hash []byte, o *options.SetOptions) *string {
 	var key string
 	var prefix string
+	var ext string
+
+	if o.Extension != "" {
+		ext = "." + o.Extension
+	}
 
 	if o.Filename != "" {
 		key = o.Filename
 	} else {
-		key = fmt.Sprintf("%s.%s", utils.ReverseAndHexEncodeSlice(hash), o.Extension)
+		key = fmt.Sprintf("%s%s", utils.ReverseAndHexEncodeSlice(hash), ext)
 		prefix = key[:o.PrefixDirectory]
 	}
 

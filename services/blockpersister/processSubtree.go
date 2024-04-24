@@ -130,5 +130,5 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 		return fmt.Errorf("[BlockPersister] error persisting subtree: %w", err)
 	}
 
-	return u.blockStore.SetTTL(ctx, subtreeHash[:], 0)
+	return u.blockStore.SetTTL(ctx, subtreeHash[:], 0, options.WithFileExtension("subtree"))
 }

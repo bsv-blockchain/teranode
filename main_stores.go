@@ -113,7 +113,7 @@ func getBlockStore(logger ulogger.Logger) blob.Store {
 	if !found {
 		panic("blockstore config not found")
 	}
-	blockStore, err = blob.NewStore(logger, blockStoreUrl, options.WithPrefixDirectory(10))
+	blockStore, err = blob.NewStore(logger, blockStoreUrl)
 	if err != nil {
 		panic(err)
 	}

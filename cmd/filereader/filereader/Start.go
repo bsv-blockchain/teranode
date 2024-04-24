@@ -92,7 +92,6 @@ func verifyChain() error {
 	}
 
 	o = append(o, options.WithSubDirectory("blocks"))
-	o = append(o, options.WithPrefixDirectory(10))
 
 	if !old {
 		o = append(o, options.WithFileExtension("block"))

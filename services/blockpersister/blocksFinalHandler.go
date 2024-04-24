@@ -77,7 +77,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
 
-	concurrency, _ := gocore.Config().GetInt("blockpersister_concurrency", util.Max(64, runtime.NumCPU()/2))
+	concurrency, _ := gocore.Config().GetInt("blockpersister_concurrency", util.Max(10, runtime.NumCPU()/2))
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
@@ -172,7 +172,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return fmt.Errorf("[BlockPersister] error persisting block: %w", err)
 	}
 
-	return u.blockStore.SetTTL(ctx, hash[:], 0)
+	return u.blockStore.SetTTL(ctx, hash[:], 0, options.WithFileExtension("block"))
 }
 
 type Exister interface {

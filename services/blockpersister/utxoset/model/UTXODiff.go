@@ -116,7 +116,7 @@ func (ud *UTXODiff) Persist(ctx context.Context, store blob.Store) error {
 		return fmt.Errorf("[BlockPersister] error persisting utxodiff: %w", err)
 	}
 
-	return store.SetTTL(ctx, ud.BlockHash[:], 0)
+	return store.SetTTL(ctx, ud.BlockHash[:], 0, options.WithFileExtension("utxodiff"))
 }
 
 func (ud *UTXODiff) Write(w io.Writer) error {
