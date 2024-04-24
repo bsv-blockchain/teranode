@@ -3,7 +3,6 @@ package blockpersister
 import (
 	"context"
 	"net/url"
-	"runtime"
 	"strconv"
 
 	"golang.org/x/sync/errgroup"
