@@ -46,6 +46,18 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 			return
 		}
 
+		// Check if the block already exists
+		exists, err := u.blockStore.Exists(ctx, hash[:], options.WithFileExtension("block"))
+		if err != nil {
+			u.logger.Errorf("Error checking if block %s exists: %v", hash.String(), err)
+			return
+		}
+
+		if exists {
+			u.logger.Infof("Block %s already exists, skipping...", hash.String())
+			return
+		}
+
 		gotLock, _, err := tryLockIfNotExists(ctx, u.logger, u.blockStore, hash)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())

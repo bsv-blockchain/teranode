@@ -21,6 +21,7 @@ import (
 type s3Store interface {
 	Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error)
 	GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error)
+	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
 }
 
 type Lustre struct {
@@ -257,7 +258,15 @@ func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options)
 			_, err = os.Stat(s.getFileNameForPersist(fileName))
 			if err != nil {
 				if os.IsNotExist(err) {
-					return false, nil
+					// check s3
+					exists, err := s.s3Client.Exists(context.Background(), hash)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							return false, nil
+						}
+						return false, fmt.Errorf("failed to read data from file: %w", err)
+					}
+					return exists, nil
 				}
 				return false, fmt.Errorf("failed to read data from file: %w", err)
 			}
