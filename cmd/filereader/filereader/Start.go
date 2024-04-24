@@ -86,7 +86,7 @@ func verifyChain() error {
 
 	var o []options.Options
 
-	ext := ".block"
+	ext := "block"
 	if old {
 		ext = ""
 	}
@@ -133,7 +133,7 @@ func verifyChain() error {
 
 func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error {
 	switch ext {
-	case ".utxodiff":
+	case "utxodiff":
 		utxodiff, err := model.NewUTXODiffFromReader(logger, r)
 		if err != nil {
 			return fmt.Errorf("error reading utxodiff: %w\n", err)
@@ -163,7 +163,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 			fmt.Println()
 		}
 
-	case ".utxoset":
+	case "utxoset":
 		utxoSet, err := model.NewUTXOSetFromReader(logger, r)
 		if err != nil {
 			return fmt.Errorf("error reading utxoSet: %v\n", err)
@@ -182,7 +182,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 			fmt.Println()
 		}
 
-	case ".subtree":
+	case "subtree":
 		num := readSubtree(r, logger, verbose)
 		fmt.Printf("Number of transactions: %d\n", num)
 
@@ -201,7 +201,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 
 		fmt.Printf("\t%d transactions\n", txCount)
 
-	case ".block":
+	case "block":
 		block, err := block_model.NewBlockFromReader(r)
 		if err != nil {
 			return fmt.Errorf("error reading block: %v\n", err)
@@ -244,8 +244,11 @@ func getReader(path string, logger ulogger.Logger) (string, string, io.Reader, e
 	dir, file := filepath.Split(path)
 
 	ext := filepath.Ext(file)
-
 	fileWithoutExtension := strings.TrimSuffix(file, ext)
+
+	if ext[0] == '.' {
+		ext = ext[1:]
+	}
 
 	if ext == "" {
 		usage()
