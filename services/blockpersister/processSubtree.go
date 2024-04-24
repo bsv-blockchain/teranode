@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -27,8 +28,6 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 		stat.AddTime(startTotal)
 		prometheusBlockPersisterValidateSubtree.Inc()
 	}()
-
-	u.logger.Infof("[validateSubtreeInternal][%s] called", subtreeHash.String())
 
 	// 1. get the subtree from the subtree store
 	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
@@ -125,5 +124,11 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 		}
 	}()
 
-	return u.blockStore.SetFromReader(ctx, subtreeHash[:], reader, options.WithFileExtension("subtree"), options.WithPrefixDirectory(4))
+	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
+	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
+	if err := u.blockStore.SetFromReader(ctx, subtreeHash[:], reader, options.WithFileExtension("subtree"), options.WithTTL(24*time.Hour)); err != nil {
+		return fmt.Errorf("[BlockPersister] error persisting subtree: %w", err)
+	}
+
+	return u.blockStore.SetTTL(ctx, subtreeHash[:], 0)
 }

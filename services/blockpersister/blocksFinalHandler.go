@@ -88,10 +88,13 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	// Add coinbase utxos to the utxo diff
 	utxoDiff.ProcessTx(block.CoinbaseTx)
 
-	for _, subtreeHash := range block.Subtrees {
+	for i, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
+		i := i
 
 		g.Go(func() error {
+			u.logger.Debugf("[BlockPersister] processing subtree %d / %d [%s]", i, len(block.Subtrees), subtreeHash.String())
+
 			return u.processSubtree(gCtx, *subtreeHash, utxoDiff)
 		})
 	}
@@ -163,11 +166,13 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		}
 	}()
 
-	if err := u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithPrefixDirectory(10)); err != nil {
-		return fmt.Errorf("error persisting block: %w", err)
+	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
+	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
+	if err := u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithTTL(24*time.Hour)); err != nil {
+		return fmt.Errorf("[BlockPersister] error persisting block: %w", err)
 	}
 
-	return nil
+	return u.blockStore.SetTTL(ctx, hash[:], 0)
 }
 
 type Exister interface {

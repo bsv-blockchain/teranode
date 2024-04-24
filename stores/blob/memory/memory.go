@@ -3,7 +3,6 @@ package memory
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -61,7 +60,7 @@ func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 
 func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.Options) error {
 	// not supported in memory store yet
-	return errors.New("TTL is not supported in a memory store")
+	return nil
 }
 
 func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {

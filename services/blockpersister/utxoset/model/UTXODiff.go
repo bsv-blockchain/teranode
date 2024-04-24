@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -109,7 +110,13 @@ func (ud *UTXODiff) Persist(ctx context.Context, store blob.Store) error {
 		}
 	}()
 
-	return store.SetFromReader(ctx, ud.BlockHash[:], reader, options.WithFileExtension("utxodiff"), options.WithPrefixDirectory(10))
+	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
+	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
+	if err := store.SetFromReader(ctx, ud.BlockHash[:], reader, options.WithFileExtension("utxodiff"), options.WithTTL(24*time.Hour)); err != nil {
+		return fmt.Errorf("[BlockPersister] error persisting utxodiff: %w", err)
+	}
+
+	return store.SetTTL(ctx, ud.BlockHash[:], 0)
 }
 
 func (ud *UTXODiff) Write(w io.Writer) error {
