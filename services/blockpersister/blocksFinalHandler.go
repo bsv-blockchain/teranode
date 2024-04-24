@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path"
-	"runtime"
 	"sync"
 	"time"
 
@@ -77,7 +76,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
 
-	concurrency, _ := gocore.Config().GetInt("blockpersister_concurrency", util.Max(10, runtime.NumCPU()/2))
+	concurrency, _ := gocore.Config().GetInt("blockpersister_concurrency", 8)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)

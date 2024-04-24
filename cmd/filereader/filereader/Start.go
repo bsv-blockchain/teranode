@@ -88,10 +88,8 @@ func verifyChain() error {
 
 	ext := ".block"
 	if old {
-		ext = ".blockold"
+		ext = ""
 	}
-
-	o = append(o, options.WithSubDirectory("blocks"))
 
 	if !old {
 		o = append(o, options.WithFileExtension("block"))
@@ -188,7 +186,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 		num := readSubtree(r, logger, verbose)
 		fmt.Printf("Number of transactions: %d\n", num)
 
-	case ".blockold":
+	case "":
 		blockHeaderBytes := make([]byte, 80)
 		// read the first 80 bytes as the block header
 		if _, err := io.ReadFull(r, blockHeaderBytes); err != nil {

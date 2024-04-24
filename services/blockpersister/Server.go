@@ -100,7 +100,7 @@ func (u *Server) Start(ctx context.Context) error {
 		}
 
 		// set the concurrency limit by default to leave 16 cpus for doing tx meta processing
-		blocksFinalConcurrency, _ := gocore.Config().GetInt("blockpersister_kafkaBlocksFinalConcurrency", util.Max(4, runtime.NumCPU()-16))
+		blocksFinalConcurrency, _ := gocore.Config().GetInt("blockpersister_kafkaBlocksFinalConcurrency", 1)
 		g := errgroup.Group{}
 		g.SetLimit(blocksFinalConcurrency)
 
