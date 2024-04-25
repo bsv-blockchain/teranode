@@ -3,9 +3,6 @@ package blockpersister
 import (
 	"context"
 	"net/url"
-	"strconv"
-
-	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
@@ -79,38 +76,12 @@ func (u *Server) Init(ctx context.Context) (err error) {
 func (u *Server) Start(ctx context.Context) error {
 	blocksFinalKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
 	if err == nil && ok {
-		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.
-		// subtreeConcurrency, _ := gocore.Config().GetInt("blockpersister_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
-		// g.SetLimit(subtreeConcurrency)
-		var partitions int
-		if partitions, err = strconv.Atoi(blocksFinalKafkaURL.Query().Get("partitions")); err != nil {
-			u.logger.Fatalf("[BlockPersister] unable to parse Kafka partitions from %s: %s", blocksFinalKafkaURL, err)
-		}
+		u.logger.Infof("Starting Kafka consumer for blocksFinal messages")
 
-		consumerRatio := util.GetQueryParamInt(blocksFinalKafkaURL, "consumer_ratio", 4)
-		if consumerRatio < 1 {
-			consumerRatio = 1
-		}
-
-		consumerCount := partitions / consumerRatio
-
-		if consumerCount <= 0 {
-			consumerCount = 1
-		}
-
-		// set the concurrency limit by default to leave 16 cpus for doing tx meta processing
-		blocksFinalConcurrency, _ := gocore.Config().GetInt("blockpersister_kafkaBlocksFinalConcurrency", 1)
-		g := errgroup.Group{}
-		g.SetLimit(blocksFinalConcurrency)
-
-		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the subtree messages.
-		u.logger.Infof("Starting %d Kafka consumers for blocksFinal messages", consumerCount)
-		go u.startKafkaListener(ctx, blocksFinalKafkaURL, "blockpersister", consumerCount, func(msg util.KafkaMessage) {
-			g.Go(func() error {
-				// TODO is there a way to return an error here and have Kafka mark the message as not done?
-				u.blocksFinalHandler(msg)
-				return nil
-			})
+		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the blocksFinal messages.
+		go u.startKafkaListener(ctx, blocksFinalKafkaURL, "blockpersister", 1, func(msg util.KafkaMessage) {
+			// TODO is there a way to return an error here and have Kafka mark the message as not done?
+			u.blocksFinalHandler(msg)
 		})
 	}
 
