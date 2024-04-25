@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"google.golang.org/grpc/keepalive"
 	"io"
 	"os"
 	"sync"
@@ -53,17 +54,18 @@ func (PasswordCredentials) RequireTransportSecurity() bool {
 // ---------------------------------------------------------------------
 
 type ConnectionOptions struct {
-	MaxMessageSize int                 // Max message size in bytes
-	SecurityLevel  int                 // 0 = insecure, 1 = secure, 2 = secure with client cert
-	OpenTelemetry  bool                // Enable OpenTelemetry tracing
-	OpenTracing    bool                // Enable OpenTelemetry tracing
-	Prometheus     bool                // Enable Prometheus metrics
-	CertFile       string              // CA cert file if SecurityLevel > 0
-	CaCertFile     string              // CA cert file if SecurityLevel > 0
-	KeyFile        string              // Client key file if SecurityLevel > 1
-	MaxRetries     int                 // Max number of retries for transient errors
-	RetryBackoff   time.Duration       // Backoff between retries
-	Credentials    PasswordCredentials // Credentials to pass to downstream middleware (optional)
+	MaxMessageSize   int                 // Max message size in bytes
+	SecurityLevel    int                 // 0 = insecure, 1 = secure, 2 = secure with client cert
+	OpenTelemetry    bool                // Enable OpenTelemetry tracing
+	OpenTracing      bool                // Enable OpenTelemetry tracing
+	Prometheus       bool                // Enable Prometheus metrics
+	CertFile         string              // CA cert file if SecurityLevel > 0
+	CaCertFile       string              // CA cert file if SecurityLevel > 0
+	KeyFile          string              // Client key file if SecurityLevel > 1
+	MaxRetries       int                 // Max number of retries for transient errors
+	RetryBackoff     time.Duration       // Backoff between retries
+	Credentials      PasswordCredentials // Credentials to pass to downstream middleware (optional)
+	MaxConnectionAge time.Duration       // The maximum amount of time a connection may exist before it will be closed by sending a GoAway
 }
 
 // ---------------------------------------------------------------------
@@ -216,6 +218,12 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 		grpc.MaxSendMsgSize(connectionOptions.MaxMessageSize),
 		grpc.MaxRecvMsgSize(connectionOptions.MaxMessageSize),
 	)
+
+	if connectionOptions.MaxConnectionAge > 0 {
+		opts = append(opts, grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionAge: connectionOptions.MaxConnectionAge,
+		}))
+	}
 
 	if connectionOptions.OpenTelemetry {
 		opts = append(opts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
