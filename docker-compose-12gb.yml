@@ -126,12 +126,11 @@ services:
       txmeta_store: aerospikemap://aerospike-1:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
       blockchain_store: postgres://miner1:miner1@postgres-shared:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres-shared:5432/coinbase1
-      subtreestore: file:///data/ubsv1/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/data/ubsv1/txstore
-      - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
+      - ./data/ubsv1/txstore:/data/txstore
+      - ./data/ubsv1/subtreestore:/data/subtreestore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18093:8090-8093"
@@ -152,7 +151,6 @@ services:
       txmeta_store: aerospikemap://aerospike-2:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
       blockchain_store: postgres://miner2:miner2@postgres-shared:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres-shared:5432/coinbase2
-      subtreestore: file:///data/ubsv2/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
@@ -178,12 +176,11 @@ services:
       txmeta_store: aerospikemap://aerospike-3:3000/test?WarmUp=4&ConnectionQueueSize=4&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=4&expiration=300
       blockchain_store: postgres://miner3:miner3@postgres-shared:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres-shared:5432/coinbase3
-      subtreestore: file:///data/ubsv3/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv3/txstore:/data/ubsv3/txstore
-      - ./data/ubsv3/subtreestore:/data/ubsv3/subtreestore
+      - ./data/ubsv3/txstore:/data/txstore
+      - ./data/ubsv3/subtreestore:/data/subtreestore
     ports:
       - "38081-38089:8081-8089"
       - "38090-38093:8090-8093"
