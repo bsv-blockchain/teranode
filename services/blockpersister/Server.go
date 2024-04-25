@@ -9,6 +9,7 @@ import (
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/google/uuid"
 	"github.com/ordishs/gocore"
 )
 
@@ -78,8 +79,12 @@ func (u *Server) Start(ctx context.Context) error {
 	if err == nil && ok {
 		u.logger.Infof("Starting Kafka consumer for blocksFinal messages")
 
+		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
+		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
+		groupID := "blockpersister-" + uuid.New().String()
+
 		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the blocksFinal messages.
-		go u.startKafkaListener(ctx, blocksFinalKafkaURL, "blockpersister", 1, func(msg util.KafkaMessage) {
+		go u.startKafkaListener(ctx, blocksFinalKafkaURL, groupID, 1, func(msg util.KafkaMessage) {
 			// TODO is there a way to return an error here and have Kafka mark the message as not done?
 			u.blocksFinalHandler(msg)
 		})

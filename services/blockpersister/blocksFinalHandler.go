@@ -46,19 +46,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 			return
 		}
 
-		// Check if the block already exists
-		exists, err := u.blockStore.Exists(ctx, hash[:], options.WithFileExtension("block"))
-		if err != nil {
-			u.logger.Errorf("Error checking if block %s exists: %v", hash.String(), err)
-			return
-		}
-
-		if exists {
-			u.logger.Infof("Block %s already exists, skipping...", hash.String())
-			return
-		}
-
-		gotLock, _, err := tryLockIfNotExists(ctx, u.logger, u.blockStore, hash)
+		gotLock, _, err := tryLockIfNotExists(ctx, u.logger, hash, u.blockStore, options.WithFileExtension("block"))
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
 			return
@@ -195,8 +183,8 @@ type Exister interface {
 	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
 }
 
-func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exister, hash *chainhash.Hash) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
-	b, err := exister.Exists(ctx, hash[:])
+func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainhash.Hash, exister Exister, opts ...options.Options) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
+	b, err := exister.Exists(ctx, hash[:], opts...)
 	if err != nil {
 		return false, false, err
 	}
@@ -205,7 +193,7 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exis
 	}
 
 	quorumPath, _ := gocore.Config().Get("block_quorum_path", "")
-	quorumTimeout, _, _ := gocore.Config().GetDuration("block_quorum_timeout", 30*time.Second)
+	quorumTimeout, _, _ := gocore.Config().GetDuration("block_quorum_timeout", 30*time.Minute)
 
 	if quorumPath == "" {
 		return true, false, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked
@@ -220,7 +208,7 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exis
 
 	lockFile := path.Join(quorumPath, hash.String()) + ".lock"
 
-	// If the lock file already exists, the subtree is being processed by another node. However, the lock may be stale.
+	// If the lock file already exists, the block is being processed by another node. However, the lock may be stale.
 	// If the lock file is older than the quorum timeout, it is considered stale and can be removed.
 	if info, err := os.Stat(lockFile); err == nil {
 		if time.Since(info.ModTime()) > quorumTimeout {
