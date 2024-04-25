@@ -12,13 +12,6 @@ x-ubsv-base:
     - ./data:/app/data
   expose:
     - 8081-8093
-x-common-env: &common-env
-  ALLOW_PLAINTEXT_LISTENER: "yes"
-  KAFKA_CFG_NODE_ID: "0"
-  KAFKA_CFG_PROCESS_ROLES: "controller,broker"
-  KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
-  KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
-  KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
 networks:
   ubsv-network:
     name: my-ubsv-network
@@ -61,16 +54,44 @@ services:
 
   kafka-shared:
     container_name: kafka-shared
-    image: bitnami/kafka:latest
-    mem_limit: 1g
+    image: vectorized/redpanda:latest
+    mem_limit: 512m
     networks:
       - ubsv-network
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:9093
     ports:
-      - "49092:9092"
-      - "49093:9093"
+      - 18181:8081
+      - 19092:9092
+      - 19093:9093
+
+  kafka-console-shared:
+    container_name: kafka-console-shared
+    image: docker.redpanda.com/redpandadata/console:latest
+    networks:
+      - ubsv-network
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
     environment:
-      <<: *common-env
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "0@kafka-shared:9093"
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["kafka-shared:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://kafka-shared:8081"]
+    ports:
+      - "18080:8080"
+    depends_on:
+      - kafka-shared
 
   ubsv-1:
     <<: *ubsv-base
