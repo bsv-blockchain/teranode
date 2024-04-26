@@ -23,6 +23,8 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
 
 var verbose bool
@@ -101,6 +103,8 @@ func verifyChain() error {
 		return fmt.Errorf("error getting best block header: %w", err)
 	}
 
+	p := message.NewPrinter(language.English)
+
 	for {
 		r, err := blockStore.GetIoReader(context.Background(), header.Hash()[:], o...)
 		if err != nil {
@@ -115,7 +119,7 @@ func verifyChain() error {
 			if err := readFile(ext, logger, r, ""); err != nil {
 				return fmt.Errorf("error reading block: %w", err)
 			} else {
-				fmt.Printf("%s (%d): FOUND with %d transactions\n", header.Hash(), meta.Height, meta.TxCount)
+				p.Printf("%s (%d): FOUND with %12d transactions\n", header.Hash(), meta.Height, meta.TxCount)
 			}
 		}
 
