@@ -75,7 +75,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		require.NotNil(t, testItems)
 
 		testItems.blockAssembler.startChannelListeners(ctx)
-		testItems.blockAssembler.bestBlockHeader = model.GenesisBlockHeader
+		testItems.blockAssembler.bestBlockHeader.Store(model.GenesisBlockHeader)
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -200,7 +200,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		require.NotNil(t, items)
 
-		items.blockAssembler.bestBlockHeader = blockHeader1
+		items.blockAssembler.bestBlockHeader.Store(blockHeader1)
 		_, _, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), nil)
 		require.Error(t, err)
 	})
@@ -210,7 +210,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		// set the cached BlockAssembler items to the correct values
-		items.blockAssembler.bestBlockHeader = blockHeader4
+		items.blockAssembler.bestBlockHeader.Store(blockHeader4)
 		items.blockAssembler.currentChain = []*model.BlockHeader{
 			blockHeader4,
 			blockHeader3,
@@ -258,7 +258,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		// set the cached BlockAssembler items to the correct values
-		items.blockAssembler.bestBlockHeader = blockHeader2
+		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
 		items.blockAssembler.currentChain = []*model.BlockHeader{blockHeader2, blockHeader1}
 		items.blockAssembler.currentChainMap = map[chainhash.Hash]uint32{
 			*blockHeader1.Hash(): 1,
