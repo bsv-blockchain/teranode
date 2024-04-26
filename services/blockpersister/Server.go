@@ -89,6 +89,43 @@ func (u *Server) Start(ctx context.Context) error {
 		})
 	}
 
+	// http.HandleFunc("GET /block/", func(w http.ResponseWriter, req *http.Request) {
+	// 	hashStr := req.PathValue("hash")
+
+	// 	if hashStr == "" {
+	// 		http.Error(w, "missing hash", http.StatusBadRequest)
+	// 		return
+	// 	}
+
+	// 	hash, err := chainhash.NewHashFromStr(hashStr)
+	// 	if err != nil {
+	// 		http.Error(w, "invalid hash", http.StatusBadRequest)
+	// 		return
+	// 	}
+
+	// 	client, err := blockchain.NewClient(req.Context(), u.logger)
+	// 	if err != nil {
+	// 		http.Error(w, "failed to create blockchain client", http.StatusInternalServerError)
+	// 		return
+	// 	}
+
+	// 	block, err := client.GetBlock(req.Context(), hash)
+	// 	if err != nil {
+	// 		http.Error(w, "failed to get block", http.StatusInternalServerError)
+	// 		return
+	// 	}
+
+	// 	blockBytes, err := block.Bytes()
+	// 	if err != nil {
+	// 		http.Error(w, "failed to get block bytes", http.StatusInternalServerError)
+	// 		return
+	// 	}
+
+	// 	u.persistBlock(req.Context(), hash, blockBytes)
+
+	// 	w.WriteHeader(http.StatusOK)
+	// })
+
 	<-ctx.Done()
 
 	return nil

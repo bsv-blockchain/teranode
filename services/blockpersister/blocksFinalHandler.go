@@ -124,6 +124,8 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	}
 
 	// Now, write the block file
+	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())
+
 	reader, writer := io.Pipe()
 
 	bufferedWriter := bufio.NewWriter(writer)
@@ -159,10 +161,14 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return fmt.Errorf("[BlockPersister] error persisting block: %w", err)
 	}
 
+	u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
+
 	// At this point, we have a complete UTXODiff for this block.
 	if err := utxoDiff.Persist(ctx, u.blockStore); err != nil {
 		return fmt.Errorf("error persisting utxo diff: %w", err)
 	}
+
+	u.logger.Infof("[BlockPersister] Processing UTXOSet for block %s", block.Header.Hash().String())
 
 	// 2. Now we need to apply this UTXODiff to the UTXOSet for the previous block
 	previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
