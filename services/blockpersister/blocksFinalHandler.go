@@ -26,6 +26,15 @@ var (
 )
 
 func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
+	var err error
+
+	defer func() {
+		if msg.Message != nil && err == nil {
+			msg.Session.MarkMessage(msg.Message, "")
+			msg.Session.Commit()
+		}
+	}()
+
 	if msg.Message != nil {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -40,15 +49,25 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 			return
 		}
 
-		hash, err := chainhash.NewHash(msg.Message.Key[:])
+		var hash *chainhash.Hash
+
+		hash, err = chainhash.NewHash(msg.Message.Key[:])
 		if err != nil {
 			u.logger.Errorf("Failed to parse block hash from message: %v", err)
 			return
 		}
 
-		gotLock, _, err := tryLockIfNotExists(ctx, u.logger, hash, u.blockStore, options.WithFileExtension("block"))
+		var gotLock bool
+		var exists bool
+
+		gotLock, exists, err = tryLockIfNotExists(ctx, u.logger, hash, u.blockStore, options.WithFileExtension("block"))
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
+			return
+		}
+
+		if exists {
+			u.logger.Infof("Block %s already exists", hash.String())
 			return
 		}
 
@@ -57,9 +76,10 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 			return
 		}
 
-		if err := u.persistBlock(ctx, hash, msg.Message.Value); err != nil {
+		if err = u.persistBlock(ctx, hash, msg.Message.Value); err != nil {
 			if errors.Is(err, errors.ErrNotFound) {
 				u.logger.Warnf("PreviousBlock %s not found, so UTXOSet not processed", hash.String())
+				err = nil
 			} else {
 				u.logger.Errorf("Error persisting block %s: %v", hash.String(), err)
 			}
@@ -183,7 +203,7 @@ type Exister interface {
 	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
 }
 
-func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainhash.Hash, exister Exister, opts ...options.Options) (bool, bool, error) { // First bool is if the lock was acquired, second is if the lockfile exists
+func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainhash.Hash, exister Exister, opts ...options.Options) (bool, bool, error) { // First bool is if the lock was acquired, second is if the item already exists
 	b, err := exister.Exists(ctx, hash[:], opts...)
 	if err != nil {
 		return false, false, err

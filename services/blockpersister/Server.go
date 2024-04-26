@@ -85,7 +85,6 @@ func (u *Server) Start(ctx context.Context) error {
 
 		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the blocksFinal messages.
 		go u.startKafkaListener(ctx, blocksFinalKafkaURL, groupID, 1, func(msg util.KafkaMessage) {
-			// TODO is there a way to return an error here and have Kafka mark the message as not done?
 			u.blocksFinalHandler(msg)
 		})
 	}
