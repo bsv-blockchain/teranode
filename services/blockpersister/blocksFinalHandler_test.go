@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
@@ -181,4 +182,36 @@ func TestBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, block.Header.Hash().String(), newBlockModel.Header.Hash().String())
+}
+
+type mockExister struct{}
+
+func (m *mockExister) Exists(_ context.Context, _ []byte, _ ...options.Options) (bool, error) {
+	return false, nil
+}
+
+func TestLockFile(t *testing.T) {
+	// util.SkipVeryLongTests(t) // TEMP fix this test
+
+	ctx, cancel := context.WithCancel(context.Background())
+	hash := chainhash.HashH([]byte("test"))
+
+	gotLock, _, err := tryLockIfNotExists(ctx, ulogger.TestLogger{}, &hash, &mockExister{}, options.WithFileExtension("block"))
+	require.NoError(t, err)
+	assert.True(t, gotLock)
+
+	gotLock, _, err = tryLockIfNotExists(ctx, ulogger.TestLogger{}, &hash, &mockExister{}, options.WithFileExtension("block"))
+	require.NoError(t, err)
+	assert.False(t, gotLock)
+
+	cancel()
+
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+
+	time.Sleep(1 * time.Millisecond) // Wait for the lock to be released
+
+	gotLock, _, err = tryLockIfNotExists(ctx, ulogger.TestLogger{}, &hash, &mockExister{}, options.WithFileExtension("block"))
+	require.NoError(t, err)
+	assert.True(t, gotLock)
 }

@@ -183,7 +183,7 @@ type Exister interface {
 	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
 }
 
-func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainhash.Hash, exister Exister, opts ...options.Options) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
+func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainhash.Hash, exister Exister, opts ...options.Options) (bool, bool, error) { // First bool is if the lock was acquired, second is if the lockfile exists
 	b, err := exister.Exists(ctx, hash[:], opts...)
 	if err != nil {
 		return false, false, err
@@ -193,8 +193,6 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainh
 	}
 
 	quorumPath, _ := gocore.Config().Get("block_quorum_path", "")
-	quorumTimeout, _, _ := gocore.Config().GetDuration("block_quorum_timeout", 30*time.Minute)
-
 	if quorumPath == "" {
 		return true, false, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked
 	}
@@ -209,9 +207,9 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainh
 	lockFile := path.Join(quorumPath, hash.String()) + ".lock"
 
 	// If the lock file already exists, the block is being processed by another node. However, the lock may be stale.
-	// If the lock file is older than the quorum timeout, it is considered stale and can be removed.
+	// If the lock file mtime is more than 10 seconds old it is considered stale and can be removed.
 	if info, err := os.Stat(lockFile); err == nil {
-		if time.Since(info.ModTime()) > quorumTimeout {
+		if time.Since(info.ModTime()) > 10*time.Second {
 			if err := os.Remove(lockFile); err != nil {
 				logger.Warnf("failed to remove stale lock file %q: %v", lockFile, err)
 			}
@@ -236,14 +234,24 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainh
 	}
 
 	go func() {
-		// Release the lock after 30s or when context is cancelled
-		select {
-		case <-ctx.Done():
-		case <-time.After(quorumTimeout):
-		}
+		// Initialize ticker to update the lock file every 5 seconds
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 
-		if err := os.Remove(lockFile); err != nil {
-			logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
+		for {
+			select {
+			case <-ctx.Done():
+				if err := os.Remove(lockFile); err != nil {
+					logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
+				}
+				return
+			case <-ticker.C:
+				// Touch the lock file by updating its access and modification times to the current time
+				now := time.Now()
+				if err := os.Chtimes(lockFile, now, now); err != nil {
+					logger.Warnf("failed to update lock file %q: %v", lockFile, err)
+				}
+			}
 		}
 	}()
 
