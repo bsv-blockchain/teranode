@@ -841,5 +841,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(_ context.Context, _ *blockassemb
 		SubtreeCount:          uint32(ba.blockAssembler.SubtreeCount()),
 		TxCount:               ba.blockAssembler.TxCount(),
 		QueueCount:            ba.blockAssembler.QueueLength(),
+		CurrentHeight:         ba.blockAssembler.bestBlockHeight.Load(),
+		CurrentHash:           ba.blockAssembler.bestBlockHeader.Load().Hash().String(),
 	}, nil
 }

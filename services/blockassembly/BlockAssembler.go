@@ -42,7 +42,7 @@ type BlockAssembler struct {
 
 	miningCandidateCh          chan chan *miningCandidateResponse
 	bestBlockHeader            atomic.Pointer[model.BlockHeader]
-	bestBlockHeight            uint32
+	bestBlockHeight            atomic.Uint32
 	currentChain               []*model.BlockHeader
 	currentChainMap            map[chainhash.Hash]uint32
 	currentChainMapIDs         map[uint32]struct{}
@@ -172,12 +172,12 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting to new best block header: %d", meta.Height)
 				b.bestBlockHeader.Store(bestBlockchainBlockHeader)
-				b.bestBlockHeight = currentHeight
+				b.bestBlockHeight.Store(currentHeight)
 				if err = b.SetState(ctx); err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error setting state: %v", err)
 				}
 
-				prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight))
+				prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
 
 				if err = b.setCurrentChain(ctx); err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset][%s] error setting current chain: %v", bestBlockchainBlockHeader.Hash(), err)
@@ -252,9 +252,9 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					}
 
 					b.bestBlockHeader.Store(bestBlockchainBlockHeader)
-					b.bestBlockHeight = meta.Height
+					b.bestBlockHeight.Store(meta.Height)
 
-					prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight))
+					prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
 
 					if b.resetWaitCount.Load() > 0 {
 						// decrement the reset wait count, we just found and processed a block
@@ -288,9 +288,9 @@ func (b *BlockAssembler) GetCurrentRunningState() string {
 	return b.currentRunningState.Load().(string)
 }
 
-func (b *BlockAssembler) Start(ctx context.Context) (err error) {
-	var bestBlockHeader *model.BlockHeader
-	bestBlockHeader, b.bestBlockHeight, err = b.GetState(ctx)
+func (b *BlockAssembler) Start(ctx context.Context) error {
+	bestBlockHeader, bestBlockHeight, err := b.GetState(ctx)
+	b.bestBlockHeight.Store(bestBlockHeight)
 	b.bestBlockHeader.Store(bestBlockHeader)
 	if err != nil {
 		// TODO what is the best way to handle errors wrapped in grpc rpc errors?
@@ -300,12 +300,12 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 			b.logger.Errorf("[BlockAssembler] error getting state from blockchain db: %v", err)
 		}
 	} else {
-		b.logger.Infof("[BlockAssembler] setting best block header from state: %d: %s", b.bestBlockHeight, b.bestBlockHeader.Load().Hash())
+		b.logger.Infof("[BlockAssembler] setting best block header from state: %d: %s", b.bestBlockHeight.Load(), b.bestBlockHeader.Load().Hash())
 		b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader.Load())
 	}
 
 	// we did not get any state back from the blockchain db, so we get the current best block header
-	if b.bestBlockHeader.Load() == nil || b.bestBlockHeight == 0 {
+	if b.bestBlockHeader.Load() == nil || b.bestBlockHeight.Load() == 0 {
 		header, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 		if err != nil {
 			b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
@@ -313,7 +313,7 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 			b.logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", b.bestBlockHeader.Load().Hash())
 
 			b.bestBlockHeader.Store(header)
-			b.bestBlockHeight = meta.Height
+			b.bestBlockHeight.Store(meta.Height)
 			b.subtreeProcessor.SetCurrentBlockHeader(b.bestBlockHeader.Load())
 		}
 	}
@@ -334,7 +334,7 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 
 	b.startChannelListeners(ctx)
 
-	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight))
+	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
 
 	return nil
 }
@@ -360,10 +360,10 @@ func (b *BlockAssembler) SetState(ctx context.Context) error {
 	}
 
 	state := make([]byte, 4+len(b.bestBlockHeader.Load().Bytes()))
-	binary.LittleEndian.PutUint32(state[:4], b.bestBlockHeight)
+	binary.LittleEndian.PutUint32(state[:4], b.bestBlockHeight.Load())
 	state = append(state[:4], b.bestBlockHeader.Load().Bytes()...)
 
-	b.logger.Debugf("[BlockAssembler] setting state: %d: %s", b.bestBlockHeight, b.bestBlockHeader.Load().Hash())
+	b.logger.Debugf("[BlockAssembler] setting state: %d: %s", b.bestBlockHeight.Load(), b.bestBlockHeader.Load().Hash())
 	return b.blockchainClient.SetState(ctx, "BlockAssembler", state)
 }
 
@@ -410,7 +410,7 @@ func (b *BlockAssembler) GetCurrentChainMapIDs() map[uint32]struct{} {
 }
 
 func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
-	return b.bestBlockHeader.Load(), b.bestBlockHeight
+	return b.bestBlockHeader.Load(), b.bestBlockHeight.Load()
 }
 
 func (b *BlockAssembler) AddTx(node util.SubtreeNode) {
@@ -460,7 +460,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	for _, subtree := range subtrees {
 		coinbaseValue += subtree.Fees
 	}
-	coinbaseValue += util.GetBlockSubsidyForHeight(b.bestBlockHeight + 1)
+	coinbaseValue += util.GetBlockSubsidyForHeight(b.bestBlockHeight.Load() + 1)
 
 	// Get the hash of the last subtree in the list...
 	// We do this by using the same subtree processor logic to get the top tree hash.
@@ -507,7 +507,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		CoinbaseValue: coinbaseValue,
 		Version:       1,
 		NBits:         nBits.CloneBytes(),
-		Height:        b.bestBlockHeight + 1,
+		Height:        b.bestBlockHeight.Load() + 1,
 		Time:          timeNow,
 		MerkleProof:   coinbaseMerkleProofBytes,
 		SubtreeCount:  uint32(len(subtrees)),
@@ -525,7 +525,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		return fmt.Errorf("error getting reorg blocks: %w", err)
 	}
 
-	if (len(moveDownBlocks) > 5 || len(moveUpBlocks) > 5) && b.bestBlockHeight > 1000 {
+	if (len(moveDownBlocks) > 5 || len(moveUpBlocks) > 5) && b.bestBlockHeight.Load() > 1000 {
 		// large reorg, log it and Reset the block assembler
 		b.logger.Warnf("large reorg, moveDownBlocks: %d, moveUpBlocks: %d, resetting block assembly", len(moveDownBlocks), len(moveUpBlocks))
 		b.Reset()
@@ -644,7 +644,7 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	b.logger.Debugf("timeDifference: %d", timeDifference)
 	b.logger.Debugf("bestBlockHeader.Hash().String(): %s", b.bestBlockHeader.Load().Hash().String())
 
-	if !b.difficultyAdjustment || (b.bestBlockHeight < uint32(b.difficultyAdjustmentWindow)+3) {
+	if !b.difficultyAdjustment || (b.bestBlockHeight.Load() < uint32(b.difficultyAdjustmentWindow)+3) {
 		b.logger.Debugf("no difficulty adjustment. Difficulty set to %s", b.defaultMiningNBits.String())
 		return b.defaultMiningNBits, nil
 	} else if timeDifference > thresholdSeconds+uint32(randomOffset) {
