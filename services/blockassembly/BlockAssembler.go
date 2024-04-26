@@ -40,9 +40,8 @@ type BlockAssembler struct {
 	blockchainClient blockchain.ClientI
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 
-	miningCandidateCh chan chan *miningCandidateResponse
-	bestBlockHeader   atomic.Pointer[model.BlockHeader]
-	//bestBlockHeader            *model.BlockHeader
+	miningCandidateCh          chan chan *miningCandidateResponse
+	bestBlockHeader            atomic.Pointer[model.BlockHeader]
 	bestBlockHeight            uint32
 	currentChain               []*model.BlockHeader
 	currentChainMap            map[chainhash.Hash]uint32
@@ -290,7 +289,6 @@ func (b *BlockAssembler) GetCurrentRunningState() string {
 }
 
 func (b *BlockAssembler) Start(ctx context.Context) (err error) {
-	// b.bestBlockHeader, b.bestBlockHeight, err = b.GetState(ctx)
 	var bestBlockHeader *model.BlockHeader
 	bestBlockHeader, b.bestBlockHeight, err = b.GetState(ctx)
 	b.bestBlockHeader.Store(bestBlockHeader)

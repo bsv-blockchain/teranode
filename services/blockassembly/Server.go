@@ -596,7 +596,9 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 		return nil, fmt.Errorf("[BlockAssembly][%s] failed to convert hashPrevBlock: %w", jobID, err)
 	}
 
-	// TODO check whether we are already mining on a higher chain work, then just ignore this solution
+	if ba.blockAssembler.bestBlockHeader.Load().HashPrevBlock.IsEqual(hashPrevBlock) {
+		return nil, fmt.Errorf("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID)
+	}
 
 	coinbaseTx, err := bt.NewTxFromBytes(req.CoinbaseTx)
 	if err != nil {
