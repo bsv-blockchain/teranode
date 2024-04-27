@@ -51,7 +51,7 @@ func Start() {
 	}
 
 	if len(flag.Args()) != 1 {
-		usage()
+		usage("filename or hash required")
 	}
 
 	path := flag.Arg(0)
@@ -239,7 +239,10 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 	return nil
 }
 
-func usage() {
+func usage(msg string) {
+	if msg != "" {
+		fmt.Printf("Error: %s\n\n", msg)
+	}
 	fmt.Printf("Usage: filereader [-verbose] <filename | hash>.[block | subtree | utxoset | utxodiff] | -verify [-old]\n\n")
 	os.Exit(1)
 }
@@ -248,14 +251,14 @@ func getReader(path string, logger ulogger.Logger) (string, string, io.Reader, e
 	dir, file := filepath.Split(path)
 
 	ext := filepath.Ext(file)
+	if ext == "" || ext == "." {
+		usage("file extension missing")
+	}
+
 	fileWithoutExtension := strings.TrimSuffix(file, ext)
 
 	if ext[0] == '.' {
 		ext = ext[1:]
-	}
-
-	if ext == "" {
-		usage()
 	}
 
 	hash, err := chainhash.NewHashFromStr(fileWithoutExtension)
