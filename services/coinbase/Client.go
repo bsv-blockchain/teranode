@@ -42,7 +42,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 	}, nil
 }
 
-func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string) (ClientI, error) {
+func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string) (*Client, error) {
 	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
@@ -53,8 +53,10 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	}
 
 	return &Client{
-		client: coinbase_api.NewCoinbaseAPIClient(baConn),
-		logger: logger,
+		client:  coinbase_api.NewCoinbaseAPIClient(baConn),
+		logger:  logger,
+		running: true,
+		conn:    baConn,
 	}, nil
 }
 

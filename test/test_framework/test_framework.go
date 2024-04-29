@@ -21,14 +21,14 @@ func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 	}
 }
 
-func (b *BitcoinTestFramework) SetupNodes() error {
+func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 	compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(b.ComposeFilePaths...))
 	if err != nil {
 		return err
 	}
 
 	b.ctx = context.Background()
-	if err := compose.Up(b.ctx); err != nil {
+	if err := compose.WithEnv(m).Up(b.ctx); err != nil {
 		return err
 	}
 
