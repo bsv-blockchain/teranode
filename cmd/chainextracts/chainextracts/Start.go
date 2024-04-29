@@ -1,13 +1,11 @@
 package chainextracts
 
 import (
-	"bufio"
 	"context"
 	"flag"
-	"io"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/cmd/validate_block/validateblock"
+	"github.com/bitcoin-sv/ubsv/cmd/filereader/filereader"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -58,15 +56,6 @@ func Start() {
 	if err != nil {
 		panic(err)
 	}
-	persistURL, err, ok := gocore.Config().GetURL("blockPersister_persistURL.ci.chainintegrity.ubsv1")
-	if err != nil || !ok {
-		logger.Fatalf("Error getting blockpersister_store URL: %v", err)
-	}
-	persistStore, err := blob.NewStore(logger, persistURL)
-	if err != nil {
-		logger.Errorf("failed to open store at %s: %s", persistURL, err)
-		return
-	}
 
 	// ------------------------------------------------------------------------------------------------
 	// test stores
@@ -83,17 +72,19 @@ func Start() {
 
 	logger.Infof("found %d blocks", len(allBlocks))
 
-	for _, hash := range allBlocks {
-		logger.Infof("checking block %s", chainhash.Hash(hash))
-		block, height, err := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(hash))
+	for _, hashBytes := range allBlocks {
+		hash := chainhash.Hash(hashBytes)
+
+		logger.Infof("checking block %s", hash)
+		block, height, err := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(hashBytes))
 		if err != nil {
 			logger.Errorf("failed to get block %s: %s", height, err)
 			continue
 		}
-		logger.Infof("block %s has height %d", chainhash.Hash(hash), height)
+		logger.Infof("block %s has height %d", hash, height)
 
 		if len(block.Subtrees) == 0 {
-			logger.Infof("no subtrees found for block %s", chainhash.Hash(hash))
+			logger.Infof("no subtrees found for block %s", hash)
 			continue
 		}
 
@@ -102,32 +93,18 @@ func Start() {
 		for _, subtreeHash := range block.Subtrees {
 			_, err = subtreeStore.Get(ctx, subtreeHash[:])
 			if err != nil {
-				logger.Errorf("failed to get subtree %s for block %s: %s", subtreeHash, chainhash.Hash(hash), err)
+				logger.Errorf("failed to get subtree %s for block %s: %s", subtreeHash, hash, err)
 				logger.Debugf("block dump: %s", block.Header.StringDump())
 			}
 			logger.Infof("subtree %s exists", subtreeHash)
 		}
 
-		rc, err := persistStore.GetIoReader(context.Background(), hash)
-		if err != nil {
-			logger.Errorf("error getting reader from store: %s", err)
-			return
-		}
-		logger.Infof("block %s has been persisted", chainhash.Hash(hash))
-		var r io.Reader = rc
-		r = bufio.NewReaderSize(r, 1024*1024)
-
-		valid, err := validateblock.ValidateBlock(r, logger)
-		if err != nil {
+		if err := filereader.ProcessFile(hash.String()+".block", logger); err != nil {
 			logger.Errorf("Error during validation: %v", err)
 			return
-		}
-
-		if valid {
-			logger.Infof("Block %s is valid", chainhash.Hash(hash))
 		} else {
-			logger.Errorf("Block %s is NOT valid", chainhash.Hash(hash))
-		}
+			logger.Infof("Block %s is valid", hash)
 
+		}
 	}
 }

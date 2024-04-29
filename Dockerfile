@@ -57,7 +57,6 @@ RUN ln -s ubsv.run blockassemblyblaster.run
 RUN ln -s ubsv.run utxostoreblaster.run
 RUN ln -s ubsv.run aerospiketest.run
 RUN ln -s ubsv.run s3blaster.run
-RUN ln -s ubsv.run validateblock.run
 RUN ln -s ubsv.run filereader.run
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \

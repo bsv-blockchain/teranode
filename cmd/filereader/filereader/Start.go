@@ -56,24 +56,31 @@ func Start() {
 
 	path := flag.Arg(0)
 
-	dir, ext, r, err := getReader(path, logger)
-	if err != nil {
-		fmt.Printf("error getting reader: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Wrap the reader with a buffered reader
-	r = bufio.NewReaderSize(r, 1024*1024)
-
-	fmt.Printf("Reading file %s\n", path)
-
 	// read the transaction count
-	if err := readFile(ext, logger, r, dir); err != nil {
-		fmt.Printf("error reading file: %v\n", err)
+	if err := ProcessFile(path, logger); err != nil {
+		fmt.Printf("error processing file: %v\n", err)
 		os.Exit(1)
 	}
 
 	os.Exit(0)
+}
+
+func ProcessFile(path string, logger ulogger.Logger) error {
+	dir, ext, r, err := getReader(path, logger)
+	if err != nil {
+		return fmt.Errorf("error getting reader: %w", err)
+	}
+
+	r = bufio.NewReaderSize(r, 1024*1024)
+
+	logger.Infof("Reading file %s\n", path)
+
+	if err := readFile(ext, logger, r, dir); err != nil {
+		return fmt.Errorf("error reading file: %w", err)
+	}
+
+	return nil
 }
 
 func verifyChain() error {
