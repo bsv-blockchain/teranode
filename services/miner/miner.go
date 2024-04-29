@@ -260,10 +260,10 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	retryCount := 3
 	retryMessage := fmt.Sprintf("[Miner] submitting mining solution: %s %s", candidateId, blockHash.String())
 	// Wrap the call to SubmitMiningSolution in an anonymous function
-	retryFunction := func() error {
-		return m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
+	retryFunction := func() (struct{}, error) {
+		return struct{}{}, m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	}
-	err = retry.RetryWithLogger(ctx, m.logger, retryFunction, retryCount, 2, time.Second, retryMessage)
+	_, err = retry.RetryWithLogger[struct{}](ctx, m.logger, retryFunction, retryCount, 2, time.Second, retryMessage)
 
 	if err != nil {
 		// After all retries, if there's still an error, wrap and return it using %w

@@ -16,47 +16,51 @@ func TestRetryWithLogger(t *testing.T) {
 	defer cancel()
 
 	// Function that will succeed on the first attempt
-	successFn := func() error {
-		return nil
+	successFn := func() (string, error) {
+		return "success", nil
 	}
 
 	// Function that will fail once then succeed
 	staticCallCount := 0
-	retryOnceFn := func() error {
+	retryOnceFn := func() (string, error) {
 		if staticCallCount == 0 {
 			staticCallCount++
-			return errors.New("error")
+			return "", errors.New("error")
 		}
-		return nil
+		return "success", nil
 	}
 
 	// Function that will always fail
-	alwaysFailFn := func() error {
-		return errors.New("persistent error")
+	alwaysFailFn := func() (string, error) {
+		return "", errors.New("persistent error")
 	}
 
 	// Test case 1: Function succeeds on the first try
-	err := RetryWithLogger(ctx, logger, successFn, 3, 2, 100*time.Millisecond, "Trying again")
+	result, err := RetryWithLogger(ctx, logger, successFn, 3, 2, 100*time.Millisecond, "Trying again")
 	assert.NoError(t, err)
+	assert.Equal(t, "success", result)
 	logger.AssertNumberOfCalls(t, "Infof", 1)
 	logger.Reset()
 
 	// Test case 2: Function fails once then succeeds
-	err = RetryWithLogger(ctx, logger, retryOnceFn, 3, 2, 100*time.Millisecond, "Trying again")
+	result, err = RetryWithLogger(ctx, logger, retryOnceFn, 3, 2, 100*time.Millisecond, "Trying again")
 	assert.NoError(t, err)
+	assert.Equal(t, "success", result)
 	logger.AssertNumberOfCalls(t, "Infof", 2)
 	logger.Reset()
 
 	// Test case 3: Function fails all attempts
-	err = RetryWithLogger(ctx, logger, alwaysFailFn, 3, 2, 100*time.Millisecond, "Trying again")
+	result, err = RetryWithLogger(ctx, logger, alwaysFailFn, 3, 2, 100*time.Millisecond, "Trying again")
 	assert.Error(t, err)
+	assert.Empty(t, result)
 	logger.AssertNumberOfCalls(t, "Infof", 3)
 	logger.Reset()
 
 	// Test case 4: Context cancellation
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel() // Immediately cancel the context
-	err = RetryWithLogger(cancelCtx, logger, alwaysFailFn, 3, 2, 100*time.Millisecond, "Trying again")
+	result, err = RetryWithLogger(cancelCtx, logger, alwaysFailFn, 3, 2, 100*time.Millisecond, "Trying again")
+	assert.Empty(t, result)
 	assert.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 	logger.AssertNumberOfCalls(t, "Infof", 0)
@@ -124,19 +128,19 @@ func TestRetryWithLoggerTimer(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			recordedSleeps = nil // Reset before each test case
+			recordedSleeps = nil
 			ctx := context.Background()
 			logger := mock_logger.NewTestLogger()
 			errorCount := 0
-			f := func() error {
+			f := func() (string, error) {
 				if errorCount < tc.simulateErrors {
 					errorCount++
-					return errors.New("test error")
+					return "", errors.New("test error")
 				}
-				return nil
+				return "success", nil
 			}
 
-			err := RetryWithLogger(ctx, logger, f, tc.retryCount, tc.backoffMult, tc.backoffType, "retrying...")
+			_, err := RetryWithLogger(ctx, logger, f, tc.retryCount, tc.backoffMult, tc.backoffType, "retrying...")
 
 			if errorCount < tc.simulateErrors && err == nil {
 				t.Errorf("Expected an error but got nil")
@@ -155,15 +159,6 @@ func TestRetryWithLoggerTimer(t *testing.T) {
 					t.Errorf("Expected sleep of %v but got %v on attempt %d", expected, recordedSleeps[i], i+1)
 				}
 			}
-			// if len(recordedSleeps) != len(tc.expectedSleeps) {
-			// 	t.Errorf("Expected %d sleep calls but got %d", len(tc.expectedSleeps), len(recordedSleeps))
-			// } else {
-			// 	for i, expected := range tc.expectedSleeps {
-			// 		if recordedSleeps[i] != expected {
-			// 			t.Errorf("Expected sleep of %v but got %v on attempt %d", expected, recordedSleeps[i], i+1)
-			// 		}
-			// 	}
-			// }
 		})
 	}
 }

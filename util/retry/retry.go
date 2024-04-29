@@ -2,7 +2,6 @@ package retry
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -18,28 +17,30 @@ import (
 // retryMessage: The message that will be logged when retrying
 // Returns:
 // error: The error returned by the function, or nil if the function was successful
-func RetryWithLogger(ctx context.Context, logger ulogger.Logger, f func() error, retryCount int, backoffMultiplier int, backoffDurationType time.Duration, retryMessage string) error {
+func RetryWithLogger[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error), retryCount int, backoffMultiplier int, backoffDurationType time.Duration, retryMessage string) (T, error) {
+	var result T
 	var err error
+
 	for i := 0; i < retryCount; i++ {
 		select {
 		case <-ctx.Done(): // Check if the context has been cancelled
-			fmt.Println("Context cancelled")
-			return ctx.Err()
+			logger.Errorf("Context cancelled, stopping retries")
+			return result, ctx.Err()
 		default:
 			// Log the retry message
 			logger.Infof(retryMessage, ", (attempt %d): ", i+1)
 
 			// Call the function
-			err = f()
+			result, err = f()
 
 			// If the function was successful, return nil
 			if err == nil {
-				return nil
+				return result, nil
 			}
 
 			// Backkoff and sleep for the backoff time
 			BackoffAndSleep(i, backoffMultiplier, backoffDurationType)
 		}
 	}
-	return err
+	return result, err
 }

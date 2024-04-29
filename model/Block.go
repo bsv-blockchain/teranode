@@ -21,6 +21,7 @@ import (
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/greatroar/blobloom"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -598,21 +599,29 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 			// if the subtree meta slice is loaded, we can use that instead of the txMetaStore
 			var subtreeMetaSlice *util.SubtreeMeta
-			retries := 0
-			for {
-				subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, subtreeStore, *subtreeHash, subtree)
-				if err != nil {
-					if retries < 3 {
-						retries++
-						logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice, retrying: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
-						time.Sleep(1 * time.Second)
-						continue
-					}
-					logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
-				}
-
-				break
+			retryCount := 3
+			retryMessage := fmt.Sprintf("[BLOCK][%s][%s:%d] error getting subtree meta slice", b.Hash().String(), subtreeHash.String(), sIdx)
+			retryFunction := func() (*util.SubtreeMeta, error) {
+				subtreeMetaSlice, err = b.getSubtreeMetaSlice(gCtx, subtreeStore, *subtreeHash, subtree)
+				return subtreeMetaSlice, err
 			}
+
+			subtreeMetaSlice, err = retry.RetryWithLogger[*util.SubtreeMeta](ctx, logger, retryFunction, retryCount, 2, time.Second, retryMessage)
+			// retries := 0
+			// for {
+			// 	subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, subtreeStore, *subtreeHash, subtree)
+			// 	if err != nil {
+			// 		if retries < 3 {
+			// 			retries++
+			// 			logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice, retrying: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
+			// 			time.Sleep(1 * time.Second)
+			// 			continue
+			// 		}
+			// 		logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
+			// 	}
+
+			// 	break
+			// }
 
 			var parentTxHashes []chainhash.Hash
 			bloomStats.mu.Lock()
@@ -636,7 +645,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				} else {
 					// get from the txMetaStore
 					var txMeta *txmetastore.Data
-					retries = 0
+					retries := 0
 					for {
 						txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
 						if err != nil {

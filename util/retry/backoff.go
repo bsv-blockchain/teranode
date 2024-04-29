@@ -19,5 +19,4 @@ func BackoffAndSleep(retries int, backoffMultiplier int, durationType time.Durat
 	backoffPeriod := time.Duration(backoff) * durationType
 	//time.Sleep(backoffPeriod)
 	sleepFunc(backoffPeriod)
-	return
 }
