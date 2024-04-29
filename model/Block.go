@@ -599,29 +599,19 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 			// if the subtree meta slice is loaded, we can use that instead of the txMetaStore
 			var subtreeMetaSlice *util.SubtreeMeta
-			retryCount := 3
-			retryMessage := fmt.Sprintf("[BLOCK][%s][%s:%d] error getting subtree meta slice", b.Hash().String(), subtreeHash.String(), sIdx)
-			retryFunction := func() (*util.SubtreeMeta, error) {
-				subtreeMetaSlice, err = b.getSubtreeMetaSlice(gCtx, subtreeStore, *subtreeHash, subtree)
-				return subtreeMetaSlice, err
+			subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, subtreeStore, *subtreeHash, subtree)
+			if err != nil {
+				retryCount := 3
+				retryMessage := fmt.Sprintf("[BLOCK][%s][%s:%d] error getting subtree meta slice", b.Hash().String(), subtreeHash.String(), sIdx)
+				retryFunction := func() (*util.SubtreeMeta, error) {
+					subtreeMetaSlice, err = b.getSubtreeMetaSlice(gCtx, subtreeStore, *subtreeHash, subtree)
+					return subtreeMetaSlice, err
+				}
+				subtreeMetaSlice, err = retry.RetryWithLogger[*util.SubtreeMeta](ctx, logger, retryFunction, retryCount, 1, time.Second, retryMessage)
+				if err != nil {
+					logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
+				}
 			}
-
-			subtreeMetaSlice, err = retry.RetryWithLogger[*util.SubtreeMeta](ctx, logger, retryFunction, retryCount, 2, time.Second, retryMessage)
-			// retries := 0
-			// for {
-			// 	subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, subtreeStore, *subtreeHash, subtree)
-			// 	if err != nil {
-			// 		if retries < 3 {
-			// 			retries++
-			// 			logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice, retrying: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
-			// 			time.Sleep(1 * time.Second)
-			// 			continue
-			// 		}
-			// 		logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
-			// 	}
-
-			// 	break
-			// }
 
 			var parentTxHashes []chainhash.Hash
 			bloomStats.mu.Lock()
@@ -645,24 +635,22 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				} else {
 					// get from the txMetaStore
 					var txMeta *txmetastore.Data
-					retries := 0
-					for {
-						txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
+					txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
+					if err != nil {
+						retryCount := 3
+						retryMessage := fmt.Sprintf("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
+						retryFunction := func() (*txmetastore.Data, error) {
+							txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
+							return txMeta, err
+						}
+						txMeta, err = retry.RetryWithLogger[*txmetastore.Data](ctx, logger, retryFunction, retryCount, 1, time.Second, retryMessage)
+						// retry returned an error
 						if err != nil {
-							if retries < 3 {
-								retries++
-								logger.Errorf("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore, retrying: %v", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
-								time.Sleep(1 * time.Second)
-								continue
-							}
-
 							if errors.Is(err, txmetastore.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
 								return errors.New(errors.ERR_NOT_FOUND, "[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
 							}
 							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
 						}
-
-						break
 					}
 
 					if txMeta == nil {
