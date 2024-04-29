@@ -15,7 +15,7 @@ func NewErrTxmetaNotFound(key *chainhash.Hash) error {
 }
 
 func NewErrTxmetaAlreadyExists(key *chainhash.Hash) error {
-	return errors.New(errors.ERR_NOT_FOUND, fmt.Sprintf("txmeta key %q", key.String()))
+	return errors.New(errors.ERR_TXMETA_ALREADY_EXISTS, fmt.Sprintf("txmeta key %q", key.String()))
 }
 
 type MissingTxHash struct {
