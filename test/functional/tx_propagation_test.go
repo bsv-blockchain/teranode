@@ -1,13 +1,15 @@
 //go:build e2eTest
 
-package main
+package test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -20,8 +22,8 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	setupBitcoinTestFramework()
-	defer tearDownBitcoinTestFramework()
+	// setupBitcoinTestFramework()
+	// defer tearDownBitcoinTestFramework()
 
 	m.Run()
 
@@ -30,7 +32,12 @@ func TestMain(m *testing.M) {
 
 func setupBitcoinTestFramework() {
 	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml"})
-	if err := framework.SetupNodes(); err != nil {
+	m := map[string]string{
+		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
+		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc1",
+		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tc1",
+	}
+	if err := framework.SetupNodes(m); err != nil {
 		fmt.Printf("Error setting up nodes: %v\n", err)
 		os.Exit(1)
 	}
@@ -43,7 +50,7 @@ func tearDownBitcoinTestFramework() {
 }
 
 func TestPropagation(t *testing.T) {
-	// ctx := context.Background()
+	ctx := context.Background()
 	// url := "http://localhost:18090"
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
@@ -55,13 +62,13 @@ func TestPropagation(t *testing.T) {
 		distributor.WithFailureTolerance(0),
 	)
 
-	// coinbaseClient, err := coinbase.NewClient(ctx, logger)
-	// if err != nil {
-	// 	t.Fatalf("Failed to create Coinbase client: %v", err)
-	// }
+	coinbaseClient, err := coinbase.NewClientWithAddress(ctx, logger, "localhost:18093")
+	if err != nil {
+		t.Fatalf("Failed to create Coinbase client: %v", err)
+	}
 
-	// utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
-	// fmt.Printf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	fmt.Printf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
 	// coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
 	// coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
