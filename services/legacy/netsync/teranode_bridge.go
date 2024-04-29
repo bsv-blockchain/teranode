@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	uerrors "github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
@@ -202,16 +201,7 @@ func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
 			return fmt.Errorf("Failed to create bt.Tx: %w", err)
 		}
 
-		if tx.IsCoinbase() {
-			if _, err := tb.txmetaStore.Create(context.TODO(), tx, tx.LockTime); err != nil {
-				if uerr, ok := err.(*uerrors.Error); ok && uerr.Code == uerrors.ERR_NOT_FOUND {
-					log.Debugf("Coinbase tx %s already exists in map store - skipping", txHash)
-				} else {
-					return fmt.Errorf("Failed to store coinbase tx %s: %w", txHash, err)
-				}
-			}
-
-		} else {
+		if !tx.IsCoinbase() {
 			if err := subtree.AddNode(txHash, 0, txSize); err != nil {
 				return fmt.Errorf("Failed to add node (%s) to subtree: %w", txHash, err)
 			}
