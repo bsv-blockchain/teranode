@@ -257,29 +257,13 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 
 	}
 
-	// Define retry delays
-	//retryDelays := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
-	//for i := 0; i < len(retryDelays); i++ {
 	retryCount := 3
 	retryMessage := fmt.Sprintf("[Miner] submitting mining solution: %s %s", candidateId, blockHash.String())
 	// Wrap the call to SubmitMiningSolution in an anonymous function
 	retryFunction := func() error {
 		return m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	}
-	retry.RetryWithLogger(ctx, m.logger, retryFunction, retryCount, 2, time.Second, retryMessage)
-
-	//retry.RetryWithContext(ctx, m.blockAssemblyClient.SubmitMiningSolution, []interface{}{solution}, retryCount, 2*time.Second, "[Miner] submitting mining solution: %s %s", m.logger)
-	// for i := 0; i < retryCount; i++ {
-	// 	m.logger.Infof("[Miner] submitting mining solution for job (attempt %d): %s [%s]", i+1, candidateId, blockHash.String())
-	// 	m.logger.Debugf(solution.Stringify(gocore.Config().GetBool("miner_verbose", false)))
-
-	// 	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
-	// 	if err == nil {
-	// 		break // Success, exit the loop
-	// 	}
-
-	// 	retry.BackoffAndSleep(i, 2, time.Second)
-	// }
+	err = retry.RetryWithLogger(ctx, m.logger, retryFunction, retryCount, 2, time.Second, retryMessage)
 
 	if err != nil {
 		// After all retries, if there's still an error, wrap and return it using %w
