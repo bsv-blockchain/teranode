@@ -643,7 +643,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 							txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
 							return txMeta, err
 						}
-						txMeta, err = retry.RetryWithLogger[*txmetastore.Data](ctx, logger, retryFunction, retryCount, 1, time.Second, retryMessage)
+						txMeta, err = retry.RetryWithLogger(ctx, logger, retryFunction, retryCount, 1, time.Second, retryMessage)
 						// retry returned an error
 						if err != nil {
 							if errors.Is(err, txmetastore.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
@@ -882,51 +882,42 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 			g.Go(func() error {
 				// retry to get the subtree from the store 3 times, there are instances when we get an EOF error,
 				// probably when being moved to permanent storage in another service
-				retries := 0
+				retryCount := 3
 				subtree := &util.Subtree{}
-				for { // retry for loop
-					select {
-					case <-gCtx.Done():
-						return gCtx.Err()
-					default:
 
-						subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
-						if err != nil {
-							if retries < 3 {
-								retries++
-								backoff := time.Duration(2^retries) * time.Second
-								logger.Warnf("[BLOCK][%s] failed to get subtree %s, retrying %d in %s", b.Hash().String(), subtreeHash.String(), retries, backoff.String())
-								time.Sleep(backoff)
-								continue
-							}
-							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String(), err)
-						}
-
-						err = subtree.DeserializeFromReader(subtreeReader)
-						if err != nil {
-							_ = subtreeReader.Close()
-							if retries < 3 {
-								retries++
-								backoff := time.Duration(2^retries) * time.Second
-								logger.Warnf("[BLOCK][%s] failed to deserialize subtree %s, retrying %d in %s", b.Hash().String(), subtreeHash.String(), retries, backoff)
-								time.Sleep(backoff)
-								continue
-							}
-							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] failed to deserialize subtree %s", b.Hash().String(), subtreeHash.String(), err)
-						}
-
-						b.SubtreeSlices[i] = subtree
-
-						sizeInBytes.Add(subtree.SizeInBytes)
-						txCount.Add(uint64(subtree.Length()))
-
-						_ = subtreeReader.Close()
-						break
-
+				subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+				if err != nil {
+					retryMessage := fmt.Sprintf("[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String())
+					retryFunction := func() (io.ReadCloser, error) {
+						return subtreeStore.GetIoReader(gCtx, subtreeHash[:])
 					}
-
-					return nil
+					subtreeReader, err = retry.RetryWithLogger(gCtx, logger, retryFunction, retryCount, 2, time.Second, retryMessage)
+					if err != nil {
+						return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String(), err)
+					}
 				}
+
+				err = subtree.DeserializeFromReader(subtreeReader)
+				if err != nil {
+					//_ = subtreeReader.Close()
+					retryMessage := fmt.Sprintf("[BLOCK][%s] failed to deserialize subtree %s", b.Hash().String(), subtreeHash.String())
+					retryFunction := func() (struct{}, error) {
+						return struct{}{}, subtree.DeserializeFromReader(subtreeReader)
+					}
+					_, err = retry.RetryWithLogger(gCtx, logger, retryFunction, retryCount, 2, time.Second, retryMessage)
+					if err != nil {
+						return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] failed to deserialize subtree %s", b.Hash().String(), subtreeHash.String(), err)
+					}
+				}
+
+				b.SubtreeSlices[i] = subtree
+
+				sizeInBytes.Add(subtree.SizeInBytes)
+				txCount.Add(uint64(subtree.Length()))
+
+				_ = subtreeReader.Close()
+
+				return nil
 			})
 		}
 	}
