@@ -735,15 +735,22 @@ LOOP:
 			}
 		}
 
+		u.logger.Infof("[catchup][%s] added %d blocks for validating", fromBlock.Hash().String(), len(validateBlocksChan))
+
 		// close the channel to signal that all blocks have been processed
 		close(validateBlocksChan)
 
 		return nil
 	})
 
+	size := len(validateBlocksChan)
+	i := 0
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
 	for block := range validateBlocksChan {
+		i++
+		u.logger.Infof("[catchup][%s] validating block %d/%d [%s]", block.Hash().String(), i, size, block.Hash().String())
+
 		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
