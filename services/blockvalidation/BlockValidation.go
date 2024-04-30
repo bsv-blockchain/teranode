@@ -867,7 +867,12 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 			if !subtreeExists {
 				// we don't have the subtree, so we need to process it in the subtree validation service
 				// this will also store the subtree in the store and block while the subtree is being processed
-				err = u.subtreeValidationClient.CheckSubtree(spanCtx, *subtreeHash, baseUrl, blockHeight)
+				// we do this with a timeout of max 2 minutes
+				checkCtx, cancel := context.WithTimeout(spanCtx, 2*time.Minute)
+				defer func() {
+					cancel()
+				}()
+				err = u.subtreeValidationClient.CheckSubtree(checkCtx, *subtreeHash, baseUrl, blockHeight)
 				if err != nil {
 					return fmt.Errorf("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service: %v", subtreeHash.String(), err)
 				}
