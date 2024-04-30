@@ -503,6 +503,10 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	u.logger.Infof("[ValidateBlock][%s] called", block.Header.Hash().String())
 
+	initialDelay := 10 * time.Millisecond // Initial delay of 10ms
+	maxDelay := 5 * time.Second           // Maximum delay
+	delay := initialDelay
+
 	for {
 		parentBlockMined, err := u.isParentMined(ctx, block.Header)
 		if err != nil {
@@ -513,7 +517,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 		if !parentBlockMined {
 			u.logger.Warnf("[BlockValidation:start][%s] parent block not mined yet, retrying", block.Hash().String())
-			time.Sleep(5 * time.Second)
+			time.Sleep(delay)
+			delay = min(2*delay, maxDelay) // Increase delay, ensuring it does not exceed maxDelay
 		} else {
 			break
 		}
