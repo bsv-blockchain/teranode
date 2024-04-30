@@ -254,21 +254,21 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 			m.logger.Infof("[Miner] Waiting %v to allow coinbase splitting to catch up before mining last few initial blocks", m.initialBlockFinalWaitDuration)
 			time.Sleep(m.initialBlockFinalWaitDuration)
 		}
-
 	}
 
-	retryCount := 3
-	retryMessage := fmt.Sprintf("[Miner] submitting mining solution: %s %s", candidateId, blockHash.String())
-	// Wrap the call to SubmitMiningSolution in an anonymous function
-	retryFunction := func() (struct{}, error) {
-		return struct{}{}, m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
-	}
-	_, err = retry.RetryWithLogger[struct{}](ctx, m.logger, retryFunction, retryCount, 2, time.Second, retryMessage)
-
+	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
-		// After all retries, if there's still an error, wrap and return it using %w
-		// to wrap the error, so the caller can use errors.Is() to check for this specific error
-		return fmt.Errorf("error submitting mining solution after %d retries for job %s: %w", retryCount, candidateId, err)
+		retryCount := 3
+		retryMessage := fmt.Sprintf("[Miner] submitting mining solution: %s %s", candidateId, blockHash.String())
+		retryFunction := func() (struct{}, error) {
+			return struct{}{}, m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
+		}
+		_, err = retry.RetryWithLogger[struct{}](ctx, m.logger, retryFunction, retryCount, 2, time.Second, retryMessage)
+		if err != nil {
+			// After all retries, if there's still an error, wrap and return it using %w
+			// to wrap the error, so the caller can use errors.Is() to check for this specific error
+			return fmt.Errorf("error submitting mining solution after %d retries for job %s: %w", retryCount, candidateId, err)
+		}
 	}
 
 	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
