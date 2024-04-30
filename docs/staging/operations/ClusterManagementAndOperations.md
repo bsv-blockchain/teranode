@@ -93,7 +93,7 @@ Microservice configurations can be influenced by settings. There are 2 ways to p
 - Download the `k8s_shortcuts.sh` shortcuts file from the shared repository and place it in the home directory.
 
 ```bash
-cp docs/private/runbook/.k8s_shortcuts.sh ~/.k8s_shortcuts.sh
+cp docs/staging/operations/.k8s_shortcuts.sh ~/.k8s_shortcuts.sh
 ```
 
 - Add Kubernetes shortcuts to `.zprofile` for ease of use.
