@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRetryWithLogger(t *testing.T) {
+func TestRetry(t *testing.T) {
 	logger := mock_logger.NewTestLogger()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -41,21 +41,21 @@ func TestRetryWithLogger(t *testing.T) {
 	messageOpts := WithMessage("Trying again")
 
 	// Test case 1: Function succeeds on the first try
-	result, err := RetryWithLogger(ctx, logger, successFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
+	result, err := Retry(ctx, logger, successFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
 	assert.NoError(t, err)
 	assert.Equal(t, "success", result)
 	logger.AssertNumberOfCalls(t, "Infof", 1)
 	logger.Reset()
 
 	// Test case 2: Function fails once then succeeds
-	result, err = RetryWithLogger(ctx, logger, retryOnceFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
+	result, err = Retry(ctx, logger, retryOnceFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
 	assert.NoError(t, err)
 	assert.Equal(t, "success", result)
 	logger.AssertNumberOfCalls(t, "Infof", 2)
 	logger.Reset()
 
 	// Test case 3: Function fails all attempts
-	result, err = RetryWithLogger(ctx, logger, alwaysFailFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
+	result, err = Retry(ctx, logger, alwaysFailFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
 	assert.Error(t, err)
 	assert.Empty(t, result)
 	logger.AssertNumberOfCalls(t, "Infof", 3)
@@ -64,14 +64,14 @@ func TestRetryWithLogger(t *testing.T) {
 	// Test case 4: Context cancellation
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel() // Immediately cancel the context
-	result, err = RetryWithLogger(cancelCtx, logger, alwaysFailFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
+	result, err = Retry(cancelCtx, logger, alwaysFailFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
 	assert.Empty(t, result)
 	assert.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 	logger.AssertNumberOfCalls(t, "Infof", 0)
 }
 
-func TestRetryWithLoggerTimer(t *testing.T) {
+func TestRetryTimer(t *testing.T) {
 	// Save the original function
 	originalSleepFunc := sleepFunc
 	// Restore the original function after test
@@ -86,10 +86,7 @@ func TestRetryWithLoggerTimer(t *testing.T) {
 	}
 
 	tests := []struct {
-		name string
-		// retryCount     int
-		// backoffMult    int
-		// backoffType    time.Duration
+		name           string
 		options        []Options
 		expectedSleeps []time.Duration
 		simulateErrors int // Number of times the function should return an error before succeeding
@@ -138,7 +135,7 @@ func TestRetryWithLoggerTimer(t *testing.T) {
 				return "success", nil
 			}
 
-			_, err := RetryWithLogger(ctx, logger, f, tc.retryCount, tc.backoffMult, tc.backoffType, "retrying...")
+			_, err := Retry(ctx, logger, f, tc.options...)
 
 			if errorCount < tc.simulateErrors && err == nil {
 				t.Errorf("Expected an error but got nil")

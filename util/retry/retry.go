@@ -17,7 +17,7 @@ import (
 // Returns:
 // error: The error returned by the function, or nil if the function was successful
 // func RetryWithLogger[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error), retryCount int, backoffMultiplier int, backoffDurationType time.Duration, retryMessage string) (T, error) {
-func RetryWithLogger[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error), opts ...Options) (T, error) {
+func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error), opts ...Options) (T, error) {
 	var result T
 	var err error
 
