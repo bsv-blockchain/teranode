@@ -241,6 +241,30 @@ In this context, `BlockAssembler` is tasked with ensuring that the local version
         - It involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
 
 
+### 3.6. Resetting the Block Assembly
+
+
+The Block Assembly service can be reset to the best block by calling the `ResetBlockAssembly` gRPC method.
+
+1. **State Storage and Retrieval**:
+    - `bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)`: Retrieves the best block header from the blockchain along with its metadata.
+
+2. **Resetting Block Assembly**:
+    - The block assembler resets to the new best block header with its height and details.
+    - It then calculates which blocks need to be moved down or up to align with the new best block header (`getReorgBlocks`).
+
+3. **Processing the Reorganization**:
+    - It attempts to reset the `subtreeProcessor` with the new block headers. If there's an error during this reset, it logs the error, and the block header is re-set to match the `subtreeProcessor`'s current block header.
+
+4. **Updating Assembly State**:
+    - Updates internal state with the new best block header and adjusts the height of the best block based on how many blocks were moved up and down.
+    - Attempts to set the new state and current blockchain chain.
+
+
+
+![block_assembly_reset.svg](img/plantuml/blockassembly/block_assembly_reset.svg)
+
+
 ## 3. Data Model
 
 
