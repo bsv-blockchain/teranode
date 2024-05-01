@@ -258,16 +258,20 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 
 	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
-		retryCount := 3
-		retryMessage := fmt.Sprintf("[Miner] submitting mining solution: %s %s", candidateId, blockHash.String())
-		retryFunction := func() (struct{}, error) {
+		// retryCount := 3
+		// retryMessage := fmt.Sprintf("[Miner] submitting mining solution: %s %s", candidateId, blockHash.String())
+		// retryFunction := func() (struct{}, error) {
+		// 	return struct{}{}, m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
+		// }
+		_, err = retry.Retry(ctx, m.logger, func() (struct{}, error) {
 			return struct{}{}, m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
-		}
-		_, err = retry.RetryWithLogger(ctx, m.logger, retryFunction, retryCount, 2, time.Second, retryMessage)
+		}, retry.WithMessage(fmt.Sprintf("[Miner] submitting mining solution: %s %s", candidateId, blockHash.String())))
+
 		if err != nil {
 			// After all retries, if there's still an error, wrap and return it using %w
 			// to wrap the error, so the caller can use errors.Is() to check for this specific error
-			return fmt.Errorf("error submitting mining solution after %d retries for job %s: %w", retryCount, candidateId, err)
+			// TODO: 3 retries is hardcoded, as it is default in the retry package. This could be accessible.
+			return fmt.Errorf("error submitting mining solution after 3 retries for job %s: %w", candidateId, err)
 		}
 	}
 
