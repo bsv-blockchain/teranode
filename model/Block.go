@@ -607,7 +607,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					subtreeMetaSlice, err = b.getSubtreeMetaSlice(gCtx, subtreeStore, *subtreeHash, subtree)
 					return subtreeMetaSlice, err
 				}
-				subtreeMetaSlice, err = retry.RetryWithLogger[*util.SubtreeMeta](ctx, logger, retryFunction, retryCount, 1, time.Second, retryMessage)
+				subtreeMetaSlice, err = retry.RetryWithLogger(ctx, logger, retryFunction, retryCount, 1, time.Second, retryMessage)
 				if err != nil {
 					logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
 				}
@@ -895,6 +895,17 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 					if err != nil {
 						return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String(), err)
 					}
+					// taslak
+					/*
+						subtreeReader, err := retry.RetryWithLogger(gCtx, logger, func() (io.ReadCloser, error) {
+							return subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+						}, retry.WithMessage(fmt.Sprintf("Getting subtree %s", subtree.RootHash().String())))
+
+						if err != nil {
+							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String(), err)
+						}
+					*/
+					//
 				}
 
 				err = subtree.DeserializeFromReader(subtreeReader)

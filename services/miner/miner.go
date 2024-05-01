@@ -263,7 +263,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 		retryFunction := func() (struct{}, error) {
 			return struct{}{}, m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 		}
-		_, err = retry.RetryWithLogger[struct{}](ctx, m.logger, retryFunction, retryCount, 2, time.Second, retryMessage)
+		_, err = retry.RetryWithLogger(ctx, m.logger, retryFunction, retryCount, 2, time.Second, retryMessage)
 		if err != nil {
 			// After all retries, if there's still an error, wrap and return it using %w
 			// to wrap the error, so the caller can use errors.Is() to check for this specific error

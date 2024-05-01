@@ -35,22 +35,27 @@ func TestRetryWithLogger(t *testing.T) {
 		return "", errors.New("persistent error")
 	}
 
+	retryOpts := WithRetryCount(3)
+	backoffMultOpts := WithBackoffMultiplier(2)
+	backoffDurOpts := WithBackoffDurationType(100 * time.Millisecond)
+	messageOpts := WithMessage("Trying again")
+
 	// Test case 1: Function succeeds on the first try
-	result, err := RetryWithLogger(ctx, logger, successFn, 3, 2, 100*time.Millisecond, "Trying again")
+	result, err := RetryWithLogger(ctx, logger, successFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
 	assert.NoError(t, err)
 	assert.Equal(t, "success", result)
 	logger.AssertNumberOfCalls(t, "Infof", 1)
 	logger.Reset()
 
 	// Test case 2: Function fails once then succeeds
-	result, err = RetryWithLogger(ctx, logger, retryOnceFn, 3, 2, 100*time.Millisecond, "Trying again")
+	result, err = RetryWithLogger(ctx, logger, retryOnceFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
 	assert.NoError(t, err)
 	assert.Equal(t, "success", result)
 	logger.AssertNumberOfCalls(t, "Infof", 2)
 	logger.Reset()
 
 	// Test case 3: Function fails all attempts
-	result, err = RetryWithLogger(ctx, logger, alwaysFailFn, 3, 2, 100*time.Millisecond, "Trying again")
+	result, err = RetryWithLogger(ctx, logger, alwaysFailFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
 	assert.Error(t, err)
 	assert.Empty(t, result)
 	logger.AssertNumberOfCalls(t, "Infof", 3)
@@ -59,7 +64,7 @@ func TestRetryWithLogger(t *testing.T) {
 	// Test case 4: Context cancellation
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel() // Immediately cancel the context
-	result, err = RetryWithLogger(cancelCtx, logger, alwaysFailFn, 3, 2, 100*time.Millisecond, "Trying again")
+	result, err = RetryWithLogger(cancelCtx, logger, alwaysFailFn, retryOpts, backoffMultOpts, backoffDurOpts, messageOpts)
 	assert.Empty(t, result)
 	assert.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
@@ -81,45 +86,38 @@ func TestRetryWithLoggerTimer(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		retryCount     int
-		backoffMult    int
-		backoffType    time.Duration
+		name string
+		// retryCount     int
+		// backoffMult    int
+		// backoffType    time.Duration
+		options        []Options
 		expectedSleeps []time.Duration
 		simulateErrors int // Number of times the function should return an error before succeeding
 		expectedError  bool
 	}{
 		{
 			name:           "Retry three times with increasing backoff, fail all retries",
-			retryCount:     3,
-			backoffMult:    1,
-			backoffType:    time.Millisecond, // Use smaller units for testing
+			options:        []Options{WithRetryCount(3), WithBackoffMultiplier(1), WithBackoffDurationType(time.Millisecond), WithMessage("retrying...")},
 			expectedSleeps: []time.Duration{1 * time.Millisecond, 2 * time.Millisecond, 3 * time.Millisecond},
 			simulateErrors: 3, // Fails three times
 			expectedError:  true,
 		},
 		{
 			name:           "Function succeeds on first try",
-			retryCount:     3,
-			backoffMult:    1,
-			backoffType:    time.Millisecond,
+			options:        []Options{WithRetryCount(3), WithBackoffMultiplier(1), WithBackoffDurationType(time.Millisecond), WithMessage("retrying...")},
 			expectedSleeps: nil, // No sleep calls
 			expectedError:  false,
 		},
 		{
 			name:           "Error twice then succeed, success on last try",
-			retryCount:     3,
-			backoffMult:    1,
-			backoffType:    time.Millisecond,
+			options:        []Options{WithRetryCount(3), WithBackoffMultiplier(1), WithBackoffDurationType(time.Millisecond), WithMessage("retrying...")},
 			expectedSleeps: []time.Duration{1 * time.Millisecond, 2 * time.Millisecond},
 			simulateErrors: 2, // Fails twice, then succeeds
 			expectedError:  false,
 		},
 		{
 			name:           "Retry with increasing backoff, succeeds midway",
-			retryCount:     5,
-			backoffMult:    1,
-			backoffType:    time.Millisecond,
+			options:        []Options{WithRetryCount(5), WithBackoffMultiplier(1), WithBackoffDurationType(time.Millisecond), WithMessage("retrying...")},
 			expectedSleeps: []time.Duration{1 * time.Millisecond, 2 * time.Millisecond, 3 * time.Millisecond},
 			simulateErrors: 3, // Fails twice, then succeeds on the third try
 			expectedError:  false,
