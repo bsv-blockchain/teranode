@@ -101,7 +101,7 @@ func (s *Client) connectFRPC(ctx context.Context, frpcClient *blockvalidation_ap
 	if err != nil {
 		_, err = retry.Retry(ctx, s.logger, func() (struct{}, error) {
 			return struct{}{}, frpcClient.Connect(blockValidationFRPCAddress)
-		}, retry.WithMessage(fmt.Sprintf("[BlockValidation] error connecting to fRPC server in blockvalidation: %s", err)), retry.WithRetryCount(5))
+		}, retry.WithMessage(fmt.Sprintf("[BlockValidation] error connecting to fRPC server in blockvalidation: %s", err)), retry.WithRetryCount(4))
 		if err != nil {
 			s.logger.Fatalf("failed to connect to blockvalidation fRPC server after 5 attempts")
 		}

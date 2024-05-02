@@ -602,8 +602,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 			subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, subtreeStore, *subtreeHash, subtree)
 			if err != nil {
 				subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*util.SubtreeMeta, error) {
-					subtreeMetaSlice, err = b.getSubtreeMetaSlice(gCtx, subtreeStore, *subtreeHash, subtree)
-					return subtreeMetaSlice, err
+					return b.getSubtreeMetaSlice(gCtx, subtreeStore, *subtreeHash, subtree)
 				}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][%s:%d] error getting subtree meta slice", b.Hash().String(), subtreeHash.String(), sIdx)))
 
 				if err != nil {
@@ -636,8 +635,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
 					if err != nil {
 						txMeta, err = retry.Retry(ctx, logger, func() (*txmetastore.Data, error) {
-							txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
-							return txMeta, err
+							return txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
 						}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())))
 
 						if err != nil {

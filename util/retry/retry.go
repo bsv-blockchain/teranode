@@ -6,17 +6,16 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
-// RetryWithLogger is a utility function that will retry a function call a number of times, with a backoff time between each retry.
+// RetryWithLogger will retry a function call a number of times, with a backoff time between each retry.
 // Parameters:
 // ctx: The context that will be used to control the retry operation
 // logger: The logger that will be used to log messages
 // f: The function that will be retried. It should return an error, which will be checked to determine if the function was successful
-// retryCount: The number of times the function will be retried
-// backoffTime: The time to wait between each retry
-// retryMessage: The message that will be logged when retrying
+// opts: The options that will be used to control the retry operation. These can be set using the WithMessage, WithBackoffDurationType, WithBackoffMultiplier, and WithRetryCount functions
 // Returns:
+// T: The result of the function call, or the zero value of T if the function was not successful
 // error: The error returned by the function, or nil if the function was successful
-// func RetryWithLogger[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error), retryCount int, backoffMultiplier int, backoffDurationType time.Duration, retryMessage string) (T, error) {
+// func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error), opts ...Options) (T, error) {
 func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error), opts ...Options) (T, error) {
 	var result T
 	var err error
