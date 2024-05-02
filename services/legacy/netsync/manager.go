@@ -660,7 +660,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	// If we didn't ask for this block then the peer is misbehaving.
 	blockHash := bmsg.block.Hash()
 
-	log.Infof("Received block %s from %s", blockHash, peer.Addr())
+	// log.Infof("Received block %s from %s", blockHash, peer.Addr())
 
 	if _, exists = state.requestedBlocks[*blockHash]; !exists {
 		// The regression test intentionally sends some blocks twice
@@ -1304,6 +1304,10 @@ out:
 				}
 
 			case *blockMsg:
+				if err := sm.teranodeBridge.HandleBlock(msg.block); err != nil {
+					log.Errorf("Failed to process HandleBlock %s: %v", msg.block.Hash(), err)
+				}
+
 				sm.handleBlockMsg(msg)
 				if msg.reply != nil {
 					msg.reply <- struct{}{}
@@ -1413,11 +1417,8 @@ func (sm *SyncManager) handleBlockchainNotification(notification *blockchain.Not
 		}
 
 		log.Debugf("NTBlockConnected: %s", block.Hash())
-
-		// Make sure we process the block before bsvd does, so the UTXO is not spent
 		if err := sm.teranodeBridge.HandleBlockConnected(block); err != nil {
 			log.Errorf("Failed to process HandleBlockConnected %s: %v", block.Hash(), err)
-			break
 		}
 
 		// Remove all of the transactions (except the coinbase) in the
