@@ -253,7 +253,12 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 
 func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
 	if tb.verifyOnly {
-		return tb.VerifyOnly(block)
+		go func() {
+			if err := tb.VerifyOnly(block); err != nil {
+				log.Errorf("Failed to verify block: %s", err)
+			}
+		}()
+		return nil
 	}
 	return tb.SendToTeranode(block)
 }
@@ -351,7 +356,7 @@ func (tb *TeranodeBridge) SendToTeranode(block *bsvutil.Block) error {
 		return nil
 	}
 
-	log.Warnf("HandleBlockConnected received for %s (height %d)", block.Hash(), legacyHeight)
+	// log.Warnf("HandleBlockConnected received for %s (height %d)", block.Hash(), legacyHeight)
 
 	var size int64
 
