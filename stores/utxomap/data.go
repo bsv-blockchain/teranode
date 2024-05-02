@@ -21,6 +21,13 @@ type Data struct {
 	IsCoinbase     bool             `json:"isCoinbase"`
 }
 
+type PreviousOutput struct {
+	PreviousTxID  chainhash.Hash
+	Vout          uint32
+	LockingScript []byte
+	Satoshis      uint64
+}
+
 // NewMetaDataFromBytes creates a new Data object from a byte slice
 // the byte slice should be in the format:
 //

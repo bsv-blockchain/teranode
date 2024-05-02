@@ -15,6 +15,7 @@ type Error struct {
 	Code       ERR
 	Message    string
 	WrappedErr error
+	Data       map[string]interface{}
 }
 
 var (
@@ -71,6 +72,15 @@ func (e *Error) Unwrap() error {
 	return e.WrappedErr
 }
 
+func (e *Error) WithData(key string, value interface{}) *Error {
+	if e.Data == nil {
+		e.Data = make(map[string]interface{})
+	}
+	e.Data[key] = value
+
+	return e
+}
+
 func New(code ERR, message string, params ...interface{}) *Error {
 	var wErr error
 
@@ -118,8 +128,12 @@ func WrapGRPC(err error) error {
 		if err != nil {
 			return status.New(codes.Internal, "error adding details to gRPC status").Err()
 		}
+
+		// TODO add the Data field to the details
+
 		return st.Err()
 	}
+
 	return status.New(ErrorCodeToGRPCCode(ErrUnknown.Code), ErrUnknown.Message).Err()
 }
 
@@ -132,6 +146,8 @@ func UnwrapGRPC(err error) error {
 	if !ok {
 		return err // Not a gRPC status error
 	}
+
+	// TODO add the Data field to the details
 
 	// Attempt to extract and return detailed UBSVError if present
 	for _, detail := range st.Details() {
