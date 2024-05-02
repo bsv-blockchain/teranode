@@ -21,6 +21,7 @@ import (
 	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/greatroar/blobloom"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -598,20 +599,15 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 			// if the subtree meta slice is loaded, we can use that instead of the txMetaStore
 			var subtreeMetaSlice *util.SubtreeMeta
-			retries := 0
-			for {
-				subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, subtreeStore, *subtreeHash, subtree)
+			subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, subtreeStore, *subtreeHash, subtree)
+			if err != nil {
+				subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*util.SubtreeMeta, error) {
+					return b.getSubtreeMetaSlice(gCtx, subtreeStore, *subtreeHash, subtree)
+				}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][%s:%d] error getting subtree meta slice", b.Hash().String(), subtreeHash.String(), sIdx)))
+
 				if err != nil {
-					if retries < 3 {
-						retries++
-						logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice, retrying: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
-						time.Sleep(1 * time.Second)
-						continue
-					}
 					logger.Errorf("[BLOCK][%s][%s:%d] error getting subtree meta slice: %v", b.Hash().String(), subtreeHash.String(), sIdx, err)
 				}
-
-				break
 			}
 
 			var parentTxHashes []chainhash.Hash
@@ -636,24 +632,18 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 				} else {
 					// get from the txMetaStore
 					var txMeta *txmetastore.Data
-					retries = 0
-					for {
-						txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
-						if err != nil {
-							if retries < 3 {
-								retries++
-								logger.Errorf("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore, retrying: %v", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
-								time.Sleep(1 * time.Second)
-								continue
-							}
+					txMeta, err = txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
+					if err != nil {
+						txMeta, err = retry.Retry(ctx, logger, func() (*txmetastore.Data, error) {
+							return txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
+						}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())))
 
+						if err != nil {
 							if errors.Is(err, txmetastore.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
 								return errors.New(errors.ERR_NOT_FOUND, "[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
 							}
 							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
 						}
-
-						break
 					}
 
 					if txMeta == nil {
@@ -885,51 +875,38 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 			g.Go(func() error {
 				// retry to get the subtree from the store 3 times, there are instances when we get an EOF error,
 				// probably when being moved to permanent storage in another service
-				retries := 0
 				subtree := &util.Subtree{}
-				for { // retry for loop
-					select {
-					case <-gCtx.Done():
-						return gCtx.Err()
-					default:
 
-						subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
-						if err != nil {
-							if retries < 3 {
-								retries++
-								backoff := time.Duration(2^retries) * time.Second
-								logger.Warnf("[BLOCK][%s] failed to get subtree %s, retrying %d in %s", b.Hash().String(), subtreeHash.String(), retries, backoff.String())
-								time.Sleep(backoff)
-								continue
-							}
-							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String(), err)
-						}
+				subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+				if err != nil {
+					subtreeReader, err = retry.Retry(gCtx, logger, func() (io.ReadCloser, error) {
+						return subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String())))
 
-						err = subtree.DeserializeFromReader(subtreeReader)
-						if err != nil {
-							_ = subtreeReader.Close()
-							if retries < 3 {
-								retries++
-								backoff := time.Duration(2^retries) * time.Second
-								logger.Warnf("[BLOCK][%s] failed to deserialize subtree %s, retrying %d in %s", b.Hash().String(), subtreeHash.String(), retries, backoff)
-								time.Sleep(backoff)
-								continue
-							}
-							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] failed to deserialize subtree %s", b.Hash().String(), subtreeHash.String(), err)
-						}
-
-						b.SubtreeSlices[i] = subtree
-
-						sizeInBytes.Add(subtree.SizeInBytes)
-						txCount.Add(uint64(subtree.Length()))
-
-						_ = subtreeReader.Close()
-						break
-
+					if err != nil {
+						return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String(), err)
 					}
-
-					return nil
 				}
+
+				err = subtree.DeserializeFromReader(subtreeReader)
+				if err != nil {
+					_, err = retry.Retry(gCtx, logger, func() (struct{}, error) {
+						return struct{}{}, subtree.DeserializeFromReader(subtreeReader)
+					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s] failed to deserialize subtree %s", b.Hash().String(), subtreeHash.String())))
+
+					if err != nil {
+						return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] failed to deserialize subtree %s", b.Hash().String(), subtreeHash.String(), err)
+					}
+				}
+
+				b.SubtreeSlices[i] = subtree
+
+				sizeInBytes.Add(subtree.SizeInBytes)
+				txCount.Add(uint64(subtree.Length()))
+
+				_ = subtreeReader.Close()
+
+				return nil
 			})
 		}
 	}

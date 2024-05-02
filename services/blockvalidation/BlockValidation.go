@@ -398,7 +398,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 
 	// update block mined_set to true
 	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
-		return fmt.Errorf("[setMined][%s] failed to set block mined: %s", block.Hash().String(), err)
+		return fmt.Errorf("[setTxMined][%s] failed to set block mined: %s", block.Hash().String(), err)
 	}
 
 	return nil

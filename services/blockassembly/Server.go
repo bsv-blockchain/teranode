@@ -3,7 +3,6 @@ package blockassembly
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/url"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -157,8 +157,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					subtreeRetry.retries++
 					go func() {
 						// backoff and wait before re-adding to retry queue
-						backoff := time.Duration(math.Pow(2, float64(subtreeRetry.retries))) * time.Second
-						time.Sleep(backoff)
+						retry.BackoffAndSleep(subtreeRetry.retries, 2, time.Second)
 
 						// re-add the subtree to the retry queue
 						subtreeRetryChan <- subtreeRetry

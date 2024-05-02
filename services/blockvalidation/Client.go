@@ -12,6 +12,7 @@ import (
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -96,32 +97,14 @@ func (s *Client) connectFRPC(ctx context.Context, frpcClient *blockvalidation_ap
 		return
 	}
 
-	connected := false
-	maxRetries := 5
-	retryInterval := 5 * time.Second
-
-	for i := 0; i < maxRetries; i++ {
-		s.logger.Infof("attempting to create fRPC connection to blockvalidation, attempt %d", i+1)
-
-		err := frpcClient.Connect(blockValidationFRPCAddress)
+	err := frpcClient.Connect(blockValidationFRPCAddress)
+	if err != nil {
+		_, err = retry.Retry(ctx, s.logger, func() (struct{}, error) {
+			return struct{}{}, frpcClient.Connect(blockValidationFRPCAddress)
+		}, retry.WithMessage(fmt.Sprintf("[BlockValidation] error connecting to fRPC server in blockvalidation: %s", err)), retry.WithRetryCount(4))
 		if err != nil {
-			s.logger.Infof("error connecting to fRPC server in blockvalidation: %s", err)
-			if i+1 == maxRetries {
-				break
-			}
-			time.Sleep(retryInterval)
-			retryInterval *= 2
-		} else {
-			s.logger.Infof("connected to blockvalidation fRPC server")
-			connected = true
-			break
+			s.logger.Fatalf("failed to connect to blockvalidation fRPC server after 5 attempts")
 		}
-	}
-
-	s.frpcClientConnected = connected
-
-	if !connected {
-		s.logger.Fatalf("failed to connect to blockvalidation fRPC server after %d attempts", maxRetries)
 	}
 
 	/* listen for close channel and reconnect */
