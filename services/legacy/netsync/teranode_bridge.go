@@ -300,9 +300,11 @@ func (tb *TeranodeBridge) VerifyOnly(block *bsvutil.Block) error {
 				return fmt.Errorf("tx %s is not extended", txHash)
 			}
 
-			if err := txv.ValidateTransaction(tx, uint32(block.Height())); err != nil {
-				return fmt.Errorf("tx %s failed validation: %w", txHash, err)
-			}
+			go func() {
+				if err := txv.ValidateTransaction(tx, uint32(block.Height())); err != nil {
+					log.Errorf("tx %s failed validation: %w", txHash, err)
+				}
+			}()
 
 		}
 	}
@@ -339,9 +341,11 @@ func (tb *TeranodeBridge) VerifyOnly(block *bsvutil.Block) error {
 		return fmt.Errorf("Failed to create model.NewBlock: %w", err)
 	}
 
-	if _, err := teranodeBlock.Valid(context.TODO(), log, nil, nil, nil, nil, nil, nil); err != nil {
-		return fmt.Errorf("Failed to validate block: %w", err)
-	}
+	go func() {
+		if _, err := teranodeBlock.Valid(context.TODO(), log, nil, nil, nil, nil, nil, nil); err != nil {
+			log.Errorf("Failed to validate block: %w", err)
+		}
+	}()
 
 	return nil
 }
