@@ -72,6 +72,29 @@ func NewDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error)
 	return d, nil
 }
 
+func NewDistributorFromAddress(address string, logger ulogger.Logger, opts ...Option) (*Distributor, error) {
+	propagationServer, err := getPropagationServerFromAddress(address)
+	if err != nil {
+		return nil, err
+	}
+	propagationServers := map[string]propagation_api.PropagationAPIClient{
+		address: propagationServer,
+	}
+
+	d := &Distributor{
+		logger:             logger,
+		propagationServers: propagationServers,
+		attempts:           1,
+		failureTolerance:   50,
+	}
+
+	for _, opt := range opts {
+		opt(d)
+	}
+
+	return d, nil
+}
+
 func getPropagationServers() (map[string]propagation_api.PropagationAPIClient, error) {
 	addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 
@@ -95,6 +118,31 @@ func getPropagationServers() (map[string]propagation_api.PropagationAPIClient, e
 	}
 
 	return propagationServers, nil
+}
+
+func getPropagationServerFromAddress(address string) (propagation_api.PropagationAPIClient, error) {
+	// addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
+
+	// if len(addresses) == 0 {
+	// 	return nil, errors.New("no propagation server addresses found")
+	// }
+
+	// propagationServers := make(map[string]propagation_api.PropagationAPIClient)
+
+	// for _, address := range addresses {
+	pConn, err := util.GetGRPCClient(context.Background(), address, &util.ConnectionOptions{
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		MaxRetries:  3,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error connecting to propagation server %s: %w", address, err)
+	}
+
+	propagationServer := propagation_api.NewPropagationAPIClient(pConn)
+	// }
+
+	return propagationServer, nil
 }
 
 func NewQuicDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error) {

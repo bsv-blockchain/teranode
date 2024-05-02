@@ -65,6 +65,45 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	return client
 }
 
+func NewClientFromAddress(blockAssemblyGrpcAddress string, ctx context.Context, logger ulogger.Logger) *Client {
+	// blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockassembly_grpcAddress")
+	// if !ok {
+	// 	panic("no blockassembly_grpcAddress setting found")
+	// }
+
+	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
+		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
+		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
+		MaxRetries:  3,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	batchSize, _ := gocore.Config().GetInt("blockassembly_sendBatchSize", 0)
+	sendBatchTimeout, _ := gocore.Config().GetInt("blockassembly_sendBatchTimeout", 100)
+
+	if batchSize > 0 {
+		logger.Infof("Using batch mode to send transactions to block assembly, batches: %d, timeout: %d", batchSize, sendBatchTimeout)
+	}
+
+	duration := time.Duration(sendBatchTimeout) * time.Millisecond
+
+	client := &Client{
+		client:    blockassembly_api.NewBlockAssemblyAPIClient(baConn),
+		logger:    logger,
+		batchSize: batchSize,
+		batchCh:   make(chan []*batchItem),
+	}
+
+	sendBatch := func(batch []*batchItem) {
+		client.sendBatchToBlockAssembly(ctx, batch)
+	}
+	client.batcher = *batcher.New[batchItem](batchSize, duration, sendBatch, true)
+
+	return client
+}
+
 func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
 	req := &blockassembly_api.AddTxRequest{
 		Txid: hash[:],
