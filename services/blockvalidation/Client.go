@@ -64,7 +64,7 @@ func (s *Client) getFRPCClient(ctx context.Context) *blockvalidation_api.Client 
 
 	frpcClient := s.frpcClient.Load()
 	if frpcClient != nil {
-		s.connectFRPC(frpcClient)
+		s.connectFRPC(ctx, frpcClient)
 	}
 	return frpcClient
 }
@@ -83,7 +83,7 @@ func (s *Client) NewFRPCClient() {
 	s.frpcClient.Store(frpcClient)
 }
 
-func (s *Client) connectFRPC(frpcClient *blockvalidation_api.Client) {
+func (s *Client) connectFRPC(ctx context.Context, frpcClient *blockvalidation_api.Client) {
 	if frpcClient.Closed() {
 		s.logger.Errorf("fRPC connection to blockvalidation, closed, will attempt to connect")
 	}
@@ -97,30 +97,14 @@ func (s *Client) connectFRPC(frpcClient *blockvalidation_api.Client) {
 		return
 	}
 
-	connected := false
-	maxRetries := 5
-
-	for i := 0; i < maxRetries; i++ {
-		s.logger.Infof("attempting to create fRPC connection to blockvalidation, attempt %d", i+1)
-
-		err := frpcClient.Connect(blockValidationFRPCAddress)
+	err := frpcClient.Connect(blockValidationFRPCAddress)
+	if err != nil {
+		_, err = retry.Retry(ctx, s.logger, func() (struct{}, error) {
+			return struct{}{}, frpcClient.Connect(blockValidationFRPCAddress)
+		}, retry.WithMessage(fmt.Sprintf("[BlockValidation] error connecting to fRPC server in blockvalidation: %s", err)), retry.WithRetryCount(5))
 		if err != nil {
-			s.logger.Infof("error connecting to fRPC server in blockvalidation: %s", err)
-			if i+1 == maxRetries {
-				break
-			}
-			retry.BackoffAndSleep(i, 2, time.Second)
-		} else {
-			s.logger.Infof("connected to blockvalidation fRPC server")
-			connected = true
-			break
+			s.logger.Fatalf("failed to connect to blockvalidation fRPC server after 5 attempts")
 		}
-	}
-
-	s.frpcClientConnected = connected
-
-	if !connected {
-		s.logger.Fatalf("failed to connect to blockvalidation fRPC server after %d attempts", maxRetries)
 	}
 
 	/* listen for close channel and reconnect */
