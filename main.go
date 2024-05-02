@@ -38,6 +38,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/miner"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
+	"github.com/bitcoin-sv/ubsv/services/rpc"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -142,6 +143,7 @@ func main() {
 	startBlockPersister := shouldStart("BlockPersister")
 	startLegacy := shouldStart("Legacy")
 	help := shouldStart("help")
+	startRpc := shouldStart("rpc")
 
 	if help || appCount == 0 {
 		printUsage()
@@ -235,6 +237,12 @@ func main() {
 			getTxStore(logger),
 			getSubtreeStore(logger),
 		)); err != nil {
+			panic(err)
+		}
+	}
+
+	if startRpc {
+		if err := sm.AddService("Rpc", rpc.NewServer(logger.New("rpc"))); err != nil {
 			panic(err)
 		}
 	}
