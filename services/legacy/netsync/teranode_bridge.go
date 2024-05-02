@@ -198,24 +198,43 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 		// Extend the tx with additional information
 		if !tx.IsCoinbase() {
 			for _, input := range tx.Inputs {
-				// This only works before BSVD processes the block.
-				// Once processed, FetchUtxoEntry returns nil because the utxo is spent and removed from the UTXOSet.
-				previousOutput, err := tb.chain.FetchUtxoEntry(wire.OutPoint{
-					Hash:  *input.PreviousTxIDChainHash(),
-					Index: input.PreviousTxOutIndex,
-				})
+				// Lookup the previous tx in out txCache
+				var script *bscript.Script
+				var satoshis uint64
 
-				if err != nil {
-					return fmt.Errorf("Failed to lookup previous tx (%s:%d): %w", *input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, err)
+				w, ok := tb.txCache.Get(*input.PreviousTxIDChainHash())
+
+				if ok {
+					prevTx, err := bt.NewTxFromBytes(w.bytes)
+					if err != nil {
+						return fmt.Errorf("Failed to create bt.Tx for previous tx (%s): %w", input.PreviousTxIDChainHash(), err)
+					}
+
+					script = prevTx.Outputs[input.PreviousTxOutIndex].LockingScript
+					satoshis = prevTx.Outputs[input.PreviousTxOutIndex].Satoshis
+
+				} else {
+					// This only works before BSVD processes the block.
+					// Once processed, the UTXOEntry is spent and removed from the UTXOSet
+					previousOutput, err := tb.chain.FetchUtxoEntry(wire.OutPoint{
+						Hash:  *input.PreviousTxIDChainHash(),
+						Index: input.PreviousTxOutIndex,
+					})
+
+					if err != nil {
+						return fmt.Errorf("Failed to lookup previous tx (%s:%d): %w", *input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, err)
+					}
+
+					if previousOutput == nil {
+						return fmt.Errorf("previous output not found for block %s, tx %s, prevTx %s, vout %d", block.Hash(), txHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
+					}
+
+					script = bscript.NewFromBytes(previousOutput.PkScript())
+					satoshis = uint64(previousOutput.Amount())
 				}
 
-				if previousOutput == nil {
-					return fmt.Errorf("previous output not found for block %s, tx %s, prevTx %s, vout %d", block.Hash(), txHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
-				}
-
-				input.PreviousTxScript = bscript.NewFromBytes(previousOutput.PkScript())
-				input.PreviousTxSatoshis = uint64(previousOutput.Amount())
-
+				input.PreviousTxScript = script
+				input.PreviousTxSatoshis = satoshis
 			}
 
 			if !tx.IsExtended() {
