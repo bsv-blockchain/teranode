@@ -418,7 +418,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 		// 5. Check that the coinbase transaction includes the correct block height.
 		_, err := b.ExtractCoinbaseHeight()
 		if err != nil {
-			return false, errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] error extracting coinbase height: %v", b.Hash().String(), err)
+			return false, errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] error extracting coinbase height: %w", b.Hash().String(), err)
 		}
 	}
 
