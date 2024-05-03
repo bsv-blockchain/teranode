@@ -197,16 +197,16 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				// 2 blocks && at least 20 minutes
 				if b.resetWaitCount.Load() > 0 || int32(time.Now().Unix()) <= b.resetWaitTime.Load() {
 					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitTime.Load()), 0).String())
-					responseCh <- &miningCandidateResponse{
+					utils.SafeSend(responseCh, &miningCandidateResponse{
 						err: fmt.Errorf("waiting for reset to complete"),
-					}
+					})
 				} else {
 					miningCandidate, subtrees, err := b.getMiningCandidate()
-					responseCh <- &miningCandidateResponse{
+					utils.SafeSend(responseCh, &miningCandidateResponse{
 						miningCandidate: miningCandidate,
 						subtrees:        subtrees,
 						err:             err,
-					}
+					})
 				}
 				// stat.AddTime(start)
 				b.currentRunningState.Store("running")
@@ -438,6 +438,8 @@ func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCan
 	// wait for 10 seconds for the response
 	select {
 	case <-time.After(10 * time.Second):
+		// make sure to close the channel, otherwise the for select will hang, because no one is reading from it
+		close(responseCh)
 		return nil, nil, fmt.Errorf("timeout getting mining candidate")
 	case response := <-responseCh:
 		return response.miningCandidate, response.subtrees, response.err
