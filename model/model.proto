@@ -35,6 +35,21 @@ enum NotificationType {
   Subtree = 1;
   Block = 2;
   MiningOn = 3;
+  FSMEvent = 4;
+}
+
+// swagger:enum FSMEvent
+// enum FSMEventType {
+//   STOP = 0;
+//   RUN = 1;
+//   MINE = 2;
+//   STOPMINING = 3;
+// }
+
+// swagger:model NotificationMetadata
+message NotificationMetadata {
+  //define a map of string to string
+  map<string, string> metadata = 1;
 }
 
 // swagger:model BlockInfo
