@@ -3,9 +3,11 @@ package validator
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"time"
+
+	"errors"
+	//"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/TAAL-GmbH/arc/api"
 	"github.com/TAAL-GmbH/arc/validator" // TODO move this to UBSV repo - add recover to validation
@@ -378,6 +380,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 		traceSpan.RecordError(err)
 
 		// check whether this is a double spend error
+
 		var spentErr *utxostore.ErrSpent
 		ok := errors.As(err, &spentErr)
 		if ok {
@@ -390,6 +393,20 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 				}
 			}
 		}
+
+		// spentErr1 := errors.New(errors.ERR_UTXO_SPENT, "")
+		// ok := errors.As(err, &spentErr1)
+		// if ok {
+		// 	// remove the spending tx from the block assembly and freeze it
+		// 	// TODO implement freezing in utxo store
+		// 	spendingTxID, ok := spentErr1.Data["spendingTxID"].(*chainhash.Hash)
+		// 	if ok && spendingTxID != nil {
+		// 		err = v.blockAssembler.RemoveTx(ctx, spendingTxID)
+		// 		if err != nil {
+		// 			v.logger.Errorf("validator: UTXO Store remove tx failed: %v", err)
+		// 		}
+		// 	}
+		// }
 
 		return nil, fmt.Errorf("validator: UTXO Store spend failed for %s: %w", tx.TxIDChainHash().String(), err)
 	}

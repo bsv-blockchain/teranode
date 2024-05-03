@@ -180,6 +180,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					if err := u.catchup(ctx1, c.block, c.baseURL); err != nil {
 						u.logger.Errorf("[Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
 					}
+
 					u.logger.Infof("[Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 				}
@@ -476,6 +477,49 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		errCh = make(chan error)
 	}
 
+	// get current blockheight
+	//currentBlockHeight, err := u.blockchainClient.GetBestBlockHeader(ctx)
+
+	if len(u.blockFoundCh) > 10 {
+		// get the height and check if it is one of the first X blocks that are mined in the beginning
+		block, err := u.getBlock(ctx, hash, req.BaseUrl)
+		if err != nil {
+			return nil, err
+		}
+
+		// TODO GOKHAN
+		if block.Height > 2000 {
+			// we should tell the miner to stop mining.
+			u.logger.Infof("[BlockFound][%s] too many blocks in queue, sending STOPMINING", hash.String())
+
+			// make make(map[string]string) with one element "event" : "STOPMINING"
+			metadata := make(map[string]string)
+			metadata["event"] = "STOPMINING"
+
+			// create a new blockchain notification
+			notification := &model.Notification{
+				Type:    model.NotificationType_FSMEvent,
+				Hash:    nil,
+				BaseURL: "",
+				Metadata: model.NotificationMetadata{
+					Metadata: metadata,
+				},
+			}
+
+			// send the notification to the blockchain client
+
+			// FIRST IMPLEMENT THE FSM IN BLOCKCHAIN CLIENT
+			// CALL ITS FUNCTION TO STOP MINING
+			// THEN IT SHOULD SEND THE NOTIFICATION -> BUT TO ALL SERVICES?
+			// BECAUSE THEY ARE SUBSRIBED TO THE BLOCKCHAIN CLIENT -> ARE THEY SUBSCRIBED TO ALL NOTIFICATIONS, CHECK?
+
+			if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
+				return nil, fmt.Errorf("[BlockFound][%s] failed to send STOPMINING notification [%w]", hash.String(), err)
+			}
+		}
+
+	}
+
 	// process the block in the background, in the order we receive them, but without blocking the grpc call
 	go func() {
 		u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
@@ -669,12 +713,14 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 }
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
+	//stop mining
 	start, stat, ctx := util.NewStatFromContext(ctx, "catchup", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:catchup")
 	defer func() {
 		stat.AddTime(start)
 		span.Finish()
 		prometheusBlockValidationCatchupDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
+		// start mining
 	}()
 
 	prometheusBlockValidationCatchup.Inc()
