@@ -29,6 +29,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 )
@@ -54,10 +55,12 @@ type TeranodeBridge struct {
 	height                atomic.Uint32
 	chain                 *legacy_blockchain.BlockChain
 	verifyOnly            bool
+	verifyOnlyErrorGroup  *errgroup.Group
 }
 
 func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, error) {
 	verifyOnly := gocore.Config().GetBool("legacy_verifyOnly", true)
+	verifyOnly_concurrency, _ := gocore.Config().GetInt("legacy_verifyOnly_concurrency", 1000)
 
 	listenAddress, ok := gocore.Config().Get("legacy_httpListenAddress")
 	if !ok {
@@ -97,16 +100,20 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 		panic(err)
 	}
 
+	verifyOnlyErrorGroup := errgroup.Group{}
+	verifyOnlyErrorGroup.SetLimit(verifyOnly_concurrency)
+
 	tb := &TeranodeBridge{
-		txCache:               expiringmap.New[chainhash.Hash, *wrapper](30 * time.Minute),
-		subtreeCache:          expiringmap.New[chainhash.Hash, *wrapper](30 * time.Minute),
-		blockCache:            expiringmap.New[chainhash.Hash, *wrapper](30 * time.Minute),
+		txCache:               expiringmap.New[chainhash.Hash, *wrapper](1 * time.Minute),
+		subtreeCache:          expiringmap.New[chainhash.Hash, *wrapper](1 * time.Minute),
+		blockCache:            expiringmap.New[chainhash.Hash, *wrapper](1 * time.Minute),
 		blockValidationClient: blockvalidationClient,
 		blockchainClient:      blockchainClient,
 		baseUrl:               baseUrl.String(),
 		chain:                 chain,
 		txmetaStore:           txmetaStore,
 		verifyOnly:            verifyOnly,
+		verifyOnlyErrorGroup:  &verifyOnlyErrorGroup,
 	}
 
 	e := echo.New()
@@ -202,6 +209,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 				var script *bscript.Script
 				var satoshis uint64
 
+				// Using tb.chain.GetUtxoEntry() doesn't work for utxos that are spent in the same block
 				w, ok := tb.txCache.Get(*input.PreviousTxIDChainHash())
 
 				if ok {
@@ -236,10 +244,6 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 				input.PreviousTxScript = script
 				input.PreviousTxSatoshis = satoshis
 			}
-
-			if !tx.IsExtended() {
-				return fmt.Errorf("tx %s is not extended", txHash)
-			}
 		}
 
 		tb.txCache.Set(txHash, &wrapper{
@@ -266,6 +270,7 @@ func (tb *TeranodeBridge) HandleBlockConnected(block *bsvutil.Block) error {
 /* validate every tx and every block using validator.TxValidator.ValidateTransaction() and model.Block.Valid() */
 func (tb *TeranodeBridge) VerifyOnly(block *bsvutil.Block) error {
 	txs := block.Transactions()
+	blockHeight := uint32(block.Height())
 
 	subtree, err := util.NewIncompleteTreeByLeafCount(len(txs))
 	if err != nil {
@@ -296,15 +301,16 @@ func (tb *TeranodeBridge) VerifyOnly(block *bsvutil.Block) error {
 				return fmt.Errorf("Failed to add node (%s) to subtree: %w", txHash, err)
 			}
 
-			if !tx.IsExtended() {
+			if !util.IsExtended(tx, blockHeight) {
 				return fmt.Errorf("tx %s is not extended", txHash)
 			}
 
-			go func() {
-				if err := txv.ValidateTransaction(tx, uint32(block.Height())); err != nil {
-					log.Errorf("tx %s failed validation: %w", txHash, err)
+			tb.verifyOnlyErrorGroup.Go(func() error {
+				if err := txv.ValidateTransaction(tx, blockHeight); err != nil {
+					log.Errorf("[height %d] tx %s failed validation: %v", blockHeight, txHash, err)
 				}
-			}()
+				return nil
+			})
 
 		}
 	}
@@ -341,11 +347,12 @@ func (tb *TeranodeBridge) VerifyOnly(block *bsvutil.Block) error {
 		return fmt.Errorf("Failed to create model.NewBlock: %w", err)
 	}
 
-	go func() {
+	tb.verifyOnlyErrorGroup.Go(func() error {
 		if _, err := teranodeBlock.Valid(context.TODO(), log, nil, nil, nil, nil, nil, nil); err != nil {
-			log.Errorf("Failed to validate block: %w", err)
+			log.Errorf("[height %d] Failed to validate block: %v", blockHeight, err)
 		}
-	}()
+		return nil
+	})
 
 	return nil
 }
