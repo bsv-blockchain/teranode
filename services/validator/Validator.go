@@ -512,7 +512,8 @@ func (vb *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	//    => checked by the node, we do not want to have to know the current block height
 
 	// 7) The transaction size in bytes is greater than or equal to 100
-	if txSize < 100 {
+	// There are many examples in the chain upto height 422559 where this rule was not in place
+	if blockHeight > 422559 && txSize < 100 {
 		return fmt.Errorf("transaction size in bytes is less than 100 bytes")
 	}
 
@@ -595,10 +596,16 @@ func (v *TxValidator) checkInputs(tx *bt.Tx) error {
 			return validator.NewError(fmt.Errorf("transaction input %d sequence number is invalid", index), arc.ErrStatusInputs)
 		}
 		*/
+		// if input.PreviousTxSatoshis == 0 && !input.PreviousTxScript.IsData() {
+		// 	return validator.NewError(fmt.Errorf("transaction input %d satoshis cannot be zero", index), api.ErrStatusInputs)
+		// }
 		if input.PreviousTxSatoshis > MaxSatoshis {
 			return validator.NewError(fmt.Errorf("transaction input %d satoshis is too high", index), api.ErrStatusInputs)
 		}
 		total += input.PreviousTxSatoshis
+	}
+	if total == 0 {
+		return validator.NewError(fmt.Errorf("transaction input total satoshis cannot be zero"), api.ErrStatusInputs)
 	}
 	if total > MaxSatoshis {
 		return validator.NewError(fmt.Errorf("transaction input total satoshis is too high"), api.ErrStatusInputs)
