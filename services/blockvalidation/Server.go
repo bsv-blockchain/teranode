@@ -184,6 +184,33 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				}
 			case b := <-u.blockFoundCh:
 				{
+					if len(u.blockFoundCh) > 3 {
+						// we are multiple blocks behind, process all the blocks per peer on the catchup channel
+						u.logger.Infof("[Init] processing block found on channel [%s] - too many blocks behind", b.hash.String())
+						peerBlocks := make(map[string]processBlockFound)
+						peerBlocks[b.baseURL] = b
+						// get the newest block per peer
+						for pb := range u.blockFoundCh {
+							peerBlocks[pb.baseURL] = pb
+						}
+
+						// add that latest block of each peer to the catchup channel
+						for _, pb := range peerBlocks {
+							u.logger.Infof("[Init] processing block found on channel [%s] - adding to catchup", pb.hash.String())
+
+							block, err := u.getBlock(ctx, pb.hash, pb.baseURL)
+							if err != nil {
+								u.logger.Errorf("[Init] failed to get block [%s] [%v]", pb.hash.String(), err)
+								return
+							}
+
+							u.catchupCh <- processBlockCatchup{
+								block:   block,
+								baseURL: pb.baseURL,
+							}
+						}
+					}
+
 					_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
 					// TODO optimize this for the valid chain, not processing everything ???
 					u.logger.Infof("[Init] processing block found on channel [%s]", b.hash.String())
