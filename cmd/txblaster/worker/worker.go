@@ -10,8 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/util"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -211,14 +209,14 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 			break
 		}
 
-		if errors.Is(err, propagation.ErrBadRequest) {
-			return errors.New(errors.ERR_SERVICE_ERROR, "error sending funding transaction %s", tx.TxIDChainHash().String(), err)
+		if errors.Is(err, errors.ErrProcessing) {
+			return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
 		}
 
 		// Go through each response and check for ErrBadRequest errors
 		for _, response := range responses {
-			if errors.Is(response.Error, propagation.ErrBadRequest) {
-				return errors.New(errors.ERR_SERVICE_ERROR, "error sending funding transaction %s", tx.TxIDChainHash().String(), response.Error)
+			if errors.Is(response.Error, errors.ErrProcessing) {
+				return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), response.Error)
 			}
 		}
 

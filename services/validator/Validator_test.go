@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	utxoMemorystore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
@@ -67,9 +66,7 @@ func BenchmarkValidator(b *testing.B) {
 		panic(err)
 	}
 
-	ns := &NullStore{}
-
-	v, err := New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}))
+	v, err := New(context.Background(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 	if err != nil {
 		panic(err)
 	}
@@ -95,7 +92,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	// delete spends set to false
 	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, utxoStore, txMetaStore)
+	v, err := New(context.Background(), ulogger.TestLogger{}, utxoStore)
 	if err != nil {
 		panic(err)
 	}
