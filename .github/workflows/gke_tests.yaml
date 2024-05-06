@@ -30,6 +30,7 @@ jobs:
   sonarqube:
     name: Sonarqube
     runs-on: ubsv-runner
+    needs: go-lint-and-test
     steps:
     - name: Checkout
       uses: actions/checkout@v4
