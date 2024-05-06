@@ -48,8 +48,8 @@ require (
 	github.com/ordishs/go-bitcoin v1.0.86
 	github.com/ordishs/go-utils v1.0.50
 	github.com/ordishs/gocore v1.0.63
-	github.com/prometheus/client_golang v1.19.0
-	github.com/quic-go/quic-go v0.42.0
+	github.com/prometheus/client_golang v1.18.0
+	github.com/quic-go/quic-go v0.43.1
 	github.com/redis/go-redis/v9 v9.2.1
 	github.com/rs/zerolog v1.31.0
 	github.com/sercand/kuberesolver/v5 v5.1.1
@@ -67,6 +67,7 @@ require (
 	golang.org/x/sync v0.7.0
 	golang.org/x/sys v0.19.0
 	golang.org/x/term v0.19.0
+	golang.org/x/text v0.14.0
 	golang.org/x/time v0.5.0
 	google.golang.org/grpc v1.62.1
 	google.golang.org/protobuf v1.33.0
