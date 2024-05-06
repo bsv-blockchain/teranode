@@ -2,11 +2,13 @@ package subtreevalidation
 
 import (
 	"context"
-	"github.com/ordishs/gocore"
 	"os"
 	"testing"
 
+	"github.com/ordishs/gocore"
+
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,11 +35,11 @@ func TestLock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	gotLock, _, err := tryLockIfNotExists(ctx, exister, &hash)
+	gotLock, _, err := tryLockIfNotExists(ctx, ulogger.TestLogger{}, exister, &hash)
 	require.NoError(t, err)
 	assert.True(t, gotLock)
 
-	gotLock, _, err = tryLockIfNotExists(ctx, exister, &hash)
+	gotLock, _, err = tryLockIfNotExists(ctx, ulogger.TestLogger{}, exister, &hash)
 	require.NoError(t, err)
 	assert.False(t, gotLock)
 

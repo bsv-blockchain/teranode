@@ -14,7 +14,7 @@ type genericMap[K comparable, V any] interface {
 	Delete(K) bool
 	Iter(cb func(K, V) (stop bool))
 	Exists(K) bool
-	Length() int
+	Length() int // TODO remove the need for this method
 }
 
 // hashable is a custom interface that defines a method that must be implemented by a type in order to be used as a key in a splitSwiss map
@@ -108,7 +108,11 @@ func (s *swissMap[K, V]) Put(k K, v V) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.length++
+	if !s.m.Has(k) {
+		// Only increment the length if the key is new
+		// TODO: This is a hack to get around the fact that the swiss map doesn't have a length method
+		s.length++
+	}
 
 	s.m.Put(k, v)
 }
@@ -124,9 +128,13 @@ func (s *swissMap[K, V]) Delete(k K) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.length--
+	deleted := s.m.Delete(k)
 
-	return s.m.Delete(k)
+	if deleted {
+		s.length-- // Only decrement the length if the key was actually deleted
+	}
+
+	return deleted
 }
 
 func (s *swissMap[K, V]) Iter(cb func(K, V) (stop bool)) {

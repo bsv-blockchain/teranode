@@ -108,4 +108,6 @@ message StateMessage {
   uint32 subtreeCount = 5; // the number of subtrees
   uint64 txCount = 6; // the number of transactions
   int64 queueCount = 7; // the size of the queue
+  uint32 currentHeight = 8; // the height of the chaintip
+  string currentHash = 9; // the hash of the chaintip
 }

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -16,7 +17,7 @@ func TestNewUTXODiffFromReader(t *testing.T) {
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 
 	// Create a new UTXODiff
-	ud1 := NewUTXODiff(&hash)
+	ud1 := NewUTXODiff(ulogger.TestLogger{}, &hash)
 
 	b := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
 
@@ -48,7 +49,7 @@ func TestNewUTXODiffFromReader(t *testing.T) {
 
 	// Read the UTXOMap from the buffer
 	r := bufio.NewReader(buf)
-	ud2, err := NewUTXODiffFromReader(r)
+	ud2, err := NewUTXODiffFromReader(ulogger.TestLogger{}, r)
 	require.NoError(t, err)
 
 	// Check the UTXOMap is the same
@@ -82,7 +83,7 @@ func TestNewUTXODiffFromReaderWithProcessTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new UTXODiff
-	ud1 := NewUTXODiff(&hash)
+	ud1 := NewUTXODiff(ulogger.TestLogger{}, &hash)
 
 	ud1.ProcessTx(tx)
 
@@ -101,7 +102,7 @@ func TestNewUTXODiffFromReaderWithProcessTx(t *testing.T) {
 
 	// Read the UTXOMap from the buffer
 	r := bufio.NewReader(buf)
-	ud2, err := NewUTXODiffFromReader(r)
+	ud2, err := NewUTXODiffFromReader(ulogger.TestLogger{}, r)
 	require.NoError(t, err)
 
 	// Check the UTXOMap is the same

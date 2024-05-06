@@ -18,29 +18,30 @@ type Error struct {
 }
 
 var (
-	ErrUnknown              = New(ERR_UNKNOWN, "unknown error")
-	ErrInvalidArgument      = New(ERR_INVALID_ARGUMENT, "invalid argument")
-	ErrThresholdExceeded    = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
-	ErrNotFound             = New(ERR_NOT_FOUND, "not found")
-	ErrProcessing           = New(ERR_PROCESSING, "error processing")
-	ErrError                = New(ERR_ERROR, "generic error")
-	ErrBlockNotFound        = New(ERR_BLOCK_NOT_FOUND, "block not found")
-	ErrBlockInvalid         = New(ERR_BLOCK_INVALID, "block invalid")
-	ErrBlockError           = New(ERR_BLOCK_ERROR, "block error")
-	ErrSubtreeNotFound      = New(ERR_SUBTREE_NOT_FOUND, "subtree not found")
-	ErrSubtreeInvalid       = New(ERR_SUBTREE_INVALID, "subtree invalid")
-	ErrSubtreeError         = New(ERR_SUBTREE_ERROR, "subtree error")
-	ErrTxNotFound           = New(ERR_TX_NOT_FOUND, "tx not found")
-	ErrTxInvalid            = New(ERR_TX_INVALID, "tx invalid")
-	ErrTxInvalidDoubleSpend = New(ERR_TX_INVALID_DOUBLE_SPEND, "tx invalid double spend")
-	ErrTxAlreadyExists      = New(ERR_TX_ALREADY_EXISTS, "tx already exists")
-	ErrTxError              = New(ERR_TX_ERROR, "tx error")
-	ErrServiceUnavailable   = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
-	ErrServiceNotStarted    = New(ERR_SERVICE_NOT_STARTED, "service not started")
-	ErrServiceError         = New(ERR_SERVICE_ERROR, "service error")
-	ErrStorageUnavailable   = New(ERR_STORAGE_UNAVAILABLE, "storage unavailable")
-	ErrStorageNotStarted    = New(ERR_STORAGE_NOT_STARTED, "storage not started")
-	ErrStorageError         = New(ERR_STORAGE_ERROR, "storage error")
+	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
+	ErrInvalidArgument            = New(ERR_INVALID_ARGUMENT, "invalid argument")
+	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
+	ErrNotFound                   = New(ERR_NOT_FOUND, "not found")
+	ErrProcessing                 = New(ERR_PROCESSING, "error processing")
+	ErrError                      = New(ERR_ERROR, "generic error")
+	ErrBlockNotFound              = New(ERR_BLOCK_NOT_FOUND, "block not found")
+	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
+	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
+	ErrSubtreeNotFound            = New(ERR_SUBTREE_NOT_FOUND, "subtree not found")
+	ErrSubtreeInvalid             = New(ERR_SUBTREE_INVALID, "subtree invalid")
+	ErrSubtreeError               = New(ERR_SUBTREE_ERROR, "subtree error")
+	ErrTxNotFound                 = New(ERR_TX_NOT_FOUND, "tx not found")
+	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")
+	ErrTxInvalidDoubleSpend       = New(ERR_TX_INVALID_DOUBLE_SPEND, "tx invalid double spend")
+	ErrTxAlreadyExists            = New(ERR_TX_ALREADY_EXISTS, "tx already exists")
+	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
+	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
+	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
+	ErrServiceError               = New(ERR_SERVICE_ERROR, "service error")
+	ErrStorageUnavailable         = New(ERR_STORAGE_UNAVAILABLE, "storage unavailable")
+	ErrStorageNotStarted          = New(ERR_STORAGE_NOT_STARTED, "storage not started")
+	ErrStorageError               = New(ERR_STORAGE_ERROR, "storage error")
+	ErrCoinbaseMissingBlockHeight = New(ERR_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script doesn't have the block height")
 )
 
 func (e *Error) Error() string {
@@ -50,9 +51,6 @@ func (e *Error) Error() string {
 
 	return fmt.Sprintf("Error: %s (error code: %d),  %v: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
 }
-
-// errors.WrapGRPC(errros.New() )
-// fmt.Errorf -> errors.New() will be replaced.
 
 // Is reports whether error codes match.
 func (e *Error) Is(target error) bool {
@@ -161,18 +159,8 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 		return codes.Unknown
 	case ERR_INVALID_ARGUMENT:
 		return codes.InvalidArgument
-	// case ERR_NOT_FOUND:
-	// 	return codes.NotFound
-	// case ERR_BLOCK_NOT_FOUND:
-	// 	return codes.NotFound
 	case ERR_THRESHOLD_EXCEEDED:
 		return codes.ResourceExhausted
-	// case ERR_INVALID_BLOCK:
-	// 	return codes.Internal
-	// case ERR_INVALID_TX_DOUBLE_SPEND:
-	// 	return codes.Internal
-	// case ERR_SERVICE_UNAVAILABLE:
-	// 	return codes.Unavailable
 	default:
 		return codes.Internal
 	}

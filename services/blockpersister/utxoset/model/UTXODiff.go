@@ -2,24 +2,30 @@ package model
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
-	"os"
+	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // UTXODiff is a map of UTXOs.
 type UTXODiff struct {
+	logger    ulogger.Logger
 	BlockHash chainhash.Hash // This is the block hash that is the last block in the chain with these UTXOs.
 	Added     UTXOMap
 	Removed   UTXOMap
 }
 
 // NewUTXOMap creates a new UTXODiff.
-func NewUTXODiff(blockHash *chainhash.Hash) *UTXODiff {
+func NewUTXODiff(logger ulogger.Logger, blockHash *chainhash.Hash) *UTXODiff {
 	return &UTXODiff{
+		logger:    logger,
 		BlockHash: *blockHash,
 		Added:     newUTXOMap(),
 		Removed:   newUTXOMap(),
@@ -27,27 +33,27 @@ func NewUTXODiff(blockHash *chainhash.Hash) *UTXODiff {
 }
 
 // Add adds a UTXO to the map.
-func (us *UTXODiff) Add(txID chainhash.Hash, index uint32, value uint64, locktime uint32, script []byte) {
+func (ud *UTXODiff) Add(txID chainhash.Hash, index uint32, value uint64, locktime uint32, script []byte) {
 	uk := NewUTXOKey(txID, index)
 	uv := NewUTXOValue(value, locktime, script)
 
-	us.Added.Put(uk, uv)
+	ud.Added.Put(uk, uv)
 }
 
-func (us *UTXODiff) Delete(txID chainhash.Hash, index uint32) {
+func (ud *UTXODiff) Delete(txID chainhash.Hash, index uint32) {
 	uk := NewUTXOKey(txID, index)
 
-	if us.Added.Exists(uk) {
-		us.Added.Delete(uk)
+	if ud.Added.Exists(uk) {
+		ud.Added.Delete(uk)
 	} else {
-		us.Removed.Put(uk, nil)
+		ud.Removed.Put(uk, nil)
 	}
 }
 
-func (us *UTXODiff) ProcessTx(tx *bt.Tx) {
+func (ud *UTXODiff) ProcessTx(tx *bt.Tx) {
 	if !tx.IsCoinbase() {
 		for _, input := range tx.Inputs {
-			us.Delete(*input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
+			ud.Delete(*input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
 		}
 	}
 
@@ -56,74 +62,73 @@ func (us *UTXODiff) ProcessTx(tx *bt.Tx) {
 			continue
 		}
 
-		us.Add(*tx.TxIDChainHash(), uint32(i), output.Satoshis, tx.LockTime, *output.LockingScript)
+		ud.Add(*tx.TxIDChainHash(), uint32(i), output.Satoshis, tx.LockTime, *output.LockingScript)
 	}
 }
 
-func NewUTXODiffFromReader(r io.Reader) (*UTXODiff, error) {
+func NewUTXODiffFromReader(logger ulogger.Logger, r io.Reader) (*UTXODiff, error) {
 	blockHash := new(chainhash.Hash)
 
 	if _, err := io.ReadFull(r, blockHash[:]); err != nil {
 		return nil, fmt.Errorf("error reading block hash: %w", err)
 	}
 
-	us := NewUTXODiff(blockHash)
+	ud := NewUTXODiff(logger, blockHash)
 
-	if err := us.Removed.Read(r); err != nil {
+	if err := ud.Removed.Read(r); err != nil {
 		return nil, err
 	}
 
-	if err := us.Added.Read(r); err != nil {
+	if err := ud.Added.Read(r); err != nil {
 		return nil, err
 	}
 
-	return us, nil
+	return ud, nil
 }
 
-func (us *UTXODiff) Persist(filename string) error {
-	var err error
-	var f *os.File
+func (ud *UTXODiff) Persist(ctx context.Context, store blob.Store) error {
+	reader, writer := io.Pipe()
 
-	tmpFilename := filename + ".tmp"
+	bufferedWriter := bufio.NewWriter(writer)
 
-	f, err = os.Create(tmpFilename)
-	if err != nil {
-		return fmt.Errorf("error creating file: %w", err)
-	}
+	go func() {
+		defer func() {
+			// Flush the buffer and close the writer with error handling
+			if err := bufferedWriter.Flush(); err != nil {
+				ud.logger.Errorf("error flushing writer: %v", err)
+			}
 
-	defer func() {
-		_ = f.Close()
+			if err := writer.CloseWithError(nil); err != nil {
+				ud.logger.Errorf("error closing writer: %v", err)
+			}
+		}()
 
-		if err != nil {
-			_ = os.Rename(tmpFilename, filename+".error")
-		} else {
-			_ = os.Rename(tmpFilename, filename)
+		if err := ud.Write(bufferedWriter); err != nil {
+			ud.logger.Errorf("error writing UTXO diff: %v", err)
+			writer.CloseWithError(err)
+			return
 		}
 	}()
 
-	// Create a buffered writer
-	w := bufio.NewWriter(f)
-	defer func() {
-		_ = w.Flush()
-	}()
-
-	if err := us.Write(w); err != nil {
-		return err
+	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
+	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
+	if err := store.SetFromReader(ctx, ud.BlockHash[:], reader, options.WithFileExtension("utxodiff"), options.WithTTL(24*time.Hour)); err != nil {
+		return fmt.Errorf("[BlockPersister] error persisting utxodiff: %w", err)
 	}
 
-	return nil
+	return store.SetTTL(ctx, ud.BlockHash[:], 0, options.WithFileExtension("utxodiff"))
 }
 
-func (us *UTXODiff) Write(w io.Writer) error {
-	if _, err := w.Write(us.BlockHash[:]); err != nil {
+func (ud *UTXODiff) Write(w io.Writer) error {
+	if _, err := w.Write(ud.BlockHash[:]); err != nil {
 		return fmt.Errorf("error writing block hash: %w", err)
 	}
 
-	if err := us.Removed.Write(w); err != nil {
+	if err := ud.Removed.Write(w); err != nil {
 		return fmt.Errorf("error writing removed UTXOs: %w", err)
 	}
 
-	if err := us.Added.Write(w); err != nil {
+	if err := ud.Added.Write(w); err != nil {
 		return fmt.Errorf("error writing added UTXOs: %w", err)
 	}
 

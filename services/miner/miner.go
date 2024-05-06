@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -253,31 +254,20 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 			m.logger.Infof("[Miner] Waiting %v to allow coinbase splitting to catch up before mining last few initial blocks", m.initialBlockFinalWaitDuration)
 			time.Sleep(m.initialBlockFinalWaitDuration)
 		}
-
 	}
 
-	// Define retry delays
-	retryDelays := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
-
-	for i := 0; i < len(retryDelays); i++ {
-		m.logger.Infof("[Miner] submitting mining solution for job (attempt %d): %s [%s]", i+1, candidateId, blockHash.String())
-		m.logger.Debugf(solution.Stringify(gocore.Config().GetBool("miner_verbose", false)))
-
-		err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
-		if err == nil {
-			break // Success, exit the loop
-		}
-
-		if i < len(retryDelays)-1 {
-			// Wait for the specified period before retrying, except for the last attempt
-			time.Sleep(retryDelays[i])
-		}
-	}
-
+	err = m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
-		// After all retries, if there's still an error, wrap and return it using %w
-		// to wrap the error, so the caller can use errors.Is() to check for this specific error
-		return fmt.Errorf("error submitting mining solution after %d retries for job %s: %w", len(retryDelays), candidateId, err)
+		_, err = retry.Retry(ctx, m.logger, func() (struct{}, error) {
+			return struct{}{}, m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
+		}, retry.WithMessage(fmt.Sprintf("[Miner] submitting mining solution: %s %s", candidateId, blockHash.String())))
+
+		if err != nil {
+			// After all retries, if there's still an error, wrap and return it using %w
+			// to wrap the error, so the caller can use errors.Is() to check for this specific error
+			// TODO: 3 retries is hardcoded, as it is default in the retry package. This setting should be accessible.
+			return fmt.Errorf("error submitting mining solution after 3 retries for job %s: %w", candidateId, err)
+		}
 	}
 
 	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)

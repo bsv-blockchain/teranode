@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -33,7 +34,7 @@ type S3 struct {
 	uploader   *manager.Uploader
 	downloader *manager.Downloader
 	bucket     string
-	prefixDir  int
+	options    *options.SetOptions
 	logger     ulogger.Logger
 }
 
@@ -71,11 +72,7 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 		downloader: manager.NewDownloader(client),
 		bucket:     s3URL.Path[1:], // remove leading slash
 		logger:     logger,
-	}
-
-	o := options.NewSetOptions(opts...)
-	if o.PrefixDirectory > 0 {
-		s.prefixDir = o.PrefixDirectory
+		options:    options.NewSetOptions(nil, opts...),
 	}
 
 	return s, nil
@@ -110,18 +107,9 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	traceSpan := tracing.Start(ctx, "s3:SetFromReader")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(opts...)
+	o := options.NewSetOptions(g.options, opts...)
 
-	var objectKey *string
-	if o.Filename != "" {
-		objectKey = &o.Filename
-	} else {
-		objectKey = g.getObjectKey(key, o.Extension)
-	}
-
-	if o.SubDirectory != "" {
-		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
-	}
+	objectKey := g.getObjectKey(key, o)
 
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(g.bucket),
@@ -151,18 +139,9 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	traceSpan := tracing.Start(ctx, "s3:Set")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(opts...)
+	o := options.NewSetOptions(g.options, opts...)
 
-	var objectKey *string
-	if o.Filename != "" {
-		objectKey = &o.Filename
-	} else {
-		objectKey = g.getObjectKey(key, o.Extension)
-	}
-
-	if o.SubDirectory != "" {
-		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
-	}
+	objectKey := g.getObjectKey(key, o)
 
 	buf := bytes.NewBuffer(value)
 	uploadInput := &s3.PutObjectInput{
@@ -209,18 +188,9 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(opts...)
+	o := options.NewSetOptions(g.options, opts...)
 
-	var objectKey *string
-	if o.Filename != "" {
-		objectKey = &o.Filename
-	} else {
-		objectKey = g.getObjectKey(key, o.Extension)
-	}
-
-	if o.SubDirectory != "" {
-		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
-	}
+	objectKey := g.getObjectKey(key, o)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
@@ -239,30 +209,21 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	return result.Body, nil
 }
 
-func (g *S3) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
+func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
-		g.logger.Warnf("[S3][%s] Getting object from S3 DONE", utils.ReverseAndHexEncodeSlice(hash))
+		g.logger.Warnf("[S3][%s] Getting object from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
 	}()
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(opts...)
+	o := options.NewSetOptions(g.options, opts...)
 
-	var objectKey *string
-	if o.Filename != "" {
-		objectKey = &o.Filename
-	} else {
-		objectKey = g.getObjectKey(hash, o.Extension)
-	}
-
-	if o.SubDirectory != "" {
-		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
-	}
+	objectKey := g.getObjectKey(key, o)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
-	g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(hash), *objectKey)
+	g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	// check cache
 	cached, ok := cache.Get(*objectKey)
@@ -288,30 +249,21 @@ func (g *S3) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]b
 	return buf.Bytes(), err
 }
 
-func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
+func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetHead").AddTime(start)
-		g.logger.Warnf("[S3][%s] Getting object head from S3 DONE", utils.ReverseAndHexEncodeSlice(hash))
+		g.logger.Warnf("[S3][%s] Getting object head from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
 	}()
 	traceSpan := tracing.Start(ctx, "s3:GetHead")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(opts...)
+	o := options.NewSetOptions(g.options, opts...)
 
-	var objectKey *string
-	if o.Filename != "" {
-		objectKey = &o.Filename
-	} else {
-		objectKey = g.getObjectKey(hash, o.Extension)
-	}
-
-	if o.SubDirectory != "" {
-		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
-	}
+	objectKey := g.getObjectKey(key, o)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
-	g.logger.Warnf("[S3][%s] Getting object head from S3: %s", utils.ReverseAndHexEncodeSlice(hash), *objectKey)
+	g.logger.Warnf("[S3][%s] Getting object head from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	// check cache
 	cached, ok := cache.Get(*objectKey)
@@ -343,7 +295,7 @@ func (g *S3) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...op
 	return buf.Bytes(), err
 }
 
-func (g *S3) Exists(ctx context.Context, hash []byte, opts ...options.Options) (bool, error) {
+func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Exists").AddTime(start)
@@ -351,18 +303,9 @@ func (g *S3) Exists(ctx context.Context, hash []byte, opts ...options.Options) (
 	traceSpan := tracing.Start(ctx, "s3:Exists")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(opts...)
+	o := options.NewSetOptions(g.options, opts...)
 
-	var objectKey *string
-	if o.Filename != "" {
-		objectKey = &o.Filename
-	} else {
-		objectKey = g.getObjectKey(hash, o.Extension)
-	}
-
-	if o.SubDirectory != "" {
-		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
-	}
+	objectKey := g.getObjectKey(key, o)
 
 	// check cache
 	_, ok := cache.Get(*objectKey)
@@ -393,7 +336,7 @@ func (g *S3) Exists(ctx context.Context, hash []byte, opts ...options.Options) (
 	return true, nil
 }
 
-func (g *S3) Del(ctx context.Context, hash []byte, opts ...options.Options) error {
+func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Del").AddTime(start)
@@ -401,18 +344,9 @@ func (g *S3) Del(ctx context.Context, hash []byte, opts ...options.Options) erro
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(opts...)
+	o := options.NewSetOptions(g.options, opts...)
 
-	var objectKey *string
-	if o.Filename != "" {
-		objectKey = &o.Filename
-	} else {
-		objectKey = g.getObjectKey(hash, o.Extension)
-	}
-
-	if o.SubDirectory != "" {
-		objectKey = aws.String(fmt.Sprintf("%s/%s", o.SubDirectory, *objectKey))
-	}
+	objectKey := g.getObjectKey(key, o)
 
 	cache.Delete(*objectKey)
 
@@ -438,21 +372,23 @@ func (g *S3) Del(ctx context.Context, hash []byte, opts ...options.Options) erro
 	return nil
 }
 
-func (g *S3) getObjectKey(key []byte, extension string) *string {
-	objectKey := g.generateKey(key)
+func (g *S3) getObjectKey(hash []byte, o *options.SetOptions) *string {
+	var key string
+	var prefix string
+	var ext string
 
-	if g.prefixDir > 0 {
-		// take the first n bytes of the key and use them as a prefix directory
-		objectKeyStr := *objectKey
-		objectKey = aws.String(fmt.Sprintf("%s/%s%s", objectKeyStr[:g.prefixDir], objectKeyStr, extension))
+	if o.Extension != "" {
+		ext = "." + o.Extension
 	}
 
-	return objectKey
-}
+	if o.Filename != "" {
+		key = o.Filename
+	} else {
+		key = fmt.Sprintf("%s%s", utils.ReverseAndHexEncodeSlice(hash), ext)
+		prefix = key[:o.PrefixDirectory]
+	}
 
-func (g *S3) generateKey(key []byte) *string {
-	var reverseHexEncodedKey = utils.ReverseAndHexEncodeSlice(key)
-	return aws.String(fmt.Sprintf("%s/%s", reverseHexEncodedKey[:10], reverseHexEncodedKey))
+	return aws.String(filepath.Join(o.SubDirectory, prefix, key))
 }
 
 func getQueryParamInt(url *url.URL, key string, defaultValue int) int {

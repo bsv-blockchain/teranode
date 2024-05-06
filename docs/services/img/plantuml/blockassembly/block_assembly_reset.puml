@@ -1,0 +1,25 @@
+@startuml
+actor Client
+
+entity "Block Assembler" as Assembler
+entity "Blockchain BlockchainClient" as BlockchainClient
+entity "Subtree Processor" as Processor
+
+
+Client -> Assembler : Call ResetBlockAssembly
+
+Assembler -> BlockchainClient : GetBestBlockHeader()
+BlockchainClient -> Assembler : Return bestBlockHeader, meta, err
+
+Assembler -> Assembler : Calculate reorg blocks(moveDownBlocks, moveUpBlocks)
+Assembler -> Processor : Reset subtree with new blocks
+Processor -> Assembler : Return response (with errors if any)
+
+Assembler -> Assembler : Update internal state with new block header
+Assembler -> Assembler : Update block height
+
+
+Assembler -> Assembler : Set current chain
+
+
+@enduml

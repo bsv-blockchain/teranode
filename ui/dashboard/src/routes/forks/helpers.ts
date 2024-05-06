@@ -1,8 +1,14 @@
 import * as d3 from 'd3';
 import type {TreeLayout} from "d3-hierarchy";
 
-function treeBoxes(selector, jsonData)
+
+function treeBoxes(selector, jsonData, orientation)
 {
+    // const direction = "bottom-to-top"
+    // const direction = "left-to-right"
+    // const direction = "right-to-left"
+    // const direction = "top-to-bottom"
+    
     const blue = '#337ab7',
         green = '#3b763b',
         yellow = '#9d742e',
@@ -17,12 +23,20 @@ function treeBoxes(selector, jsonData)
         };
     // Height and width are redefined later in function of the size of the tree
     // (after that the data are loaded)
+    // default direction is assumed horizontal (left-to-right | right-to-left)
     let width = 800 - margin.right - margin.left,
-        height = 400 - margin.top - margin.bottom;
+    height = 400 - margin.top - margin.bottom;
 
-    const rectNode = { width : 120, height : 64, textMargin : 5 },
-        tooltip = { width : 150, height : 40, textMargin : 5 },
-        duration = 750;
+    switch (orientation) {
+    case "bottom-to-top":
+    case "top-to-bottom":
+        height = 800 - margin.right - margin.left;
+        width = 400 - margin.top - margin.bottom;
+    }
+
+    const rectNode = { width : 128, height :72, textMargin : 5 },
+          tooltip = { width : 150, height : 40, textMargin : 5 },
+          duration = 750;
     let i = 0;
 
     let mousedown,
@@ -57,9 +71,11 @@ function treeBoxes(selector, jsonData)
     {
         root = d3.hierarchy(jsonData);
         tree = d3.tree().size([ height, width ]);
-        // const nodes = d3.hierarchy(jsonData, function(d) {
-        //     return d.children;
-        // });
+        switch (orientation) {
+        case "bottom-to-top":
+        case "top-to-bottom":
+            tree = d3.tree().size([ width, height ]);
+        }
 
 
         const url = new URL(document.location.href);
@@ -68,9 +84,7 @@ function treeBoxes(selector, jsonData)
         // Dynamically set the height of the main svg container
         // breadthFirstTraversal returns the max number of node on a same level
         // and colors the nodes
-        let maxDepth = 0;
         const maxTreeWidth = breadthFirstTraversal([root], function(currentLevel) {
-            maxDepth++;
             currentLevel.forEach(function(node: any) {
                 if (!node.data?.miner || node.data?.miner?.match(currentMiner))
                     node.color = blue;
@@ -82,14 +96,30 @@ function treeBoxes(selector, jsonData)
                     node.color = purple;
             });
         });
-        height += maxTreeWidth * (rectNode.height + 20) + tooltip.height + 20 - margin.right - margin.left;
-        width += maxDepth * (rectNode.width * 1.5) + tooltip.width / 2 - margin.top - margin.bottom;
+        switch (orientation) {
+        case "bottom-to-top":
+            height += root.height * (rectNode.height + 20) + tooltip.height + 20 + margin.right + margin.left;
+            width += maxTreeWidth * (rectNode.width * 1.5) + tooltip.width / 2 - margin.top - margin.bottom;
+            break;
+        case "top-to-bottom":
+            height += root.height * (rectNode.height + 20) + tooltip.height + 20 + margin.top + margin.bottom;
+            width += maxTreeWidth * (rectNode.width * 1.5) + tooltip.width / 2 - margin.right - margin.left;
+            break;
+        case "left-to-right":
+            height += maxTreeWidth * (rectNode.height + 20) + tooltip.height + 20 - margin.right - margin.left;
+            width += root.height * (rectNode.width * 1.5) + tooltip.width / 2 - margin.top - margin.bottom;
+            break;
+        case "right-to-left":
+            height += maxTreeWidth * (rectNode.height + 20) + tooltip.height + 20 - margin.right - margin.left;
+            width += root.height * (rectNode.width * 1.5) + tooltip.width / 2 - margin.top - margin.bottom;
+            break;
+        }
 
-        console.log({maxDepth, maxTreeWidth, height, width});
-
-        tree = d3.tree().size([ height, width ]);
-        root.x0 = height / 2;
+        root.x0 = 0;
         root.y0 = 0;
+
+        // root.height and maxTree Width appear to be inverted, but it's normal
+        console.log({maxDepth: root.height, maxTreeWidth, height, width}); 
 
         baseSvg = d3.select(selector).append('svg')
             .attr('width', width + margin.right + margin.left)
@@ -135,12 +165,28 @@ function treeBoxes(selector, jsonData)
         const nodes = root.descendants().reverse();
         const links = tree(root).links();
 
+
         // Check if two nodes are in collision on the ordinates axe and move them
         breadthFirstTraversal([root], collision);
         // Normalize for fixed-depth
         nodes.forEach(function(d) {
-            d.y = d.depth * (rectNode.width * 1.5);
-        });
+            switch (orientation) {
+            case "bottom-to-top":
+                d.y = (root.height - d.depth) * (rectNode.height * 2.0)
+                break;
+            case "top-to-bottom":
+                d.y = d.depth * (rectNode.height * 2.0)
+                break;
+            case "left-to-right":
+                d.y = d.depth * (rectNode.width * 1.5);
+                break;
+            case "right-to-left":
+                d.y = (root.height - d.depth) * (rectNode.width * 1.5);
+                break;
+            }
+        }
+        );
+
 
         // 1) ******************* Update the nodes *******************
         const node = nodeGroup.selectAll('g.node').data(nodes, function(d) {
@@ -265,25 +311,53 @@ function treeBoxes(selector, jsonData)
             .text(function(d) {return 'Info: ' + d.data.label;});
 
         // Transition nodes to their new position.
-        const nodeUpdate = node.transition().duration(duration)
-            .attr('transform', function(d) { return 'translate(' + d.y + ',' + d.x + ')'; });
-        nodesTooltip.transition().duration(duration)
-            .attr('transform', function(d) { return 'translate(' + d.y + ',' + d.x + ')'; });
+        switch (orientation) {
+        case "bottom-to-top":
+        case "top-to-bottom": {
+            const nodeUpdate = node.transition().duration(duration)
+                .attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
+            nodesTooltip.transition().duration(duration)
+                .attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
 
-        nodeUpdate.select('rect')
-            .attr('class', function(d) { return d._children ? 'node-rect-closed' : 'node-rect'; });
+            nodeUpdate.select('rect')
+                .attr('class', function(d) { return d._children ? 'node-rect-closed' : 'node-rect'; });
+    
+            nodeUpdate.select('text').style('fill-opacity', 1);
 
-        nodeUpdate.select('text').style('fill-opacity', 1);
+            // Transition exiting nodes to the parent's new position
+            const nodeExit = node.exit().transition().duration(duration)
+                .attr('transform', function() { return 'translate(' + source.x + ',' + source.y + ')'; })
+                .remove();
+            nodesTooltip.exit().transition().duration(duration)
+                .attr('transform', function() { return 'translate(' + source.x + ',' + source.y + ')'; })
+                .remove();
 
-        // Transition exiting nodes to the parent's new position
-        const nodeExit = node.exit().transition().duration(duration)
-            .attr('transform', function() { return 'translate(' + source.y + ',' + source.x + ')'; })
-            .remove();
-        nodesTooltip.exit().transition().duration(duration)
-            .attr('transform', function() { return 'translate(' + source.y + ',' + source.x + ')'; })
-            .remove();
+            nodeExit.select('text').style('fill-opacity', 1e-6);
 
-        nodeExit.select('text').style('fill-opacity', 1e-6);
+            break;
+        }
+        case "left-to-right":
+        case "right-to-left": {
+            const nodeUpdate = node.transition().duration(duration)
+                .attr('transform', function(d) { return 'translate(' + d.y + ',' + d.x + ')'; });
+            nodesTooltip.transition().duration(duration)
+                .attr('transform', function(d) { return 'translate(' + d.y + ',' + d.x + ')'; });
+
+            nodeUpdate.select('rect')
+                .attr('class', function(d) { return d._children ? 'node-rect-closed' : 'node-rect'; });
+    
+            nodeUpdate.select('text').style('fill-opacity', 1);
+
+            // Transition exiting nodes to the parent's new position
+            const nodeExit = node.exit().transition().duration(duration)
+                .attr('transform', function() { return 'translate(' + source.y + ',' + source.x + ')'; })
+                .remove();
+            nodesTooltip.exit().transition().duration(duration)
+                .attr('transform', function() { return 'translate(' + source.y + ',' + source.x + ')'; })
+                .remove();
+
+            nodeExit.select('text').style('fill-opacity', 1e-6);
+        }}
 
 
         // 2) ******************* Update the links *******************
@@ -503,10 +577,21 @@ function treeBoxes(selector, jsonData)
     function collision(siblings) {
         const minPadding = 5;
         if (siblings) {
-            for (let i = 0; i < siblings.length - 1; i++)
-            {
-                if (siblings[i + 1].x - (siblings[i].x + rectNode.height) < minPadding)
-                    siblings[i + 1].x = siblings[i].x + rectNode.height + minPadding;
+            for (let i = 0; i < siblings.length - 1; i++) {
+                switch (orientation) {
+                case "bottom-to-top":
+                case "top-to-bottom":
+                    if (siblings[i + 1].x - (siblings[i].x + rectNode.width) < minPadding) {
+                        siblings[i + 1].x = siblings[i].x + rectNode.width + minPadding * 4;
+                    }
+                    break;
+                case "left-to-right":
+                case "right-to-left":
+                    if (siblings[i + 1].x - (siblings[i].x + rectNode.height) < minPadding) {
+                        siblings[i + 1].x = siblings[i].x + rectNode.height + minPadding;
+                    }
+                    break;
+                }
             }
         }
     }
@@ -542,29 +627,88 @@ function treeBoxes(selector, jsonData)
     }
 
     function diagonal(d) {
-        const p0 = {
-            x : d.source.x + rectNode.height / 2,
-            y : (d.source.y + rectNode.width)
-        },
-        p3 = {
-            x : d.target.x + rectNode.height / 2,
-            y : d.target.y  - 12 // -12, so the end arrows are just before the rect node
-        },
-        m = (p0.y + p3.y) / 2;
-
-        let p: any = [
-            p0, {
-                x : p0.x,
-                y : m
-            }, {
-                x : p3.x,
-                y : m
-            }, p3
-        ];
-        p = p.map(function(d) {
-            return [ d.y, d.x ];
-        });
-        return 'M' + p[0] + 'C' + p[1] + ' ' + p[2] + ' ' + p[3];
+        switch (orientation) {
+        case "bottom-to-top":
+        {
+            const p0 = {
+                y : d.target.y + rectNode.height,
+                x : d.target.x + rectNode.width / 2
+            },
+            p3 = {
+                y : d.source.y - 12,
+                x : d.source.x + rectNode.width / 2
+            },
+            m = (p0.y + p3.y) / 2;
+        
+            return `M ${p0.x},${p0.y} C ${p0.x},${m} ${p3.x},${m} ${p3.x},${p3.y}`;
+    }
+        case "top-to-bottom":
+            {
+                const p0 = {
+                    y : d.target.y ,
+                    x : d.target.x + rectNode.width / 2
+                },
+                p3 = {
+                    y : d.source.y + rectNode.height + 12,
+                    x : d.source.x + rectNode.width / 2
+                },
+                m = (p0.y + p3.y) / 2;
+            
+                return `M ${p0.x},${p0.y} C ${p0.x},${m} ${p3.x},${m} ${p3.x},${p3.y}`;
+            }
+        case "left-to-right":
+        {
+            const p0 = {
+                x : d.source.x + rectNode.height / 2,
+                y : (d.source.y + rectNode.width)
+            },
+            p3 = {
+                x : d.target.x + rectNode.height / 2,
+                y : d.target.y  - 12 // -12, so the end arrows are just before the rect node
+            },
+            m = (p0.y + p3.y) / 2;
+    
+            let p: any = [
+                p0, {
+                    x : p0.x,
+                    y : m
+                }, {
+                    x : p3.x,
+                    y : m
+                }, p3
+            ];
+            p = p.map(function(d) {
+                return [ d.y, d.x ];
+            });
+            return 'M' + p[0] + 'C' + p[1] + ' ' + p[2] + ' ' + p[3];
+        }
+        case "right-to-left":
+            {
+                const p0 = {
+                    x : d.source.x + rectNode.height / 2,
+                    y : d.source.y
+                },
+                p3 = {
+                    x : d.target.x + rectNode.height / 2,
+                    y : d.target.y + rectNode.width + 12 // -12, so the end arrows are just before the rect node
+                },
+                m = (p0.y + p3.y) / 2;
+        
+                let p: any = [
+                    p0, {
+                        x : p0.x,
+                        y : m
+                    }, {
+                        x : p3.x,
+                        y : m
+                    }, p3
+                ];
+                p = p.map(function(d) {
+                    return [ d.y, d.x ];
+                });
+                return 'M' + p[0] + 'C' + p[1] + ' ' + p[2] + ' ' + p[3];
+            }
+            }
     }
 
     function initDropShadow() {

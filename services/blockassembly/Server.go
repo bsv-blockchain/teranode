@@ -3,7 +3,6 @@ package blockassembly
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/url"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -157,8 +157,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					subtreeRetry.retries++
 					go func() {
 						// backoff and wait before re-adding to retry queue
-						backoff := time.Duration(math.Pow(2, float64(subtreeRetry.retries))) * time.Second
-						time.Sleep(backoff)
+						retry.BackoffAndSleep(subtreeRetry.retries, 2, time.Second)
 
 						// re-add the subtree to the retry queue
 						subtreeRetryChan <- subtreeRetry
@@ -596,7 +595,9 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 		return nil, fmt.Errorf("[BlockAssembly][%s] failed to convert hashPrevBlock: %w", jobID, err)
 	}
 
-	// TODO check whether we are already mining on a higher chain work, then just ignore this solution
+	if ba.blockAssembler.bestBlockHeader.Load().HashPrevBlock.IsEqual(hashPrevBlock) {
+		return nil, fmt.Errorf("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID)
+	}
 
 	coinbaseTx, err := bt.NewTxFromBytes(req.CoinbaseTx)
 	if err != nil {
@@ -839,5 +840,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(_ context.Context, _ *blockassemb
 		SubtreeCount:          uint32(ba.blockAssembler.SubtreeCount()),
 		TxCount:               ba.blockAssembler.TxCount(),
 		QueueCount:            ba.blockAssembler.QueueLength(),
+		CurrentHeight:         ba.blockAssembler.bestBlockHeight.Load(),
+		CurrentHash:           ba.blockAssembler.bestBlockHeader.Load().Hash().String(),
 	}, nil
 }

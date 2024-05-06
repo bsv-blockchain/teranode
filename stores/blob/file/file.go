@@ -189,7 +189,7 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 func (s *File) getFileNameForGet(hash []byte, opts []options.Options) (string, error) {
 	fileName := s.filename(hash)
 
-	fileOptions := options.NewSetOptions(opts...)
+	fileOptions := options.NewSetOptions(nil, opts...)
 
 	if fileOptions.Extension != "" {
 		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
@@ -200,7 +200,7 @@ func (s *File) getFileNameForGet(hash []byte, opts []options.Options) (string, e
 func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
 	fileName := s.filename(hash)
 
-	fileOptions := options.NewSetOptions(opts...)
+	fileOptions := options.NewSetOptions(nil, opts...)
 
 	if fileOptions.TTL > 0 {
 		// write bytes to file

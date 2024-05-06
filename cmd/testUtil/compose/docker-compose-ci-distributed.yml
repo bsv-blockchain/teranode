@@ -75,8 +75,8 @@ services:
       propagation_grpcAddresses: ubsv-1-propagation:8084 | ubsv-2:8084 | ubsv-3:8084
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9905/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     # volumes:
-    #   - ./data/ubsv1/txstore:/data/ubsv1/txstore
-    #   - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
+    #   - ./data/ubsv1/txstore:/data/txstore
+    #   - ./data/ubsv1/subtreestore:/data/subtreestore
     ports:
       - "18087-18087:8087-8087"
     expose:
@@ -94,8 +94,6 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      txstore: file:///data/ubsv1/txstore
-      subtreestore: file:///data/ubsv1/subtreestore
       mine_initial_blocks: true
       mine_initial_blocks_count: 300
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
@@ -115,8 +113,8 @@ services:
       blockassembly_grpcAddress: "ubsv-1-blockassembly:8085"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9905/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     volumes:
-      - ./data/ubsv1/txstore:/data/ubsv1/txstore
-      - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
+      - ./data/ubsv1/txstore:/data/txstore
+      - ./data/ubsv1/subtreestore:/data/subtreestore
     ports:
       - "18081-18084:8084-8084"
       - "18086-18086:8086-8086"
@@ -135,8 +133,6 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      txstore: file:///data/ubsv1/txstore
-      subtreestore: file:///data/ubsv1/subtreestore
       mine_initial_blocks: true
       mine_initial_blocks_count: 300
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
@@ -156,8 +152,8 @@ services:
       blockassembly_grpcAddress: "ubsv-1-blockassembly:8085"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     volumes:
-      - ./data/ubsv1/txstore:/data/ubsv1/txstore
-      - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
+      - ./data/ubsv1/txstore:/data/txstore
+      - ./data/ubsv1/subtreestore:/data/subtreestore
     ports:
       - "18081-18084:8084-8084"
       - "18086-18086:8086-8086"
@@ -176,8 +172,6 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      txstore: file:///data/ubsv1/txstore
-      subtreestore: file:///data/ubsv1/subtreestore
       mine_initial_blocks: true
       mine_initial_blocks_count: 300
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
@@ -197,8 +191,8 @@ services:
       # p2p_bootstrapAddresses: "/ip4/172.18.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9905/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     volumes:
-      - ./data/ubsv1/txstore:/data/ubsv1/txstore
-      - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
+      - ./data/ubsv1/txstore:/data/txstore
+      - ./data/ubsv1/subtreestore:/data/subtreestore
     ports:
       - "18085-18085:8085-8085"
       # - "18090-18092:8090-8092"
@@ -215,8 +209,6 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      txstore: file:///data/ubsv1/txstore
-      subtreestore: file:///data/ubsv1/subtreestore
       mine_initial_blocks: true
       mine_initial_blocks_count: 300
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
@@ -236,8 +228,8 @@ services:
       # p2p_bootstrapAddresses: "/ip4/172.18.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9905/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     volumes:
-      - ./data/ubsv1/txstore:/data/ubsv1/txstore
-      - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
+      - ./data/ubsv1/txstore:/data/txstore
+      - ./data/ubsv1/subtreestore:/data/subtreestore
     ports:
       - "18088-18088:8088-8088"
       # - "18090-18092:8090-8092"
@@ -284,8 +276,6 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      txstore: file:///data/ubsv2/txstore
-      subtreestore: file:///data/ubsv2/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       coinbase_wallet_private_key: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
       startBootstrap: false
@@ -322,8 +312,6 @@ services:
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
       startTxMetaStore: "false"
       startTxStore: "false"
-      # txstore: badger:///data/ubsv2/txstore
-      # subtreestore: badger:///data/ubsv2/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       coinbase_wallet_private_key: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
       startBootstrap: false
@@ -340,8 +328,8 @@ services:
       # p2p_bootstrapAddresses: "/ip4/172.24.0.2/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
       p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh"
     volumes:
-      - ./data/ubsv1/txstore:/data/ubsv1/txstore
-      - ./data/ubsv1/subtreestore:/data/ubsv1/subtreestore
+      - ./data/ubsv1/txstore:/data/txstore
+      - ./data/ubsv1/subtreestore:/data/subtreestore
     ports:
       - "28093-28093:8093-8093"
 
@@ -417,8 +405,6 @@ services:
       coinbase_store: postgres://coinbase:coinbase@postgres:5432/coinbase
       startTxMetaStore: "true"
       startTxStore: "true"
-      txstore: file:///data/ubsv3/txstore
-      subtreestore: file:///data/ubsv3/subtreestore
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
       coinbase_wallet_private_key: "KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k"
       startBootstrap: false
@@ -434,8 +420,8 @@ services:
       coinbase_wait_until_block: 200
       propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
     volumes:
-      - ./data/ubsv3/txstore:/data/ubsv3/txstore
-      - ./data/ubsv3/subtreestore:/data/ubsv3/subtreestore
+      - ./data/ubsv3/txstore:/data/txstore
+      - ./data/ubsv3/subtreestore:/data/subtreestore
     ports:
       - "38081-38089:8081-8089"
       - "38090-38092:8090-8092"
@@ -467,8 +453,8 @@ services:
       coinbase_grpcAddress: localhost:8093
       propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
     volumes:
-      - ./data/ubsv3/txstore:/data/ubsv3/txstore
-      - ./data/ubsv3/subtreestore:/data/ubsv3/subtreestore
+      - ./data/ubsv3/txstore:/data/txstore
+      - ./data/ubsv3/subtreestore:/data/subtreestore
     ports:
       - "38093-38093:8093-8093"
 

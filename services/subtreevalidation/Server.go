@@ -208,7 +208,7 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 	retryCount := 0
 
 	for {
-		gotLock, exists, err := tryLockIfNotExists(ctx, u.subtreeStore, hash)
+		gotLock, exists, err := tryLockIfNotExists(ctx, u.logger, u.subtreeStore, hash)
 		if err != nil {
 			return nil, fmt.Errorf("error getting lock for Subtree %s: %w", hash.String(), err)
 		}

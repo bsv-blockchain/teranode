@@ -315,6 +315,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 					MovedUpBlocks:   movedUpBlocks,
 					Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
 				}
+				return
 			}
 		}
 
@@ -327,6 +328,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 					MovedUpBlocks:   movedUpBlocks,
 					Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting tx meta data for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
 				}
+				return
 			}
 		}
 
@@ -341,6 +343,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 				MovedUpBlocks:   movedUpBlocks,
 				Err:             fmt.Errorf("[SubtreeProcessor][Reset] error processing coinbase utxos: %s", err.Error()),
 			}
+			return
 		}
 		stp.currentBlockHeader = block.Header
 		movedUpBlocks = append(movedUpBlocks, block)

@@ -1,6 +1,8 @@
 SHELL=/bin/bash
 
 DEBUG_FLAGS=
+RACE_FLAGS=
+TXMETA_TAG=
 
 .PHONY: set_debug_flags
 set_debug_flags:
@@ -12,6 +14,14 @@ endif
 set_race_flag:
 ifeq ($(RACE),true)
 	$(eval RACE_FLAG = -race)
+endif
+
+.PHONY: set_txmetacache_flag
+set_race_flag:
+ifeq ($(TXMETA_SMALL_TAG),true)
+	$(eval TXMETA_TAG = "smalltxmetacache")
+else
+	$(eval TXMETA_TAG = "largetxmetacache")
 endif
 
 .PHONY: all
@@ -42,8 +52,8 @@ dev-dashboard:
 build: build-dashboard build-ubsv
 
 .PHONY: build-ubsv
-build-ubsv: build-dashboard set_debug_flags set_race_flag
-	go build $(RACE_FLAG) -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+build-ubsv: build-dashboard set_debug_flags set_race_flag set_txmetacache_flag
+	go build $(RACE_FLAG) -tags aerospike,native,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags set_race_flag

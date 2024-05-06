@@ -14,8 +14,12 @@ type SetOptions struct {
 	PrefixDirectory int
 }
 
-func NewSetOptions(opts ...Options) *SetOptions {
+func NewSetOptions(storeOptions *SetOptions, opts ...Options) *SetOptions {
 	options := &SetOptions{}
+
+	if storeOptions != nil {
+		*options = *storeOptions // This is a copy of the provided storeOptions
+	}
 
 	for _, opt := range opts {
 		opt(options)

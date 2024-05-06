@@ -252,7 +252,16 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
-	// config.Consumer.Offsets.Initial = sarama.OffsetOldest
+
+	autoCommit := GetQueryParamInt(kafkaURL, "autocommit", 1)
+	if autoCommit == 0 {
+		config.Consumer.Offsets.AutoCommit.Enable = false
+	}
+
+	replay := GetQueryParamInt(kafkaURL, "replay", 0)
+	if replay == 1 {
+		config.Consumer.Offsets.Initial = sarama.OffsetOldest
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	// ctx, cancel := context.WithCancel(context.Background())

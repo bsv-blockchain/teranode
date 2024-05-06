@@ -4,25 +4,31 @@
 
 
 1. [Description](#1-description)
-2. [Functionality ](#2-functionality-)
+2. [Functionality](#2-functionality)
 - [2.1. Starting the Block Assembly Service](#21-starting-the-block-assembly-service)
 - [2.2. Receiving Transactions from the TX Validator Service](#22-receiving-transactions-from-the-tx-validator-service)
-- [3.2. Grouping Transactions into Subtrees ](#32-grouping-transactions-into-subtrees-)
+- [3.2. Grouping Transactions into Subtrees](#32-grouping-transactions-into-subtrees)
 - [3.3. Creating Mining Candidates](#33-creating-mining-candidates)
 - [3.4. Submit Mining Solution](#34-submit-mining-solution)
 - [3.5. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts](#35-processing-subtrees-and-blocks-from-other-nodes-and-handling-forks-and-conflicts)
-- [3.5.1. The block received is the same as the current chaintip (i.e. the block we have already seen). ](#351-the-block-received-is-the-same-as-the-current-chaintip-ie-the-block-we-have-already-seen-)
-- [3.5.2. The block received is a new block, and it is the new chaintip. ](#352-the-block-received-is-a-new-block-and-it-is-the-new-chaintip-)
-- [3.5.3. The block received is a new block, but it represents a fork. ](#353-the-block-received-is-a-new-block-but-it-represents-a-fork-)
-3. [Data Model ](#3-data-model-)
+- [3.5.1. The block received is the same as the current chaintip (i.e. the block we have already seen).](#351-the-block-received-is-the-same-as-the-current-chaintip-ie-the-block-we-have-already-seen)
+- [3.5.2. The block received is a new block, and it is the new chaintip.](#352-the-block-received-is-a-new-block-and-it-is-the-new-chaintip)
+- [3.5.3. The block received is a new block, but it represents a fork.](#353-the-block-received-is-a-new-block-but-it-represents-a-fork)
+- [3.6. Resetting the Block Assembly](#36-resetting-the-block-assembly)
+3. [Data Model](#3-data-model)
 - [3.1. Block Data Model](#31-block-data-model)
     - [3.2. Subtree Data Model](#32-subtree-data-model)
     - [3.3 TX Meta Data Model](#33-tx-meta-data-model)
 4. [gRPC Protobuf Definitions](#4-grpc-protobuf-definitions)
-5. [Technology ](#5-technology-)
+5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+- [gRPC and fRPC Server Settings:](#grpc-and-frpc-server-settings)
+- [Subtree and Cache Settings:](#subtree-and-cache-settings)
+- [Kafka Integration:](#kafka-integration)
+- [Blockchain and Mining Settings:](#blockchain-and-mining-settings)
+- [General Operational Settings:](#general-operational-settings)
 
 
 ## 1. Description
@@ -239,6 +245,30 @@ In this context, `BlockAssembler` is tasked with ensuring that the local version
         - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
         - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
         - It involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
+
+
+### 3.6. Resetting the Block Assembly
+
+
+The Block Assembly service can be reset to the best block by calling the `ResetBlockAssembly` gRPC method.
+
+1. **State Storage and Retrieval**:
+    - `bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)`: Retrieves the best block header from the blockchain along with its metadata.
+
+2. **Resetting Block Assembly**:
+    - The block assembler resets to the new best block header with its height and details.
+    - It then calculates which blocks need to be moved down or up to align with the new best block header (`getReorgBlocks`).
+
+3. **Processing the Reorganization**:
+    - It attempts to reset the `subtreeProcessor` with the new block headers. If there's an error during this reset, it logs the error, and the block header is re-set to match the `subtreeProcessor`'s current block header.
+
+4. **Updating Assembly State**:
+    - Updates internal state with the new best block header and adjusts the height of the best block based on how many blocks were moved up and down.
+    - Attempts to set the new state and current blockchain chain.
+
+
+
+![block_assembly_reset.svg](img/plantuml/blockassembly/block_assembly_reset.svg)
 
 
 ## 3. Data Model

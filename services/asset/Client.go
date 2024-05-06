@@ -251,7 +251,7 @@ func (c *Client) GetNodes(_ context.Context, _ *emptypb.Empty, _ ...grpc.CallOpt
 }
 
 func (c *Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	blobOptions := options.NewSetOptions(opts...)
+	blobOptions := options.NewSetOptions(nil, opts...)
 
 	_, err := c.client.Set(ctx, &asset_api.SetSubtreeRequest{
 		Hash:    key[:],

@@ -116,9 +116,10 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	ps.status.Store(2)
 
 	// this will block
+	maxConnectionAge, _, _ := gocore.Config().GetDuration("propagation_grpcMaxConnectionAge", 90*time.Second)
 	if err = util.StartGRPCServer(ctx, ps.logger, "propagation", func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
-	}); err != nil {
+	}, maxConnectionAge); err != nil {
 		return err
 	}
 

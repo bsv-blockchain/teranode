@@ -35,9 +35,13 @@ const maxValueSizeKB = 2 // 2KB
 
 const maxValueSizeLog = 11 // 10 + log2(maxValueSizeKB)
 
-const bucketsCount = 8 * 1024
+/*
+See improve_cache_const_large.go for large cache settings
+See improve_cache_const_small.go for small cache settings
 
+const bucketsCount = 8 * 1024
 const chunkSize = maxValueSizeKB * 2 * 1024 // 4 KB
+*/
 
 const bucketSizeBits = 40
 
@@ -97,6 +101,8 @@ type ImprovedCache struct {
 // NewImprovedCache returns new cache with the given maxBytes capacity in bytes.
 // trimRatioSetting is the percentage of the chunks to be removed when the chunks are full, default is 25%.
 func NewImprovedCache(maxBytes int, bucketType types.BucketType) *ImprovedCache {
+	LogCacheSize() // log whether we are using small or large cache
+
 	if maxBytes <= 0 {
 		panic(fmt.Errorf("maxBytes must be greater than 0; got %d", maxBytes))
 	}

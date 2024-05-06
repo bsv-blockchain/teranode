@@ -99,16 +99,13 @@ services:
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
       miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
-      subtreestore: file:///data/ubsv1/subtreestore
-      blockPersister_persistURL: file:///data/ubsv1/blockpersister
-      blockPersister_workingDir: /app/data/ubsv1/blockpersister
       # p2p_bootstrapAddresses: /dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh
       # p2p_shared_key: 847a544c7403b353bd493791de2bd70878860932a40957196cc7462c8cf435c7
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/ubsv1/txstore
-      - ./data/ubsv1/subtreestore:/app/data/ubsv1/subtreestore
-      - ./data/ubsv1/blockpersister:/app/data/ubsv1/blockpersister
+      - ./data/ubsv1/txstore:/app/data/txstore
+      - ./data/ubsv1/subtreestore:/app/data/subtreestore
+      - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18093:8090-8093"
@@ -130,9 +127,6 @@ services:
   #     blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
   #     coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
   #     miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
-  #     subtreestore: file:///data/ubsv2/subtreestore
-  #     blockPersister_persistURL: file:///data/ubsv2/blockpersister
-  #     blockPersister_workingDir: /app/data/ubsv2/blockpersister
   #     # p2p_bootstrapAddresses: /dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh
   #     # p2p_shared_key: 847a544c7403b353bd493791de2bd70878860932a40957196cc7462c8cf435c7
   #   volumes:
@@ -161,16 +155,13 @@ services:
   #     blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
   #     coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase3
   #     miner_wallet_private_keys: "L56TgyTpDdvL3W24SMoALYotibToSCySQeo4pThLKxw6EFR6f93Q | KyAwSjuXZNgj78w3W7mR1fVMbPFu2heaCJJkWK5Yy58NZ4xafV6k | L32b9pdNPxXhqEA5VvzMb8wQ1NPpRXFmViFgEewjkVg8ZgH23b6w"
-  #     subtreestore: file:///data/ubsv3/subtreestore
-  #     blockPersister_persistURL: file:///data/ubsv3/blockpersister
-  #     blockPersister_workingDir: /app/data/ubsv3/blockpersister
   #     # p2p_bootstrapAddresses: /dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh
   #     # p2p_shared_key: 847a544c7403b353bd493791de2bd70878860932a40957196cc7462c8cf435c7
   #   volumes:
   #     - ./settings_local.conf:/app/settings_local.conf
-  #     - ./data/ubsv3/txstore:/app/data/ubsv3/txstore
-  #     - ./data/ubsv3/subtreestore:/app/data/ubsv3/subtreestore
-  #     - ./data/ubsv3/blockpersister:/app/data/ubsv3/blockpersister
+  #     - ./data/ubsv3/txstore:/app/data/txstore
+  #     - ./data/ubsv3/subtreestore:/app/data/subtreestore
+  #     - ./data/ubsv3/blockpersister:/app/data/blockpersister
   #   ports:
   #     - "38081-38089:8081-8089"
   #     - "38090-38093:8090-8093"
