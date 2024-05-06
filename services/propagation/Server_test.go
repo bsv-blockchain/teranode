@@ -2,15 +2,14 @@ package propagation
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/libsv/go-bt/v2/chainhash"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -18,37 +17,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestErr1(t *testing.T) {
-	err := fmt.Errorf("test error: %w", ErrBadRequest)
-	require.True(t, errors.Is(err, ErrBadRequest))
-	require.False(t, errors.Is(err, ErrInternal))
-	assert.Equal(t, "test error: PROPAGATION_BAD_REQUEST", err.Error())
-}
-
-func TestErr2(t *testing.T) {
-	err := fmt.Errorf("test error: %w: %w", ErrBadRequest, ErrInternal)
-	require.True(t, errors.Is(err, ErrBadRequest))
-	require.True(t, errors.Is(err, ErrInternal))
-	assert.Equal(t, "test error: PROPAGATION_BAD_REQUEST: PROPAGATION_INTERNAL", err.Error())
-}
-
-func TestErr3(t *testing.T) {
-	err := fmt.Errorf("test error: %v: %w", ErrBadRequest, ErrInternal)
-	require.False(t, errors.Is(err, ErrBadRequest))
-	require.True(t, errors.Is(err, ErrInternal))
-	assert.Equal(t, "test error: PROPAGATION_BAD_REQUEST: PROPAGATION_INTERNAL", err.Error())
-}
-
 func TestValidatorErrors(t *testing.T) {
 	tx := bt.NewTx()
 
-	ns := &NullStore{}
-
-	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}))
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 	require.NoError(t, err)
 	err = v.Validate(context.Background(), tx, util.GenesisActivationHeight)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, validator.ErrBadRequest))
+	assert.True(t, errors.Is(err, errors.ErrProcessing))
 }
 
 type NullStore struct{}
@@ -69,7 +45,7 @@ func (ns *NullStore) DeleteSpends(deleteSpends bool) {
 	// No nothing
 }
 
-func (ns *NullStore) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
+func (ns *NullStore) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.SpendResponse, error) {
 	// fmt.Printf("Get(%s)\n", hash.String())
 	return nil, nil
 }

@@ -3,18 +3,19 @@ package blockpersister
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"runtime"
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
-func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, batched bool) (int, error) {
+func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data, batched bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, fmt.Errorf("txHashes and txMetaSlice must be the same length")
 	}
@@ -37,7 +38,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 			g.Go(func() error {
 				end := util.Min(i+batchSize, len(txHashes))
 
-				missingTxHashesCompacted := make([]*txmeta.MissingTxHash, 0, end-i)
+				missingTxHashesCompacted := make([]*utxo.UnresolvedMetaData, 0, end-i)
 
 				for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
 					select {
@@ -52,7 +53,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 						}
 
 						if txMetaSlice[i+j] == nil {
-							missingTxHashesCompacted = append(missingTxHashesCompacted, &txmeta.MissingTxHash{
+							missingTxHashesCompacted = append(missingTxHashesCompacted, &utxo.UnresolvedMetaData{
 								Hash: txHashes[i+j],
 								Idx:  i + j,
 							})
@@ -60,7 +61,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					}
 				}
 
-				if err := u.txMetaStore.MetaBatchDecorate(gCtx, missingTxHashesCompacted, "tx"); err != nil {
+				if err := u.utxoStore.MetaBatchDecorate(gCtx, missingTxHashesCompacted, "tx"); err != nil {
 					return err
 				}
 
@@ -110,7 +111,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 						}
 
 						if txMetaSlice[i+j] == nil {
-							txMeta, err := u.txMetaStore.GetMeta(gCtx, &txHash)
+							txMeta, err := u.utxoStore.GetMeta(gCtx, &txHash)
 							if err != nil {
 								return err
 							}

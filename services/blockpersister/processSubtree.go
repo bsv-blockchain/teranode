@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"io"
 	"time"
 
@@ -12,7 +13,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
@@ -53,7 +53,7 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 	}
 
 	// txMetaSlice will be populated with the txMeta data for each txHash
-	txMetaSlice := make([]*txmeta.Data, len(txHashes))
+	txMetaSlice := make([]*meta.Data, len(txHashes))
 
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 

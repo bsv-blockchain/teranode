@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -65,7 +65,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 
 			data := make([]SubtreeTx, 0, limit)
 
-			var txMeta *txmeta.Data
+			var txMeta *meta.Data
 			for i := offset; i < offset+limit; i++ {
 				if i >= subtree.Length() {
 					break

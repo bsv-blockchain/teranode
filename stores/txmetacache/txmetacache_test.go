@@ -3,11 +3,11 @@ package txmetacache
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"testing"
 	"unsafe"
 
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -53,7 +53,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 
 		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 
-		meta := &txmeta.Data{
+		metaData := &meta.Data{
 			Fee:            100,
 			SizeInBytes:    111,
 			ParentTxHashes: []chainhash.Hash{},
@@ -61,13 +61,13 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
 
-		err := c.(*TxMetaCache).SetCache(hash, meta)
+		err := c.(*TxMetaCache).SetCache(hash, metaData)
 		require.NoError(t, err)
 
 		metaGet, err := c.GetMeta(ctx, hash)
 		require.NoError(t, err)
 
-		require.Equal(t, meta, metaGet)
+		require.Equal(t, metaData, metaGet)
 	})
 }
 
@@ -89,7 +89,7 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		hash := hashes[i]
 		g.Go(func() error {
-			return cache.SetCache(&hash, &txmeta.Data{})
+			return cache.SetCache(&hash, &meta.Data{})
 		})
 	}
 
@@ -103,7 +103,7 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	c := NewTxMetaCache(ctx, logger, memory.New(logger))
 	cache := c.(*TxMetaCache)
 
-	meta := &txmeta.Data{
+	meta := &meta.Data{
 		Fee:            100,
 		SizeInBytes:    111,
 		ParentTxHashes: []chainhash.Hash{},
@@ -152,13 +152,13 @@ func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 
 	for i := 0; i < 2_000_000; i++ {
 		hash := chainhash.HashH([]byte(string(rune(i))))
-		err = cache.SetCache(&hash, &txmeta.Data{})
+		err = cache.SetCache(&hash, &meta.Data{})
 		require.NoError(t, err)
 	}
 
 	//make sure newly added items are not expired
 	hash := chainhash.HashH([]byte(string(rune(999_999_999))))
-	_ = cache.SetCache(&hash, &txmeta.Data{})
+	_ = cache.SetCache(&hash, &meta.Data{})
 
 	txmetaLatest, err := cache.Get(ctx, &hash)
 	assert.NoError(t, err)
@@ -167,15 +167,15 @@ func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 }
 
 func TestMap(t *testing.T) {
-	m := make(map[chainhash.Hash]*txmeta.Data)
+	m := make(map[chainhash.Hash]*meta.Data)
 
 	hash1, _ := chainhash.NewHashFromStr("000000000000000004c636f1bf72da9bdea11677ea3eefbde93ce0358ef28c30")
 	hash2, _ := chainhash.NewHashFromStr("000000000000000004c636f1bf72da9bdea11677ea3eefbde93ce0358ef28c30")
 
 	assert.Equal(t, hash1, hash2)
 
-	m[*hash1] = &txmeta.Data{}
-	m[*hash2] = &txmeta.Data{}
+	m[*hash1] = &meta.Data{}
+	m[*hash2] = &meta.Data{}
 
 	assert.Equal(t, 1, len(m))
 }

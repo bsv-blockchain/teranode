@@ -20,7 +20,7 @@ func ExtractCoinbaseHeight(coinbaseTx *bt.Tx) (uint32, error) {
 
 func ExtractCoinbaseMiner(coinbaseTx *bt.Tx) (string, error) {
 	_, miner, err := extractCoinbaseHeightAndText(*coinbaseTx.Inputs[0].UnlockingScript)
-	if err != nil && errors.Is(err, errors.ErrCoinbaseMissingBlockHeight) {
+	if err != nil && errors.Is(err, errors.ErrTxCoinbaseMissingBlockHeight) {
 		err = nil
 	}
 	return miner, err
@@ -28,17 +28,17 @@ func ExtractCoinbaseMiner(coinbaseTx *bt.Tx) (string, error) {
 
 func extractCoinbaseHeightAndText(sigScript bscript.Script) (uint32, string, error) {
 	if len(sigScript) < 1 {
-		return 0, "", errors.New(errors.ERR_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script must start with the length of the serialized block height")
+		return 0, "", errors.New(errors.ERR_TX_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script must start with the length of the serialized block height")
 	}
 
 	serializedLen := int(sigScript[0])
 	if len(sigScript[1:]) < serializedLen {
-		return 0, "", errors.New(errors.ERR_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script must start with the serialized block height")
+		return 0, "", errors.New(errors.ERR_TX_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script must start with the serialized block height")
 	}
 
 	serializedHeightBytes := sigScript[1 : serializedLen+1]
 	if len(serializedHeightBytes) > 8 {
-		return 0, "", errors.New(errors.ERR_COINBASE_MISSING_BLOCK_HEIGHT, "serialized block height too large")
+		return 0, "", errors.New(errors.ERR_TX_COINBASE_MISSING_BLOCK_HEIGHT, "serialized block height too large")
 	}
 
 	heightBytes := make([]byte, 8)

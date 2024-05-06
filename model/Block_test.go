@@ -6,13 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -254,7 +254,7 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	}
 
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
-	txMetaStore := memory.New(ulogger.TestLogger{}, true)
+	txMetaStore := memory.New(ulogger.TestLogger{})
 
 	currentChain := make([]*BlockHeader, 11)
 	currentChainIDs := make([]uint32, 11)
@@ -287,7 +287,7 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	block, err := generateTestBlock(txCount, subtreeStore, true)
 	require.NoError(t, err)
 
-	txMetaStore := memory.New(ulogger.TestLogger{}, true)
+	txMetaStore := memory.New(ulogger.TestLogger{})
 	cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
 	err = loadTxMetaIntoMemory()
 	require.NoError(t, err)
@@ -298,7 +298,7 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 
 	data, err := cachedTxMetaStore.Get(context.Background(), reqTxId)
 	require.NoError(t, err)
-	require.Equal(t, &txmeta.Data{
+	require.Equal(t, &meta.Data{
 		Fee:            1,
 		SizeInBytes:    1,
 		ParentTxHashes: []chainhash.Hash{},
@@ -336,7 +336,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	subtreeSize = 8
 
 	subtreeStore := newLocalSubtreeStore()
-	txMetaStore := memory.New(ulogger.TestLogger{}, true)
+	txMetaStore := memory.New(ulogger.TestLogger{})
 	cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
 	txMetaCache := cachedTxMetaStore.(*txmetacache.TxMetaCache)
 
@@ -355,7 +355,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	// rest of transactions are random
 	for i := 0; i < leafCount-2; i++ {
 		_ = subtree.AddNode(*hashes[i], 111, 0)
-		err = txMetaCache.SetCache(hashes[i], &txmeta.Data{Fee: 111, SizeInBytes: 1})
+		err = txMetaCache.SetCache(hashes[i], &meta.Data{Fee: 111, SizeInBytes: 1})
 		require.NoError(t, err)
 	}
 

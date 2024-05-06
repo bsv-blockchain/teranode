@@ -3,14 +3,14 @@ package validator
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/libsv/go-bt/v2"
 )
 
 type MockValidatorClient struct {
 	BlockHeight uint32
 	Errors      []error
-	TxMetaStore txmeta.Store
+	TxMetaStore utxo.Store
 }
 
 func (m *MockValidatorClient) Health(ctx context.Context) (int, string, error) {

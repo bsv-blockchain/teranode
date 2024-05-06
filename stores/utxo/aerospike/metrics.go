@@ -7,10 +7,7 @@ import (
 )
 
 var (
-	prometheusUtxoMapGet prometheus.Counter
-	//prometheusUtxoMapStore prometheus.Counter
-	//prometheusUtxoMapReStore    prometheus.Counter
-	//prometheusUtxoMapStoreSpent prometheus.Counter
+	prometheusUtxoMapGet        prometheus.Counter
 	prometheusUtxoMapSpend      prometheus.Counter
 	prometheusUtxoMapReSpend    prometheus.Counter
 	prometheusUtxoMapSpendSpent prometheus.Counter
@@ -21,7 +18,6 @@ var (
 	prometheusTxMetaAerospikeMapGet       prometheus.Counter
 	prometheusTxMetaAerospikeMapStore     prometheus.Counter
 	prometheusTxMetaAerospikeMapSetMined  prometheus.Counter
-	prometheusTxMetaAerospikeMapDelete    prometheus.Counter
 	prometheusTxMetaAerospikeMapErrors    *prometheus.CounterVec
 	prometheusTxMetaAerospikeMapGetMulti  prometheus.Counter
 	prometheusTxMetaAerospikeMapGetMultiN prometheus.Counter
@@ -54,12 +50,6 @@ func _initPrometheusMetrics() {
 		prometheus.CounterOpts{
 			Name: "aerospike_map_txmeta_set_mined",
 			Help: "Number of txmeta set_mined calls done to aerospike",
-		},
-	)
-	prometheusTxMetaAerospikeMapDelete = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "aerospike_map_txmeta_delete",
-			Help: "Number of txmeta delete calls done to aerospike",
 		},
 	)
 	prometheusTxMetaAerospikeMapErrors = promauto.NewCounterVec(

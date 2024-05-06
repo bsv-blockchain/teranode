@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -11,15 +10,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/util"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
-	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/bitcoin-sv/ubsv/util/p2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -223,13 +220,13 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 			break
 		}
 
-		if errors.Is(err, propagation.ErrBadRequest) {
+		if errors.Is(err, errors.ErrProcessing) {
 			return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
 		}
 
 		// Go through each response and check for ErrBadRequest errors
 		for _, response := range responses {
-			if errors.Is(response.Error, propagation.ErrBadRequest) {
+			if errors.Is(response.Error, errors.ErrProcessing) {
 				return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), response.Error)
 			}
 		}
@@ -378,23 +375,23 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 	// select 1 distributor at random
 	d := w.distributors[rand.Intn(len(w.distributors))]
 	if responses, err := d.SendTransaction(ctx, tx); err != nil {
-		if errors.Is(err, propagation.ErrBadRequest) {
+		if errors.Is(err, errors.ErrTxInvalid) {
 			prometheusInvalidTransactions.Inc()
 		} else {
 			// Go through each response and check for ErrBadRequest errors
 			for _, response := range responses {
-				if errors.Is(response.Error, propagation.ErrBadRequest) {
+				if errors.Is(response.Error, errors.ErrProcessing) {
 					prometheusInvalidTransactions.Inc()
 				}
 			}
 		}
 
-		if errors.Is(err, propagation.ErrInternal) {
+		if errors.Is(err, errors.ErrProcessing) {
 			prometheusInternalErrors.Inc()
 		} else {
 			// Go through each response and check for ErrBadRequest errors
 			for _, response := range responses {
-				if errors.Is(response.Error, propagation.ErrInternal) {
+				if errors.Is(response.Error, errors.ErrProcessing) {
 					prometheusInternalErrors.Inc()
 				}
 			}

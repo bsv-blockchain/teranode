@@ -1,4 +1,4 @@
-package utxomap
+package meta
 
 import (
 	"bytes"
@@ -19,6 +19,7 @@ type Data struct {
 	Fee            uint64           `json:"fee"`
 	SizeInBytes    uint64           `json:"sizeInBytes"`
 	IsCoinbase     bool             `json:"isCoinbase"`
+	LockTime       uint32           `json:"lockTime"` // lock time can be different from the transaction lock time, for instance in coinbase transactions
 }
 
 type PreviousOutput struct {

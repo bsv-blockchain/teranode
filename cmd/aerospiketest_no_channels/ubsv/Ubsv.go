@@ -15,7 +15,7 @@ import (
 
 type Ubsv struct {
 	logger ulogger.Logger
-	store  utxostore.Interface
+	store  utxostore.Store
 }
 
 func New(logger ulogger.Logger, timeout string, addr string, port int) *Ubsv {
@@ -57,12 +57,12 @@ func (s *Ubsv) Work(ctx context.Context, id int, txCount int, wg *sync.WaitGroup
 				tx := bt.NewTx()
 				_ = tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", uint64(1000+i))
 
-				if err := s.store.Delete(ctx, tx); err != nil {
+				if err := s.store.Delete(ctx, tx.TxIDChainHash()); err != nil {
 					s.logger.Warnf("delete failed: %v\n", err)
 				}
 
 				// Store the hash
-				if err := s.store.Store(ctx, tx); err != nil {
+				if _, err := s.store.Create(ctx, tx); err != nil {
 					s.logger.Errorf("stored failed: %v", err)
 					return
 				}

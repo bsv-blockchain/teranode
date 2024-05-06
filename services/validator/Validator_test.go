@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	utxoMemorystore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -35,7 +35,7 @@ func (ns *NullStore) Health(ctx context.Context) (int, string, error) {
 func (ns *NullStore) DeleteSpends(deleteSpends bool) {
 }
 
-func (ns *NullStore) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
+func (ns *NullStore) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.SpendResponse, error) {
 	return nil, nil
 }
 
@@ -65,9 +65,7 @@ func BenchmarkValidator(b *testing.B) {
 		panic(err)
 	}
 
-	ns := &NullStore{}
-
-	v, err := validator.New(context.Background(), ulogger.TestLogger{}, ns, memory.New(ulogger.TestLogger{}))
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 	if err != nil {
 		panic(err)
 	}
@@ -91,10 +89,9 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	// need to add spendable utxo to utxo store
 
 	// delete spends set to false
-	utxoStore := utxoMemorystore.New(false)
-	txMetaStore := memory.New(ulogger.TestLogger{}, true)
+	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
 
-	v, err := validator.New(context.Background(), ulogger.TestLogger{}, utxoStore, txMetaStore)
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, utxoStore)
 	if err != nil {
 		panic(err)
 	}

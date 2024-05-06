@@ -3,6 +3,7 @@ package blockassembly
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"net/url"
 	"time"
 
@@ -15,7 +16,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -51,8 +51,7 @@ type BlockAssembly struct {
 
 	blockchainClient      blockchain.ClientI
 	txStore               blob.Store
-	utxoStore             utxostore.Interface
-	txMetaStore           txmeta_store.Store
+	utxoStore             utxostore.Store
 	subtreeStore          blob.Store
 	subtreeTTL            time.Duration
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
@@ -68,7 +67,7 @@ type subtreeRetrySend struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interface, txMetaStore txmeta_store.Store, subtreeStore blob.Store,
+func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Store, subtreeStore blob.Store,
 	blockchainClient blockchain.ClientI) *BlockAssembly {
 
 	// initialize Prometheus metrics, singleton, will only happen once
@@ -82,7 +81,6 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Interfac
 		blockchainClient:      blockchainClient,
 		txStore:               txStore,
 		utxoStore:             utxoStore,
-		txMetaStore:           txMetaStore,
 		subtreeStore:          subtreeStore,
 		subtreeTTL:            subtreeTTL,
 		jobStore:              ttlcache.New[chainhash.Hash, *subtreeprocessor.Job](),
@@ -123,7 +121,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	}
 
 	// init the block assembler for this server
-	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.txMetaStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
 
 	// Turned off for now, will be used to validate own blocks
 	//kafkaBlocksValidateConfig, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
@@ -467,7 +465,7 @@ func (ba *BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_api.
 	}, batchError
 }
 
-func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) (*txmeta_store.Data, error) {
+func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) (*meta.Data, error) {
 	startMetaTime := time.Now()
 	txMetaSpan, txMetaSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:txMeta")
 	defer func() {
@@ -476,7 +474,7 @@ func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) 
 		prometheusBlockAssemblerTxMetaGetDuration.Observe(float64(time.Since(startMetaTime).Microseconds()) / 1_000_000)
 	}()
 
-	txMetadata, err := ba.txMetaStore.Get(txMetaSpanCtx, txHash)
+	txMetadata, err := ba.utxoStore.Get(txMetaSpanCtx, txHash)
 	if err != nil {
 		return nil, err
 	}

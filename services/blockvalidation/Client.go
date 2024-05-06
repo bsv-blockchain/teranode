@@ -9,7 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/retry"
@@ -198,7 +198,7 @@ func (s *Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 	return fmt.Errorf("not implemented")
 }
 
-func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*txmeta_store.Data) error {
+func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*meta.Data) error {
 	func() {
 		// frpc throws a segmentation violation when the blockvalidation service is not available :-(
 		err := recover()

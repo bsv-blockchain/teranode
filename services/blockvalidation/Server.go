@@ -9,16 +9,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
-
-	"golang.org/x/sync/errgroup"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
@@ -28,6 +25,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
 
@@ -49,7 +47,7 @@ type Server struct {
 	blockchainClient            blockchain.ClientI
 	subtreeStore                blob.Store
 	txStore                     blob.Store
-	txMetaStore                 txmeta_store.Store
+	utxoStore                   utxo.Store
 	validatorClient             validator.Interface
 	blockFoundCh                chan processBlockFound
 	catchupCh                   chan processBlockCatchup
@@ -66,7 +64,7 @@ type Server struct {
 
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
-	txMetaStore txmeta_store.Store, validatorClient validator.Interface) *Server {
+	utxoStore utxo.Store, validatorClient validator.Interface) *Server {
 
 	initPrometheusMetrics()
 
@@ -83,7 +81,7 @@ func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
 		logger:               logger,
 		subtreeStore:         subtreeStore,
 		txStore:              txStore,
-		txMetaStore:          txMetaStore,
+		utxoStore:            utxoStore,
 		validatorClient:      validatorClient,
 		blockFoundCh:         make(chan processBlockFound, blockFoundChBuffer),
 		catchupCh:            make(chan processBlockCatchup, catchupChBuffer),
@@ -95,7 +93,7 @@ func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
 	return bVal
 }
 
-func (u *Server) Health(ctx context.Context) (int, string, error) {
+func (u *Server) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
@@ -120,7 +118,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}
 
-	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
+	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
 
 	go u.processSubtreeNotify.Start()
 

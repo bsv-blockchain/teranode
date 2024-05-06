@@ -2,7 +2,7 @@ module github.com/bitcoin-sv/ubsv
 
 go 1.21.3
 
-replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.7
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.8
 
 require (
 	github.com/IBM/sarama v1.42.2
@@ -255,7 +255,6 @@ require (
 	github.com/segmentio/encoding v0.3.6 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	github.com/stretchr/objx v0.5.0 // indirect
 	github.com/testcontainers/testcontainers-go v0.22.0 // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect

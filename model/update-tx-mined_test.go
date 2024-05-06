@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -26,7 +26,7 @@ var (
 
 func TestUpdateTxMinedStatus(t *testing.T) {
 	t.Run("TestUpdateTxMinedStatus", func(t *testing.T) {
-		txMetaStore := memory.New(ulogger.TestLogger{}, true)
+		txMetaStore := memory.New(ulogger.TestLogger{})
 
 		_, err := txMetaStore.Create(context.Background(), tx0)
 		require.NoError(t, err)

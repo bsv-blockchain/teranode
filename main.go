@@ -233,7 +233,6 @@ func main() {
 			logger.New("asset"),
 			getUtxoStore(ctx, logger),
 			getTxStore(logger),
-			getTxMetaStore(logger),
 			getSubtreeStore(logger),
 		)); err != nil {
 			panic(err)
@@ -245,7 +244,7 @@ func main() {
 			logger,
 			getBlockStore(logger),
 			getSubtreeStore(logger),
-			getTxMetaStore(logger),
+			getUtxoStore(ctx, logger),
 		)); err != nil {
 			panic(err)
 		}
@@ -264,7 +263,6 @@ func main() {
 				logger.New("bass"),
 				getTxStore(logger),
 				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
 				getSubtreeStore(logger),
 				blockchainClient,
 			)); err != nil {
@@ -278,7 +276,6 @@ func main() {
 		validatorClient, err := validator.New(ctx,
 			logger,
 			getUtxoStore(ctx, logger),
-			getTxMetaStore(logger),
 		)
 		if err != nil {
 			logger.Fatalf("could not create validator [%v]", err)
@@ -288,7 +285,7 @@ func main() {
 			logger.New("stval"),
 			getSubtreeStore(logger),
 			getTxStore(logger),
-			getTxMetaStore(logger),
+			getUtxoStore(ctx, logger),
 			validatorClient,
 		)); err != nil {
 			panic(err)
@@ -302,7 +299,6 @@ func main() {
 			validatorClient, err := validator.New(ctx,
 				logger,
 				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
 			)
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)
@@ -312,7 +308,7 @@ func main() {
 				logger.New("bval"),
 				getSubtreeStore(logger),
 				getTxStore(logger),
-				getTxMetaStore(logger),
+				getUtxoStore(ctx, logger),
 				validatorClient,
 			)); err != nil {
 				panic(err)
@@ -326,7 +322,6 @@ func main() {
 			if err := sm.AddService("Validator", validator.NewServer(
 				logger.New("valid"),
 				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
 			)); err != nil {
 				panic(err)
 			}
@@ -359,7 +354,6 @@ func main() {
 			validatorClient, err = validator.New(ctx,
 				logger,
 				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
 			)
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)

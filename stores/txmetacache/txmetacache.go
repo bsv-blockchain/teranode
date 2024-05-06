@@ -2,10 +2,11 @@ package txmetacache
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/types"
 	"github.com/libsv/go-bt/v2"
@@ -30,10 +31,10 @@ type CachedData struct {
 }
 
 type TxMetaCache struct {
-	txMetaStore txmeta.Store
-	cache       *ImprovedCache
-	metrics     metrics
-	logger      ulogger.Logger
+	utxoStore utxo.Store
+	cache     *ImprovedCache
+	metrics   metrics
+	logger    ulogger.Logger
 }
 
 type CacheStats struct {
@@ -43,8 +44,8 @@ type CacheStats struct {
 	TotalElementsAdded uint64
 }
 
-func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta.Store, options ...int) txmeta.Store {
-	if _, ok := txMetaStore.(*TxMetaCache); ok {
+func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Store, options ...int) utxo.Store {
+	if _, ok := utxoStore.(*TxMetaCache); ok {
 		// txMetaStore is a TxMetaCache, this is not allowed
 		panic("Cannot use TxMetaCache as the underlying store for TxMetaCache")
 	}
@@ -58,10 +59,10 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 	}
 
 	m := &TxMetaCache{
-		txMetaStore: txMetaStore,
-		cache:       NewImprovedCache(maxMB*1024*1024, types.Trimmed),
-		metrics:     metrics{},
-		logger:      logger,
+		utxoStore: utxoStore,
+		cache:     NewImprovedCache(maxMB*1024*1024, types.Trimmed),
+		metrics:   metrics{},
+		logger:    logger,
 	}
 
 	go func() {
@@ -90,7 +91,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, txMetaStore txme
 	return m
 }
 
-func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *txmeta.Data) error {
+func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
 	txMeta.Tx = nil
 	err := t.cache.Set(hash[:], txMeta.MetaBytes())
 	if err != nil {
@@ -122,14 +123,14 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 	return nil
 }
 
-func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *txmeta.Data {
+func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *meta.Data {
 	cachedBytes := make([]byte, 0)
 	_ = t.cache.Get(&cachedBytes, hash[:])
 
 	if len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
-		txmetaData := txmeta.Data{}
-		txmeta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+		txmetaData := meta.Data{}
+		meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
 
 		return &txmetaData
 	}
@@ -138,21 +139,21 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *tx
 	return nil
 }
 
-func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
 	_ = t.cache.Get(&cachedBytes, hash[:])
 
 	if len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
-		txmetaData := txmeta.Data{}
-		txmeta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+		txmetaData := meta.Data{}
+		meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
 		return &txmetaData, nil
 	}
 	t.metrics.misses.Add(1)
 
 	t.logger.Warnf("txMetaCache miss for %s", hash.String())
 
-	txMeta, err := t.txMetaStore.GetMeta(ctx, hash)
+	txMeta, err := t.utxoStore.GetMeta(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -166,21 +167,21 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmet
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, _ ...[]string) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
 	_ = t.cache.Get(&cachedBytes, hash[:])
 	// if found in cache
 	if len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)
 
-		txmetaData := txmeta.Data{}
-		txmeta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+		txmetaData := meta.Data{}
+		meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
 		return &txmetaData, nil
 	}
 
 	// if not found in the cache, add it to the cache, record cache miss
 	t.metrics.misses.Add(1)
-	txMeta, err := t.txMetaStore.Get(ctx, hash)
+	txMeta, err := t.utxoStore.Get(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -194,8 +195,8 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash) (*txmeta.Da
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.MissingTxHash, fields ...string) error {
-	if err := t.txMetaStore.MetaBatchDecorate(ctx, hashes, fields...); err != nil {
+func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...string) error {
+	if err := t.utxoStore.MetaBatchDecorate(ctx, hashes, fields...); err != nil {
 		return err
 	}
 
@@ -211,8 +212,8 @@ func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.Mi
 	return nil
 }
 
-func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, lockTime ...uint32) (*txmeta.Data, error) {
-	txMeta, err := t.txMetaStore.Create(ctx, tx, lockTime...)
+func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, lockTime ...uint32) (*meta.Data, error) {
+	txMeta, err := t.utxoStore.Create(ctx, tx, lockTime...)
 	if err != nil {
 		return txMeta, err
 	}
@@ -244,7 +245,7 @@ func (t *TxMetaCache) SetMinedMulti(ctx context.Context, hashes []*chainhash.Has
 }
 
 func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockID uint32) error {
-	err := t.txMetaStore.SetMined(ctx, hash, blockID)
+	err := t.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{hash}, blockID)
 	if err != nil {
 		return err
 	}
@@ -258,10 +259,10 @@ func (t *TxMetaCache) SetMined(ctx context.Context, hash *chainhash.Hash, blockI
 }
 
 func (t *TxMetaCache) setMinedInCache(ctx context.Context, hash *chainhash.Hash, blockID uint32) (err error) {
-	var txMeta *txmeta.Data
+	var txMeta *meta.Data
 	txMeta, err = t.Get(ctx, hash)
 	if err != nil {
-		txMeta, err = t.txMetaStore.Get(ctx, hash)
+		txMeta, err = t.utxoStore.Get(ctx, hash)
 	}
 	if err != nil {
 		return err
@@ -297,4 +298,32 @@ func (t *TxMetaCache) GetCacheStats() *CacheStats {
 		TotalMapSize:       s.TotalMapSize,
 		TotalElementsAdded: s.TotalElementsAdded,
 	}
+}
+
+func (t *TxMetaCache) Health(ctx context.Context) (int, string, error) {
+	return t.utxoStore.Health(ctx)
+}
+
+func (t *TxMetaCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
+	return t.utxoStore.GetSpend(ctx, spend)
+}
+
+func (t *TxMetaCache) Spend(ctx context.Context, spends []*utxo.Spend) error {
+	return t.utxoStore.Spend(ctx, spends)
+}
+
+func (t *TxMetaCache) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
+	return t.utxoStore.UnSpend(ctx, spends)
+}
+
+func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+	return t.utxoStore.PreviousOutputsDecorate(ctx, outpoints)
+}
+
+func (t *TxMetaCache) SetBlockHeight(height uint32) error {
+	return t.utxoStore.SetBlockHeight(height)
+}
+
+func (t *TxMetaCache) GetBlockHeight() (uint32, error) {
+	return t.utxoStore.GetBlockHeight()
 }

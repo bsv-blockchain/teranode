@@ -19,8 +19,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	legacy_blockchain "github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	txmetafactory "github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	utxoFactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
@@ -42,7 +42,7 @@ type wrapper struct {
 type TeranodeBridge struct {
 	blockValidationClient *blockvalidation.Client
 	blockchainClient      blockchain.ClientI
-	txmetaStore           txmeta.Store
+	txmetaStore           utxo.Store
 	txCache               *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	subtreeCache          *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	blockCache            *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
@@ -79,7 +79,7 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 		return nil, fmt.Errorf("could not find txmeta_store: %w", err)
 	}
 
-	txmetaStore, err := txmetafactory.New(log, txmetaStoreURL)
+	txmetaStore, err := utxoFactory.NewStore(context.Background(), log, txmetaStoreURL, "teranode_bridge", false)
 	if err != nil {
 		panic(err)
 	}

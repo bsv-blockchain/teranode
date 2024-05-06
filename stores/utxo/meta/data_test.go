@@ -1,4 +1,4 @@
-package utxomap
+package meta
 
 import (
 	"testing"
@@ -7,6 +7,11 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+var (
+	hash3, _ = chainhash.NewHashFromStr("0ab59604a1c249d0cbfe18f01fe423df3035840f9a609395ccd177d2b217cae6")
+	hash4, _ = chainhash.NewHashFromStr("08c3d6e8388415d8f6190a40c0acb9328b41a89a5854468e62c2bbd1dc740460")
 )
 
 func Test_NewDataFromBytes(t *testing.T) {

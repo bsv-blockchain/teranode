@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
+	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"net/url"
 	"testing"
 	"time"
@@ -15,7 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jarcoal/httpmock"
@@ -53,7 +54,7 @@ func (m *MockSubtreeValidationClient) CheckSubtree(ctx context.Context, subtreeH
 	return nil
 }
 
-func setup() (*memory.Memory, *validator.MockValidatorClient, subtreevalidation.Interface, blob.Store, blob.Store, func()) {
+func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation.Interface, blob.Store, blob.Store, func()) {
 	// we only need the httpClient, txMetaStore and validatorClient when blessing a transaction
 	httpmock.Activate()
 	httpmock.RegisterResponder(

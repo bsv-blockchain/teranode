@@ -3,6 +3,7 @@ package asset
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
@@ -14,8 +15,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/gocore"
@@ -30,10 +29,9 @@ type peerWithContext struct {
 // Server type carries the logger within it
 type Server struct {
 	logger           ulogger.Logger
-	utxoStore        utxo.Interface
+	utxoStore        utxo.Store
 	txStore          blob.Store
 	subtreeStore     blob.Store
-	txMetaStore      txmeta.Store
 	grpcAddr         string
 	httpAddr         string
 	grpcServer       *grpc_impl.GRPC
@@ -46,12 +44,11 @@ type Server struct {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store, subtreeStore blob.Store) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store) *Server {
 	s := &Server{
 		logger:         logger,
 		utxoStore:      utxoStore,
 		txStore:        txStore,
-		txMetaStore:    txMetaStore,
 		subtreeStore:   subtreeStore,
 		peers:          make(map[string]peerWithContext),
 		notificationCh: make(chan *asset_api.Notification, 100),
@@ -78,7 +75,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("error creating blockchain client: %s", err)
 	}
 
-	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, v.txMetaStore, blockchainClient, v.subtreeStore)
+	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, blockchainClient, v.subtreeStore)
 	if err != nil {
 		return fmt.Errorf("error creating repository: %s", err)
 	}

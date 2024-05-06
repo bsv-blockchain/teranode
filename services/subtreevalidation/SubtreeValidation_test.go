@@ -11,8 +11,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jarcoal/httpmock"
@@ -108,8 +109,8 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 // 	})
 // }
 
-func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.Store, func()) {
-	// we only need the httpClient, txMetaStore and validatorClient when blessing a transaction
+func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store, func()) {
+	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
 	httpmock.Activate()
 	httpmock.RegisterResponder(
 		"GET",
@@ -123,13 +124,13 @@ func setup() (*memory.Memory, *validator.MockValidatorClient, blob.Store, blob.S
 		httpmock.NewBytesResponder(200, tx1.ExtendedBytes()),
 	)
 
-	txMetaStore := memory.New(ulogger.TestLogger{})
+	utxoStore := memory.New(ulogger.TestLogger{})
 	txStore := blobmemory.New()
 	subtreeStore := blobmemory.New()
 
-	validatorClient := &validator.MockValidatorClient{TxMetaStore: txMetaStore}
+	validatorClient := &validator.MockValidatorClient{TxMetaStore: utxoStore}
 
-	return txMetaStore, validatorClient, txStore, subtreeStore, func() {
+	return utxoStore, validatorClient, txStore, subtreeStore, func() {
 		httpmock.DeactivateAndReset()
 	}
 }
@@ -143,7 +144,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	defer deferFunc()
 
 	blockValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
-	blockValidation.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
+	blockValidation.utxoStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
 
 	numberOfItems := 1_024 * 1_024
 
@@ -156,7 +157,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
 
-		_, err := blockValidation.txMetaStore.Create(context.Background(), tx)
+		_, err := blockValidation.utxoStore.Create(context.Background(), tx)
 		require.NoError(t, err)
 	}
 
@@ -199,7 +200,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	initPrometheusMetrics()
 
-	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+	utxoStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
 	defer deferFunc()
 
 	subtree, err := util.NewTreeByLeafCount(1)
@@ -215,7 +216,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 		httpmock.NewBytesResponder(200, nodeBytes),
 	)
 
-	subtreeValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
+	subtreeValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, utxoStore, validatorClient)
 
 	// Create a mock context
 	ctx := context.Background()
