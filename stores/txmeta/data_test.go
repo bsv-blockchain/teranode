@@ -27,7 +27,8 @@ func Test_NewDataFromBytes(t *testing.T) {
 				123,
 				321,
 			},
-			Tx: &bt.Tx{},
+			Tx:         &bt.Tx{},
+			IsCoinbase: true,
 		}
 
 		b := data.Bytes()
@@ -37,6 +38,7 @@ func Test_NewDataFromBytes(t *testing.T) {
 
 		assert.Equal(t, data.Fee, d.Fee)
 		assert.Equal(t, data.SizeInBytes, d.SizeInBytes)
+		assert.True(t, d.IsCoinbase)
 
 		require.Len(t, data.ParentTxHashes, 2)
 		require.Equal(t, len(data.ParentTxHashes), len(d.ParentTxHashes))

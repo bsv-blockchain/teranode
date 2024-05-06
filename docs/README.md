@@ -160,6 +160,12 @@ Overlay Service documentation:
 + [P2P Legacy Service](docs/services/p2pLegacy.md)
 + [Bootstrap (Deprecated)](docs/services/bootstrap.md)
 
+Additionally, the system has a number of test / development utilities:
+
++ [TX Blaster](docs/commands/txBlaster.md)
++ [UTXO Blaster](docs/commands/utxoBlaster.md)
++ [Propagation Blaster](docs/commands/propagationBlaster.md)
++ [Chain Integrity](docs/commands/chainIntegrity.md)
 
 ---
 
@@ -301,21 +307,21 @@ The system uses a number of different store technologies to store data. Differen
   - Subtree Store: For shared subtree data
     - /data/subtreestore
   - TX Store: For shared transaction data
-    - /data/txstore
+    - /data/blockstore
   - These volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services.
-  - Files are deleted from the base directory of each file store after 360 minutes (6 hours).
+  - All files are deleted from the base directory of each file store after 1 hour.
   - No file-locking is provided, so the application must be aware of when a file-write is completed and it is safe to be read by other services.
   - Filesystem consistent-state latency should be in the sub-millisecond range.
   - There is a /s3 subfolder in each filesystem that facilitates automatic transfer of data to an associated S3 bucket.
-  - File data on all objects within the /s3 subfolder are released from the filesystem every hour, within a 30 minute flexible time window. The filesystem metadata will still be available, but the actual file contents will be cleared.
-  - Once data is archived off to S3, the best way to read it again is using S3 direct API calls
+  - File data on all objects within the /s3 subfolder are released from the filesystem every hour. The filesystem metadata will still be available, but the actual file contents will be cleared.
+  - Once data is archived off to S3, the best way to read it again is using S3 direct API calls, but it is also possible to just issue a read to the object in the /s3 subfolder and the contents will be restored transparently, though with some possible delays for data transfer.
   - Linked S3 archive buckets:
-    - ap-ubsv-subtree-store
-    - ap-ubsv-txstore
-    - eu-ubsv-subtree-store
-    - eu-ubsv-txstore
-    - us-ubsv-subtree-store
-    - us-ubsv-txstore
+    - s3://ap-ubsv-subtree-store
+    - s3://ap-ubsv-block-store
+    - s3://eu-ubsv-subtree-store
+    - s3://eu-ubsv-block-store
+    - s3://us-ubsv-subtree-store
+    - s3://us-ubsv-block-store
 
 
 ---
@@ -399,8 +405,7 @@ For naming conventions please check the [Naming Conventions](docs/guidelines/nam
 
 ### 8.3. Error Handling
 
--- TODO
-
+For error handling conventions please check the [Error Handling](docs/guidelines/errorHandling.md).
 
 ---
 

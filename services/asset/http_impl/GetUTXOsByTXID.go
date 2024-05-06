@@ -1,11 +1,10 @@
 package http_impl
 
 import (
-	"errors"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
@@ -45,7 +44,7 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 		b, err := h.repository.GetTransaction(c.Request().Context(), hash)
 		if err != nil {
 			h.logger.Errorf("[Asset_http][%s] GetUTXOsByTXID error getting transaction: %s", hash.String(), err.Error())
-			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -88,7 +87,11 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 				}
 
 				// Get the UTXO for this output.
-				utxoRes, _ := h.repository.GetUtxo(ctx, utxoHash)
+				utxoRes, _ := h.repository.GetUtxo(ctx, &utxo.Spend{
+					Hash: utxoHash,
+					TxID: tx.TxIDChainHash(),
+					Vout: uint32(safeI),
+				})
 
 				if utxoRes != nil && utxoRes.Status != int(utxo.Status_NOT_FOUND) {
 					utxoItem.Status = utxo.Status(utxoRes.Status).String()

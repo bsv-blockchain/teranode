@@ -33,9 +33,10 @@ func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, 
 		return nil
 	}
 
-	if s == "NOT_FOUND" {
-		return utxostore.ErrNotFound
-	}
+	// if s == "NOT_FOUND" {
+	// panic("NOT_FOUND")
+	// return utxostore.ErrNotFound
+	//}
 
 	if strings.HasPrefix(s, "LOCKED") {
 		parts := strings.Split(s[7:], ",")
@@ -62,7 +63,7 @@ func spendUtxo(ctx context.Context, rdb redis.Scripter, spend *utxostore.Spend, 
 			return err
 		}
 
-		return utxostore.NewErrSpent(hash)
+		return utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, hash)
 	}
 
 	return fmt.Errorf("unknown response from spend: %v", res)

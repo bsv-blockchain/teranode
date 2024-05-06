@@ -2,11 +2,10 @@ package http_impl
 
 import (
 	"encoding/hex"
-	"errors"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -28,12 +27,16 @@ func (h *HTTP) GetTransaction(mode ReadMode) func(c echo.Context) error {
 
 		b, err := h.repository.GetTransaction(c.Request().Context(), hash)
 		if err != nil {
-			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
+
+		// sign the response, if the private key is set, ignore error
+		// do this before any output is sent to the client, this adds a signature to the response header
+		_ = h.Sign(c.Response(), hash.CloneBytes())
 
 		prometheusAssetHttpGetTransaction.WithLabelValues("OK", "200").Inc()
 
@@ -53,7 +56,7 @@ func (h *HTTP) GetTransaction(mode ReadMode) func(c echo.Context) error {
 			return c.JSONPretty(200, tx, "  ")
 
 		default:
-			err = errors.New("bad read mode")
+			err = errors.New(errors.ERR_UNKNOWN, "bad read mode")
 			return sendError(c, http.StatusInternalServerError, 52, err)
 		}
 	}

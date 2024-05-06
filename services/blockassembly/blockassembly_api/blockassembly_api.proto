@@ -33,6 +33,9 @@ service BlockAssemblyAPI {
 
   // Reset transaction in block assembly subtree processor.
   rpc ResetBlockAssembly (EmptyMessage) returns (EmptyMessage) {}
+
+  // Get the block assembly state.
+  rpc GetBlockAssemblyState (EmptyMessage) returns (StateMessage) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -94,4 +97,17 @@ message SubmitMiningSolutionRequest {
 // Response indicating whether the submission of a mining solution was successful.
 message SubmitMiningSolutionResponse {
   bool ok = 1; // true if the solution was successfully submitted
+}
+
+// Message containing the state of the block assembly service.
+message StateMessage {
+  string blockAssemblyState = 1; // the state of the block assembly service
+  string subtreeProcessorState = 2; // the state of the block assembly subtree processor
+  uint32 resetWaitCount = 3; // the number of blocks the reset has to wait for
+  uint32 resetWaitTime = 4; // the time in seconds the reset has to wait for
+  uint32 subtreeCount = 5; // the number of subtrees
+  uint64 txCount = 6; // the number of transactions
+  int64 queueCount = 7; // the size of the queue
+  uint32 currentHeight = 8; // the height of the chaintip
+  string currentHash = 9; // the hash of the chaintip
 }

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -297,27 +296,23 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 		// Read any errors from the channel
 		responses := make([]*ResponseWrapper, len(d.propagationServers))
 		var i int
-
-		builderErrors := strings.Builder{}
 		errorCount := 0
-
+		var errs []error
 		for rw := range responseWrapperCh {
 			responses[i] = rw
 			i++
 
 			if rw.Error != nil {
-				builderErrors.WriteString(fmt.Sprintf("\t%s: %v\n", rw.Addr, rw.Error))
+				errs = append(errs, fmt.Errorf("%s: %v", rw.Addr, rw.Error))
 				errorCount++
 			}
 		}
 
-		if errorCount > 0 {
-			d.logger.Errorf("error(s) distributing transaction %s:\n%s", tx.TxIDChainHash().String(), builderErrors.String())
-		}
-
 		failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
 		if failurePercentage > float32(d.failureTolerance) {
-			return responses, errors.Join(propagation.ErrInternal, fmt.Errorf("error sending transaction %s to %.2f%% of the propagation servers", tx.TxIDChainHash().String(), failurePercentage))
+			return responses, errors.Join(propagation.ErrInternal, fmt.Errorf("error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs))
+		} else if errorCount > 0 {
+			d.logger.Errorf("error(s) distributing transaction %s: %v", tx.TxIDChainHash().String(), errs)
 		}
 
 		return responses, nil

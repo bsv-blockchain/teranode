@@ -9,12 +9,14 @@ import (
 	"io"
 	"log"
 	"math"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -78,8 +80,10 @@ type SubtreeProcessor struct {
 	doubleSpendWindowDuration time.Duration
 	subtreeStore              blob.Store
 	utxoStore                 utxostore.Interface
+	txMetaStore               txmeta.Store
 	logger                    ulogger.Logger
 	stat                      *gocore.Stat
+	currentRunningState       atomic.Value
 }
 
 var (
@@ -87,7 +91,7 @@ var (
 )
 
 func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, utxoStore utxostore.Interface,
-	newSubtreeChan chan NewSubtreeRequest, options ...Options) *SubtreeProcessor {
+	txMetaStore txmeta.Store, newSubtreeChan chan NewSubtreeRequest, options ...Options) *SubtreeProcessor {
 
 	initPrometheusMetrics()
 
@@ -133,21 +137,26 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		removeMap:                 util.NewSwissMap(0),
 		doubleSpendWindowDuration: time.Duration(doubleSpendWindowMillis) * time.Millisecond,
 		subtreeStore:              subtreeStore,
-		utxoStore:                 utxoStore, // TODO should this be here? It is needed to remove the coinbase on moveDownBlock
+		utxoStore:                 utxoStore,
+		txMetaStore:               txMetaStore,
 		logger:                    logger,
 		stat:                      gocore.NewStat("subtreeProcessor").NewStat("Add", false),
+		currentRunningState:       atomic.Value{},
 	}
+	stp.currentRunningState.Store("starting")
 
 	for _, opts := range options {
 		opts(stp)
 	}
 
+	stp.currentRunningState.Store("running")
 	go func() {
 		var txReq *txIDAndFee
 		var err error
 		for {
 			select {
 			case getSubtreesChan := <-stp.getSubtreesChan:
+				stp.currentRunningState.Store("getSubtrees")
 				logger.Infof("[SubtreeProcessor] get current subtrees")
 				chainedCount := stp.chainedSubtreeCount.Load()
 				completeSubtrees := make([]*util.Subtree, 0, chainedCount)
@@ -183,14 +192,18 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 
 				getSubtreesChan <- completeSubtrees
 				logger.Infof("[SubtreeProcessor] get current subtrees DONE")
+				stp.currentRunningState.Store("running")
 
 			case reorgReq := <-stp.reorgBlockChan:
+				stp.currentRunningState.Store("reorg")
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor: %d, %d", len(reorgReq.moveDownBlocks), len(reorgReq.moveUpBlocks))
 				err = stp.reorgBlocks(ctx, reorgReq.moveDownBlocks, reorgReq.moveUpBlocks)
 				reorgReq.errChan <- err
 				logger.Infof("[SubtreeProcessor] reorgReq subtree processor DONE: %d, %d", len(reorgReq.moveDownBlocks), len(reorgReq.moveUpBlocks))
+				stp.currentRunningState.Store("running")
 
 			case moveUpReq := <-stp.moveUpBlockChan:
+				stp.currentRunningState.Store("moveUpBlock")
 				logger.Infof("[SubtreeProcessor][%s] moveUpBlock subtree processor", moveUpReq.block.String())
 				err = stp.moveUpBlock(ctx, moveUpReq.block, false)
 				if err == nil {
@@ -198,14 +211,20 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 				}
 				moveUpReq.errChan <- err
 				logger.Infof("[SubtreeProcessor][%s] moveUpBlock subtree processor DONE", moveUpReq.block.String())
+				stp.currentRunningState.Store("running")
 
 			case <-stp.deDuplicateTransactionsCh:
+				stp.currentRunningState.Store("deDuplicateTransactions")
 				stp.deDuplicateTransactions()
+				stp.currentRunningState.Store("running")
 
 			case resetBlocks := <-stp.resetCh:
+				stp.currentRunningState.Store("resetBlocks")
 				stp.reset(resetBlocks.blockHeader, resetBlocks.moveDownBlocks, resetBlocks.moveUpBlocks, resetBlocks.responseCh)
+				stp.currentRunningState.Store("running")
 
 			default:
+				stp.currentRunningState.Store("dequeue")
 				nrProcessed := 0
 				mapLength := stp.removeMap.Length()
 				// set the validFromMillis to the current time minus the double spend window - so in the past
@@ -238,11 +257,16 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 						break
 					}
 				}
+				stp.currentRunningState.Store("running")
 			}
 		}
 	}()
 
 	return stp
+}
+
+func (stp *SubtreeProcessor) GetCurrentRunningState() string {
+	return stp.currentRunningState.Load().(string)
 }
 
 // Reset resets the subtree processor, removing all subtrees and transactions
@@ -284,12 +308,30 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 
 	for _, block := range moveDownBlocks {
 		if err := stp.utxoStore.Delete(context.Background(), block.CoinbaseTx); err != nil {
-			responseCh <- ResetResponse{
-				MovedDownBlocks: movedDownBlocks,
-				MovedUpBlocks:   movedUpBlocks,
-				Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
+			// no need to error out if the key doesn't exist anyway
+			if !errors.Is(err, utxostore.ErrNotFound) {
+				responseCh <- ResetResponse{
+					MovedDownBlocks: movedDownBlocks,
+					MovedUpBlocks:   movedUpBlocks,
+					Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
+				}
+				return
 			}
 		}
+
+		// delete tx meta
+		if err := stp.txMetaStore.Delete(context.Background(), block.CoinbaseTx.TxIDChainHash()); err != nil {
+			// no need to error out if the key doesn't exist anyway
+			if !errors.Is(err, txmeta.NewErrTxmetaNotFound(block.CoinbaseTx.TxIDChainHash())) {
+				responseCh <- ResetResponse{
+					MovedDownBlocks: movedDownBlocks,
+					MovedUpBlocks:   movedUpBlocks,
+					Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting tx meta data for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
+				}
+				return
+			}
+		}
+
 		stp.currentBlockHeader = block.Header
 		movedDownBlocks = append(movedDownBlocks, block)
 	}
@@ -301,6 +343,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 				MovedUpBlocks:   movedUpBlocks,
 				Err:             fmt.Errorf("[SubtreeProcessor][Reset] error processing coinbase utxos: %s", err.Error()),
 			}
+			return
 		}
 		stp.currentBlockHeader = block.Header
 		movedUpBlocks = append(movedUpBlocks, block)
@@ -556,6 +599,11 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 				return fmt.Errorf("[moveDownBlock][%s] error deleting utxos for tx %s: %s", block.String(), block.CoinbaseTx.String(), err.Error())
 			}
 
+			// delete tx meta data
+			if err = stp.txMetaStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
+				return fmt.Errorf("[moveDownBlock][%s] error deleting tx meta data for tx %s: %s", block.String(), block.CoinbaseTx.String(), err.Error())
+			}
+
 			// skip the first transaction of the first subtree (coinbase)
 			for i := 1; i < len(subtreeNode); i++ {
 				_ = stp.addNode(subtreeNode[i], true)
@@ -607,6 +655,8 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 
 		err := recover()
 		if err != nil {
+			// print the stack trace
+			stp.logger.Errorf("%s", debug.Stack())
 			stp.logger.Errorf("[moveUpBlock][%s] with block: %s", block.String(), err)
 		}
 	}()
@@ -842,9 +892,14 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return fmt.Errorf("error extracting coinbase height via utxo store: %v", err)
 	}
 
-	if err := stp.utxoStore.Store(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
+	if err = stp.utxoStore.Store(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
 		// error will be handled below
 		stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
+	}
+
+	if _, err = stp.txMetaStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
+		// error will be handled below
+		stp.logger.Errorf("[SubtreeProcessor] error storing txmeta: %v", err)
 	}
 
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)

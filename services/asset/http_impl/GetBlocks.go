@@ -1,11 +1,10 @@
 package http_impl
 
 import (
-	"errors"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"net/http"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/labstack/echo/v4"
 	"github.com/ordishs/gocore"
 )
@@ -29,7 +28,7 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 	// First we find the latest block height
 	_, blockMeta, err := h.repository.GetBestBlockHeader(c.Request().Context())
 	if err != nil {
-		if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
 		} else {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -43,7 +42,7 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 
 	blocks, err := h.repository.GetLastNBlocks(c.Request().Context(), int64(limit), includeOrphans, uint32(fromHeight))
 	if err != nil {
-		if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
 		} else {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

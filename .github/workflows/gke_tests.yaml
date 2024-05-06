@@ -27,22 +27,27 @@ jobs:
       - name: Run Go tests
         run: make longtests
 
-      - uses: twingate/github-action@v1
-        with:
-          service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
   sonarqube:
     name: Sonarqube
     runs-on: ubsv-runner
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - uses: twingate/github-action@v1
       with:
         service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
 
     - name: SonarQube Scan
-      uses: sonarsource/sonarqube-scan-action@master
+      uses: sonarsource/sonarqube-scan-action@v2.0.1
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: https://sonarqube.ubsv.dev
+
+    - name: SonarQube Quality Gate check
+      uses: sonarsource/sonarqube-quality-gate-action@master
+      timeout-minutes: 10
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: https://sonarqube.ubsv.dev
+      continue-on-error: true

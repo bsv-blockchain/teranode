@@ -2,108 +2,143 @@ package blockpersister
 
 import (
 	"context"
-	"fmt"
-	"net/http"
-	"strings"
+	"net/url"
 
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/google/uuid"
 	"github.com/ordishs/gocore"
 )
 
 // Server type carries the logger within it
 type Server struct {
 	logger       ulogger.Logger
+	blockStore   blob.Store
 	subtreeStore blob.Store
-	txMetaStore  txmeta.Store
-	bp           *blockPersister
+	txMetaStore  txmeta_store.Store
+	stats        *gocore.Stat
 }
 
-// New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, subtreeStore blob.Store, txMetaStore txmeta.Store) *Server {
-	initPrometheusMetrics()
+func New(
+	ctx context.Context,
+	logger ulogger.Logger,
+	blockStore blob.Store,
+	subtreeStore blob.Store,
+	txMetaStore txmeta.Store,
+) *Server {
 
-	return &Server{
+	u := &Server{
 		logger:       logger,
+		blockStore:   blockStore,
 		subtreeStore: subtreeStore,
 		txMetaStore:  txMetaStore,
+		stats:        gocore.NewStat("blockpersister"),
 	}
+
+	// clean old files from working dir
+	// dir, ok := gocore.Config().Get("blockPersister_workingDir")
+	// if ok {
+	// 	logger.Infof("[BlockPersister] Cleaning old files from working dir: %s", dir)
+	// 	files, err := os.ReadDir(dir)
+	// 	if err != nil {
+	// 		logger.Fatalf("error reading working dir: %v", err)
+	// 	}
+	// 	for _, file := range files {
+	// 		fileInfo, err := file.Info()
+	// 		if err != nil {
+	// 			logger.Errorf("error reading file info: %v", err)
+	// 		}
+	// 		if time.Since(fileInfo.ModTime()) > 30*time.Minute {
+	// 			logger.Infof("removing old file: %s", file.Name())
+	// 			if err = os.Remove(path.Join(dir, file.Name())); err != nil {
+	// 				logger.Errorf("error removing old file: %v", err)
+	// 			}
+	// 		}
+	// 	}
+	// }
+
+	return u
 }
 
-func (ps *Server) Health(_ context.Context) (int, string, error) {
+func (u *Server) Health(ctx context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (ps *Server) Init(ctx context.Context) (err error) {
-
-	persistURL, err, ok := gocore.Config().GetURL("blockPersister_persistURL")
-	if err != nil || !ok {
-		return fmt.Errorf("error getting blockPersister_persistURL URL: %w", err)
-	}
-
-	ps.bp = newBlockPersister(ctx, ps.logger, persistURL, ps.subtreeStore, ps.txMetaStore)
+func (u *Server) Init(ctx context.Context) (err error) {
+	initPrometheusMetrics()
 
 	return nil
 }
 
-func (ps *Server) Start(ctx context.Context) (err error) {
-	// add a http handler that allows us to request a block to be processed
-	http.Handle("/blockpersister/block/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hashStr := strings.TrimPrefix(r.URL.Path, "/blockpersister/block/")
-
-		hash, err := chainhash.NewHashFromStr(hashStr)
-		if err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(err.Error() + "\n"))
-			return
-		}
-
-		client, err := blockchain.NewClient(ctx, ps.logger)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(err.Error() + "\n"))
-			return
-		}
-
-		block, err := client.GetBlock(ctx, hash)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(err.Error() + "\n"))
-			return
-		}
-
-		blockBytes, err := block.Bytes()
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(err.Error() + "\n"))
-			return
-		}
-
-		go func() {
-			_ = ps.bp.blockFinalHandler(context.Background(), nil, blockBytes)
-		}()
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
-	}))
-
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
+// Start function
+func (u *Server) Start(ctx context.Context) error {
+	blocksFinalKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
 	if err == nil && ok {
-		ps.logger.Infof("[BlockPersister] Starting subtree Kafka on address: %s, with %d workers", kafkaURL.String(), 1)
+		u.logger.Infof("Starting Kafka consumer for blocksFinal messages")
 
-		util.StartKafkaListener(ctx, ps.logger, kafkaURL, 1, "BlockPersister", "blockpersister", ps.bp.blockFinalHandler)
+		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
+		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
+		groupID := "blockpersister-" + uuid.New().String()
+
+		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the blocksFinal messages.
+		go u.startKafkaListener(ctx, blocksFinalKafkaURL, groupID, 1, func(msg util.KafkaMessage) {
+			u.blocksFinalHandler(msg)
+		})
 	}
+
+	// http.HandleFunc("GET /block/", func(w http.ResponseWriter, req *http.Request) {
+	// 	hashStr := req.PathValue("hash")
+
+	// 	if hashStr == "" {
+	// 		http.Error(w, "missing hash", http.StatusBadRequest)
+	// 		return
+	// 	}
+
+	// 	hash, err := chainhash.NewHashFromStr(hashStr)
+	// 	if err != nil {
+	// 		http.Error(w, "invalid hash", http.StatusBadRequest)
+	// 		return
+	// 	}
+
+	// 	client, err := blockchain.NewClient(req.Context(), u.logger)
+	// 	if err != nil {
+	// 		http.Error(w, "failed to create blockchain client", http.StatusInternalServerError)
+	// 		return
+	// 	}
+
+	// 	block, err := client.GetBlock(req.Context(), hash)
+	// 	if err != nil {
+	// 		http.Error(w, "failed to get block", http.StatusInternalServerError)
+	// 		return
+	// 	}
+
+	// 	blockBytes, err := block.Bytes()
+	// 	if err != nil {
+	// 		http.Error(w, "failed to get block bytes", http.StatusInternalServerError)
+	// 		return
+	// 	}
+
+	// 	u.persistBlock(req.Context(), hash, blockBytes)
+
+	// 	w.WriteHeader(http.StatusOK)
+	// })
 
 	<-ctx.Done()
 
 	return nil
 }
 
-// Stop function
-func (ps *Server) Stop(_ context.Context) (err error) {
+func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage)) {
+	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
+
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, fn); err != nil {
+		u.logger.Errorf("Failed to start Kafka listener: %v", err)
+	}
+}
+
+func (u *Server) Stop(_ context.Context) error {
 	return nil
 }

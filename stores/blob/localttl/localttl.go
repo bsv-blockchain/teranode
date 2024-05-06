@@ -53,7 +53,7 @@ func (l *LocalTTL) Close(_ context.Context) error {
 }
 
 func (l *LocalTTL) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	if setOptions.TTL > 0 {
 		// set the value in the ttl store
@@ -66,7 +66,7 @@ func (l *LocalTTL) SetFromReader(ctx context.Context, key []byte, reader io.Read
 
 func (l *LocalTTL) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
 	// l.logger.Debugf("[localTTL] Set called %v\n%s\n%s\n", utils.ReverseAndHexEncodeSlice(key), stack.Stack(), ctx.Value("stack"))
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	if setOptions.TTL > 0 {
 		// set the value in the ttl store

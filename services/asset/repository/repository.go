@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"io"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
@@ -92,7 +91,7 @@ func (r *Repository) Health(ctx context.Context) (int, string, error) {
 	}
 
 	if len(errs) > 0 {
-		return -1, sb.String(), errors.New("Health errors occurred")
+		return -1, sb.String(), errors.New(errors.ERR_UNKNOWN, "Health errors occurred")
 	}
 
 	return 0, sb.String(), nil
@@ -174,6 +173,17 @@ func (r *Repository) GetLastNBlocks(ctx context.Context, n int64, includeOrphans
 	return blockInfo, nil
 }
 
+func (r *Repository) GetBlocks(ctx context.Context, hash *chainhash.Hash, n uint32) ([]*model.Block, error) {
+	r.logger.Debugf("[Repository] GetNBlocks: %d", n)
+
+	blocks, err := r.BlockchainClient.GetBlocks(ctx, hash, n)
+	if err != nil {
+		return nil, err
+	}
+
+	return blocks, nil
+}
+
 func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
 	r.logger.Debugf("[Repository] GetBlockHeaders: %s", hash.String())
 	blockHeaders, heights, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, numberOfHeaders)
@@ -231,7 +241,7 @@ func (r *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (
 	}
 
 	if len(subtreeBytes) != 56 {
-		return nil, 0, ubsverrors.ErrNotFound
+		return nil, 0, errors.ErrNotFound
 	}
 
 	subtree := &util.Subtree{}
@@ -255,8 +265,8 @@ func (r *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (
 	return subtree, int(numNodes), nil
 }
 
-func (r *Repository) GetUtxoBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
-	resp, err := r.GetUtxo(ctx, hash)
+func (r *Repository) GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byte, error) {
+	resp, err := r.GetUtxo(ctx, spend)
 	if err != nil {
 		return nil, err
 	}
@@ -264,9 +274,9 @@ func (r *Repository) GetUtxoBytes(ctx context.Context, hash *chainhash.Hash) ([]
 	return resp.SpendingTxID.CloneBytes(), nil
 }
 
-func (r *Repository) GetUtxo(ctx context.Context, hash *chainhash.Hash) (*utxo.Response, error) {
-	r.logger.Debugf("[Repository] GetUtxo: %s", hash.String())
-	resp, err := r.UtxoStore.Get(ctx, &utxo.Spend{Hash: hash})
+func (r *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.Response, error) {
+	r.logger.Debugf("[Repository] GetUtxo: %s", spend.Hash.String())
+	resp, err := r.UtxoStore.Get(ctx, spend)
 	if err != nil {
 		return nil, err
 	}

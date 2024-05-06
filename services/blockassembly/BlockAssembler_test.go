@@ -58,12 +58,6 @@ var (
 	hash3 = tx3.TxIDChainHash()
 	hash4 = tx4.TxIDChainHash()
 	hash5 = tx5.TxIDChainHash()
-
-	utxo1, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000001")
-	utxo2, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000002")
-	utxo3, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000003")
-	utxo4, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000004")
-	// utxo5, _ = chainhash.NewHashFromStr("1000000000000000000000000000000000000000000000000000000000000005")
 )
 
 func newTx(lockTime uint32) *bt.Tx {
@@ -81,7 +75,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		require.NotNil(t, testItems)
 
 		testItems.blockAssembler.startChannelListeners(ctx)
-		testItems.blockAssembler.bestBlockHeader = model.GenesisBlockHeader
+		testItems.blockAssembler.bestBlockHeader.Store(model.GenesisBlockHeader)
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -206,7 +200,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		require.NotNil(t, items)
 
-		items.blockAssembler.bestBlockHeader = blockHeader1
+		items.blockAssembler.bestBlockHeader.Store(blockHeader1)
 		_, _, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), nil)
 		require.Error(t, err)
 	})
@@ -216,7 +210,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		// set the cached BlockAssembler items to the correct values
-		items.blockAssembler.bestBlockHeader = blockHeader4
+		items.blockAssembler.bestBlockHeader.Store(blockHeader4)
 		items.blockAssembler.currentChain = []*model.BlockHeader{
 			blockHeader4,
 			blockHeader3,
@@ -264,7 +258,7 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		// set the cached BlockAssembler items to the correct values
-		items.blockAssembler.bestBlockHeader = blockHeader2
+		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
 		items.blockAssembler.currentChain = []*model.BlockHeader{blockHeader2, blockHeader1}
 		items.blockAssembler.currentChainMap = map[chainhash.Hash]uint32{
 			*blockHeader1.Hash(): 1,
@@ -316,13 +310,22 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 		context.Background(),
 		ulogger.TestLogger{},
 		items.utxoStore,
+		items.txMetaStore,
 		items.blobStore,
 		items.blockchainClient,
 		items.newSubtreeChan,
 	)
 
 	// overwrite default subtree processor with a new one
-	ba.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, items.newSubtreeChan, subtreeprocessor.WithBatcherSize(1))
+	ba.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(
+		context.Background(),
+		ulogger.TestLogger{},
+		nil,
+		nil,
+		nil,
+		items.newSubtreeChan,
+		subtreeprocessor.WithBatcherSize(1),
+	)
 
 	items.blockAssembler = ba
 

@@ -148,7 +148,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 }
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
-	s.logger.Warnf("setting block height to %d", blockHeight)
+	s.logger.Debugf("setting block height to %d", blockHeight)
 	s.blockHeight.Store(blockHeight)
 	return nil
 }
@@ -444,7 +444,7 @@ func (s *Store) Spend(cntxt context.Context, spends []*utxostore.Spend) (err err
 				if utxo.SpendingTxID.IsEqual(spend.SpendingTxID) {
 					return nil
 				} else {
-					return utxostore.NewErrSpent(utxo.SpendingTxID)
+					return utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, utxo.SpendingTxID)
 				}
 			} else if !util.ValidLockTime(utxo.LockTime, s.blockHeight.Load()) {
 				return utxostore.NewErrLockTime(utxo.LockTime, s.blockHeight.Load())

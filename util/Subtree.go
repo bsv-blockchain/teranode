@@ -232,6 +232,21 @@ func (st *Subtree) RootHash() *chainhash.Hash {
 	return st.rootHash
 }
 
+func (st *Subtree) RootHashWithReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes uint64) (*chainhash.Hash, error) {
+	// clone the subtree, so we do not overwrite anything in it
+	subtreeClone := st.Duplicate()
+	subtreeClone.ReplaceRootNode(node, fee, sizeInBytes)
+
+	// calculate rootHash
+	store, err := BuildMerkleTreeStoreFromBytes(subtreeClone.Nodes)
+	if err != nil {
+		return nil, err
+	}
+
+	rootHash := chainhash.Hash((*store)[len(*store)-1][:])
+	return &rootHash, nil
+}
+
 func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {
 	// return all the ids that are in st.Nodes, but not in ids
 	diff := make([]SubtreeNode, 0, 1_000)

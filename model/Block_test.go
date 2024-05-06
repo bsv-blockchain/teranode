@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -37,12 +38,13 @@ func TestBlock_Bytes(t *testing.T) {
 			TransactionCount: 1,
 			SizeInBytes:      123,
 			Subtrees:         []*chainhash.Hash{},
+			Height:           800000,
 		}
 
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
 
-		assert.Equal(t, 93, len(blockBytes))
+		assert.Equal(t, 98, len(blockBytes))
 	})
 
 	t.Run("test block bytes", func(t *testing.T) {
@@ -104,6 +106,77 @@ func TestBlock_Bytes(t *testing.T) {
 		assert.Equal(t, block.Subtrees[1].String(), blockFromBytes.Subtrees[1].String())
 		assert.Equal(t, uint64(1), block.TransactionCount)
 		assert.Equal(t, uint64(215), block.SizeInBytes)
+	})
+
+	t.Run("test block reader - subtrees", func(t *testing.T) {
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		block := &Block{
+			Header:           blockHeader,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			SizeInBytes:      uint64(len(coinbaseTx.Bytes())) + 80 + util.VarintSize(1),
+			Subtrees: []*chainhash.Hash{
+				hash1,
+				hash2,
+			},
+		}
+
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		buf := bytes.NewReader(blockBytes)
+		blockFromBytes, err := NewBlockFromReader(buf)
+		require.NoError(t, err)
+
+		assert.Len(t, blockFromBytes.Subtrees, 2)
+		assert.Equal(t, block.Subtrees[0].String(), blockFromBytes.Subtrees[0].String())
+		assert.Equal(t, block.Subtrees[1].String(), blockFromBytes.Subtrees[1].String())
+		assert.Equal(t, uint64(1), block.TransactionCount)
+		assert.Equal(t, uint64(215), block.SizeInBytes)
+	})
+
+	t.Run("test multiple blocks reader - subtrees", func(t *testing.T) {
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		block := &Block{
+			Header:           blockHeader,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			SizeInBytes:      uint64(len(coinbaseTx.Bytes())) + 80 + util.VarintSize(1),
+			Subtrees: []*chainhash.Hash{
+				hash1,
+				hash2,
+			},
+		}
+
+		blockBytes, err := block.Bytes()
+		require.NoError(t, err)
+
+		blockBytes = append(blockBytes, blockBytes...)
+		blockBytes = append(blockBytes, blockBytes...)
+
+		buf := bytes.NewReader(blockBytes)
+
+		// read 4 blocks
+		for i := 0; i < 4; i++ {
+			blockFromBytes, err := NewBlockFromReader(buf)
+			require.NoError(t, err)
+
+			assert.Len(t, blockFromBytes.Subtrees, 2)
+			assert.Equal(t, block.Subtrees[0].String(), blockFromBytes.Subtrees[0].String())
+			assert.Equal(t, block.Subtrees[1].String(), blockFromBytes.Subtrees[1].String())
+			assert.Equal(t, uint64(1), block.TransactionCount)
+			assert.Equal(t, uint64(215), block.SizeInBytes)
+		}
+
+		// no more blocks to read
+		_, err = NewBlockFromReader(buf)
+		require.Error(t, err)
 	})
 }
 

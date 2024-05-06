@@ -13,9 +13,9 @@ func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript []byte, 
 		return nil, fmt.Errorf("locking script is nil")
 	}
 
-	if satoshis == 0 {
-		return nil, fmt.Errorf("satoshis is 0")
-	}
+	// if satoshis == 0 {
+	// 	return nil, fmt.Errorf("satoshis is 0")
+	// }
 
 	utxoHash := make([]byte, 0, 256)
 	utxoHash = append(utxoHash, previousTxid.CloneBytes()...)

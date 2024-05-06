@@ -211,8 +211,8 @@ func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.Mi
 	return nil
 }
 
-func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx) (*txmeta.Data, error) {
-	txMeta, err := t.txMetaStore.Create(ctx, tx)
+func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, lockTime ...uint32) (*txmeta.Data, error) {
+	txMeta, err := t.txMetaStore.Create(ctx, tx, lockTime...)
 	if err != nil {
 		return txMeta, err
 	}

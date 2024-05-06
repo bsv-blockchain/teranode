@@ -3,14 +3,13 @@ package badger
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/dgraph-io/badger/v3"
 	"github.com/ordishs/go-utils"
@@ -118,14 +117,7 @@ func (s *Badger) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 		return fmt.Errorf("failed to read data from reader: %w", err)
 	}
 
-	setOptions := options.NewSetOptions(opts...)
-
-	storeKey := key
-	if setOptions.Extension != "" {
-		storeKey = append(storeKey, []byte(setOptions.Extension)...)
-	}
-
-	return s.Set(ctx, storeKey, b, opts...)
+	return s.Set(ctx, key, b, opts...)
 }
 
 func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
@@ -138,7 +130,8 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 	traceSpan := tracing.Start(ctx, "Badger:Set")
 	defer traceSpan.Finish()
 
-	setOptions := options.NewSetOptions(opts...)
+	// This is used to read the old value from the store
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := key
 	if setOptions.Extension != "" {
@@ -171,7 +164,7 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts
 	traceSpan := tracing.Start(ctx, "Badger:SetTTL")
 	defer traceSpan.Finish()
 
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := key
 	if setOptions.Extension != "" {
@@ -189,7 +182,7 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts
 }
 
 func (s *Badger) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := key
 	if setOptions.Extension != "" {
@@ -214,7 +207,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 	traceSpan := tracing.Start(ctx, "Badger:Get")
 	defer traceSpan.Finish()
 
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := hash
 	if setOptions.Extension != "" {
@@ -232,7 +225,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 		data, err := tx.Get(storeKey)
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, fmt.Sprintf("badger key not found [%s]", utils.ReverseAndHexEncodeSlice(hash)), err)
+				return errors.New(errors.ERR_NOT_FOUND, fmt.Sprintf("badger key not found [%s]", utils.ReverseAndHexEncodeSlice(hash)), err)
 			}
 			traceSpan.RecordError(err)
 			return err
@@ -274,7 +267,7 @@ func (s *Badger) Exists(ctx context.Context, hash []byte, opts ...options.Option
 	traceSpan := tracing.Start(ctx, "Badger:Exists")
 	defer traceSpan.Finish()
 
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := hash
 	if setOptions.Extension != "" {
@@ -316,7 +309,7 @@ func (s *Badger) Del(ctx context.Context, hash []byte, opts ...options.Options) 
 	traceSpan := tracing.Start(ctx, "Badger:Del")
 	defer traceSpan.Finish()
 
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := hash
 	if setOptions.Extension != "" {

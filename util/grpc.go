@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
@@ -12,7 +13,7 @@ import (
 	"google.golang.org/grpc/reflection"
 )
 
-func StartGRPCServer(ctx context.Context, l ulogger.Logger, serviceName string, register func(server *grpc.Server)) error {
+func StartGRPCServer(ctx context.Context, l ulogger.Logger, serviceName string, register func(server *grpc.Server), maxConnectionAge ...time.Duration) error {
 	grpcAddress := fmt.Sprintf("%s_grpcListenAddress", serviceName)
 	address, ok := gocore.Config().Get(grpcAddress)
 	if !ok {
@@ -36,13 +37,19 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, serviceName string, 
 		}
 	}
 
-	grpcServer, err := getGRPCServer(&ConnectionOptions{
+	connectionOptions := &ConnectionOptions{
 		OpenTracing:   gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:    gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
 		SecurityLevel: securityLevel,
 		CertFile:      certFile,
 		KeyFile:       keyFile,
-	})
+	}
+
+	if len(maxConnectionAge) > 0 {
+		connectionOptions.MaxConnectionAge = maxConnectionAge[0]
+	}
+
+	grpcServer, err := getGRPCServer(connectionOptions)
 	if err != nil {
 		return fmt.Errorf("[%s] could not create GRPC server [%w]", serviceName, err)
 	}

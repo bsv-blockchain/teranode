@@ -1,0 +1,35 @@
+@startuml PropagationBlaster Init and Start Sequence
+
+participant "Main\nApplication" as Main
+participant "HTTP\nServer" as HTTPServer
+entity "Worker\nRoutines" as Workers
+participant "Propagation\nService" as PropagationService
+
+== Initialization (Init Function) ==
+Main -> Main: Get configuration values\n(profilerAddr, prometheusEndpoint)
+Main -> HTTPServer: Setup for metrics and pprof
+HTTPServer --> Main: HTTP Server Running
+
+== Start Function ==
+Main -> Main: Parse command-line flags\n(workers, broadcast, buffer_size)
+
+Main -> Main: Log service stats\nand version info
+alt HTTP Broadcast
+    Main -> Main: Get "propagation_httpAddresses"\nReturn HTTP URL
+    Main -> Main: Initialize HTTP client\nwith URL
+else gRPC Broadcast
+    Main -> Main: Get "propagation_grpcAddresses"\nReturn gRPC address
+    Main -> PropagationService: Establish gRPC connection
+    PropagationService --> Main: gRPC Client Ready
+end
+Main -> Workers: Launch worker goroutines\nbased on workerCount
+
+== Worker Routine ==
+loop Each Worker
+    Workers -> Workers: Generate and sign transactions
+
+    Workers -> PropagationService: Send Transaction
+
+end
+
+@enduml

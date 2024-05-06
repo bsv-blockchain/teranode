@@ -5,6 +5,9 @@ package aerospikemap
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"testing"
+
 	aero "github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospikemap"
@@ -12,10 +15,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"net/url"
-	"testing"
 )
 
 const (
@@ -24,12 +26,30 @@ const (
 	aerospikeNamespace = "test"      // test
 )
 
+var (
+	coinbaseKey *aero.Key
+)
+
 func TestAerospike(t *testing.T) {
+	gocore.Config().Set("utxostore_spendBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "false")
+	internalTest(t)
+}
+
+func TestAerospikeBatching(t *testing.T) {
+	gocore.Config().Set("utxostore_spendBatcherEnabled", "true")
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "true")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "true")
+	internalTest(t)
+}
+
+func internalTest(t *testing.T) {
 	// raw client to be able to do gets and cleanup
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s", aerospikeHost, aerospikePort, aerospikeNamespace))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=txmeta-test", aerospikeHost, aerospikePort, aerospikeNamespace))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -39,17 +59,24 @@ func TestAerospike(t *testing.T) {
 
 	//var utxoDb utxostore.Interface
 	utxoDb, err := aerospikemap.New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
 	_ = utxoDb
 
 	tx, _ := bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
 	hash := tx.TxIDChainHash()
 	parentTxHash := tx.Inputs[0].PreviousTxIDChainHash()
 
+	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff19031404002f6d332d617369612fdf5128e62eda1a07e94dbdbdffffffff0500ca9a3b000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00ca9a3b000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00ca9a3b000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00ca9a3b000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00ca9a3b000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88ac00000000")
+	require.NoError(t, err)
+
+	coinbaseKey, err = aero.NewKey(aerospikeNamespace, db.setName, coinbaseTx.TxIDChainHash()[:])
+	require.NoError(t, err)
+
 	blockID := uint32(123)
 	blockID2 := uint32(124)
 
 	var key *aero.Key
-	key, err = aero.NewKey("test", setName, hash[:])
+	key, err = aero.NewKey("test", db.setName, hash[:])
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -61,7 +88,7 @@ func TestAerospike(t *testing.T) {
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key)
 
-		// txs are stored when utxos are created, not in tx meta
+		// txs are stored when txmeta is created, not in utxo
 		err = utxoDb.Store(context.Background(), tx)
 		require.NoError(t, err)
 
@@ -74,14 +101,19 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint32(1), value.Generation)
 		assert.Equal(t, uint64(215), uint64(value.Bins["fee"].(int)))
-		assert.Equal(t, uint64(328), uint64(value.Bins["size"].(int)))
-		assert.Len(t, value.Bins["parentTxHashes"].([]interface{}), 1)
-		assert.Equal(t, []interface{}{parentTxHash[:]}, value.Bins["parentTxHashes"])
+		assert.Equal(t, uint64(328), uint64(value.Bins["sizeInBytes"].(int)))
+		assert.Len(t, value.Bins["parentTxHashes"].([]byte), 32)
+		binParentTxHash := chainhash.Hash(value.Bins["parentTxHashes"].([]byte))
+		assert.Equal(t, parentTxHash[:], binParentTxHash.CloneBytes())
 		assert.Equal(t, []interface{}{}, value.Bins["blockIDs"])
 
-		_, err = db.Create(context.Background(), tx)
+		err = utxoDb.Store(context.Background(), tx)
 		// no-op, so should be nil
 		require.NoError(t, err)
+
+		_, err = db.Create(context.Background(), tx)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, txmeta.NewErrTxmetaAlreadyExists(hash))
 
 		err = db.SetMined(context.Background(), hash, blockID)
 		require.NoError(t, err)
@@ -100,6 +132,24 @@ func TestAerospike(t *testing.T) {
 		require.Equal(t, uint32(3), value.Generation)
 		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 2)
 		assert.Equal(t, []interface{}{int(blockID), int(blockID2)}, value.Bins["blockIDs"].([]interface{}))
+		assert.False(t, value.Bins["isCoinbase"].(bool))
+	})
+
+	t.Run("aerospike store coinbase", func(t *testing.T) {
+		cleanDB(t, client, key)
+		_, err = db.Create(context.Background(), coinbaseTx)
+		require.NoError(t, err)
+
+		var value *aero.Record
+		// raw aerospike get
+		value, err = client.Get(util.GetAerospikeReadPolicy(), coinbaseKey)
+		require.NoError(t, err)
+		assert.True(t, value.Bins["isCoinbase"].(bool))
+
+		var txMeta *txmeta.Data
+		txMeta, err = db.Get(context.Background(), coinbaseTx.TxIDChainHash())
+		require.NoError(t, err)
+		assert.True(t, txMeta.IsCoinbase)
 	})
 
 	t.Run("aerospike get", func(t *testing.T) {
@@ -136,5 +186,7 @@ func TestAerospike(t *testing.T) {
 func cleanDB(t *testing.T, client *aero.Client, key *aero.Key) {
 	policy := util.GetAerospikeWritePolicy(0, 0)
 	_, err := client.Delete(policy, key)
+	require.NoError(t, err)
+	_, err = client.Delete(policy, coinbaseKey)
 	require.NoError(t, err)
 }

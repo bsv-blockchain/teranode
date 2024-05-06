@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
@@ -157,6 +157,7 @@ func (s *Store) Get(cntxt context.Context, hash *chainhash.Hash) (*txmeta.Data, 
 		SizeInBytes:    sizeInBytes,
 		ParentTxHashes: parentTxHashes,
 		BlockIDs:       blockIDs,
+		IsCoinbase:     tx.IsCoinbase(),
 	}, nil
 }
 
@@ -165,8 +166,8 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 	for _, item := range items {
 		data, err := s.Get(ctx, &item.Hash)
 		if err != nil {
-			if uerr, ok := err.(*ubsverrors.Error); ok {
-				if uerr.Code == ubsverrors.ErrorConstants_NOT_FOUND {
+			if uerr, ok := err.(*errors.Error); ok {
+				if uerr.Code == errors.ERR_NOT_FOUND {
 					continue
 				}
 			}
@@ -178,7 +179,7 @@ func (s *Store) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingTx
 	return nil
 }
 
-func (s *Store) Create(cntxt context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (s *Store) Create(cntxt context.Context, tx *bt.Tx, lockTime ...uint32) (*txmeta.Data, error) {
 	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
 	defer cancelTimeout()
 

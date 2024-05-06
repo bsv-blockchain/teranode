@@ -43,6 +43,15 @@ func (c LocalClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*
 	return block, nil
 }
 
+func (c LocalClient) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
+	blocks, err := c.store.GetBlocks(ctx, blockHash, numberOfBlocks)
+	if err != nil {
+		return nil, err
+	}
+
+	return blocks, nil
+}
+
 func (c LocalClient) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
 	block, err := c.store.GetBlockByHeight(ctx, height)
 	if err != nil {

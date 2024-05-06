@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -54,8 +54,8 @@ func (m *Memory) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingT
 	for _, item := range items {
 		data, err := m.Get(ctx, &item.Hash)
 		if err != nil {
-			if uerr, ok := err.(*ubsverrors.Error); ok {
-				if uerr.Code == ubsverrors.ErrorConstants_NOT_FOUND {
+			if uerr, ok := err.(*errors.Error); ok {
+				if uerr.Code == errors.ERR_NOT_FOUND {
 					continue
 				}
 			}
@@ -67,7 +67,7 @@ func (m *Memory) MetaBatchDecorate(ctx context.Context, items []*txmeta.MissingT
 	return nil
 }
 
-func (m *Memory) Create(_ context.Context, tx *bt.Tx) (*txmeta.Data, error) {
+func (m *Memory) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*txmeta.Data, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

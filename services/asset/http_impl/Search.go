@@ -1,15 +1,14 @@
 package http_impl
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -30,7 +29,7 @@ func (h *HTTP) Search(c echo.Context) error {
 	q := c.QueryParam("q")
 
 	if q == "" {
-		return sendError(c, http.StatusBadRequest, 1, errors.New("missing query parameter"))
+		return sendError(c, http.StatusBadRequest, 1, errors.New(errors.ERR_INVALID_ARGUMENT, "missing query parameter"))
 	}
 
 	if len(q) == 64 {
@@ -42,7 +41,7 @@ func (h *HTTP) Search(c echo.Context) error {
 
 		// Check if the hash is a block...
 		header, _, err := h.repository.GetBlockHeader(c.Request().Context(), hash)
-		if err != nil && !errors.Is(err, ubsverrors.ErrNotFound) { // We return an error except if it's a not found error
+		if err != nil && !errors.Is(err, errors.ErrNotFound) { // We return an error except if it's a not found error
 			return sendError(c, http.StatusBadRequest, 3, fmt.Errorf("error searching for block: %w", err))
 		}
 
@@ -65,7 +64,7 @@ func (h *HTTP) Search(c echo.Context) error {
 		// Check if it's a subtree
 		subtree, err := h.repository.GetSubtreeBytes(c.Request().Context(), hash)
 		// TODO error handling is still a bit messy, not all implementations are throwing the ErrNotFound correctly
-		if err != nil && !errors.Is(err, ubsverrors.ErrNotFound) && !strings.Contains(err.Error(), "not found") {
+		if err != nil && !errors.Is(err, errors.ErrNotFound) && !strings.Contains(err.Error(), "not found") {
 			return sendError(c, http.StatusBadRequest, 4, fmt.Errorf("error searching for subtree: %w", err))
 		}
 
@@ -75,7 +74,9 @@ func (h *HTTP) Search(c echo.Context) error {
 		}
 
 		// Check if it's a utxo
-		u, err := h.repository.GetUtxo(c.Request().Context(), hash)
+		u, err := h.repository.GetUtxo(c.Request().Context(), &utxo.Spend{
+			Hash: hash,
+		})
 		if err != nil && !errors.Is(err, utxo.ErrNotFound) {
 			return sendError(c, http.StatusBadRequest, 6, fmt.Errorf("error searching for utxo: %w", err))
 		}
@@ -92,7 +93,7 @@ func (h *HTTP) Search(c echo.Context) error {
 		// We are searching a number, get latest block height
 		_, blockMeta, err := h.repository.GetBestBlockHeader(c.Request().Context())
 		if err != nil {
-			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -104,7 +105,7 @@ func (h *HTTP) Search(c echo.Context) error {
 		if blockHeight >= 0 && uint32(blockHeight) <= latestBlockHeight {
 			block, err := h.repository.GetBlockByHeight(c.Request().Context(), uint32(blockHeight))
 			if err != nil {
-				if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+				if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
 				} else {
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -114,5 +115,5 @@ func (h *HTTP) Search(c echo.Context) error {
 		}
 	}
 
-	return sendError(c, http.StatusBadRequest, 7, errors.New("query must be a valid hash or block height"))
+	return sendError(c, http.StatusBadRequest, 7, errors.New(errors.ERR_UNKNOWN, "query must be a valid hash or block height"))
 }

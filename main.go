@@ -23,11 +23,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
 	"github.com/bitcoin-sv/ubsv/cmd/chainintegrity/chainintegrity"
+	"github.com/bitcoin-sv/ubsv/cmd/filereader/filereader"
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	"github.com/bitcoin-sv/ubsv/cmd/utxostore_blaster/utxostore_blaster"
-	"github.com/bitcoin-sv/ubsv/cmd/validate_block/validateblock"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -38,6 +38,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/miner"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
+	"github.com/bitcoin-sv/ubsv/services/rpc"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -58,6 +59,9 @@ var appCount int
 
 func init() {
 	gocore.SetInfo(progname, version, commit)
+
+	// Call the gocore.Log function to initialize the logger and start the Unix domain socket that allows us to configure settings at runtime.
+	gocore.Log(progname)
 
 	gocore.AddAppPayloadFn("CONFIG", func() interface{} {
 		return gocore.Config().GetAll()
@@ -97,9 +101,6 @@ func main() {
 		blockchainstatus.Init()
 		blockchainstatus.Start()
 		return
-	case "validateblock.run":
-		// validateblock.Init()
-		validateblock.Start()
 	case "blaster.run":
 		// txblaster.Init()
 		txblaster.Start()
@@ -107,6 +108,10 @@ func main() {
 	case "utxostoreblaster.run":
 		utxostore_blaster.Init()
 		utxostore_blaster.Start()
+		return
+	case "filereader.run":
+		// filereader.Init()
+		filereader.Start()
 		return
 	}
 
@@ -138,6 +143,7 @@ func main() {
 	startBlockPersister := shouldStart("BlockPersister")
 	startLegacy := shouldStart("Legacy")
 	help := shouldStart("help")
+	startRpc := shouldStart("rpc")
 
 	if help || appCount == 0 {
 		printUsage()
@@ -193,7 +199,7 @@ func main() {
 	// blockchain service
 	if startBlockchain {
 		var err error
-		blockchainService, err = blockchain.New(logger.New("bchn"))
+		blockchainService, err = blockchain.New(ctx, logger.New("bchn"))
 		if err != nil {
 			panic(err)
 		}
@@ -236,9 +242,16 @@ func main() {
 		}
 	}
 
+	if startRpc {
+		if err := sm.AddService("Rpc", rpc.NewServer(logger.New("rpc"))); err != nil {
+			panic(err)
+		}
+	}
+
 	if startBlockPersister {
-		if err = sm.AddService("BlockPersister", blockpersister.New(
+		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
 			logger,
+			getBlockStore(logger),
 			getSubtreeStore(logger),
 			getTxMetaStore(logger),
 		)); err != nil {
@@ -279,7 +292,7 @@ func main() {
 			logger.Fatalf("could not create validator [%v]", err)
 		}
 
-		if err := sm.AddService("Subtree Validation", subtreevalidation.New(
+		if err := sm.AddService("Subtree Validation", subtreevalidation.New(ctx,
 			logger.New("stval"),
 			getSubtreeStore(logger),
 			getTxStore(logger),
@@ -305,7 +318,6 @@ func main() {
 
 			if err := sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
-				getUtxoStore(ctx, logger),
 				getSubtreeStore(logger),
 				getTxStore(logger),
 				getTxMetaStore(logger),

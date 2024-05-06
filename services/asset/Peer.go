@@ -102,7 +102,7 @@ func (c *Peer) Start(ctx context.Context) error {
 				case asset_api.Type_Block:
 					c.logger.Debugf("Received BLOCK notification: %s", hash.String())
 
-					if err = c.validationClient.BlockFound(ctx, hash, resp.BaseUrl, util.GenesisActivationHeight, false); err != nil {
+					if err = c.validationClient.BlockFound(ctx, hash, resp.BaseUrl, false); err != nil {
 						c.logger.Errorf("could not validate block: %v", err)
 						continue
 					}

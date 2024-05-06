@@ -27,6 +27,7 @@ func TxMetaDataFromTx(tx *bt.Tx) (*txmeta.Data, error) {
 		Fee:            fee,
 		SizeInBytes:    uint64(tx.Size()),
 		ParentTxHashes: parentTxHashes,
+		IsCoinbase:     tx.IsCoinbase(),
 	}
 
 	return &s, nil

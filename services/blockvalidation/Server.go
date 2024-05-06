@@ -19,7 +19,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
@@ -33,16 +32,14 @@ import (
 )
 
 type processBlockFound struct {
-	hash        *chainhash.Hash
-	blockHeight uint32
-	baseURL     string
-	errCh       chan error
+	hash    *chainhash.Hash
+	baseURL string
+	errCh   chan error
 }
 
 type processBlockCatchup struct {
-	block       *model.Block
-	blockHeight uint32
-	baseURL     string
+	block   *model.Block
+	baseURL string
 }
 
 // Server type carries the logger within it
@@ -50,7 +47,6 @@ type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
 	logger                      ulogger.Logger
 	blockchainClient            blockchain.ClientI
-	utxoStore                   utxostore.Interface
 	subtreeStore                blob.Store
 	txStore                     blob.Store
 	txMetaStore                 txmeta_store.Store
@@ -65,12 +61,11 @@ type Server struct {
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
 	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
 	// bloom filter stats for all blocks processed
-	bloomFilterStats *model.BloomStats
-	stats            *gocore.Stat
+	stats *gocore.Stat
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob.Store, txStore blob.Store,
+func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
 	txMetaStore txmeta_store.Store, validatorClient validator.Interface) *Server {
 
 	initPrometheusMetrics()
@@ -85,7 +80,6 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 	catchupChBuffer, _ := gocore.Config().GetInt("blockvalidation_catchupCh_buffer_size", 10)
 
 	bVal := &Server{
-		utxoStore:            utxoStore,
 		logger:               logger,
 		subtreeStore:         subtreeStore,
 		txStore:              txStore,
@@ -95,7 +89,6 @@ func New(logger ulogger.Logger, utxoStore utxostore.Interface, subtreeStore blob
 		catchupCh:            make(chan processBlockCatchup, catchupChBuffer),
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
-		bloomFilterStats:     model.NewBloomStats(),
 		stats:                gocore.NewStat("blockvalidation"),
 	}
 
@@ -127,11 +120,9 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}
 
-	u.blockValidation = NewBlockValidation(u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
+	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
 
 	go u.processSubtreeNotify.Start()
-
-	go u.bloomFilterStats.BloomFilterStatsProcessor(ctx)
 
 	go func() {
 		for {
@@ -193,7 +184,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
 					// TODO optimize this for the valid chain, not processing everything ???
 					u.logger.Infof("[Init] processing block found on channel [%s]", b.hash.String())
-					if err := u.processBlockFound(ctx1, b.hash, b.baseURL, b.blockHeight); err != nil {
+					if err := u.processBlockFound(ctx1, b.hash, b.baseURL); err != nil {
 						u.logger.Errorf("[Init] failed to process block [%s] [%v]", b.hash.String(), err)
 					}
 
@@ -255,7 +246,7 @@ func (u *Server) Start(ctx context.Context) error {
 								u.logger.Errorf("[BlockValidation] failed getting block from blockchain service")
 							}
 
-							u.logger.Infof("[BlockValidation][%s] processing block into blockpersister kafka producer", block.Hash().String())
+							u.logger.Debugf("[BlockValidation][%s] processing block into blockpersister kafka producer", block.Hash().String())
 
 							for _, subtreeHash := range block.Subtrees {
 								subtreeBytes := subtreeHash.CloneBytes()
@@ -270,6 +261,20 @@ func (u *Server) Start(ctx context.Context) error {
 			}()
 		}
 	}
+
+	//kafkaBlocksValidateConfigURL, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
+	//if err == nil && ok {
+	//	u.logger.Infof("[BlockValidation] starting block validation Kafka client on address: %s, with %d workers", kafkaBlocksValidateConfigURL.String(), 1)
+	//
+	//	util.StartKafkaListener(ctx, u.logger, kafkaBlocksValidateConfigURL, 1, "BlockValidation", "blockvalidation", func(_ context.Context, blockHashBytes []byte, _ []byte) error {
+	//		blockHash, err := chainhash.NewHash(blockHashBytes)
+	//		if err != nil {
+	//			u.logger.Errorf("[BlockValidation] failed to parse block hash from kafka: %v", err)
+	//			return nil
+	//		}
+	//		return u.blockValidation.validateBlock(ctx, blockHash)
+	//	})
+	//}
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, u.logger, "blockvalidation", func(server *grpc.Server) {
@@ -428,10 +433,9 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	go func() {
 		u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
 		u.blockFoundCh <- processBlockFound{
-			hash:        hash,
-			blockHeight: req.BlockHeight,
-			baseURL:     req.GetBaseUrl(),
-			errCh:       errCh,
+			hash:    hash,
+			baseURL: req.GetBaseUrl(),
+			errCh:   errCh,
 		}
 		prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 	}()
@@ -446,7 +450,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
-func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string, blockHeight uint32) error {
+func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string) error {
 	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidationServer:processBlockFound")
 	span.LogKV("hash", hash.String())
 	start, stat, ctx := util.NewStatFromContext(spanCtx, "processBlockFound", u.stats)
@@ -509,9 +513,8 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 		go func() {
 			u.logger.Infof("[processBlockFound][%s] processBlockFound add to catchup channel", hash.String())
 			u.catchupCh <- processBlockCatchup{
-				block:       block,
-				blockHeight: blockHeight,
-				baseURL:     baseUrl,
+				block:   block,
+				baseURL: baseUrl,
 			}
 			prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 		}()
@@ -521,7 +524,7 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
-	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.bloomFilterStats)
+	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)
 	if err != nil {
 		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}
@@ -697,7 +700,7 @@ LOOP:
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
 	for block := range validateBlocksChan {
-		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.bloomFilterStats); err != nil {
+		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
 	}

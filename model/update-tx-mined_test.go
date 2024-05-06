@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
@@ -44,11 +45,17 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 		_, err = txMetaStore.Create(context.Background(), tx7)
 		require.NoError(t, err)
 
-		subtrees := []*util.Subtree{
+		block := &Block{}
+		block.CoinbaseTx = tx0
+		block.Subtrees = []*chainhash.Hash{
+			tx1.TxIDChainHash(),
+			tx2.TxIDChainHash(),
+		}
+		block.SubtreeSlices = []*util.Subtree{
 			{
 				Nodes: []util.SubtreeNode{
 					{
-						Hash: *tx0.TxIDChainHash(),
+						Hash: chainhash.Hash{}, // placeholder
 					},
 					{
 						Hash: *tx1.TxIDChainHash(),
@@ -83,16 +90,42 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 			context.Background(),
 			ulogger.TestLogger{},
 			txMetaStore,
-			subtrees,
-			&chainhash.Hash{},
+			block,
 			1,
 		)
 		require.NoError(t, err)
 
 		txMeta, err := txMetaStore.Get(context.Background(), tx0.TxIDChainHash())
 		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
 
-		_ = txMeta
+		txMeta, err = txMetaStore.Get(context.Background(), tx1.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+
+		txMeta, err = txMetaStore.Get(context.Background(), tx2.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+
+		txMeta, err = txMetaStore.Get(context.Background(), tx3.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+
+		txMeta, err = txMetaStore.Get(context.Background(), tx4.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+
+		txMeta, err = txMetaStore.Get(context.Background(), tx5.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+
+		txMeta, err = txMetaStore.Get(context.Background(), tx6.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+
+		txMeta, err = txMetaStore.Get(context.Background(), tx7.TxIDChainHash())
+		require.NoError(t, err)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
 	})
 }
 

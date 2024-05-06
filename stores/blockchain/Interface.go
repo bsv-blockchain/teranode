@@ -2,19 +2,20 @@ package blockchain
 
 import (
 	"context"
+	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 var (
-	ErrNotFound = ubsverrors.New(ubsverrors.ErrorConstants_NOT_FOUND, "not found")
+	ErrNotFound = errors.New(errors.ERR_NOT_FOUND, "not found")
 
 	// ErrBlockNotFound is returned when a block is not found
-	ErrBlockNotFound = ubsverrors.New(ubsverrors.ErrorConstants_BLOCK_NOT_FOUND, "block not found")
+	ErrBlockNotFound = errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found")
 )
 
 type Store interface {
@@ -22,6 +23,7 @@ type Store interface {
 	GetDBEngine() util.SQLEngine
 	GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error)
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error)
+	GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlockss uint32) ([]*model.Block, error)
 	GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
 	GetBlockStats(ctx context.Context) (*model.BlockStats, error)
 	GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error)
@@ -44,4 +46,5 @@ type Store interface {
 	GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error)
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
+	GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error)
 }

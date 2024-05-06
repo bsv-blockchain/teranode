@@ -20,8 +20,13 @@ var (
 	prometheusBlockValidationSetTxMetaQueueCh          prometheus.Gauge
 	//prometheusBlockValidationSetTxMetaQueueChWaitDuration    prometheus.Histogram
 	//prometheusBlockValidationSetTxMetaQueueDuration          prometheus.Histogram
+
+	// block validation
 	prometheusBlockValidationValidateBlock         prometheus.Counter
 	prometheusBlockValidationValidateBlockDuration prometheus.Histogram
+	prometheusBlockValidationReValidateBlock       prometheus.Histogram
+	prometheusBlockValidationReValidateBlockErr    prometheus.Histogram
+
 	// tx meta cache stats
 	prometheusBlockValidationSetTXMetaCache        prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheFrpc    prometheus.Counter
@@ -152,6 +157,24 @@ func _initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "validate_block_duration_seconds",
 			Help:      "Duration of validate block",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationReValidateBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockvalidation",
+			Name:      "revalidate_block_duration_seconds",
+			Help:      "Duration of re-validate block",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationReValidateBlockErr = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockvalidation",
+			Name:      "revalidate_block_err",
+			Help:      "Number of blocks revalidated with error",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)

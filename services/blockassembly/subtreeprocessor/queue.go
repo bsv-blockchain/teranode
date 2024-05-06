@@ -1,8 +1,8 @@
 package subtreeprocessor
 
 import (
+	"github.com/kpango/fastime"
 	"sync/atomic"
-	"time"
 )
 
 // LockFreeQueue represents a FIFO structure with operations to enqueue
@@ -31,7 +31,7 @@ func (q *LockFreeQueue) length() int64 {
 // Enqueue adds a series of Request to the queue
 // enqueue is thread safe, it uses atomic operations to add to the queue
 func (q *LockFreeQueue) enqueue(v *txIDAndFee) {
-	v.time = time.Now().UnixMilli()
+	v.time = fastime.Now().UnixMilli()
 	prev := q.tail.Swap(v)
 	if prev == nil {
 		q.head.next.Store(v)

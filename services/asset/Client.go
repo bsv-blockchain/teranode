@@ -57,8 +57,9 @@ func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Cli
 		if err != nil {
 			if retries < maxRetries {
 				retries++
-				logger.Warnf("failed to connect to asset service, retrying %d: %v", retries, err)
-				time.Sleep(time.Duration(retries*retrySleep) * time.Millisecond)
+				backoff := time.Duration(retries*retrySleep) * time.Millisecond
+				logger.Warnf("failed to connect to asset service, retrying %d in %s: %v", retries, backoff, err)
+				time.Sleep(backoff)
 				continue
 			}
 
@@ -115,7 +116,7 @@ func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*mode
 		subtreeHashes = append(subtreeHashes, hash)
 	}
 
-	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes)
+	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height)
 }
 
 func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
@@ -250,7 +251,7 @@ func (c *Client) GetNodes(_ context.Context, _ *emptypb.Empty, _ ...grpc.CallOpt
 }
 
 func (c *Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	blobOptions := options.NewSetOptions(opts...)
+	blobOptions := options.NewSetOptions(nil, opts...)
 
 	_, err := c.client.Set(ctx, &asset_api.SetSubtreeRequest{
 		Hash:    key[:],

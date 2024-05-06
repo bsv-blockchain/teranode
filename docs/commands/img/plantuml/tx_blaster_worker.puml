@@ -1,0 +1,45 @@
+@startuml Worker Init and Start Function
+
+participant "Worker" as Worker
+participant "Coinbase\nService" as Coinbase
+participant "Propagation\nService" as Propagation
+
+== Worker Initialization (Init) ==
+Worker -> Coinbase : Request initial funds
+Coinbase -> Worker : Provide TX out of existing spendable UTXOs
+Worker -> Propagation : Send TX to the propagation service
+Propagation --> Worker : OK, error
+
+loop For each UTXO output in the sent Tx
+    Worker -> Worker : Add UTXO to queue for Tx processing
+end
+
+== Transaction Processing ==
+loop Transaction Processing Loop
+    Worker -> Worker : Generate new transaction from UTXO
+    alt Successful Transaction Generation
+        Worker -> Propagation : Send transaction
+        Propagation --> Worker : OK, error
+
+        loop For each UTXO output in the sent Tx
+            Worker -> Worker : Add UTXO to queue for Tx processing
+        end
+
+    else Error in Transaction Generation
+        Worker -> Worker : Log error
+    end
+
+    alt Rate Limiting Enabled
+        Worker -> Worker : Wait based on rate limit
+    end
+end
+
+== Shutdown ==
+alt Graceful Shutdown Triggered
+    Worker -> Worker : Stop processing new transactions
+
+end
+
+left footer " Last Modified On: 3-April-2024. © 2024 Bitcoin SV. All rights reserved."
+
+@enduml

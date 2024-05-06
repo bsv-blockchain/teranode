@@ -3,7 +3,6 @@ package memory
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -44,7 +43,7 @@ func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 }
 
 func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := hash
 	if setOptions.Extension != "" {
@@ -61,7 +60,7 @@ func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 
 func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.Options) error {
 	// not supported in memory store yet
-	return errors.New("TTL is not supported in a memory store")
+	return nil
 }
 
 func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
@@ -74,7 +73,7 @@ func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Op
 }
 
 func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := hash
 	if setOptions.Extension != "" {
@@ -106,7 +105,7 @@ func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...
 }
 
 func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := hash
 	if setOptions.Extension != "" {
@@ -121,7 +120,7 @@ func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.Options)
 }
 
 func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.Options) error {
-	setOptions := options.NewSetOptions(opts...)
+	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := hash
 	if setOptions.Extension != "" {

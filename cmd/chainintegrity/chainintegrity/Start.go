@@ -30,6 +30,10 @@ type BlockSubtree struct {
 }
 
 func Start() {
+	// turn off all batching in aerospike, in this case it will only slow us down, since we are reading in 1 thread
+	gocore.Config().Set("utxostore_spendBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "false")
 
 	path, err := os.Getwd()
 	if err != nil {
@@ -284,9 +288,10 @@ func Start() {
 										continue
 									}
 									utxo, err := utxoStore.Get(ctx, &utxostore.Spend{
-										TxID: btTx.TxIDChainHash(),
-										Vout: uint32(inputIdx),
-										Hash: utxoHash,
+										TxID:         input.PreviousTxIDChainHash(),
+										SpendingTxID: btTx.TxIDChainHash(),
+										Vout:         uint32(inputIdx),
+										Hash:         utxoHash,
 									})
 									if err != nil {
 										logger.Errorf("failed to get parent utxo %s from utxo store: %s", utxoHash, err)

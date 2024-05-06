@@ -1,0 +1,90 @@
+version: '3.8'
+
+x-aerospike-base: &aerospike-base
+  image: aerospike:ce-6.4.0.7_2
+  # mem_limit: 1024m
+  networks:
+    - ubsv-network
+  command: --config-file /etc/aerospike.conf
+  volumes:
+    - ./deploy/dev/aerospike.conf:/etc/aerospike.conf
+
+services:
+
+  aerospike-1:
+    container_name: aerospike-1
+    <<: *aerospike-base
+    ports:
+      - 3100:3000
+
+  aerospike-2:
+    container_name: aerospike-2
+    <<: *aerospike-base
+    ports:
+      - 3200:3000
+
+  aerospike-3:
+    container_name: aerospike-3
+    <<: *aerospike-base
+    ports:
+      - 3300:3000
+
+  ubsv-1:
+    depends_on:
+      - aerospike-1
+    entrypoint: ["/app/wait.sh", "aerospike-1", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    environment:
+      utxostore: aerospikemap://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospikemap://aerospike-1:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+
+  ubsv-2:
+    depends_on:
+      - aerospike-2
+    entrypoint: ["/app/wait.sh", "aerospike-2", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    environment:
+      utxostore: aerospikemap://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospikemap://aerospike-2:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+
+  ubsv-3:
+    depends_on:
+      - aerospike-3
+    entrypoint: ["/app/wait.sh", "aerospike-3", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    environment:
+      utxostore: aerospikemap://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+      txmeta_store: aerospikemap://aerospike-3:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+
+  aerospike-exporter-1:
+    image: aerospike/aerospike-prometheus-exporter:latest
+    container_name: aerospike-exporter-1
+    environment:
+      AS_HOST: "aerospike-1"
+      AS_PORT: "3000"
+      METRIC_LABELS: "type='development',source='aerospike'"
+    ports:
+      - "19145:9145"
+    networks:
+      - ubsv-network
+
+  aerospike-exporter-2:
+    image: aerospike/aerospike-prometheus-exporter:latest
+    container_name: aerospike-exporter-2
+    environment:
+      AS_HOST: "aerospike-2"
+      AS_PORT: "3000"
+      METRIC_LABELS: "type='development',source='aerospike'"
+    ports:
+      - "29145:9145"
+    networks:
+      - ubsv-network
+
+  aerospike-exporter-3:
+    image: aerospike/aerospike-prometheus-exporter:latest
+    container_name: aerospike-exporter-3
+    environment:
+      AS_HOST: "aerospike-3"
+      AS_PORT: "3000"
+      METRIC_LABELS: "type='development',source='aerospike'"
+    ports:
+      - "39145:9145"
+    networks:
+      - ubsv-network

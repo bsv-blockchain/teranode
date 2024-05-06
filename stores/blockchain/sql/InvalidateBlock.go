@@ -44,7 +44,7 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return fmt.Errorf("block %s was not updated to invalid", blockHash.String())
 	}
 
-	// clear all caches after a new block is added
+	// clear all caches
 	cache.DeleteAll()
 
 	return nil

@@ -34,34 +34,29 @@ type subscriber struct {
 // Server type carries the logger within it
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
-	validator           Interface
-	logger              ulogger.Logger
-	utxoStore           utxostore.Interface
-	txMetaStore         txmetastore.Store
-	kafkaSignal         chan os.Signal
-	newSubscriptions    chan subscriber
-	deadSubscriptions   chan subscriber
-	subscribers         map[subscriber]bool
-	subscriptionCtx     context.Context
-	cancelSubscriptions context.CancelFunc
-	stats               *gocore.Stat
+	validator         Interface
+	logger            ulogger.Logger
+	utxoStore         utxostore.Interface
+	txMetaStore       txmetastore.Store
+	kafkaSignal       chan os.Signal
+	newSubscriptions  chan subscriber
+	deadSubscriptions chan subscriber
+	subscribers       map[subscriber]bool
+	stats             *gocore.Stat
 }
 
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store) *Server {
 	initPrometheusMetrics()
-	subscriptionCtx, cancelSubscriptions := context.WithCancel(context.Background())
 
 	return &Server{
-		logger:              logger,
-		utxoStore:           utxoStore,
-		txMetaStore:         txMetaStore,
-		newSubscriptions:    make(chan subscriber, 10),
-		deadSubscriptions:   make(chan subscriber, 10),
-		subscribers:         make(map[subscriber]bool),
-		subscriptionCtx:     subscriptionCtx,
-		cancelSubscriptions: cancelSubscriptions,
-		stats:               gocore.NewStat("validator"),
+		logger:            logger,
+		utxoStore:         utxoStore,
+		txMetaStore:       txMetaStore,
+		newSubscriptions:  make(chan subscriber, 10),
+		deadSubscriptions: make(chan subscriber, 10),
+		subscribers:       make(map[subscriber]bool),
+		stats:             gocore.NewStat("validator"),
 	}
 }
 
@@ -86,6 +81,9 @@ func (v *Server) Start(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				v.logger.Infof("[Validator] Stopping channel listeners go routine")
+				for sub := range v.subscribers {
+					safeClose(sub.done)
+				}
 				return
 			case s := <-v.newSubscriptions:
 				v.subscribers[s] = true

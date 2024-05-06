@@ -3,7 +3,6 @@ package blockassembly
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/url"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -58,6 +58,7 @@ type BlockAssembly struct {
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	blockSubmissionChan   chan *BlockSubmissionRequest
 	blockAssemblyDisabled bool
+	//blockValidKafkaProducer util.KafkaProducerI
 }
 
 type subtreeRetrySend struct {
@@ -122,7 +123,16 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	}
 
 	// init the block assembler for this server
-	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.txMetaStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
+
+	// Turned off for now, will be used to validate own blocks
+	//kafkaBlocksValidateConfig, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
+	//if err == nil && ok {
+	//	_, ba.blockValidKafkaProducer, err = util.ConnectToKafka(kafkaBlocksValidateConfig)
+	//	if err != nil {
+	//		return fmt.Errorf("[BlockAssembly:Init] unable to connect to kafka for block validation: %v", err)
+	//	}
+	//}
 
 	// start the new subtree retry processor in the background
 	go func() {
@@ -147,8 +157,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					subtreeRetry.retries++
 					go func() {
 						// backoff and wait before re-adding to retry queue
-						backoff := time.Duration(math.Pow(2, float64(subtreeRetry.retries))) * time.Second
-						time.Sleep(backoff)
+						retry.BackoffAndSleep(subtreeRetry.retries, 2, time.Second)
 
 						// re-add the subtree to the retry queue
 						subtreeRetryChan <- subtreeRetry
@@ -331,17 +340,10 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.U
 			return
 		}
 
-		utxoHashesBytes := make([][]byte, len(data.UtxoHashes))
-		for i, hash := range data.UtxoHashes {
-			utxoHashesBytes[i] = hash.CloneBytes()
-		}
-
 		if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
-			Txid:     data.TxIDChainHash.CloneBytes(),
-			Fee:      data.Fee,
-			Size:     data.Size,
-			Locktime: data.LockTime,
-			Utxos:    utxoHashesBytes,
+			Txid: data.TxIDChainHash.CloneBytes(),
+			Fee:  data.Fee,
+			Size: data.Size,
 		}); err != nil {
 			ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
 		}
@@ -373,7 +375,7 @@ func (ba *BlockAssembly) HealthGRPC(_ context.Context, _ *blockassembly_api.Empt
 
 var txsProcessed = atomic.Uint64{}
 
-func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
+func (ba *BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
 	startTime := time.Now()
 	defer func() {
 		if txsProcessed.Load()%1000 == 0 {
@@ -426,7 +428,7 @@ func (ba *BlockAssembly) RemoveTx(_ context.Context, req *blockassembly_api.Remo
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
-func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
+func (ba *BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
 	// start := gocore.CurrentTime()
 	// defer func() {
 	// 	addTxBatchGrpc.AddTime(start)
@@ -593,7 +595,9 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 		return nil, fmt.Errorf("[BlockAssembly][%s] failed to convert hashPrevBlock: %w", jobID, err)
 	}
 
-	// TODO check whether we are already mining on a higher chain work, then just ignore this solution
+	if ba.blockAssembler.bestBlockHeader.Load().HashPrevBlock.IsEqual(hashPrevBlock) {
+		return nil, fmt.Errorf("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID)
+	}
 
 	coinbaseTx, err := bt.NewTxFromBytes(req.CoinbaseTx)
 	if err != nil {
@@ -718,6 +722,14 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to add block: %w", jobID, block.Hash().String(), err)
 	}
 
+	// send the block for validation in the blockvalidation server, this makes sure we also mark the block as
+	// invalid if there is something wrong with it
+	// TODO this does not work properly, since the subtreeMeta is not stored with the subtree from our own blocks
+	//      this needs to be changed before re-activating this one
+	//if err = ba.blockValidKafkaProducer.Send(block.Hash().CloneBytes(), block.Hash().CloneBytes()); err != nil {
+	//	ba.logger.Errorf("[BlockAssembly][%s][%s] failed to send block for validation: %s", jobID, block.Hash().String(), err)
+	//}
+
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
 	callerSpan := opentracing.SpanFromContext(ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
@@ -786,8 +798,7 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 		subtreeHash := subtreeHash
 		g.Go(func() error {
 			// TODO this would be better as a batch operation
-			err = ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0)
-			if err != nil {
+			if err := ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0); err != nil {
 				// TODO should this retry? We are in a bad state when this happens
 				ba.logger.Errorf("[removeSubtreesTTL][%s][%s] failed to update subtree TTL: %v", block.Hash().String(), subtreeHash.String(), err)
 			}
@@ -818,4 +829,18 @@ func (ba *BlockAssembly) DeDuplicateBlockAssembly(_ context.Context, _ *blockass
 func (ba *BlockAssembly) ResetBlockAssembly(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
 	ba.blockAssembler.Reset()
 	return &blockassembly_api.EmptyMessage{}, nil
+}
+
+func (ba *BlockAssembly) GetBlockAssemblyState(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.StateMessage, error) {
+	return &blockassembly_api.StateMessage{
+		BlockAssemblyState:    ba.blockAssembler.GetCurrentRunningState(),
+		SubtreeProcessorState: ba.blockAssembler.subtreeProcessor.GetCurrentRunningState(),
+		ResetWaitCount:        uint32(ba.blockAssembler.resetWaitCount.Load()),
+		ResetWaitTime:         uint32(ba.blockAssembler.resetWaitTime.Load()),
+		SubtreeCount:          uint32(ba.blockAssembler.SubtreeCount()),
+		TxCount:               ba.blockAssembler.TxCount(),
+		QueueCount:            ba.blockAssembler.QueueLength(),
+		CurrentHeight:         ba.blockAssembler.bestBlockHeight.Load(),
+		CurrentHash:           ba.blockAssembler.bestBlockHeader.Load().Hash().String(),
+	}, nil
 }

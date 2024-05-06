@@ -4,16 +4,13 @@ import (
 	"bufio"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
-
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -54,6 +51,10 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 
 		prometheusAssetHttpGetSubtree.WithLabelValues("OK", "200").Inc()
 
+		// sign the response, if the private key is set, ignore error
+		// do this before any output is sent to the client, this adds a signature to the response header
+		_ = h.Sign(c.Response(), hash.CloneBytes())
+
 		// At this point, the subtree contains all the fees and sizes for the transactions in the subtree.
 
 		if mode == JSON {
@@ -62,7 +63,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			// this is only needed for the json response
 			subtree, err := h.repository.GetSubtree(c.Request().Context(), hash)
 			if err != nil {
-				if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+				if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 					return echo.NewHTTPError(http.StatusNotFound, err.Error())
 				} else {
 					return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -77,7 +78,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 		// get subtree reader is much more efficient than get subtree
 		subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
 		if err != nil {
-			if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
 			} else {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
@@ -100,7 +101,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			return c.String(200, hex.EncodeToString(b))
 
 		default:
-			err = errors.New("bad read mode")
+			err = errors.New(errors.ERR_UNKNOWN, "bad read mode")
 			return sendError(c, http.StatusInternalServerError, 52, err)
 		}
 	}
@@ -115,18 +116,18 @@ type SubtreeNodesReader struct {
 
 func NewSubtreeNodesReader(subtreeReader io.Reader) (*SubtreeNodesReader, error) {
 	// Read the root hash and skip
-	if _, err := subtreeReader.Read(make([]byte, 32)); err != nil {
+	if _, err := io.ReadFull(subtreeReader, make([]byte, 32)); err != nil {
 		return nil, err
 	}
 
 	b := make([]byte, 8)
-	if _, err := subtreeReader.Read(b); err != nil { // fee
+	if _, err := io.ReadFull(subtreeReader, b); err != nil { // fee
 		return nil, err
 	}
-	if _, err := subtreeReader.Read(b); err != nil { // sizeInBytes
+	if _, err := io.ReadFull(subtreeReader, b); err != nil { // sizeInBytes
 		return nil, err
 	}
-	if _, err := subtreeReader.Read(b); err != nil { // numberOfLeaves
+	if _, err := io.ReadFull(subtreeReader, b); err != nil { // numberOfLeaves
 		return nil, err
 	}
 	itemCount := binary.LittleEndian.Uint64(b)
@@ -200,7 +201,7 @@ func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	start2 := gocore.CurrentTime()
 	subtreeReader, err := h.repository.GetSubtreeReader(c.Request().Context(), hash)
 	if err != nil {
-		if errors.Is(err, ubsverrors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 			return echo.NewHTTPError(http.StatusNotFound, err.Error())
 		} else {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())

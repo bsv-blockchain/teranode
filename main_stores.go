@@ -16,6 +16,7 @@ import (
 var (
 	txStore      blob.Store
 	subtreeStore blob.Store
+	blockStore   blob.Store
 	txMetaStore  txmetastore.Store
 	utxoStore    utxostore.Interface
 )
@@ -98,4 +99,24 @@ func getSubtreeStore(logger ulogger.Logger) blob.Store {
 	}
 
 	return subtreeStore
+}
+
+func getBlockStore(logger ulogger.Logger) blob.Store {
+	if blockStore != nil {
+		return blockStore
+	}
+
+	blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("blockstore config not found")
+	}
+	blockStore, err = blob.NewStore(logger, blockStoreUrl)
+	if err != nil {
+		panic(err)
+	}
+
+	return blockStore
 }

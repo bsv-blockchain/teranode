@@ -1,0 +1,34 @@
+@startuml UTXOBlaster Worker Logic
+
+participant "Worker" as Worker
+participant "UTXO Store Factory" as Factory
+participant "Prometheus Metrics" as Metrics
+database "UTXO Store" as UTXOStore
+
+== Worker Initialization ==
+Worker -> Factory: Call storeFn()\nto initialize UTXO Store
+Factory --> Worker: Return UTXO Store instance
+
+== UTXO Generation ==
+loop Continuous UTXO Processing
+    Worker -> Worker: Generate new UTXO
+    alt Successful UTXO Generation
+        Worker -> UTXOStore: Store new UTXO
+        UTXOStore --> Worker: Acknowledge Store
+        Worker -> Metrics: Observe store time\n(prometheusUtxoStoreBlasterStore)
+
+        Worker -> Worker: Sleep for storeSpendDelay
+
+        Worker -> UTXOStore: Mark UTXO as spent
+        UTXOStore --> Worker: Acknowledge Spend
+        Worker -> Metrics: Observe spend time\n(prometheusUtxoStoreBlasterSpend)
+
+        Worker -> Worker: Increment counter
+    else UTXO Generation or Operation Failed
+        Worker -> Worker: Log error
+    end
+end
+
+left footer " Last Modified On: 15-April-2024. © 2024 Bitcoin SV. All rights reserved."
+
+@enduml

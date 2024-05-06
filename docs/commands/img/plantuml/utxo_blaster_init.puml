@@ -1,0 +1,25 @@
+@startuml UTXOBlaster Initialization and Start
+
+participant "UTXO\nBlaster" as Main
+entity "HTTP Server" as HTTPServer
+entity "Worker\nRoutines" as Workers
+database "UTXO\nStore" as UTXOStore
+
+== Initialization ==
+Main -> HTTPServer: Setup HTTP Server
+HTTPServer --> Main: HTTP Server Running\n(Profiler and Health Check endpoints)
+
+== Start ==
+Main -> Main: Parse command-line flags\n("workers", "store", "storeSpendDelay")
+Main -> Main: Log selected store type\nand worker count
+Main -> UTXOStore: Initialize UTXO Store\nBased on "store" flag
+UTXOStore --> Main: Store Initialized
+Main -> Workers: Start worker goroutines\nBased on "workers" flag
+loop For Each Worker
+    Workers -> UTXOStore: Continuous Loop\n(Generate, Store, Spend UTXOs)
+end
+Workers --> Main: Workers Running
+
+left footer " Last Modified On: 15-April-2024. © 2024 Bitcoin SV. All rights reserved."
+
+@enduml

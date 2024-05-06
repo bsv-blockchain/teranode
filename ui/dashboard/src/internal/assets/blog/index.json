@@ -41,6 +41,27 @@
       "slug": "final-enhancements",
       "path": "final-enhancements.md",
       "timestamp": "1711460640000"
+    },
+    {
+      "title": "Why we let it run after failure",
+      "summary": "Failures are not always bad, we can learn a lot from them",
+      "slug": "run-after-failure",
+      "path": "run-after-failure.md",
+      "timestamp": "1713169726969"
+    },
+    {
+      "title": "Breakthrough: Teranode Runs for 24 Hrs",
+      "summary": "Pushing the boundaries, a new milestone in blockchain innovation",
+      "slug": "breakthrough",
+      "path": "breakthrough.md",
+      "timestamp": "1713447296693"
+    },
+    {
+      "title": "Teranode network processes over 600 billion transactions in a week",
+      "summary": "Processes more transactions than all the credit card companies do in a year, combined",
+      "slug": "full-week",
+      "path": "full-week.md",
+      "timestamp": "1714145765010"
     }
   ]
 }

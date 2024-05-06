@@ -33,7 +33,6 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	http3 "github.com/quic-go/quic-go/http3"
-	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
 
@@ -117,9 +116,10 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	ps.status.Store(2)
 
 	// this will block
+	maxConnectionAge, _, _ := gocore.Config().GetDuration("propagation_grpcMaxConnectionAge", 90*time.Second)
 	if err = util.StartGRPCServer(ctx, ps.logger, "propagation", func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
-	}); err != nil {
+	}, maxConnectionAge); err != nil {
 		return err
 	}
 
@@ -402,40 +402,20 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 	callerSpan := opentracing.SpanFromContext(ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 
-	g, gCtx := errgroup.WithContext(setCtx)
-
-	// make a clone to pass to the go func to avoid race condition where Validate does potentially modify the tx!!!!!
-	cloneTx, err := bt.NewTxFromBytes(req.Tx)
-	if err != nil {
-		prometheusInvalidTransactions.Inc()
-		return nil, fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %w", err)
+	// we should store all transactions, if this fails we should not validate the transaction
+	if err = ps.storeTransaction(setCtx, btTx); err != nil {
+		return nil, fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v: %w", btTx.TxIDChainHash(), err, ErrInternal)
 	}
 
-	g.Go(func() error {
-		if err := ps.storeTransaction(gCtx, cloneTx); err != nil {
-			return fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v: %w", cloneTx.TxIDChainHash(), err, ErrInternal)
-		}
-		return nil
-	})
-
 	// All transactions entering Teranode can be assumed to be after Genesis activation height
-	if err := ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
+	if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
 		if errors.Is(err, validator.ErrInternal) {
 			err = fmt.Errorf("%v: %w", err, ErrInternal)
 		} else if errors.Is(err, validator.ErrBadRequest) {
 			err = fmt.Errorf("%v: %w", err, ErrBadRequest)
 		}
 
-		// TODO send REJECT message to peers if invalid tx
-		ps.logger.Errorf("[ProcessTransaction][%s] received invalid transaction: %s", btTx.TxID(), err.Error())
 		prometheusInvalidTransactions.Inc()
-		return nil, err
-	}
-
-	if err := g.Wait(); err != nil {
-		// TODO: we failed storing the tx in the store, what should we do now?
-		//       maybe store in a local badger or a kafka stream and have a process that retries?
-		ps.logger.Errorf("[ProcessTransaction][%s] failed to store transaction: %s", btTx.TxID(), err.Error())
 		return nil, err
 	}
 

@@ -3,7 +3,6 @@ package subtreevalidation
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -11,11 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
-	"github.com/bitcoin-sv/ubsv/ubsverrors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -159,7 +158,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 		if r := recover(); r != nil {
 			switch x := r.(type) {
 			case string:
-				err = errors.New(x)
+				err = errors.New(errors.ERR_UNKNOWN, x)
 			case error:
 				err = x
 			default:
@@ -304,9 +303,19 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 		// The function was called by BlockFound, and we had not already blessed the subtree, so we load the subtree from the store to get the hashes
 		// get subtree from network over http using the baseUrl
-		txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, &v.SubtreeHash, v.BaseUrl)
-		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String()), err)
+		for retries := 0; retries < 3; retries++ {
+			txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, &v.SubtreeHash, v.BaseUrl)
+			if err != nil {
+				if retries < 2 {
+					backoff := time.Duration(2^retries) * time.Second
+					u.logger.Warnf("[validateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
+					time.Sleep(backoff)
+				} else {
+					return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String()), err)
+				}
+			} else {
+				break
+			}
 		}
 	}
 
@@ -351,7 +360,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		// 1. First attempt to load the txMeta from the cache...
 		missed, err := u.processTxMetaUsingCache(spanCtx, txHashes, txMetaSlice, failFast)
 		if err != nil {
-			if errors.Is(err, ubsverrors.ErrThresholdExceeded) {
+			if errors.Is(err, errors.ErrThresholdExceeded) {
 				u.logger.Warnf("[validateSubtreeInternal][%s] [attempt #%d] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String(), attempt)
 				time.Sleep(retrySleepDuration)
 				continue
@@ -417,10 +426,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		// finally add the transaction hash and fee to the subtree
 		txMeta = txMetaSlice[idx]
 		if txMeta == nil {
-			if txHash.Equal(*model.CoinbasePlaceholderHash) {
-				return fmt.Errorf("[validateSubtreeInternal][%s] tx meta is nil for coinbase placeholder at index %d", v.SubtreeHash.String(), idx)
-			}
-			return fmt.Errorf("[validateSubtreeInternal][%s] tx meta not found in txMetaSlice [%s]", v.SubtreeHash.String(), txHash.String())
+			return fmt.Errorf("[validateSubtreeInternal][%s] tx meta not found in txMetaSlice at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
@@ -507,7 +513,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	buffer := make([]byte, chainhash.HashSize)
 	bufferedReader := bufio.NewReaderSize(body, 1024*1024*4) // 4MB buffer
 
-	u.logger.Infof("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
+	u.logger.Debugf("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
 	for {
 		n, err := io.ReadFull(bufferedReader, buffer)
 		if n > 0 {
@@ -525,15 +531,9 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 		}
 	}
 
-	// // the subtree bytes we got from our competing miner only contain the transaction hashes
-	// // it's basically just a list of 32 byte transaction hashes
-	// txHashes := make([]chainhash.Hash, len(subtreeBytes)/chainhash.HashSize)
-	// for i := 0; i < len(subtreeBytes); i += chainhash.HashSize {
-	// 	txHashes[i/chainhash.HashSize] = chainhash.Hash(subtreeBytes[i : i+chainhash.HashSize])
-	// }
 	stat.NewStat("3. createTxHashes").AddTime(start)
 
-	u.logger.Infof("[getSubtreeTxHashes][%s] done with subtree response", subtreeHash.String())
+	u.logger.Debugf("[getSubtreeTxHashes][%s] done with subtree response", subtreeHash.String())
 
 	return txHashes, nil
 }
