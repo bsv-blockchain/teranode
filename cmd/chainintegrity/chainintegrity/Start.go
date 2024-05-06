@@ -29,6 +29,10 @@ type BlockSubtree struct {
 }
 
 func Start() {
+	// turn off all batching in aerospike, in this case it will only slow us down, since we are reading in 1 thread
+	gocore.Config().Set("utxostore_spendBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
+	gocore.Config().Set("txmeta_store_getBatcherEnabled", "false")
 
 	path, err := os.Getwd()
 	if err != nil {
