@@ -48,7 +48,7 @@ require (
 	github.com/ordishs/go-utils v1.0.50
 	github.com/ordishs/gocore v1.0.63
 	github.com/prometheus/client_golang v1.18.0
-	github.com/quic-go/quic-go v0.42.0
+	github.com/quic-go/quic-go v0.43.1
 	github.com/redis/go-redis/v9 v9.2.1
 	github.com/rs/zerolog v1.31.0
 	github.com/sercand/kuberesolver/v5 v5.1.1
