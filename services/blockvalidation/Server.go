@@ -477,9 +477,6 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		errCh = make(chan error)
 	}
 
-	// get current blockheight
-	//currentBlockHeight, err := u.blockchainClient.GetBestBlockHeader(ctx)
-
 	if len(u.blockFoundCh) > 10 {
 		// get the height and check if it is one of the first X blocks that are mined in the beginning
 		block, err := u.getBlock(ctx, hash, req.BaseUrl)
@@ -493,28 +490,21 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 			u.logger.Infof("[BlockFound][%s] too many blocks in queue, sending STOPMINING", hash.String())
 
 			// make make(map[string]string) with one element "event" : "STOPMINING"
-			metadata := make(map[string]string)
-			metadata["event"] = "STOPMINING"
-
 			// create a new blockchain notification
 			notification := &model.Notification{
 				Type:    model.NotificationType_FSMEvent,
 				Hash:    nil,
 				BaseURL: "",
 				Metadata: model.NotificationMetadata{
-					Metadata: metadata,
+					Metadata: map[string]string{
+						"event": blockchain.FiniteStateMachineEvent_StopMining,
+					},
 				},
 			}
 
 			// send the notification to the blockchain client
-
-			// FIRST IMPLEMENT THE FSM IN BLOCKCHAIN CLIENT
-			// CALL ITS FUNCTION TO STOP MINING
-			// THEN IT SHOULD SEND THE NOTIFICATION -> BUT TO ALL SERVICES?
-			// BECAUSE THEY ARE SUBSRIBED TO THE BLOCKCHAIN CLIENT -> ARE THEY SUBSCRIBED TO ALL NOTIFICATIONS, CHECK?
-
 			if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
-				return nil, fmt.Errorf("[BlockFound][%s] failed to send STOPMINING notification [%w]", hash.String(), err)
+				return nil, fmt.Errorf("[BlockFound][%s] failed to send STOP notification [%w]", hash.String(), err)
 			}
 		}
 

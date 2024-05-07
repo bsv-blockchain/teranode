@@ -124,6 +124,8 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 					if notification.Type == model.NotificationType_Block {
 						// push block hash to the setMinedChan
 						bv.setMinedChan <- notification.Hash
+					} else if notification.Type == model.NotificationType_FSMEvent {
+						// TODO HERE
 					}
 				}
 			}
