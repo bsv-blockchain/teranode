@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/legacy"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
@@ -267,15 +268,15 @@ func main() {
 		}
 	}
 
+	// should this be done globally somewhere?
+	blockchainClient, err := blockchain.NewClient(ctx, logger)
+	if err != nil {
+		panic(err)
+	}
+
 	// blockAssembly
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
-			// should this be done globally somewhere?
-			blockchainClient, err := blockchain.NewClient(ctx, logger)
-			if err != nil {
-				panic(err)
-			}
-
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				logger.New("bass"),
 				getTxStore(logger),
@@ -412,7 +413,25 @@ func main() {
 		}
 	}
 
-	// miner
+	// All services started successfully
+	// create a new blockchain notification with Run event
+	notification := &model.Notification{
+		Type:    model.NotificationType_FSMEvent,
+		Hash:    nil, // not relevant for FSMEvent notifications
+		BaseURL: "",  // not relevant for FSMEvent notifications
+		Metadata: model.NotificationMetadata{
+			Metadata: map[string]string{
+				"event": blockchain.FiniteStateMachineEvent_Run,
+			},
+		},
+	}
+	// send FSMEvent notification to the blockchain client. FSM will transition to state Running
+	if err := blockchainClient.SendNotification(ctx, notification); err != nil {
+		logger.Errorf("[Main] failed to send RUN notification [%v]", err)
+		panic(err)
+	}
+
+	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining
 	if startMiner {
 		if err = sm.AddService("miner", miner.NewMiner(ctx, logger.New("miner"))); err != nil {
 			panic(err)
