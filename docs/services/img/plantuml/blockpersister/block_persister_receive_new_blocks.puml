@@ -4,35 +4,37 @@ participant "Kafka" as Kafka
 participant "Block Persister Service" as BlockPersister
 database "TxMetaStore" as TMS
 database "Substree Store" as SubtreeStore
-database "Decorated Block Store" as BlockStore
-
+database "Substree Store" as SubtreeStore
+database "File Storage" as FileStorage
 
 Blockchain -> Kafka: Emit Kafka Block Notification
 Kafka -> BlockPersister: Notify Block Received
-BlockPersister -> BlockPersister: blockFinalHandler(ctx, _, blockBytes)
+BlockPersister -> BlockPersister: blocksFinalHandler(ctx, _, blockBytes)
 activate BlockPersister
+BlockPersister -> BlockPersister: persistBlock(ctx, hash, blockBytes)
+activate BlockPersister
+BlockPersister -> BlockPersister: Create UTXODiff for block
+
+
 BlockPersister -> BlockPersister: Create file for block
-BlockPersister -> BlockPersister: Write block header to file
-BlockPersister -> BlockPersister: Write number of block transactions to file
-BlockPersister -> BlockPersister: Write Coinbase Tx to file
+BlockPersister -> BlockPersister: Write block header to block file (.block)
+BlockPersister -> FileStorage: Persist block file (.block) to storage
+
 loop for each Subtree in the Block
-    BlockPersister -> BlockPersister: processSubtree(ctx, subtreeHash)
-    activate BlockPersister
-    BlockPersister -> SubtreeStore: Get Subtree from Subtree Store
-    loop for each 1000s Tx in Subtree
-        BlockPersister -> TMS : MetaBatchDecorate Tx batch
-        TMS --> BlockPersister
-        BlockPersister -> BlockPersister : Checks if Tx is not Coinbase Tx
-        alt if Tx is not Coinbase Tx then
-            BlockPersister -> BlockPersister: Write Tx to file
-        end
-    end
-    deactivate BlockPersister
+    BlockPersister -> FileStorage: Create subtree file (.subtree)
 end
 
-BlockPersister -> BlockStore: Persist block file to storage
+BlockPersister -> FileStorage: Create UTXODiff file  (.utxodiff)
+
+activate BlockPersister
+BlockPersister -> FileStorage: Create UTXO Set file (.utxoset)
 deactivate BlockPersister
 
-left footer Last Modified On: 15-March-2024
+
+deactivate BlockPersister
+deactivate BlockPersister
+
+
+left footer Last Modified On: 6-May-2024
 
 @enduml
