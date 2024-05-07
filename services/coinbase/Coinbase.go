@@ -583,11 +583,13 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 		}
 	}
 
-	if blobBestBlockHeight >= coinbaseBestBlockMeta.Height {
-		err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
-		if err != nil {
-			return fmt.Errorf("could not process coinbase %+v", err)
-		}
+	if blobBestBlockHeight != coinbaseBestBlockMeta.Height {
+		c.logger.Warnf("asset service reports block height of %d whereas coinbase service reports %d", blobBestBlockHeight, coinbaseBestBlockMeta.Height)
+	}
+
+	err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
+	if err != nil {
+		return fmt.Errorf("could not process coinbase %+v", err)
 	}
 
 	return nil
