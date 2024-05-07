@@ -1,0 +1,69 @@
+@startuml
+participant "Blockchain Service" as Blockchain
+participant "Kafka" as Kafka
+participant "Block Persister Service" as BlockPersister
+database "TxMetaStore" as TMS
+database "Substree Store" as SubtreeStore
+database "Substree Store" as SubtreeStore
+database "File Storage" as FileStorage
+
+Blockchain -> Kafka: Emit Kafka Block Notification
+Kafka -> BlockPersister: Notify Block Received
+BlockPersister -> BlockPersister: blocksFinalHandler(ctx, _, blockBytes)
+activate BlockPersister
+BlockPersister -> BlockPersister: persistBlock(ctx, hash, blockBytes)
+activate BlockPersister
+BlockPersister -> BlockPersister: Create UTXODiff for block
+BlockPersister -> BlockPersister: Add coinbase utxos to the UTXODiff
+
+
+BlockPersister -> BlockPersister: Create file for block
+BlockPersister -> BlockPersister: Write block header to block file (.block)
+BlockPersister -> FileStorage: Persist block file (.block) to storage
+
+loop for each Subtree in the Block
+    BlockPersister -> BlockPersister: processSubtree(ctx, subtreeHash)
+    activate BlockPersister
+    BlockPersister -> BlockPersister: Create file for subtree
+    BlockPersister -> SubtreeStore: Get Subtree from Subtree Store
+    loop for each 1000s Tx in Subtree
+        BlockPersister -> TMS : MetaBatchDecorate Tx batch
+        TMS --> BlockPersister
+    end
+
+    BlockPersister -> BlockPersister: Write number of txs in the subtree to subtree file
+    loop for each Tx Meta in Subtree
+        alt Coinbase Tx
+           BlockPersister -> TMS: Write Coinbase Tx to subtree fil
+        else
+            BlockPersister -> TMS: Write Tx Meta to subtree file
+            BlockPersister -> TMS: Process Tx Meta in UTXODiff
+        end
+
+        TMS --> BlockPersister
+    end
+
+    BlockPersister -> BlockPersister: Write number of txs in the subtree to subtree file
+
+    BlockPersister -> FileStorage: Persist subtree file (.subtree) to storage
+
+    deactivate BlockPersister
+end
+
+BlockPersister -> FileStorage: Persist UTXODiff file  (.utxodiff) to storage
+
+BlockPersister -> BlockPersister: Compute UTXO Set for the block
+activate BlockPersister
+BlockPersister -> BlockPersister: Load previous UTXO Set
+BlockPersister -> BlockPersister: Apply UTXODiff to UTXO Set
+BlockPersister -> FileStorage: Write UTXO Set to file (.utxoset)
+deactivate BlockPersister
+
+
+deactivate BlockPersister
+deactivate BlockPersister
+
+
+left footer Last Modified On: 6-May-2024
+
+@enduml

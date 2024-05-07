@@ -22,12 +22,12 @@ This service plays a key role within the Teranode network, guaranteeing that txs
 
 It's important to note that the post-processed subtree data file is not automatically utilized by any subsequent service. However, the decorated subtrees remain invaluable for future data analysis and inspection.
 
-![Block_Persister_Service_Container_Diagram.png](img%2FBlock_Persister_Service_Container_Diagram.png)
+![Block_Persister_Service_Container_Diagram.png](img/Block_Persister_Service_Container_Diagram.png)
 
 * The Block Persister consumes notifications from the Blockchain service, and stores the decorated block in a data store (such as S3).
 
-![Block_Persister_Service_Component_Diagram.png](img%2FBlock_Persister_Service_Component_Diagram.png)
-*
+![Block_Persister_Service_Component_Diagram.png](img/Block_Persister_Service_Component_Diagram.png)
+
 * The Blockchain service relies on Kafka for its new block notifications, to which the Block Persister service subscribes to.
 
 
@@ -35,21 +35,28 @@ It's important to note that the post-processed subtree data file is not automati
 
 ### 2.1 Service Initialization
 
-![block_persister_init.svg](img%2Fplantuml%2Fblockpersister%2Fblock_persister_init.svg)
+![block_persister_init.svg](img/plantuml/blockpersister/block_persister_init.svg)
 
 - The service starts by initializing a connection to the subtree store and subscribing to the new block notifications from Kafka.
 - Additionally, it subscribes to internally generated subtree notifications.
 
 ### 2.2 Receiving and Processing a new Block Notification
 
-![block_persister_receive_new_blocks.svg](img%2Fplantuml%2Fblockpersister%2Fblock_persister_receive_new_blocks.svg)
 
 - The Blockchain service, after adding a new block, emits a Kafka notification which is received by the Block Persister service.
 - The Block Persister service creates a new file for the block.
-- Within the new file, the service stores the block header, block number of transactions, coinbase tx, and the decorated transactions
-- To create the decorated transactions, the service will request the subtree from the subtree store. Then, it will iterate the Txs, sending batches of 1000 (or any other batch value as configured via settings) to the TX Meta Store. The TX Meta Store is responsible for adding the meta data to all transactions.
-- Finally, the block file is saved to the storage.
+- It then creates a new file for each subtree, including the number of transactions in the subtree, and the decorated transactions (as txmeta).
+- Additionally, 2 files are created for the block: a `UTXO Diff` and a `UTXO Set`.
+  - The UTXO Diff file contains the UTXO Set difference between the previous block and the current block. This is basically a list of added Txs (outputs), including the Coinbase Tx, and removed Txs (inputs).
+  - The UTXO Set file contains the UTXO Set for the current block. This is effectively a snapshot of the UTXOs at the time the block was created. A block UTXO Set is used as input for the next block UTXO Set, and so on.
 
+![block_persister_receive_new_blocks.svg](img/plantuml/blockpersister/block_persister_receive_new_blocks.svg)
+
+Going into more detail, the Block Persister service iterates each subtree (with some level of concurrency), decorating the transactions (txmeta) in batches for each subtree. For each subtree, the service creates a subtree file that contains the txmeta transactions.
+
+![block_persister_receive_new_blocks_subtrees.svg](img/plantuml/blockpersister/block_persister_receive_new_blocks_subtrees.svg)
+
+Additionally, the UTXO Diff is built by adding the coinbase tx for the block, and then processing all inputs and outputs from all transactions in all subtrees. Finally, the UTXO Set is built by applying the UTXO Diff to the previous block UTXO Set.
 
 ## 3. Data Model
 
@@ -110,4 +117,7 @@ The `blockpersister` service utilizes specific `gocore` settings for configurati
   - **Purpose:** Sets the concurrency limit for parallel transaction processing in subtrees.
   - **Usage:** Controls the number of goroutines for processing transaction metadata concurrently during subtree processing.
 
-¡
+5. **blockPersister_processUTXOSets**
+
+ - **Purpose**: Determines whether the service should process UTXO Sets.
+ - **Usage**: If set to `true`, the service will process UTXO Sets for each block.
