@@ -306,6 +306,128 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		return err
 	}
 
+	switch c.engine {
+	case util.Postgres:
+
+		if _, err := c.db.ExecContext(ctx, `
+			CREATE TABLE IF NOT EXISTS spendable_utxos_log (
+				id BIGSERIAL PRIMARY KEY,
+				 change_type CHAR(1)  -- 'I' for insert, 'D' for delete, 'U' for update
+				,utxo_count_change BIGINT DEFAULT 0
+				,satoshis_change BIGINT DEFAULT 0
+			);
+			`); err != nil {
+			return err
+		}
+
+		if _, err := c.db.ExecContext(ctx, `
+			CREATE TABLE IF NOT EXISTS spendable_utxos_balance (
+				utxo_count BIGINT DEFAULT 0
+				,total_satoshis BIGINT DEFAULT 0
+			);
+			`); err != nil {
+			return err
+		}
+
+		if _, err := c.db.ExecContext(ctx, `
+			INSERT INTO spendable_utxos_balance (
+				 utxo_count
+				,total_satoshis
+			) SELECT 
+					 COALESCE(COUNT(*), 0)
+					,COALESCE(SUM(satoshis), 0)
+				FROM 
+					spendable_utxos;
+		`); err != nil {
+			return err
+		}
+
+		if _, err := c.db.ExecContext(ctx, `
+				CREATE OR REPLACE FUNCTION log_spendable_utxos_balance()
+				RETURNS TRIGGER AS $$
+				BEGIN
+						IF OLD IS NULL THEN
+								-- INSERT
+								INSERT INTO spendable_utxos_log (change_type, utxo_count_change, satoshis_change)
+								VALUES ('I', 1, NEW.satoshis);
+						ELSIF NEW IS NULL THEN
+								-- DELETE
+								INSERT INTO spendable_utxos_log (change_type, utxo_count_change, satoshis_change)
+								VALUES ('D', -1, -OLD.satoshis);
+						ELSE
+								-- UPDATE
+								INSERT INTO spendable_utxos_log (change_type, utxo_count_change, satoshis_change)
+								VALUES ('U', 0, NEW.satoshis - OLD.satoshis);
+						END IF;
+				
+						RETURN NULL;
+				END;
+				$$ LANGUAGE plpgsql;
+			`); err != nil {
+			return err
+		}
+
+		if _, err := c.db.ExecContext(ctx, `
+				CREATE OR REPLACE TRIGGER trigger_spendable_utxos_log
+				AFTER INSERT OR UPDATE OR DELETE ON spendable_utxos
+				FOR EACH ROW
+				EXECUTE FUNCTION log_spendable_utxos_balance();
+			`); err != nil {
+			return err
+		}
+
+		// this need the cron extension to be install on postgres server
+		// for the moment (until this solution is proven viable) we will use a go routine
+		// to update the spendable balance (see monitorSpendableUTXOs)
+		// if _, err := c.db.ExecContext(ctx, `
+		// SELECT cron.schedule('*/1 * * * *', $$ -- Run every minute
+		// DECLARE
+		// 	total_changes RECORD;
+		// BEGIN
+		// 	SELECT
+		// 			COALESCE(SUM(utxo_count_change), 0) AS total_utxo_count
+		// 			,COALESCE(SUM(satoshis_change), 0) AS total_satoshis
+		// 	INTO total_changes
+		// 	FROM spendable_utxos_log;
+
+		// 	UPDATE spendable_utxos_balance
+		// 	SET
+		// 		utxo_count = utxo_count + total_changes.total_utxo_count
+		// 		,total_satoshis = total_satoshis + total_changes.total_satoshis;
+
+		// 	DELETE FROM spendable_utxos_log;
+		// END;
+		// $$);
+		// 	`); err != nil {
+		// 	return err
+		// }
+
+		if _, err := c.db.ExecContext(ctx, `
+				CREATE OR REPLACE FUNCTION get_spendable_utxos_balance()
+				RETURNS TABLE (utxo_count BIGINT, total_satoshis BIGINT) AS $$
+				BEGIN
+					RETURN QUERY
+	
+					SELECT
+						 sb.utxo_count + CAST(sl.utxo_count_change AS BIGINT) AS utxo_count
+						,sb.total_satoshis + CAST(sl.satoshis_change AS BIGINT) AS total_satoshis
+					FROM
+						 spendable_utxos_balance sb
+						,(
+								SELECT
+										 COALESCE(SUM(utxo_count_change), 0) AS utxo_count_change
+										,COALESCE(SUM(satoshis_change), 0) AS satoshis_change
+								FROM
+										spendable_utxos_log
+						) sl;
+				END;
+				$$ LANGUAGE plpgsql;
+			`); err != nil {
+			return err
+		}
+
+	} // end switch
+
 	if _, err := c.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS ux_coinbase_utxos_txid_vout ON coinbase_utxos (txid, vout);`); err != nil {
 		_ = c.db.Close()
 		return fmt.Errorf("could not create ux_coinbase_utxos_txid_vout index - [%+v]", err)
@@ -594,6 +716,10 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 			c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", utxo.TxIDHash, utxo.Vout)
 			if err = c.splitUtxo(c.gCtx, utxo); err != nil {
 				return fmt.Errorf("could not split utxo: %w", err)
+			}
+			// TODO remove this when we start using postgres cron job to do this periodically
+			if err := c.aggregateBalance(ctx); err != nil {
+				return fmt.Errorf("could not aggregate balance: %w", err)
 			}
 			return nil
 		})
@@ -966,18 +1092,65 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
+/*
+*
+Run this periodically to update the spendable balance
+Failure to run this will result in a progressively slower getBalance().
+Ideally this is a cron job running on the postgres server
+but this means installing the cron extension and I don't want to hassle devops
+until this is a proven solution.
+*/
+func (c *Coinbase) aggregateBalance(ctx context.Context) error {
+
+	switch c.engine {
+	case util.Postgres:
+		if _, err := c.db.ExecContext(ctx, `
+				DO $$
+				DECLARE
+					total_changes RECORD;
+				BEGIN
+					SELECT
+						 COALESCE(SUM(utxo_count_change), 0) AS total_utxo_count
+						,COALESCE(SUM(satoshis_change), 0) AS total_satoshis
+					INTO total_changes
+					FROM spendable_utxos_log;
+			
+					UPDATE spendable_utxos_balance
+					SET
+						 utxo_count = utxo_count + total_changes.total_utxo_count
+						,total_satoshis = total_satoshis + total_changes.total_satoshis;
+		
+					DELETE FROM spendable_utxos_log;
+				END;
+				$$;
+			`); err != nil {
+			return err
+		}
+	} // switch
+
+	return nil
+}
+
 func (c *Coinbase) getBalance(ctx context.Context) (*coinbase_api.GetBalanceResponse, error) {
 	res := &coinbase_api.GetBalanceResponse{}
 
-	if err := c.db.QueryRowContext(ctx, `
-		SELECT
-		 COUNT(*)
-		,COALESCE(SUM(satoshis), 0)
-		FROM spendable_utxos;
-	`).Scan(&res.NumberOfUtxos, &res.TotalSatoshis); err != nil {
-		return nil, err
-	}
-
+	switch c.engine {
+	case util.Postgres:
+		if err := c.db.QueryRowContext(ctx, `
+			SELECT * FROM get_spendable_utxos_balance()
+		`).Scan(&res.NumberOfUtxos, &res.TotalSatoshis); err != nil {
+			return nil, err
+		}
+	default:
+		if err := c.db.QueryRowContext(ctx, `
+			SELECT
+		   COUNT(*)
+			,COALESCE(SUM(satoshis), 0)
+			FROM spendable_utxos;
+		`).Scan(&res.NumberOfUtxos, &res.TotalSatoshis); err != nil {
+			return nil, err
+		}
+	} //switch
 	return res, nil
 }
 
