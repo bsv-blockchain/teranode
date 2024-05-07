@@ -15,34 +15,8 @@ type Error struct {
 	Code       ERR
 	Message    string
 	WrappedErr error
+	Data       map[string]interface{}
 }
-
-var (
-	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
-	ErrInvalidArgument            = New(ERR_INVALID_ARGUMENT, "invalid argument")
-	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
-	ErrNotFound                   = New(ERR_NOT_FOUND, "not found")
-	ErrProcessing                 = New(ERR_PROCESSING, "error processing")
-	ErrError                      = New(ERR_ERROR, "generic error")
-	ErrBlockNotFound              = New(ERR_BLOCK_NOT_FOUND, "block not found")
-	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
-	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
-	ErrSubtreeNotFound            = New(ERR_SUBTREE_NOT_FOUND, "subtree not found")
-	ErrSubtreeInvalid             = New(ERR_SUBTREE_INVALID, "subtree invalid")
-	ErrSubtreeError               = New(ERR_SUBTREE_ERROR, "subtree error")
-	ErrTxNotFound                 = New(ERR_TX_NOT_FOUND, "tx not found")
-	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")
-	ErrTxInvalidDoubleSpend       = New(ERR_TX_INVALID_DOUBLE_SPEND, "tx invalid double spend")
-	ErrTxAlreadyExists            = New(ERR_TX_ALREADY_EXISTS, "tx already exists")
-	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
-	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
-	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
-	ErrServiceError               = New(ERR_SERVICE_ERROR, "service error")
-	ErrStorageUnavailable         = New(ERR_STORAGE_UNAVAILABLE, "storage unavailable")
-	ErrStorageNotStarted          = New(ERR_STORAGE_NOT_STARTED, "storage not started")
-	ErrStorageError               = New(ERR_STORAGE_ERROR, "storage error")
-	ErrCoinbaseMissingBlockHeight = New(ERR_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script doesn't have the block height")
-)
 
 func (e *Error) Error() string {
 	if e.WrappedErr == nil {
@@ -54,12 +28,30 @@ func (e *Error) Error() string {
 
 // Is reports whether error codes match.
 func (e *Error) Is(target error) bool {
-	var ue *Error
-	if errors.As(target, &ue) {
-		return e.Code == ue.Code
+	if e == nil {
+		return false
 	}
 
-	return errors.Is(errors.Unwrap(e), target)
+	var ue *Error
+	if errors.As(target, &ue) {
+		//return e.Code == ue.Code
+		if e.Code == ue.Code {
+			return true
+		}
+
+		if e.WrappedErr == nil {
+			return false
+		}
+	}
+
+	// Unwrap the current error and recursively call Is on the unwrapped error
+	if unwrapped := errors.Unwrap(e); unwrapped != nil {
+		if ue, ok := unwrapped.(*Error); ok {
+			return ue.Is(target)
+		}
+	}
+
+	return false
 }
 
 func (e *Error) Unwrap() error {
@@ -67,26 +59,42 @@ func (e *Error) Unwrap() error {
 }
 
 func New(code ERR, message string, params ...interface{}) *Error {
-	var wErr error
+	var wErr *Error
+	var data map[string]interface{}
 
-	// sprintf the message with the params except the last one if the last one is an error
+	// Extract the wrapped error and data, if present
 	if len(params) > 0 {
-		if err, ok := params[len(params)-1].(error); ok {
+		if err, ok := params[len(params)-1].(*Error); ok {
 			wErr = err
+			data = err.Data
 			params = params[:len(params)-1]
 		}
 	}
 
+	// Extract additional data, if present
+	if len(params)%2 == 0 {
+		if data == nil {
+			data = make(map[string]interface{})
+		}
+		for i := 0; i < len(params); i += 2 {
+			if key, ok := params[i].(string); ok {
+				data[key] = params[i+1]
+			}
+		}
+	}
+
+	// Format the message with the remaining parameters
 	if len(params) > 0 {
 		message = fmt.Sprintf(message, params...)
 	}
 
-	// Check the code exists in the ErrorConstants enum
+	// Check if the code exists in the ErrorConstants enum
 	if _, ok := ERR_name[int32(code)]; !ok {
 		return &Error{
 			Code:       code,
 			Message:    "invalid error code",
 			WrappedErr: wErr,
+			Data:       data,
 		}
 	}
 
@@ -94,6 +102,26 @@ func New(code ERR, message string, params ...interface{}) *Error {
 		Code:       code,
 		Message:    message,
 		WrappedErr: wErr,
+		Data:       data,
+	}
+}
+
+func (e *Error) WithData(key string, value interface{}) *Error {
+	newData := make(map[string]interface{})
+
+	// Copy existing data
+	for k, v := range e.Data {
+		newData[k] = v
+	}
+
+	// Add new data
+	newData[key] = value
+
+	return &Error{
+		Code:       e.Code,
+		Message:    e.Message,
+		WrappedErr: e.WrappedErr,
+		Data:       newData,
 	}
 }
 
@@ -113,8 +141,10 @@ func WrapGRPC(err error) error {
 		if err != nil {
 			return status.New(codes.Internal, "error adding details to gRPC status").Err()
 		}
+
 		return st.Err()
 	}
+
 	return status.New(ErrorCodeToGRPCCode(ErrUnknown.Code), ErrUnknown.Message).Err()
 }
 
