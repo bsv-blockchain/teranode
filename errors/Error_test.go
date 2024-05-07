@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,20 +17,46 @@ import (
 // Test_NewCustomError tests the creation of custom errors.
 func Test_NewCustomError(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "resource not found")
-	assert.NotNil(t, err)
-	assert.Equal(t, ERR_NOT_FOUND, err.Code)
-	assert.Equal(t, "resource not found", err.Message)
+	require.NotNil(t, err)
+	require.Equal(t, ERR_NOT_FOUND, err.Code)
+	require.Equal(t, "resource not found", err.Message)
 
 	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", err)
 	thirdErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", secondErr)
 	anotherErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "Another ERR, block is invalid")
-	olderError := fmt.Errorf("older error: %w", thirdErr)
-	fourthErr := New(ERR_BLOCK_INVALID, "invalid tx double spend error", olderError)
+	fourthErr := New(ERR_SERVICE_ERROR, "older error: ", thirdErr)
+	fifthErr := New(ERR_BLOCK_INVALID, "invalid tx double spend error", fourthErr)
 
-	assert.ErrorIs(t, anotherErr, thirdErr)
-	assert.ErrorIs(t, fourthErr, ErrTxInvalidDoubleSpend)
-	assert.ErrorIs(t, fourthErr, err)
-	assert.NotErrorIs(t, anotherErr, fourthErr)
+	require.True(t, anotherErr.Is(thirdErr))
+	require.True(t, fourthErr.Is(New(ERR_TX_INVALID_DOUBLE_SPEND, "")))
+	require.True(t, fourthErr.Is(ErrTxInvalidDoubleSpend))
+
+	require.True(t, fourthErr.Is(err))
+	require.True(t, fifthErr.Is(thirdErr))
+	require.True(t, fifthErr.Is(err))
+
+	require.False(t, anotherErr.Is(fourthErr))
+	require.False(t, fifthErr.Is(ErrBlockNotFound))
+
+}
+
+func Test_FmtErrorCustomError(t *testing.T) {
+	err := New(ERR_NOT_FOUND, "resource not found")
+	require.NotNil(t, err)
+	require.Equal(t, ERR_NOT_FOUND, err.Code)
+	require.Equal(t, "resource not found", err.Message)
+
+	fmtError := fmt.Errorf("error: %w", err)
+	require.NotNil(t, fmtError)
+	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", fmtError)
+	require.NotNil(t, secondErr)
+
+	// If we FMT Err, then they won't be recognized as equal
+	require.False(t, secondErr.Is(err))
+
+	altErr := New(ERR_INVALID_ARGUMENT, "invalid argument", err)
+	altSecondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", fmtError)
+	require.True(t, altSecondErr.Is(altErr))
 }
 
 // Test_WrapGRPC tests wrapping a custom error for gRPC.
@@ -45,10 +71,6 @@ func Test_WrapGRPC(t *testing.T) {
 	if s.Code() != codes.Internal {
 		t.Errorf("expected gRPC code %v; got %v", codes.Internal, s.Code())
 	}
-
-	// if s.Message() != "not found" {
-	// 	t.Errorf("expected gRPC message 'not found'; got '%s'", s.Message())
-	// }
 }
 
 // TestUnwrapGRPC tests unwrapping a gRPC error back to a custom error.
@@ -113,30 +135,31 @@ func Test_ErrorWrapWithAdditionalContext(t *testing.T) {
 	if !strings.Contains(wrappedErr.Error(), "Some more additional context") {
 		t.Errorf("Wrapped error does not contain additional context")
 	}
-
-	fmt.Println(wrappedErr)
 }
 
 func Test_ErrorEquality(t *testing.T) {
 	err1 := New(ERR_NOT_FOUND, "resource not found")
 	err2 := New(ERR_NOT_FOUND, "resource not found")
 
-	if !errors.Is(err1, err2) {
+	if !err1.Is(err2) {
 		t.Errorf("Errors with the same code and message should be equal")
 	}
 
 	// same error codes
 	err2 = New(ERR_NOT_FOUND, "invalid argument")
 
-	if !errors.Is(err1, err2) {
+	if !err1.Is(err2) {
 		t.Errorf("Errors with same codes should be equal")
 	}
 
 	// different error codes
 	err2 = New(ERR_INVALID_ARGUMENT, "resource not found")
-	if errors.Is(err1, err2) {
+	if err1.Is(err2) {
 		t.Errorf("Errors with different codes should not be equal")
 	}
+
+	dsErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "[ValidateBlock][%s] failed to set block subtrees_set: ")
+	require.True(t, dsErr.Is(ErrTxInvalidDoubleSpend))
 }
 
 func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
@@ -243,13 +266,15 @@ func createGRPCError(code ERR, msg string) error {
 }
 
 func TestStorageError(t *testing.T) {
-	otherError := fmt.Errorf("storage error")
-	err := New(ERR_STORAGE_ERROR, "error getting transaction %s from txMetaStore", chainhash.Hash{}, otherError)
-	assert.NotNil(t, err)
-	assert.Equal(t, ERR_STORAGE_ERROR, err.Code)
-	assert.Equal(t, "error getting transaction 0000000000000000000000000000000000000000000000000000000000000000 from txMetaStore", err.Message)
-	assert.True(t, Is(err, ErrStorageError), "expected error to be of type ERR_STORAGE_ERROR")
-	assert.True(t, Is(err, otherError), "expected error to be of type otherError")
+	otherError := New(ERR_ERROR, "storage error")
+	require.NotNil(t, otherError)
+	require.Equal(t, ERR_ERROR, otherError.Code)
+
+	err := New(ERR_STORAGE_ERROR, "error getting transaction %s from txMetaStore", otherError).WithData("block id", chainhash.Hash{})
+	require.NotNil(t, err)
+	require.Equal(t, ERR_STORAGE_ERROR, err.Code)
+	require.True(t, Is(err, ErrStorageError), "expected error to be of type ERR_STORAGE_ERROR")
+	require.True(t, err.Is(otherError), "expected error to be of type otherError")
 }
 
 func Test_JoinWithMultipleErrs(t *testing.T) {
@@ -258,6 +283,65 @@ func Test_JoinWithMultipleErrs(t *testing.T) {
 	err3 := New(ERR_INVALID_ARGUMENT, "invalid argument")
 
 	joinedErr := Join(err1, err2, err3)
-	assert.NotNil(t, joinedErr)
-	assert.Equal(t, "3: not found, 10: block not found, 1: invalid argument", joinedErr.Error())
+	require.NotNil(t, joinedErr)
+	require.Equal(t, "Error: NOT_FOUND (error code: 3),  not found: <nil>, Error: BLOCK_NOT_FOUND (error code: 10),  block not found: <nil>, Error: INVALID_ARGUMENT (error code: 1),  invalid argument: <nil>", joinedErr.Error())
+}
+
+func Test_AddDataToWrappedError(t *testing.T) {
+	// Create a base error
+	baseErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "base error")
+
+	// Wrap the base error multiple times
+	wrappedOnce := baseErr
+	wrappedTwice := New(ERR_UNKNOWN, "error wrapped twice", wrappedOnce)
+
+	// Add data to the twice wrapped error
+	data := map[string]interface{}{
+		"key": 1000,
+	}
+	errWithData := wrappedTwice.WithData("key", 1000)
+
+	// Check if the data is added correctly
+	if !dataEqual(errWithData.Data, data) {
+		t.Errorf("Failed to add data to the wrapped error")
+	}
+
+	// Check if the base error is still reachable through unwrapping
+	if !errors.Is(errWithData, baseErr) {
+		t.Errorf("Should identify base error anywhere in the unwrap chain")
+	}
+}
+
+func Test_AddDataToWrappedError2(t *testing.T) {
+	// Create a base error
+	baseErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "base error").WithData("key0", 0)
+
+	// Wrap the base error multiple times, each time adding additional data
+	wrappedOnce := baseErr.WithData("key1", 1000)
+	wrappedTwice := New(ERR_UNKNOWN, "error wrapped twice", wrappedOnce).WithData("key2", 2000)
+	wrappedThrice := New(ERR_BLOCK_NOT_FOUND, "error wrapped thrice", wrappedTwice).WithData("key3", 3000)
+
+	// wrappedThrice should have the data from all the wrapping errors, we can access by unwrapping
+	// fmt.Println("Error data:", wrappedThrice.Data)
+	require.True(t, dataEqual(wrappedThrice.Data, map[string]interface{}{"key0": 0, "key1": 1000, "key2": 2000, "key3": 3000}))
+
+	// Check if the base error is still reachable through unwrapping
+	if !errors.Is(wrappedThrice, baseErr) {
+		t.Errorf("Should identify base error anywhere in the unwrap chain")
+	}
+}
+
+// dataEqual checks if two maps are equal
+func dataEqual(map1, map2 map[string]interface{}) bool {
+	if len(map1) != len(map2) {
+		//fmt.Println("Length mismatch")
+		return false
+	}
+	for k, v := range map1 {
+		if val, ok := map2[k]; !ok || val != v {
+			fmt.Println("Mismatch in key:", k, ", val1:", v, ", val2:", val)
+			return false
+		}
+	}
+	return true
 }
