@@ -5,7 +5,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/looplab/fsm"
 )
 
@@ -19,7 +18,7 @@ import (
 // - Mine
 // - StopMining
 // - Stop
-func (b *Blockchain) NewFiniteStateMachine(logger ulogger.Logger, opts ...func(*fsm.FSM)) *fsm.FSM {
+func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 
 	// Define callbacks
 	callbacks := fsm.Callbacks{
@@ -37,7 +36,7 @@ func (b *Blockchain) NewFiniteStateMachine(logger ulogger.Logger, opts ...func(*
 			})
 
 			if err != nil {
-				logger.Errorf("[Blockchain][FiniteStateMachine] error sending notification: %s", err)
+				b.logger.Errorf("[Blockchain][FiniteStateMachine] error sending notification: %s", err)
 			}
 		},
 	}
