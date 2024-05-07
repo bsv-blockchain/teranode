@@ -345,10 +345,15 @@ func main() {
 
 			switch scriptType {
 			case "p2pkh":
+				fallthrough
 			case "p2pk":
+				fallthrough
 			case "p2sh":
+				fallthrough
 			case "p2ms":
+				fallthrough
 			case "non-standard":
+				fallthrough
 			default:
 				fmt.Printf("%x, %v, %v, %v, %v, %x, %v\n",
 					txid,
