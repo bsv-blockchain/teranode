@@ -16,6 +16,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/looplab/fsm"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -42,6 +43,7 @@ type Blockchain struct {
 	difficulty         *Difficulty
 	blockKafkaProducer util.KafkaProducerI
 	stats              *gocore.Stat
+	finiteStateMachine *fsm.FSM
 }
 
 // New will return a server instance with the logger stored within it
@@ -67,6 +69,7 @@ func New(ctx context.Context, logger ulogger.Logger) (*Blockchain, error) {
 	if err != nil {
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}
+
 	return &Blockchain{
 		store:             s,
 		logger:            logger,
@@ -85,7 +88,8 @@ func (b *Blockchain) Health(ctx context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (b *Blockchain) Init(ctx context.Context) error {
+func (b *Blockchain) Init(_ context.Context) error {
+	b.finiteStateMachine = b.NewFiniteStateMachine()
 	return nil
 }
 
