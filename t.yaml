@@ -1,0 +1,66 @@
+apiVersion: v1
+data:
+  mapRoles: |
+    - groups:
+      - system:bootstrappers
+      - system:nodes
+      rolearn: arn:aws:iam::434394763103:role/NodeInstanceRole-us-east-1
+      username: system:node:{{EC2PrivateDNSName}}
+  mapUsers: |
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/oli.oskarsson@bsvblockchain.org
+      username: oli
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/graheshtunuguntla972@gmail.com
+      username: grahesh
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/github-ci-cd-user
+      username: github-ci-cd
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/sukhendu.ghosh@bsvblockchain.org
+      username: sukhendu
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/gokhansagirlar@gmail.com
+      username: gokhan
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/simon@taal.com
+      username: simon
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/sigudur@bitcoinassociation.net
+      username: siggi
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/liam.missin@bsvblockchain.org
+      username: liam
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/stu@team-freeman.com
+      username: stu
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/vicente@betica.com
+      username: vicente
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/jeff@lightweb.net
+      username: jeff
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/augustyn.chmiel@4chain.studio
+      username: augustyn
+    - groups:
+      - ubsv-core-dev
+      userarn: arn:aws:iam::434394763103:user/graheshtunuguntla972@gmail.com
+      username: graheshtunuguntla
+immutable: false
+kind: ConfigMap
+metadata:
+  name: aws-auth
+  namespace: kube-system
