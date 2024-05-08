@@ -9,6 +9,11 @@ use postman
 
 `{"method": "getbestblockhash"}`
 
+`{"method": "createrawtransaction", "params": [[{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":0}],{"148EznH7niCQRUcsrtDgBBKUfYDYESscUQ":12.5}]}`
+
+`{"method": "sendrawtransaction", "params": ["010000000100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff01807c814a000000001976a9142246f8f846d04b71fbec79815c7ab487b47737a388ac00000000"]}`
+
+
 
 curl --user bitcoin  -X POST http://localhost:9292 \
      -H "Content-Type: application/json" \
