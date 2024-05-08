@@ -3,18 +3,18 @@ package errors
 import (
 	"errors"
 	"fmt"
+	"strings"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
-	"strings"
 )
 
 type Error struct {
 	Code       ERR
 	Message    string
 	WrappedErr error
-	Data       map[string]interface{}
 }
 
 func (e *Error) Error() string {
@@ -57,72 +57,72 @@ func (e *Error) Unwrap() error {
 	return e.WrappedErr
 }
 
-//type ErrDataKey struct {
-//	key string
-//}
-//
-//type ErrData interface {
-//	Error() string
-//}
-//
-//type DataUtxoSpent struct {
-//	Hash           chainhash.Hash
-//	SpendingTxHash chainhash.Hash
-//	Time           time.Time
-//}
-//
-//func (e *DataUtxoSpent) Error() string {
-//	return fmt.Sprintf("utxo %s already spent by %s at %s", e.Hash, e.SpendingTxHash, e.Time)
-//}
-//
-//func UtxoSpent(txID chainhash.Hash, spendingTxID chainhash.Hash, t time.Time, err error) error {
-//	utxoSpentErr := &DataUtxoSpent{
-//		Hash:           txID,
-//		SpendingTxHash: spendingTxID,
-//		Time:           t,
-//	}
-//	e := Join(utxoSpentErr, err)
-//	return New(ERR_TX_ALREADY_EXISTS, utxoSpentErr.Error(), e)
-//}
-//
-//func (e *Error) Asssss(err error) bool {
-//	//errrrr := New(ERR_TX_ALREADY_EXISTS, "utxo already spent: %s", "string", UtxoSpentData(chainhash.Hash{}), err)
-//	errrrr := UtxoSpent(chainhash.Hash{}, chainhash.Hash{}, time.Now(), err)
-//
-//	var spentErr *DataUtxoSpent
-//	if errors.As(errrrr, &spentErr) {
-//		if spentErr.SpendingTxHash.Equal(chainhash.Hash{}) {
-//			return true
-//		}
-//	}
-//
-//	return false
-//}
+// type ErrDataKey struct {
+// 	key string
+// }
+
+// type ErrData interface {
+// 	Error() string
+// }
+
+// type ErrDataUtxoSpent struct {
+// 	Hash           chainhash.Hash
+// 	SpendingTxHash chainhash.Hash
+// 	Time           time.Time
+// }
+
+// func (e *ErrDataUtxoSpent) Error() string {
+// 	return fmt.Sprintf("utxo %s already spent by %s at %s", e.Hash, e.SpendingTxHash, e.Time)
+// }
+
+// func UtxoSpent(txID chainhash.Hash, spendingTxID chainhash.Hash, t time.Time, err error) error {
+// 	utxoSpentErr := &ErrDataUtxoSpent{
+// 		Hash:           txID,
+// 		SpendingTxHash: spendingTxID,
+// 		Time:           t,
+// 	}
+// 	e := Join(utxoSpentErr, err)
+// 	return New(ERR_TX_ALREADY_EXISTS, utxoSpentErr.Error(), e)
+// }
+
+// func (e *Error) Asssss(err error) bool {
+// 	//errrrr := New(ERR_TX_ALREADY_EXISTS, "utxo already spent: %s", "string", UtxoSpentData(chainhash.Hash{}), err)
+// 	errrrr := UtxoSpent(chainhash.Hash{}, chainhash.Hash{}, time.Now(), err)
+
+// 	var spentErr *DataUtxoSpent
+// 	if errors.As(errrrr, &spentErr) {
+// 		if spentErr.SpendingTxHash.Equal(chainhash.Hash{}) {
+// 			return true
+// 		}
+// 	}
+
+// 	return false
+// }
 
 func New(code ERR, message string, params ...interface{}) *Error {
 	var wErr *Error
-	var data map[string]interface{}
+	//var data map[string]interface{}
 
 	// Extract the wrapped error and data, if present
 	if len(params) > 0 {
 		if err, ok := params[len(params)-1].(*Error); ok {
 			wErr = err
-			data = err.Data
+			//data = err.Data
 			params = params[:len(params)-1]
 		}
 	}
 
 	// Extract additional data, if present
-	if len(params)%2 == 0 {
-		if data == nil {
-			data = make(map[string]interface{})
-		}
-		for i := 0; i < len(params); i += 2 {
-			if key, ok := params[i].(string); ok {
-				data[key] = params[i+1]
-			}
-		}
-	}
+	// if len(params)%2 == 0 {
+	// if data == nil {
+	// 	data = make(map[string]interface{})
+	// }
+	// for i := 0; i < len(params); i += 2 {
+	// 	if key, ok := params[i].(string); ok {
+	// 		data[key] = params[i+1]
+	// 	}
+	// }
+	// }
 
 	// Format the message with the remaining parameters
 	if len(params) > 0 {
@@ -135,7 +135,6 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			Code:       code,
 			Message:    "invalid error code",
 			WrappedErr: wErr,
-			Data:       data,
 		}
 	}
 
@@ -143,28 +142,14 @@ func New(code ERR, message string, params ...interface{}) *Error {
 		Code:       code,
 		Message:    message,
 		WrappedErr: wErr,
-		Data:       data,
 	}
 }
 
-func (e *Error) WithData(key string, value interface{}) *Error {
-	newData := make(map[string]interface{})
+// func (e *Error) WithData(key string, value interface{}) *Error {
+// 	//e.Data = append(e.Data, key)
 
-	// Copy existing data
-	for k, v := range e.Data {
-		newData[k] = v
-	}
-
-	// Add new data
-	newData[key] = value
-
-	return &Error{
-		Code:       e.Code,
-		Message:    e.Message,
-		WrappedErr: e.WrappedErr,
-		Data:       newData,
-	}
-}
+// 	return e
+// }
 
 func WrapGRPC(err error) error {
 	if err == nil {
