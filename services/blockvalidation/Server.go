@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
@@ -746,6 +747,8 @@ LOOP:
 
 	catchupConcurrency, _ := gocore.Config().GetInt("blockvalidation_catchupConcurrency", util.Max(4, runtime.NumCPU()/2))
 
+	size := atomic.Uint32{}
+
 	// process the catchup block headers in reverse order and put them on the channel
 	// this will allow the blocks to be validated while getting them from the other node
 	g, gCtx := errgroup.WithContext(spanCtx)
@@ -760,6 +763,8 @@ LOOP:
 		var blocks []*model.Block
 		for _, batch := range batches {
 			u.logger.Debugf("[catchup][%s] getting %d blocks from %s", fromBlock.Hash().String(), batch.size, batch.hash.String())
+
+			size.Add(batch.size)
 
 			blocks, err = u.getBlocks(gCtx, &batch.hash, batch.size, baseURL)
 			if err != nil {
@@ -783,13 +788,12 @@ LOOP:
 		return nil
 	})
 
-	size := len(validateBlocksChan)
 	i := 0
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
 	for block := range validateBlocksChan {
 		i++
-		u.logger.Infof("[catchup][%s] validating block %d/%d [%s]", block.Hash().String(), i, size, block.Hash().String())
+		u.logger.Infof("[catchup][%s] validating block %d/%d", block.Hash().String(), i, size.Load())
 
 		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
