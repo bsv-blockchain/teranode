@@ -19,3 +19,7 @@ sleep $waitfor
 
 >&2 echo "$host is up - executing command"
 exec $cmd
+
+if [ "$host" = "postgres" ]; then
+  sleep 10
+fi
