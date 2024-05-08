@@ -3,12 +3,11 @@ package errors
 import (
 	"errors"
 	"fmt"
-	"strings"
-
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"strings"
 )
 
 type Error struct {
@@ -57,6 +56,48 @@ func (e *Error) Is(target error) bool {
 func (e *Error) Unwrap() error {
 	return e.WrappedErr
 }
+
+//type ErrDataKey struct {
+//	key string
+//}
+//
+//type ErrData interface {
+//	Error() string
+//}
+//
+//type DataUtxoSpent struct {
+//	Hash           chainhash.Hash
+//	SpendingTxHash chainhash.Hash
+//	Time           time.Time
+//}
+//
+//func (e *DataUtxoSpent) Error() string {
+//	return fmt.Sprintf("utxo %s already spent by %s at %s", e.Hash, e.SpendingTxHash, e.Time)
+//}
+//
+//func UtxoSpent(txID chainhash.Hash, spendingTxID chainhash.Hash, t time.Time, err error) error {
+//	utxoSpentErr := &DataUtxoSpent{
+//		Hash:           txID,
+//		SpendingTxHash: spendingTxID,
+//		Time:           t,
+//	}
+//	e := Join(utxoSpentErr, err)
+//	return New(ERR_TX_ALREADY_EXISTS, utxoSpentErr.Error(), e)
+//}
+//
+//func (e *Error) Asssss(err error) bool {
+//	//errrrr := New(ERR_TX_ALREADY_EXISTS, "utxo already spent: %s", "string", UtxoSpentData(chainhash.Hash{}), err)
+//	errrrr := UtxoSpent(chainhash.Hash{}, chainhash.Hash{}, time.Now(), err)
+//
+//	var spentErr *DataUtxoSpent
+//	if errors.As(errrrr, &spentErr) {
+//		if spentErr.SpendingTxHash.Equal(chainhash.Hash{}) {
+//			return true
+//		}
+//	}
+//
+//	return false
+//}
 
 func New(code ERR, message string, params ...interface{}) *Error {
 	var wErr *Error
