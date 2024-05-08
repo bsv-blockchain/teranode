@@ -27,13 +27,13 @@ jobs:
     strategy: # This will cause the workflow to terminate if any job fails
       fail-fast: true
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # Setup Docker Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        # with:
-        #  buildkitd-flags: --debug # Debug logs
+        with:
+         buildkitd-flags: --debug # Debug logs
 
       # Set up AWS CLI
       - name: Configure AWS credentials
