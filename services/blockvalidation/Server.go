@@ -484,12 +484,11 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 			return nil, err
 		}
 
-		// TODO GOKHAN
+		// if we are not in the beginning, and there are many blocks queued for vlaidation, we should stop mining
 		if block.Height > 2000 {
 			// we should tell the miner to stop mining.
-			u.logger.Infof("[BlockFound][%s] too many blocks in queue, sending STOPMINING", hash.String())
+			u.logger.Infof("[BlockFound][%s] too many blocks in queue, sending StopMining FSM event", hash.String())
 
-			// make make(map[string]string) with one element "event" : "STOPMINING"
 			// create a new blockchain notification
 			notification := &model.Notification{
 				Type:    model.NotificationType_FSMEvent,

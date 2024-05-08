@@ -125,7 +125,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 						// push block hash to the setMinedChan
 						bv.setMinedChan <- notification.Hash
 					} else if notification.Type == model.NotificationType_FSMEvent {
-						// TODO HERE
+						// TODO GOKHAN define what is done when the event FSM event
 					}
 				}
 			}

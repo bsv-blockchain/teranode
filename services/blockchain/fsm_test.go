@@ -17,13 +17,15 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 	fsm := blockchainClient.NewFiniteStateMachine()
 	require.NotNil(t, fsm)
 	require.Equal(t, "Stopped", fsm.Current())
-	require.True(t, fsm.Can("Run"))
+	require.True(t, fsm.Can(FiniteStateMachineEvent_Run))
 
 	// Test transitions
 	t.Run("Transition from Stopped to Running", func(t *testing.T) {
 		err := fsm.Event(ctx, "Run")
 		require.NoError(t, err)
 		require.Equal(t, "Running", fsm.Current())
+		require.True(t, fsm.Can(FiniteStateMachineEvent_Mine))
+		require.True(t, fsm.Can(FiniteStateMachineEvent_Stop))
 	})
 
 	t.Run("Transition from Running to Mining", func(t *testing.T) {
@@ -31,25 +33,29 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 		err := fsm.Event(ctx, "Run")
 		require.Error(t, err)
 
-		// Now, transition to Mining
+		// Transition to Mining
 		err = fsm.Event(ctx, "Mine")
 		require.NoError(t, err)
 		require.Equal(t, "Mining", fsm.Current())
+		require.True(t, fsm.Can(FiniteStateMachineEvent_StopMining))
+		require.True(t, fsm.Can(FiniteStateMachineEvent_Stop))
 	})
 
 	t.Run("Transition from Mining to Running", func(t *testing.T) {
-		// Transition back to Running
+		// Stop mining, transition to Running
 		err = fsm.Event(ctx, "StopMining")
 		require.NoError(t, err)
 		require.Equal(t, "Running", fsm.Current())
+		require.True(t, fsm.Can(FiniteStateMachineEvent_Mine))
+		require.True(t, fsm.Can(FiniteStateMachineEvent_Stop))
 	})
 
 	t.Run("Transition from Running to Stopped", func(t *testing.T) {
-
-		// Now, transition to Stopped
+		// Transition to Stopped
 		err = fsm.Event(ctx, "Stop")
 		require.NoError(t, err)
 		require.Equal(t, "Stopped", fsm.Current())
+		require.True(t, fsm.Can(FiniteStateMachineEvent_Run))
 	})
 
 }
