@@ -100,8 +100,8 @@ services:
       - kafka-shared
       # - aerospike-1
       - postgres
-    # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
       logLevel: "DEBUG"
@@ -126,7 +126,8 @@ services:
       - kafka-shared
       # - aerospike-2
       - postgres
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ci.ubsv2}
       logLevel: "DEBUG"
@@ -151,7 +152,8 @@ services:
       - kafka-shared
       # - aerospike-3
       - postgres
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ci.ubsv3}
       logLevel: "DEBUG"
