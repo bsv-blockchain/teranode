@@ -1,5 +1,10 @@
 //go:build e2eTest
 
+// How to run this test:
+// cd into this directory
+// Comment out the build tag above, then run `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowFairTx`
+// Once the test is complete, uncomment the build tag again and run `go test -run TestShouldAllowFairTx`
+
 package test
 
 import (
