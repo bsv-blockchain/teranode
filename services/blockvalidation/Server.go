@@ -475,6 +475,9 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 		return err
 	}
 
+	delay := 10 * time.Millisecond
+	maxDelay := 10 * time.Second
+
 	// check if the parent block is being validated, then wait for it to finish.
 	blockBeingFinalized := u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock) ||
 		u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock)
@@ -494,7 +497,12 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 				u.logger.Infof("[processBlockFound][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: %v - %v", hash.String(), retries, block.Header.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*block.Header.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*block.Header.HashPrevBlock))
 			}
 
-			time.Sleep(1 * time.Second)
+			time.Sleep(delay)
+			delay *= 2
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+
 			retries++
 		}
 		u.logger.Infof("[processBlockFound][%s] parent block is done being validated", hash.String())
