@@ -440,6 +440,9 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spe
 }
 
 func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
+	if tx.IsCoinbase() {
+		return nil
+	}
 
 	for _, input := range tx.Inputs {
 		// TODO use the new PreviousOutputsDecorate function
@@ -498,7 +501,7 @@ func (vb *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 
 	// 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
 	// 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
-	if err := vb.checkInputs(tx); err != nil {
+	if err := vb.checkInputs(tx, blockHeight); err != nil {
 		return err
 	}
 
@@ -512,7 +515,7 @@ func (vb *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	//    => checked by the node, we do not want to have to know the current block height
 
 	// 7) The transaction size in bytes is greater than or equal to 100
-	// There are many examples in the chain upto height 422559 where this rule was not in place
+	// There are many examples in the chain up to height 422559 where this rule was not in place
 	if blockHeight > 422559 && txSize < 100 {
 		return fmt.Errorf("transaction size in bytes is less than 100 bytes")
 	}
@@ -523,7 +526,10 @@ func (vb *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	}
 
 	// SAO - https://bitcoin.stackexchange.com/questions/83805/did-the-introduction-of-verifyscript-cause-a-backwards-incompatible-change-to-co
-	if blockHeight != 163685 {
+	// SAO - The rule enforcing that unlocking scripts must be "push only" became more relevant and started being enforced with the
+	//       introduction of Segregated Witness (SegWit) which activated at height 481824.  BCH Forked before this at height 478559
+	//       and therefore let's not enforce this check until then.
+	if blockHeight >= util.ForkIDActivationHeight {
 		// 9) The unlocking script (scriptSig) can only push numbers on the stack
 		if err := vb.pushDataCheck(tx); err != nil {
 			return err
@@ -571,7 +577,7 @@ func (v *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 		switch {
 		case !isData && (output.Satoshis > MaxSatoshis || output.Satoshis < minOutput):
 			return validator.NewError(fmt.Errorf("transaction output %d satoshis is invalid", index), api.ErrStatusOutputs)
-		case isData && output.Satoshis != 0:
+		case isData && output.Satoshis != 0 && blockHeight >= util.GenesisActivationHeight:
 			return validator.NewError(fmt.Errorf("transaction output %d has non 0 value op return", index), api.ErrStatusOutputs)
 		}
 		total += output.Satoshis
@@ -584,7 +590,7 @@ func (v *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 	return nil
 }
 
-func (v *TxValidator) checkInputs(tx *bt.Tx) error {
+func (v *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
 	for index, input := range tx.Inputs {
 		if hex.EncodeToString(input.PreviousTxID()) == coinbaseTxID {
@@ -604,7 +610,7 @@ func (v *TxValidator) checkInputs(tx *bt.Tx) error {
 		}
 		total += input.PreviousTxSatoshis
 	}
-	if total == 0 {
+	if total == 0 && blockHeight >= util.ForkIDActivationHeight {
 		return validator.NewError(fmt.Errorf("transaction input total satoshis cannot be zero"), api.ErrStatusInputs)
 	}
 	if total > MaxSatoshis {

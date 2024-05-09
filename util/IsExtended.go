@@ -6,7 +6,7 @@ import (
 
 const (
 	// https://en.wikipedia.org/wiki/Bitcoin_Cash#:~:text=The%20fork%20that%20created%20Bitcoin,second%20version%20or%20an%20altcoin.
-	ForkIDActivationHeight  = 478559
+	ForkIDActivationHeight  = 478559 // This is the height that BCH was born
 	GenesisActivationHeight = 620538
 )
 
