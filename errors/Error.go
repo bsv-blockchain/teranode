@@ -3,6 +3,7 @@ package errors
 import (
 	"errors"
 	"fmt"
+	reflect "reflect"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -11,18 +12,28 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+type ErrData interface {
+	Error() string
+}
+
 type Error struct {
 	Code       ERR
 	Message    string
 	WrappedErr error
+	Data       ErrData
 }
 
 func (e *Error) Error() string {
-	if e.WrappedErr == nil {
-		return fmt.Sprintf("%d: %v", e.Code, e.Message)
+	dataMsg := ""
+	if e.Data != nil {
+		dataMsg = e.Data.Error() // Call Error() on the ErrorData
 	}
 
-	return fmt.Sprintf("Error: %s (error code: %d),  %v: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
+	if e.WrappedErr == nil {
+		return fmt.Sprintf("%d: %v, data: %s", e.Code, e.Message, dataMsg)
+	}
+
+	return fmt.Sprintf("Error: %s (error code: %d),  %v: %v, data :%s", e.Code.Enum(), e.Code, e.Message, e.WrappedErr, dataMsg)
 }
 
 // Is reports whether error codes match.
@@ -53,55 +64,48 @@ func (e *Error) Is(target error) bool {
 	return false
 }
 
+func (e *Error) As(target interface{}) bool {
+	// fmt.Println("In as, e:", e, "\ntarget: ", target)
+	if e == nil {
+		return false
+	}
+
+	// Try to assign this error to the target if the types are compatible
+	if targetErr, ok := target.(**Error); ok {
+		*targetErr = e
+		return true
+	}
+
+	// check if Data matches the target type
+	if e.Data != nil {
+		if data, ok := e.Data.(error); ok {
+			return errors.As(data, target)
+		}
+	}
+
+	// Recursively check the wrapped error if there is one
+	if e.WrappedErr != nil {
+		// use reflect to see if the value is nil. If it is, return false
+		if reflect.ValueOf(e.WrappedErr).IsNil() {
+			return false
+		}
+		return errors.As(e.WrappedErr, target)
+	}
+
+	// Also check any further unwrapped errors
+	if unwrapped := errors.Unwrap(e); unwrapped != nil {
+		return errors.As(unwrapped, target)
+	}
+
+	return false
+}
+
 func (e *Error) Unwrap() error {
 	return e.WrappedErr
 }
 
-// type ErrDataKey struct {
-// 	key string
-// }
-
-// type ErrData interface {
-// 	Error() string
-// }
-
-// type ErrDataUtxoSpent struct {
-// 	Hash           chainhash.Hash
-// 	SpendingTxHash chainhash.Hash
-// 	Time           time.Time
-// }
-
-// func (e *ErrDataUtxoSpent) Error() string {
-// 	return fmt.Sprintf("utxo %s already spent by %s at %s", e.Hash, e.SpendingTxHash, e.Time)
-// }
-
-// func UtxoSpent(txID chainhash.Hash, spendingTxID chainhash.Hash, t time.Time, err error) error {
-// 	utxoSpentErr := &ErrDataUtxoSpent{
-// 		Hash:           txID,
-// 		SpendingTxHash: spendingTxID,
-// 		Time:           t,
-// 	}
-// 	e := Join(utxoSpentErr, err)
-// 	return New(ERR_TX_ALREADY_EXISTS, utxoSpentErr.Error(), e)
-// }
-
-// func (e *Error) Asssss(err error) bool {
-// 	//errrrr := New(ERR_TX_ALREADY_EXISTS, "utxo already spent: %s", "string", UtxoSpentData(chainhash.Hash{}), err)
-// 	errrrr := UtxoSpent(chainhash.Hash{}, chainhash.Hash{}, time.Now(), err)
-
-// 	var spentErr *DataUtxoSpent
-// 	if errors.As(errrrr, &spentErr) {
-// 		if spentErr.SpendingTxHash.Equal(chainhash.Hash{}) {
-// 			return true
-// 		}
-// 	}
-
-// 	return false
-// }
-
 func New(code ERR, message string, params ...interface{}) *Error {
 	var wErr *Error
-	//var data map[string]interface{}
 
 	// Extract the wrapped error and data, if present
 	if len(params) > 0 {
@@ -111,18 +115,6 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			params = params[:len(params)-1]
 		}
 	}
-
-	// Extract additional data, if present
-	// if len(params)%2 == 0 {
-	// if data == nil {
-	// 	data = make(map[string]interface{})
-	// }
-	// for i := 0; i < len(params); i += 2 {
-	// 	if key, ok := params[i].(string); ok {
-	// 		data[key] = params[i+1]
-	// 	}
-	// }
-	// }
 
 	// Format the message with the remaining parameters
 	if len(params) > 0 {
@@ -144,12 +136,6 @@ func New(code ERR, message string, params ...interface{}) *Error {
 		WrappedErr: wErr,
 	}
 }
-
-// func (e *Error) WithData(key string, value interface{}) *Error {
-// 	//e.Data = append(e.Data, key)
-
-// 	return e
-// }
 
 func WrapGRPC(err error) error {
 	if err == nil {

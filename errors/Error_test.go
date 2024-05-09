@@ -271,45 +271,22 @@ func Test_UtxoSpentError(t *testing.T) {
 	require.NotNil(t, baseErr)
 	require.Equal(t, ERR_ERROR, baseErr.Code)
 
-	// err := New(ERR_STORAGE_ERROR, "error getting transaction %s from txMetaStore", otherError).WithData("block id", chainhash.Hash{})
-	// require.NotNil(t, err)
-	// require.Equal(t, ERR_STORAGE_ERROR, err.Code)
-	// require.True(t, Is(err, ErrStorageError), "expected error to be of type ERR_STORAGE_ERROR")
-	// require.True(t, err.Is(otherError), "expected error to be of type otherError")
-
 	utxoSpentError := NewUtxoSpentErr(chainhash.Hash{}, chainhash.Hash{}, time.Now(), baseErr)
 	require.NotNil(t, utxoSpentError)
 	require.True(t, Is(utxoSpentError, ErrTxAlreadyExists), "expected error to be of type ERR_TX_ALREADY_EXISTS")
+	require.True(t, utxoSpentError.Is(baseErr), "expected error to be of type baseErr")
+	require.False(t, utxoSpentError.Is(ErrBlockInvalid), "expected error to be of type baseErr")
 
-	var spentErr UtxoSpentErrData
-	spentErr = UtxoSpentErrData{
-		Hash:           chainhash.Hash{},
-		SpendingTxHash: chainhash.Hash{},
-		Time:           time.Now(),
-	}
+	var spentErr *UtxoSpentErrData
+	require.True(t, utxoSpentError.As(&spentErr))
 
-	if As(utxoSpentError, spentErr) {
-		fmt.Println("able to as")
-	}
+	// wrap utxospent
+	wrappedUtxoSpent := New(ERR_BLOCK_INVALID, "utxoSpentErrStruct.Error()", utxoSpentError)
+	require.True(t, wrappedUtxoSpent.As(&spentErr))
 
+	anotherErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "Another ERR, block is invalid")
+	require.False(t, anotherErr.As(&spentErr))
 }
-
-/*
-func Example(err error) bool {
-	//errrrr := New(ERR_TX_ALREADY_EXISTS, "utxo already spent: %s", "string", UtxoSpentData(chainhash.Hash{}), err)
-	errrrr := UtxoSpent(chainhash.Hash{}, chainhash.Hash{}, time.Now(), err)
-
-	var spentErr *ErrDataUtxoSpent
-	if errors.As(errrrr, &spentErr) {
-		if spentErr.SpendingTxHash.Equal(chainhash.Hash{}) {
-			return true
-		}
-	}
-
-	return false
-}
-
-*/
 
 func Test_JoinWithMultipleErrs(t *testing.T) {
 	err1 := New(ERR_NOT_FOUND, "not found")
@@ -318,52 +295,8 @@ func Test_JoinWithMultipleErrs(t *testing.T) {
 
 	joinedErr := Join(err1, err2, err3)
 	require.NotNil(t, joinedErr)
-	require.Equal(t, "Error: NOT_FOUND (error code: 3),  not found: <nil>, Error: BLOCK_NOT_FOUND (error code: 10),  block not found: <nil>, Error: INVALID_ARGUMENT (error code: 1),  invalid argument: <nil>", joinedErr.Error())
+	require.Equal(t, "Error: NOT_FOUND (error code: 3),  not found: <nil>, data :, Error: BLOCK_NOT_FOUND (error code: 10),  block not found: <nil>, data :, Error: INVALID_ARGUMENT (error code: 1),  invalid argument: <nil>, data :", joinedErr.Error())
 }
-
-// func Test_AddDataToWrappedError(t *testing.T) {
-// 	// Create a base error
-// 	baseErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "base error")
-
-// 	// Wrap the base error multiple times
-// 	wrappedOnce := baseErr
-// 	wrappedTwice := New(ERR_UNKNOWN, "error wrapped twice", wrappedOnce)
-
-// 	// Add data to the twice wrapped error
-// 	data := map[string]interface{}{
-// 		"key": 1000,
-// 	}
-// 	errWithData := wrappedTwice.WithData("key", 1000)
-
-// 	// Check if the data is added correctly
-// 	if !dataEqual(errWithData.Data, data) {
-// 		t.Errorf("Failed to add data to the wrapped error")
-// 	}
-
-// 	// Check if the base error is still reachable through unwrapping
-// 	if !errors.Is(errWithData, baseErr) {
-// 		t.Errorf("Should identify base error anywhere in the unwrap chain")
-// 	}
-// }
-
-// func Test_AddDataToWrappedError2(t *testing.T) {
-// 	// Create a base error
-// 	baseErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "base error").WithData("key0", 0)
-
-// 	// Wrap the base error multiple times, each time adding additional data
-// 	wrappedOnce := baseErr.WithData("key1", 1000)
-// 	wrappedTwice := New(ERR_UNKNOWN, "error wrapped twice", wrappedOnce).WithData("key2", 2000)
-// 	wrappedThrice := New(ERR_BLOCK_NOT_FOUND, "error wrapped thrice", wrappedTwice).WithData("key3", 3000)
-
-// 	// wrappedThrice should have the data from all the wrapping errors, we can access by unwrapping
-// 	// fmt.Println("Error data:", wrappedThrice.Data)
-// 	require.True(t, dataEqual(wrappedThrice.Data, map[string]interface{}{"key0": 0, "key1": 1000, "key2": 2000, "key3": 3000}))
-
-// 	// Check if the base error is still reachable through unwrapping
-// 	if !errors.Is(wrappedThrice, baseErr) {
-// 		t.Errorf("Should identify base error anywhere in the unwrap chain")
-// 	}
-// }
 
 // dataEqual checks if two maps are equal
 func dataEqual(map1, map2 map[string]interface{}) bool {
