@@ -1,0 +1,16 @@
+version: '3.8'
+# Define a common base configuration for ubsv nodes
+
+services:
+
+  ubsv-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  ubsv-2:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  ubsv-3:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
