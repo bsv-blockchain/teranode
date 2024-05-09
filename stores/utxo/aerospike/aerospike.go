@@ -155,7 +155,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	// check whether we go the spend lua script in the lust
+	// check whether the spend lua script is installed in the cluster
 	foundScript := false
 	for _, udf := range udfs {
 		if udf.Filename == luaSpendFunction+".lua" {
