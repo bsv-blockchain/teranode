@@ -182,52 +182,65 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					u.logger.Infof("[Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 				}
-			case b := <-u.blockFoundCh:
+			case blockFound := <-u.blockFoundCh:
 				{
-					if len(u.blockFoundCh) > 3 {
-						// we are multiple blocks behind, process all the blocks per peer on the catchup channel
-						u.logger.Infof("[Init] processing block found on channel [%s] - too many blocks behind", b.hash.String())
-						peerBlocks := make(map[string]processBlockFound)
-						peerBlocks[b.baseURL] = b
-						// get the newest block per peer
-						for pb := range u.blockFoundCh {
-							peerBlocks[pb.baseURL] = pb
-						}
-
-						// add that latest block of each peer to the catchup channel
-						for _, pb := range peerBlocks {
-							u.logger.Infof("[Init] processing block found on channel [%s] - adding to catchup", pb.hash.String())
-
-							block, err := u.getBlock(ctx, pb.hash, pb.baseURL)
-							if err != nil {
-								u.logger.Errorf("[Init] failed to get block [%s] [%v]", pb.hash.String(), err)
-								return
-							}
-
-							u.catchupCh <- processBlockCatchup{
-								block:   block,
-								baseURL: pb.baseURL,
-							}
-						}
+					if err := u.processBlockFoundChannel(ctx, blockFound); err != nil {
+						u.logger.Errorf("[Init] failed to process block found [%s] [%v]", blockFound.hash.String(), err)
 					}
-
-					_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
-					// TODO optimize this for the valid chain, not processing everything ???
-					u.logger.Infof("[Init] processing block found on channel [%s]", b.hash.String())
-					if err := u.processBlockFound(ctx1, b.hash, b.baseURL); err != nil {
-						u.logger.Errorf("[Init] failed to process block [%s] [%v]", b.hash.String(), err)
-					}
-
-					if b.errCh != nil {
-						b.errCh <- err
-					}
-
-					u.logger.Infof("[Init] processing block found on channel DONE [%s]", b.hash.String())
-					prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 				}
 			}
 		}
 	}()
+
+	return nil
+}
+
+func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound processBlockFound) error {
+	if len(u.blockFoundCh) > 3 {
+		// we are multiple blocks behind, process all the blocks per peer on the catchup channel
+		u.logger.Infof("[Init] processing block found on channel [%s] - too many blocks behind", blockFound.hash.String())
+		peerBlocks := make(map[string]processBlockFound)
+		peerBlocks[blockFound.baseURL] = blockFound
+		// get the newest block per peer, emptying the block found channel
+		for len(u.blockFoundCh) > 0 {
+			pb := <-u.blockFoundCh
+			peerBlocks[pb.baseURL] = pb
+		}
+
+		u.logger.Infof("[Init] peerBlocks: %v", peerBlocks)
+		// add that latest block of each peer to the catchup channel
+		for _, pb := range peerBlocks {
+			block, err := u.getBlock(ctx, pb.hash, pb.baseURL)
+			if err != nil {
+				return fmt.Errorf("[Init] failed to get block [%s] [%v]", pb.hash.String(), err)
+			}
+
+			u.catchupCh <- processBlockCatchup{
+				block:   block,
+				baseURL: pb.baseURL,
+			}
+		}
+		return nil
+	}
+
+	_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
+
+	// TODO optimize this for the valid chain, not processing everything ???
+	u.logger.Infof("[Init] processing block found on channel [%s]", blockFound.hash.String())
+	err := u.processBlockFound(ctx1, blockFound.hash, blockFound.baseURL)
+	if err != nil {
+		if blockFound.errCh != nil {
+			blockFound.errCh <- err
+		}
+		return fmt.Errorf("[Init] failed to process block [%s] [%v]", blockFound.hash.String(), err)
+	}
+
+	if blockFound.errCh != nil {
+		blockFound.errCh <- nil
+	}
+
+	u.logger.Infof("[Init] processing block found on channel DONE [%s]", blockFound.hash.String())
+	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 
 	return nil
 }
