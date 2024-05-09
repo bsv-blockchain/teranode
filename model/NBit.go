@@ -69,3 +69,17 @@ func (b NBit) CalculateTarget() *big.Int {
 
 	return target
 }
+
+// Calculate difficulty from nBits
+func (b NBit) CalculateDifficulty() *big.Float {
+	// Difficulty 1 target
+	difficulty1Target, _ := new(big.Int).SetString("00000000FFFF0000000000000000000000000000000000000000000000000000", 16)
+
+	// Current target from nBits
+	currentTarget := b.CalculateTarget()
+
+	// Calculate difficulty
+	difficulty := new(big.Float).Quo(new(big.Float).SetInt(difficulty1Target), new(big.Float).SetInt(currentTarget))
+
+	return difficulty
+}

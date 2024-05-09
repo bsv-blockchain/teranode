@@ -22,6 +22,7 @@ import (
 
 // handleGetBlock implements the getblock command.
 func handleGetBlock(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	ctx := context.Background()
 	c := cmd.(*btcjson.GetBlockCmd)
 	s.logger.Debugf("handleGetBlock %s", c.Hash)
 	ch, err := chainhash.NewHashFromStr(c.Hash)
@@ -29,7 +30,7 @@ func handleGetBlock(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 		return nil, rpcDecodeHexError(c.Hash)
 	}
 	// Load the raw block bytes from the database.
-	b, err := s.blockchainClient.GetBlock(context.Background(), ch)
+	b, err := s.blockchainClient.GetBlock(ctx, ch)
 	if err != nil {
 		return nil, err
 	}
@@ -51,30 +52,43 @@ func handleGetBlock(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 		return hex.EncodeToString(blkBytes), nil
 	}
 
-	// Get the block height from chain.
+	// get best block header
+	_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Get next block hash unless there are none.
+	nextBlock, err := s.blockchainClient.GetBlockByHeight(ctx, b.Height+1)
+	if err != nil {
+		return nil, err
+	}
 
 	var (
 		blockReply interface{}
 	// 	params      = s.cfg.ChainParams
 	// 	blockHeader = &blk.MsgBlock().Header
 	)
+	diff, _ := b.Header.Bits.CalculateDifficulty().Float64()
+
 	baseBlockReply := &btcjson.GetBlockBaseVerboseResult{
-		Hash:    c.Hash,
-		Version: int32(b.Header.Version),
-		// 	VersionHex:    fmt.Sprintf("%08x", blockHeader.Version),
-		MerkleRoot:   b.Header.HashMerkleRoot.String(),
-		PreviousHash: b.Header.HashPrevBlock.String(),
-		Nonce:        b.Header.Nonce,
-		Time:         int64(b.Header.Timestamp),
-		// 	Confirmations: int64(1 + best.Height - blockHeight),
-		// 	Height:        int64(blockHeight),
-		Size: int32(len(blkBytes)),
-		Bits: b.Header.Bits.String(),
-		// 	Difficulty:    getDifficultyRatio(blockHeader.Bits, params),
-		// 	NextHash:      nextHashString,
+		Hash:          c.Hash,
+		Version:       int32(b.Header.Version),
+		VersionHex:    fmt.Sprintf("%08x", b.Header.Version),
+		MerkleRoot:    b.Header.HashMerkleRoot.String(),
+		PreviousHash:  b.Header.HashPrevBlock.String(),
+		Nonce:         b.Header.Nonce,
+		Time:          int64(b.Header.Timestamp),
+		Confirmations: int64(1 + bestBlockMeta.Height - b.Height),
+		Height:        int64(b.Height),
+		Size:          int32(len(blkBytes)),
+		Bits:          b.Header.Bits.String(),
+		Difficulty:    diff,
+		NextHash:      string(nextBlock.Hash().String()),
 	}
+
+	// TODO: we can't add the txs to the block as there could be too many.
+	// A breaking change would be to add the subtrees.
 
 	// If verbose level does not match 0 or 1
 	// we can consider it 2 (current bitcoin core behavior)
