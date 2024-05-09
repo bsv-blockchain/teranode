@@ -749,7 +749,7 @@ LOOP:
 		}
 	}
 
-	u.logger.Infof("[catchup][%s] catching up from [%s] to [%s]", fromBlock.Hash().String(), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
+	u.logger.Infof("[catchup][%s] catching up (%d blocks) from [%s] to [%s]", fromBlock.Hash().String(), len(catchupBlockHeaders), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
 
 	validateBlocksChan := make(chan *model.Block, len(catchupBlockHeaders))
 
@@ -762,15 +762,17 @@ LOOP:
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(catchupConcurrency)
 	g.Go(func() error {
+		slices.Reverse(catchupBlockHeaders)
 		batches := getBlockBatchGets(catchupBlockHeaders, 100)
-		// reverse the batches, so we get the oldest blocks first
-		slices.Reverse(batches)
 
 		u.logger.Debugf("[catchup][%s] getting %d batches", fromBlock.Hash().String(), len(batches))
 
+		blockCount := 0
+		i := 0
 		var blocks []*model.Block
 		for _, batch := range batches {
-			u.logger.Debugf("[catchup][%s] getting %d blocks from %s", fromBlock.Hash().String(), batch.size, batch.hash.String())
+			i++
+			u.logger.Debugf("[catchup][%s] [batch %d] getting %d blocks from %s", fromBlock.Hash().String(), i, batch.size, batch.hash.String())
 
 			size.Add(batch.size)
 
@@ -778,17 +780,21 @@ LOOP:
 			if err != nil {
 				return errors.Join(fmt.Errorf("[catchup][%s] failed to get %d blocks [%s]", fromBlock.Hash().String(), batch.size, batch.hash.String()), err)
 			}
+			if uint32(len(blocks)) != batch.size {
+				u.logger.Warnf("[catchup][%s] got %d blocks, expected %d", fromBlock.Hash().String(), len(blocks), batch.size)
+			}
 
 			u.logger.Debugf("[catchup][%s] got %d blocks from %s", fromBlock.Hash().String(), len(blocks), batch.hash.String())
 
 			// reverse the blocks, so they are in the correct order, we get them newest to oldest from the other node
 			slices.Reverse(blocks)
 			for _, block := range blocks {
+				blockCount++
 				validateBlocksChan <- block
 			}
 		}
 
-		u.logger.Infof("[catchup][%s] added %d blocks for validating", fromBlock.Hash().String(), len(validateBlocksChan))
+		u.logger.Infof("[catchup][%s] added %d blocks for validating", fromBlock.Hash().String(), blockCount)
 
 		// close the channel to signal that all blocks have been processed
 		close(validateBlocksChan)
@@ -806,7 +812,10 @@ LOOP:
 		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
+		u.logger.Debugf("[catchup][%s] validated block %d/%d", block.Hash().String(), i, size.Load())
 	}
+
+	u.logger.Infof("[catchup][%s] done validating catchup blocks", fromBlock.Hash().String())
 
 	return nil
 }
