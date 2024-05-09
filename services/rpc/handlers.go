@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 
 	"github.com/bitcoinsv/bsvd/btcjson"
@@ -307,7 +307,7 @@ func handleGenerate(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 	defer response.Body.Close() // Always close the response body
 
 	// Read the response body
-	data, _ := ioutil.ReadAll(response.Body)
+	data, _ := io.ReadAll(response.Body)
 
 	// Print the response status and body
 	s.logger.Debugf("Status Code:", response.StatusCode)
