@@ -1,0 +1,33 @@
+
+version: '3.8'
+
+services:
+
+  p2p-bootstrap-1:
+    build:
+      context: ./modules/p2pBootstrap
+      dockerfile: local.Dockerfile
+    environment:
+      P2P_BOOTSTRAP_PORT: 9901
+      SETTINGS_CONTEXT: "docker.ci.ubsv1"
+    networks:
+      - ubsv-network
+    ports:
+      - "19901:9901"
+
+  ubsv-1:
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-p2p=0", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    environment:
+      - p2p_bootstrapAddresses=/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh
+      - p2p_shared_key=847a544c7403b353bd493791de2bd70878860932a40957196cc7462c8cf435c7
+
+  ubsv-2:
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-p2p=0", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    environment:
+      - p2p_bootstrapAddresses=/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh
+      - p2p_shared_key=847a544c7403b353bd493791de2bd70878860932a40957196cc7462c8cf435c7
+
+  ubsv-3:
+    environment:
+      - p2p_bootstrapAddresses=/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWS43tBXaGewmskvL1B82KccLP5JafTvreiJNbHCbZhDnh
+      - p2p_shared_key=847a544c7403b353bd493791de2bd70878860932a40957196cc7462c8cf435c7
