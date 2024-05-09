@@ -67,26 +67,27 @@ $ logLevel=INFO SETTINGS_CONTEXT=docker.ci.externaltxblaster.ubsv3 go run . -wor
 
 ## To override the base compose to use Aerospike services
 ```
-$ docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml up
+$ docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml up -d
 $ docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml down
 ```
 
 ## To override the base compose to use dedicated kafka services for each node
 ```
-$ docker compose -f docker-compose.yml -f docker-compose.kafka.override.yml up
+$ docker compose -f docker-compose.yml -f docker-compose.kafka.override.yml up -d
 $ docker compose -f docker-compose.yml -f docker-compose.kafka.override.yml down
 ```
 
 ## To override the base compose to use more than 1 tx-blaster
 ```
-$ docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml up
+$ docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml up -d
 $ docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml down
 ```
 
-## To override the base compose to run on a 16GB macbook with 12GB allocated to Docker
+## To override the base compose to run a local build
 ```
-$ docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml -f docker-compose.12gb.override.yml up
-$ docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml -f docker-compose.12gb.override.yml down
+$ GOOS=linux GOARCH=arm64 make build -j 32
+$ docker compose -f docker-compose.yml -f docker-compose.localBinary.override.yml up -d
+$ docker compose -f docker-compose.yml -f docker-compose.localBinary.override.yml down
 ```
 
 ## To tail the log files of everything
