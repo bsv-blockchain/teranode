@@ -3,6 +3,7 @@ package errors
 import (
 	"errors"
 	"fmt"
+	reflect "reflect"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -11,55 +12,92 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+type ErrData interface {
+	Error() string
+}
+
 type Error struct {
 	Code       ERR
 	Message    string
 	WrappedErr error
+	Data       ErrData
 }
 
-var (
-	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
-	ErrInvalidArgument            = New(ERR_INVALID_ARGUMENT, "invalid argument")
-	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
-	ErrNotFound                   = New(ERR_NOT_FOUND, "not found")
-	ErrProcessing                 = New(ERR_PROCESSING, "error processing")
-	ErrError                      = New(ERR_ERROR, "generic error")
-	ErrBlockNotFound              = New(ERR_BLOCK_NOT_FOUND, "block not found")
-	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
-	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
-	ErrSubtreeNotFound            = New(ERR_SUBTREE_NOT_FOUND, "subtree not found")
-	ErrSubtreeInvalid             = New(ERR_SUBTREE_INVALID, "subtree invalid")
-	ErrSubtreeError               = New(ERR_SUBTREE_ERROR, "subtree error")
-	ErrTxNotFound                 = New(ERR_TX_NOT_FOUND, "tx not found")
-	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")
-	ErrTxInvalidDoubleSpend       = New(ERR_TX_INVALID_DOUBLE_SPEND, "tx invalid double spend")
-	ErrTxAlreadyExists            = New(ERR_TX_ALREADY_EXISTS, "tx already exists")
-	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
-	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
-	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
-	ErrServiceError               = New(ERR_SERVICE_ERROR, "service error")
-	ErrStorageUnavailable         = New(ERR_STORAGE_UNAVAILABLE, "storage unavailable")
-	ErrStorageNotStarted          = New(ERR_STORAGE_NOT_STARTED, "storage not started")
-	ErrStorageError               = New(ERR_STORAGE_ERROR, "storage error")
-	ErrCoinbaseMissingBlockHeight = New(ERR_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script doesn't have the block height")
-)
-
 func (e *Error) Error() string {
-	if e.WrappedErr == nil {
-		return fmt.Sprintf("%d: %v", e.Code, e.Message)
+	dataMsg := ""
+	if e.Data != nil {
+		dataMsg = e.Data.Error() // Call Error() on the ErrorData
 	}
 
-	return fmt.Sprintf("Error: %s (error code: %d),  %v: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
+	if e.WrappedErr == nil {
+		return fmt.Sprintf("%d: %v, data: %s", e.Code, e.Message, dataMsg)
+	}
+
+	return fmt.Sprintf("Error: %s (error code: %d),  %v: %v, data :%s", e.Code.Enum(), e.Code, e.Message, e.WrappedErr, dataMsg)
 }
 
 // Is reports whether error codes match.
 func (e *Error) Is(target error) bool {
-	var ue *Error
-	if errors.As(target, &ue) {
-		return e.Code == ue.Code
+	if e == nil {
+		return false
 	}
 
-	return errors.Is(errors.Unwrap(e), target)
+	var ue *Error
+	if errors.As(target, &ue) {
+		//return e.Code == ue.Code
+		if e.Code == ue.Code {
+			return true
+		}
+
+		if e.WrappedErr == nil {
+			return false
+		}
+	}
+
+	// Unwrap the current error and recursively call Is on the unwrapped error
+	if unwrapped := errors.Unwrap(e); unwrapped != nil {
+		if ue, ok := unwrapped.(*Error); ok {
+			return ue.Is(target)
+		}
+	}
+
+	return false
+}
+
+func (e *Error) As(target interface{}) bool {
+	// fmt.Println("In as, e:", e, "\ntarget: ", target)
+	if e == nil {
+		return false
+	}
+
+	// Try to assign this error to the target if the types are compatible
+	if targetErr, ok := target.(**Error); ok {
+		*targetErr = e
+		return true
+	}
+
+	// check if Data matches the target type
+	if e.Data != nil {
+		if data, ok := e.Data.(error); ok {
+			return errors.As(data, target)
+		}
+	}
+
+	// Recursively check the wrapped error if there is one
+	if e.WrappedErr != nil {
+		// use reflect to see if the value is nil. If it is, return false
+		if reflect.ValueOf(e.WrappedErr).IsNil() {
+			return false
+		}
+		return errors.As(e.WrappedErr, target)
+	}
+
+	// Also check any further unwrapped errors
+	if unwrapped := errors.Unwrap(e); unwrapped != nil {
+		return errors.As(unwrapped, target)
+	}
+
+	return false
 }
 
 func (e *Error) Unwrap() error {
@@ -67,21 +105,23 @@ func (e *Error) Unwrap() error {
 }
 
 func New(code ERR, message string, params ...interface{}) *Error {
-	var wErr error
+	var wErr *Error
 
-	// sprintf the message with the params except the last one if the last one is an error
+	// Extract the wrapped error and data, if present
 	if len(params) > 0 {
-		if err, ok := params[len(params)-1].(error); ok {
+		if err, ok := params[len(params)-1].(*Error); ok {
 			wErr = err
+			//data = err.Data
 			params = params[:len(params)-1]
 		}
 	}
 
+	// Format the message with the remaining parameters
 	if len(params) > 0 {
 		message = fmt.Sprintf(message, params...)
 	}
 
-	// Check the code exists in the ErrorConstants enum
+	// Check if the code exists in the ErrorConstants enum
 	if _, ok := ERR_name[int32(code)]; !ok {
 		return &Error{
 			Code:       code,
@@ -113,8 +153,10 @@ func WrapGRPC(err error) error {
 		if err != nil {
 			return status.New(codes.Internal, "error adding details to gRPC status").Err()
 		}
+
 		return st.Err()
 	}
+
 	return status.New(ErrorCodeToGRPCCode(ErrUnknown.Code), ErrUnknown.Message).Err()
 }
 

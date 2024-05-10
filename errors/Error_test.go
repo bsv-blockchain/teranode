@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,20 +18,46 @@ import (
 // Test_NewCustomError tests the creation of custom errors.
 func Test_NewCustomError(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "resource not found")
-	assert.NotNil(t, err)
-	assert.Equal(t, ERR_NOT_FOUND, err.Code)
-	assert.Equal(t, "resource not found", err.Message)
+	require.NotNil(t, err)
+	require.Equal(t, ERR_NOT_FOUND, err.Code)
+	require.Equal(t, "resource not found", err.Message)
 
 	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", err)
 	thirdErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", secondErr)
 	anotherErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "Another ERR, block is invalid")
-	olderError := fmt.Errorf("older error: %w", thirdErr)
-	fourthErr := New(ERR_BLOCK_INVALID, "invalid tx double spend error", olderError)
+	fourthErr := New(ERR_SERVICE_ERROR, "older error: ", thirdErr)
+	fifthErr := New(ERR_BLOCK_INVALID, "invalid tx double spend error", fourthErr)
 
-	assert.ErrorIs(t, anotherErr, thirdErr)
-	assert.ErrorIs(t, fourthErr, ErrTxInvalidDoubleSpend)
-	assert.ErrorIs(t, fourthErr, err)
-	assert.NotErrorIs(t, anotherErr, fourthErr)
+	require.True(t, anotherErr.Is(thirdErr))
+	require.True(t, fourthErr.Is(New(ERR_TX_INVALID_DOUBLE_SPEND, "")))
+	require.True(t, fourthErr.Is(ErrTxInvalidDoubleSpend))
+
+	require.True(t, fourthErr.Is(err))
+	require.True(t, fifthErr.Is(thirdErr))
+	require.True(t, fifthErr.Is(err))
+
+	require.False(t, anotherErr.Is(fourthErr))
+	require.False(t, fifthErr.Is(ErrBlockNotFound))
+
+}
+
+func Test_FmtErrorCustomError(t *testing.T) {
+	err := New(ERR_NOT_FOUND, "resource not found")
+	require.NotNil(t, err)
+	require.Equal(t, ERR_NOT_FOUND, err.Code)
+	require.Equal(t, "resource not found", err.Message)
+
+	fmtError := fmt.Errorf("error: %w", err)
+	require.NotNil(t, fmtError)
+	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", fmtError)
+	require.NotNil(t, secondErr)
+
+	// If we FMT Err, then they won't be recognized as equal
+	require.False(t, secondErr.Is(err))
+
+	altErr := New(ERR_INVALID_ARGUMENT, "invalid argument", err)
+	altSecondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", fmtError)
+	require.True(t, altSecondErr.Is(altErr))
 }
 
 // Test_WrapGRPC tests wrapping a custom error for gRPC.
@@ -45,10 +72,6 @@ func Test_WrapGRPC(t *testing.T) {
 	if s.Code() != codes.Internal {
 		t.Errorf("expected gRPC code %v; got %v", codes.Internal, s.Code())
 	}
-
-	// if s.Message() != "not found" {
-	// 	t.Errorf("expected gRPC message 'not found'; got '%s'", s.Message())
-	// }
 }
 
 // TestUnwrapGRPC tests unwrapping a gRPC error back to a custom error.
@@ -113,30 +136,31 @@ func Test_ErrorWrapWithAdditionalContext(t *testing.T) {
 	if !strings.Contains(wrappedErr.Error(), "Some more additional context") {
 		t.Errorf("Wrapped error does not contain additional context")
 	}
-
-	fmt.Println(wrappedErr)
 }
 
 func Test_ErrorEquality(t *testing.T) {
 	err1 := New(ERR_NOT_FOUND, "resource not found")
 	err2 := New(ERR_NOT_FOUND, "resource not found")
 
-	if !errors.Is(err1, err2) {
+	if !err1.Is(err2) {
 		t.Errorf("Errors with the same code and message should be equal")
 	}
 
 	// same error codes
 	err2 = New(ERR_NOT_FOUND, "invalid argument")
 
-	if !errors.Is(err1, err2) {
+	if !err1.Is(err2) {
 		t.Errorf("Errors with same codes should be equal")
 	}
 
 	// different error codes
 	err2 = New(ERR_INVALID_ARGUMENT, "resource not found")
-	if errors.Is(err1, err2) {
+	if err1.Is(err2) {
 		t.Errorf("Errors with different codes should not be equal")
 	}
+
+	dsErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "[ValidateBlock][%s] failed to set block subtrees_set: ")
+	require.True(t, dsErr.Is(ErrTxInvalidDoubleSpend))
 }
 
 func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
@@ -242,14 +266,26 @@ func createGRPCError(code ERR, msg string) error {
 	return st.Err()
 }
 
-func TestStorageError(t *testing.T) {
-	otherError := fmt.Errorf("storage error")
-	err := New(ERR_STORAGE_ERROR, "error getting transaction %s from txMetaStore", chainhash.Hash{}, otherError)
-	assert.NotNil(t, err)
-	assert.Equal(t, ERR_STORAGE_ERROR, err.Code)
-	assert.Equal(t, "error getting transaction 0000000000000000000000000000000000000000000000000000000000000000 from txMetaStore", err.Message)
-	assert.True(t, Is(err, ErrStorageError), "expected error to be of type ERR_STORAGE_ERROR")
-	assert.True(t, Is(err, otherError), "expected error to be of type otherError")
+func Test_UtxoSpentError(t *testing.T) {
+	baseErr := New(ERR_ERROR, "storage error")
+	require.NotNil(t, baseErr)
+	require.Equal(t, ERR_ERROR, baseErr.Code)
+
+	utxoSpentError := NewUtxoSpentErr(chainhash.Hash{}, chainhash.Hash{}, time.Now(), baseErr)
+	require.NotNil(t, utxoSpentError)
+	require.True(t, Is(utxoSpentError, ErrTxAlreadyExists), "expected error to be of type ERR_TX_ALREADY_EXISTS")
+	require.True(t, utxoSpentError.Is(baseErr), "expected error to be of type baseErr")
+	require.False(t, utxoSpentError.Is(ErrBlockInvalid), "expected error to be of type baseErr")
+
+	var spentErr *UtxoSpentErrData
+	require.True(t, utxoSpentError.As(&spentErr))
+
+	// wrap utxospent
+	wrappedUtxoSpent := New(ERR_BLOCK_INVALID, "utxoSpentErrStruct.Error()", utxoSpentError)
+	require.True(t, wrappedUtxoSpent.As(&spentErr))
+
+	anotherErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "Another ERR, block is invalid")
+	require.False(t, anotherErr.As(&spentErr))
 }
 
 func Test_JoinWithMultipleErrs(t *testing.T) {
@@ -258,6 +294,6 @@ func Test_JoinWithMultipleErrs(t *testing.T) {
 	err3 := New(ERR_INVALID_ARGUMENT, "invalid argument")
 
 	joinedErr := Join(err1, err2, err3)
-	assert.NotNil(t, joinedErr)
-	assert.Equal(t, "3: not found, 10: block not found, 1: invalid argument", joinedErr.Error())
+	require.NotNil(t, joinedErr)
+	require.Equal(t, "Error: NOT_FOUND (error code: 3),  not found: <nil>, data :, Error: BLOCK_NOT_FOUND (error code: 10),  block not found: <nil>, data :, Error: INVALID_ARGUMENT (error code: 1),  invalid argument: <nil>, data :", joinedErr.Error())
 }
