@@ -297,18 +297,3 @@ func Test_JoinWithMultipleErrs(t *testing.T) {
 	require.NotNil(t, joinedErr)
 	require.Equal(t, "Error: NOT_FOUND (error code: 3),  not found: <nil>, data :, Error: BLOCK_NOT_FOUND (error code: 10),  block not found: <nil>, data :, Error: INVALID_ARGUMENT (error code: 1),  invalid argument: <nil>, data :", joinedErr.Error())
 }
-
-// dataEqual checks if two maps are equal
-func dataEqual(map1, map2 map[string]interface{}) bool {
-	if len(map1) != len(map2) {
-		//fmt.Println("Length mismatch")
-		return false
-	}
-	for k, v := range map1 {
-		if val, ok := map2[k]; !ok || val != v {
-			fmt.Println("Mismatch in key:", k, ", val1:", v, ", val2:", val)
-			return false
-		}
-	}
-	return true
-}
