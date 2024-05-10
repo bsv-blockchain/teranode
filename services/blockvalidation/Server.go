@@ -1,12 +1,16 @@
 package blockvalidation
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"runtime"
+	"slices"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
@@ -179,25 +183,65 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					u.logger.Infof("[Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 				}
-			case b := <-u.blockFoundCh:
+			case blockFound := <-u.blockFoundCh:
 				{
-					_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
-					// TODO optimize this for the valid chain, not processing everything ???
-					u.logger.Infof("[Init] processing block found on channel [%s]", b.hash.String())
-					if err := u.processBlockFound(ctx1, b.hash, b.baseURL); err != nil {
-						u.logger.Errorf("[Init] failed to process block [%s] [%v]", b.hash.String(), err)
+					if err := u.processBlockFoundChannel(ctx, blockFound); err != nil {
+						u.logger.Errorf("[Init] failed to process block found [%s] [%v]", blockFound.hash.String(), err)
 					}
-
-					if b.errCh != nil {
-						b.errCh <- err
-					}
-
-					u.logger.Infof("[Init] processing block found on channel DONE [%s]", b.hash.String())
-					prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 				}
 			}
 		}
 	}()
+
+	return nil
+}
+
+func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound processBlockFound) error {
+	if len(u.blockFoundCh) > 3 {
+		// we are multiple blocks behind, process all the blocks per peer on the catchup channel
+		u.logger.Infof("[Init] processing block found on channel [%s] - too many blocks behind", blockFound.hash.String())
+		peerBlocks := make(map[string]processBlockFound)
+		peerBlocks[blockFound.baseURL] = blockFound
+		// get the newest block per peer, emptying the block found channel
+		for len(u.blockFoundCh) > 0 {
+			pb := <-u.blockFoundCh
+			peerBlocks[pb.baseURL] = pb
+		}
+
+		u.logger.Infof("[Init] peerBlocks: %v", peerBlocks)
+		// add that latest block of each peer to the catchup channel
+		for _, pb := range peerBlocks {
+			block, err := u.getBlock(ctx, pb.hash, pb.baseURL)
+			if err != nil {
+				return fmt.Errorf("[Init] failed to get block [%s] [%v]", pb.hash.String(), err)
+			}
+
+			u.catchupCh <- processBlockCatchup{
+				block:   block,
+				baseURL: pb.baseURL,
+			}
+		}
+		return nil
+	}
+
+	_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
+
+	// TODO optimize this for the valid chain, not processing everything ???
+	u.logger.Infof("[Init] processing block found on channel [%s]", blockFound.hash.String())
+	err := u.processBlockFound(ctx1, blockFound.hash, blockFound.baseURL)
+	if err != nil {
+		if blockFound.errCh != nil {
+			blockFound.errCh <- err
+		}
+		return fmt.Errorf("[Init] failed to process block [%s] [%v]", blockFound.hash.String(), err)
+	}
+
+	if blockFound.errCh != nil {
+		blockFound.errCh <- nil
+	}
+
+	u.logger.Infof("[Init] processing block found on channel DONE [%s]", blockFound.hash.String())
+	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 
 	return nil
 }
@@ -565,6 +609,36 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl str
 	return block, nil
 }
 
+func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, baseUrl string) ([]*model.Block, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "getBlocks", u.stats)
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:getBlocks")
+	defer func() {
+		span.Finish()
+		stat.AddTime(start)
+	}()
+
+	blockBytes, err := util.DoHTTPRequest(spanCtx, fmt.Sprintf("%s/blocks/%s?n=%d", baseUrl, hash.String(), n))
+	if err != nil {
+		return nil, fmt.Errorf("[getBlocks][%s] failed to get blocks from peer [%w]", hash.String(), err)
+	}
+
+	blockReader := bytes.NewReader(blockBytes)
+
+	blocks := make([]*model.Block, 0)
+	for {
+		block, err := model.NewBlockFromReader(blockReader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, fmt.Errorf("[getBlocks][%s] failed to create block from bytes [%w]", hash.String(), err)
+		}
+		blocks = append(blocks, block)
+	}
+
+	return blocks, nil
+}
+
 func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
 	start, stat, ctx := util.NewStatFromContext(ctx, "getBlockHeaders", u.stats)
 	defer func() {
@@ -675,29 +749,52 @@ LOOP:
 		}
 	}
 
-	u.logger.Infof("[catchup][%s] catching up from [%s] to [%s]", fromBlock.Hash().String(), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
+	u.logger.Infof("[catchup][%s] catching up (%d blocks) from [%s] to [%s]", fromBlock.Hash().String(), len(catchupBlockHeaders), catchupBlockHeaders[len(catchupBlockHeaders)-1].String(), catchupBlockHeaders[0].String())
 
 	validateBlocksChan := make(chan *model.Block, len(catchupBlockHeaders))
 
 	catchupConcurrency, _ := gocore.Config().GetInt("blockvalidation_catchupConcurrency", util.Max(4, runtime.NumCPU()/2))
+
+	size := atomic.Uint32{}
 
 	// process the catchup block headers in reverse order and put them on the channel
 	// this will allow the blocks to be validated while getting them from the other node
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(catchupConcurrency)
 	g.Go(func() error {
-		var blockHeader *model.BlockHeader
-		for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
-			blockHeader = catchupBlockHeaders[i]
+		slices.Reverse(catchupBlockHeaders)
+		batches := getBlockBatchGets(catchupBlockHeaders, 100)
 
-			// TODO get blocks in batches
-			block, err := u.getBlock(gCtx, blockHeader.Hash(), baseURL)
+		u.logger.Debugf("[catchup][%s] getting %d batches", fromBlock.Hash().String(), len(batches))
+
+		blockCount := 0
+		i := 0
+		var blocks []*model.Block
+		for _, batch := range batches {
+			i++
+			u.logger.Debugf("[catchup][%s] [batch %d] getting %d blocks from %s", fromBlock.Hash().String(), i, batch.size, batch.hash.String())
+
+			size.Add(batch.size)
+
+			blocks, err = u.getBlocks(gCtx, &batch.hash, batch.size, baseURL)
 			if err != nil {
-				return errors.Join(fmt.Errorf("[catchup][%s] failed to get block [%s]", fromBlock.Hash().String(), blockHeader.String()), err)
+				return errors.Join(fmt.Errorf("[catchup][%s] failed to get %d blocks [%s]", fromBlock.Hash().String(), batch.size, batch.hash.String()), err)
+			}
+			if uint32(len(blocks)) != batch.size {
+				u.logger.Warnf("[catchup][%s] got %d blocks, expected %d", fromBlock.Hash().String(), len(blocks), batch.size)
 			}
 
-			validateBlocksChan <- block
+			u.logger.Debugf("[catchup][%s] got %d blocks from %s", fromBlock.Hash().String(), len(blocks), batch.hash.String())
+
+			// reverse the blocks, so they are in the correct order, we get them newest to oldest from the other node
+			slices.Reverse(blocks)
+			for _, block := range blocks {
+				blockCount++
+				validateBlocksChan <- block
+			}
 		}
+
+		u.logger.Infof("[catchup][%s] added %d blocks for validating", fromBlock.Hash().String(), blockCount)
 
 		// close the channel to signal that all blocks have been processed
 		close(validateBlocksChan)
@@ -705,15 +802,50 @@ LOOP:
 		return nil
 	})
 
+	i := 0
 	// validate the blocks while getting them from the other node
 	// this will block until all blocks are validated
 	for block := range validateBlocksChan {
+		i++
+		u.logger.Infof("[catchup][%s] validating block %d/%d", block.Hash().String(), i, size.Load())
+
 		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
+		u.logger.Debugf("[catchup][%s] validated block %d/%d", block.Hash().String(), i, size.Load())
 	}
 
+	u.logger.Infof("[catchup][%s] done validating catchup blocks", fromBlock.Hash().String())
+
 	return nil
+}
+
+type blockBatchGet struct {
+	hash chainhash.Hash
+	size uint32
+}
+
+func getBlockBatchGets(catchupBlockHeaders []*model.BlockHeader, batchSize int) []blockBatchGet {
+	batches := make([]blockBatchGet, 0)
+
+	var useBlockHeaders []*model.BlockHeader
+	for i := 0; i < len(catchupBlockHeaders); i += batchSize {
+		start := i
+		end := i + batchSize
+		if end > len(catchupBlockHeaders)-1 {
+			useBlockHeaders = catchupBlockHeaders[start:]
+		} else {
+			useBlockHeaders = catchupBlockHeaders[start:end]
+		}
+
+		lastHash := useBlockHeaders[len(useBlockHeaders)-1].Hash()
+		batches = append(batches, blockBatchGet{
+			hash: *lastHash,
+			size: uint32(len(useBlockHeaders)),
+		})
+	}
+
+	return batches
 }
 
 func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*blockvalidation_api.EmptyMessage, error) {

@@ -1,0 +1,18 @@
+version: '3.8'
+# Define a common base configuration for ubsv nodes
+services:
+
+  ubsv-1:
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1", "-p2p=0"]
+    environment:
+      mine_initial_blocks: true
+
+  ubsv-2:
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1", "-p2p=0"]
+    environment:
+      mine_initial_blocks: true
+
+  ubsv-3:
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1", "-p2p=0"]
+    environment:
+      mine_initial_blocks: true
