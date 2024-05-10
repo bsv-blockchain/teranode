@@ -1,0 +1,14 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+
+Client -> RPC : Request: Version()
+activate RPC
+
+RPC -> RPC : handleVersion()
+activate RPC
+
+RPC -> Client : Response with Version Info
+deactivate RPC
+
+@enduml

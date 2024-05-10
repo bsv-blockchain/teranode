@@ -1,0 +1,21 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Blockchain Client" as Blockchain
+
+Client -> RPC : Request: GetBestBlockHash()
+activate RPC
+RPC -> RPC: handleGetBestBlockHash()
+
+activate RPC
+RPC -> Blockchain : GetBestBlockHeader()
+
+
+activate Blockchain
+Blockchain -> RPC : best block hash
+deactivate Blockchain
+
+deactivate RPC
+RPC -> Client : Response with BestBlockHash
+deactivate RPC
+@enduml
