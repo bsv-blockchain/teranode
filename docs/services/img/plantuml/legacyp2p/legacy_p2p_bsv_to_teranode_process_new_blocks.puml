@@ -22,8 +22,7 @@ legacy -> legacy: create a new (empty) subtree
 legacy -> legacy: add a placeholder coinbase tx\n to the subtree
 
 loop each tx
-    legacy -> legacy: convert Tx to Extended Tx format
-    legacy -> legacy: add Extended Tx to the Subtree
+    legacy -> legacy: add Tx Hash to the Subtree
     legacy -> txCache: Cache Tx
     txCache --> legacy
 end
@@ -31,7 +30,7 @@ end
 legacy -> subtreeCache: Cache Subtree
 subtreeCache --> legacy
 
-legacy -> legacy: Build a Teranode block (block, subtree)
+legacy -> legacy: Build a Teranode block (block, coinbaseTx, subtree)
 
 legacy -> blockCache: Cache Teranode Block
 blockCache --> legacy
