@@ -237,6 +237,7 @@ func main() {
 			getTxStore(logger),
 			getTxMetaStore(logger),
 			getSubtreeStore(logger),
+			getBlockStore(logger),
 		)); err != nil {
 			panic(err)
 		}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"io"
 	"strings"
 
@@ -28,12 +29,13 @@ type Repository struct {
 	TxStore          blob.Store
 	TxMetaStore      txmeta.Store
 	SubtreeStore     blob.Store
+	BlockStore       blob.Store
 	BlockchainClient blockchain.ClientI
 	CoinbaseProvider coinbase_api.CoinbaseAPIClient
 }
 
 func NewRepository(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store,
-	blockchainClient blockchain.ClientI, SubtreeStore blob.Store) (*Repository, error) {
+	blockchainClient blockchain.ClientI, SubtreeStore blob.Store, BlockStore blob.Store) (*Repository, error) {
 
 	// SAO - Loading the grpc client directly without using the coinbase.NewClient() method as it causes a circular dependency
 	coinbaseGrpcAddress, ok := gocore.Config().Get("coinbase_grpcAddress")
@@ -59,6 +61,7 @@ func NewRepository(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob
 		TxStore:          txStore,
 		TxMetaStore:      txMetaStore,
 		SubtreeStore:     SubtreeStore,
+		BlockStore:       BlockStore,
 	}, nil
 }
 
@@ -215,6 +218,10 @@ func (r *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) 
 
 func (r *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	return r.SubtreeStore.GetIoReader(ctx, hash.CloneBytes())
+}
+
+func (r *Repository) GetSubtreeDataReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+	return r.BlockStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 }
 
 func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {

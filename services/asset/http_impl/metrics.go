@@ -13,6 +13,7 @@ var (
 	prometheusAssetHttpGetBlockHeader     *prometheus.CounterVec
 	prometheusAssetHttpGetBestBlockHeader *prometheus.CounterVec
 	prometheusAssetHttpGetBlock           *prometheus.CounterVec
+	prometheusAssetHttpGetBlockLegacy     *prometheus.CounterVec
 	prometheusAssetHttpGetLastNBlocks     *prometheus.CounterVec
 	prometheusAssetHttpGetUTXO            *prometheus.CounterVec
 )
@@ -103,6 +104,18 @@ func _initPrometheusMetrics() {
 			Namespace: "Asset",
 			Name:      "http_get_block",
 			Help:      "Number of Get block ops",
+		},
+		[]string{
+			"function",  //function tracking the operation
+			"operation", // type of operation achieved
+		},
+	)
+
+	prometheusAssetHttpGetBlockLegacy = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "Asset",
+			Name:      "http_get_block_legacy",
+			Help:      "Number of Get legacy block ops",
 		},
 		[]string{
 			"function",  //function tracking the operation

@@ -88,6 +88,8 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 		}()
 
 		// Write the number of txs in the subtree
+		// TODO why is there meta data in the subtree data?
+		//      this makes it impossible to stream directly from S3 to the client
 		if err := binary.Write(bufferedWriter, binary.LittleEndian, uint32(len(txMetaSlice))); err != nil {
 			u.logger.Errorf("error writing number of txs: %v", err)
 			writer.CloseWithError(err)

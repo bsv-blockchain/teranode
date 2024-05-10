@@ -33,6 +33,7 @@ type Server struct {
 	utxoStore        utxo.Interface
 	txStore          blob.Store
 	subtreeStore     blob.Store
+	blockStore       blob.Store
 	txMetaStore      txmeta.Store
 	grpcAddr         string
 	httpAddr         string
@@ -46,13 +47,14 @@ type Server struct {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store, subtreeStore blob.Store) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store, subtreeStore blob.Store, blockStore blob.Store) *Server {
 	s := &Server{
 		logger:         logger,
 		utxoStore:      utxoStore,
 		txStore:        txStore,
 		txMetaStore:    txMetaStore,
 		subtreeStore:   subtreeStore,
+		blockStore:     blockStore,
 		peers:          make(map[string]peerWithContext),
 		notificationCh: make(chan *asset_api.Notification, 100),
 	}
@@ -78,7 +80,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("error creating blockchain client: %s", err)
 	}
 
-	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, v.txMetaStore, blockchainClient, v.subtreeStore)
+	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, v.txMetaStore, blockchainClient, v.subtreeStore, v.blockStore)
 	if err != nil {
 		return fmt.Errorf("error creating repository: %s", err)
 	}

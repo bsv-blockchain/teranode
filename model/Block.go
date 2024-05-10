@@ -933,7 +933,8 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 
 	b.TransactionCount = txCount.Load()
 	// header + transaction count + size in bytes + coinbase tx size
-	b.SizeInBytes = sizeInBytes.Load() + 80 + util.VarintSize(b.TransactionCount) + uint64(b.CoinbaseTx.Size())
+	// TODO - this is not correct, we need to calculate the correct block size
+	b.SizeInBytes = uint64(BlockHeaderSize) + util.VarintSize(b.TransactionCount) + sizeInBytes.Load() + uint64(b.CoinbaseTx.Size())
 
 	// TODO something with conflicts
 
