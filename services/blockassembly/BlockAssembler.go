@@ -214,6 +214,22 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			case notification := <-b.blockchainSubscriptionCh:
 				b.currentRunningState.Store("blockchainSubscription")
 				switch notification.Type {
+				// TODO GOKHAN
+				case model.NotificationType_FSMEvent:
+					notificationMetadata := notification.Metadata.GetMetadata()
+					if notificationMetadata["event"] == "STOPMINING" {
+						b.logger.Infof("[BlockAssembler] received FSM event: STOPMINING")
+						// stop mining for X blocks
+						// TODO GOKHAN: update this. We should be able to stop mining forever, until it is started again.
+						// TODO GOKHAN: maybe better to make it add 2?
+						b.resetWaitCount.Store(2)
+					} else if notificationMetadata["event"] == "MINE" {
+						b.logger.Infof("[BlockAssembler] received FSM event: MINE, starting mining")
+						// start mining again
+						// TODO GOKHAN: maybe better to make it add -2?
+						b.resetWaitCount.Store(0)
+
+					}
 				case model.NotificationType_Block:
 					// _, _, ctx := util.NewStatFromContext(context, "blockchainSubscriptionCh", channelStats)
 					bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
@@ -434,6 +450,12 @@ func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCan
 	responseCh := make(chan *miningCandidateResponse)
 
 	utils.SafeSend(b.miningCandidateCh, responseCh, 10*time.Second)
+
+	// TODO
+	// b.blockchainClient.GetFSMState()
+	if b.GetCurrentRunningState() == "not_mining" {
+		return nil, nil, fmt.Errorf("not mining")
+	}
 
 	// wait for 10 seconds for the response
 	select {

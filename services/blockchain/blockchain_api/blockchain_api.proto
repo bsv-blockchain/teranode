@@ -175,6 +175,13 @@ message Notification {
   model.NotificationType type = 1;
   bytes hash = 2;
   string base_url = 3;
+  NotificationMetadata metadata = 4;
+}
+
+// swagger:model NotificationMetadata
+message NotificationMetadata {
+  //define a map of string to string
+  map<string, string> metadata = 1;
 }
 
 // swagger:model StateRequest
