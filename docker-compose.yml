@@ -166,8 +166,8 @@ services:
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/ubsv3/txstore:/app/data/txstore
-      - ./data/ubsv3/subtreestore:/app/subtreestore
-      - ./data/ubsv3/blockstore:/app/blockstore
+      - ./data/ubsv3/subtreestore:/app/data/subtreestore
+      - ./data/ubsv3/blockstore:/app/data/blockstore
     ports:
       - "38081-38089:8081-8089"
       - "38090-38093:8090-8093"
