@@ -1,8 +1,13 @@
+linters:
+  enable:
+    - gosec
+    - errcheck
+
 issues:
   # exclude-dirs:
   #   - services/legacy/bsvutil
   #   - services/legacy/wire
-    
+
   exclude-rules:
     - path: services/legacy
       linters:
@@ -12,3 +17,10 @@ issues:
         - errcheck
         - ineffassign
 
+    - path: services/rpc
+      linters:
+        - govet
+        - staticcheck
+        - unused
+        - errcheck
+        - ineffassign
