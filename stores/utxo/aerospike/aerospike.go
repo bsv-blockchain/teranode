@@ -7,15 +7,16 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-	"golang.org/x/exp/slices"
 	"math"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"golang.org/x/exp/slices"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
@@ -94,8 +95,50 @@ type Store struct {
 }
 
 func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
-	//TODO implement me
-	panic("implement me")
+	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
+
+	policy := util.GetAerospikeBatchReadPolicy()
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(outpoints))
+
+	for idx, item := range outpoints {
+		key, err := aerospike.NewKey(s.namespace, s.setName, item.PreviousTxID[:])
+		if err != nil {
+			return errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta", err)
+		}
+
+		bins := []string{"version", "locktime", "inputs", "outputs"}
+		record := aerospike.NewBatchRead(policy, key, bins)
+		// Add to batch
+		batchRecords[idx] = record
+	}
+
+	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	if err != nil {
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records", err)
+	}
+
+	for idx, batchRecordIfc := range batchRecords {
+		batchRecord := batchRecordIfc.BatchRec()
+		if batchRecord.Err != nil {
+			return errors.New(errors.ERR_PROCESSING, "error in aerospike map store batch record", batchRecord.Err)
+		}
+
+		bins := batchRecord.Record.Bins
+		previousTx, err := s.getTxFromBins(bins)
+		if err != nil {
+			return errors.New(errors.ERR_TX_INVALID, "invalid tx", err)
+		}
+
+		outpoints[idx].Satoshis = previousTx.Outputs[outpoints[idx].Vout].Satoshis
+		outpoints[idx].LockingScript = *previousTx.Outputs[outpoints[idx].Vout].LockingScript
+	}
+
+	prometheusTxMetaAerospikeMapGetMulti.Inc()
+	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
+
+	return nil
 }
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
@@ -205,6 +248,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	var key *aerospike.Key
 	var binsToStore []*aerospike.Bin
 	var err error
+
 	for idx, bItem := range batch {
 		hash = bItem.tx.TxIDChainHash()
 		key, err = aerospike.NewKey(s.namespace, s.setName, hash[:])
@@ -226,6 +270,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 		record := aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
 		batchRecords[idx] = record
+
 	}
 
 	batchId := s.batchId.Add(1)

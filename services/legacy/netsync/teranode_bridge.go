@@ -22,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxoFactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
@@ -30,8 +31,6 @@ import (
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
-
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 )
 
 var (
@@ -47,7 +46,7 @@ type wrapper struct {
 type TeranodeBridge struct {
 	blockValidationClient *blockvalidation.Client
 	blockchainClient      blockchain.ClientI
-	txmetaStore           utxo.Store
+	utxoStore             utxo.Store
 	txCache               *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	subtreeCache          *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
 	blockCache            *expiringmap.ExpiringMap[chainhash.Hash, *wrapper]
@@ -87,7 +86,7 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 		blockvalidationClient = blockvalidation.NewClient(context.TODO(), log)
 	}
 
-	txmetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+	storeURL, err, found := gocore.Config().GetURL("txmeta_store")
 	if err != nil {
 		return nil, fmt.Errorf("could not read txmeta_store: %w", err)
 	}
@@ -95,7 +94,7 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 		return nil, fmt.Errorf("could not find txmeta_store: %w", err)
 	}
 
-	txmetaStore, err := utxoFactory.NewStore(context.Background(), log, txmetaStoreURL, "teranode_bridge", false)
+	utxoStore, err := utxoFactory.NewStore(context.Background(), log, storeURL, "teranode_bridge", false)
 	if err != nil {
 		panic(err)
 	}
@@ -111,7 +110,7 @@ func NewTeranodeBridge(chain *legacy_blockchain.BlockChain) (*TeranodeBridge, er
 		blockchainClient:      blockchainClient,
 		baseUrl:               baseUrl.String(),
 		chain:                 chain,
-		txmetaStore:           txmetaStore,
+		utxoStore:             utxoStore,
 		verifyOnly:            verifyOnly,
 		verifyOnlyErrorGroup:  &verifyOnlyErrorGroup,
 	}
@@ -205,7 +204,7 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 		// Extend the tx with additional information
 		if !tx.IsCoinbase() {
 			for _, input := range tx.Inputs {
-				// Lookup the previous tx in out txCache
+				// Lookup the previous tx in our txCache
 				var script *bscript.Script
 				var satoshis uint64
 
@@ -222,23 +221,23 @@ func (tb *TeranodeBridge) HandleBlock(block *bsvutil.Block) error {
 					satoshis = prevTx.Outputs[input.PreviousTxOutIndex].Satoshis
 
 				} else {
-					// This only works before BSVD processes the block.
-					// Once processed, the UTXOEntry is spent and removed from the UTXOSet
-					previousOutput, err := tb.chain.FetchUtxoEntry(wire.OutPoint{
-						Hash:  *input.PreviousTxIDChainHash(),
-						Index: input.PreviousTxOutIndex,
-					})
+					// Get the previous output from the UTXO store
+					po := &meta.PreviousOutput{
+						PreviousTxID: *input.PreviousTxIDChainHash(),
+						Vout:         input.PreviousTxOutIndex,
+					}
 
+					err := tb.utxoStore.PreviousOutputsDecorate(context.Background(), []*meta.PreviousOutput{po})
 					if err != nil {
 						return fmt.Errorf("Failed to lookup previous tx (%s:%d): %w", *input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, err)
 					}
 
-					if previousOutput == nil {
-						return fmt.Errorf("previous output not found for block %s, tx %s, prevTx %s, vout %d", block.Hash(), txHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
+					if po.LockingScript == nil || len(po.LockingScript) == 0 {
+						return fmt.Errorf("Previous output script is empty for %s:%d", *input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
 					}
 
-					script = bscript.NewFromBytes(previousOutput.PkScript())
-					satoshis = uint64(previousOutput.Amount())
+					script = bscript.NewFromBytes(po.LockingScript)
+					satoshis = uint64(po.Satoshis)
 				}
 
 				input.PreviousTxScript = script
