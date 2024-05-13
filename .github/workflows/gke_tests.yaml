@@ -50,7 +50,7 @@ jobs:
       uses: golangci/golangci-lint-action@v5
       with:
         version: latest
-        args: --issues-exit-code=0 --out-format=checkstyle:golangci-lint-report.xml
+        args: --timeout=5m --issues-exit-code=0 --out-format=checkstyle:golangci-lint-report.xml
 
     - uses: twingate/github-action@v1
       with:
