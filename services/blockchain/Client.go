@@ -247,6 +247,7 @@ func (c *Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash
 
 	return resp.Block, nil
 }
+
 func (c *Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
 	resp, err := c.client.GetHashOfAncestorBlock(ctx, &blockchain_api.GetHashOfAncestorBlockRequest{
 		Hash:  blockHash[:],
@@ -261,6 +262,7 @@ func (c *Client) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhas
 	}
 	return hash, nil
 }
+
 func (c *Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.Hash) (*model.NBit, error) {
 	resp, err := c.client.GetNextWorkRequired(ctx, &blockchain_api.GetNextWorkRequiredRequest{
 		BlockHash: blockHash[:],
@@ -557,4 +559,14 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 	}
 
 	return blocks, nil
+}
+
+func (c *Client) GetFSMCurrentState(ctx context.Context) (blockchain_api.FSMStateType, error) {
+
+	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
+	if err != nil {
+		return blockchain_api.FSMStateType_STOPPED, err
+	}
+
+	return state.State, nil
 }

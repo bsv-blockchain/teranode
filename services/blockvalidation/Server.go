@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 
 	"golang.org/x/sync/errgroup"
@@ -496,7 +497,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 				BaseURL: "",
 				Metadata: model.NotificationMetadata{
 					Metadata: map[string]string{
-						"event": blockchain.FiniteStateMachineEvent_StopMining,
+						"event": blockchain_api.FSMEventType_STOPMINING.String(),
 					},
 				},
 			}

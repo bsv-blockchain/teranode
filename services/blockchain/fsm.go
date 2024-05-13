@@ -43,36 +43,37 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 
 	// Create the finite state machine, with states and transitions
 	finiteStateMachine := fsm.NewFSM(
-		FiniteStateMachineState_Stopped,
+		// FiniteStateMachineState_Stopped,
+		blockchain_api.FSMStateType_STOPPED.String(),
 		fsm.Events{
 			{
-				Name: FiniteStateMachineEvent_Run,
+				Name: blockchain_api.FSMEventType_RUN.String(), //FiniteStateMachineEvent_Run,
 				Src: []string{
-					FiniteStateMachineState_Stopped,
+					blockchain_api.FSMStateType_STOPPED.String(),
 				},
-				Dst: FiniteStateMachineState_Running,
+				Dst: blockchain_api.FSMStateType_RUNNING.String(),
 			},
 			{
-				Name: FiniteStateMachineEvent_Mine,
+				Name: blockchain_api.FSMEventType_MINE.String(),
 				Src: []string{
-					FiniteStateMachineState_Running,
+					blockchain_api.FSMStateType_RUNNING.String(),
 				},
-				Dst: FiniteStateMachineState_Mining,
+				Dst: blockchain_api.FSMStateType_MINING.String(),
 			},
 			{
-				Name: FiniteStateMachineEvent_StopMining,
+				Name: blockchain_api.FSMEventType_STOPMINING.String(),
 				Src: []string{
-					FiniteStateMachineState_Mining,
+					blockchain_api.FSMStateType_MINING.String(),
 				},
-				Dst: FiniteStateMachineState_Running,
+				Dst: blockchain_api.FSMStateType_RUNNING.String(),
 			},
 			{
-				Name: FiniteStateMachineEvent_Stop,
+				Name: blockchain_api.FSMEventType_STOP.String(),
 				Src: []string{
-					FiniteStateMachineState_Running,
-					FiniteStateMachineState_Mining,
+					blockchain_api.FSMStateType_RUNNING.String(),
+					blockchain_api.FSMStateType_MINING.String(),
 				},
-				Dst: FiniteStateMachineState_Stopped,
+				Dst: blockchain_api.FSMStateType_STOPPED.String(),
 			},
 		},
 		callbacks,

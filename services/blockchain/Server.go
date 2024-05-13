@@ -837,6 +837,28 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 	}, nil
 }
 
+func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
+	var state string
+
+	if b.finiteStateMachine == nil {
+		return nil, fmt.Errorf("FSM is not initialized")
+	}
+
+	// Assuming b.finiteStateMachine.Current() returns a string representation of the current state
+	state = b.finiteStateMachine.Current()
+
+	// Convert the string state to FSMEventType using the map
+	enumState, ok := blockchain_api.FSMEventType_value[state]
+	if !ok {
+		// Handle the case where the state is not found in the map
+		return nil, errors.New(errors.ERR_PROCESSING, "invalid state: "+state)
+	}
+
+	return &blockchain_api.GetFSMStateResponse{
+		State: blockchain_api.FSMStateType(enumState),
+	}, nil
+}
+
 func safeClose[T any](ch chan T) {
 	defer func() {
 		_ = recover()

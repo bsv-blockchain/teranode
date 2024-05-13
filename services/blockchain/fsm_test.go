@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/util/test/mock_logger"
 	"github.com/stretchr/testify/require"
 )
@@ -16,46 +17,46 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 
 	fsm := blockchainClient.NewFiniteStateMachine()
 	require.NotNil(t, fsm)
-	require.Equal(t, "Stopped", fsm.Current())
-	require.True(t, fsm.Can(FiniteStateMachineEvent_Run))
+	require.Equal(t, "STOPPED", fsm.Current())
+	require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
 
 	// Test transitions
 	t.Run("Transition from Stopped to Running", func(t *testing.T) {
-		err := fsm.Event(ctx, "Run")
+		err := fsm.Event(ctx, blockchain_api.FSMEventType_RUN.String())
 		require.NoError(t, err)
-		require.Equal(t, "Running", fsm.Current())
-		require.True(t, fsm.Can(FiniteStateMachineEvent_Mine))
-		require.True(t, fsm.Can(FiniteStateMachineEvent_Stop))
+		require.Equal(t, "RUNNING", fsm.Current())
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_MINE.String()))
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
 	})
 
 	t.Run("Transition from Running to Mining", func(t *testing.T) {
 		// Try to set the state to Runningm again
-		err := fsm.Event(ctx, "Run")
+		err := fsm.Event(ctx, blockchain_api.FSMEventType_RUN.String())
 		require.Error(t, err)
 
 		// Transition to Mining
-		err = fsm.Event(ctx, "Mine")
+		err = fsm.Event(ctx, blockchain_api.FSMEventType_MINE.String())
 		require.NoError(t, err)
-		require.Equal(t, "Mining", fsm.Current())
-		require.True(t, fsm.Can(FiniteStateMachineEvent_StopMining))
-		require.True(t, fsm.Can(FiniteStateMachineEvent_Stop))
+		require.Equal(t, "MINING", fsm.Current())
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOPMINING.String()))
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
 	})
 
 	t.Run("Transition from Mining to Running", func(t *testing.T) {
 		// Stop mining, transition to Running
-		err = fsm.Event(ctx, "StopMining")
+		err = fsm.Event(ctx, blockchain_api.FSMEventType_STOPMINING.String())
 		require.NoError(t, err)
-		require.Equal(t, "Running", fsm.Current())
-		require.True(t, fsm.Can(FiniteStateMachineEvent_Mine))
-		require.True(t, fsm.Can(FiniteStateMachineEvent_Stop))
+		require.Equal(t, "RUNNING", fsm.Current())
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_MINE.String()))
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
 	})
 
 	t.Run("Transition from Running to Stopped", func(t *testing.T) {
 		// Transition to Stopped
-		err = fsm.Event(ctx, "Stop")
+		err = fsm.Event(ctx, blockchain_api.FSMEventType_STOP.String())
 		require.NoError(t, err)
-		require.Equal(t, "Stopped", fsm.Current())
-		require.True(t, fsm.Can(FiniteStateMachineEvent_Run))
+		require.Equal(t, "STOPPED", fsm.Current())
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
 	})
 
 }

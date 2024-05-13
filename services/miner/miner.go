@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/retry"
@@ -121,21 +122,20 @@ func (m *Miner) Start(ctx context.Context) error {
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
 
 	// Send FSM event to start mining
-	// create a new blockchain notification with Run event
+	// create a new blockchain notification with Mine event
 	notification := &model.Notification{
 		Type:    model.NotificationType_FSMEvent,
 		Hash:    nil, // not relevant for FSMEvent notifications
 		BaseURL: "",  // not relevant for FSMEvent notifications
 		Metadata: model.NotificationMetadata{
 			Metadata: map[string]string{
-				"event": blockchain.FiniteStateMachineEvent_Mine,
+				"event": blockchain_api.FSMEventType_MINE.String(),
 			},
 		},
 	}
 	// send FSMEvent Mine notification to the blockchain client. FSM will transition to state Mining
 	if err := m.blockchainClient.SendNotification(ctx, notification); err != nil {
-		return fmt.Errorf("[Main] failed to send START MINING notification [%v]", err)
-
+		return fmt.Errorf("[Main] failed to send MINE notification [%v]", err)
 	}
 
 	var miningCtx context.Context

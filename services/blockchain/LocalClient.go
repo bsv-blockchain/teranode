@@ -150,3 +150,8 @@ func (c LocalClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainha
 func (c LocalClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
 	return c.store.GetBlocksSubtreesNotSet(ctx)
 }
+
+func (c LocalClient) GetFSMCurrentState(ctx context.Context) (blockchain_api.FSMStateType, error) {
+	// TODO: check what this should be?
+	return blockchain_api.FSMStateType_MINING, nil
+}
