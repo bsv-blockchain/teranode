@@ -181,6 +181,7 @@ type Block struct {
 
 	// local
 	hash            *chainhash.Hash
+	hasMutex        sync.Mutex
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
 	txMap           util.TxMap
@@ -327,6 +328,9 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 }
 
 func (b *Block) Hash() *chainhash.Hash {
+	b.hasMutex.Lock()
+	defer b.hasMutex.Unlock()
+
 	if b.hash != nil {
 		return b.hash
 	}
