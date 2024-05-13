@@ -49,14 +49,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: twingate/github-action@v1
+        with:
+          service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }}
+
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: coverage-report
-
-      - uses: twingate/github-action@v1
-        with:
-          service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }}
 
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@v2.0.1
