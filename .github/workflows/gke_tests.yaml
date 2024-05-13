@@ -45,6 +45,13 @@ jobs:
       with:
         name: coverage-report
 
+    # Re-run golangci separately without exiting on errors and generating a report for use in Sonar
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v5
+      with:
+        version: latest
+        args: --issues-exit-code=0 --out-format=checkstyle:golangci-lint-report.xml
+
     - uses: twingate/github-action@v1
       with:
         service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
