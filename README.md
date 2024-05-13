@@ -38,7 +38,7 @@ The Bitcoin (BTC) _scalability issue_ refers to the challenge faced by the histo
 
 With BSV, the block size limit was increased to 4 gigabyte, thereby also increasing the performance of the network. However, the current BSV node software (SV Node) has its own limitations, especially related to scalability and performance, limiting the current network to several thousand transactions per second.
 
-**UBSV** is BSV’s solution to the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for BSV scaling to be truly unbounded.
+**UBSV** (also refered to as **Teranode** externally) is BSV’s solution to the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for BSV scaling to be truly unbounded.
 
 UBSV provides a robust node processing system for BSV that can consistently handle over **1M transactions per second**, while strictly adhering to the Bitcoin whitepaper.
 The node has been designed as a collection of microservices, each handling specific functionalities of the BSV network.
@@ -258,7 +258,7 @@ Also, read about how to generate this project's protobuf files in the [3.3. Prot
 
 IPv6 multicast is a communication method in IPv6 networks that allows one-to-many and many-to-many communication. It is used for sending data packets from one source to multiple receivers efficiently, especially in scenarios where multiple recipients want to receive the same data simultaneously. IPv6 multicast is an improvement over IPv4 multicast and offers several advantages, including a larger address space and simplified addressing.
 
-In terms of the UBSV project, IPv6 multicast is used for the propagation of transactions across the network. An originator will broadcast a transaction to a multicast group, and all nodes that have joined that group will receive the transaction. This is a much more efficient way of propagating transactions across the network, as opposed to the traditional unicast method, where the originator would have to send the transaction to each node individually.
+For UBSV, IPv6 multicast is used for the propagation of transactions across the network. An originator will broadcast a transaction to a multicast group, and all nodes that have joined that group will receive the transaction. This is a much more efficient way of propagating transactions across the network, as opposed to the traditional unicast method, where the originator would have to send the transaction to each node individually.
 
 Here are some key points about IPv6 multicast:
 
