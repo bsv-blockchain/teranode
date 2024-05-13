@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/url"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,9 +43,11 @@ var (
 	prometheusTxMetaAerospikeMapSetMinedBatch     prometheus.Counter
 	prometheusTxMetaAerospikeMapSetMinedBatchN    prometheus.Counter
 	prometheusTxMetaAerospikeMapSetMinedBatchErrN prometheus.Counter
+
+	initPrometheusMetricsOnce sync.Once
 )
 
-func init() {
+func initPrometheusMetrics() {
 	prometheusTxMetaAerospikeMapGet = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "aerospike_map_txmeta_get",
@@ -146,6 +149,7 @@ type Store struct {
 }
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
+	initPrometheusMetricsOnce.Do(initPrometheusMetrics)
 	namespace := u.Path[1:]
 
 	client, err := util.GetAerospikeClient(logger, u)

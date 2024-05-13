@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,9 +48,11 @@ var (
 	prometheusUtxoMapReset      prometheus.Counter
 	prometheusUtxoMapDelete     prometheus.Counter
 	prometheusUtxoMapErrors     *prometheus.CounterVec
+
+	initPrometheusMetricsOnce sync.Once
 )
 
-func init() {
+func initPrometheusMetrics() {
 	prometheusUtxoMapGet = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "aerospike_map_utxo_get",
@@ -159,6 +162,7 @@ var (
 )
 
 func New(logger ulogger.Logger, u *url.URL) (*Store, error) {
+	initPrometheusMetricsOnce.Do(initPrometheusMetrics)
 	namespace := u.Path[1:]
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
