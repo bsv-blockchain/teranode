@@ -122,12 +122,12 @@ func Test_main_batched(t *testing.T) {
 				batch = append(batch, i*n)
 				if len(batch) == 100 {
 					ch <- batch
-					batch = batch[:0]
+					batch = make([]int, 0, 100)
 				}
 			}
 			if len(batch) > 0 {
 				ch <- batch
-				batch = batch[:0]
+				batch = make([]int, 0, 100)
 			}
 		}(n)
 	}
