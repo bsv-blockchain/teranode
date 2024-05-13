@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/legacy"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
@@ -421,7 +422,7 @@ func main() {
 		BaseURL: "",  // not relevant for FSMEvent notifications
 		Metadata: model.NotificationMetadata{
 			Metadata: map[string]string{
-				"event": blockchain.FiniteStateMachineEvent_Run,
+				"event": blockchain_api.FSMEventType_RUN.String(),
 			},
 		},
 	}

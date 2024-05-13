@@ -848,7 +848,7 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	state = b.finiteStateMachine.Current()
 
 	// Convert the string state to FSMEventType using the map
-	enumState, ok := blockchain_api.FSMEventType_value[state]
+	enumState, ok := blockchain_api.FSMStateType_value[state]
 	if !ok {
 		// Handle the case where the state is not found in the map
 		return nil, errors.New(errors.ERR_PROCESSING, "invalid state: "+state)
