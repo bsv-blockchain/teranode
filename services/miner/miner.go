@@ -59,6 +59,7 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
 	maxSubtreeCountVariance, _ := gocore.Config().GetInt("miner_max_subtree_count_variance", 100)
 
+	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - r.Intn(maxSubtreeCountVariance*2)
 
@@ -88,9 +89,17 @@ func (m *Miner) Start(ctx context.Context) error {
 	if !ok {
 		m.logger.Fatalf("[Miner] No miner_httpListenAddress specified")
 	}
+	server := &http.Server{
+		Addr:         listenAddress,
+		Handler:      nil,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	go func() {
 		http.HandleFunc("/mine", m.handler)
-		err := http.ListenAndServe(listenAddress, nil)
+		err := server.ListenAndServe()
 		if err != nil {
 			m.logger.Fatalf("[Miner] Error starting http server: %v", err)
 		}
@@ -229,6 +238,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	blockHash, _ := chainhash.NewHash(solution.BlockHash)
 
 	if !generateBlocks && !m.difficultyAdjustment { // SAO - Mine the first <initialBlockCount> blocks without delay
+		//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		randWait := r.Intn(waitSeconds)
 
@@ -274,6 +284,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	maxSubtreeCountVariance, _ := gocore.Config().GetInt("miner_max_subtree_count_variance", 100)
 
 	// after mining a block, set it again to a new value -> vary the max subtree count by 10% to avoid all miners mining at the same time
+	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	m.maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - r.Intn(maxSubtreeCountVariance*2)
 
@@ -400,6 +411,7 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 				currentBackoff = maxBackoff
 			}
 			// Add some jitter to prevent synchronized retries
+			//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 			currentBackoff += time.Duration(rand.Int63n(int64(currentBackoff / 10)))
 
 			retryCount++

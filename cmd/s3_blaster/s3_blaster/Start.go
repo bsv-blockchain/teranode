@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	_ "net/http/pprof"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -43,9 +42,17 @@ func Init() {
 		_, _ = w.Write([]byte("OK"))
 	}))
 
+	server := &http.Server{
+		Addr:         httpAddr,
+		Handler:      nil,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	log.Printf("Profiler available at http://%s/debug/pprof", httpAddr)
 	go func() {
-		log.Printf("%v", http.ListenAndServe(httpAddr, nil))
+		log.Printf("%v", server.ListenAndServe())
 	}()
 
 }

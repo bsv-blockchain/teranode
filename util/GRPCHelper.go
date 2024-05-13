@@ -342,7 +342,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 				return nil, fmt.Errorf("failed to read key pair: %w", err)
 			}
 			return credentials.NewTLS(&tls.Config{
-				Certificates:       []tls.Certificate{cert},
+				Certificates: []tls.Certificate{cert},
+				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
 				InsecureSkipVerify: true,
 				ClientAuth:         tls.RequireAnyClientCert,
 			}), nil
@@ -361,7 +362,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 				return nil, fmt.Errorf("failed to read key pair: %w", err)
 			}
 			return credentials.NewTLS(&tls.Config{
-				Certificates:       []tls.Certificate{cert},
+				Certificates: []tls.Certificate{cert},
+				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
 				InsecureSkipVerify: true,
 				RootCAs:            caCertPool,
 			}), nil
@@ -384,7 +386,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 				return nil, fmt.Errorf("failed to read key pair: %w", err)
 			}
 			return credentials.NewTLS(&tls.Config{
-				Certificates:       []tls.Certificate{cert},
+				Certificates: []tls.Certificate{cert},
+				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
 				InsecureSkipVerify: true,
 				ClientAuth:         tls.RequireAndVerifyClientCert,
 				ClientCAs:          caCertPool,
@@ -404,7 +407,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 				return nil, fmt.Errorf("failed to read key pair: %w", err)
 			}
 			return credentials.NewTLS(&tls.Config{
-				Certificates:       []tls.Certificate{cert},
+				Certificates: []tls.Certificate{cert},
+				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
 				InsecureSkipVerify: true,
 				RootCAs:            caCertPool,
 			}), nil

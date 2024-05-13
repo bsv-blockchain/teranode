@@ -771,6 +771,7 @@ LOOP:
 		i := 0
 		var blocks []*model.Block
 		for _, batch := range batches {
+			batch := batch
 			i++
 			u.logger.Debugf("[catchup][%s] [batch %d] getting %d blocks from %s", fromBlock.Hash().String(), i, batch.size, batch.hash.String())
 

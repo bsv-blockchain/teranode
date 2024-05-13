@@ -42,6 +42,7 @@ func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 		}
 
 		go func(host string) {
+			//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec
 			randSource := mrand.New(mrand.NewSource(time.Now().UnixNano()))
 
 			seedpeers, err := lookupFn(host)

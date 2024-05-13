@@ -3,9 +3,10 @@ package chainintegrity
 import (
 	"context"
 	"flag"
-	txmetafactory "github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
 	"os"
 	"strings"
+
+	txmetafactory "github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -237,6 +238,7 @@ func Start() {
 				var btTx *bt.Tx
 				subtreeFees := uint64(0)
 				for nodeIdx, node := range subtree.Nodes {
+					node := node
 					if !model.CoinbasePlaceholderHash.Equal(node.Hash) {
 						logger.Debugf("checking transaction %s", node.Hash)
 

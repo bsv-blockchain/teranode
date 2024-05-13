@@ -479,7 +479,7 @@ func (ps *PropagationServer) storeTransaction(setCtx context.Context, btTx *bt.T
 
 // Setup a bare-bones TLS config for the server
 func (ps *PropagationServer) generateTLSConfig() *tls.Config {
-	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		ps.logger.Errorf("error generating rsa key: %s", err.Error())
 		return nil
@@ -509,5 +509,6 @@ func (ps *PropagationServer) generateTLSConfig() *tls.Config {
 	return &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		NextProtos:   []string{"txblaster2"},
+		MinVersion:   tls.VersionTLS12,
 	}
 }

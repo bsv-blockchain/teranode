@@ -115,6 +115,7 @@ func (t *Immutable) Put(key, value []byte) *Immutable {
 
 	// The node is the root of the tree if there isn't already one.
 	if t.root == nil {
+		//nolint:gosec // G404 (CWE-337): Use of weak random number generator
 		root := newTreapNode(key, value, rand.Int())
 		return newImmutable(root, 1, nodeSize(root))
 	}
@@ -165,6 +166,7 @@ func (t *Immutable) Put(key, value []byte) *Immutable {
 	}
 
 	// Link the new node into the binary tree in the correct position.
+	//nolint:gosec // G404 (CWE-337): Use of weak random number generator
 	node := newTreapNode(key, value, rand.Int())
 	parent := parents.At(0)
 	if compareResult < 0 {

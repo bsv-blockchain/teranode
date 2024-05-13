@@ -159,6 +159,7 @@ func NewQuicDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, er
 	logger.Infof("wait time between txs: %d ms\n", waitMsBetweenTxs)
 
 	tlsConf := &tls.Config{
+		//nolint:gosec // G402 (CWE-295): TLS InsecureSkipVerify set true
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"txblaster2"},
 	}

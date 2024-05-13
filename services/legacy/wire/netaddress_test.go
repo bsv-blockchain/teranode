@@ -171,6 +171,7 @@ func TestNetAddressWire(t *testing.T) {
 
 	t.Logf("Running %d tests", len(tests))
 	for i, test := range tests {
+		test := test
 		// Encode to wire format.
 		var buf bytes.Buffer
 		err := writeNetAddress(&buf, test.pver, &test.in, test.ts)

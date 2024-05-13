@@ -312,8 +312,10 @@ func (sm *SyncManager) startSync() {
 	// if that is not available then use a random peer at the same
 	// height and hope they find blocks.
 	if len(bestPeers) > 0 {
+		//nolint:gosec // G404: Use of weak random number generator (math/rand)
 		bestPeer = bestPeers[rand.Intn(len(bestPeers))]
 	} else if len(okPeers) > 0 {
+		//nolint:gosec // G404: Use of weak random number generator (math/rand)
 		bestPeer = okPeers[rand.Intn(len(okPeers))]
 	}
 

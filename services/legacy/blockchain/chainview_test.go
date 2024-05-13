@@ -15,6 +15,8 @@ import (
 
 // testNoncePrng provides a deterministic prng for the nonce in generated fake
 // nodes.  The ensures that the node have unique hashes.
+//
+//nolint:gosec // G404: Use of weak random number generator (math/rand)
 var testNoncePrng = rand.New(rand.NewSource(0))
 
 // chainedNodes returns the specified number of nodes constructed such that each

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"path"
 	"strconv"
@@ -161,7 +160,15 @@ func main() {
 			prefix, _ := gocore.Config().Get("stats_prefix")
 			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
 
-			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
+			server := &http.Server{
+				Addr:         profilerAddr,
+				Handler:      nil,
+				ReadTimeout:  60 * time.Second,
+				WriteTimeout: 60 * time.Second,
+				IdleTimeout:  120 * time.Second,
+			}
+
+			logger.Fatalf("%v", server.ListenAndServe())
 		}
 	}()
 

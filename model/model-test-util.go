@@ -340,6 +340,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 			saveBatch := batch
 			g.Go(func() error {
 				for _, data := range saveBatch {
+					data := data
 					if err = txMetaStore.SetCache(&data.hash, &txmeta.Data{
 						Fee:            data.fee,
 						SizeInBytes:    data.sizeInBytes,
@@ -363,6 +364,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 	// remainder batch
 	if len(batch) > 0 {
 		for _, data := range batch {
+			data := data
 			if err := txMetaStore.SetCache(&data.hash, &txmeta.Data{
 				Fee:            data.fee,
 				SizeInBytes:    data.sizeInBytes,

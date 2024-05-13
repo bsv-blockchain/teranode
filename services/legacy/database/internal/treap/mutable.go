@@ -113,6 +113,7 @@ func (t *Mutable) Put(key, value []byte) {
 
 	// The node is the root of the tree if there isn't already one.
 	if t.root == nil {
+		//nolint:gosec // G404 (CWE-337): Use of weak random number generator (math/rand instead of crypto/rand)
 		node := newTreapNode(key, value, rand.Int())
 		t.count = 1
 		t.totalSize = nodeSize(node)
@@ -145,6 +146,7 @@ func (t *Mutable) Put(key, value []byte) {
 	}
 
 	// Link the new node into the binary tree in the correct position.
+	//nolint:gosec // G404 (CWE-337): Use of weak random number generator (math/rand instead of crypto/rand)
 	node := newTreapNode(key, value, rand.Int())
 	t.count++
 	t.totalSize += nodeSize(node)

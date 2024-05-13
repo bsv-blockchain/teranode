@@ -773,6 +773,7 @@ func TestLocateInventory(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
+		test := test
 		// Ensure the expected headers are located.
 		var headers []wire.BlockHeader
 		if test.maxAllowed != 0 {
@@ -883,6 +884,7 @@ func TestHeightToHashRange(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
+		test := test
 		hashes, err := chain.HeightToHashRange(test.startHeight, &test.endHash,
 			test.maxResults)
 		if err != nil {
@@ -956,6 +958,7 @@ func TestIntervalBlockHashes(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
+		test := test
 		hashes, err := chain.IntervalBlockHashes(&test.endHash, test.interval)
 		if err != nil {
 			if !test.expectError {

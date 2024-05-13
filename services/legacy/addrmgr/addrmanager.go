@@ -661,6 +661,7 @@ func (a *AddrManager) AddressCache() []*wire.NetAddress {
 	// `numAddresses' since we are throwing the rest.
 	for i := 0; i < numAddresses; i++ {
 		// pick a number between current index and the end
+		//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 		j := rand.Intn(addrIndexLen-i) + i
 		allAddr[i], allAddr[j] = allAddr[j], allAddr[i]
 	}
@@ -1107,8 +1108,9 @@ func (a *AddrManager) GetBestLocalAddress(remoteAddr *wire.NetAddress) *wire.Net
 // Use Start to begin processing asynchronous address updates.
 func New(dataDir string, lookupFunc func(string) ([]net.IP, error)) *AddrManager {
 	am := AddrManager{
-		peersFile:      filepath.Join(dataDir, "peers.json"),
-		lookupFunc:     lookupFunc,
+		peersFile:  filepath.Join(dataDir, "peers.json"),
+		lookupFunc: lookupFunc,
+		//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 		rand:           rand.New(rand.NewSource(time.Now().UnixNano())),
 		quit:           make(chan struct{}),
 		localAddresses: make(map[string]*localAddress),

@@ -639,6 +639,7 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
 
 	thresholdSeconds := 2 * uint32(targetTimePerBlock)
+	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	randomOffset := rand.Int31n(21) - 10
 
 	timeDifference := uint32(now.Unix()) - b.bestBlockHeader.Load().Timestamp

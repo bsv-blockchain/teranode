@@ -55,7 +55,7 @@ func Run() error {
 		// exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s build", composeFilePath))
 
 		// alternative to above line
-		cmd := exec.Command("docker-compose", "-f", composeFilePath, "build")
+		cmd := exec.Command("bash", "-c", "docker-compose", "-f", composeFilePath, "build")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("Failed to execute command: %s, error: %s", output, err)
 		}
@@ -186,7 +186,8 @@ func execCommand(name string, args ...string) error {
 
 func getServices(prefix string) (string, error) {
 
-	cmd := exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s config --services", composeFilePath))
+	// cmd := exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s config --services", composeFilePath)) // cause golint error
+	cmd := exec.Command("bash", "-c", "docker-compose", "-f", composeFilePath, "config", "--services")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err

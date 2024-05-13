@@ -82,6 +82,7 @@ func TestStxoSerialization(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		test := test
 		// Ensure the function to calculate the serialized size without
 		// actually serializing it is calculated properly.
 		gotSize := spentTxOutSerializeSize(&test.stxo)
@@ -182,6 +183,7 @@ func TestStxoDecodeErrors(t *testing.T) {
 	}
 
 	for _, test := range tests {
+		test := test
 		// Ensure the expected error type is returned.
 		gotBytesRead, err := decodeSpentTxOut(test.serialized,
 			&test.stxo)

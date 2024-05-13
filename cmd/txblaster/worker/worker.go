@@ -370,6 +370,7 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 	//}
 
 	// select 1 distributor at random
+	//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	d := w.distributors[rand.Intn(len(w.distributors))]
 	if responses, err := d.SendTransaction(ctx, tx); err != nil {
 		if errors.Is(err, propagation.ErrBadRequest) {

@@ -18,6 +18,7 @@ import (
 func TestFeeFilterLatest(t *testing.T) {
 	pver := ProtocolVersion
 
+	//nolint:gosec // G404: Use of weak random number generator (math/rand)
 	minfee := rand.Int63()
 	msg := NewMsgFeeFilter(minfee)
 	if msg.MinFee != minfee {

@@ -1617,6 +1617,7 @@ var sigScriptTests = []tstSigScript{
 
 func newOutpoint() *wire.OutPoint {
 	return &wire.OutPoint{
+		//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 		Index: uint32(rand.Int31()),
 	}
 }

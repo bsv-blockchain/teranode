@@ -286,6 +286,7 @@ func generatePrivateKey(privateKeyFilename string) (*crypto.PrivKey, error) {
 		return nil, err
 	}
 	// Save private key to a file
+	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less
 	err = os.WriteFile(privateKeyFilename, privBytes, 0644)
 	if err != nil {
 		return nil, err

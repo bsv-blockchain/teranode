@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 
 	"github.com/bitcoinsv/bsvd/btcjson"
 	"github.com/libsv/go-bt/v2"
@@ -307,10 +308,29 @@ func handleGenerate(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 			Message: "Can't contact miner",
 		}
 	}
-	url := fmt.Sprintf("http://localhost:%d/mine?blocks=%d", minerHttpPort, c.NumBlocks)
+	if minerHttpPort < 0 || minerHttpPort > 65535 {
+		s.logger.Fatalf("Invalid port number: %d", minerHttpPort)
+	}
+
+	if c.NumBlocks < 0 {
+		s.logger.Fatalf("Invalid number of blocks: %d", c.NumBlocks)
+	}
+
+	// causes lint:gosec error G107: Potential HTTP request made with variable url (gosec)
+	// url := fmt.Sprintf("http://localhost:%d/mine?blocks=%d", minerHttpPort, c.NumBlocks)
+
+	// Construct URL using net/url
+	u := &url.URL{
+		Scheme: "http",
+		Host:   fmt.Sprintf("localhost:%d", minerHttpPort),
+		Path:   "mine",
+	}
+	q := u.Query()
+	q.Set("blocks", fmt.Sprintf("%d", c.NumBlocks))
+	u.RawQuery = q.Encode()
 
 	// Send the GET request
-	response, err := http.Get(url)
+	response, err := http.Get(u.String())
 	if err != nil {
 		s.logger.Errorf("The HTTP request failed with error %s\n", err)
 		return nil, &btcjson.RPCError{
