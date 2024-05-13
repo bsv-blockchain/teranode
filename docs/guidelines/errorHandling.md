@@ -14,8 +14,9 @@
 - [2.2. Sentinel Errors in Teranode](#22-sentinel-errors-in-teranode)
 - [2.3. Error Wrapping in Teranode](#23-error-wrapping-in-teranode)
 - [2.4. gRPC Error Wrapping in Teranode](#24-grpc-error-wrapping-in-teranode)
-- [2.6. Error Protobuf](#26-error-protobuf)
-- [2.7. Unit Tests](#27-unit-tests)
+- [2.6. Extra Data](#26-extra-data)
+- [2.7. Error Protobuf](#27-error-protobuf)
+- [2.8. Unit Tests](#28-unit-tests)
 
 
 ## 1. Introduction
@@ -176,15 +177,17 @@ Teranode follows a structured error handling strategy that combines the use of s
 
 The `errors/Error.go` file contains the definition of sentinel errors and wrapping / unwrapping functions used across the application.
 
-An error is defined as a struct containing a code error, a message, and an optional wrapped error.
+An error is defined as a struct containing a code error, a message, an optional wrapped error and an optional extra data (`Data`) .
 
 ```go
 type Error struct {
-	Code       ERR
-	Message    string
-	WrappedErr error
+    Code       ERR
+    Message    string
+    WrappedErr error
+    Data       ErrData
 }
 ```
+
 ### 2.2. Sentinel Errors in Teranode
 
 As mentioned in previous sections, sentinel errors are predefined errors that serve as fixed references for common error conditions. They are an integral part of the Teranode error handling strategy, providing a standard and efficient way to recognize and manage common specific error scenarios.
@@ -452,7 +455,62 @@ This is then interpreted by the Client (`GetBlock` in the Blockchain `Client.go`
 
 From this point on, the service invoking the blockchain client can handle the error as a Teranode error, even though it was originally delivered as a gRPC error.
 
-### 2.6. Error Protobuf
+
+### 2.6. Extra Data
+
+The `Data` field in the `Error` struct is an interface type `ErrData`. This interface is defined as follows:
+
+```go
+type ErrData interface {
+    Error() string
+}
+```
+
+This means that any type that implements the `Error()` method (returns a string) can be used as the `Data` field in the `Error` struct. The purpose of having a `Data` field in the error struct is to allow attaching additional contextual information or payload to the error.
+Notice how this is different from a wrapped error.
+
+We can see an example here:
+
+
+```go
+
+type UtxoSpentErrData struct {
+    Hash           chainhash.Hash
+    SpendingTxHash chainhash.Hash
+    Time           time.Time
+}
+
+func (e *UtxoSpentErrData) Error() string {
+    return fmt.Sprintf("utxo %s already spent by %s at %s", e.Hash, e.SpendingTxHash, e.Time)
+}
+
+func NewUtxoSpentErr(txID chainhash.Hash, spendingTxID chainhash.Hash, t time.Time, err error) *Error {
+
+	// 1 - Create a new error
+	e := New(ERR_TX_ALREADY_EXISTS, "utxoSpentErrStruct.Error()", err)
+
+	// 2 - Create a second error, to be used for the Data field
+    utxoSpentErrStruct := &UtxoSpentErrData{
+        Hash:           txID,
+        SpendingTxHash: spendingTxID,
+        Time:           t,
+    }
+
+	// 3 - Attach the data to the original error
+	e.Data = utxoSpentErrStruct
+
+	return e
+}
+```
+
+In this example, we can see:
+* In the `NewUtxoSpentErr` function, a new custom error (`*Error`) is created using the `New` function, together with a `ERR_TX_ALREADY_EXISTS` sentinel code.
+* To provide a more descriptive error, a new `UtxoSpentErrData` struct is created.
+* The `Data` field of the error (`e.Data`) is set to the `utxoSpentErrStruct`, attaching the UtxoSpentErrData to the error.
+
+
+
+### 2.7. Error Protobuf
 
 `error.proto` defines a protocol buffer message for error handling in Teranode. This file specifies the structure of error messages, including error codes and messages, using the Protobuf language.
 
@@ -460,6 +518,6 @@ The `enum ERR` defines an enumeration of possible error codes with explicit valu
 
 Use `protoc-gen-go` to compile the proto file.
 
-### 2.7. Unit Tests
+### 2.8. Unit Tests
 
 Extensive unit tests are available under the `errors` package (`Error_test.go`). Should you add any new functionality or scenario, it is recommended to update the unit tests to ensure that the error handling logic remains consistent and reliable.
