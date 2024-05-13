@@ -207,7 +207,11 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 	//}
 
 	for outerRetry := 0; outerRetry < 3; outerRetry++ {
-		responses, err := w.distributors[rand.Intn(len(w.distributors))].SendTransaction(ctx, tx)
+
+		//nolint:gosec // G404: Use of weak random number generator is acceptable here, not security-sensitive
+		index := rand.Intn(len(w.distributors))
+
+		responses, err := w.distributors[index].SendTransaction(ctx, tx)
 		if err == nil {
 			break
 		}
