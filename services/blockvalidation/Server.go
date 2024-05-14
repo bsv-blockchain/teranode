@@ -58,6 +58,7 @@ type Server struct {
 	validatorClient             validator.Interface
 	blockFoundCh                chan processBlockFound
 	catchupCh                   chan processBlockCatchup
+	startedMiningCh             chan *blockchain_api.FSMEventType
 	blockValidation             *BlockValidation
 	blockPersisterKafkaProducer util.KafkaProducerI
 	SetTxMetaQ                  *util.LockFreeQ[[][]byte]
@@ -125,7 +126,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}
 
-	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
+	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second, u.handleMiningEvent)
 
 	go u.processSubtreeNotify.Start()
 
@@ -194,6 +195,40 @@ func (u *Server) Init(ctx context.Context) (err error) {
 			}
 		}
 	}()
+
+	return nil
+}
+
+func (u *Server) handleMiningEvent(ctx context.Context, height uint32) error {
+	return u.checkIfMiningShouldStop(ctx, height)
+}
+
+func (u *Server) checkIfMiningShouldStop(ctx context.Context, height uint32) error {
+	// TODO: Parameterize this 10
+	if len(u.blockFoundCh) > 10 {
+		// if we are not in the beginning, and there are many blocks queued for vlaidation, we should stop mining
+		if height > 2000 {
+			// we should tell the miner to stop mining.
+			u.logger.Infof("[BlockValidation][checkIfMiningShouldStop] too many blocks in queue, sending StopMining FSM event")
+
+			// create a new blockchain notification
+			notification := &model.Notification{
+				Type:    model.NotificationType_FSMEvent,
+				Hash:    nil,
+				BaseURL: "",
+				Metadata: model.NotificationMetadata{
+					Metadata: map[string]string{
+						"event": blockchain_api.FSMEventType_STOPMINING.String(),
+					},
+				},
+			}
+
+			// send the notification to the blockchain client
+			if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
+				return fmt.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
+			}
+		}
+	}
 
 	return nil
 }
@@ -485,27 +520,10 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 			return nil, err
 		}
 
-		// if we are not in the beginning, and there are many blocks queued for vlaidation, we should stop mining
-		if block.Height > 2000 {
-			// we should tell the miner to stop mining.
-			u.logger.Infof("[BlockFound][%s] too many blocks in queue, sending StopMining FSM event", hash.String())
-
-			// create a new blockchain notification
-			notification := &model.Notification{
-				Type:    model.NotificationType_FSMEvent,
-				Hash:    nil,
-				BaseURL: "",
-				Metadata: model.NotificationMetadata{
-					Metadata: map[string]string{
-						"event": blockchain_api.FSMEventType_STOPMINING.String(),
-					},
-				},
-			}
-
-			// send the notification to the blockchain client
-			if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
-				return nil, fmt.Errorf("[BlockFound][%s] failed to send STOP notification [%w]", hash.String(), err)
-			}
+		// check if we should stop mining
+		err = u.checkIfMiningShouldStop(ctx, block.Height)
+		if err != nil {
+			return nil, err
 		}
 
 	}

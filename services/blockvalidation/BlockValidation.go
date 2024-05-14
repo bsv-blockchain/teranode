@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -58,10 +59,11 @@ type BlockValidation struct {
 	setMinedChan                       chan *chainhash.Hash
 	revalidateBlockChan                chan revalidateBlockData
 	stats                              *gocore.Stat
+	onMiningEvent                      func(context.Context, uint32) error
 }
 
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation {
+	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration, onMiningEventFunc func(context.Context, uint32) error) *BlockValidation {
 
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
@@ -92,6 +94,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 		setMinedChan:                       make(chan *chainhash.Hash, 1000),
 		revalidateBlockChan:                make(chan revalidateBlockData, 2),
 		stats:                              gocore.NewStat("blockvalidation"),
+		onMiningEvent:                      onMiningEventFunc,
 	}
 
 	go func() {
@@ -125,7 +128,36 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 						// push block hash to the setMinedChan
 						bv.setMinedChan <- notification.Hash
 					} else if notification.Type == model.NotificationType_FSMEvent {
+						notificationMetadata := notification.Metadata.GetMetadata()
+						// if blockassembly started mining
+						if notificationMetadata["event"] == blockchain_api.FSMEventType_MINE.String() {
+							// check if mining need to be stopped
+							// get the best block header validated
+							_, meta, err := bv.blockchainClient.GetBestBlockHeader(ctx)
+							if err != nil {
+								// TODO: check whether something else needs to be done
+								bv.logger.Errorf("[BlockValidation:onMiningEvent] failed to get best block header: %s", err)
+								continue
+							}
+							// call the onMiningEvent function with the best height
+							err = bv.onMiningEvent(ctx, meta.Height)
+							if err != nil {
+								// TODO: check whether something else needs to be done
+								bv.logger.Errorf("[BlockValidation:onMiningEvent] failed to call onMiningEvent: %s", err)
+								continue
+							}
+
+						}
 						// TODO GOKHAN define what is done when the event FSM event
+						// here we check:
+						// first validation sent stop mining,
+						// asseembly got the notification, type is stopmining,
+						// it calls Reset() function, and halts the mining
+						// after 2 blocks / 20 minutes, it will start mining again
+						// and when it starts it will send mining event.
+						// validation here checks the FSMevent if it is mining, it will check the queue length again,
+						// and if length is 0 - or small, such as 1-2, it will not do anything-mining can start mining again
+						// however if the queue length is bigger, it will send stopmining event again.
 					}
 				}
 			}

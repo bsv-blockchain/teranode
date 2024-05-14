@@ -844,7 +844,7 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 		return nil, fmt.Errorf("FSM is not initialized")
 	}
 
-	// Assuming b.finiteStateMachine.Current() returns a string representation of the current state
+	// Get the current state of the FSM
 	state = b.finiteStateMachine.Current()
 
 	// Convert the string state to FSMEventType using the map
