@@ -444,16 +444,24 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 		return nil
 	}
 
-	for _, input := range tx.Inputs {
-		// TODO use the new PreviousOutputsDecorate function
-		txMetaData, err := v.utxoStore.GetMeta(ctx, input.PreviousTxIDChainHash())
-		if err != nil {
-			return fmt.Errorf("can't get txmeta for tx: %w", err)
+	outpoints := make([]*meta.PreviousOutput, len(tx.Inputs))
+
+	for i, input := range tx.Inputs {
+		outpoints[i] = &meta.PreviousOutput{
+			PreviousTxID: *input.PreviousTxIDChainHash(),
+			Vout:         input.PreviousTxOutIndex,
 		}
-		prevOut := txMetaData.Tx.Outputs[input.PreviousTxOutIndex]
-		input.PreviousTxScript = prevOut.LockingScript
-		input.PreviousTxSatoshis = prevOut.Satoshis
 	}
+
+	if err := v.utxoStore.PreviousOutputsDecorate(ctx, outpoints); err != nil {
+		return fmt.Errorf("can't extend transaction  %s: %w", tx.TxIDChainHash().String(), err)
+	}
+
+	for i, input := range tx.Inputs {
+		input.PreviousTxScript = bscript.NewFromBytes(outpoints[i].LockingScript)
+		input.PreviousTxSatoshis = outpoints[i].Satoshis
+	}
+
 	return nil
 }
 
