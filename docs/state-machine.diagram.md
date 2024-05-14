@@ -4,10 +4,11 @@ The mermaid diagram outlined below represents the various states and events that
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Stopped
-    Mining --> Stopped: Stop
-    Mining --> Running: StopMining
-    Running --> Mining: Mine
-    Running --> Stopped: Stop
-    Stopped --> Running: Run
+    [*] --> STOPPED
+    MINING --> MINING: MINE
+    MINING --> STOPPED: STOP
+    MINING --> RUNNING: STOPMINING
+    RUNNING --> MINING: MINE
+    RUNNING --> STOPPED: STOP
+    STOPPED --> RUNNING: RUN
 ```

@@ -57,6 +57,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Name: blockchain_api.FSMEventType_MINE.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
+					blockchain_api.FSMStateType_MINING.String(),
 				},
 				Dst: blockchain_api.FSMStateType_MINING.String(),
 			},
