@@ -101,6 +101,9 @@ func (e *Error) As(target interface{}) bool {
 }
 
 func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
 	return e.WrappedErr
 }
 

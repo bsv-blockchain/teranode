@@ -5,11 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -628,7 +628,8 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 	for {
 		block, err := model.NewBlockFromReader(blockReader)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if strings.Contains(err.Error(), "EOF") {
+				// if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) { // doesn't catch the EOF!!!! //TODO
 				break
 			}
 			return nil, fmt.Errorf("[getBlocks][%s] failed to create block from bytes [%w]", hash.String(), err)
@@ -779,6 +780,9 @@ LOOP:
 
 			blocks, err = u.getBlocks(gCtx, &batch.hash, batch.size, baseURL)
 			if err != nil {
+				// TODO
+				// we aren't waiting for the func to finish so we never catch this error and log it
+				u.logger.Errorf("[catchup][%s] failed to get %d blocks [%s]:%v", fromBlock.Hash().String(), batch.size, batch.hash.String(), err)
 				return errors.Join(fmt.Errorf("[catchup][%s] failed to get %d blocks [%s]", fromBlock.Hash().String(), batch.size, batch.hash.String()), err)
 			}
 			if uint32(len(blocks)) != batch.size {
