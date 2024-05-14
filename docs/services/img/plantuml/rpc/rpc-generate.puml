@@ -1,0 +1,21 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Miner" as Miner
+
+Client -> RPC : Request: Generate(NumBlocks)
+activate RPC
+
+RPC -> RPC : handleGenerate(NumBlocks)
+activate RPC
+
+RPC -> Miner : HTTP /mine?blocks=(NumBlocks)
+activate Miner
+Miner --> RPC : Acknowledged
+deactivate Miner
+
+RPC -> Client : Acknowledged
+
+
+deactivate RPC
+@enduml

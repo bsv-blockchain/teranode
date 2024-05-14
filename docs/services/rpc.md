@@ -83,7 +83,7 @@ The below table summarises the services supported in the current version:
 A description of the commands can be found in the `rpcserverhelp.go` file in the `bsvd` repository:
 https://github.com/bitcoinsv/bsvd/blob/master/rpcserverhelp.go
 
-Teranode RPC server is designed to be compatible with the Bitcoin Core RPC interface, as implemented in the `bsvd` repository.
+Teranode RPC server is designed to be compatible with the Bitcoin RPC interface, as implemented in the `bsvd` repository.
 
 ### Authentication
 
@@ -97,7 +97,9 @@ All RPC commands require a valid username and password for authentication. The s
 The RPC server is a standalone service that listens for incoming requests and processes them based on the command type. The server starts by initializing the HTTP server and setting up the necessary configurations.
 It then listens for incoming requests and routes them to the appropriate handler based on the command type. The handler processes the request, executes the command, and returns the response to the client.
 
-In order to serve some of the requests, the RPC server interacts with the Teranode core services to fetch the required data. For example, when a `getblock` command is received, the server interacts with the blockchain service to fetch the block data.
+In order to serve some of the requests, the RPC server interacts with the Teranode core services to fetch the required data.
+For example, when a `getblock` command is received, the server interacts with the blockchain service to fetch the block data.
+Also, when a `generate` command is received, the server interacts with the miner service to generate the requested number of blocks.
 
 
 ## 3. Functionality
@@ -124,9 +126,126 @@ The `getblock` command is used to retrieve information about a specific block on
 
 ![rpc-get-block.svg](img/plantuml/rpc/rpc-get-block.svg)
 
-### 3.5. Command - Stop
 
-*** TODO
+### 3.5. Command - Generate
+
+The `generate` command is used to generate a specified number of blocks on the blockchain. The RPC server processes this command by interacting with the blockchain service to create the requested number of blocks.
+
+This command is commonly used in testing and development environments to artificially advance the blockchain by generating blocks immediately, rather than waiting for them to be mined in the usual way.
+
+
+![rpc-generate.svg](img/plantuml/rpc/rpc-generate.svg)
+
+
+The function accepts a `GenerateCmd` which contains the number of blocks to generate, and sends an HTTP GET request to the miner's URL (e.g. `http://localhost:${MINER_HTTP_PORT}/mine?blocks=${numberOfBlocksToGenerate}`) to trigger block generation.
+
+
+- **Example Use**:
+
+```go
+// Sample usage within an RPC server setup
+command := &btcjson.GenerateCmd{NumBlocks: 10}
+result, err := handleGenerate(rpcServerInstance, command, closeChannel)
+if err != nil {
+    log.Fatalf("Failed to generate blocks: %v", err)
+}
+```
+
+
+- **Settings**: It requires a valid `MINER_HTTP_PORT` setting.
+
+
+- **Considerations:**
+  - This function should not be exposed in production environments as it allows the generation of blocks outside of the normal consensus rules, which can be exploited or lead to unintended forks if used maliciously.
+  - Ensure the miner service is secured and only accessible by the RPC server to prevent unauthorized block generation.
+
+
+### 3.6. Command - Create Raw Transaction
+
+The `createrawtransaction` RPC method is used in Bitcoin to manually create a raw transaction. This transaction is not broadcast to the network but returned as a hex-encoded string. The created transaction could then be further modified, signed, and eventually broadcast using other RPC commands.
+
+The CreateRawTransaction method constructs a transaction that spends a given set of inputs and sends the outputs to specified addresses. It requires specific parameters about the inputs (which UTXOs to spend) and outputs (where to send the coins).
+
+![rpc-create-raw-transaction.svg](img/plantuml/rpc/rpc-create-raw-transaction.svg)
+
+#### Input Parameters:
+- **Inputs**: A list of transaction inputs including the transaction ID (`txid`), output index (`vout`), and a sequence number if applicable.
+- **Amounts**: A dictionary where each key is a Bitcoin address and the value is the amount of bitcoin to send to that address.
+- **LockTime** (optional): Specifies the earliest time or block number that this transaction can be included in the blockchain.
+
+#### Steps:
+1. **Validate LockTime**: Checks if the provided `LockTime` is within the valid range.
+
+
+2. **Create Transaction**: Initializes a new transaction (`mtx`).
+
+
+3. **Process Inputs**:
+  - For each input, it validates the transaction ID and constructs the transaction input structure.
+  - If a `LockTime` is set and not zero, it adjusts the sequence number to allow for the lock time to be effective.
+
+
+4. **Process Outputs**:
+  - Validates the amount for each output to ensure it's within the valid monetary range.
+  - Validates each output address, ensuring it's a supported type and appropriate for the network.
+  - Creates a payment script for each address and constructs the transaction output.
+
+
+5. **Set Transaction LockTime**: If provided, sets the transaction's lock time.
+
+
+6. **Serialize Transaction**: Converts the transaction to a hex-encoded string for output.
+
+#### Outputs:
+- **Success**: Returns a hex-encoded string representing the raw transaction.
+- **Error**: Returns an error if there are issues with the inputs, outputs, lock time, address decoding, or serialization.
+
+
+
+
+### 3.7. Command - Send Raw Transaction
+
+The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-signed raw transaction to the network. This command broadcasts the raw transaction hex to the connected nodes in the blockchain network for inclusion in a block.
+
+
+#### Function Overview
+
+- **Purpose**: To submit a raw, serialized, and hex-encoded transaction to the blockchain network.
+- **Parameters**:
+  - `cmd`: Contains the raw transaction data and any command-specific parameters.
+  - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
+- **Return Value**:
+  - On success: Returns a result (e.g., transaction ID or confirmation message) indicating that the transaction was successfully broadcast.
+  - On failure: Returns an error detailing why the transaction could not be processed or broadcast.
+
+#### Process Flow
+
+![rpc-send-raw-transaction.svg](img/plantuml/rpc/rpc-send-raw-transaction.svg)
+
+1. **Input Parsing**:
+  - The function receives a command (`btcjson.SendRawTransactionCmd`) which includes the hex-encoded string of the transaction.
+  - It checks if the hexadecimal string has an odd length and prepends a "0" if necessary to ensure correct decoding.
+
+2. **Hex Decoding**:
+  - Attempts to decode the hexadecimal string into bytes.
+  - If decoding fails, it returns an error using `rpcDecodeHexError`, indicating the hex string was malformed.
+
+3. **Transaction Deserialization**:
+  - Attempts to construct a transaction object from the decoded bytes using a transaction parsing library (assumed to be `bt.NewTxFromBytes`).
+  - If the transaction cannot be parsed, it returns an error stating the transaction is deserializable, indicating structural issues with the transaction data.
+
+4. **Transaction Distribution Setup**:
+  - Initializes a `Distributor` object responsible for handling the broadcasting of transactions to the Propagation servers.
+  - If the distributor cannot be created (due to configuration errors, connection issues, etc.), it returns an initialization error.
+
+5. **Transaction Broadcasting**:
+  - Calls a method (`d.SendTransaction`) on the distributor to send the transaction to the network.
+  - This method likely involves network operations, where the transaction is relayed to peers or a blockchain node.
+  - If broadcasting fails, it returns an error indicating that the transaction was rejected along with a message detailing the reason (e.g., network errors, validation failures on the network side).
+
+6. **Success Response**:
+  - If the transaction is successfully broadcast, the function returns a success response, which might include the transaction ID or a success message.
+
 
 ## 4. Technology
 
@@ -149,6 +268,7 @@ The RPC service is located in the `services/rpc` directory. The main files and d
 ├── Server.go          # Main server application file: Initializes and runs the server, sets up configurations, and handles lifecycle events.
 └── handlers.go        # Request handlers: Defines functions that process incoming requests based on type and content.
 ```
+
 
 ## 6. Settings
 

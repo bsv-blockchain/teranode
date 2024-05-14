@@ -67,8 +67,8 @@ func handleGetBlock(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 
 	var (
 		blockReply interface{}
-	// 	params      = s.cfg.ChainParams
-	// 	blockHeader = &blk.MsgBlock().Header
+		// 	params      = s.cfg.ChainParams
+		// 	blockHeader = &blk.MsgBlock().Header
 	)
 	diff, _ := b.Header.Bits.CalculateDifficulty().Float64()
 
@@ -356,7 +356,7 @@ func handleGenerate(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 	// if err != nil {
 	// 	return nil, &btcjson.RPCError{
 	// 		Code:    btcjson.ErrRPCInternal.Code,
-	// 		Message: err.Error(),
+	// 		Message: herr.Error(),
 	// 	}
 	// }
 
