@@ -876,11 +876,6 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
 	}
 
-	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
-		// error will be handled below
-		stp.logger.Errorf("[SubtreeProcessor] error storing txmeta: %v", err)
-	}
-
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
 	return nil
