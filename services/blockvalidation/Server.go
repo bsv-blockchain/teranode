@@ -211,7 +211,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 }
 
 func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound processBlockFound) error {
-	if len(u.blockFoundCh) > 3 {
+	useCatchupWhenBehind := gocore.Config().GetBool("blockvalidation_useCatchupWhenBehind", false)
+	if useCatchupWhenBehind && len(u.blockFoundCh) > 3 {
 		// we are multiple blocks behind, process all the blocks per peer on the catchup channel
 		u.logger.Infof("[Init] processing block found on channel [%s] - too many blocks behind", blockFound.hash.String())
 		peerBlocks := make(map[string]processBlockFound)
