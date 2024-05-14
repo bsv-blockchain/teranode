@@ -415,6 +415,9 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 			err = fmt.Errorf("%v: %w", err, ErrBadRequest)
 		}
 
+		// TEMP: Log the error for now
+		ps.logger.Errorf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
+
 		prometheusInvalidTransactions.Inc()
 		return nil, err
 	}

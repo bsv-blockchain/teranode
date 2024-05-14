@@ -320,7 +320,8 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 							break
 						}
 
-						d.logger.Errorf("error sending transaction %s to %s: %v", tx.TxIDChainHash().String(), a, err)
+						deadline, _ := ctx1.Deadline()
+						d.logger.Warnf("error sending transaction %s to %s failed (deadline %s, duration %s), retrying: %v", tx.TxIDChainHash().String(), a, time.Until(deadline), time.Since(start), err)
 						if retries < d.attempts {
 							retries++
 							time.Sleep(backoff)
