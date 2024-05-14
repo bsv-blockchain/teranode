@@ -197,11 +197,49 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				// wait for the reset to complete before getting a new mining candidate
 				// 2 blocks && at least 20 minutes
 				if b.resetWaitCount.Load() > 0 || int32(time.Now().Unix()) <= b.resetWaitTime.Load() {
+					// Reset might be triggered with manual intervention, so we need to make sure we are in NotMining state.
+					// here we are sending stopmining event without checking the current state of the FSM, to keep grpc calls at 1, rather than 2.
+					notification := &model.Notification{
+						Type:    model.NotificationType_FSMEvent,
+						Hash:    nil,
+						BaseURL: "",
+						Metadata: model.NotificationMetadata{
+							Metadata: map[string]string{
+								"event": blockchain_api.FSMEventType_STOPMINING.String(),
+							},
+						},
+					}
+
+					// send the notification to the blockchain client
+					if err := b.blockchainClient.SendNotification(ctx, notification); err != nil {
+						// TODO: should we add retry?
+						b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
+					}
+
 					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitTime.Load()), 0).String())
 					utils.SafeSend(responseCh, &miningCandidateResponse{
 						err: fmt.Errorf("waiting for reset to complete"),
 					})
 				} else {
+					// we are able to mine, make sure FSM is in MINING state
+					// create a new blockchain notification
+					notification := &model.Notification{
+						Type:    model.NotificationType_FSMEvent,
+						Hash:    nil,
+						BaseURL: "",
+						Metadata: model.NotificationMetadata{
+							Metadata: map[string]string{
+								"event": blockchain_api.FSMEventType_MINE.String(),
+							},
+						},
+					}
+
+					// send the notification to the blockchain client
+					if err := b.blockchainClient.SendNotification(ctx, notification); err != nil {
+						// TODO: should we add retry?
+						b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
+					}
+
 					miningCandidate, subtrees, err := b.getMiningCandidate()
 					utils.SafeSend(responseCh, &miningCandidateResponse{
 						miningCandidate: miningCandidate,
@@ -441,10 +479,6 @@ func (b *BlockAssembler) GetMiningCandidate(_ context.Context) (*model.MiningCan
 	responseCh := make(chan *miningCandidateResponse)
 
 	utils.SafeSend(b.miningCandidateCh, responseCh, 10*time.Second)
-
-	if b.GetCurrentRunningState() != blockchain_api.FSMStateType_MINING.String() {
-		return nil, nil, fmt.Errorf("Block assembler is not mining")
-	}
 
 	// wait for 10 seconds for the response
 	select {
