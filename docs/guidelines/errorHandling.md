@@ -458,6 +458,17 @@ From this point on, the service invoking the blockchain client can handle the er
 
 ### 2.6. Extra Data
 
+As we saw before, a Teranode error is represented by the following struct:
+
+```go
+type Error struct {
+    Code       ERR
+    Message    string
+    WrappedErr error
+    Data       ErrData
+}
+```
+
 The `Data` field in the `Error` struct is an interface type `ErrData`. This interface is defined as follows:
 
 ```go
@@ -508,7 +519,26 @@ In this example, we can see:
 * To provide a more descriptive error, a new `UtxoSpentErrData` struct is created.
 * The `Data` field of the error (`e.Data`) is set to the `utxoSpentErrStruct`, attaching the UtxoSpentErrData to the error.
 
+The `Data` field is not only used to attach additional context to the error but also in the `errors.As` method for error type assertions.
 
+```go
+func (e *Error) As(target interface{}) bool {
+    // ...
+
+    // check if Data matches the target type
+    if e.Data != nil {
+        if data, ok := e.Data.(error); ok {
+            return errors.As(data, target)
+        }
+    }
+
+    // ...
+}
+```
+
+Here, if the `Data` field of the error (`e.Data`) is not `nil`, it checks if the `Data` implements the `error` interface. If it does, it calls `errors.As(data, target)`, attempting to assign the `Data` to the target.
+
+So, in the context of the `NewUtxoSpentErr` function example, the `Data` field, which contains `utxoSpentErrStruct`, is used both for attaching context to the error and for performing type assertions using `errors.As`. This ensures that if the caller of this function needs to extract specific details about the error, it can do so by using `errors.As` on the error returned by `NewUtxoSpentErr`.
 
 ### 2.7. Error Protobuf
 
