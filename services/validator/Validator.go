@@ -176,7 +176,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 		return errors.New(errors.ERR_PROCESSING, "[Validate][%s] error spending utxos: %v", tx.TxID(), err)
 	}
 
-	txMetaData, err := v.registerTxInMetaStore(setSpan, tx, spentUtxos)
+	txMetaData, err := v.storeTxInUtxoMap(setSpan, tx)
 	if err != nil {
 		if errors.Is(err, errors.ErrUtxoAlreadyExists) {
 			// stop all processing, this transaction has already been validated and passed into the block assembly
@@ -218,31 +218,6 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 		}
 	}
 
-	// if the block assembly creates utxos, then we don't need to do it here
-	// then we store the new utxos from the tx
-	err = v.storeUtxos(setSpan.Ctx, tx)
-	if err != nil {
-		v.logger.Errorf("[Validate][%s] error storing tx in utxo utxoStore: %v", tx.TxIDChainHash().String(), err)
-
-		// TODO We need to make sure that these actions are actually completed
-		//      Push into a queue to be processed later?
-
-		if err = v.blockAssembler.RemoveTx(setSpan.Ctx, tx.TxIDChainHash()); err != nil {
-			err = errors.New(errors.ERR_PROCESSING, "error removing tx from block assembly: %v", err)
-		}
-
-		if err = v.reverseTxMetaStore(setSpan, tx.TxIDChainHash()); err != nil {
-			err = errors.New(errors.ERR_PROCESSING, "error reversing tx meta utxoStore: %v", err)
-		}
-
-		if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
-			err = errors.New(errors.ERR_PROCESSING, "error reversing utxo spends: %v", reverseErr)
-		}
-
-		setSpan.RecordError(err)
-		return err
-	}
-
 	return nil
 }
 
@@ -270,32 +245,7 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Has
 	return err
 }
 
-func (v *Validator) storeUtxos(ctx context.Context, tx *bt.Tx) error {
-	start, stat, ctx := util.StartStatFromContext(ctx, "storeUtxos")
-	storeUtxosSpan := tracing.Start(ctx, "Validator:storeUtxos")
-	defer func() {
-		stat.AddTime(start)
-		storeUtxosSpan.Finish()
-		prometheusTransactionStoreUtxos.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
-
-	_, err := v.utxoStore.Create(storeUtxosSpan.Ctx, tx)
-	if err != nil {
-
-		// TODO #144
-		// add the tx to the fail queue and process ASAP?
-
-		// TODO remove from tx meta store?
-		// TRICKY - we've sent the tx to block assembly - we can't undo that?
-		// the reverseSpends need to be given the outputs not the spends
-		// v.reverseSpends(traceSpan, spentUtxos)
-		return fmt.Errorf("error storing tx %s in utxo utxoStore: %v", tx.TxIDChainHash().String(), err)
-	}
-
-	return nil
-}
-
-func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spentUtxos []*utxo.Spend) (*meta.Data, error) {
+func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx) (*meta.Data, error) {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "registerTxInMetaStore")
 	defer func() {
 		stat.AddTime(start)
@@ -307,15 +257,7 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 
 	data, err := v.utxoStore.Create(ctx, tx)
 	if err != nil {
-		if errors.Is(err, errors.ErrUtxoAlreadyExists) {
-			// this does not need to be a warning, it's just a duplicate validation request
-			return nil, err
-		}
-
-		if reverseErr := v.reverseSpends(txMetaSpan, spentUtxos); reverseErr != nil {
-			err = errors.Join(err, fmt.Errorf("error reversing utxos: %v", reverseErr))
-		}
-		return data, fmt.Errorf("error sending tx %s to txmetaStore: %w", tx.TxIDChainHash().String(), err)
+		return nil, err
 	}
 
 	if v.txMetaKafkaChan != nil {
