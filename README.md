@@ -316,12 +316,8 @@ The system uses a number of different store technologies to store data. Differen
   - File data on all objects within the /s3 subfolder are released from the filesystem every hour. The filesystem metadata will still be available, but the actual file contents will be cleared.
   - Once data is archived off to S3, the best way to read it again is using S3 direct API calls, but it is also possible to just issue a read to the object in the /s3 subfolder and the contents will be restored transparently, though with some possible delays for data transfer.
   - Linked S3 archive buckets:
-    - s3://ap-ubsv-subtree-store
-    - s3://ap-ubsv-block-store
-    - s3://eu-ubsv-subtree-store
-    - s3://eu-ubsv-block-store
-    - s3://us-ubsv-subtree-store
-    - s3://us-ubsv-block-store
+    - s3://ubsv-m[1-6]-subtree-store
+    - s3://ubsv-m[1-6]-block-store
 
 
 ---
