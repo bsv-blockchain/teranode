@@ -561,12 +561,12 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 	return blocks, nil
 }
 
-func (c *Client) GetFSMCurrentState(ctx context.Context) (blockchain_api.FSMStateType, error) {
+func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
 
 	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
 	if err != nil {
-		return blockchain_api.FSMStateType_STOPPED, err
+		return nil, err
 	}
 
-	return state.State, nil
+	return &state.State, nil
 }

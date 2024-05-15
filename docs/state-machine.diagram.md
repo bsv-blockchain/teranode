@@ -5,7 +5,6 @@ The mermaid diagram outlined below represents the various states and events that
 ```mermaid
 stateDiagram-v2
     [*] --> STOPPED
-    MINING --> MINING: MINE
     MINING --> STOPPED: STOP
     MINING --> RUNNING: STOPMINING
     RUNNING --> MINING: MINE

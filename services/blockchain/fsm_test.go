@@ -52,21 +52,34 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 	})
 
 	t.Run("Transition from Running to Running", func(t *testing.T) {
-		// Stop mining, transition to Running
+		require.Equal(t, "RUNNING", fsm.Current())
 		err = fsm.Event(ctx, blockchain_api.FSMEventType_STOPMINING.String())
+		require.Error(t, err)
+		require.Equal(t, "RUNNING", fsm.Current())
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_MINE.String()))
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
+	})
+
+	t.Run("Transition from Running to Mining Again", func(t *testing.T) {
+		// Try to set the state to Runningm again
+		err := fsm.Event(ctx, blockchain_api.FSMEventType_RUN.String())
+		require.Error(t, err)
+
+		// Transition to Mining
+		err = fsm.Event(ctx, blockchain_api.FSMEventType_MINE.String())
 		require.NoError(t, err)
-		// require.Equal(t, "RUNNING", fsm.Current())
-		// require.True(t, fsm.Can(blockchain_api.FSMEventType_MINE.String()))
-		// require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
+		require.Equal(t, "MINING", fsm.Current())
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOPMINING.String()))
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
 	})
 
 	t.Run("Transition from Mining to Mining", func(t *testing.T) {
-		// Stop mining, transition to Running
+		require.Equal(t, "MINING", fsm.Current())
 		err = fsm.Event(ctx, blockchain_api.FSMEventType_MINE.String())
-		require.NoError(t, err)
-		//require.Equal(t, "RUNNING", fsm.Current())
-		//require.True(t, fsm.Can(blockchain_api.FSMEventType_MINE.String()))
-		//require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
+		require.Error(t, err)
+		require.Equal(t, "MINING", fsm.Current())
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOPMINING.String()))
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
 	})
 
 	t.Run("Transition from Running to Stopped", func(t *testing.T) {
@@ -81,8 +94,8 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 		// Try to set the state to Stopped, again
 		err = fsm.Event(ctx, blockchain_api.FSMEventType_STOP.String())
 		require.Error(t, err)
-		// require.Equal(t, "STOPPED", fsm.Current())
-		// require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
+		require.Equal(t, "STOPPED", fsm.Current())
+		require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
 	})
 
 }

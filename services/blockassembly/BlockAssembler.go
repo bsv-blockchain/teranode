@@ -198,22 +198,31 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				// 2 blocks && at least 20 minutes
 				if b.resetWaitCount.Load() > 0 || int32(time.Now().Unix()) <= b.resetWaitTime.Load() {
 					// Reset might be triggered with manual intervention, so we need to make sure we are in NotMining state.
-					// here we are sending stopmining event without checking the current state of the FSM, to keep grpc calls at 1, rather than 2.
-					notification := &model.Notification{
-						Type:    model.NotificationType_FSMEvent,
-						Hash:    nil,
-						BaseURL: "",
-						Metadata: model.NotificationMetadata{
-							Metadata: map[string]string{
-								"event": blockchain_api.FSMEventType_STOPMINING.String(),
-							},
-						},
+					// here we are sending stopmining event. First we check the current state of the FSM
+
+					state, err := b.blockchainClient.GetFSMCurrentState(ctx)
+					if err != nil {
+						// TODO: should we add retry? or do something else?
+						b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to get current state [%w]", err)
 					}
 
-					// send the notification to the blockchain client
-					if err := b.blockchainClient.SendNotification(ctx, notification); err != nil {
-						// TODO: should we add retry?
-						b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
+					if *state != blockchain_api.FSMStateType_RUNNING {
+						notification := &model.Notification{
+							Type:    model.NotificationType_FSMEvent,
+							Hash:    nil,
+							BaseURL: "",
+							Metadata: model.NotificationMetadata{
+								Metadata: map[string]string{
+									"event": blockchain_api.FSMEventType_STOPMINING.String(),
+								},
+							},
+						}
+
+						// send the notification to the blockchain client
+						if err := b.blockchainClient.SendNotification(ctx, notification); err != nil {
+							// TODO: should we add retry?
+							b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
+						}
 					}
 
 					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitTime.Load()), 0).String())
@@ -222,22 +231,31 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					})
 				} else {
 					// we are able to mine, make sure FSM is in MINING state
-					// create a new blockchain notification
-					notification := &model.Notification{
-						Type:    model.NotificationType_FSMEvent,
-						Hash:    nil,
-						BaseURL: "",
-						Metadata: model.NotificationMetadata{
-							Metadata: map[string]string{
-								"event": blockchain_api.FSMEventType_MINE.String(),
-							},
-						},
+
+					state, err := b.blockchainClient.GetFSMCurrentState(ctx)
+					if err != nil {
+						// TODO: should we add retry? or do something else?
+						b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to get current state [%w]", err)
 					}
 
-					// send the notification to the blockchain client
-					if err := b.blockchainClient.SendNotification(ctx, notification); err != nil {
-						// TODO: should we add retry?
-						b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
+					if state != nil && *state != blockchain_api.FSMStateType_MINING {
+						// create a new blockchain notification
+						notification := &model.Notification{
+							Type:    model.NotificationType_FSMEvent,
+							Hash:    nil,
+							BaseURL: "",
+							Metadata: model.NotificationMetadata{
+								Metadata: map[string]string{
+									"event": blockchain_api.FSMEventType_MINE.String(),
+								},
+							},
+						}
+
+						// send the notification to the blockchain client
+						if err := b.blockchainClient.SendNotification(ctx, notification); err != nil {
+							// TODO: should we add retry?
+							b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
+						}
 					}
 
 					miningCandidate, subtrees, err := b.getMiningCandidate()

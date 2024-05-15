@@ -204,10 +204,13 @@ func (u *Server) handleMiningEvent(ctx context.Context, height uint32) error {
 }
 
 func (u *Server) checkIfMiningShouldStop(ctx context.Context, height uint32) error {
-	// TODO: Parameterize this 10
-	if len(u.blockFoundCh) > 10 {
+	mining_should_stop_after_block_validation_queued_blocks, _ := gocore.Config().GetInt("mining_should_stop_after_block_validation_queued_blocks", 10)
+
+	if len(u.blockFoundCh) > mining_should_stop_after_block_validation_queued_blocks {
+		initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
+
 		// if we are not in the beginning, and there are many blocks queued for vlaidation, we should stop mining
-		if height > 2000 {
+		if height > uint32(initialBlockCount) {
 			// we should tell the miner to stop mining.
 			u.logger.Infof("[BlockValidation][checkIfMiningShouldStop] too many blocks in queue, sending StopMining FSM event")
 
@@ -513,7 +516,11 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		errCh = make(chan error)
 	}
 
-	if len(u.blockFoundCh) > 10 {
+	mining_should_stop_after_block_validation_queued_blocks, _ := gocore.Config().GetInt("mining_should_stop_after_block_validation_queued_blocks", 10)
+
+	if len(u.blockFoundCh) > mining_should_stop_after_block_validation_queued_blocks {
+		// TODO: how to get rid of this dobule > 10 check and getBlock? Is there a better way to handle this?
+
 		// get the height and check if it is one of the first X blocks that are mined in the beginning
 		block, err := u.getBlock(ctx, hash, req.BaseUrl)
 		if err != nil {
@@ -525,7 +532,6 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 		if err != nil {
 			return nil, err
 		}
-
 	}
 
 	// process the block in the background, in the order we receive them, but without blocking the grpc call

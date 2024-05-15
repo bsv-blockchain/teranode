@@ -151,7 +151,8 @@ func (c LocalClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Bloc
 	return c.store.GetBlocksSubtreesNotSet(ctx)
 }
 
-func (c LocalClient) GetFSMCurrentState(ctx context.Context) (blockchain_api.FSMStateType, error) {
+func (c LocalClient) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
 	// TODO: check what this should be?
-	return blockchain_api.FSMStateType_MINING, nil
+	state := blockchain_api.FSMStateType_STOPPED
+	return &state, nil
 }
