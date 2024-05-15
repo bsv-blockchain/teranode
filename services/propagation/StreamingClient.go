@@ -146,10 +146,12 @@ func (sc *StreamingClient) GetTimings() (time.Duration, int) {
 func (sc *StreamingClient) initStream(ctx context.Context) error {
 	var err error
 
-	client, _, err := getClientConn(ctx)
+	conn, err := getClientConn(ctx)
 	if err != nil {
 		return err
 	}
+
+	client := propagation_api.NewPropagationAPIClient(conn)
 
 	sc.stream, err = client.ProcessTransactionStream(ctx)
 	if err != nil {

@@ -30,14 +30,22 @@ type Client struct {
 	batcher   batcher.Batcher2[batchItem]
 }
 
-func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
+func NewClient(ctx context.Context, logger ulogger.Logger, conn ...*grpc.ClientConn) (*Client, error) {
 
 	initResolver(logger)
 
-	client, conn, err := getClientConn(ctx)
-	if err != nil {
-		return nil, err
+	var useConn *grpc.ClientConn
+	if len(conn) > 0 {
+		useConn = conn[0]
+	} else {
+		localConn, err := getClientConn(ctx)
+		if err != nil {
+			return nil, err
+		}
+		useConn = localConn
 	}
+
+	client := propagation_api.NewPropagationAPIClient(useConn)
 
 	batchSize, _ := gocore.Config().GetInt("propagation_sendBatchSize", 100)
 	sendBatchTimeout, _ := gocore.Config().GetInt("propagation_sendBatchTimeout", 5)
@@ -50,14 +58,13 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 
 	c := &Client{
 		client:    client,
-		conn:      conn,
+		conn:      useConn,
 		batchSize: batchSize,
 		batchCh:   make(chan []*batchItem),
 	}
 
 	sendBatch := func(batch []*batchItem) {
-		err = c.ProcessTransactionBatch(ctx, batch)
-		if err != nil {
+		if err := c.ProcessTransactionBatch(ctx, batch); err != nil {
 			logger.Errorf("Error sending batch: %s", err)
 		}
 	}
@@ -131,7 +138,7 @@ func initResolver(logger ulogger.Logger) {
 	}
 }
 
-func getClientConn(ctx context.Context) (propagation_api.PropagationAPIClient, *grpc.ClientConn, error) {
+func getClientConn(ctx context.Context) (*grpc.ClientConn, error) {
 	propagation_grpcAddresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 	conn, err := util.GetGRPCClient(ctx, propagation_grpcAddresses[0], &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
@@ -139,10 +146,8 @@ func getClientConn(ctx context.Context) (propagation_api.PropagationAPIClient, *
 		MaxRetries:  3,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	client := propagation_api.NewPropagationAPIClient(conn)
-
-	return client, conn, nil
+	return conn, nil
 }
