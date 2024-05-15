@@ -124,6 +124,16 @@ func (sc *StreamingClient) ProcessTransaction(txBytes []byte) error {
 	return err
 }
 
+func (sc *StreamingClient) ProcessTransactionBatch(txs [][]byte) error {
+	for _, tx := range txs {
+		if err := sc.ProcessTransaction(tx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (sc *StreamingClient) GetTimings() (time.Duration, int) {
 	ch := make(chan timing)
 	sc.timingsCh <- ch
