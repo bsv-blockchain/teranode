@@ -381,8 +381,6 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 		Error: make([]string, len(req.Tx)),
 	}
 
-	ps.logger.Infof("ProcessTransactionBatch %d transactions", len(req.Tx))
-
 	g, gCtx := errgroup.WithContext(ctx)
 	for idx, tx := range req.Tx {
 		idx := idx
