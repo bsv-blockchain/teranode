@@ -449,6 +449,7 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*txmeta.MissingTxHa
 		batchRecords[idx] = record
 	}
 
+	// TODO use BatchGetOperate() instead of BatchOperate()
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		return err

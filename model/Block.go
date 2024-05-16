@@ -818,7 +818,10 @@ func (b *Block) getFromAerospike(parentTxStruct missingParentTx) error {
 		return fmt.Errorf("aerospike error: %w", aeroErr)
 	}
 
-	response, aErr := client.Get(nil, key)
+	readPolicy := aerospike.NewPolicy()
+	readPolicy.SocketTimeout = 10 * time.Second
+	readPolicy.TotalTimeout = 10 * time.Second
+	response, aErr := client.Get(readPolicy, key)
 	if aErr != nil {
 		return fmt.Errorf("aerospike error: %w", aErr)
 	}

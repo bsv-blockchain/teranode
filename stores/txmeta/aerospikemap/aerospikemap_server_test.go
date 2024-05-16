@@ -181,6 +181,40 @@ func internalTest(t *testing.T) {
 		assert.Len(t, value.BlockIDs, 1)
 		assert.Equal(t, []uint32{blockID2}, value.BlockIDs)
 	})
+
+	t.Run("aerospike set mined multi", func(t *testing.T) {
+		cleanDB(t, client, key)
+
+		// txs are stored when txmeta is created, not in utxo
+		err = utxoDb.Store(context.Background(), tx)
+		require.NoError(t, err)
+
+		_, err = db.Create(context.Background(), tx)
+		require.NoError(t, err)
+
+		var value *aero.Record
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 0)
+
+		err = db.SetMinedMulti(context.Background(), []*chainhash.Hash{hash}, blockID)
+		require.NoError(t, err)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
+		require.NoError(t, err)
+		assert.Len(t, value.Bins["blockIDs"].([]interface{}), 1)
+		assert.Equal(t, []interface{}{int(blockID)}, value.Bins["blockIDs"].([]interface{}))
+
+		err = db.SetMinedMulti(context.Background(), []*chainhash.Hash{hash}, blockID2)
+		require.NoError(t, err)
+
+		items := []*txmeta.MissingTxHash{{Hash: *hash}}
+		err = db.MetaBatchDecorate(context.Background(), items)
+		require.NoError(t, err)
+		assert.Len(t, items[0].Data.BlockIDs, 2)
+		assert.Equal(t, []uint32{blockID, blockID2}, items[0].Data.BlockIDs)
+	})
+
 }
 
 func cleanDB(t *testing.T, client *aero.Client, key *aero.Key) {
