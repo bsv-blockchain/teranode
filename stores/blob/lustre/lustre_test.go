@@ -59,8 +59,9 @@ func TestFile_Get(t *testing.T) {
 		err = f.SetTTL(context.Background(), []byte("key"), 0)
 		require.NoError(t, err)
 
+		// file should still be there, we copy it
 		_, err = os.Stat(filename)
-		require.Error(t, err)
+		require.NoError(t, err)
 
 		// file should have been persisted - moved to the persists directory
 		info, err = os.Stat(persistFilename)

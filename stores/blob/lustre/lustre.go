@@ -134,8 +134,34 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 			return nil
 		}
 
-		// the err is ErrNotExist, so the file should be persisted
-		return os.Rename(fileName, persistedFilename)
+		// err is ErrNotExist, so the file should be persisted, copy it from the main dir to the persist dir
+		f, err := os.Open(fileName)
+		if err != nil {
+			return fmt.Errorf("[%s] unable to open file: %v", fileName, err)
+		}
+		defer f.Close()
+
+		persistedFile, err := os.Create(persistedFilename)
+		if err != nil {
+			return fmt.Errorf("[%s] unable to create file: %v", persistedFilename, err)
+		}
+		defer persistedFile.Close()
+
+		if _, err = io.Copy(persistedFile, f); err != nil {
+			return fmt.Errorf("[%s] unable to copy file: %v", fileName, err)
+		}
+
+		return nil
+	}
+
+	_, err = os.Stat(fileName)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("[%s] unable to stat file, %v", persistedFilename, err)
+	}
+
+	// the file is already exists in the main dir, remove it from the persist dir
+	if err == nil {
+		return os.Remove(fileName)
 	}
 
 	// the filename should be moved from the persist sub dir to the main dir
