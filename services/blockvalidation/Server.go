@@ -287,8 +287,10 @@ func (u *Server) Start(ctx context.Context) error {
 						if notification.Type == model.NotificationType_Block {
 							block, err = u.blockchainClient.GetBlock(ctx, notification.Hash)
 							if err != nil {
-								u.logger.Errorf("[BlockValidation] failed getting block from blockchain service")
-							}
+								u.logger.Errorf("[BlockValidation] failed getting block from blockchain service - NOT sending subtree to blockpersister kafka producer")
+							} else if block == nil {
+								u.logger.Errorf("[BlockValidation] block is nil from blockchain service - NOT sending subtree to blockpersister kafka producer")
+							} else {
 
 							u.logger.Debugf("[BlockValidation][%s] processing block into blockpersister kafka producer", block.Hash().String())
 
@@ -629,7 +631,7 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 		block, err := model.NewBlockFromReader(blockReader)
 		if err != nil {
 			if strings.Contains(err.Error(), "EOF") {
-				// if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) { // doesn't catch the EOF!!!! //TODO
+				// if strings.Contains(err.Error(), "EOF") || errors.Is(err, io.ErrUnexpectedEOF) { // doesn't catch the EOF!!!! //TODO
 				break
 			}
 			return nil, fmt.Errorf("[getBlocks][%s] failed to create block from bytes [%w]", hash.String(), err)
