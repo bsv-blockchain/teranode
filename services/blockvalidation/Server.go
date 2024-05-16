@@ -292,13 +292,14 @@ func (u *Server) Start(ctx context.Context) error {
 								u.logger.Errorf("[BlockValidation] block is nil from blockchain service - NOT sending subtree to blockpersister kafka producer")
 							} else {
 
-							u.logger.Debugf("[BlockValidation][%s] processing block into blockpersister kafka producer", block.Hash().String())
+								u.logger.Debugf("[BlockValidation][%s] processing block into blockpersister kafka producer", block.Hash().String())
 
-							for _, subtreeHash := range block.Subtrees {
-								subtreeBytes := subtreeHash.CloneBytes()
-								u.logger.Debugf("[BlockValidation][%s][%s] processing subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
-								if err := u.blockPersisterKafkaProducer.Send(subtreeBytes, subtreeBytes); err != nil {
-									u.logger.Errorf("[BlockValidation][%s][%s] failed to send subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
+								for _, subtreeHash := range block.Subtrees {
+									subtreeBytes := subtreeHash.CloneBytes()
+									u.logger.Debugf("[BlockValidation][%s][%s] processing subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
+									if err := u.blockPersisterKafkaProducer.Send(subtreeBytes, subtreeBytes); err != nil {
+										u.logger.Errorf("[BlockValidation][%s][%s] failed to send subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
+									}
 								}
 							}
 						}
