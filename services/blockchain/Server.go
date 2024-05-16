@@ -116,7 +116,18 @@ func (b *Blockchain) Start(ctx context.Context) error {
 			case notification := <-b.notifications:
 				start := gocore.CurrentTime()
 				func() {
-					b.logger.Debugf("[Blockchain] Sending notification: %s", notification.Stringify())
+					b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
+
+					if notification.Type == model.NotificationType_FSMEvent {
+						notificationMetadata := notification.Metadata.GetMetadata()
+						event := blockchain_api.FSMEventType(blockchain_api.FSMEventType_value[notificationMetadata["event"]])
+						b.logger.Debugf("[Blockchain Server] Sending FSM event: %s", event.String())
+						err := b.finiteStateMachine.Event(ctx, event.String())
+						if err != nil {
+							b.logger.Errorf("[Blockchain Server] Error sending FSM event: %v", err)
+						}
+						b.logger.Debugf("[Blockchain Server] FSM current state: %s", b.finiteStateMachine.Current())
+					}
 
 					for sub := range b.subscribers {
 						b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
@@ -772,6 +783,9 @@ func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Not
 	defer func() {
 		stat.AddTime(start)
 	}()
+	if req.Type == model.NotificationType_FSMEvent {
+		b.logger.Infof("[Blockchain Server] SendNotification FSMevent called: %s", req.GetMetadata())
+	}
 
 	prometheusBlockchainSendNotification.Inc()
 	b.notifications <- req

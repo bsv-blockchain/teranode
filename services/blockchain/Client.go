@@ -25,7 +25,11 @@ type Client struct {
 	logger  ulogger.Logger
 	running *atomic.Bool
 	conn    *grpc.ClientConn
+	// currFSMstate blockchain_api.FSMStateType
 }
+
+// client subscribes to server notifications and updates currFSMState.
+//
 
 type BestBlockHeader struct {
 	Header *model.BlockHeader
@@ -414,11 +418,42 @@ func (c *Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Has
 	return resp.Ids, nil
 }
 
+func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEventType) error {
+	// All services started successfully
+	// create a new blockchain notification with Run event
+	notification := &model.Notification{
+		Type:    model.NotificationType_FSMEvent,
+		Hash:    &chainhash.Hash{}, // not relevant for FSMEvent notifications
+		BaseURL: "",                // not relevant for FSMEvent notifications
+		Metadata: model.NotificationMetadata{
+			Metadata: map[string]string{
+				"event": event.String(),
+			},
+		},
+	}
+	// send FSMEvent notification to the blockchain client. FSM will transition to state Running
+	if err := c.SendNotification(ctx, notification); err != nil {
+		//logger.Errorf("[Main] failed to send RUN notification [%v]", err)
+		//panic(err)
+		return err
+	}
+
+	return nil
+}
+
 func (c *Client) SendNotification(ctx context.Context, notification *model.Notification) error {
-	_, err := c.client.SendNotification(ctx, &blockchain_api.Notification{
-		Type: notification.Type,
-		Hash: notification.Hash[:],
-	})
+	blockchainNotification := &blockchain_api.Notification{
+		Type:    notification.Type,
+		Hash:    notification.Hash[:],
+		BaseUrl: notification.BaseURL,
+		Metadata: &blockchain_api.NotificationMetadata{
+			Metadata: notification.Metadata.Metadata,
+		},
+	}
+	if notification.Type == model.NotificationType_FSMEvent {
+		c.logger.Infof("[Blockchain Client] Sending FSMevent notification, metadata: %v", blockchainNotification.Metadata.Metadata)
+	}
+	_, err := c.client.SendNotification(ctx, blockchainNotification)
 
 	if err != nil {
 		return err

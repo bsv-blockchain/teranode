@@ -1,9 +1,6 @@
 package blockchain
 
 import (
-	"context"
-
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/looplab/fsm"
 )
@@ -20,25 +17,25 @@ import (
 // - Stop
 func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 
-	// Define callbacks
+	// // Define callbacks
 	callbacks := fsm.Callbacks{
-		"enter_state": func(_ context.Context, e *fsm.Event) {
-			metadata := make(map[string]string)
-			metadata["event"] = e.Event
+		// 	"enter_state": func(_ context.Context, e *fsm.Event) {
+		// 		metadata := make(map[string]string)
+		// 		metadata["event"] = e.Event
 
-			_, err := b.SendNotification(context.Background(), &blockchain_api.Notification{
-				Type:    model.NotificationType_FSMEvent,
-				Hash:    nil, // irrelevant
-				BaseUrl: "",  // irrelevant
-				Metadata: &blockchain_api.NotificationMetadata{
-					Metadata: metadata,
-				},
-			})
+		// 		_, err := b.SendNotification(context.Background(), &blockchain_api.Notification{
+		// 			Type:    model.NotificationType_FSMEvent,
+		// 			Hash:    nil, // irrelevant
+		// 			BaseUrl: "",  // irrelevant
+		// 			Metadata: &blockchain_api.NotificationMetadata{
+		// 				Metadata: metadata,
+		// 			},
+		// 		})
 
-			if err != nil {
-				b.logger.Errorf("[Blockchain][FiniteStateMachine] error sending notification: %s", err)
-			}
-		},
+		// 		if err != nil {
+		// 			b.logger.Errorf("[Blockchain][FiniteStateMachine] error sending notification: %s", err)
+		// 		}
+		// 	},
 	}
 
 	// Create the finite state machine, with states and transitions

@@ -100,6 +100,10 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 
 }
 
+func Test_EventTypeConversion(t *testing.T) {
+
+}
+
 /*
 type subscriber struct {
 	subscription blockchain_api.BlockchainAPI_SubscribeServer

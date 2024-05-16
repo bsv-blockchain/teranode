@@ -172,16 +172,16 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0), mock_handleOnMiningEvent)
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0)) //, mock_handleOnMiningEvent)
 	start := time.Now()
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
 
-func mock_handleOnMiningEvent(_ context.Context, _ uint32) error {
-	return nil
-}
+// func mock_handleOnMiningEvent(_ context.Context, _ uint32) error {
+// 	return nil
+// }
 
 func TestBlockValidationValidateBlock(t *testing.T) {
 
@@ -278,7 +278,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0), mock_handleOnMiningEvent)
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0)) //, mock_handleOnMiningEvent)
 	start := time.Now()
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.NoError(t, err)

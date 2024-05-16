@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/legacy"
@@ -414,23 +413,37 @@ func main() {
 		}
 	}
 
+	state, err := blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil {
+		// TODO: should we add retry? or do something else?
+		logger.Errorf("CURRENT STATE [checkIfMiningShouldStop] failed to get current state [%w]", err)
+	}
+
+	logger.Infof("Current state: %s", state)
+
 	// All services started successfully
 	// create a new blockchain notification with Run event
-	notification := &model.Notification{
-		Type:    model.NotificationType_FSMEvent,
-		Hash:    nil, // not relevant for FSMEvent notifications
-		BaseURL: "",  // not relevant for FSMEvent notifications
-		Metadata: model.NotificationMetadata{
-			Metadata: map[string]string{
-				"event": blockchain_api.FSMEventType_RUN.String(),
-			},
-		},
-	}
-	// send FSMEvent notification to the blockchain client. FSM will transition to state Running
-	if err := blockchainClient.SendNotification(ctx, notification); err != nil {
-		logger.Errorf("[Main] failed to send RUN notification [%v]", err)
+	// notification := &model.Notification{
+	// 	Type:    model.NotificationType_FSMEvent,
+	// 	Hash:    &chainhash.Hash{}, // not relevant for FSMEvent notifications
+	// 	BaseURL: "",                // not relevant for FSMEvent notifications
+	// 	Metadata: model.NotificationMetadata{
+	// 		Metadata: map[string]string{
+	// 			"event": blockchain_api.FSMEventType_RUN.String(),
+	// 		},
+	// 	},
+	// }
+	// // send FSMEvent notification to the blockchain client. FSM will transition to state Running
+	// if err := blockchainClient.SendNotification(ctx, notification); err != nil {
+	// 	logger.Errorf("[Main] failed to send RUN notification [%v]", err)
+	// 	panic(err)
+	// }
+	if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
+		logger.Errorf("[Main] failed to send RUN event [%v]", err)
 		panic(err)
 	}
+
+	logger.Infof("Current state2: %s", state)
 
 	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining
 	if startMiner {
@@ -438,6 +451,8 @@ func main() {
 			panic(err)
 		}
 	}
+
+	logger.Infof("Current state3: %s", state)
 
 	// start prometheus metrics
 	util.RegisterPrometheusMetrics()

@@ -200,70 +200,69 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					// Reset might be triggered with manual intervention, so we need to make sure we are in NotMining state.
 					// here we are sending stopmining event. First we check the current state of the FSM
 
-					state, err := b.blockchainClient.GetFSMCurrentState(ctx)
-					if err != nil {
-						// TODO: should we add retry? or do something else?
-						b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to get current state [%w]", err)
-					}
+					// state, err := b.blockchainClient.GetFSMCurrentState(ctx)
+					// if err != nil {
+					// 	// TODO: should we add retry? or do something else?
+					// 	b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to get current state [%w]", err)
+					// }
 
-					if *state != blockchain_api.FSMStateType_RUNNING {
-						notification := &model.Notification{
-							Type:    model.NotificationType_FSMEvent,
-							Hash:    nil,
-							BaseURL: "",
-							Metadata: model.NotificationMetadata{
-								Metadata: map[string]string{
-									"event": blockchain_api.FSMEventType_STOPMINING.String(),
-								},
-							},
-						}
+					// if *state != blockchain_api.FSMStateType_RUNNING {
+					// 	notification := &model.Notification{
+					// 		Type:    model.NotificationType_FSMEvent,
+					// 		Hash:    &chainhash.Hash{},
+					// 		BaseURL: "",
+					// 		Metadata: model.NotificationMetadata{
+					// 			Metadata: map[string]string{
+					// 				"event": blockchain_api.FSMEventType_STOPMINING.String(),
+					// 			},
+					// 		},
+					// 	}
 
-						// send the notification to the blockchain client
-						if err := b.blockchainClient.SendNotification(ctx, notification); err != nil {
-							// TODO: should we add retry?
-							b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
-						}
-					}
+					// 	// send the notification to the blockchain client
+					// 	if err := b.blockchainClient.SendNotification(ctx, notification); err != nil {
+					// 		// TODO: should we add retry?
+					// 		b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
+					// 	}
+					// }
 
 					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitTime.Load()), 0).String())
 					utils.SafeSend(responseCh, &miningCandidateResponse{
 						err: fmt.Errorf("waiting for reset to complete"),
 					})
 				} else {
-					// we are able to mine, make sure FSM is in MINING state
-
+					// check if current state is mining
 					state, err := b.blockchainClient.GetFSMCurrentState(ctx)
 					if err != nil {
 						// TODO: should we add retry? or do something else?
 						b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to get current state [%w]", err)
 					}
 
-					if state != nil && *state != blockchain_api.FSMStateType_MINING {
+					if state != nil && *state == blockchain_api.FSMStateType_MINING {
+						miningCandidate, subtrees, err := b.getMiningCandidate()
+						utils.SafeSend(responseCh, &miningCandidateResponse{
+							miningCandidate: miningCandidate,
+							subtrees:        subtrees,
+							err:             err,
+						})
+
 						// create a new blockchain notification
-						notification := &model.Notification{
-							Type:    model.NotificationType_FSMEvent,
-							Hash:    nil,
-							BaseURL: "",
-							Metadata: model.NotificationMetadata{
-								Metadata: map[string]string{
-									"event": blockchain_api.FSMEventType_MINE.String(),
-								},
-							},
-						}
+						// notification := &model.Notification{
+						// 	Type:    model.NotificationType_FSMEvent,
+						// 	Hash:    &chainhash.Hash{},
+						// 	BaseURL: "",
+						// 	Metadata: model.NotificationMetadata{
+						// 		Metadata: map[string]string{
+						// 			"event": blockchain_api.FSMEventType_MINE.String(),
+						// 		},
+						// 	},
+						// }
 
-						// send the notification to the blockchain client
-						if err := b.blockchainClient.SendNotification(ctx, notification); err != nil {
-							// TODO: should we add retry?
-							b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
-						}
+						// // send the notification to the blockchain client
+						// if err := b.blockchainClient.SendNotification(ctx, notification); err != nil {
+						// 	// TODO: should we add retry?
+						// 	b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
+						// }
 					}
-
-					miningCandidate, subtrees, err := b.getMiningCandidate()
-					utils.SafeSend(responseCh, &miningCandidateResponse{
-						miningCandidate: miningCandidate,
-						subtrees:        subtrees,
-						err:             err,
-					})
 				}
 				// stat.AddTime(start)
 				b.currentRunningState.Store("running")
@@ -271,12 +270,12 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			case notification := <-b.blockchainSubscriptionCh:
 				b.currentRunningState.Store("blockchainSubscription")
 				switch notification.Type {
-				case model.NotificationType_FSMEvent:
-					notificationMetadata := notification.Metadata.GetMetadata()
-					if notificationMetadata["event"] == blockchain_api.FSMEventType_STOPMINING.String() {
-						// call reset to stop mining for 2 blocks
-						b.Reset()
-					}
+				// case model.NotificationType_FSMEvent:
+				// 	notificationMetadata := notification.Metadata.GetMetadata()
+				// 	if notificationMetadata["event"] == blockchain_api.FSMEventType_STOPMINING.String() {
+				// 		// call reset to stop mining for 2 blocks
+				// 		b.Reset()
+				// 	}
 				case model.NotificationType_Block:
 					// _, _, ctx := util.NewStatFromContext(context, "blockchainSubscriptionCh", channelStats)
 					bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)

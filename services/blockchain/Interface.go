@@ -37,4 +37,5 @@ type ClientI interface {
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 	GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error)
+	SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
 }
