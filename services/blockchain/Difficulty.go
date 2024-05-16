@@ -76,6 +76,7 @@ func (d *Difficulty) GetNextWorkRequired(ctx context.Context, bestBlockHeader *m
 	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
 
 	thresholdSeconds := 2 * uint32(targetTimePerBlock)
+	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 	randomOffset := rand.Int31n(21) - 10
 
 	timeDifference := uint32(now.Unix()) - bestBlockHeader.Timestamp

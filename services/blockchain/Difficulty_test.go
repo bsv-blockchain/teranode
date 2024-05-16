@@ -80,6 +80,7 @@ func TestCalculateDifficulty(t *testing.T) {
 	d, err := NewDifficulty(nil, ulogger.TestLogger{}, 600)
 	require.NoError(t, err)
 	for name, tc := range tests {
+		tc := tc
 		t.Run(name, func(t *testing.T) {
 			got, err := d.ComputeTarget(&tc.firstBlockHeader, &tc.lastBlockHeader)
 			require.NoError(t, err)
