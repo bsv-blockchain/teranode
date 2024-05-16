@@ -31,6 +31,7 @@ type revalidateBlockData struct {
 	block          *model.Block
 	blockHeaders   []*model.BlockHeader
 	blockHeaderIDs []uint32
+	baseUrl        string
 	retries        int
 }
 
@@ -574,14 +575,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
-				u.ReValidateBlock(block)
+				u.ReValidateBlock(block, baseUrl)
 				return
 			}
 
 			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
-				u.ReValidateBlock(block)
+				u.ReValidateBlock(block, baseUrl)
 				return
 			}
 			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
@@ -598,7 +599,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 				if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
 					// storage or processing error, block is not really invalid, but we need to re-validate
-					u.ReValidateBlock(block)
+					u.ReValidateBlock(block, baseUrl)
 				} else {
 					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", block.String(), err)
 					// TODO TEMP disable invalidation in the scaling test
@@ -614,14 +615,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
-			u.ReValidateBlock(block)
+			u.ReValidateBlock(block, baseUrl)
 			return fmt.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 		}
 
 		blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
-			u.ReValidateBlock(block)
+			u.ReValidateBlock(block, baseUrl)
 			return fmt.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
@@ -697,15 +698,25 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	return nil
 }
 
-func (u *BlockValidation) ReValidateBlock(block *model.Block) {
+func (u *BlockValidation) ReValidateBlock(block *model.Block, baseUrl string) {
 	u.logger.Errorf("[ValidateBlock][%s] re-validating block", block.String())
 	u.revalidateBlockChan <- revalidateBlockData{
-		block: block,
+		block:   block,
+		baseUrl: baseUrl,
 	}
 }
 
 func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	ctx := context.Background()
+
+	timeStart, stat, ctx := util.NewStatFromContext(ctx, "reValidateBlock", u.stats)
+	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:reValidateBlock")
+	span.LogKV("block", blockData.block.Hash().String())
+	defer func() {
+		span.Finish()
+		stat.AddTime(timeStart)
+		prometheusBlockValidationValidateBlock.Inc()
+	}()
 
 	// make a copy of the recent bloom filters, so we don't get race conditions if the bloom filters are updated
 	u.recentBlocksBloomFiltersMu.Lock()
@@ -713,16 +724,23 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
 	u.recentBlocksBloomFiltersMu.Unlock()
 
-	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.txMetaStore, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
-		u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
+	// validate all the subtrees in the block
+	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees", blockData.block.Hash().String(), len(blockData.block.Subtrees))
+	if err := u.validateBlockSubtrees(spanCtx, blockData.block, blockData.baseUrl); err != nil {
+		return err
+	}
+	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees DONE", blockData.block.Hash().String(), len(blockData.block.Subtrees))
+
+	if ok, err := blockData.block.Valid(spanCtx, u.logger, u.subtreeStore, u.txMetaStore, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
+		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
 			// storage error, block is not really invalid, but we need to re-validate
 			return err
 		} else {
-			u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", blockData.block.String(), err)
+			u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] block is invalid: %v", blockData.block.String(), err)
 			// TODO TEMP disable invalidation in the scaling test
-			//if err = u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); err != nil {
+			//if err = u.blockchainClient.InvalidateBlock(spanCtx, blockData.block.Header.Hash()); err != nil {
 			//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), err)
 			//}
 		}
