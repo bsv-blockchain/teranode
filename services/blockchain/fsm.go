@@ -16,28 +16,6 @@ import (
 // - StopMining
 // - Stop
 func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
-
-	// // Define callbacks
-	callbacks := fsm.Callbacks{
-		// 	"enter_state": func(_ context.Context, e *fsm.Event) {
-		// 		metadata := make(map[string]string)
-		// 		metadata["event"] = e.Event
-
-		// 		_, err := b.SendNotification(context.Background(), &blockchain_api.Notification{
-		// 			Type:    model.NotificationType_FSMEvent,
-		// 			Hash:    nil, // irrelevant
-		// 			BaseUrl: "",  // irrelevant
-		// 			Metadata: &blockchain_api.NotificationMetadata{
-		// 				Metadata: metadata,
-		// 			},
-		// 		})
-
-		// 		if err != nil {
-		// 			b.logger.Errorf("[Blockchain][FiniteStateMachine] error sending notification: %s", err)
-		// 		}
-		// 	},
-	}
-
 	// Create the finite state machine, with states and transitions
 	finiteStateMachine := fsm.NewFSM(
 		// FiniteStateMachineState_Stopped,
@@ -54,26 +32,37 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Name: blockchain_api.FSMEventType_MINE.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
+					blockchain_api.FSMStateType_CATCHINGTXS.String(),
+					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 				},
 				Dst: blockchain_api.FSMStateType_MINING.String(),
 			},
 			{
-				Name: blockchain_api.FSMEventType_STOPMINING.String(),
+				Name: blockchain_api.FSMEventType_CATCHUPBLOCKS.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_MINING.String(),
 				},
-				Dst: blockchain_api.FSMStateType_RUNNING.String(),
+				Dst: blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+			},
+			{
+				Name: blockchain_api.FSMEventType_CATCHUPTXS.String(),
+				Src: []string{
+					blockchain_api.FSMStateType_MINING.String(),
+				},
+				Dst: blockchain_api.FSMStateType_CATCHINGTXS.String(),
 			},
 			{
 				Name: blockchain_api.FSMEventType_STOP.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
 					blockchain_api.FSMStateType_MINING.String(),
+					blockchain_api.FSMStateType_CATCHINGTXS.String(),
+					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 				},
 				Dst: blockchain_api.FSMStateType_STOPPED.String(),
 			},
 		},
-		callbacks,
+		fsm.Callbacks{},
 	)
 
 	// apply options

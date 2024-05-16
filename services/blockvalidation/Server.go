@@ -179,7 +179,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 			case c := <-u.catchupCh:
 				{
 					// stop mining
-					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_STOPMINING)
+					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_CATCHUPBLOCKS)
 					if err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to send STOPMINING event [%v]", err)
 					}

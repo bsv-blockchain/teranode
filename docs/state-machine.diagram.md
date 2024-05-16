@@ -5,8 +5,13 @@ The mermaid diagram outlined below represents the various states and events that
 ```mermaid
 stateDiagram-v2
     [*] --> STOPPED
+    CATCHINGBLOCKS --> MINING: MINE
+    CATCHINGBLOCKS --> STOPPED: STOP
+    CATCHINGTXS --> MINING: MINE
+    CATCHINGTXS --> STOPPED: STOP
+    MINING --> CATCHINGBLOCKS: CATCHUPBLOCKS
+    MINING --> CATCHINGTXS: CATCHUPTXS
     MINING --> STOPPED: STOP
-    MINING --> RUNNING: STOPMINING
     RUNNING --> MINING: MINE
     RUNNING --> STOPPED: STOP
     STOPPED --> RUNNING: RUN
