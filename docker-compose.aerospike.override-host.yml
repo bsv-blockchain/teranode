@@ -12,19 +12,19 @@ services:
     container_name: aerospike-1
     <<: *aerospike-base
     volumes:
-      - ./deploy/dev/aerospike-1.conf:/etc/aerospike.conf
+      - ./deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
 
   aerospike-2:
     container_name: aerospike-2
     <<: *aerospike-base
     volumes:
-      - ./deploy/dev/aerospike-2.conf:/etc/aerospike.conf
+      - ./deploy/dev/aerospike/aerospike-2.conf:/etc/aerospike.conf
 
   aerospike-3:
     container_name: aerospike-3
     <<: *aerospike-base
     volumes:
-      - ./deploy/dev/aerospike-3.conf:/etc/aerospike.conf
+      - ./deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
 
   ubsv-1:
     depends_on:
@@ -56,9 +56,9 @@ services:
     environment:
       AS_HOST: "localhost"
       AS_PORT: "3100"
+      AGENT_BIND_PORT: "19145"
       METRIC_LABELS: "type='development',source='aerospike'"
     network_mode: "host"
-    command: ["aerospike-prometheus-exporter", "--port", "19145"]
 
   aerospike-exporter-2:
     image: aerospike/aerospike-prometheus-exporter:latest
@@ -66,9 +66,9 @@ services:
     environment:
       AS_HOST: "localhost"
       AS_PORT: "3200"
+      AGENT_BIND_PORT: "29145"
       METRIC_LABELS: "type='development',source='aerospike'"
     network_mode: "host"
-    command: ["aerospike-prometheus-exporter", "--port", "29145"]
 
   aerospike-exporter-3:
     image: aerospike/aerospike-prometheus-exporter:latest
@@ -76,6 +76,6 @@ services:
     environment:
       AS_HOST: "localhost"
       AS_PORT: "3300"
+      AGENT_BIND_PORT: "39145"
       METRIC_LABELS: "type='development',source='aerospike'"
     network_mode: "host"
-    command: ["aerospike-prometheus-exporter", "--port", "39145"]
