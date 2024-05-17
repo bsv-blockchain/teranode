@@ -26,15 +26,15 @@ import (
 )
 
 type Server struct {
-	logger   ulogger.Logger
-	stats    *gocore.Stat
-	config   *peer.Config
-	peer     *peer.Peer
-	tb       *TeranodeBridge
-	params   chaincfg.Params
-	lastHash *chainhash.Hash
-	height   uint32
-	// ch              chan error
+	logger          ulogger.Logger
+	stats           *gocore.Stat
+	config          *peer.Config
+	peer            *peer.Peer
+	tb              *TeranodeBridge
+	params          chaincfg.Params
+	lastHash        *chainhash.Hash
+	height          uint32
+	ch              chan error
 	blockchainStore blockchain.Store
 	utxoStore       utxo.Store
 	subtreeStore    blob.Store
@@ -45,10 +45,10 @@ func New(logger ulogger.Logger, blockchainStore blockchain.Store, subtreeStore b
 	// initPrometheusMetrics()
 
 	return &Server{
-		logger: logger,
-		stats:  gocore.NewStat("legacy"),
-		params: chaincfg.MainNetParams,
-		// ch:              make(chan error),
+		logger:          logger,
+		stats:           gocore.NewStat("legacy"),
+		params:          chaincfg.MainNetParams,
+		ch:              make(chan error),
 		blockchainStore: blockchainStore,
 		subtreeStore:    subtreeStore,
 		utxoStore:       utxoStore,
@@ -94,30 +94,32 @@ func (s *Server) Init(ctx context.Context) error {
 						getDataMsg.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash))
 
 						s.peer.QueueMessage(getDataMsg, nil)
-
-						// 	// Wait for the block to be received and processed
-						// 	select {
-						// 	case err := <-s.ch:
-						// 		if err != nil {
-						// 			s.logger.Fatalf("Failed to process block: %v", err)
-						// 		}
-						// 	case <-ctx.Done():
-						// 		return
-						// 	}
 					}
 
-					h := msg.Headers[len(msg.Headers)-1].BlockHash()
-					s.lastHash = &h
-
-					invMsg := wire.NewMsgGetHeaders()
-					invMsg.AddBlockLocatorHash(s.lastHash)
-					invMsg.HashStop = chainhash.Hash{}
-
-					// Send the getheaders message
-					s.logger.Infof("Requesting headers starting from %s\n", s.lastHash)
-
-					s.peer.QueueMessage(invMsg, nil)
+					s.ch <- nil
 				}()
+
+				// Wait for all the blocks to be processed
+				select {
+				case err := <-s.ch:
+					if err != nil {
+						s.logger.Fatalf("Failed to process block: %v", err)
+					}
+				case <-ctx.Done():
+					return
+				}
+
+				h := msg.Headers[len(msg.Headers)-1].BlockHash()
+				s.lastHash = &h
+
+				invMsg := wire.NewMsgGetHeaders()
+				invMsg.AddBlockLocatorHash(s.lastHash)
+				invMsg.HashStop = chainhash.Hash{}
+
+				// Send the getheaders message
+				s.logger.Infof("Requesting headers starting from %s\n", s.lastHash)
+
+				s.peer.QueueMessage(invMsg, nil)
 
 			},
 
