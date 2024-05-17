@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -887,19 +888,29 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return nil
 	}
 
+	utxos, err := utxo.GetUtxoHashes(block.CoinbaseTx)
+	if err != nil {
+		return fmt.Errorf("[SubtreeProcessor][coinbase:%s]error extracting coinbase utxos: %v", block.CoinbaseTx.TxIDChainHash(), err)
+	}
+	for _, utxo := range utxos {
+		stp.logger.Debugf("[SubtreeProcessor][coinbase:%s] store utxo: %s", block.CoinbaseTx.TxIDChainHash(), utxo.String())
+	}
+
 	blockHeight, err := stp.utxoStore.GetBlockHeight()
 	if err != nil {
-		return fmt.Errorf("error extracting coinbase height via utxo store: %v", err)
+		return fmt.Errorf("[SubtreeProcessor][coinbase:%s]error extracting coinbase height via utxo store: %v", block.CoinbaseTx.TxIDChainHash(), err)
 	}
 
 	if err = stp.utxoStore.Store(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
-		// error will be handled below
-		stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
+		return fmt.Errorf("[SubtreeProcessor][coinbase:%s] error storing utxos: %v", block.CoinbaseTx.TxIDChainHash(), err)
 	}
 
 	if _, err = stp.txMetaStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
-		// error will be handled below
-		stp.logger.Errorf("[SubtreeProcessor] error storing txmeta: %v", err)
+		return fmt.Errorf("[SubtreeProcessor][coinbase:%s] error storing txmeta: %v", block.CoinbaseTx.TxIDChainHash(), err)
+	}
+
+	for _, utxo := range utxos {
+		stp.logger.Debugf("[SubtreeProcessor][coinbase:%s] store SUCCESS utxo: %s", block.CoinbaseTx.TxIDChainHash(), utxo.String())
 	}
 
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
