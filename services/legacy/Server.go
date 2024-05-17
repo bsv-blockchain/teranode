@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -34,7 +35,7 @@ type Server struct {
 	params          chaincfg.Params
 	lastHash        *chainhash.Hash
 	height          uint32
-	ch              chan error
+	wg              sync.WaitGroup
 	blockchainStore blockchain.Store
 	utxoStore       utxo.Store
 	subtreeStore    blob.Store
@@ -48,7 +49,6 @@ func New(logger ulogger.Logger, blockchainStore blockchain.Store, subtreeStore b
 		logger:          logger,
 		stats:           gocore.NewStat("legacy"),
 		params:          chaincfg.MainNetParams,
-		ch:              make(chan error),
 		blockchainStore: blockchainStore,
 		subtreeStore:    subtreeStore,
 		utxoStore:       utxoStore,
@@ -86,6 +86,8 @@ func (s *Server) Init(ctx context.Context) error {
 				}
 				s.logger.Infof("Header chain is valid")
 
+				s.wg.Add(len(msg.Headers))
+
 				// Now get each block in turn and process it
 				go func() {
 					for _, header := range msg.Headers {
@@ -96,31 +98,20 @@ func (s *Server) Init(ctx context.Context) error {
 						s.peer.QueueMessage(getDataMsg, nil)
 					}
 
-					s.ch <- nil
+					s.wg.Wait()
+
+					h := msg.Headers[len(msg.Headers)-1].BlockHash()
+					s.lastHash = &h
+
+					invMsg := wire.NewMsgGetHeaders()
+					invMsg.AddBlockLocatorHash(s.lastHash)
+					invMsg.HashStop = chainhash.Hash{}
+
+					// Send the getheaders message
+					s.logger.Infof("Requesting headers starting from %s\n", s.lastHash)
+
+					s.peer.QueueMessage(invMsg, nil)
 				}()
-
-				// Wait for all the blocks to be processed
-				select {
-				case err := <-s.ch:
-					if err != nil {
-						s.logger.Fatalf("Failed to process block: %v", err)
-					}
-				case <-ctx.Done():
-					return
-				}
-
-				h := msg.Headers[len(msg.Headers)-1].BlockHash()
-				s.lastHash = &h
-
-				invMsg := wire.NewMsgGetHeaders()
-				invMsg.AddBlockLocatorHash(s.lastHash)
-				invMsg.HashStop = chainhash.Hash{}
-
-				// Send the getheaders message
-				s.logger.Infof("Requesting headers starting from %s\n", s.lastHash)
-
-				s.peer.QueueMessage(invMsg, nil)
-
 			},
 
 			OnBlock: func(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
@@ -140,6 +131,8 @@ func (s *Server) Init(ctx context.Context) error {
 						s.logger.Fatalf("Failed to handle block: %v", err)
 					}
 				}
+
+				s.wg.Done()
 			},
 		},
 	}
