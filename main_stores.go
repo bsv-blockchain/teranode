@@ -5,6 +5,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -12,10 +13,11 @@ import (
 )
 
 var (
-	txStore      blob.Store
-	subtreeStore blob.Store
-	blockStore   blob.Store
-	utxoStore    utxostore.Store
+	txStore         blob.Store
+	subtreeStore    blob.Store
+	blockStore      blob.Store
+	utxoStore       utxostore.Store
+	blockchainStore blockchain.Store
 )
 
 func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Store {
@@ -36,6 +38,26 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Store {
 	}
 
 	return utxoStore
+}
+
+func getBlockchainStore(ctx context.Context, logger ulogger.Logger) blockchain.Store {
+	if blockchainStore != nil {
+		return blockchainStore
+	}
+
+	blockchainURL, err, found := gocore.Config().GetURL("blockchain_store")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no blockchain setting found")
+	}
+	blockchainStore, err = blockchain.NewStore(logger, blockchainURL)
+	if err != nil {
+		panic(err)
+	}
+
+	return blockchainStore
 }
 
 func getTxStore(logger ulogger.Logger) blob.Store {

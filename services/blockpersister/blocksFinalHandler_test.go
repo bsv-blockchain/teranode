@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"io"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
@@ -86,7 +87,7 @@ func (m *MockStore) Health(ctx context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (m *MockStore) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*meta.Data, error) {
+func (m *MockStore) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
 	return nil, nil
 }
 

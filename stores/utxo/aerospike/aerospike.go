@@ -810,12 +810,7 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*utxo.UnresolvedMet
 	return nil
 }
 
-func (s *Store) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*meta.Data, error) {
-	storeLockTime := tx.LockTime
-	if len(lockTime) > 0 {
-		storeLockTime = lockTime[0]
-	}
-
+func (s *Store) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
 		return nil, errors.New(errors.ERR_PROCESSING, "failed to get tx meta data", err)
@@ -823,7 +818,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*meta.
 
 	if s.storeBatcher != nil {
 		done := make(chan error)
-		s.storeBatcher.Put(&batchStoreItem{tx: tx, lockTime: storeLockTime, done: done})
+		s.storeBatcher.Put(&batchStoreItem{tx: tx, lockTime: tx.LockTime, done: done})
 
 		err = <-done
 		if err != nil {
@@ -835,7 +830,7 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*meta.
 		return txMeta, nil
 	}
 
-	bins, err := getBinsToStore(tx, storeLockTime)
+	bins, err := getBinsToStore(tx, blockIDs...)
 	if err != nil {
 		return nil, errors.New(errors.ERR_PROCESSING, "failed to get bins to store", err)
 	}
@@ -1235,7 +1230,7 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func getBinsToStore(tx *bt.Tx, lockTime uint32) ([]*aerospike.Bin, error) {
+func getBinsToStore(tx *bt.Tx, blockIDs ...uint32) ([]*aerospike.Bin, error) {
 	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx)
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
@@ -1246,8 +1241,6 @@ func getBinsToStore(tx *bt.Tx, lockTime uint32) ([]*aerospike.Bin, error) {
 	for _, utxoHash := range utxoHashes {
 		utxos[utxoHash.String()] = aerospike.NewStringValue("")
 	}
-
-	blockIDs := make([]uint32, 0)
 
 	// create a tx interface[] map
 	inputs := make([]interface{}, len(tx.Inputs))
@@ -1286,7 +1279,7 @@ func getBinsToStore(tx *bt.Tx, lockTime uint32) ([]*aerospike.Bin, error) {
 		aerospike.NewBin("inputs", inputs),
 		aerospike.NewBin("outputs", outputs),
 		aerospike.NewBin("version", aerospike.NewIntegerValue(int(tx.Version))),
-		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(lockTime))),
+		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
 		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(tx.Size())),
 		aerospike.NewBin("utxos", aerospike.NewMapValue(utxos)),

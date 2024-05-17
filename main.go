@@ -393,7 +393,12 @@ func main() {
 	}
 
 	if startLegacy {
-		if err = sm.AddService("Legacy", legacy.New(logger)); err != nil {
+		if err = sm.AddService("Legacy", legacy.New(
+			logger,
+			getBlockchainStore(ctx, logger),
+			getSubtreeStore(logger),
+			getUtxoStore(ctx, logger),
+		)); err != nil {
 			panic(err)
 		}
 	}

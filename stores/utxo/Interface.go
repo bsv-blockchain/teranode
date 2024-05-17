@@ -2,6 +2,7 @@ package utxo
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/libsv/go-bt/v2"
@@ -39,7 +40,7 @@ type UnresolvedMetaData struct {
 type Store interface {
 	// CRUD functions
 	Health(ctx context.Context) (int, string, error)
-	Create(ctx context.Context, tx *bt.Tx, lockTime ...uint32) (*meta.Data, error)
+	Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error)
 	Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error)
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error)    // Remove? Only used in tests
 	GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) // Remove?

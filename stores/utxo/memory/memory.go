@@ -2,6 +2,9 @@ package memory
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
@@ -9,8 +12,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"sync"
-	"sync/atomic"
 )
 
 type memoryData struct {
@@ -40,7 +41,7 @@ func (m *Memory) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (m *Memory) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*meta.Data, error) {
+func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
@@ -50,14 +51,9 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*meta
 		return nil, errors.New(errors.ERR_UTXO_ALREADY_EXISTS, "utxo already exists")
 	}
 
-	useLockTime := tx.LockTime
-	if len(lockTime) > 0 {
-		useLockTime = lockTime[0]
-	}
-
 	m.txs[*txHash] = &memoryData{
 		tx:       tx,
-		lockTime: useLockTime,
+		lockTime: tx.LockTime,
 		blockIDs: make([]uint32, 0),
 		utxoMap:  make(map[chainhash.Hash]*chainhash.Hash),
 	}

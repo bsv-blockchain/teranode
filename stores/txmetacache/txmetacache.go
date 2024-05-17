@@ -2,9 +2,10 @@ package txmetacache
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -212,8 +213,8 @@ func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*utxo.Unre
 	return nil
 }
 
-func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, lockTime ...uint32) (*meta.Data, error) {
-	txMeta, err := t.utxoStore.Create(ctx, tx, lockTime...)
+func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+	txMeta, err := t.utxoStore.Create(ctx, tx, blockIDs...)
 	if err != nil {
 		return txMeta, err
 	}

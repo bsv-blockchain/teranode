@@ -2,6 +2,7 @@ package nullstore
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/libsv/go-bt/v2/chainhash"
 
@@ -48,7 +49,7 @@ func (m *NullStore) PreviousOutputsDecorate(ctx context.Context, outpoints []*me
 	return nil
 }
 
-func (m *NullStore) Create(ctx context.Context, tx *bt.Tx, lockTime ...uint32) (*meta.Data, error) {
+func (m *NullStore) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
 	return &meta.Data{}, nil
 }
 
