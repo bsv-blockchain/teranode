@@ -63,9 +63,11 @@ func (s *Server) Init(ctx context.Context) error {
 	var err error
 
 	// Create a new Teranode bridge
-	s.tb, err = NewTeranodeBridge(ctx, s.logger)
-	if err != nil {
-		s.logger.Fatalf("Failed to create Teranode bridge: %v", err)
+	if !gocore.Config().GetBool("legacy_direct", true) {
+		s.tb, err = NewTeranodeBridge(ctx, s.logger)
+		if err != nil {
+			s.logger.Fatalf("Failed to create Teranode bridge: %v", err)
+		}
 	}
 
 	// Create a new Bitcoin peer configuration
@@ -166,7 +168,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Wait for connection
 	time.Sleep(time.Second * 5)
 
-	bestBlockHeader, bestBlockMeta, err := s.tb.blockchainClient.GetBestBlockHeader(ctx)
+	bestBlockHeader, bestBlockMeta, err := s.blockchainStore.GetBestBlockHeader(ctx)
 	if err != nil {
 		log.Fatalf("Failed to get best block header: %v", err)
 	}
