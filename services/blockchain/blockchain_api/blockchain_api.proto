@@ -275,7 +275,6 @@ enum FSMEventType {
   RUN = 1;
   MINE = 2;
   CATCHUPBLOCKS = 3;
-  CATCHUPTXS = 4;
 }
 
 // swagger:enum FSMStateType
@@ -284,5 +283,4 @@ enum FSMStateType {
   RUNNING = 1;
   MINING = 2;
   CATCHINGBLOCKS = 3;
-  CATCHINGTXS = 4;
 }

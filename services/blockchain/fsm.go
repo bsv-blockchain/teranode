@@ -10,10 +10,11 @@ import (
 // - Stopped
 // - Running
 // - Mining
+// - CatchingBlocks
 // The finite state machine has the following events:
 // - Run
 // - Mine
-// - StopMining
+// - CatchupBlocks
 // - Stop
 func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	// Create the finite state machine, with states and transitions
@@ -32,7 +33,6 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Name: blockchain_api.FSMEventType_MINE.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
-					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 				},
 				Dst: blockchain_api.FSMStateType_MINING.String(),
@@ -45,18 +45,10 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Dst: blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 			},
 			{
-				Name: blockchain_api.FSMEventType_CATCHUPTXS.String(),
-				Src: []string{
-					blockchain_api.FSMStateType_MINING.String(),
-				},
-				Dst: blockchain_api.FSMStateType_CATCHINGTXS.String(),
-			},
-			{
 				Name: blockchain_api.FSMEventType_STOP.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
 					blockchain_api.FSMStateType_MINING.String(),
-					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 				},
 				Dst: blockchain_api.FSMStateType_STOPPED.String(),
