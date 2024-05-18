@@ -171,6 +171,11 @@ func (s *Server) Start(ctx context.Context) error {
 	s.height = bestBlockMeta.Height
 	s.lastHash = bestBlockHeader.Hash()
 
+	if s.height > 0 {
+		s.height--
+		s.lastHash = bestBlockHeader.HashPrevBlock
+	}
+
 	invMsg := wire.NewMsgGetHeaders()
 	invMsg.AddBlockLocatorHash(s.lastHash) // First time this is Genesis block hash
 	invMsg.HashStop = chainhash.Hash{}
