@@ -3,9 +3,11 @@ package legacy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -286,7 +289,16 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 
 	dbID, err := s.blockchainStore.StoreBlock(ctx, teranodeBlock, "LEGACY")
 	if err != nil {
-		return fmt.Errorf("Failed to store block: %w", err)
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) {
+			if pqErr.Code == "23505" { // Duplicate constraint violation
+				s.logger.Warnf("Block already exists in the database: %s", block.Hash().String())
+			} else {
+				return fmt.Errorf("Failed to store block: %w", err)
+			}
+		} else {
+			return fmt.Errorf("Failed to store block: %w", err)
+		}
 	}
 
 	// Add the placeholder to the subtree
@@ -357,11 +369,17 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 			}
 
 			// Spend the inputs
-			err = s.utxoStore.Spend(ctx, spends)
+			if err := s.utxoStore.Spend(ctx, spends); err != nil {
+				return fmt.Errorf("Failed to spend utxos: %w", err)
+			}
 		}
 
 		// Store the tx in the store
-		_, err = s.utxoStore.Create(ctx, tx, uint32(dbID))
+		if _, err := s.utxoStore.Create(ctx, tx, uint32(dbID)); err != nil {
+			if !strings.Contains(err.Error(), "utxo already exists") {
+				return fmt.Errorf("Failed to store tx: %w", err)
+			}
+		}
 	}
 
 	if len(block.Transactions()) > 1 {
