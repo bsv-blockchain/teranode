@@ -61,8 +61,7 @@ type BlockValidation struct {
 }
 
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation { //, onMiningEventFunc func(context.Context, uint32) error) *BlockValidation {
-
+	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation {
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
