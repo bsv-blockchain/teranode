@@ -43,6 +43,7 @@ require (
 	github.com/libsv/go-bt/v2 v2.2.5
 	github.com/loopholelabs/frisbee-go v0.7.2
 	github.com/loopholelabs/polyglot v1.1.4
+	github.com/looplab/fsm v1.0.1
 	github.com/multiformats/go-multiaddr v0.11.0
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opentracing/opentracing-go v1.2.0

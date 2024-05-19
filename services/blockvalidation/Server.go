@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 
 	"golang.org/x/sync/errgroup"
@@ -124,7 +125,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}
 
-	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second)
+	u.blockValidation = NewBlockValidation(ctx, u.logger, u.blockchainClient, u.subtreeStore, u.txStore, u.txMetaStore, u.validatorClient, subtreeValidationClient, time.Duration(expiration)*time.Second) //, u.handleMiningEvent)
 
 	go u.processSubtreeNotify.Start()
 
@@ -176,12 +177,25 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				return
 			case c := <-u.catchupCh:
 				{
+					// stop mining
+					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_CATCHUPBLOCKS)
+					if err != nil {
+						u.logger.Errorf("[BlockValidation Init] failed to send STOPMINING event [%v]", err)
+					}
+
 					u.logger.Infof("[Init] processing catchup on channel [%s]", c.block.Hash().String())
 					if err := u.catchup(ctx1, c.block, c.baseURL); err != nil {
 						u.logger.Errorf("[Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
 					}
+
 					u.logger.Infof("[Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
+
+					// start mining
+					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_MINE)
+					if err != nil {
+						u.logger.Errorf("[BlockValidation Init] failed to send MINE event [%v]", err)
+					}
 				}
 			case blockFound := <-u.blockFoundCh:
 				{
@@ -669,12 +683,14 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 }
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
+	//stop mining
 	start, stat, ctx := util.NewStatFromContext(ctx, "catchup", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:catchup")
 	defer func() {
 		stat.AddTime(start)
 		span.Finish()
 		prometheusBlockValidationCatchupDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
+		// start mining
 	}()
 
 	prometheusBlockValidationCatchup.Inc()

@@ -272,3 +272,8 @@ install:
 	brew install protoc-gen-go-grpc
 	brew install pre-commit
 	pre-commit install
+
+.PHONY: generate_fsm_diagram
+generate_fsm_diagram:
+	go run ./services/blockchain/fsm_visualizer/main.go
+	echo "State Machine diagram generated in docs/state-machine.diagram.md"

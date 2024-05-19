@@ -3,9 +3,10 @@ package validator
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"time"
+
+	"errors"
 
 	"github.com/TAAL-GmbH/arc/api"
 	"github.com/TAAL-GmbH/arc/validator" // TODO move this to UBSV repo - add recover to validation
@@ -378,6 +379,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 		traceSpan.RecordError(err)
 
 		// check whether this is a double spend error
+
 		var spentErr *utxostore.ErrSpent
 		ok := errors.As(err, &spentErr)
 		if ok {

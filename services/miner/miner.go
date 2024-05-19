@@ -13,6 +13,8 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/retry"
@@ -23,6 +25,7 @@ import (
 
 type Miner struct {
 	logger                           ulogger.Logger
+	blockchainClient                 blockchain.ClientI
 	blockAssemblyClient              *blockassembly.Client
 	candidateTimer                   *time.Timer
 	waitSeconds                      int
@@ -77,10 +80,15 @@ func (m *Miner) Health(ctx context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (m *Miner) Init(_ context.Context) error {
+func (m *Miner) Init(ctx context.Context) error {
 	m.MineBlocksNImmediatelyChan = make(chan int, 1)
 	m.MineBlocksNImmediatelyCancelChan = make(chan bool, 1)
-	return nil
+	var err error
+	if m.blockchainClient, err = blockchain.NewClient(ctx, m.logger); err != nil {
+		return fmt.Errorf("[Init] failed to create blockchain client [%w]", err)
+	}
+
+	return err
 }
 
 func (m *Miner) Start(ctx context.Context) error {
@@ -112,6 +120,11 @@ func (m *Miner) Start(ctx context.Context) error {
 	m.waitSeconds, _ = gocore.Config().GetInt("miner_waitSeconds", 30)
 
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
+
+	err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
+	if err != nil {
+		return fmt.Errorf("[Main] failed to send MINE notification [%v]", err)
+	}
 
 	var miningCtx context.Context
 	var cancel context.CancelFunc

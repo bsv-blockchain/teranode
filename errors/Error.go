@@ -110,7 +110,7 @@ func (e *Error) Unwrap() error {
 func New(code ERR, message string, params ...interface{}) *Error {
 	var wErr *Error
 
-	// Extract the wrapped error and data, if present
+	// Extract the wrapped error, if present
 	if len(params) > 0 {
 		if err, ok := params[len(params)-1].(*Error); ok {
 			wErr = err

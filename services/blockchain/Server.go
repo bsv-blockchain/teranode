@@ -16,6 +16,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/looplab/fsm"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -42,6 +43,7 @@ type Blockchain struct {
 	difficulty         *Difficulty
 	blockKafkaProducer util.KafkaProducerI
 	stats              *gocore.Stat
+	finiteStateMachine *fsm.FSM
 }
 
 // New will return a server instance with the logger stored within it
@@ -67,6 +69,7 @@ func New(ctx context.Context, logger ulogger.Logger) (*Blockchain, error) {
 	if err != nil {
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}
+
 	return &Blockchain{
 		store:             s,
 		logger:            logger,
@@ -85,7 +88,8 @@ func (b *Blockchain) Health(ctx context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (b *Blockchain) Init(ctx context.Context) error {
+func (b *Blockchain) Init(_ context.Context) error {
+	b.finiteStateMachine = b.NewFiniteStateMachine()
 	return nil
 }
 
@@ -112,7 +116,18 @@ func (b *Blockchain) Start(ctx context.Context) error {
 			case notification := <-b.notifications:
 				start := gocore.CurrentTime()
 				func() {
-					b.logger.Debugf("[Blockchain] Sending notification: %s", notification.Stringify())
+					b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
+
+					if notification.Type == model.NotificationType_FSMEvent {
+						notificationMetadata := notification.Metadata.GetMetadata()
+						event := blockchain_api.FSMEventType(blockchain_api.FSMEventType_value[notificationMetadata["event"]])
+						b.logger.Debugf("[Blockchain Server] Sending FSM event: %s", event.String())
+						err := b.finiteStateMachine.Event(ctx, event.String())
+						if err != nil {
+							b.logger.Errorf("[Blockchain Server] Error sending FSM event: %v", err)
+						}
+						b.logger.Debugf("[Blockchain Server] FSM current state: %s", b.finiteStateMachine.Current())
+					}
 
 					for sub := range b.subscribers {
 						b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
@@ -768,6 +783,9 @@ func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Not
 	defer func() {
 		stat.AddTime(start)
 	}()
+	if req.Type == model.NotificationType_FSMEvent {
+		b.logger.Infof("[Blockchain Server] SendNotification FSMevent called: %s", req.GetMetadata())
+	}
 
 	prometheusBlockchainSendNotification.Inc()
 	b.notifications <- req
@@ -830,6 +848,28 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 
 	return &blockchain_api.GetBlocksSubtreesNotSetResponse{
 		BlockBytes: blockBytes,
+	}, nil
+}
+
+func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
+	var state string
+
+	if b.finiteStateMachine == nil {
+		return nil, fmt.Errorf("FSM is not initialized")
+	}
+
+	// Get the current state of the FSM
+	state = b.finiteStateMachine.Current()
+
+	// Convert the string state to FSMEventType using the map
+	enumState, ok := blockchain_api.FSMStateType_value[state]
+	if !ok {
+		// Handle the case where the state is not found in the map
+		return nil, errors.New(errors.ERR_PROCESSING, "invalid state: "+state)
+	}
+
+	return &blockchain_api.GetFSMStateResponse{
+		State: blockchain_api.FSMStateType(enumState),
 	}, nil
 }
 
