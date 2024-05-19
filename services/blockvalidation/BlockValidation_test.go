@@ -179,10 +179,6 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
 
-// func mock_handleOnMiningEvent(_ context.Context, _ uint32) error {
-// 	return nil
-// }
-
 func TestBlockValidationValidateBlock(t *testing.T) {
 
 	initPrometheusMetrics()
@@ -284,31 +280,3 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
-
-// copied from BigBlock_test
-//func calculateMerkleRoot(hashes []*chainhash.Hash) (*chainhash.Hash, error) {
-//	var calculatedMerkleRootHash *chainhash.Hash
-//	if len(hashes) == 1 {
-//		calculatedMerkleRootHash = hashes[0]
-//	} else if len(hashes) > 0 {
-//		// Create a new subtree with the hashes of the subtrees
-//		st, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(hashes)))
-//		if err != nil {
-//			return nil, err
-//		}
-//		for _, hash := range hashes {
-//			err := st.AddNode(*hash, 1, 0)
-//			if err != nil {
-//				return nil, err
-//			}
-//		}
-//
-//		calculatedMerkleRoot := st.RootHash()
-//		calculatedMerkleRootHash, err = chainhash.NewHash(calculatedMerkleRoot[:])
-//		if err != nil {
-//			return nil, err
-//		}
-//	}
-//
-//	return calculatedMerkleRootHash, nil
-//}

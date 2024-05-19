@@ -211,44 +211,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-// func (u *Server) handleMiningEvent(ctx context.Context, height uint32) error {
-// 	return u.checkIfMiningShouldStop(ctx, height)
-// }
-
-// func (u *Server) checkIfMiningShouldStop(ctx context.Context, height uint32) error {
-// 	mining_should_stop_after_block_validation_queued_blocks, _ := gocore.Config().GetInt("mining_should_stop_after_block_validation_queued_blocks", 10)
-
-// 	if len(u.blockFoundCh) > mining_should_stop_after_block_validation_queued_blocks {
-// 		initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
-
-// 		// if we are not in the beginning, and there are many blocks queued for vlaidation, we should stop mining
-// 		// TODO GOKHAN: try to remove the initial block count check, and just check if we have too many blocks in the queue
-// 		if height > uint32(initialBlockCount) {
-// 			// we should tell the miner to stop mining.
-// 			u.logger.Infof("[BlockValidation][checkIfMiningShouldStop] too many blocks in queue, sending StopMining FSM event")
-
-// 			// create a new blockchain notification
-// 			notification := &model.Notification{
-// 				Type:    model.NotificationType_FSMEvent,
-// 				Hash:    &chainhash.Hash{},
-// 				BaseURL: "",
-// 				Metadata: model.NotificationMetadata{
-// 					Metadata: map[string]string{
-// 						"event": blockchain_api.FSMEventType_STOPMINING.String(),
-// 					},
-// 				},
-// 			}
-
-// 			// send the notification to the blockchain client
-// 			if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
-// 				return fmt.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to send STOP notification [%w]", err)
-// 			}
-// 		}
-// 	}
-
-// 	return nil
-// }
-
 func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound processBlockFound) error {
 	if len(u.blockFoundCh) > 3 {
 		// we are multiple blocks behind, process all the blocks per peer on the catchup channel
@@ -361,20 +323,6 @@ func (u *Server) Start(ctx context.Context) error {
 			}()
 		}
 	}
-
-	//kafkaBlocksValidateConfigURL, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
-	//if err == nil && ok {
-	//	u.logger.Infof("[BlockValidation] starting block validation Kafka client on address: %s, with %d workers", kafkaBlocksValidateConfigURL.String(), 1)
-	//
-	//	util.StartKafkaListener(ctx, u.logger, kafkaBlocksValidateConfigURL, 1, "BlockValidation", "blockvalidation", func(_ context.Context, blockHashBytes []byte, _ []byte) error {
-	//		blockHash, err := chainhash.NewHash(blockHashBytes)
-	//		if err != nil {
-	//			u.logger.Errorf("[BlockValidation] failed to parse block hash from kafka: %v", err)
-	//			return nil
-	//		}
-	//		return u.blockValidation.validateBlock(ctx, blockHash)
-	//	})
-	//}
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, u.logger, "blockvalidation", func(server *grpc.Server) {
@@ -528,24 +476,6 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	if req.WaitToComplete {
 		errCh = make(chan error)
 	}
-
-	// mining_should_stop_after_block_validation_queued_blocks, _ := gocore.Config().GetInt("mining_should_stop_after_block_validation_queued_blocks", 10)
-
-	// if len(u.blockFoundCh) > mining_should_stop_after_block_validation_queued_blocks {
-	// 	// TODO: how to get rid of this dobule > 10 check and getBlock? Is there a better way to handle this?
-
-	// 	// get the height and check if it is one of the first X blocks that are mined in the beginning
-	// 	block, err := u.getBlock(ctx, hash, req.BaseUrl)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-
-	// 	// check if we should stop mining
-	// 	err = u.checkIfMiningShouldStop(ctx, block.Height)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// }
 
 	// process the block in the background, in the order we receive them, but without blocking the grpc call
 	go func() {

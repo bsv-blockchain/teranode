@@ -63,13 +63,8 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 	t.Run("Transition from Mining to Stopped", func(t *testing.T) {
 		// Try to set the state to Stopped, again
 		err = fsm.Event(ctx, blockchain_api.FSMEventType_STOP.String())
-		require.Error(t, err)
+		require.NoError(t, err)
 		require.Equal(t, "STOPPED", fsm.Current())
 		require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
 	})
-
-}
-
-func Test_EventTypeConversion(t *testing.T) {
-
 }

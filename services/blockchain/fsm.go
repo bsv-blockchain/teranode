@@ -19,7 +19,6 @@ import (
 func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	// Create the finite state machine, with states and transitions
 	finiteStateMachine := fsm.NewFSM(
-		// FiniteStateMachineState_Stopped,
 		blockchain_api.FSMStateType_STOPPED.String(),
 		fsm.Events{
 			{

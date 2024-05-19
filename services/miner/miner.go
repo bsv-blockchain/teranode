@@ -121,22 +121,6 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
 
-	// Send FSM event to start mining
-	// create a new blockchain notification with Mine event
-	// notification := &model.Notification{
-	// 	Type:    model.NotificationType_FSMEvent,
-	// 	Hash:    &chainhash.Hash{}, // not relevant for FSMEvent notifications
-	// 	BaseURL: "",                // not relevant for FSMEvent notifications
-	// 	Metadata: model.NotificationMetadata{
-	// 		Metadata: map[string]string{
-	// 			"event": blockchain_api.FSMEventType_MINE.String(),
-	// 		},
-	// 	},
-	// }
-	// // send FSMEvent Mine notification to the blockchain client. FSM will transition to state Mining
-	// if err := m.blockchainClient.SendNotification(ctx, notification); err != nil {
-	// 	return fmt.Errorf("[Main] failed to send MINE notification [%v]", err)
-	// }
 	err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
 	if err != nil {
 		return fmt.Errorf("[Main] failed to send MINE notification [%v]", err)
