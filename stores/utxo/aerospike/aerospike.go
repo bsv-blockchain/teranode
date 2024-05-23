@@ -810,15 +810,23 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*utxo.UnresolvedMet
 	return nil
 }
 
-func (s *Store) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+	startTotal, stat, ctx := util.StartStatFromContext(ctx, "Create")
+
+	defer func() {
+		stat.AddTime(startTotal)
+	}()
+
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
 		return nil, errors.New(errors.ERR_PROCESSING, "failed to get tx meta data", err)
 	}
 
+	done := make(chan error)
+	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, done: done}
+
 	if s.storeBatcher != nil {
-		done := make(chan error)
-		s.storeBatcher.Put(&batchStoreItem{tx: tx, lockTime: tx.LockTime, done: done})
+		s.storeBatcher.Put(item)
 
 		err = <-done
 		if err != nil {
@@ -830,29 +838,10 @@ func (s *Store) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.
 		return txMeta, nil
 	}
 
-	bins, err := getBinsToStore(tx, blockIDs...)
+	s.sendStoreBatch([]*batchStoreItem{item})
+	err = <-done
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "failed to get bins to store", err)
-	}
-
-	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
-	policy.RecordExistsAction = aerospike.CREATE_ONLY
-
-	key, aeroErr := aerospike.NewKey(s.namespace, s.setName, tx.TxIDChainHash().CloneBytes())
-	if aeroErr != nil {
-		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", aeroErr.Error()).Inc()
-		return nil, errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta", aeroErr)
-	}
-
-	aeroErr = s.client.PutBins(policy, key, bins...)
-	if aeroErr != nil {
-		var aErr *aerospike.AerospikeError
-		if errors.As(aeroErr, &aErr) && aErr.ResultCode == types.KEY_EXISTS_ERROR {
-			// TODO replace this error with the new one
-			return nil, errors.New(errors.ERR_UTXO_ALREADY_EXISTS, "utxo already exists", aeroErr).WithData("hash", tx.TxIDChainHash())
-		}
-
-		return nil, aeroErr
+		return nil, err
 	}
 
 	prometheusTxMetaAerospikeMapStore.Inc()

@@ -249,6 +249,12 @@ func checkProofOfWork(header *wire.BlockHeader) bool {
 }
 
 func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) error {
+	startTotal, stat, ctx := util.StartStatFromContext(ctx, "HandleBlockDirect")
+
+	defer func() {
+		stat.AddTime(startTotal)
+	}()
+
 	subtrees := make([]*chainhash.Hash, 0)
 
 	subtree, err := util.NewIncompleteTreeByLeafCount(len(block.Transactions()))
@@ -287,6 +293,8 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 		return fmt.Errorf("Failed to create model.NewBlock: %w", err)
 	}
 
+	start := gocore.CurrentTime()
+
 	dbID, err := s.blockchainStore.StoreBlock(ctx, teranodeBlock, "LEGACY")
 	if err != nil {
 		var pqErr *pq.Error
@@ -300,6 +308,8 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 			return fmt.Errorf("Failed to store block: %w", err)
 		}
 	}
+
+	start = stat.NewStat("StoreBlock").AddTime(start)
 
 	// Add the placeholder to the subtree
 	if err := subtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
@@ -390,6 +400,8 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 		}
 
 		s.subtreeStore.Set(ctx, subtree.RootHash()[:], subtreeBytes)
+
+		stat.NewStat("SubtreeStore").AddTime(start)
 
 		// subtrees = append(subtrees, subtree.RootHash())
 
