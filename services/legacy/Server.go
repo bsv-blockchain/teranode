@@ -401,7 +401,7 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 
 		s.subtreeStore.Set(ctx, subtree.RootHash()[:], subtreeBytes)
 
-		stat.NewStat("SubtreeStore").AddTime(start)
+		stat.NewStat("SubtreeStore").AddTimeForRange(start, len(block.Transactions()))
 
 		// subtrees = append(subtrees, subtree.RootHash())
 
