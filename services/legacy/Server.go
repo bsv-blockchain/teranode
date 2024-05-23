@@ -255,6 +255,8 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 		stat.AddTime(startTotal)
 	}()
 
+	stat.NewStat("SubtreeStore").AddRanges(0, 1, 10, 100, 1000, 10000, 100000, 1000000)
+
 	subtrees := make([]*chainhash.Hash, 0)
 
 	subtree, err := util.NewIncompleteTreeByLeafCount(len(block.Transactions()))
