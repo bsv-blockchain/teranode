@@ -15,3 +15,8 @@ redis-cli FLUSHALL
 
 asinfo -h localhost -v "truncate-namespace:namespace=ubsv-store"
 asinfo -h localhost -v "truncate-namespace:namespace=test"
+
+# mkdir -p data/aerospike
+# touch data/aerospike/aerospike-1.dat
+# touch data/aerospike/aerospike-2.dat
+# touch data/aerospike/aerospike-3.dat

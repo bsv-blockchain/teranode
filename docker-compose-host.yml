@@ -38,8 +38,8 @@ services:
       - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
-      interval: 5s
+      test: [ "CMD-SHELL", "pg_isready -p 15432 -U postgres" ]
+      interval: 1s
       timeout: 5s
       retries: 5
 
@@ -80,9 +80,10 @@ services:
     <<: *ubsv-base
     container_name: ubsv-1
     depends_on:
-      - kafka-shared
-      # - aerospike-1
-      - postgres
+      postgres:
+        condition: service_healthy
+      kafka-shared:
+        condition: service_started
     entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv1"
@@ -96,9 +97,10 @@ services:
     <<: *ubsv-base
     container_name: ubsv-2
     depends_on:
-      - kafka-shared
-      # - aerospike-2
-      - postgres
+      postgres:
+        condition: service_healthy
+      kafka-shared:
+        condition: service_started
     entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv2"
@@ -112,9 +114,10 @@ services:
     <<: *ubsv-base
     container_name: ubsv-3
     depends_on:
-      - kafka-shared
-      # - aerospike-3
-      - postgres
+      postgres:
+        condition: service_healthy
+      kafka-shared:
+        condition: service_started
     entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv3"
