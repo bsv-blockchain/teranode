@@ -579,6 +579,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 				return fmt.Errorf("[moveDownBlock][%s] error deserializing subtree: %s", block.String(), err.Error())
 			}
 
+			// TODO add metrics about how many txs we are reading per second
 			subtreesNodes[idx] = subtree.Nodes
 
 			subtree = nil
@@ -998,6 +999,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 				return errors.Join(fmt.Errorf("error getting subtree: %s", st.String()), err)
 			}
 
+			// TODO add metrics about how many txs we are reading per second
 			txHashBuckets, err := DeserializeHashesFromReaderIntoBuckets(subtreeReader, transactionMap.Buckets())
 			if err != nil {
 				return errors.Join(fmt.Errorf("error deserializing subtree: %s", st.String()), err)
