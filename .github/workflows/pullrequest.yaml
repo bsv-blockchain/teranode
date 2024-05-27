@@ -61,7 +61,7 @@ jobs:
           version: latest
           args: --timeout=5m --issues-exit-code=0 --out-format=checkstyle:golangci-lint-report.xml
 
-      - uses: twingate/github-action@v1
+      - uses: twingate/github-action@4493ffc3806241aa98194a3fa679f874bce013b5
         with:
           service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }}
 
