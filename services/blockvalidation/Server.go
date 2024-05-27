@@ -13,26 +13,24 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
-
-	"golang.org/x/sync/errgroup"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
 
@@ -511,17 +509,13 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
-func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, baseUrl string) error {
-	span, spanCtx := opentracing.StartSpanFromContext(cntxt, "BlockValidationServer:processBlockFound")
-	span.LogKV("hash", hash.String())
-	start, stat, ctx := util.NewStatFromContext(spanCtx, "processBlockFound", u.stats)
-	defer func() {
-		span.Finish()
-		stat.AddTime(start)
-		prometheusBlockValidationProcessBlockFoundDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
-
-	u.logger.Infof("[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl)
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
+	ctx, deferFn := tracing.StartTracing(ctx, "processBlockFound",
+		tracing.WithHistogram(prometheusBlockValidationProcessBlockFoundDuration),
+		tracing.WithParentStat(u.stats),
+		tracing.WithLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl),
+	)
+	defer deferFn()
 
 	// first check if the block exists, it might have already been processed
 	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
@@ -602,14 +596,12 @@ func (u *Server) processBlockFound(cntxt context.Context, hash *chainhash.Hash, 
 }
 
 func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "getBlock", u.stats)
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:getBlock")
-	defer func() {
-		span.Finish()
-		stat.AddTime(start)
-	}()
+	ctx, deferFn := tracing.StartTracing(ctx, "getBlock",
+		tracing.WithParentStat(u.stats),
+	)
+	defer deferFn()
 
-	blockBytes, err := util.DoHTTPRequest(spanCtx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
+	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
 	if err != nil {
 		return nil, fmt.Errorf("[getBlock][%s] failed to get block from peer [%w]", hash.String(), err)
 	}
@@ -627,14 +619,12 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl str
 }
 
 func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, baseUrl string) ([]*model.Block, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "getBlocks", u.stats)
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:getBlocks")
-	defer func() {
-		span.Finish()
-		stat.AddTime(start)
-	}()
+	ctx, deferFn := tracing.StartTracing(ctx, "getBlocks",
+		tracing.WithParentStat(u.stats),
+	)
+	defer deferFn()
 
-	blockBytes, err := util.DoHTTPRequest(spanCtx, fmt.Sprintf("%s/blocks/%s?n=%d", baseUrl, hash.String(), n))
+	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/blocks/%s?n=%d", baseUrl, hash.String(), n))
 	if err != nil {
 		return nil, fmt.Errorf("[getBlocks][%s] failed to get blocks from peer [%w]", hash.String(), err)
 	}
@@ -658,10 +648,10 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 }
 
 func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "getBlockHeaders", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, deferFn := tracing.StartTracing(ctx, "getBlockHeaders",
+		tracing.WithParentStat(u.stats),
+	)
+	defer deferFn()
 
 	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers/%s", baseUrl, hash.String()))
 	if err != nil {
@@ -683,22 +673,17 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 }
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
-	//stop mining
-	start, stat, ctx := util.NewStatFromContext(ctx, "catchup", u.stats)
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidationServer:catchup")
-	defer func() {
-		stat.AddTime(start)
-		span.Finish()
-		prometheusBlockValidationCatchupDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-		// start mining
-	}()
+	ctx, deferFn := tracing.StartTracing(ctx, "catchup",
+		tracing.WithHistogram(prometheusBlockValidationCatchupDuration),
+		tracing.WithParentStat(u.stats),
+		tracing.WithLogMessage(u.logger, "[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL),
+	)
+	defer deferFn()
 
 	prometheusBlockValidationCatchup.Inc()
 
-	u.logger.Infof("[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL)
-
 	// first check whether this block already exists, which would mean we caught up from another peer
-	exists, err := u.blockValidation.GetBlockExists(spanCtx, fromBlock.Hash())
+	exists, err := u.blockValidation.GetBlockExists(ctx, fromBlock.Hash())
 	if err != nil {
 		return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
 	}
@@ -714,7 +699,7 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 LOOP:
 	for {
 		u.logger.Debugf("[catchup][%s] getting block headers for catchup from [%s]", fromBlock.Hash().String(), fromBlockHeaderHash.String())
-		blockHeaders, err = u.getBlockHeaders(spanCtx, fromBlockHeaderHash, baseURL)
+		blockHeaders, err = u.getBlockHeaders(ctx, fromBlockHeaderHash, baseURL)
 		if err != nil {
 			return err
 		}
@@ -749,7 +734,7 @@ LOOP:
 				u.logger.Infof("[catchup][%s] parent block is done being validated", fromBlock.Hash().String())
 			}
 
-			exists, err = u.blockValidation.GetBlockExists(spanCtx, blockHeader.Hash())
+			exists, err = u.blockValidation.GetBlockExists(ctx, blockHeader.Hash())
 			if err != nil {
 				return fmt.Errorf("[catchup][%s] failed to check if parent block exists [%w]", fromBlock.Hash().String(), err)
 			}
@@ -779,7 +764,7 @@ LOOP:
 
 	// process the catchup block headers in reverse order and put them on the channel
 	// this will allow the blocks to be validated while getting them from the other node
-	g, gCtx := errgroup.WithContext(spanCtx)
+	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(catchupConcurrency)
 	g.Go(func() error {
 		slices.Reverse(catchupBlockHeaders)
@@ -833,7 +818,7 @@ LOOP:
 		i++
 		u.logger.Infof("[catchup][%s] validating block %d/%d", block.Hash().String(), i, size.Load())
 
-		if err := u.blockValidation.ValidateBlock(spanCtx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
+		if err := u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
 			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
 		}
 		u.logger.Debugf("[catchup][%s] validated block %d/%d", block.Hash().String(), i, size.Load())
