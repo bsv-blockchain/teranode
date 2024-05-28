@@ -4,7 +4,7 @@ participant "HTTP Client" as Client
 participant "HTTP Server" as HTTP
 participant "Propagation Server" as Server
 participant "Tx Store" as TxStore
-participant "Validator Service" as ValidationService
+participant "Validator" as ValidationService
 
 activate Server
 
@@ -35,6 +35,6 @@ end
 
 deactivate HTTP
 
-left footer Last Modified On: 18-Dec-2023
+left footer Last Modified On: 28-May-2024
 
 @enduml
