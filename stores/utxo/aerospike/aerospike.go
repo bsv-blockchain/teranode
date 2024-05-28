@@ -210,7 +210,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			continue
 		}
 
-		binsToStore, err = getBinsToStore(bItem.tx, bItem.tx.LockTime)
+		binsToStore, err = getBinsToStore(bItem.tx)
 		if err != nil {
 			bItem.done <- errors.New(errors.ERR_PROCESSING, "could not get bins to store", err)
 			continue
