@@ -94,53 +94,6 @@ type Store struct {
 	lastSpendBatcher *batcher.Batcher2[batchLastSpend]
 }
 
-func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
-	batchPolicy := util.GetAerospikeBatchPolicy()
-	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
-
-	policy := util.GetAerospikeBatchReadPolicy()
-
-	batchRecords := make([]aerospike.BatchRecordIfc, len(outpoints))
-
-	for idx, item := range outpoints {
-		key, err := aerospike.NewKey(s.namespace, s.setName, item.PreviousTxID[:])
-		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta", err)
-		}
-
-		bins := []string{"version", "locktime", "inputs", "outputs"}
-		record := aerospike.NewBatchRead(policy, key, bins)
-		// Add to batch
-		batchRecords[idx] = record
-	}
-
-	err := s.client.BatchOperate(batchPolicy, batchRecords)
-	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records", err)
-	}
-
-	for idx, batchRecordIfc := range batchRecords {
-		batchRecord := batchRecordIfc.BatchRec()
-		if batchRecord.Err != nil {
-			return errors.New(errors.ERR_PROCESSING, "error in aerospike map store batch record", batchRecord.Err)
-		}
-
-		bins := batchRecord.Record.Bins
-		previousTx, err := s.getTxFromBins(bins)
-		if err != nil {
-			return errors.New(errors.ERR_TX_INVALID, "invalid tx", err)
-		}
-
-		outpoints[idx].Satoshis = previousTx.Outputs[outpoints[idx].Vout].Satoshis
-		outpoints[idx].LockingScript = *previousTx.Outputs[outpoints[idx].Vout].LockingScript
-	}
-
-	prometheusTxMetaAerospikeMapGetMulti.Inc()
-	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
-
-	return nil
-}
-
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	initPrometheusMetrics()
 	if gocore.Config().GetBool("aerospike_debug", true) {
@@ -560,96 +513,25 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*me
 
 	bins = s.addAbstractedBins(bins)
 
+	done := make(chan batchGetItemData)
+	item := &batchGetItem{hash: *hash, fields: bins, done: done}
+
 	if s.getBatcher != nil {
-		done := make(chan batchGetItemData)
-		s.getBatcher.Put(&batchGetItem{hash: *hash, fields: bins, done: done})
-
-		data := <-done
-		if data.Err != nil {
-			prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", data.Err.Error()).Inc()
-		} else {
-			prometheusTxMetaAerospikeMapGet.Inc()
-		}
-		return data.Data, data.Err
+		s.getBatcher.Put(item)
+	} else {
+		// if the batcher is disabled, we still want to process the request in a go routine
+		go func() {
+			s.sendGetBatch([]*batchGetItem{item})
+		}()
 	}
 
-	// in the map implementation, we are using the utxo store for the data
-	key, aeroErr := aerospike.NewKey(s.namespace, s.setName, hash[:])
-	if aeroErr != nil {
-		return nil, aeroErr
+	data := <-done
+	if data.Err != nil {
+		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", data.Err.Error()).Inc()
+	} else {
+		prometheusTxMetaAerospikeMapGet.Inc()
 	}
-
-	var value *aerospike.Record
-
-	readPolicy := util.GetAerospikeReadPolicy()
-	readPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
-
-	value, aeroErr = s.client.Get(readPolicy, key, bins...)
-	if aeroErr != nil {
-		return nil, aeroErr
-	}
-
-	if value == nil {
-		return nil, nil
-	}
-
-	var parentTxHashes []chainhash.Hash
-	if slices.Contains(bins, "parentTxHashes") {
-		inputInterfaces, ok := value.Bins["inputs"].([]interface{})
-		if ok {
-			parentTxHashes = make([]chainhash.Hash, len(inputInterfaces))
-			for i, inputInterface := range inputInterfaces {
-				input := inputInterface.([]byte)
-				parentTxHashes[i] = chainhash.Hash(input[:32])
-			}
-		}
-	}
-
-	var blockIDs []uint32
-	if value.Bins["blockIDs"] != nil {
-		// convert from []interface{} to []uint32
-		for _, v := range value.Bins["blockIDs"].([]interface{}) {
-			blockIDs = append(blockIDs, uint32(v.(int)))
-		}
-	}
-
-	var tx *bt.Tx
-	var err error
-	if slices.Contains(bins, "tx") {
-		tx, err = s.getTxFromBins(value.Bins)
-		if err != nil {
-			return nil, errors.New(errors.ERR_TX_INVALID, "invalid tx", err)
-		}
-	}
-
-	var fee uint64
-	if value.Bins["fee"] != nil {
-		fee = uint64(value.Bins["fee"].(int))
-	}
-	var sizeInBytes uint64
-	if value.Bins["sizeInBytes"] != nil {
-		sizeInBytes = uint64(value.Bins["sizeInBytes"].(int))
-	}
-	var lockTime uint32
-	if value.Bins["locktime"] != nil {
-		lockTime = uint32(value.Bins["locktime"].(int))
-	}
-
-	// transform the aerospike interface{} into the correct types
-	status := &meta.Data{
-		Tx:             tx,
-		Fee:            fee,
-		SizeInBytes:    sizeInBytes,
-		ParentTxHashes: parentTxHashes,
-		BlockIDs:       blockIDs,
-		LockTime:       lockTime,
-	}
-
-	if value.Bins["isCoinbase"] != nil {
-		status.IsCoinbase = value.Bins["isCoinbase"].(bool)
-	}
-
-	return status, nil
+	return data.Data, data.Err
 }
 
 func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
@@ -810,8 +692,55 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*utxo.UnresolvedMet
 	return nil
 }
 
+func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+	batchPolicy := util.GetAerospikeBatchPolicy()
+	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
+
+	policy := util.GetAerospikeBatchReadPolicy()
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(outpoints))
+
+	for idx, item := range outpoints {
+		key, err := aerospike.NewKey(s.namespace, s.setName, item.PreviousTxID[:])
+		if err != nil {
+			return errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta", err)
+		}
+
+		bins := []string{"version", "locktime", "inputs", "outputs"}
+		record := aerospike.NewBatchRead(policy, key, bins)
+		// Add to batch
+		batchRecords[idx] = record
+	}
+
+	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	if err != nil {
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records", err)
+	}
+
+	for idx, batchRecordIfc := range batchRecords {
+		batchRecord := batchRecordIfc.BatchRec()
+		if batchRecord.Err != nil {
+			return errors.New(errors.ERR_PROCESSING, "error in aerospike map store batch record", batchRecord.Err)
+		}
+
+		bins := batchRecord.Record.Bins
+		previousTx, err := s.getTxFromBins(bins)
+		if err != nil {
+			return errors.New(errors.ERR_TX_INVALID, "invalid tx", err)
+		}
+
+		outpoints[idx].Satoshis = previousTx.Outputs[outpoints[idx].Vout].Satoshis
+		outpoints[idx].LockingScript = *previousTx.Outputs[outpoints[idx].Vout].LockingScript
+	}
+
+	prometheusTxMetaAerospikeMapGetMulti.Inc()
+	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
+
+	return nil
+}
+
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "Create")
+	startTotal, stat, _ := util.StartStatFromContext(ctx, "Create")
 
 	defer func() {
 		stat.AddTime(startTotal)
@@ -827,25 +756,20 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 
 	if s.storeBatcher != nil {
 		s.storeBatcher.Put(item)
-
-		err = <-done
-		if err != nil {
-			// return raw err, should already be wrapped
-			return nil, err
-		}
-
-		prometheusTxMetaAerospikeMapStore.Inc()
-		return txMeta, nil
+	} else {
+		// if the batcher is disabled, we still want to process the request in a go routine
+		go func() {
+			s.sendStoreBatch([]*batchStoreItem{item})
+		}()
 	}
 
-	s.sendStoreBatch([]*batchStoreItem{item})
 	err = <-done
 	if err != nil {
+		// return raw err, should already be wrapped
 		return nil, err
 	}
 
 	prometheusTxMetaAerospikeMapStore.Inc()
-
 	return txMeta, nil
 }
 
