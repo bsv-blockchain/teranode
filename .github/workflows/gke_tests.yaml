@@ -10,9 +10,6 @@ jobs:
       fail-fast: true
     steps:
       - uses: actions/checkout@v4
-        with:
-          # Disabling shallow clone is recommended for improving relevancy of reporting
-          fetch-depth: 0
       - name: Set up Go
         uses: actions/setup-go@v5 # v4 has caching enabled by default
         with:
@@ -26,20 +23,41 @@ jobs:
 
       - name: Run Go tests
         run: make longtests
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 1
 
   sonarqube:
     name: Sonarqube
     runs-on: ubsv-runner
+    needs: go-lint-and-test
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-    - uses: twingate/github-action@v1
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: coverage-report
+
+    # Re-run golangci separately without exiting on errors and generating a report for use in Sonar
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v5
+      with:
+        version: latest
+        args: --timeout=5m --issues-exit-code=0 --out-format=checkstyle:golangci-lint-report.xml
+
+    - uses: twingate/github-action@4493ffc3806241aa98194a3fa679f874bce013b5
       with:
         service-key: ${{ secrets.TWINGATE_GH_ACTIONS_SERVICE_KEY }} # Required
 
     - name: SonarQube Scan
-      uses: sonarsource/sonarqube-scan-action@v2.0.1
+      uses: sonarsource/sonarqube-scan-action@v2.0.2
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: https://sonarqube.ubsv.dev

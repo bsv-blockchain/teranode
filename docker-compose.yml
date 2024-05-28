@@ -39,11 +39,11 @@ services:
       POSTGRES_PASSWORD: really_strong_password_change_me
       POSTGRES_DB: postgres
     ports:
-      - 15432:5432
+      - 5432:5432
     expose:
       - 5432
     volumes:
-      - ./deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
+      # - ./deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
       - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
@@ -100,7 +100,7 @@ services:
       - kafka-shared
       # - aerospike-1
       - postgres
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1", "-rpc=1", "-faucet=1"]
     # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
@@ -116,9 +116,10 @@ services:
       - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
-      - "18090-18093:8090-8093"
+      - "18090-18097:8090-8097"
       - "19091:9091"
       - "19905:9905"
+      - "19292:9292"
 
   ubsv-2:
     <<: *ubsv-base

@@ -4,13 +4,14 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"io"
 	"math"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -366,7 +367,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 				time.Sleep(retrySleepDuration)
 				continue
 			}
-			return errors.New(errors.ERR_UTXO_ERROR, "[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
+			return errors.New(errors.ERR_ERROR, "[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
 		}
 
 		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {

@@ -1,0 +1,54 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Hex Decoder" as Decoder
+participant "Transaction Parser" as Parser
+participant "Distributor" as Distributor
+
+Client -> RPC : SendRawTransactionCmd(HexTx)
+activate RPC
+
+RPC -> Decoder : Decode hex string
+activate Decoder
+Decoder -> RPC : return bytes or error
+deactivate Decoder
+
+alt If Hex Decoding Fails
+    RPC -> Client : Return rpcDecodeHexError
+    deactivate RPC
+else If Hex Decoding Succeeds
+    RPC -> Parser : Parse transaction from bytes
+    activate Parser
+    Parser -> RPC : return transaction object or error
+    deactivate Parser
+
+    alt If Parsing Fails
+        RPC -> Client : Return ErrRPCDeserialization
+        deactivate RPC
+    else If Parsing Succeeds
+        RPC -> Distributor : Initialize Distributor
+        activate Distributor
+        Distributor -> RPC : return distributor instance or error
+        deactivate Distributor
+
+        alt If Distributor Initialization Fails
+            RPC -> Client : Return initialization error
+            deactivate RPC
+        else If Initialization Succeeds
+            RPC -> Distributor : SendTransaction(context, tx)
+            activate Distributor
+            Distributor -> RPC : return result or broadcasting error
+            deactivate Distributor
+
+            alt If Broadcasting Fails
+                RPC -> Client : Return ErrRPCInvalidParameter
+                deactivate RPC
+            else If Broadcasting Succeeds
+                RPC -> Client : Return transaction result
+                deactivate RPC
+            end
+        end
+    end
+end
+
+@enduml

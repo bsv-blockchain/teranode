@@ -1,0 +1,44 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+
+Client -> RPC : CreateRawTransactionCmd( inputs, amounts, lockTime)
+activate RPC
+
+RPC -> RPC : Validate lockTime
+alt lockTime is invalid
+    RPC -> Client : Error: "Locktime out of range"
+else valid lockTime
+    RPC -> RPC : Create new transaction (mtx)
+    loop for each input
+        RPC -> RPC : Validate txid
+        alt txid is invalid
+            RPC -> Client : Error: "Invalid txid"
+        else valid txid
+            RPC -> RPC : Add input to mtx
+        end
+    end
+    loop for each output
+        RPC -> RPC : Decode address
+        alt address is invalid
+            RPC -> Client : Error: "Invalid address or key"
+        else valid address
+            RPC -> RPC : Create pay-to-address script
+            alt script creation failed
+                RPC -> Client : Error: "Failed to generate script"
+            else script created successfully
+                RPC -> RPC : Add output to mtx
+            end
+        end
+    end
+    RPC -> RPC : Set mtx.LockTime
+    RPC -> RPC : Serialize transaction to hex
+    alt serialization successful
+        RPC -> Client : Returns serialized transaction hex
+    else serialization failed
+        RPC -> Client : Error: "Failed to serialize transaction"
+    end
+end
+
+deactivate RPC
+@enduml

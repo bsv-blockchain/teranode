@@ -24,7 +24,7 @@ At a glance, the Propagation service:
 3. Sends the transaction to the Validator service for further processing.
 
 
-![Propagation_Service_Container_Diagram.png](img%2FPropagation_Service_Container_Diagram.png)
+![Propagation_Service_Container_Diagram.png](img/Propagation_Service_Container_Diagram.png)
 
 
 The service implements multiple experimental alternative communication methods (e.g. fRPC, QUIC) for transaction propagation, as well as UDP listeners over IPv6. At the time of writing, the gRPC protocol is the primary communication method.
@@ -35,13 +35,13 @@ A node can start multiple parallel instances of the Propagation service. This tr
 
 The Notice how fRPC does not allow for load balancing.
 
-![Propagation_Service_Component_Diagram.png](img%2FPropagation_Service_Component_Diagram.png)
+![Propagation_Service_Component_Diagram.png](img/Propagation_Service_Component_Diagram.png)
 
 ## 2. Functionality
 
 ### 2.1. Starting the Propagation Service
 
-![propagation_startup.svg](img%2Fplantuml%2Fpropagation%2Fpropagation_startup.svg)
+![propagation_startup.svg](img/plantuml/propagation/propagation_startup.svg)
 
 Upon startup, the Propagation service starts the relevant communication channels, as configured via settings.
 
@@ -51,17 +51,17 @@ All communication channels receive txs and delegate them to the `ProcessTransact
 
 **HTTP:**
 
-![propagation_http.svg](img%2Fplantuml%2Fpropagation%2Fpropagation_http.svg)
+![propagation_http.svg](img/plantuml/propagation/propagation_http.svg)
 
 
 **gRPC:**
 
-![propagation_grpc.svg](img%2Fplantuml%2Fpropagation%2Fpropagation_grpc.svg)
+![propagation_grpc.svg](img/plantuml/propagation/propagation_grpc.svg)
 
 
 **UDP IPv6:**
 
-![propagation_udp_ipv6.svg](img%2Fplantuml%2Fpropagation%2Fpropagation_udp_ipv6.svg)
+![propagation_udp_ipv6.svg](img/plantuml/propagation/propagation_udp_ipv6.svg)
 
 
 

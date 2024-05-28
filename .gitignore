@@ -27,6 +27,7 @@ vite.config.ts.timestamp-*
 *.private_key
 
 coverage.out
+golangci-lint-report.xml
 
 *.prof
 /model/test-generated_test_data/
@@ -53,3 +54,5 @@ current
 deploy/dev/grafana/grafana.db/
 
 vendor
+
+.ipynb_checkpoints/

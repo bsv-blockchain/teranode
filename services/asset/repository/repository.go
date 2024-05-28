@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"io"
 	"strings"
+
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -27,12 +29,13 @@ type Repository struct {
 	UtxoStore        utxo.Store
 	TxStore          blob.Store
 	SubtreeStore     blob.Store
+	BlockStore       blob.Store
 	BlockchainClient blockchain.ClientI
 	CoinbaseProvider coinbase_api.CoinbaseAPIClient
 }
 
 func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store,
-	blockchainClient blockchain.ClientI, SubtreeStore blob.Store) (*Repository, error) {
+	blockchainClient blockchain.ClientI, SubtreeStore blob.Store, BlockStore blob.Store) (*Repository, error) {
 
 	// SAO - Loading the grpc client directly without using the coinbase.NewClient() method as it causes a circular dependency
 	coinbaseGrpcAddress, ok := gocore.Config().Get("coinbase_grpcAddress")
@@ -57,6 +60,7 @@ func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Sto
 		UtxoStore:        utxoStore,
 		TxStore:          txStore,
 		SubtreeStore:     SubtreeStore,
+		BlockStore:       BlockStore,
 	}, nil
 }
 
@@ -215,6 +219,10 @@ func (r *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Hash)
 	return r.SubtreeStore.GetIoReader(ctx, hash.CloneBytes())
 }
 
+func (r *Repository) GetSubtreeDataReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
+	return r.BlockStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
+}
+
 func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {
 	r.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
@@ -285,12 +293,12 @@ func (r *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.Spen
 func (r *Repository) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	r.logger.Debugf("[Repository] GetBestBlockHeader")
 
-	header, headerMeta, err := r.BlockchainClient.GetBestBlockHeader(ctx)
+	header, meta, err := r.BlockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return header, headerMeta, nil
+	return header, meta, nil
 }
 
 func (r *Repository) GetBalance(ctx context.Context) (uint64, uint64, error) {

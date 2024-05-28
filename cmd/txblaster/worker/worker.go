@@ -10,13 +10,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/util"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
+	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/bitcoin-sv/ubsv/util/p2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -204,19 +207,23 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 	//}
 
 	for outerRetry := 0; outerRetry < 3; outerRetry++ {
-		responses, err := w.distributors[rand.Intn(len(w.distributors))].SendTransaction(ctx, tx)
+
+		//nolint:gosec // G404: Use of weak random number generator is acceptable here, not security-sensitive
+		index := rand.Intn(len(w.distributors))
+
+		responses, err := w.distributors[index].SendTransaction(ctx, tx)
 		if err == nil {
 			break
 		}
 
-		if errors.Is(err, errors.ErrProcessing) {
-			return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), err)
+		if errors.Is(err, propagation.ErrBadRequest) {
+			return errors.New(errors.ERR_SERVICE_ERROR, "error sending funding transaction %s", tx.TxIDChainHash().String(), err)
 		}
 
 		// Go through each response and check for ErrBadRequest errors
 		for _, response := range responses {
-			if errors.Is(response.Error, errors.ErrProcessing) {
-				return fmt.Errorf("error sending funding transaction %s: %v", tx.TxIDChainHash().String(), response.Error)
+			if errors.Is(response.Error, propagation.ErrBadRequest) {
+				return errors.New(errors.ERR_SERVICE_ERROR, "error sending funding transaction %s", tx.TxIDChainHash().String(), response.Error)
 			}
 		}
 
@@ -363,25 +370,26 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 	//}
 
 	// select 1 distributor at random
+	//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	d := w.distributors[rand.Intn(len(w.distributors))]
 	if responses, err := d.SendTransaction(ctx, tx); err != nil {
-		if errors.Is(err, errors.ErrTxInvalid) {
+		if errors.Is(err, propagation.ErrBadRequest) {
 			prometheusInvalidTransactions.Inc()
 		} else {
 			// Go through each response and check for ErrBadRequest errors
 			for _, response := range responses {
-				if errors.Is(response.Error, errors.ErrProcessing) {
+				if errors.Is(response.Error, propagation.ErrBadRequest) {
 					prometheusInvalidTransactions.Inc()
 				}
 			}
 		}
 
-		if errors.Is(err, errors.ErrProcessing) {
+		if errors.Is(err, propagation.ErrInternal) {
 			prometheusInternalErrors.Inc()
 		} else {
 			// Go through each response and check for ErrBadRequest errors
 			for _, response := range responses {
-				if errors.Is(response.Error, errors.ErrProcessing) {
+				if errors.Is(response.Error, propagation.ErrInternal) {
 					prometheusInternalErrors.Inc()
 				}
 			}

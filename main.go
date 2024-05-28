@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/legacy"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
@@ -161,7 +161,15 @@ func main() {
 			prefix, _ := gocore.Config().Get("stats_prefix")
 			logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
 
-			logger.Fatalf("%v", http.ListenAndServe(profilerAddr, nil))
+			server := &http.Server{
+				Addr:         profilerAddr,
+				Handler:      nil,
+				ReadTimeout:  60 * time.Second,
+				WriteTimeout: 60 * time.Second,
+				IdleTimeout:  120 * time.Second,
+			}
+
+			logger.Fatalf("%v", server.ListenAndServe())
 		}
 	}()
 
@@ -236,6 +244,7 @@ func main() {
 			getUtxoStore(ctx, logger),
 			getTxStore(logger),
 			getSubtreeStore(logger),
+			getBlockStore(logger),
 		)); err != nil {
 			panic(err)
 		}
@@ -258,15 +267,15 @@ func main() {
 		}
 	}
 
+	// should this be done globally somewhere?
+	blockchainClient, err := blockchain.NewClient(ctx, logger)
+	if err != nil {
+		panic(err)
+	}
+
 	// blockAssembly
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
-			// should this be done globally somewhere?
-			blockchainClient, err := blockchain.NewClient(ctx, logger)
-			if err != nil {
-				panic(err)
-			}
-
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				logger.New("bass"),
 				getTxStore(logger),
@@ -403,7 +412,12 @@ func main() {
 		}
 	}
 
-	// miner
+	if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
+		logger.Errorf("[Main] failed to send RUN event [%v]", err)
+		panic(err)
+	}
+
+	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining
 	if startMiner {
 		if err = sm.AddService("miner", miner.NewMiner(ctx, logger.New("miner"))); err != nil {
 			panic(err)

@@ -6,13 +6,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
@@ -341,6 +342,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 			saveBatch := batch
 			g.Go(func() error {
 				for _, data := range saveBatch {
+					data := data
 					if err = txMetaStore.SetCache(&data.hash, &meta.Data{
 						Fee:            data.fee,
 						SizeInBytes:    data.sizeInBytes,
@@ -364,6 +366,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 	// remainder batch
 	if len(batch) > 0 {
 		for _, data := range batch {
+			data := data
 			if err := txMetaStore.SetCache(&data.hash, &meta.Data{
 				Fee:            data.fee,
 				SizeInBytes:    data.sizeInBytes,

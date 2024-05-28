@@ -21,6 +21,7 @@ import (
 func init() {
 	go func() {
 		log.Println("Starting pprof server on http://localhost:6060")
+		//nolint:gosec // G114: Use of net/http serve function that has no support for setting timeouts (gosec)
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 }

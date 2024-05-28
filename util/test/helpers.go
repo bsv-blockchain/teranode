@@ -4,9 +4,10 @@ import (
 	"bufio"
 	"encoding/binary"
 	"errors"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"io"
 	"os"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -48,7 +49,8 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 			saveBatch := batch
 			g.Go(func() error {
 				for _, data := range saveBatch {
-					if err = txMetaStore.SetCache(&data.hash, &meta.Data{
+					hash := data.hash
+					if err = txMetaStore.SetCache(&hash, &meta.Data{
 						Fee:            data.fee,
 						SizeInBytes:    data.sizeInBytes,
 						ParentTxHashes: []chainhash.Hash{},
@@ -71,7 +73,8 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 	// remainder batch
 	if len(batch) > 0 {
 		for _, data := range batch {
-			if err := txMetaStore.SetCache(&data.hash, &meta.Data{
+			hash := data.hash
+			if err := txMetaStore.SetCache(&hash, &meta.Data{
 				Fee:            data.fee,
 				SizeInBytes:    data.sizeInBytes,
 				ParentTxHashes: []chainhash.Hash{},

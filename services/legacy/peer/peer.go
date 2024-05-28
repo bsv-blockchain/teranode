@@ -824,6 +824,7 @@ func (p *Peer) PushAddrMsg(addresses []*wire.NetAddress) ([]*wire.NetAddress, er
 	if addressCount > wire.MaxAddrPerMsg {
 		// Shuffle the address list.
 		for i := 0; i < wire.MaxAddrPerMsg; i++ {
+			//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 			j := i + rand.Intn(addressCount-i)
 			msg.AddrList[i], msg.AddrList[j] = msg.AddrList[j], msg.AddrList[i]
 		}
@@ -1960,6 +1961,8 @@ func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 	// Generate a unique nonce for this peer so self connections can be
 	// detected.  This is accomplished by adding it to a size-limited map of
 	// recently seen nonces.
+
+	//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	nonce := uint64(rand.Int63())
 	sentNonces.Add(nonce)
 

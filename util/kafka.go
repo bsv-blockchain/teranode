@@ -220,15 +220,24 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 		if partitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions")); err != nil {
 			logger.Fatalf("[%s] unable to parse Kafka partitions: %s", service, err)
 		}
+		if partitions < 0 || partitions > int(^uint32(0)>>1) { // Check for int32 overflow
+			logger.Fatalf("[%s] partitions value out of range for int32: %d", service, partitions)
+		}
 
 		var replicationFactor int
 		if replicationFactor, err = strconv.Atoi(kafkaURL.Query().Get("replication")); err != nil {
 			logger.Fatalf("[%s] unable to parse Kafka replication factor: %s", service, err)
 		}
+		if replicationFactor < 0 || replicationFactor > int(^uint16(0)>>1) { // Check for int16 overflow
+			logger.Fatalf("[%s] replication factor value out of range for int16: %d", service, replicationFactor)
+		}
+
 		retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000") // 10 minutes
 
 		if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
-			NumPartitions:     int32(partitions),
+			//nolint:gosec // G109: Potential Integer Overflow
+			NumPartitions: int32(partitions),
+			//nolint:gosec // G109: Potential Integer Overflow
 			ReplicationFactor: int16(replicationFactor),
 			ConfigEntries: map[string]*string{
 				"retention.ms": &retentionPeriod, // Set the retention period

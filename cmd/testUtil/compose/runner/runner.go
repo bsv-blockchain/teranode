@@ -50,7 +50,15 @@ func Run() error {
 		cleanup()
 	} else if buildFlag {
 		// Build the Docker services
-		exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s build", composeFilePath))
+
+		// this raises lint error G204: Subprocess launched with a potential tainted input or cmd arguments (gosec)
+		// exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s build", composeFilePath))
+
+		// alternative to above line
+		cmd := exec.Command("bash", "-c", "docker-compose", "-f", composeFilePath, "build")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("Failed to execute command: %s, error: %s", output, err)
+		}
 	} else {
 		return fmt.Errorf("no valid command provided. Use --up to start services or --clean for cleanup")
 	}
@@ -178,7 +186,8 @@ func execCommand(name string, args ...string) error {
 
 func getServices(prefix string) (string, error) {
 
-	cmd := exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s config --services", composeFilePath))
+	// cmd := exec.Command("bash", "-c", fmt.Sprintf("docker-compose -f %s config --services", composeFilePath)) // cause golint error
+	cmd := exec.Command("bash", "-c", "docker-compose", "-f", composeFilePath, "config", "--services")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err

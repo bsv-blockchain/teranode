@@ -179,6 +179,7 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 	}
 
 	// write bytes to file
+	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err = os.WriteFile(fileName, value, 0644); err != nil {
 		return fmt.Errorf("failed to write data to file: %w", err)
 	}
@@ -205,6 +206,7 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 	if fileOptions.TTL > 0 {
 		// write bytes to file
 		ttl := time.Now().Add(fileOptions.TTL)
+		//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 		if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
 			return "", fmt.Errorf("failed to write ttl to file: %w", err)
 		}

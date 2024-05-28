@@ -5,13 +5,14 @@ package aerospike
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"math"
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -167,7 +168,7 @@ func internalTest(t *testing.T) {
 
 		_, err = db.Create(context.Background(), tx)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, errors.ErrUtxoAlreadyExists)
+		assert.ErrorIs(t, err, utxo.NewErrTxmetaAlreadyExists(tx.TxIDChainHash()))
 
 		err = db.SetMined(context.Background(), tx.TxIDChainHash(), blockID)
 		require.NoError(t, err)
@@ -310,14 +311,14 @@ func internalTest(t *testing.T) {
 
 		txMeta, err = db.Create(context.Background(), tx)
 		assert.Nil(t, txMeta)
-		require.ErrorIs(t, err, errors.ErrUtxoAlreadyExists)
+		require.ErrorIs(t, err, utxo.NewErrTxmetaAlreadyExists(tx.TxIDChainHash()))
 
 		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		txMeta, err = db.Create(context.Background(), tx)
 		assert.Nil(t, txMeta)
-		require.ErrorIs(t, err, errors.ErrUtxoAlreadyExists)
+		require.ErrorIs(t, err, utxo.NewErrTxmetaAlreadyExists(tx.TxIDChainHash()))
 	})
 
 	t.Run("aerospike spend", func(t *testing.T) {
@@ -339,7 +340,7 @@ func internalTest(t *testing.T) {
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends2)
-		require.ErrorIs(t, err, errors.ErrUtxoSpent)
+		require.ErrorIs(t, err, errors.NewUtxoSpentErr(*tx.TxIDChainHash(), *utxo.ErrTypeSpent.SpendingTxID, time.Now(), err))
 
 		// get the doc to check expiry etc.
 		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -381,7 +382,7 @@ func internalTest(t *testing.T) {
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends2)
-		require.ErrorIs(t, err, errors.ErrUtxoSpent)
+		require.ErrorIs(t, err, utxo.ErrTypeSpent)
 
 		// get the doc to check expiry etc.
 		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -464,7 +465,7 @@ func internalTest(t *testing.T) {
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends3)
 		require.Error(t, err)
-		require.ErrorIs(t, err, errors.ErrUtxoSpent)
+		require.ErrorIs(t, err, utxo.ErrTypeSpent)
 
 		// get the doc to check expiry etc.
 		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -489,7 +490,7 @@ func internalTest(t *testing.T) {
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends3)
 		require.Error(t, err)
-		require.ErrorIs(t, err, errors.ErrUtxoSpent)
+		require.ErrorIs(t, err, utxo.ErrTypeSpent)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
 		require.NoError(t, err)
@@ -562,7 +563,7 @@ func internalTest(t *testing.T) {
 			SpendingTxID: hash,
 		}}
 		err = db.Spend(context.Background(), spends)
-		require.ErrorIs(t, err, errors.ErrUtxoLocked)
+		require.ErrorIs(t, err, utxo.ErrTypeLockTime)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
@@ -608,7 +609,7 @@ func internalTest(t *testing.T) {
 			SpendingTxID: hash,
 		}}
 		err = db.Spend(context.Background(), spends)
-		require.ErrorIs(t, err, errors.ErrUtxoLocked)
+		require.ErrorIs(t, err, utxo.ErrTypeLockTime)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)

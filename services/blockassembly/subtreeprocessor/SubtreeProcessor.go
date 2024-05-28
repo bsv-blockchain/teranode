@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -306,7 +307,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 	for _, block := range moveDownBlocks {
 		if err := stp.utxoStore.Delete(context.Background(), block.CoinbaseTx.TxIDChainHash()); err != nil {
 			// no need to error out if the key doesn't exist anyway
-			if !errors.Is(err, errors.ErrUtxoNotFound) {
+			if !errors.Is(err, utxo.NewErrTxmetaNotFound(block.CoinbaseTx.TxIDChainHash())) {
 				responseCh <- ResetResponse{
 					MovedDownBlocks: movedDownBlocks,
 					MovedUpBlocks:   movedUpBlocks,
@@ -866,9 +867,17 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return nil
 	}
 
+	utxos, err := utxo.GetUtxoHashes(block.CoinbaseTx)
+	if err != nil {
+		return fmt.Errorf("[SubtreeProcessor][coinbase:%s]error extracting coinbase utxos: %v", block.CoinbaseTx.TxIDChainHash(), err)
+	}
+	for _, utxo := range utxos {
+		stp.logger.Debugf("[SubtreeProcessor][coinbase:%s] store utxo: %s", block.CoinbaseTx.TxIDChainHash(), utxo.String())
+	}
+
 	blockHeight, err := stp.utxoStore.GetBlockHeight()
 	if err != nil {
-		return fmt.Errorf("error extracting coinbase height via utxo store: %v", err)
+		return fmt.Errorf("[SubtreeProcessor][coinbase:%s]error extracting coinbase height via utxo store: %v", block.CoinbaseTx.TxIDChainHash(), err)
 	}
 
 	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {

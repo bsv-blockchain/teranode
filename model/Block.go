@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"io"
 	"runtime"
 	"sort"
@@ -14,12 +13,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/retry"
@@ -349,7 +350,7 @@ func (b *Block) String() string {
 	return fmt.Sprintf("Block %s (height: %d, txCount: %d, size: %d", b.Hash().String(), b.Height, b.TransactionCount, b.SizeInBytes)
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxoStore.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
 	startTime := time.Now()
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:Valid")
 	defer func() {
@@ -566,7 +567,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 	return nil
 }
 
-func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore utxoStore.Store, subtreeStore blob.Store,
+func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, subtreeStore blob.Store,
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) error {
 
 	if b.txMap == nil {
@@ -640,7 +641,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())))
 
 						if err != nil {
-							if errors.Is(err, errors.ErrUtxoNotFound) {
+							if errors.Is(err, utxo.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
 								return errors.New(errors.ERR_NOT_FOUND, "[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
 							}
 							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
@@ -680,7 +681,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						// option for now.
 						txMeta, err := txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
 						if err != nil {
-							if errors.Is(err, errors.ErrUtxoNotFound) {
+							if errors.Is(err, utxo.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
 								continue
 							}
 							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
@@ -741,13 +742,13 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	return nil
 }
 
-func (b *Block) checkParentExistsOnChain(gCtx context.Context, txMetaStore utxoStore.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) error {
+func (b *Block) checkParentExistsOnChain(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) error {
 	// check whether the parent transaction has already been mined in a block on our chain
 	// we need to get back to the txMetaStore for this, to make sure we have the latest data
 	// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 	// for the first situation we don't start validating the current block until the parent is validated.
 	parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
-	if err != nil && !errors.Is(err, errors.ErrUtxoNotFound) {
+	if err != nil && !errors.Is(err, utxo.NewErrTxmetaNotFound(&parentTxStruct.parentTxHash)) {
 		return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
 	}
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block

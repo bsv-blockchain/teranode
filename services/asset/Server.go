@@ -3,6 +3,7 @@ package asset
 import (
 	"context"
 	"fmt"
+
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -32,6 +33,7 @@ type Server struct {
 	utxoStore        utxo.Store
 	txStore          blob.Store
 	subtreeStore     blob.Store
+	blockStore       blob.Store
 	grpcAddr         string
 	httpAddr         string
 	grpcServer       *grpc_impl.GRPC
@@ -44,12 +46,13 @@ type Server struct {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockStore blob.Store) *Server {
 	s := &Server{
 		logger:         logger,
 		utxoStore:      utxoStore,
 		txStore:        txStore,
 		subtreeStore:   subtreeStore,
+		blockStore:     blockStore,
 		peers:          make(map[string]peerWithContext),
 		notificationCh: make(chan *asset_api.Notification, 100),
 	}
@@ -75,7 +78,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("error creating blockchain client: %s", err)
 	}
 
-	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, blockchainClient, v.subtreeStore)
+	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, blockchainClient, v.subtreeStore, v.blockStore)
 	if err != nil {
 		return fmt.Errorf("error creating repository: %s", err)
 	}

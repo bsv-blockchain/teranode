@@ -62,6 +62,13 @@
       "slug": "full-week",
       "path": "full-week.md",
       "timestamp": "1714145765010"
+    },
+    {
+      "title": "Successful test, next steps",
+      "summary": "Teranode 2-week test completes successfully, what are the next steps?",
+      "slug": "next-steps",
+      "path": "next-steps.md",
+      "timestamp": "1715606141505"
     }
   ]
 }

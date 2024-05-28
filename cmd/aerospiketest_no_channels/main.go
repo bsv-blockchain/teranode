@@ -4,12 +4,12 @@ import (
 	"context"
 	"flag"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest_no_channels/direct"
@@ -57,9 +57,17 @@ func main() {
 		asl.Logger.SetLevel(asl.DEBUG)
 	}
 
+	server := &http.Server{
+		Addr:         "localhost:6060",
+		Handler:      nil,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
 	go func() {
 		logger.Infof("Starting pprof on http://localhost:6060/debug/pprof")
-		logger.Infof("%v", http.ListenAndServe("localhost:6060", nil))
+		logger.Infof("%v", server.ListenAndServe())
 	}()
 
 	var strategy Strategy

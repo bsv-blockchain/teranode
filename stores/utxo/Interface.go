@@ -2,12 +2,23 @@ package utxo
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
+
+// Error functions
+func NewErrTxmetaNotFound(key *chainhash.Hash) error {
+	return errors.New(errors.ERR_NOT_FOUND, fmt.Sprintf("txmeta key %q", key.String()))
+}
+
+func NewErrTxmetaAlreadyExists(key *chainhash.Hash) error {
+	return errors.New(errors.ERR_TXMETA_ALREADY_EXISTS, fmt.Sprintf("txmeta key %q", key.String()))
+}
 
 // Spend is a struct that holds the txid and vout of the output being spent, the hash of the tx
 // that being spent and the spending txid.

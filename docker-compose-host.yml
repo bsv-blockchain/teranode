@@ -1,0 +1,191 @@
+version: '3.8'
+# Define a common base configuration for ubsv nodes
+x-ubsv-base:
+  &ubsv-base
+  image: ubsv:latest
+  network_mode: "host"
+  depends_on:
+    - postgres
+    - kafka-shared
+  environment:
+    logLevel: "DEBUG"
+  volumes:
+    - ./data:/app/data
+
+services:
+
+  ubsv-builder:
+    image: ubsv:latest
+    network_mode: "host"
+    build:
+      context: .
+      dockerfile: local.Dockerfile
+      args:
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-2db1b0e
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-2db1b0e
+    entrypoint: ["pwd"]
+
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    network_mode: "host"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_DB: postgres
+    volumes:
+      - ./deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
+      - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -p 15432 -U postgres" ]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+
+  kafka-shared:
+    container_name: kafka-shared
+    image: vectorized/redpanda:latest
+    network_mode: "host"
+    mem_limit: 256m
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:19092
+      - --advertise-kafka-addr PLAINTEXT://localhost:19092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:19093
+
+  kafka-console-shared:
+    container_name: kafka-console-shared
+    image: docker.redpanda.com/redpandadata/console:latest
+    network_mode: "host"
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["localhost:19092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://localhost:8081"]
+    depends_on:
+      - kafka-shared
+
+  ubsv-1:
+    <<: *ubsv-base
+    container_name: ubsv-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-shared:
+        condition: service_started
+    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    environment:
+      SETTINGS_CONTEXT: "docker.host.ubsv1"
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/ubsv1/txstore:/app/data/txstore
+      - ./data/ubsv1/subtreestore:/app/data/subtreestore
+      - ./data/ubsv1/blockstore:/app/data/blockstore
+
+  ubsv-2:
+    <<: *ubsv-base
+    container_name: ubsv-2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-shared:
+        condition: service_started
+    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    environment:
+      SETTINGS_CONTEXT: "docker.host.ubsv2"
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/ubsv2/txstore:/app/data/txstore
+      - ./data/ubsv2/subtreestore:/app/data/subtreestore
+      - ./data/ubsv2/blockstore:/app/data/blockstore
+
+  ubsv-3:
+    <<: *ubsv-base
+    container_name: ubsv-3
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-shared:
+        condition: service_started
+    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    environment:
+      SETTINGS_CONTEXT: "docker.host.ubsv3"
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/ubsv3/txstore:/app/data/txstore
+      - ./data/ubsv3/subtreestore:/app/data/subtreestore
+      - ./data/ubsv3/blockstore:/app/data/blockstore
+
+  tx-blaster-1:
+    <<: *ubsv-base
+    container_name: tx-blaster-1
+    depends_on:
+      - ubsv-1
+      - ubsv-2
+      - ubsv-3
+    environment:
+      SETTINGS_CONTEXT: "docker.host.ubsv1"
+      BLASTER_ARGS: "-workers=2"
+    # pass arguments to the command
+    command: ["/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=10", "--quic=false"]
+    volumes:
+      - ./data/txblaster1:/app/data
+      # - ./data/txblaster.log:/app/data/txblaster.log
+
+  prometheus-1:
+    container_name: prometheus-1
+    image: prom/prometheus:v2.44.0
+    network_mode: "host"
+    mem_limit: 64m
+    command:
+      - '--web.listen-address=:19090'
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    volumes:
+      - ./deploy/dev/prometheus/prometheus-host-1.yml:/etc/prometheus/prometheus.yml
+
+  prometheus-2:
+    container_name: prometheus-2
+    image: prom/prometheus:v2.44.0
+    network_mode: "host"
+    mem_limit: 64m
+    command:
+      - '--web.listen-address=:29090'
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    volumes:
+      - ./deploy/dev/prometheus/prometheus-host-2.yml:/etc/prometheus/prometheus.yml
+
+  prometheus-3:
+    container_name: prometheus-3
+    image: prom/prometheus:v2.44.0
+    network_mode: "host"
+    mem_limit: 64m
+    command:
+      - '--web.listen-address=:39090'
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    volumes:
+      - ./deploy/dev/prometheus/prometheus-host-3.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    network_mode: "host"
+    volumes:
+      - ./deploy/dev/grafana/datasources/main-host.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
+    depends_on:
+      - prometheus-1
+      - prometheus-2
+      - prometheus-3

@@ -6,11 +6,12 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"google.golang.org/grpc/keepalive"
 	"io"
 	"os"
 	"sync"
 	"time"
+
+	"google.golang.org/grpc/keepalive"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
@@ -324,9 +325,11 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
 				ClientAuth:   tls.NoClientCert,
+				MinVersion:   tls.VersionTLS12,
 			}), nil
 		} else {
 			return credentials.NewTLS(&tls.Config{
+				//nolint:gosec // G402: TLS InsecureSkipVerify set true. (gosec)
 				InsecureSkipVerify: true,
 			}), nil
 		}
@@ -339,7 +342,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 				return nil, fmt.Errorf("failed to read key pair: %w", err)
 			}
 			return credentials.NewTLS(&tls.Config{
-				Certificates:       []tls.Certificate{cert},
+				Certificates: []tls.Certificate{cert},
+				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
 				InsecureSkipVerify: true,
 				ClientAuth:         tls.RequireAnyClientCert,
 			}), nil
@@ -358,7 +362,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 				return nil, fmt.Errorf("failed to read key pair: %w", err)
 			}
 			return credentials.NewTLS(&tls.Config{
-				Certificates:       []tls.Certificate{cert},
+				Certificates: []tls.Certificate{cert},
+				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
 				InsecureSkipVerify: true,
 				RootCAs:            caCertPool,
 			}), nil
@@ -381,7 +386,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 				return nil, fmt.Errorf("failed to read key pair: %w", err)
 			}
 			return credentials.NewTLS(&tls.Config{
-				Certificates:       []tls.Certificate{cert},
+				Certificates: []tls.Certificate{cert},
+				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
 				InsecureSkipVerify: true,
 				ClientAuth:         tls.RequireAndVerifyClientCert,
 				ClientCAs:          caCertPool,
@@ -401,7 +407,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 				return nil, fmt.Errorf("failed to read key pair: %w", err)
 			}
 			return credentials.NewTLS(&tls.Config{
-				Certificates:       []tls.Certificate{cert},
+				Certificates: []tls.Certificate{cert},
+				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
 				InsecureSkipVerify: true,
 				RootCAs:            caCertPool,
 			}), nil

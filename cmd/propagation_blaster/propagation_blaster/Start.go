@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	_ "net/http/pprof"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -73,9 +72,17 @@ func Init() {
 		log.Printf("Prometheus metrics available at http://%s%s", httpAddr, prometheusEndpoint)
 	}
 
+	server := &http.Server{
+		Addr:         httpAddr,
+		Handler:      nil,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
 	log.Printf("Profiler available at http://%s/debug/pprof", httpAddr)
 	go func() {
-		log.Printf("%v", http.ListenAndServe(httpAddr, nil))
+		log.Printf("%v", server.ListenAndServe())
 
 	}()
 

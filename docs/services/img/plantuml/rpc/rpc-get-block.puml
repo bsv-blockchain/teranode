@@ -1,0 +1,24 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Blockchain Client" as Blockchain
+
+Client -> RPC : Request: GetBlock(hash)
+activate RPC
+
+RPC -> RPC : handleGetBlock(hash)
+activate RPC
+
+alt valid hash
+    RPC -> Blockchain : GetBlock(hash)
+    activate Blockchain
+    Blockchain --> RPC : Block data
+    deactivate Blockchain
+
+    RPC -> Client : Response with Block Data
+else invalid or not found
+    RPC -> Client : Error: Block not found
+end
+
+deactivate RPC
+@enduml

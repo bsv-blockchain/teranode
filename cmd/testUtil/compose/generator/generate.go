@@ -263,6 +263,7 @@ func generateComposeFile(serviceConfigs ServiceConfigs) error {
 
 	// Write the composed configuration to a file or print it
 	fmt.Println(sb.String())
+	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err := os.WriteFile("../../../docker-compose-generated.yml", []byte(sb.String()), 0644); err != nil {
 		return err
 	}

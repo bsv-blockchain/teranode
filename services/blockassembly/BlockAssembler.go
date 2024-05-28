@@ -5,16 +5,19 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -196,12 +199,21 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 						err: fmt.Errorf("waiting for reset to complete"),
 					})
 				} else {
-					miningCandidate, subtrees, err := b.getMiningCandidate()
-					utils.SafeSend(responseCh, &miningCandidateResponse{
-						miningCandidate: miningCandidate,
-						subtrees:        subtrees,
-						err:             err,
-					})
+					// check if current state is mining
+					state, err := b.blockchainClient.GetFSMCurrentState(ctx)
+					if err != nil {
+						// TODO: should we add retry? or do something else?
+						b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to get current state [%w]", err)
+					}
+
+					if state != nil && *state == blockchain_api.FSMStateType_MINING {
+						miningCandidate, subtrees, err := b.getMiningCandidate()
+						utils.SafeSend(responseCh, &miningCandidateResponse{
+							miningCandidate: miningCandidate,
+							subtrees:        subtrees,
+							err:             err,
+						})
+					}
 				}
 				// stat.AddTime(start)
 				b.currentRunningState.Store("running")
@@ -210,7 +222,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.currentRunningState.Store("blockchainSubscription")
 				switch notification.Type {
 				case model.NotificationType_Block:
-					// _, _, ctx := util.NewStatFromContext(context, "blockchainSubscriptionCh", channelStats)
 					bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
 					if err != nil {
 						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
@@ -634,6 +645,7 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
 
 	thresholdSeconds := 2 * uint32(targetTimePerBlock)
+	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	randomOffset := rand.Int31n(21) - 10
 
 	timeDifference := uint32(now.Unix()) - b.bestBlockHeader.Load().Timestamp

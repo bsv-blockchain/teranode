@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
 	_ "net/http/pprof"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 
 	utxo "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
+
 	//"github.com/bitcoin-sv/ubsv/stores/utxomap/memory"
 	//"github.com/bitcoin-sv/ubsv/stores/utxomap/nullstore"
 	//"github.com/bitcoin-sv/ubsv/stores/utxomap/redis"

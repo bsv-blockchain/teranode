@@ -24,8 +24,8 @@ jobs:
     name: Build Docker image
     runs-on: ${{ inputs.arch == 'arm64' && fromJSON('[ "self-hosted", "Linux", "ARM64" ]') || fromJSON('[ "self-hosted", "Linux", "X64" ]') }}
 
-    strategy: # This will cause the workflow to terminate if any job fails
-      fail-fast: true
+    # strategy: # This will cause the workflow to terminate if any job fails
+    #   fail-fast: true
     steps:
       - uses: actions/checkout@v4
 

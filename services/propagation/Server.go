@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -42,6 +42,9 @@ var (
 	// ipv6 multicast constants
 	maxDatagramSize = 512 //100 * 1024 * 1024
 	ipv6Port        = 9999
+
+	ErrBadRequest = errors.New("PROPAGATION_BAD_REQUEST")
+	ErrInternal   = errors.New("PROPAGATION_INTERNAL")
 )
 
 // PropagationServer type carries the logger within it
@@ -297,7 +300,7 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 		}
 
 		if blockHeight <= 0 {
-			errs = append(errs, errors.New(errors.ERR_PROCESSING, "blockHeight <= 0"))
+			errs = append(errs, errors.New("blockHeight <= 0"))
 			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d\n", blockHeight))
 		} else {
 			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
@@ -305,7 +308,7 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 	}
 
 	if len(errs) > 0 {
-		return -1, sb.String(), errors.New(errors.ERR_PROCESSING, "Health errors occurred")
+		return -1, sb.String(), errors.New("Health errors occurred")
 	}
 
 	return 0, sb.String(), nil
@@ -388,11 +391,11 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
-		return nil, errors.New(errors.ERR_TX_INVALID, "[ProcessTransaction][%s] received coinbase transaction: %w", btTx.TxID())
+		return nil, fmt.Errorf("[ProcessTransaction][%s] received coinbase transaction: %w", btTx.TxID(), ErrBadRequest)
 	}
 
 	if !btTx.IsExtended() {
-		return nil, errors.New(errors.ERR_TX_INVALID, "[ProcessTransaction][%s] transaction is not extended: %w", btTx.TxID())
+		return nil, fmt.Errorf("[ProcessTransaction][%s] transaction is not extended: %w", btTx.TxID(), ErrBadRequest)
 	}
 
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
@@ -401,11 +404,17 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 
 	// we should store all transactions, if this fails we should not validate the transaction
 	if err = ps.storeTransaction(setCtx, btTx); err != nil {
-		return nil, errors.New(errors.ERR_STORAGE_ERROR, "[ProcessTransaction][%s] failed to save transaction: %v: %w", btTx.TxIDChainHash(), err)
+		return nil, fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v: %w", btTx.TxIDChainHash(), err, ErrInternal)
 	}
 
 	// All transactions entering Teranode can be assumed to be after Genesis activation height
 	if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
+		if errors.Is(err, validator.ErrInternal) {
+			err = fmt.Errorf("%v: %w", err, ErrInternal)
+		} else if errors.Is(err, validator.ErrBadRequest) {
+			err = fmt.Errorf("%v: %w", err, ErrBadRequest)
+		}
+
 		prometheusInvalidTransactions.Inc()
 		return nil, err
 	}
@@ -470,7 +479,7 @@ func (ps *PropagationServer) storeTransaction(setCtx context.Context, btTx *bt.T
 
 // Setup a bare-bones TLS config for the server
 func (ps *PropagationServer) generateTLSConfig() *tls.Config {
-	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		ps.logger.Errorf("error generating rsa key: %s", err.Error())
 		return nil
@@ -500,5 +509,6 @@ func (ps *PropagationServer) generateTLSConfig() *tls.Config {
 	return &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		NextProtos:   []string{"txblaster2"},
+		MinVersion:   tls.VersionTLS12,
 	}
 }

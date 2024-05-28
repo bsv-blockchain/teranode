@@ -7,7 +7,7 @@ x-aerospike-base: &aerospike-base
     - ubsv-network
   command: --config-file /etc/aerospike.conf
   volumes:
-    - ./deploy/dev/aerospike.conf:/etc/aerospike.conf
+    - ./deploy/dev/aerospike/aerospike.conf:/etc/aerospike.conf
 
 services:
 

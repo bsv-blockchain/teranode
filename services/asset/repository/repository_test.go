@@ -31,6 +31,7 @@ func getMemoryStore(t *testing.T) blob.Store {
 
 func TestTransaction(t *testing.T) {
 	var subtreeStore blob.Store
+	var blockStore blob.Store
 
 	txStore := getMemoryStore(t)
 	utxoStore := memory.New(ulogger.TestLogger{})
@@ -50,7 +51,7 @@ func TestTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, blockchainClient, subtreeStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	require.NoError(t, err)
 
 	// Get the transaction from the repository
@@ -137,6 +138,7 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 		require.NoError(t, err)
 	}
 
+	blockStore := getMemoryStore(t)
 	subtreeStore := getMemoryStore(t)
 	txStore := getMemoryStore(t)
 	utxoStore := memory.New(ulogger.TestLogger{})
@@ -156,7 +158,7 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, blockchainClient, subtreeStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	require.NoError(t, err)
 
 	return txns, key, repo

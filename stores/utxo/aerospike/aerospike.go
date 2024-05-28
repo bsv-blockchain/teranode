@@ -243,7 +243,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			var aErr *aerospike.AerospikeError
 			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
 				s.logger.Warnf("[STORE_BATCH][%s:%d] txMeta already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
-				batch[idx].done <- errors.New(errors.ERR_UTXO_ALREADY_EXISTS, "utxo already exists", err).WithData("hash", hash)
+				batch[idx].done <- utxo.NewErrTxmetaAlreadyExists(hash)
 				continue
 			}
 
@@ -339,7 +339,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		spend := batch[idx].spend
 		err = batchRecord.BatchRec().Err
 		if err != nil {
-			batch[idx].done <- errors.New(errors.ERR_UTXO_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %w", spend.Hash.String(), s.blockHeight.Load(), batchId, err)
+			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %w", spend.Hash.String(), s.blockHeight.Load(), batchId, err)
 		} else {
 			response := batchRecord.BatchRec().Record
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
@@ -356,15 +356,13 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.Hash.String(), hashErr)
 						}
 						// TODO we need to be able to send the spending TX ID in the error down the line
-						batch[idx].done <- errors.New(errors.ERR_UTXO_SPENT, "%s:%d - %s - %s", spend.TxID, spend.Vout, spend.Hash, spendingTxID)
+						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxID)
 					case "LOCKED":
 						locktime, hashErr := strconv.ParseUint(responseMsgParts[1], 10, 32)
 						if hashErr != nil {
 							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse locktime: %w", spend.Hash.String(), hashErr)
 						}
-						batch[idx].done <- errors.New(errors.ERR_UTXO_LOCK_TIME, "%s:%d - %s - %d", spend.TxID, spend.Vout, spend.Hash, locktime).
-							WithData("locktime", uint32(locktime)).
-							WithData("blockHeight", s.blockHeight.Load())
+						batch[idx].done <- utxo.NewErrLockTime(uint32(locktime), s.blockHeight.Load(), err)
 					case "ERROR":
 						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.Hash.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
 					default:
@@ -631,7 +629,7 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*utxo.UnresolvedMet
 			items[idx].Data = nil
 			if !model.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
 				if errors.Is(err, aerospike.ErrKeyNotFound) {
-					items[idx].Err = errors.New(errors.ERR_UTXO_NOT_FOUND, "could not find utxo", err).WithData("hash", items[idx].Hash)
+					items[idx].Err = utxo.NewErrTxmetaNotFound(&items[idx].Hash)
 				} else {
 					items[idx].Err = err
 				}
@@ -817,7 +815,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 			if unspendErr != nil {
 				err = errors.Join(err, unspendErr)
 			}
-			return errors.New(errors.ERR_UTXO_ERROR, "error in aerospike spend record", err)
+			return errors.New(errors.ERR_ERROR, "error in aerospike spend record", err)
 		}
 
 		prometheusUtxoMapSpend.Add(float64(len(spends)))
@@ -841,7 +839,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 
 			err = s.spendUtxo(policy, spend)
 			if err != nil {
-				if errors.Is(err, errors.ErrUtxoSpent) {
+				if errors.Is(err, utxo.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spend.SpendingTxID)) {
 					return err
 				}
 
@@ -850,7 +848,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 					s.logger.Errorf("ERROR in aerospike reset: %v\n", resetErr)
 				}
 
-				return errors.New(errors.ERR_UTXO_ERROR, "error in aerospike spend record", err)
+				return errors.New(errors.ERR_ERROR, "error in aerospike spend record", err)
 			}
 		}
 	}
@@ -899,7 +897,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 	}...)
 	if err != nil {
 		if errors.Is(err, aerospike.ErrKeyNotFound) {
-			return errors.New(errors.ERR_UTXO_NOT_FOUND, "utxo not found", err)
+			return errors.New(errors.ERR_NOT_FOUND, "utxo not found", err)
 		}
 
 		if errors.Is(err, aerospike.ErrFilteredOut) {
@@ -916,7 +914,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 			if ok {
 				status := utxostore.CalculateUtxoStatus(nil, uint32(locktime), s.blockHeight.Load())
 				if status == utxostore.Status_LOCKED {
-					return errors.New(errors.ERR_UTXO_LOCK_TIME, "utxo %s is locked: %d < %d", spend.Hash.String(), uint32(locktime), s.blockHeight.Load(), err)
+					return utxo.NewErrLockTime(uint32(locktime), s.blockHeight.Load(), err)
 				}
 			}
 
@@ -942,11 +940,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 
 						s.logger.Debugf("utxo %s was spent by %s", spend.TxID.String(), spendingTxHash)
 						// TODO replace this error with the new one
-						return errors.New(errors.ERR_UTXO_SPENT, "utxo %s was spent by %s", spend.TxID.String(), spendingTxHash).
-							WithData("txID", spend.TxID).
-							WithData("vout", spend.Vout).
-							WithData("utxoHash", spend.Hash).
-							WithData("spendingTxID", spendingTxHash)
+						return utxo.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxHash)
 					}
 				}
 			}
@@ -1094,7 +1088,7 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 
 	if errs != nil || nrErrors > 0 {
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
-		return errors.New(errors.ERR_UTXO_ERROR, "aerospike batchRecord errors", errs)
+		return errors.New(errors.ERR_ERROR, "aerospike batchRecord errors", errs)
 	}
 
 	return nil

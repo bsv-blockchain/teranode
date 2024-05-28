@@ -223,6 +223,7 @@ func Start() {
 				var tx []byte
 				var btTx *bt.Tx
 				subtreeFees := uint64(0)
+
 				for nodeIdx, node := range subtree.Nodes {
 					if !model.CoinbasePlaceholderHash.Equal(node.Hash) {
 						logger.Debugf("checking transaction %s", node.Hash)
@@ -239,7 +240,7 @@ func Start() {
 						// check that the transaction exists in the tx store
 						tx, err = txStore.Get(ctx, node.Hash[:])
 						if err != nil {
-							txMeta, err := utxoStore.Get(ctx, &node.Hash)
+							txMeta, err := utxoStore.GetMeta(ctx, &node.Hash)
 							if err != nil {
 								logger.Errorf("failed to get transaction %s from txmeta store: %s", node.Hash, err)
 								continue

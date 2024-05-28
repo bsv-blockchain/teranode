@@ -13,6 +13,8 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/retry"
@@ -23,6 +25,7 @@ import (
 
 type Miner struct {
 	logger                           ulogger.Logger
+	blockchainClient                 blockchain.ClientI
 	blockAssemblyClient              *blockassembly.Client
 	candidateTimer                   *time.Timer
 	waitSeconds                      int
@@ -59,6 +62,7 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
 	maxSubtreeCountVariance, _ := gocore.Config().GetInt("miner_max_subtree_count_variance", 100)
 
+	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - r.Intn(maxSubtreeCountVariance*2)
 
@@ -76,10 +80,15 @@ func (m *Miner) Health(ctx context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (m *Miner) Init(_ context.Context) error {
+func (m *Miner) Init(ctx context.Context) error {
 	m.MineBlocksNImmediatelyChan = make(chan int, 1)
 	m.MineBlocksNImmediatelyCancelChan = make(chan bool, 1)
-	return nil
+	var err error
+	if m.blockchainClient, err = blockchain.NewClient(ctx, m.logger); err != nil {
+		return fmt.Errorf("[Init] failed to create blockchain client [%w]", err)
+	}
+
+	return err
 }
 
 func (m *Miner) Start(ctx context.Context) error {
@@ -88,9 +97,17 @@ func (m *Miner) Start(ctx context.Context) error {
 	if !ok {
 		m.logger.Fatalf("[Miner] No miner_httpListenAddress specified")
 	}
+	server := &http.Server{
+		Addr:         listenAddress,
+		Handler:      nil,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	go func() {
 		http.HandleFunc("/mine", m.handler)
-		err := http.ListenAndServe(listenAddress, nil)
+		err := server.ListenAndServe()
 		if err != nil {
 			m.logger.Fatalf("[Miner] Error starting http server: %v", err)
 		}
@@ -103,6 +120,11 @@ func (m *Miner) Start(ctx context.Context) error {
 	m.waitSeconds, _ = gocore.Config().GetInt("miner_waitSeconds", 30)
 
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
+
+	err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
+	if err != nil {
+		return fmt.Errorf("[Main] failed to send MINE notification [%v]", err)
+	}
 
 	var miningCtx context.Context
 	var cancel context.CancelFunc
@@ -229,6 +251,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	blockHash, _ := chainhash.NewHash(solution.BlockHash)
 
 	if !generateBlocks && !m.difficultyAdjustment { // SAO - Mine the first <initialBlockCount> blocks without delay
+		//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		randWait := r.Intn(waitSeconds)
 
@@ -274,6 +297,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	maxSubtreeCountVariance, _ := gocore.Config().GetInt("miner_max_subtree_count_variance", 100)
 
 	// after mining a block, set it again to a new value -> vary the max subtree count by 10% to avoid all miners mining at the same time
+	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	m.maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - r.Intn(maxSubtreeCountVariance*2)
 
@@ -400,6 +424,7 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 				currentBackoff = maxBackoff
 			}
 			// Add some jitter to prevent synchronized retries
+			//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 			currentBackoff += time.Duration(rand.Int63n(int64(currentBackoff / 10)))
 
 			retryCount++

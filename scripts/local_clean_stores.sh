@@ -23,3 +23,7 @@ for topic in $TOPICS; do
   /opt/bitnami/kafka/bin/kafka-topics.sh --delete --topic $topic --bootstrap-server localhost:9092
 done
 '
+# mkdir -p data/aerospike
+# touch data/aerospike/aerospike-1.dat
+# touch data/aerospike/aerospike-2.dat
+# touch data/aerospike/aerospike-3.dat

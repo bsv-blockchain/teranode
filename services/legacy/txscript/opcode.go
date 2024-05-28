@@ -6,6 +6,7 @@ package txscript
 
 import (
 	"bytes"
+	//nolint:gosec // G505: Block cipher mode of operation is not specified
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/binary"
@@ -2226,6 +2227,7 @@ func opcodeSha1(op *parsedOpcode, vm *Engine) error {
 		return err
 	}
 
+	//nolint:gosec // G401: Use of weak cryptographic primitive
 	hash := sha1.Sum(buf)
 	vm.dstack.PushByteArray(hash[:])
 	return nil

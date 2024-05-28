@@ -274,12 +274,20 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 			return true
 		},
 	})
+
 	http.Handle("/connection/websocket", authMiddleware(websocketHandler))
 	http.Handle("/subscribe", handleSubscribe(c.centrifugeNode))
 	http.Handle("/unsubscribe", handleUnsubscribe(c.centrifugeNode))
 	http.Handle("/client/", http.FileServer(http.Dir("./client")))
 
-	srv := &http.Server{Addr: addr}
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           nil,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
 
 	go func() {
 		<-ctx.Done()

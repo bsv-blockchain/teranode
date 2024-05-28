@@ -32,11 +32,9 @@ The core functionality of the P2P Legacy Service revolves around managing and tr
 
 ### 1.2. Data Transformation for Compatibility
 
-The P2P Legacy Service performs two major data transformation processes, designed to ensure full compatibility between the differing data structures of BSV and Teranode:
+The P2P Legacy Service performs a major data transformation processes, designed to ensure full compatibility between the differing data structures of BSV and Teranode.
 
-1. **Decorate Translations for Transaction Formats:** The service adeptly translates from / to the traditional TX format used in BSV and the Extended TX format that is prevalent in Teranode. This decoration process ensures that transactions can seamlessly transition between the two systems without loss of information or functionality.
-
-2. **Encapsulation and Conversion of Blocks and Transactions:** Legacy blocks and their transactions are encapsulated into subtrees, aligning with the Teranode model's approach to data management. In a similar way, the service can transparently convert blocks, subtrees, and transactions from the Teranode format back into the conventional block and transaction format used by BSV. This bidirectional conversion capability allows to maintain operational continuity across the network.
+Legacy blocks and their transactions are encapsulated into subtrees, aligning with the Teranode model's approach to data management. In a similar way, the service can transparently convert blocks, subtrees, and transactions from the Teranode format back into the conventional block and transaction format used by BSV. This bidirectional conversion capability allows to maintain operational continuity across the network.
 
 ### 1.3. Phased Migration Towards Teranode
 
@@ -48,13 +46,13 @@ The P2P Legacy Service allows for BSV and Teranode BSV nodes to operate side by 
 The P2P Legacy Service acts as a BSV node, connecting to the BSV mainnet and receiving txs and blocks. It then processes these txs and blocks, converting them into the Teranode format and propagating them to the Teranode network.
 The service also receives blocks from the Teranode network and converts them back into the BSV format for dissemination to the BSV mainnet.
 
-![P2P_Legacy_Container_Diagram.png](img%2FP2P_Legacy_Container_Diagram.png)
+![P2P_Legacy_Container_Diagram.png](img/P2P_Legacy_Container_Diagram.png)
 
 As it can be seen in the diagram above, the service maintains its own block database (in historical format).
 
 When the service receives a block message from the network, the service will propagate it to the Teranode Block Validator Service for validation and inclusion in the Teranode blockchain.
 
-![P2P_Legacy_Component_Diagram.png](img%2FP2P_Legacy_Component_Diagram.png)
+![P2P_Legacy_Component_Diagram.png](img/P2P_Legacy_Component_Diagram.png)
 
 Both the Block Validation and the Subtree validation will query the P2P Legacy Service (using the same endpoints the Asset Server offers) for the block and subtree data, respectively. The P2P Legacy Service will respond with the requested data in the same format the Asset Server uses. The following endpoints are offered by the P2P Legacy Service:
 
@@ -83,7 +81,7 @@ When we announce a teranode block, the format is:
 
 The overall cycle is:
 
-![legacy_p2p_bsv_to_teranode.svg](img%2Fplantuml%2Flegacyp2p%2Flegacy_p2p_bsv_to_teranode.svg)
+![legacy_p2p_bsv_to_teranode.svg](img/plantuml/legacyp2p/legacy_p2p_bsv_to_teranode.svg)
 
 1) An inventory (inv) notification is received, indicating that a new block or transaction is available from a BSV node. The P2P Legacy Service processes this notification and requests the block or transaction data from the BSV node.
 
@@ -121,7 +119,7 @@ Inv messages are critical in the data dissemination process within the Bitcoin n
 
 In the context of the P2P Legacy Service, the reception of inv messages is a crucial step in the communication process between BSV nodes and Teranode nodes. These messages serve as the initial trigger for data exchange, allowing the service to identify new blocks or transactions and initiate the necessary actions to retrieve and process this data.
 
-![legacy_p2p_bsv_to_teranode_inv_message.svg](img%2Fplantuml%2Flegacyp2p%2Flegacy_p2p_bsv_to_teranode_inv_message.svg)
+![legacy_p2p_bsv_to_teranode_inv_message.svg](img/plantuml/legacyp2p/legacy_p2p_bsv_to_teranode_inv_message.svg)
 
 
 1. **Connection Establishment:** The P2P Legacy Overlay Service establishes a connection with the MainNet, setting the stage for data exchange.
@@ -141,7 +139,7 @@ Once a new block is received by the Legacy P2P Service, it undergoes a series of
 
 The sequence of steps involved in processing a new block is as follows:
 
-![legacy_p2p_bsv_to_teranode_process_new_blocks.svg](img%2Fplantuml%2Flegacyp2p%2Flegacy_p2p_bsv_to_teranode_process_new_blocks.svg)
+![legacy_p2p_bsv_to_teranode_process_new_blocks.svg](img/plantuml/legacyp2p/legacy_p2p_bsv_to_teranode_process_new_blocks.svg)
 
 Process flow:
 

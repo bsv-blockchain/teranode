@@ -17,7 +17,7 @@ Nodes receive a reward each time they add a new block to the blockchain. The rew
 
 The Block Subsidy also acts to brings satoshis into circulation. The first Block Subsidies for the first 210,000 blocks added to the Bitcoin blockchain consisted of 5,000,000,000 or 50BSV per block.
 
-Every 210,000, the value of the block subsidy is halved. As of March 2023, the current value of a Block Subsidy is 625,000,000 satoshis or 6.25BSV.
+Every 210,000, the value of the block subsidy is halved. The last halving took place in April 2024 at block height 840'000. As of April 2024, the  value of a Block Subsidy is 312,500,000 satoshis or 3.125BSV.
 
 ### Proof-of-Work Target Adjustment Rule:
 
@@ -25,15 +25,15 @@ The Target value to find a Proof-of-Work is adjusted to maintain a block discove
 
 As of 2017, the Target value is adjusted every block. However, in the original release of Bitcoin, the Target value was adjusted every 14 days.
 
-The Teranode Node system will maintain the current Target Adjustment schedule of every block, but the system may be updated in the future to return to the original Target Adjustment schedule.
+The Teranode Node system will maintain the current Target Adjustment schedule of every block, but the system may be updated in the future to return to the original Target Adjustment schedule (as part of Protocol restoration).
 
 ### Genesis Block Rule:
 
-All new blocks must be added to the unbroken chain of proof-of-work leading back to the genesis block or the initial block in the chain.
+All new blocks must be added to the unbroken chain of Proof-of-Work leading back to the Genesis block or the initial block in the chain.
 
 Since blocks are connected via new blocks including the hash of its previous block, and Merkle trees are used to keep track of transactions within a block, this rule can be satisfied using the chain of block headers. Each block header is only 80 bytes.
 
-Given the chain of block headers can be used to adhere to the Genesis Block rules, the Initial Block Download or IBD where a new node joining the network downloads all block data including transaction data all the way back to the genesis block used by current node implementations is not needed and will not be included in the Teranode Node system.
+Given the chain of block headers can be used to adhere to the Genesis Block rules, the Initial Block Download or IBD where a new node joining the network downloads all block data including transaction data all the way back to the Genesis block used by current node implementations is not needed and will not be included in the Teranode Node system.
 
 ### Coinbase Maturity Rule:
 
@@ -41,9 +41,9 @@ Nodes cannot spend the output of a Coinbase Transaction unless 99 blocks have be
 
 ### Maximum Transaction Size Rule:
 
-Bitcoin Nodes collectively set a practical limit for the size of transactions they’re willing to timestamp into a block.
+Bitcoin Nodes collectively set a practical limit for the size of transactions they are willing to timestamp into a block.
 
-The Teranode Node project will ensure this limit is entirely economic and by allowing unbounded scaling.
+The Teranode Node project will ensure this limit is entirely economic by allowing unbounded scaling.
 
 ### nLockTime and nSequence Rules:
 

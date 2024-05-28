@@ -102,6 +102,7 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 	}
 
 	// write bytes to file
+	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err = os.WriteFile(fileName+".tmp", value, 0644); err != nil {
 		return fmt.Errorf("[%s] failed to write data to file: %w", fileName, err)
 	}

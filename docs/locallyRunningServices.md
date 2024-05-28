@@ -63,6 +63,8 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 | Coinbase           | `-Coinbase=1`          | Activate the Coinbase component.      |
 | BlockPersister     | `-BlockPersister=1`    | Start the Block Persister process.    |
 | P2P                | `-P2P=1`               | Begin the P2P communication process.  |
+| Legacy             | `-Legacy=1`            | Begin the Legacy Bridge process.      |
+| RPC                | `-rpc=1`               | Begin the RPC server.                 |
 | Help               | `-help=1`              | Display the help information.         |
 
 
