@@ -12,9 +12,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
-var availableDatabases = map[string]func(logger ulogger.Logger, url *url.URL) (utxo.Interface, error){}
+var availableDatabases = map[string]func(logger ulogger.Logger, url *url.URL) (utxo.Store, error){}
 
-func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, source string, startBlockchainListener ...bool) (utxo.Interface, error) {
+func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, source string, startBlockchainListener ...bool) (utxo.Store, error) {
 
 	var port int
 	var err error
@@ -28,7 +28,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 
 	dbInit, ok := availableDatabases[storeUrl.Scheme]
 	if ok {
-		var utxoStore utxo.Interface
+		var utxoStore utxo.Store
 		var blockchainClient blockchain.ClientI
 		var blockchainSubscriptionCh chan *model.Notification
 
@@ -61,7 +61,9 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 				logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
 			} else {
 				logger.Debugf("[UTXOStore] setting block height to %d", meta.Height)
-				setBlockHeight(ctx, logger, utxoStore, source, meta.Height)
+				if err = setBlockHeight(ctx, logger, utxoStore, source, meta.Height); err != nil {
+					logger.Errorf("[UTXOStore] error setting block height for %s: %v", source, err)
+				}
 			}
 
 			logger.Infof("[UTXOStore] starting block height subscription for: %s", source)
@@ -79,7 +81,9 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 								continue
 							}
 							logger.Debugf("[UTXOStore] setting block height to %d", meta.Height)
-							setBlockHeight(ctx, logger, utxoStore, source, meta.Height)
+							if err = setBlockHeight(ctx, logger, utxoStore, source, meta.Height); err != nil {
+								logger.Errorf("[UTXOStore] error setting block height for %s: %v", source, err)
+							}
 						}
 					}
 				}
@@ -92,6 +96,6 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
 }
 
-func setBlockHeight(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Interface, source string, blockHeight uint32) error {
+func setBlockHeight(_ context.Context, _ ulogger.Logger, utxoStore utxo.Store, _ string, blockHeight uint32) error {
 	return utxoStore.SetBlockHeight(blockHeight)
 }

@@ -5,8 +5,7 @@ import (
 	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/google/uuid"
@@ -18,7 +17,7 @@ type Server struct {
 	logger       ulogger.Logger
 	blockStore   blob.Store
 	subtreeStore blob.Store
-	txMetaStore  txmeta_store.Store
+	utxoStore    utxo.Store
 	stats        *gocore.Stat
 }
 
@@ -27,14 +26,14 @@ func New(
 	logger ulogger.Logger,
 	blockStore blob.Store,
 	subtreeStore blob.Store,
-	txMetaStore txmeta.Store,
+	utxoStore utxo.Store,
 ) *Server {
 
 	u := &Server{
 		logger:       logger,
 		blockStore:   blockStore,
 		subtreeStore: subtreeStore,
-		txMetaStore:  txMetaStore,
+		utxoStore:    utxoStore,
 		stats:        gocore.NewStat("blockpersister"),
 	}
 

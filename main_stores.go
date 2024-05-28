@@ -5,8 +5,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
-	txmetafactory "github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
+	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -14,34 +13,14 @@ import (
 )
 
 var (
-	txStore      blob.Store
-	subtreeStore blob.Store
-	blockStore   blob.Store
-	txMetaStore  txmetastore.Store
-	utxoStore    utxostore.Interface
+	txStore         blob.Store
+	subtreeStore    blob.Store
+	blockStore      blob.Store
+	utxoStore       utxostore.Store
+	blockchainStore blockchain.Store
 )
 
-func getTxMetaStore(logger ulogger.Logger) txmetastore.Store {
-	if txMetaStore != nil {
-		return txMetaStore
-	}
-	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no txmeta_store setting found")
-	}
-
-	txMetaStore, err = txmetafactory.New(logger, txMetaStoreURL)
-	if err != nil {
-		panic(err)
-	}
-
-	return txMetaStore
-}
-
-func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interface {
+func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Store {
 	if utxoStore != nil {
 		return utxoStore
 	}
@@ -59,6 +38,26 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interfac
 	}
 
 	return utxoStore
+}
+
+func getBlockchainStore(ctx context.Context, logger ulogger.Logger) blockchain.Store {
+	if blockchainStore != nil {
+		return blockchainStore
+	}
+
+	blockchainURL, err, found := gocore.Config().GetURL("blockchain_store")
+	if err != nil {
+		panic(err)
+	}
+	if !found {
+		panic("no blockchain setting found")
+	}
+	blockchainStore, err = blockchain.NewStore(logger, blockchainURL)
+	if err != nil {
+		panic(err)
+	}
+
+	return blockchainStore
 }
 
 func getTxStore(logger ulogger.Logger) blob.Store {

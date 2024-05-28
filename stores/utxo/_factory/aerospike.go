@@ -11,7 +11,7 @@ import (
 )
 
 func init() {
-	availableDatabases["aerospike"] = func(logger ulogger.Logger, url *url.URL) (utxo.Interface, error) {
+	availableDatabases["aerospike"] = func(logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
 		return aerospike.New(logger, url)
 	}
 }

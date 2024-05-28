@@ -192,9 +192,12 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.blockValidationClient = blockvalidation.NewClient(ctx, s.logger)
 
-	s.validatorClient, err = validator.NewClient(ctx, s.logger)
-	if err != nil {
-		return fmt.Errorf("could not create validator client [%w]", err)
+	localValidator := gocore.Config().GetBool("useLocalValidator", false)
+	if !localValidator {
+		s.validatorClient, err = validator.NewClient(ctx, s.logger)
+		if err != nil {
+			return fmt.Errorf("could not create validator client [%w]", err)
+		}
 	}
 	e := echo.New()
 	e.HideBanner = true
@@ -241,7 +244,10 @@ func (s *Server) Start(ctx context.Context) error {
 	_ = s.P2PNode.SetTopicHandler(ctx, miningOnTopicName, s.handleMiningOnTopic)
 
 	go s.blockchainSubscriptionListener(ctx)
-	go s.validatorSubscriptionListener(ctx)
+
+	if !localValidator {
+		go s.validatorSubscriptionListener(ctx)
+	}
 
 	s.sendBestBlockMessage(ctx)
 

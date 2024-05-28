@@ -6,16 +6,19 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+
+	_ "net/http/pprof"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	utxo "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/redis"
+
+	//"github.com/bitcoin-sv/ubsv/stores/utxomap/memory"
+	//"github.com/bitcoin-sv/ubsv/stores/utxomap/nullstore"
+	//"github.com/bitcoin-sv/ubsv/stores/utxomap/redis"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
@@ -39,7 +42,7 @@ var (
 	storeSpendDelay                 time.Duration
 	storeType                       string
 
-	storeFn   func() (utxo.Interface, error)
+	storeFn   func() (utxo.Store, error)
 	storeOnce sync.Once
 )
 
@@ -87,17 +90,9 @@ func Init() {
 		_, _ = w.Write([]byte("OK"))
 	}))
 
-	server := &http.Server{
-		Addr:         httpAddr,
-		Handler:      nil, // nil uses http.DefaultServeMux
-		ReadTimeout:  60 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
-
 	log.Printf("Profiler available at http://%s/debug/pprof", httpAddr)
 	go func() {
-		log.Printf("%v", server.ListenAndServe())
+		log.Printf("%v", http.ListenAndServe(httpAddr, nil))
 	}()
 }
 
@@ -123,20 +118,20 @@ func Start() {
 	logger.Infof("STATS\n%s\nVERSION\n-------\n%s (%s)\n\n", stats, version, commit)
 
 	switch storeType {
-	case "memory":
-		storeFn = func() (utxo.Interface, error) {
-			return memory.New(false), nil
-		}
-		log.Printf("Starting memory utxostore-blaster with %d worker(s)", workerCount)
-
-	case "null":
-		storeFn = func() (utxo.Interface, error) {
-			return nullstore.NewNullStore()
-		}
-		log.Printf("Starting null utxostore-blaster with %d worker(s)", workerCount)
+	//case "memory":
+	//	storeFn = func() (utxo.Interface, error) {
+	//		return memory.New(false), nil
+	//	}
+	//	log.Printf("Starting memory utxostore-blaster with %d worker(s)", workerCount)
+	//
+	//case "null":
+	//	storeFn = func() (utxo.Interface, error) {
+	//		return nullstore.NewNullStore()
+	//	}
+	//	log.Printf("Starting null utxostore-blaster with %d worker(s)", workerCount)
 
 	case "aerospike":
-		var store utxo.Interface
+		var store utxo.Store
 		var err error
 		done := make(chan struct{})
 
@@ -146,63 +141,11 @@ func Start() {
 			store, err = aerospike.New(logger, u)
 		})
 
-		storeFn = func() (utxo.Interface, error) {
+		storeFn = func() (utxo.Store, error) {
 			<-done // Wait for initialization to complete
 			return store, err
 		}
 		log.Printf("Starting aerospike utxostore-blaster with %d worker(s)", workerCount)
-
-	case "redis":
-		var store utxo.Interface
-		var err error
-		done := make(chan struct{})
-
-		storeOnce.Do(func() {
-			defer close(done)
-			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
-			store, err = redis.NewRedisClient(logger, u)
-		})
-
-		storeFn = func() (utxo.Interface, error) {
-			<-done // Wait for initialization to complete
-			return store, err
-		}
-		log.Printf("Starting redis utxostore-blaster with %d worker(s)", workerCount)
-
-	case "redis-cluster":
-		var store utxo.Interface
-		var err error
-		done := make(chan struct{})
-
-		storeOnce.Do(func() {
-			defer close(done)
-			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
-			store, err = redis.NewRedisCluster(logger, u)
-
-		})
-
-		storeFn = func() (utxo.Interface, error) {
-			<-done // Wait for initialization to complete
-			return store, err
-		}
-		log.Printf("Starting redis-cluster utxostore-blaster with %d worker(s)", workerCount)
-
-	case "redis-ring":
-		var store utxo.Interface
-		var err error
-		done := make(chan struct{})
-
-		storeOnce.Do(func() {
-			defer close(done)
-			u, _, _ := gocore.Config().GetURL("utxoblaster_utxostore_redis")
-			store, err = redis.NewRedisRing(logger, u)
-		})
-
-		storeFn = func() (utxo.Interface, error) {
-			<-done // Wait for initialization to complete
-			return store, err
-		}
-		log.Printf("Starting redis-ring utxostore-blaster with %d worker(s)", workerCount)
 
 	default:
 		panic(fmt.Sprintf("Unknown store type: %s", storeType))
@@ -269,7 +212,7 @@ func worker(logger ulogger.Logger) {
 
 		// Store the txid
 		timeStart := time.Now()
-		if err = utxostore.Store(ctx, btTx); err != nil {
+		if _, err = utxostore.Create(ctx, btTx); err != nil {
 			logger.Fatalf("Failed to Store %s: %v", btTx.TxIDChainHash().String(), err)
 		}
 		prometheusUtxoStoreBlasterStore.Observe(float64(time.Since(timeStart).Microseconds()))

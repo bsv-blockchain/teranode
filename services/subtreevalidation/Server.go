@@ -18,8 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	txmeta_store "github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/gocore"
@@ -33,7 +32,7 @@ type Server struct {
 	subtreeStore             blob.Store
 	subtreeTTL               time.Duration
 	txStore                  blob.Store
-	txMetaStore              txmeta_store.Store
+	utxoStore                utxo.Store
 	validatorClient          validator.Interface
 	subtreeCount             atomic.Int32
 	maxMerkleItemsPerSubtree int
@@ -45,7 +44,7 @@ func New(
 	logger ulogger.Logger,
 	subtreeStore blob.Store,
 	txStore blob.Store,
-	txMetaStore txmeta.Store,
+	utxoStore utxo.Store,
 	validatorClient validator.Interface,
 ) *Server {
 
@@ -58,7 +57,7 @@ func New(
 		subtreeStore:             subtreeStore,
 		subtreeTTL:               subtreeTTL,
 		txStore:                  txStore,
-		txMetaStore:              txMetaStore,
+		utxoStore:                utxoStore,
 		validatorClient:          validatorClient,
 		subtreeCount:             atomic.Int32{},
 		maxMerkleItemsPerSubtree: maxMerkleItemsPerSubtree,
@@ -68,9 +67,9 @@ func New(
 	// create a caching tx meta store
 	if gocore.Config().GetBool("subtreevalidation_txMetaCacheEnabled", true) {
 		logger.Infof("Using cached version of tx meta store")
-		u.txMetaStore = txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, txMetaStore)
+		u.utxoStore = txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, utxoStore)
 	} else {
-		u.txMetaStore = txMetaStore
+		u.utxoStore = utxoStore
 	}
 
 	return u

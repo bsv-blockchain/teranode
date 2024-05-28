@@ -17,7 +17,7 @@ import (
 
 type Ubsv struct {
 	logger ulogger.Logger
-	store  utxostore.Interface
+	store  utxostore.Store
 }
 
 func New(logger ulogger.Logger, timeout string, addr string, port int, namespace string) *Ubsv {
@@ -61,12 +61,12 @@ func (s *Ubsv) Storer(ctx context.Context, id int, txCount int, wg *sync.WaitGro
 				_ = tx.AddOpReturnOutput(hash[:])
 				tx.Outputs[0].Satoshis = uint64(1000)
 
-				if err := s.store.Delete(ctx, tx); err != nil {
+				if err := s.store.Delete(ctx, tx.TxIDChainHash()); err != nil {
 					s.logger.Warnf("delete failed: %v\n", err)
 				}
 
 				// Store the hash
-				if err := s.store.Store(ctx, tx); err != nil {
+				if _, err := s.store.Create(ctx, tx); err != nil {
 					s.logger.Errorf("stored failed: %v", err)
 					return
 				}
@@ -141,7 +141,7 @@ func (s *Ubsv) Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan *b
 		}()
 
 		for hash := range deleteCh {
-			err := s.store.Delete(ctx, hash)
+			err := s.store.Delete(ctx, hash.TxIDChainHash())
 			if err != nil {
 				s.logger.Warnf("delete failed: %v\n", err)
 			}

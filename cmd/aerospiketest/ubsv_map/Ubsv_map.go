@@ -3,21 +3,21 @@ package ubsv_map
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospikemap"
-	"github.com/bitcoin-sv/ubsv/util"
 	"net/url"
 	"sync"
 
-	// "github.com/aerospike/aerospike-client-go/v7"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	// "github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type UbsvMap struct {
 	logger ulogger.Logger
-	store  utxostore.Interface
+	store  utxostore.Store
 }
 
 func New(logger ulogger.Logger, timeout string, addr string, port int, namespace string) *UbsvMap {
@@ -27,7 +27,7 @@ func New(logger ulogger.Logger, timeout string, addr string, port int, namespace
 	}
 	storeUrl, _ := url.Parse(urlStr)
 
-	store, err := aerospikemap.New(logger, storeUrl)
+	store, err := aerospike.New(logger, storeUrl)
 	if err != nil {
 		panic(err)
 	}
@@ -62,12 +62,12 @@ func (s *UbsvMap) Storer(ctx context.Context, id int, txCount int, wg *sync.Wait
 				_ = tx.AddOpReturnOutput(hash[:])
 				tx.Outputs[0].Satoshis = uint64(1000)
 
-				if err := s.store.Delete(ctx, tx); err != nil {
+				if err := s.store.Delete(ctx, tx.TxIDChainHash()); err != nil {
 					s.logger.Warnf("delete failed: %v\n", err)
 				}
 
 				// Store the hash
-				if err := s.store.Store(ctx, tx); err != nil {
+				if _, err := s.store.Create(ctx, tx); err != nil {
 					s.logger.Errorf("stored failed: %v", err)
 					return
 				}
@@ -141,7 +141,7 @@ func (s *UbsvMap) Deleter(ctx context.Context, wg *sync.WaitGroup, deleteCh chan
 		}()
 
 		for hash := range deleteCh {
-			err := s.store.Delete(ctx, hash)
+			err := s.store.Delete(ctx, hash.TxIDChainHash())
 			if err != nil {
 				s.logger.Warnf("delete failed: %v\n", err)
 			}

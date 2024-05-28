@@ -11,8 +11,8 @@ import (
 	"github.com/TAAL-GmbH/arc/api"
 	"github.com/TAAL-GmbH/arc/validator" // TODO move this to UBSV repo - add recover to validation
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -40,9 +40,8 @@ var (
 type Validator struct {
 	txValidator            TxValidator
 	logger                 ulogger.Logger
-	utxoStore              utxostore.Interface
+	utxoStore              utxo.Store
 	blockAssembler         blockassembly.Store
-	txMetaStore            txmeta.Store
 	saveInParallel         bool
 	blockAssemblyDisabled  bool
 	blockassemblyKafkaChan chan []byte
@@ -53,7 +52,7 @@ type Validator struct {
 type TxValidator struct {
 }
 
-func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, txMetaStore txmeta.Store) (Interface, error) {
+func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interface, error) {
 	initPrometheusMetrics()
 
 	ba := blockassembly.NewClient(ctx, logger)
@@ -62,7 +61,6 @@ func New(ctx context.Context, logger ulogger.Logger, store utxostore.Interface, 
 		logger:         logger,
 		utxoStore:      store,
 		blockAssembler: ba,
-		txMetaStore:    txMetaStore,
 		saveInParallel: true,
 		stats:          gocore.NewStat("validator"),
 	}
@@ -130,9 +128,9 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 	}()
 
 	traceSpan := tracing.Start(ctx, "Validator:Validate")
-	var spentUtxos []*utxostore.Spend
+	var spentUtxos []*utxo.Spend
 
-	defer func(reservedUtxos *[]*utxostore.Spend) {
+	defer func(reservedUtxos *[]*utxo.Spend) {
 		traceSpan.Finish()
 
 		//if r := recover(); r != nil {
@@ -185,7 +183,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 
 	txMetaData, err := v.registerTxInMetaStore(setSpan, tx, spentUtxos)
 	if err != nil {
-		if errors.Is(err, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
+		if errors.Is(err, utxo.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
 			// stop all processing, this transaction has already been validated and passed into the block assembly
 			v.logger.Debugf("[Validate][%s] tx already exists in metaStore, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
 			return nil
@@ -255,7 +253,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 
 func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Hash) (err error) {
 	for retries := 0; retries < 3; retries++ {
-		if metaErr := v.txMetaStore.Delete(setSpan.Ctx, txID); metaErr != nil {
+		if metaErr := v.utxoStore.Delete(setSpan.Ctx, txID); metaErr != nil {
 			if retries < 2 {
 				backoff := time.Duration(2^retries) * time.Second
 				v.logger.Errorf("error deleting tx %s from tx meta utxoStore, retrying in %s: %v", txID.String(), backoff.String(), metaErr)
@@ -286,7 +284,7 @@ func (v *Validator) storeUtxos(ctx context.Context, tx *bt.Tx) error {
 		prometheusTransactionStoreUtxos.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}()
 
-	err := v.utxoStore.Store(storeUtxosSpan.Ctx, tx)
+	_, err := v.utxoStore.Create(storeUtxosSpan.Ctx, tx)
 	if err != nil {
 
 		// TODO #144
@@ -302,7 +300,7 @@ func (v *Validator) storeUtxos(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spentUtxos []*utxostore.Spend) (*txmeta.Data, error) {
+func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spentUtxos []*utxo.Spend) (*meta.Data, error) {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "registerTxInMetaStore")
 	defer func() {
 		stat.AddTime(start)
@@ -312,9 +310,9 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 	txMetaSpan := tracing.Start(ctx, "Validator:Validate:StoreTxMeta")
 	defer txMetaSpan.Finish()
 
-	data, err := v.txMetaStore.Create(ctx, tx)
+	data, err := v.utxoStore.Create(ctx, tx)
 	if err != nil {
-		if errors.Is(err, txmeta.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
+		if errors.Is(err, utxo.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
 			// this does not need to be a warning, it's just a duplicate validation request
 			return nil, err
 		}
@@ -334,7 +332,7 @@ func (v *Validator) registerTxInMetaStore(traceSpan tracing.Span, tx *bt.Tx, spe
 	return data, nil
 }
 
-func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.Spend, error) {
+func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxo.Spend, error) {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "spendUtxos")
 	defer func() {
 		stat.AddTime(start)
@@ -352,7 +350,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 	// check the utxos
 	txIDChainHash := tx.TxIDChainHash()
 
-	spends := make([]*utxostore.Spend, len(tx.Inputs))
+	spends := make([]*utxo.Spend, len(tx.Inputs))
 
 	for idx, input := range tx.Inputs {
 		if input.PreviousTxSatoshis == 0 {
@@ -366,7 +364,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 		}
 
 		// v.logger.Debugf("spending utxo %s:%d -> %s", input.PreviousTxIDChainHash().String(), input.PreviousTxOutIndex, hash.String())
-		spends[idx] = &utxostore.Spend{
+		spends[idx] = &utxo.Spend{
 			TxID:         input.PreviousTxIDChainHash(),
 			Vout:         input.PreviousTxOutIndex,
 			Hash:         hash,
@@ -380,7 +378,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 
 		// check whether this is a double spend error
 
-		var spentErr *utxostore.ErrSpent
+		var spentErr *utxo.ErrSpent
 		ok := errors.As(err, &spentErr)
 		if ok {
 			// remove the spending tx from the block assembly and freeze it
@@ -399,7 +397,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxostore.
 	return spends, nil
 }
 
-func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxostore.Spend) error {
+func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error {
 	startTime, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "sendToBlockAssembler")
 	defer func() {
 		stat.AddTime(startTime)
@@ -421,7 +419,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	return nil
 }
 
-func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxostore.Spend) error {
+func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spend) error {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "reverseSpends")
 	defer stat.AddTime(start)
 
@@ -452,7 +450,7 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	for _, input := range tx.Inputs {
-		prevTx, err := v.txMetaStore.Get(ctx, input.PreviousTxIDChainHash())
+		prevTx, err := v.utxoStore.GetMeta(ctx, input.PreviousTxIDChainHash())
 		if err != nil {
 			return fmt.Errorf("can't get txmeta for tx: %w", err)
 		}

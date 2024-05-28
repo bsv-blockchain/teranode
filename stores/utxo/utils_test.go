@@ -2,12 +2,12 @@ package utxo
 
 import (
 	"context"
-	"testing"
-
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
 var (
@@ -48,6 +48,25 @@ func TestGetFeesAndUtxoHashes(t *testing.T) {
 	})
 }
 
+func TestCalculateUtxoStatus(t *testing.T) {
+	// Test case when spendingTxId is not nil
+	spendingTxId, _ := chainhash.NewHashFromStr("b067b2d2a51cb3f63678cc2bf12efaa5d57235d296bcba09ead42f4147b63bf7")
+	status := CalculateUtxoStatus(spendingTxId, 0, 0)
+	assert.Equal(t, Status_SPENT, status)
+
+	// Test case when lockTime is greater than 0 and less than 500000000 and greater than blockHeight
+	status = CalculateUtxoStatus(nil, 400000000, 300000000)
+	assert.Equal(t, Status_LOCKED, status)
+
+	// Test case when lockTime is greater than or equal to 500000000 and greater than current Unix time
+	status = CalculateUtxoStatus(nil, uint32(time.Now().Add(1*time.Hour).Unix()), 0)
+	assert.Equal(t, Status_LOCKED, status)
+
+	// Test case when spendingTxId is nil and lockTime is 0
+	status = CalculateUtxoStatus(nil, 0, 0)
+	assert.Equal(t, Status_OK, status)
+}
+
 func TestGetUtxoHashes(t *testing.T) {
 	t.Run("should return utxo hashes", func(t *testing.T) {
 		utxoHashes, err := GetUtxoHashes(tx)
@@ -67,4 +86,49 @@ func TestGetUtxoHashes(t *testing.T) {
 			assert.True(t, ok, "utxo hash not found in created map: "+utxoHash.String())
 		}
 	})
+}
+
+func BenchmarkGetUtxoHashes(b *testing.B) {
+	txs := make([]*bt.Tx, b.N)
+	for i := 0; i < b.N; i++ {
+		tx := bt.NewTx()
+		_ = tx.From(
+			"5cee463416702311eace06a42e700f3d95ee7793d3ae52af9c051a4981e8345a",
+			uint32(i),
+			"76a914eb0bd5edba389198e73f8efabddfc61666969d1688ac",
+			uint64(i),
+		)
+		txs[i] = tx
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := GetUtxoHashes(txs[i])
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkGetUtxoHashes_ManyOutputs(b *testing.B) {
+	// Create a mock transaction with 1000 outputs
+	tx := bt.NewTx()
+	for i := 0; i < 1000; i++ {
+		_ = tx.From(
+			"5cee463416702311eace06a42e700f3d95ee7793d3ae52af9c051a4981e8345a",
+			uint32(i),
+			"76a914eb0bd5edba389198e73f8efabddfc61666969d1688ac",
+			uint64(i),
+		)
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := GetUtxoHashes(tx)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }

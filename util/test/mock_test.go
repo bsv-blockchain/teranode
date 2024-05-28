@@ -2,12 +2,12 @@ package test
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
@@ -29,8 +29,8 @@ func Test_GenerateBlock(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, block)
 
-	txMetaStore := memory.New(ulogger.TestLogger{}, true)
-	CachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+	utxoStore := memory.New(ulogger.TestLogger{})
+	CachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, utxoStore, 1024)
 	err = LoadTxMetaIntoMemory()
 	require.NoError(t, err)
 
@@ -40,7 +40,7 @@ func Test_GenerateBlock(t *testing.T) {
 
 	data, err := CachedTxMetaStore.Get(context.Background(), reqTxId)
 	require.NoError(t, err)
-	require.Equal(t, &txmeta.Data{
+	require.Equal(t, &meta.Data{
 		Fee:            1,
 		SizeInBytes:    1,
 		ParentTxHashes: []chainhash.Hash{},

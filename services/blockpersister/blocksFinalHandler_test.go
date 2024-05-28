@@ -9,10 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -71,9 +73,9 @@ func (m *MockStore) GetIoReader(ctx context.Context, key []byte, opts ...options
 	return newReadCloserFromBytes(b), nil
 }
 
-func (m *MockStore) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.MissingTxHash, fields ...string) error {
+func (m *MockStore) MetaBatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...string) error {
 	for _, missing := range hashes {
-		missing.Data = &txmeta.Data{
+		missing.Data = &meta.Data{
 			Tx: m.txs[missing.Idx],
 		}
 	}
@@ -81,7 +83,11 @@ func (m *MockStore) MetaBatchDecorate(ctx context.Context, hashes []*txmeta.Miss
 	return nil
 }
 
-func (m *MockStore) Create(_ context.Context, tx *bt.Tx, lockTime ...uint32) (*txmeta.Data, error) {
+func (m *MockStore) Health(ctx context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
+func (m *MockStore) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
 	return nil, nil
 }
 
@@ -89,11 +95,11 @@ func (m *MockStore) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func (m *MockStore) Get(_ context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+func (m *MockStore) Get(_ context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
 	return nil, nil
 }
 
-func (m *MockStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+func (m *MockStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	return nil, nil
 }
 
@@ -103,6 +109,30 @@ func (m *MockStore) SetMined(_ context.Context, hash *chainhash.Hash, blockID ui
 
 func (m *MockStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) (err error) {
 	return nil
+}
+
+func (m *MockStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
+	return nil, nil
+}
+
+func (m *MockStore) Spend(ctx context.Context, spends []*utxo.Spend) error {
+	return nil
+}
+
+func (m *MockStore) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
+	return nil
+}
+
+func (m *MockStore) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+	return nil
+}
+
+func (m *MockStore) SetBlockHeight(height uint32) error {
+	return nil
+}
+
+func (m *MockStore) GetBlockHeight() (uint32, error) {
+	return 0, nil
 }
 
 func TestBlock(t *testing.T) {

@@ -5,13 +5,12 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/propagation"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -100,7 +99,7 @@ func getPropagationServers() (map[string]propagation_api.PropagationAPIClient, e
 	addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 
 	if len(addresses) == 0 {
-		return nil, errors.New("no propagation server addresses found")
+		return nil, errors.New(errors.ERR_SERVICE_ERROR, "no propagation server addresses found")
 	}
 
 	propagationServers := make(map[string]propagation_api.PropagationAPIClient)
@@ -309,7 +308,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 						}
 						break
 					} else {
-						if errors.Is(err, propagation.ErrBadRequest) {
+						if errors.Is(err, errors.ErrTxInvalid) {
 							// There is no point retrying a bad transaction
 							responseWrapperCh <- &ResponseWrapper{
 								Addr:     a,
@@ -359,7 +358,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 		failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
 		if failurePercentage > float32(d.failureTolerance) {
-			return responses, errors.Join(propagation.ErrInternal, fmt.Errorf("error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs))
+			return responses, errors.New(errors.ERR_PROCESSING, "error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs)
 		} else if errorCount > 0 {
 			d.logger.Errorf("error(s) distributing transaction %s: %v", tx.TxIDChainHash().String(), errs)
 		}

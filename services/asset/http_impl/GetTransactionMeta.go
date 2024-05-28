@@ -23,7 +23,7 @@ func (h *HTTP) GetTransactionMeta(mode ReadMode) func(c echo.Context) error {
 			return err
 		}
 
-		meta, err := h.repository.TxMetaStore.Get(c.Request().Context(), hash)
+		meta, err := h.repository.UtxoStore.Get(c.Request().Context(), hash)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())

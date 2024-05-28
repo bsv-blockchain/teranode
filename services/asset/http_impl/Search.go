@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -52,7 +51,7 @@ func (h *HTTP) Search(c echo.Context) error {
 
 		// Check if it's a transaction
 		tx, err := h.repository.GetTransactionMeta(c.Request().Context(), hash)
-		if err != nil && !errors.Is(err, txmeta.NewErrTxmetaNotFound(hash)) {
+		if err != nil && !errors.Is(err, utxo.NewErrTxmetaNotFound(hash)) {
 			return sendError(c, http.StatusBadRequest, 5, fmt.Errorf("error searching for tx: %w", err))
 		}
 
@@ -77,7 +76,7 @@ func (h *HTTP) Search(c echo.Context) error {
 		u, err := h.repository.GetUtxo(c.Request().Context(), &utxo.Spend{
 			Hash: hash,
 		})
-		if err != nil && !errors.Is(err, utxo.ErrNotFound) {
+		if err != nil && !errors.Is(err, errors.ErrNotFound) {
 			return sendError(c, http.StatusBadRequest, 6, fmt.Errorf("error searching for utxo: %w", err))
 		}
 

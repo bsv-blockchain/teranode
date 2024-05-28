@@ -14,7 +14,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/opentracing/opentracing-go"
@@ -66,7 +65,6 @@ func TestServer_Performance(t *testing.T) {
 func initMockedServer(t *testing.T) (*BlockAssembly, error) {
 	memStore := memory.New()
 	utxoStore := utxostore.New(true)
-	txMetaStore := txmetastore.New()
 
 	opentracing.SetGlobalTracer(mocktracer.New())
 
@@ -84,7 +82,7 @@ func initMockedServer(t *testing.T) (*BlockAssembly, error) {
 	gocore.Config().Set("tx_chan_buffer_size", "1000000")
 
 	ctx := context.Background()
-	ba := New(ulogger.TestLogger{}, memStore, utxoStore, txMetaStore, memStore, blockchainClient)
+	ba := New(ulogger.TestLogger{}, memStore, utxoStore, memStore, blockchainClient)
 	err = ba.Init(ctx)
 	if err != nil {
 		return nil, err

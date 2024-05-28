@@ -3,12 +3,12 @@ package utxo
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"golang.org/x/sync/errgroup"
 )
 
 func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHeight uint32) Status {
@@ -64,26 +64,16 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.
 
 // GetUtxoHashes returns the utxo hashes for the outputs of a transaction.
 func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
+	txChainHash := tx.TxIDChainHash()
+
 	utxoHashes := make([]chainhash.Hash, len(tx.Outputs))
-
-	g := errgroup.Group{}
 	for i, output := range tx.Outputs {
-		i := i
-		output := output
+		utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, uint32(i))
+		if utxoErr != nil {
+			return nil, errors.New(errors.ERR_PROCESSING, "error getting output utxo hash: %s", utxoErr)
+		}
 
-		g.Go(func() error {
-			utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
-			if utxoErr != nil {
-				return fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
-			}
-
-			utxoHashes[i] = *utxoHash
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil, err
+		utxoHashes[i] = *utxoHash
 	}
 
 	return utxoHashes, nil

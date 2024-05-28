@@ -243,7 +243,6 @@ func main() {
 			logger.New("asset"),
 			getUtxoStore(ctx, logger),
 			getTxStore(logger),
-			getTxMetaStore(logger),
 			getSubtreeStore(logger),
 			getBlockStore(logger),
 		)); err != nil {
@@ -262,7 +261,7 @@ func main() {
 			logger,
 			getBlockStore(logger),
 			getSubtreeStore(logger),
-			getTxMetaStore(logger),
+			getUtxoStore(ctx, logger),
 		)); err != nil {
 			panic(err)
 		}
@@ -281,7 +280,6 @@ func main() {
 				logger.New("bass"),
 				getTxStore(logger),
 				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
 				getSubtreeStore(logger),
 				blockchainClient,
 			)); err != nil {
@@ -295,7 +293,6 @@ func main() {
 		validatorClient, err := validator.New(ctx,
 			logger,
 			getUtxoStore(ctx, logger),
-			getTxMetaStore(logger),
 		)
 		if err != nil {
 			logger.Fatalf("could not create validator [%v]", err)
@@ -305,7 +302,7 @@ func main() {
 			logger.New("stval"),
 			getSubtreeStore(logger),
 			getTxStore(logger),
-			getTxMetaStore(logger),
+			getUtxoStore(ctx, logger),
 			validatorClient,
 		)); err != nil {
 			panic(err)
@@ -319,7 +316,6 @@ func main() {
 			validatorClient, err := validator.New(ctx,
 				logger,
 				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
 			)
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)
@@ -329,7 +325,7 @@ func main() {
 				logger.New("bval"),
 				getSubtreeStore(logger),
 				getTxStore(logger),
-				getTxMetaStore(logger),
+				getUtxoStore(ctx, logger),
 				validatorClient,
 			)); err != nil {
 				panic(err)
@@ -343,7 +339,6 @@ func main() {
 			if err := sm.AddService("Validator", validator.NewServer(
 				logger.New("valid"),
 				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
 			)); err != nil {
 				panic(err)
 			}
@@ -376,7 +371,6 @@ func main() {
 			validatorClient, err = validator.New(ctx,
 				logger,
 				getUtxoStore(ctx, logger),
-				getTxMetaStore(logger),
 			)
 			if err != nil {
 				logger.Fatalf("could not create validator [%v]", err)
@@ -408,7 +402,12 @@ func main() {
 	}
 
 	if startLegacy {
-		if err = sm.AddService("Legacy", legacy.New(logger)); err != nil {
+		if err = sm.AddService("Legacy", legacy.New(
+			logger,
+			getBlockchainStore(ctx, logger),
+			getSubtreeStore(logger),
+			getUtxoStore(ctx, logger),
+		)); err != nil {
 			panic(err)
 		}
 	}
@@ -559,9 +558,6 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("    -utxostore=<1|0>")
 	fmt.Println("          whether to start the utxo store service")
-	fmt.Println("")
-	fmt.Println("    -txmeta=<1|0>")
-	fmt.Println("          whether to start the tx meta store")
 	fmt.Println("")
 	fmt.Println("    -propagation=<1|0>")
 	fmt.Println("          whether to start the propagation service")

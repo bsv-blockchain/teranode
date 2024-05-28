@@ -2,12 +2,13 @@ module github.com/bitcoin-sv/ubsv
 
 go 1.21.3
 
-replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.7
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.8
 
 require (
 	github.com/IBM/sarama v1.42.2
 	github.com/TAAL-GmbH/arc v1.0.32
 	github.com/aerospike/aerospike-client-go/v7 v7.2.0
+	github.com/ajeetdsouza/testcontainers-aerospike-go v0.1.0
 	github.com/archdx/zerolog-sentry v1.8.2
 	github.com/aws/aws-sdk-go-v2 v1.25.3
 	github.com/aws/aws-sdk-go-v2/config v1.27.7
@@ -30,7 +31,6 @@ require (
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/jarcoal/httpmock v1.3.1
 	github.com/jellydator/ttlcache/v3 v3.0.1
-	github.com/jessevdk/go-flags v1.5.0
 	github.com/json-iterator/go v1.1.12
 	github.com/kpango/fastime v1.1.9
 	github.com/lib/pq v1.10.7
@@ -52,7 +52,6 @@ require (
 	github.com/ordishs/gocore v1.0.63
 	github.com/prometheus/client_golang v1.19.0
 	github.com/quic-go/quic-go v0.38.2
-	github.com/redis/go-redis/v9 v9.2.1
 	github.com/rs/zerolog v1.32.0
 	github.com/sercand/kuberesolver/v5 v5.1.1
 	github.com/spaolacci/murmur3 v1.1.0
@@ -85,11 +84,12 @@ require (
 	dario.cat/mergo v1.0.0 // indirect
 	github.com/AdaLogics/go-fuzz-headers v0.0.0-20230811130428-ced1acdcaa24 // indirect
 	github.com/AlecAivazis/survey/v2 v2.3.7 // indirect
-	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
+	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
 	github.com/FZambia/eagle v0.1.0 // indirect
 	github.com/Masterminds/semver/v3 v3.2.1 // indirect
 	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/Microsoft/hcsshim v0.11.4 // indirect
+	github.com/aerospike/aerospike-client-go/v6 v6.13.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.1 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.7 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.15.3 // indirect
@@ -126,7 +126,6 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.2.0 // indirect
 	github.com/deepmap/oapi-codegen v1.11.0 // indirect
 	github.com/dgraph-io/ristretto v0.1.1 // indirect
-	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/distribution/reference v0.5.0 // indirect
 	github.com/docker/buildx v0.12.0-rc2.0.20231219140829-617f538cb315 // indirect
 	github.com/docker/cli v25.0.4-0.20240305161310-2bf4225ad269+incompatible // indirect

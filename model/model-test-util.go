@@ -12,8 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -27,7 +29,7 @@ import (
 var (
 	loadMetaToMemoryOnce sync.Once
 	// cachedTxMetaStore is a global variable to cache the txMetaStore in memory, to avoid reading from disk more than once
-	cachedTxMetaStore txmeta.Store
+	cachedTxMetaStore utxo.Store
 	// following variables are used to store the file names for the testdata
 	fileDir                      string
 	fileNameTemplate             string
@@ -341,7 +343,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 			g.Go(func() error {
 				for _, data := range saveBatch {
 					data := data
-					if err = txMetaStore.SetCache(&data.hash, &txmeta.Data{
+					if err = txMetaStore.SetCache(&data.hash, &meta.Data{
 						Fee:            data.fee,
 						SizeInBytes:    data.sizeInBytes,
 						ParentTxHashes: []chainhash.Hash{},
@@ -365,7 +367,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 	if len(batch) > 0 {
 		for _, data := range batch {
 			data := data
-			if err := txMetaStore.SetCache(&data.hash, &txmeta.Data{
+			if err := txMetaStore.SetCache(&data.hash, &meta.Data{
 				Fee:            data.fee,
 				SizeInBytes:    data.sizeInBytes,
 				ParentTxHashes: []chainhash.Hash{},

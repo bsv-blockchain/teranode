@@ -62,7 +62,7 @@ The p2p peers are part of a private network. This private network is managed by 
   - The generated private key is persisted.
 
 
-![P2P_System_Container_Diagram.png](img%2FP2P_System_Container_Diagram.png)
+![P2P_System_Container_Diagram.png](img/P2P_System_Container_Diagram.png)
 
 In the diagram above:
 
@@ -71,7 +71,7 @@ In the diagram above:
 
 In more detail:
 
-![P2P_System_Component_Diagram.png](img%2FP2P_System_Component_Diagram.png)
+![P2P_System_Component_Diagram.png](img/P2P_System_Component_Diagram.png)
 
 ## 2. Functionality
 
@@ -148,7 +148,7 @@ Once these steps are completed, the server is ready to accept peer connections, 
 
 In the previous section, the P2P Service created a `P2PNode as part of the initialization phase. This P2PNode is responsible for joining the network. The P2PNode utilizes a libp2p host and a Distributed Hash Table (DHT) for peer discovery and connection based on shared topics. This mechanism enables the node to become part of a decentralized network, facilitating communication and resource sharing among peers.
 
-![p2p_peer_discovery.svg](img%2Fplantuml%2Fp2p%2Fp2p_peer_discovery.svg)
+![p2p_peer_discovery.svg](img/plantuml/p2p/p2p_peer_discovery.svg)
 
 1. **Initialization of DHT and libp2p Host**:
    - The `P2PNode` struct, upon invocation of its `Start` method, initializes the DHT using either `initDHT` or `initPrivateDHT` methods depending on the configuration. This step sets up the DHT for the libp2p host (`s.host`), which allows for peer discovery and content routing within the P2P network. The DHT is bootstrapped with default or configured peers to integrate the node into the existing network.
@@ -168,7 +168,7 @@ In the previous section, the P2P Service created a `P2PNode as part of the initi
 
 ### 2.3. Best Block Messages
 
-![p2p_handle_blockchain_messages.svg](img%2Fplantuml%2Fp2p%2Fp2p_handle_blockchain_messages.svg)
+![p2p_handle_blockchain_messages.svg](img/plantuml/p2p/p2p_handle_blockchain_messages.svg)
 
 1. **Node (Peer 1) Starts**:
    - The server's `Start()` method is invoked. Within `Start()`, `s.sendBestBlockMessage(ctx)` is called to send the best block message.
@@ -190,7 +190,7 @@ In the previous section, the P2P Service created a `P2PNode as part of the initi
 When a node creates a new subtree, or finds a new block hashing solution, it will broadcast this information to the network. This is done by publishing a message to the relevant topic. The message is then received by all peers subscribed to that topic. Listening peers can then feed relevant messages to their own Block Validation Service.
 
 
-![p2p_blockchain_subscription.svg](img%2Fplantuml%2Fp2p%2Fp2p_blockchain_subscription.svg)
+![p2p_blockchain_subscription.svg](img/plantuml/p2p/p2p_blockchain_subscription.svg)
 
 
 1. **Blockchain Subscription**:
@@ -221,17 +221,18 @@ When a node creates a new subtree, or finds a new block hashing solution, it wil
 
 Nodes will broadcast rejected transaction notifications to the network. This is done by publishing a message to the relevant topic. The message is then received by all peers subscribed to that topic.
 
-![p2p_tx_validator_messages.svg](img%2Fplantuml%2Fp2p%2Fp2p_tx_validator_messages.svg)
+![p2p_tx_validator_messages.svg](img/plantuml/p2p/p2p_tx_validator_messages.svg)
 
  - The Node 1 listens for validator subscription events.
  - When a new rejected transaction notification is detected, the Node 1 publishes this message to the PubSub System using the topic name `rejectedTxTopicName`, forwarding it to any subscribers of the `rejectedTxTopicName` topic.
 
+Note that the P2P service can only subscribe to these notifications if and when the TX Validator Service is available in the node. The service uses the `useLocalValidator` setting to determine whether a local validator or a validator service is in scope. If no TX validator runs in the node, the P2P will not attempt to subscribe.
 
 ### 2.6. Websocket notifications
 
 All notifications collected from the Block and Validator listeners are sent over to the Websocket clients. The process can be seen below:
 
-![p2p_websocket_activity_diagram.svg](img%2Fplantuml%2Fp2p%2Fp2p_websocket_activity_diagram.svg)
+![p2p_websocket_activity_diagram.svg](img/plantuml/p2p/p2p_websocket_activity_diagram.svg)
 
 * WebSocket Request Handling:
   - An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.
@@ -249,7 +250,7 @@ All notifications collected from the Block and Validator listeners are sent over
 
 As a sequence:
 
-![p2p_websocket_sequence_diagram.svg](img%2Fplantuml%2Fp2p%2Fp2p_websocket_sequence_diagram.svg)
+![p2p_websocket_sequence_diagram.svg](img/plantuml/p2p/p2p_websocket_sequence_diagram.svg)
 
 1. A client requests a WebSocket connection to the server. The new client is added to the `newClientCh` queue, which then adds the client to the active client channels.
 2. The server enters a loop for WebSocket communication, where it can either receive new notifications or pings.
