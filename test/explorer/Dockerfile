@@ -32,8 +32,8 @@ ENV GOPATH /go
 # Expose port for Jupyter notebook
 EXPOSE 8888
 
-WORKDIR /tests
-COPY ./scripts /tests
+WORKDIR /workspace
+# RUN go mod tidy
 COPY ./entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
