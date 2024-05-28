@@ -15,7 +15,6 @@ var (
 	prometheusTransactionValidateTotal          prometheus.Histogram
 	prometheusTransactionValidate               prometheus.Histogram
 	prometheusTransactionValidateBatch          prometheus.Histogram
-	prometheusTransactionStoreUtxos             prometheus.Histogram
 	prometheusTransactionSpendUtxos             prometheus.Histogram
 	prometheusTransactionDuration               prometheus.Histogram
 	prometheusTransactionSize                   prometheus.Histogram
@@ -79,14 +78,6 @@ func _initPrometheusMetrics() {
 			Name:      "transactions_validate_batch_millis",
 			Help:      "Duration of transaction batch validation",
 			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-	prometheusTransactionStoreUtxos = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "validator",
-			Name:      "transactions_store_utxos_micros",
-			Help:      "Duration of transaction storing utxos",
-			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
 	prometheusTransactionSpendUtxos = promauto.NewHistogram(
