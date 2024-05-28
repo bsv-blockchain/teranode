@@ -402,7 +402,7 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 
 		// Store the tx in the store
 		if _, err := s.utxoStore.Create(ctx, tx, uint32(dbID)); err != nil {
-			if !strings.Contains(err.Error(), "utxo already exists") {
+			if !strings.Contains(err.Error(), "TXMETA_ALREADY_EXISTS") {
 				return fmt.Errorf("Failed to store tx: %w", err)
 			}
 		}
