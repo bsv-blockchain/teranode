@@ -50,7 +50,7 @@ require (
 	github.com/ordishs/go-bitcoin v1.0.86
 	github.com/ordishs/go-utils v1.0.50
 	github.com/ordishs/gocore v1.0.63
-	github.com/prometheus/client_golang v1.19.0
+	github.com/prometheus/client_golang v1.19.1
 	github.com/quic-go/quic-go v0.38.2
 	github.com/rs/zerolog v1.32.0
 	github.com/sercand/kuberesolver/v5 v5.1.1
