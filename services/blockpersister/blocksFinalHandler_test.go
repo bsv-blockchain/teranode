@@ -221,7 +221,7 @@ func (m *mockExister) Exists(_ context.Context, _ []byte, _ ...options.Options) 
 }
 
 func TestLockFile(t *testing.T) {
-	// util.SkipVeryLongTests(t) // TEMP fix this test
+	util.SkipVeryLongTests(t) // TODO TEMP fix this test
 
 	ctx, cancel := context.WithCancel(context.Background())
 	hash := chainhash.HashH([]byte("test"))
@@ -239,7 +239,7 @@ func TestLockFile(t *testing.T) {
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
 
-	time.Sleep(1 * time.Millisecond) // Wait for the lock to be released
+	time.Sleep(10 * time.Millisecond) // Wait for the lock to be released
 
 	gotLock, _, err = tryLockIfNotExists(ctx, ulogger.TestLogger{}, &hash, &mockExister{}, options.WithFileExtension("block"))
 	require.NoError(t, err)

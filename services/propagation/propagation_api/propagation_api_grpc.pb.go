@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion7
 const (
 	PropagationAPI_HealthGRPC_FullMethodName               = "/propagation_api.PropagationAPI/HealthGRPC"
 	PropagationAPI_ProcessTransaction_FullMethodName       = "/propagation_api.PropagationAPI/ProcessTransaction"
+	PropagationAPI_ProcessTransactionBatch_FullMethodName  = "/propagation_api.PropagationAPI/ProcessTransactionBatch"
 	PropagationAPI_ProcessTransactionHex_FullMethodName    = "/propagation_api.PropagationAPI/ProcessTransactionHex"
 	PropagationAPI_ProcessTransactionStream_FullMethodName = "/propagation_api.PropagationAPI/ProcessTransactionStream"
 	PropagationAPI_ProcessTransactionDebug_FullMethodName  = "/propagation_api.PropagationAPI/ProcessTransactionDebug"
@@ -33,6 +34,7 @@ type PropagationAPIClient interface {
 	// Health returns the health of the API.
 	HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
 	ProcessTransaction(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
+	ProcessTransactionBatch(ctx context.Context, in *ProcessTransactionBatchRequest, opts ...grpc.CallOption) (*ProcessTransactionBatchResponse, error)
 	ProcessTransactionHex(ctx context.Context, in *ProcessTransactionHexRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	ProcessTransactionStream(ctx context.Context, opts ...grpc.CallOption) (PropagationAPI_ProcessTransactionStreamClient, error)
 	ProcessTransactionDebug(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
@@ -58,6 +60,15 @@ func (c *propagationAPIClient) HealthGRPC(ctx context.Context, in *EmptyMessage,
 func (c *propagationAPIClient) ProcessTransaction(ctx context.Context, in *ProcessTransactionRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
 	out := new(EmptyMessage)
 	err := c.cc.Invoke(ctx, PropagationAPI_ProcessTransaction_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *propagationAPIClient) ProcessTransactionBatch(ctx context.Context, in *ProcessTransactionBatchRequest, opts ...grpc.CallOption) (*ProcessTransactionBatchResponse, error) {
+	out := new(ProcessTransactionBatchResponse)
+	err := c.cc.Invoke(ctx, PropagationAPI_ProcessTransactionBatch_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +131,7 @@ type PropagationAPIServer interface {
 	// Health returns the health of the API.
 	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
 	ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
+	ProcessTransactionBatch(context.Context, *ProcessTransactionBatchRequest) (*ProcessTransactionBatchResponse, error)
 	ProcessTransactionHex(context.Context, *ProcessTransactionHexRequest) (*EmptyMessage, error)
 	ProcessTransactionStream(PropagationAPI_ProcessTransactionStreamServer) error
 	ProcessTransactionDebug(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error)
@@ -135,6 +147,9 @@ func (UnimplementedPropagationAPIServer) HealthGRPC(context.Context, *EmptyMessa
 }
 func (UnimplementedPropagationAPIServer) ProcessTransaction(context.Context, *ProcessTransactionRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransaction not implemented")
+}
+func (UnimplementedPropagationAPIServer) ProcessTransactionBatch(context.Context, *ProcessTransactionBatchRequest) (*ProcessTransactionBatchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransactionBatch not implemented")
 }
 func (UnimplementedPropagationAPIServer) ProcessTransactionHex(context.Context, *ProcessTransactionHexRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProcessTransactionHex not implemented")
@@ -190,6 +205,24 @@ func _PropagationAPI_ProcessTransaction_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PropagationAPIServer).ProcessTransaction(ctx, req.(*ProcessTransactionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PropagationAPI_ProcessTransactionBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProcessTransactionBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PropagationAPIServer).ProcessTransactionBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PropagationAPI_ProcessTransactionBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PropagationAPIServer).ProcessTransactionBatch(ctx, req.(*ProcessTransactionBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -270,6 +303,10 @@ var PropagationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ProcessTransaction",
 			Handler:    _PropagationAPI_ProcessTransaction_Handler,
+		},
+		{
+			MethodName: "ProcessTransactionBatch",
+			Handler:    _PropagationAPI_ProcessTransactionBatch_Handler,
 		},
 		{
 			MethodName: "ProcessTransactionHex",

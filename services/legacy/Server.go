@@ -80,6 +80,12 @@ func (s *Server) Init(ctx context.Context) error {
 		ChainParams:      &s.params,
 		Listeners: peer.MessageListeners{
 
+			OnPing: func(p *peer.Peer, msg *wire.MsgPing) {
+				s.logger.Infof("Received ping\n")
+				pong := wire.NewMsgPong(msg.Nonce)
+				s.peer.QueueMessage(pong, nil)
+			},
+
 			OnHeaders: func(p *peer.Peer, msg *wire.MsgHeaders) {
 				s.logger.Infof("Received %d headers\n", len(msg.Headers))
 
@@ -188,9 +194,17 @@ func (s *Server) Start(ctx context.Context) error {
 	s.peer.QueueMessage(invMsg, nil)
 
 	// Keep the program running to receive headers
-	<-ctx.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
 
-	return nil
+		case <-time.After(time.Second * 10):
+			// Send a ping message to the peer
+			ping := wire.NewMsgPing(0)
+			s.peer.QueueMessage(ping, nil)
+		}
+	}
 }
 
 func (s *Server) Stop(ctx context.Context) error {
@@ -388,7 +402,7 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 
 		// Store the tx in the store
 		if _, err := s.utxoStore.Create(ctx, tx, uint32(dbID)); err != nil {
-			if !strings.Contains(err.Error(), "utxo already exists") {
+			if !strings.Contains(err.Error(), "TXMETA_ALREADY_EXISTS") {
 				return fmt.Errorf("Failed to store tx: %w", err)
 			}
 		}

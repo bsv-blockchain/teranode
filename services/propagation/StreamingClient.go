@@ -124,6 +124,16 @@ func (sc *StreamingClient) ProcessTransaction(txBytes []byte) error {
 	return err
 }
 
+func (sc *StreamingClient) ProcessTransactionBatch(txs [][]byte) error {
+	for _, tx := range txs {
+		if err := sc.ProcessTransaction(tx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (sc *StreamingClient) GetTimings() (time.Duration, int) {
 	ch := make(chan timing)
 	sc.timingsCh <- ch
@@ -136,10 +146,12 @@ func (sc *StreamingClient) GetTimings() (time.Duration, int) {
 func (sc *StreamingClient) initStream(ctx context.Context) error {
 	var err error
 
-	client, _, err := getClientConn(ctx)
+	conn, err := getClientConn(ctx)
 	if err != nil {
 		return err
 	}
+
+	client := propagation_api.NewPropagationAPIClient(conn)
 
 	sc.stream, err = client.ProcessTransactionStream(ctx)
 	if err != nil {

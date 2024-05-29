@@ -112,7 +112,8 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 
 	partitions := GetQueryParamInt(kafkaURL, "partitions", 1)
 	replicationFactor := GetQueryParamInt(kafkaURL, "replication", 1)
-	retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000") // 10 minutes
+	retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000")      // 10 minutes
+	segmentBytes := GetQueryParam(kafkaURL, "segment_bytes", "1073741824") // 1GB default
 
 	topic := kafkaURL.Path[1:]
 
@@ -120,7 +121,10 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 		NumPartitions:     int32(partitions),
 		ReplicationFactor: int16(replicationFactor),
 		ConfigEntries: map[string]*string{
-			"retention.ms": &retentionPeriod, // Set the retention period
+			"retention.ms":        &retentionPeriod, // Set the retention period
+			"delete.retention.ms": &retentionPeriod,
+			"segment.ms":          &retentionPeriod,
+			"segment.bytes":       &segmentBytes,
 		},
 	}, false); err != nil {
 		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
@@ -366,13 +370,17 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 
 	partitions := GetQueryParamInt(kafkaURL, "partitions", 1)
 	replicationFactor := GetQueryParamInt(kafkaURL, "replication", 1)
-	retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000") // 10 minutes
+	retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000")      // 10 minutes
+	segmentBytes := GetQueryParam(kafkaURL, "segment_bytes", "1073741824") // 1GB default
 
 	if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
 		NumPartitions:     int32(partitions),
 		ReplicationFactor: int16(replicationFactor),
 		ConfigEntries: map[string]*string{
-			"retention.ms": &retentionPeriod, // Set the retention period
+			"retention.ms":        &retentionPeriod, // Set the retention period
+			"delete.retention.ms": &retentionPeriod,
+			"segment.ms":          &retentionPeriod,
+			"segment.bytes":       &segmentBytes,
 		},
 	}, false); err != nil {
 		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {

@@ -8,6 +8,7 @@ service PropagationAPI {
   // Health returns the health of the API.
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
   rpc ProcessTransaction (ProcessTransactionRequest) returns (EmptyMessage) {}
+  rpc ProcessTransactionBatch (ProcessTransactionBatchRequest) returns (ProcessTransactionBatchResponse) {}
   rpc ProcessTransactionHex (ProcessTransactionHexRequest) returns (EmptyMessage) {}
   rpc ProcessTransactionStream (stream ProcessTransactionRequest) returns (stream EmptyMessage) {}
   rpc ProcessTransactionDebug (ProcessTransactionRequest) returns (EmptyMessage) {}
@@ -36,6 +37,16 @@ message GetResponse {
 // swagger:model ProcessTransactionRequest
 message ProcessTransactionRequest {
   bytes tx = 1;
+}
+
+// swagger:model ProcessTransactionRequest
+message ProcessTransactionBatchRequest {
+  repeated bytes tx = 1;
+}
+
+// swagger:model ProcessTransactionBatchResponse
+message ProcessTransactionBatchResponse {
+  repeated string error = 1;
 }
 
 // swagger:model ProcessTransactionRequest

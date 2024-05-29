@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
+	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -22,7 +22,7 @@ import (
 
 type Distributor struct {
 	logger             ulogger.Logger
-	propagationServers map[string]propagation_api.PropagationAPIClient
+	propagationServers map[string]*propagation.Client
 	attempts           int32
 	backoff            time.Duration
 	failureTolerance   int
@@ -52,8 +52,8 @@ func WithFailureTolerance(r int) Option {
 	}
 }
 
-func NewDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error) {
-	propagationServers, err := getPropagationServers()
+func NewDistributor(ctx context.Context, logger ulogger.Logger, opts ...Option) (*Distributor, error) {
+	propagationServers, err := getPropagationServers(ctx, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -72,12 +72,12 @@ func NewDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error)
 	return d, nil
 }
 
-func NewDistributorFromAddress(address string, logger ulogger.Logger, opts ...Option) (*Distributor, error) {
-	propagationServer, err := getPropagationServerFromAddress(address)
+func NewDistributorFromAddress(ctx context.Context, logger ulogger.Logger, address string, opts ...Option) (*Distributor, error) {
+	propagationServer, err := getPropagationServerFromAddress(ctx, logger, address)
 	if err != nil {
 		return nil, err
 	}
-	propagationServers := map[string]propagation_api.PropagationAPIClient{
+	propagationServers := map[string]*propagation.Client{
 		address: propagationServer,
 	}
 
@@ -95,14 +95,14 @@ func NewDistributorFromAddress(address string, logger ulogger.Logger, opts ...Op
 	return d, nil
 }
 
-func getPropagationServers() (map[string]propagation_api.PropagationAPIClient, error) {
+func getPropagationServers(ctx context.Context, logger ulogger.Logger) (map[string]*propagation.Client, error) {
 	addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 
 	if len(addresses) == 0 {
 		return nil, errors.New(errors.ERR_SERVICE_ERROR, "no propagation server addresses found")
 	}
 
-	propagationServers := make(map[string]propagation_api.PropagationAPIClient)
+	propagationServers := make(map[string]*propagation.Client)
 
 	for _, address := range addresses {
 		pConn, err := util.GetGRPCClient(context.Background(), address, &util.ConnectionOptions{
@@ -111,25 +111,19 @@ func getPropagationServers() (map[string]propagation_api.PropagationAPIClient, e
 			MaxRetries:  3,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("error connecting to propagation server %s: %w", address, err)
+			return nil, fmt.Errorf("error creating grpc client for propagation server %s: %w", address, err)
 		}
 
-		propagationServers[address] = propagation_api.NewPropagationAPIClient(pConn)
+		propagationServers[address], err = propagation.NewClient(ctx, logger, pConn)
+		if err != nil {
+			return nil, fmt.Errorf("error creating client for propagation server %s: %w", address, err)
+		}
 	}
 
 	return propagationServers, nil
 }
 
-func getPropagationServerFromAddress(address string) (propagation_api.PropagationAPIClient, error) {
-	// addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
-
-	// if len(addresses) == 0 {
-	// 	return nil, errors.New("no propagation server addresses found")
-	// }
-
-	// propagationServers := make(map[string]propagation_api.PropagationAPIClient)
-
-	// for _, address := range addresses {
+func getPropagationServerFromAddress(ctx context.Context, logger ulogger.Logger, address string) (*propagation.Client, error) {
 	pConn, err := util.GetGRPCClient(context.Background(), address, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
@@ -139,8 +133,10 @@ func getPropagationServerFromAddress(address string) (propagation_api.Propagatio
 		return nil, fmt.Errorf("error connecting to propagation server %s: %w", address, err)
 	}
 
-	propagationServer := propagation_api.NewPropagationAPIClient(pConn)
-	// }
+	propagationServer, err := propagation.NewClient(ctx, logger, pConn)
+	if err != nil {
+		return nil, fmt.Errorf("error creating client for propagation server %s: %w", address, err)
+	}
 
 	return propagationServer, nil
 }
@@ -197,7 +193,7 @@ type ResponseWrapper struct {
 
 // Clone returns a new instance of the Distributor with the same configuration, but with new connections
 func (d *Distributor) Clone() (*Distributor, error) {
-	propagationServers, err := getPropagationServers()
+	propagationServers, err := getPropagationServers(context.Background(), d.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -234,22 +230,19 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 		span.Finish()
 	}()
 
-	txBytes := tx.ExtendedBytes()
-
 	if d.useQuic {
 		var err error
 
 		// Write the length of the transaction to buffer
-		txLength := uint32(len(txBytes))
 		var buf bytes.Buffer
-		err = binary.Write(&buf, binary.BigEndian, txLength)
+		err = binary.Write(&buf, binary.BigEndian, uint32(tx.Size()))
 		if err != nil {
 			d.logger.Errorf("Error writing transaction length: %v", err)
 			return nil, err
 		}
 
 		// Write raw transaction to buffer
-		_, err = buf.Write(txBytes)
+		_, err = buf.Write(tx.ExtendedBytes())
 		if err != nil {
 			d.logger.Errorf("Failed to write transaction data: %v", err)
 			return nil, err
@@ -295,9 +288,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 						d.logger.Fatalf("Invalid timeout format (valid examples 5s, 1m, 100ms, etc) - distributor_timeout : %v", err)
 					}
 					ctx1, cancel := context.WithTimeout(ctx1, timeout)
-					_, err = p.ProcessTransaction(ctx1, &propagation_api.ProcessTransactionRequest{
-						Tx: txBytes,
-					})
+					err = p.ProcessTransaction(ctx1, tx)
 					cancel()
 
 					if err == nil {
@@ -319,7 +310,8 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 							break
 						}
 
-						d.logger.Errorf("error sending transaction %s to %s: %v", tx.TxIDChainHash().String(), a, err)
+						deadline, _ := ctx1.Deadline()
+						d.logger.Warnf("error sending transaction %s to %s failed (deadline %s, duration %s), retrying: %v", tx.TxIDChainHash().String(), a, time.Until(deadline), time.Since(start), err)
 						if retries < d.attempts {
 							retries++
 							time.Sleep(backoff)

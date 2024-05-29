@@ -63,7 +63,7 @@ func (f *Faucet) Init(ctx context.Context) error {
 		return fmt.Errorf("could not create coinbase client: %v", err)
 	}
 
-	f.distributor, err = distributor.NewDistributor(f.logger, distributor.WithBackoffDuration(1*time.Second), distributor.WithRetryAttempts(3), distributor.WithFailureTolerance(0))
+	f.distributor, err = distributor.NewDistributor(ctx, f.logger, distributor.WithBackoffDuration(1*time.Second), distributor.WithRetryAttempts(3), distributor.WithFailureTolerance(0))
 	if err != nil {
 		return fmt.Errorf("could not create distributor: %v", err)
 	}

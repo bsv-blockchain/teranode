@@ -16,7 +16,7 @@ env:
 jobs:
   # Get version tag
   get_tag:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Determine deployment tag
         id: deployment_tag

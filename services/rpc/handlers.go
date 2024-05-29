@@ -269,7 +269,7 @@ func handleSendRawTransaction(s *rpcServer, cmd interface{}, closeChan <-chan st
 	}
 	s.logger.Debugf("tx to send: %v", tx)
 
-	d, err := distributor.NewDistributor(s.logger)
+	d, err := distributor.NewDistributor(context.Background(), s.logger)
 	if err != nil {
 		return nil, fmt.Errorf("could not create distributor: %v", err)
 	}
