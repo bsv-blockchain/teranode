@@ -1,7 +1,6 @@
 package util
 
 import (
-	"fmt"
 	"github.com/libsv/go-bt/v2"
 	"testing"
 
@@ -39,10 +38,8 @@ func TestValidHeight(t *testing.T) {
 	height, miner, err := extractCoinbaseHeightAndText(*tx.Inputs[0].UnlockingScript)
 	require.NoError(t, err)
 
-	fmt.Printf("Height: %d, Miner: %s\n", height, miner)
-
-	assert.Equal(t, uint32(0), height)
-	assert.Equal(t, "", miner)
+	assert.Equal(t, uint32(4105), height)
+	assert.Equal(t, "/m5-cc1/", miner)
 }
 
 func TestExtractMiner(t *testing.T) {

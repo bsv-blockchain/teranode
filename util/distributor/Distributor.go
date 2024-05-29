@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"net/http"
 	"sync"
 	"time"
@@ -53,8 +52,8 @@ func WithFailureTolerance(r int) Option {
 	}
 }
 
-func NewDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error) {
-	propagationServers, err := getPropagationServers(context.Background(), logger)
+func NewDistributor(ctx context.Context, logger ulogger.Logger, opts ...Option) (*Distributor, error) {
+	propagationServers, err := getPropagationServers(ctx, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -73,12 +72,12 @@ func NewDistributor(logger ulogger.Logger, opts ...Option) (*Distributor, error)
 	return d, nil
 }
 
-func NewDistributorFromAddress(address string, logger ulogger.Logger, opts ...Option) (*Distributor, error) {
-	propagationServer, err := getPropagationServerFromAddress(address)
+func NewDistributorFromAddress(ctx context.Context, logger ulogger.Logger, address string, opts ...Option) (*Distributor, error) {
+	propagationServer, err := getPropagationServerFromAddress(ctx, logger, address)
 	if err != nil {
 		return nil, err
 	}
-	propagationServers := map[string]propagation_api.PropagationAPIClient{
+	propagationServers := map[string]*propagation.Client{
 		address: propagationServer,
 	}
 
@@ -124,16 +123,7 @@ func getPropagationServers(ctx context.Context, logger ulogger.Logger) (map[stri
 	return propagationServers, nil
 }
 
-func getPropagationServerFromAddress(address string) (map[string]*propagation.Client, error) {
-	// addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
-
-	// if len(addresses) == 0 {
-	// 	return nil, errors.New("no propagation server addresses found")
-	// }
-
-	// propagationServers := make(map[string]propagation_api.PropagationAPIClient)
-
-	// for _, address := range addresses {
+func getPropagationServerFromAddress(ctx context.Context, logger ulogger.Logger, address string) (*propagation.Client, error) {
 	pConn, err := util.GetGRPCClient(context.Background(), address, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
@@ -143,9 +133,10 @@ func getPropagationServerFromAddress(address string) (map[string]*propagation.Cl
 		return nil, fmt.Errorf("error connecting to propagation server %s: %w", address, err)
 	}
 
-	// TODO: Siggi - this is not correct, we need to create a client from the connection
-	propagationServer := propagation_api.NewPropagationAPIClient(pConn)
-	// }
+	propagationServer, err := propagation.NewClient(ctx, logger, pConn)
+	if err != nil {
+		return nil, fmt.Errorf("error creating client for propagation server %s: %w", address, err)
+	}
 
 	return propagationServer, nil
 }

@@ -88,7 +88,7 @@ func TestShouldAllowFairTx(t *testing.T) {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
 
-	txDistributor, _ := distributor.NewDistributor(logger,
+	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
 		distributor.WithRetryAttempts(3),
 		distributor.WithFailureTolerance(0),
@@ -224,10 +224,10 @@ func TestShouldAllowFairTx(t *testing.T) {
 	o = append(o, options.WithFileExtension("block"))
 	//wait
 	time.Sleep(5 * time.Second)
-	blockchain, err := blockchain.NewClient(context.Background(), logger)
-	header, meta, err := blockchain.GetBestBlockHeader(context.Background())
+	blockchain, err := blockchain.NewClient(ctx, logger)
+	header, meta, err := blockchain.GetBestBlockHeader(ctx)
 	fmt.Printf("Best block header: %v\n", header.Hash())
-	r, err := blockStore.GetIoReader(context.Background(), header.Hash()[:], o...)
+	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
 	// t.Errorf("error getting block reader: %v", err)
 	if err == nil {
 		if bl, err := readFile("block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
@@ -247,19 +247,19 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
 
-	txDistributor, _ := distributor.NewDistributor(logger,
+	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
 		distributor.WithRetryAttempts(3),
 		distributor.WithFailureTolerance(0),
 	)
 
-	txNode1Distributor, _ := distributor.NewDistributorFromAddress("localhost:18084", logger,
+	txNode1Distributor, _ := distributor.NewDistributorFromAddress(ctx, logger, "localhost:18084",
 		distributor.WithBackoffDuration(200*time.Millisecond),
 		distributor.WithRetryAttempts(3),
 		distributor.WithFailureTolerance(0),
 	)
 
-	txNode2Distributor, _ := distributor.NewDistributorFromAddress("localhost:28084", logger,
+	txNode2Distributor, _ := distributor.NewDistributorFromAddress(ctx, logger, "localhost:28084",
 		distributor.WithBackoffDuration(200*time.Millisecond),
 		distributor.WithRetryAttempts(3),
 		distributor.WithFailureTolerance(0),
@@ -465,10 +465,10 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	var o []options.Options
 	o = append(o, options.WithFileExtension("block"))
 	//wait
-	blockchain, err := blockchain.NewClient(context.Background(), logger)
-	header, meta, err := blockchain.GetBestBlockHeader(context.Background())
+	blockchain, err := blockchain.NewClient(ctx, logger)
+	header, meta, err := blockchain.GetBestBlockHeader(ctx)
 	fmt.Printf("Best block header: %v\n", header.Hash())
-	r, err := blockStore.GetIoReader(context.Background(), header.Hash()[:], o...)
+	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
 	// t.Errorf("error getting block reader: %v", err)
 	if err == nil {
 		if bl, err := readFile("block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
@@ -655,7 +655,7 @@ func getReader(path string, logger ulogger.Logger) (string, string, io.Reader, e
 	if dir == "" && err == nil {
 		store := getBlockStore(logger)
 
-		r, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension(ext))
+		r, err := store.GetIoReader(ctx, hash[:], options.WithFileExtension(ext))
 		if err != nil {
 			return "", "", nil, fmt.Errorf("error getting reader from store: %w", err)
 		}
