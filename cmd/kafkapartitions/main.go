@@ -54,6 +54,9 @@ func createPartitions(configName string, partitions int) error {
 	defer admin.Close()
 
 	err = admin.CreatePartitions(topic, int32(partitions), nil, false)
+	if err != nil {
+		return fmt.Errorf("error changing partitions: %w", err)
+	}
 
 	log.Printf("%q changed successfully with %d partitions", topic, partitions)
 
