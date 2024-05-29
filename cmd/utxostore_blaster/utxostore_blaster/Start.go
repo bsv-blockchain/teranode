@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 
-	_ "net/http/pprof"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -91,8 +90,12 @@ func Init() {
 	}))
 
 	log.Printf("Profiler available at http://%s/debug/pprof", httpAddr)
+	server := &http.Server{
+		Addr:              httpAddr,
+		ReadHeaderTimeout: 90 * time.Second, // pprof takes 30 seconds to create a profile
+	}
 	go func() {
-		log.Printf("%v", http.ListenAndServe(httpAddr, nil))
+		log.Printf("%v", server.ListenAndServe())
 	}()
 }
 
