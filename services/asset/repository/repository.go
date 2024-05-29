@@ -102,7 +102,7 @@ func (r *Repository) Health(ctx context.Context) (int, string, error) {
 func (r *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
 	r.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 
-	txMeta, err := r.UtxoStore.GetMeta(ctx, hash)
+	txMeta, err := r.UtxoStore.Get(ctx, hash)
 	if err == nil && txMeta != nil {
 		return txMeta.Tx.ExtendedBytes(), nil
 	}
