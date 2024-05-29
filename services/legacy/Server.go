@@ -3,14 +3,13 @@ package legacy
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
@@ -402,7 +401,8 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 
 		// Store the tx in the store
 		if _, err := s.utxoStore.Create(ctx, tx, uint32(dbID)); err != nil {
-			if !strings.Contains(err.Error(), "TXMETA_ALREADY_EXISTS") {
+			if !errors.Is(err, errors.ErrTxmetaAlreadyExists) {
+				// if !strings.Contains(err.Error(), "TXMETA_ALREADY_EXISTS") {
 				return fmt.Errorf("Failed to store tx: %w", err)
 			}
 		}

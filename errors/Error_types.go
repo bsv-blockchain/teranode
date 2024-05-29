@@ -21,6 +21,7 @@ var (
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
+	ErrTxmetaAlreadyExists        = New(ERR_TXMETA_ALREADY_EXISTS, "txmeta already exists")
 	ErrServiceError               = New(ERR_SERVICE_ERROR, "service error")
 	ErrStorageUnavailable         = New(ERR_STORAGE_UNAVAILABLE, "storage unavailable")
 	ErrStorageNotStarted          = New(ERR_STORAGE_NOT_STARTED, "storage not started")
