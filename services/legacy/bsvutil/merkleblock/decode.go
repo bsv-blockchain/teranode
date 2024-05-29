@@ -6,7 +6,6 @@
 package merkleblock
 
 import (
-	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -80,117 +79,6 @@ func NewMerkleBlockFromMsg(msg wire.MsgMerkleBlock) *PartialBlock {
 	}
 
 	return mBlock
-}
-
-// ExtractMatches traverses the partial merkle tree and returns the merkle root
-// on successful traversal or nil if an error occured during traversal due to
-// an invalid block being parsed
-func (m *PartialBlock) ExtractMatches() *chainhash.Hash {
-
-	// if block is empty then no extraction can be made
-	if m.numTx == 0 {
-		return nil
-	}
-
-	// check for excessively high number of transactions
-	if m.numTx > MaxTxnCount {
-		return nil
-	}
-
-	totalHashes := uint64(len(m.finalHashes))
-
-	// check there are not more hashes than total number of transactions in a block
-	if totalHashes > m.numTx {
-		return nil
-	}
-
-	// there must be atleast one bit per node in the partial merkle tree and
-	// atleast one node per hash
-	if uint64(len(m.bits)) < totalHashes {
-		return nil
-	}
-
-	// calculate the height of the merkle tree
-	height := uint64(0)
-	for m.calcTreeWidth(height) > 1 {
-		height++
-	}
-
-	// traverse the partial merkle tree
-	merkleRootHash := m.traverseAndExtract(height, 0)
-
-	// check no problems occured during tree traversal
-	if m.bad {
-		return nil
-	}
-
-	// verify that all bits were consumed (except for the padding caused by
-	// serialisation it as a byte sequence)
-	if (m.bitsUsed+7)/8 != (uint32(len(m.bits))+7)/8 {
-		return nil
-	}
-
-	// verify that all hashes were consumed
-	if m.hashesUsed != uint32(len(m.finalHashes)) {
-		return nil
-	}
-
-	// return merkle root
-	return merkleRootHash
-}
-
-// traverseAndExtract traverses over a partial merkle tree and finds matched
-// transaction hashes and their item position in the block
-func (m *PartialBlock) traverseAndExtract(height, pos uint64) *chainhash.Hash {
-
-	if m.bitsUsed >= uint32(len(m.bits)) {
-		// bits array has overflowed
-		m.bad = true
-		return &chainhash.Hash{}
-	}
-
-	parent := m.bits[m.bitsUsed]
-	m.bitsUsed++
-
-	if height == 0 || parent == byte(0) {
-		// at height 0 or bit not set of node, then do not descend tree,
-		// just return hash
-		if m.hashesUsed >= uint32(len(m.finalHashes)) {
-			m.bad = true
-			return &chainhash.Hash{}
-		}
-
-		hash := m.finalHashes[m.hashesUsed]
-		m.hashesUsed++
-
-		if height == 0 && parent == byte(1) {
-			// at height 0 and we have a matched transaction
-			m.matchedHashes = append(m.matchedHashes, hash)
-			m.matchedItems = append(m.matchedItems, pos)
-		}
-
-		return hash
-	}
-
-	// descend into subtree to extract matched transactions
-	left := m.traverseAndExtract(height-1, pos*2)
-
-	var right *chainhash.Hash
-
-	if pos*2+1 < m.calcTreeWidth(height-1) {
-		right = m.traverseAndExtract(height-1, pos*2+1)
-
-		if right.IsEqual(left) {
-			// left and right branches should not be identical, as the
-			// transaction hashes covered by them must each be unique
-			m.bad = true
-		}
-	} else {
-		right = left
-	}
-
-	// hash with double sha256 and return
-	return blockchain.HashMerkleBranches(left, right)
 }
 
 // GetMatches returns the transaction hashes matched in the partial merkle tree

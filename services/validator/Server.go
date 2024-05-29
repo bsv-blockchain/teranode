@@ -13,8 +13,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
-	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -36,8 +35,7 @@ type Server struct {
 	validator_api.UnsafeValidatorAPIServer
 	validator         Interface
 	logger            ulogger.Logger
-	utxoStore         utxostore.Interface
-	txMetaStore       txmetastore.Store
+	utxoStore         utxo.Store
 	kafkaSignal       chan os.Signal
 	newSubscriptions  chan subscriber
 	deadSubscriptions chan subscriber
@@ -46,13 +44,12 @@ type Server struct {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxostore.Interface, txMetaStore txmetastore.Store) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Store) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
 		logger:            logger,
 		utxoStore:         utxoStore,
-		txMetaStore:       txMetaStore,
 		newSubscriptions:  make(chan subscriber, 10),
 		deadSubscriptions: make(chan subscriber, 10),
 		subscribers:       make(map[subscriber]bool),
@@ -65,7 +62,7 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {
-	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaStore)
+	v.validator, err = New(ctx, v.logger, v.utxoStore)
 	if err != nil {
 		return fmt.Errorf("could not create validator [%w]", err)
 	}

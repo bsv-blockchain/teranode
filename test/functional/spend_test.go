@@ -34,6 +34,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
+	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -218,6 +219,11 @@ func TestShouldAllowFairTx(t *testing.T) {
 	}
 	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
 	fmt.Printf("Block: %v\n", b)
+
+	_, err = helper.CallRPC("http://localhost:18090", "getblock", []interface{}{hashStr, 1})
+	if err != nil {
+		t.Errorf("error getting block: %v", err)
+	}
 
 	blockStore := getBlockStore(logger)
 	var o []options.Options

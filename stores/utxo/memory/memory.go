@@ -3,227 +3,258 @@ package memory
 import (
 	"context"
 	"sync"
-	"time"
+	"sync/atomic"
 
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// var (
-// 	empty = &chainhash.Hash{}
-// )
-
-type UTXO struct {
-	SpendingTxID *chainhash.Hash
-	LockTime     uint32
+type memoryData struct {
+	tx       *bt.Tx
+	lockTime uint32
+	blockIDs []uint32
+	utxoMap  map[chainhash.Hash]*chainhash.Hash
 }
 
 type Memory struct {
-	mu               sync.Mutex
-	m                map[chainhash.Hash]UTXO // needs to be able to be variable length
-	BlockHeight      uint32
-	DeleteSpentUtxos bool
-	timeout          time.Duration
+	logger      ulogger.Logger
+	txs         map[chainhash.Hash]*memoryData
+	txsMu       sync.Mutex
+	blockHeight atomic.Uint32
 }
 
-func New(deleteSpends bool) *Memory {
+func New(logger ulogger.Logger) utxo.Store {
 	return &Memory{
-		m:                make(map[chainhash.Hash]UTXO),
-		DeleteSpentUtxos: deleteSpends,
-		timeout:          5000 * time.Millisecond,
+		logger:      logger,
+		txs:         make(map[chainhash.Hash]*memoryData),
+		txsMu:       sync.Mutex{},
+		blockHeight: atomic.Uint32{},
 	}
 }
 
+func (m *Memory) Health(_ context.Context) (int, string, error) {
+	return 0, "", nil
+}
+
+func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	txHash := tx.TxIDChainHash()
+
+	if _, ok := m.txs[*txHash]; ok {
+		return nil, utxo.NewErrTxmetaAlreadyExists(txHash)
+	}
+
+	m.txs[*txHash] = &memoryData{
+		tx:       tx,
+		lockTime: tx.LockTime,
+		blockIDs: make([]uint32, 0),
+		utxoMap:  make(map[chainhash.Hash]*chainhash.Hash),
+	}
+
+	txMetaData, err := util.TxMetaDataFromTx(tx)
+	if err != nil {
+		return nil, err
+	}
+
+	utxoHashes, err := utxo.GetUtxoHashes(tx)
+	if err != nil {
+		return nil, errors.New(errors.ERR_PROCESSING, "failed to get utxo hashes", err)
+	}
+
+	for _, utxoHash := range utxoHashes {
+		m.txs[*txHash].utxoMap[utxoHash] = nil
+	}
+
+	return txMetaData, nil
+}
+
+func (m *Memory) Get(_ context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	if data, ok := m.txs[*hash]; ok {
+		txMeta, err := util.TxMetaDataFromTx(data.tx)
+		if err != nil {
+			return nil, err
+		}
+
+		txMeta.BlockIDs = data.blockIDs
+
+		return txMeta, nil
+	}
+
+	return nil, utxo.NewErrTxmetaNotFound(hash)
+}
+
+func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	metaData, err := m.Get(context.Background(), spend.TxID)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, ok := m.txs[*spend.TxID]; !ok {
+		return nil, utxo.NewErrTxmetaNotFound(spend.TxID)
+	}
+
+	txSpend, ok := m.txs[*spend.TxID].utxoMap[*spend.Hash]
+	if !ok {
+		return nil, utxo.NewErrTxmetaNotFound(spend.TxID)
+	}
+
+	return &utxo.SpendResponse{
+		Status:       int(utxo.CalculateUtxoStatus(txSpend, metaData.LockTime, m.blockHeight.Load())),
+		SpendingTxID: txSpend,
+		LockTime:     metaData.LockTime,
+	}, nil
+}
+
+func (m *Memory) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	return m.Get(ctx, hash)
+}
+
+func (m *Memory) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	if _, ok := m.txs[*hash]; !ok {
+		return utxo.NewErrTxmetaNotFound(hash)
+	}
+
+	delete(m.txs, *hash)
+
+	return nil
+}
+
+func (m *Memory) Spend(ctx context.Context, spends []*utxo.Spend) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	for _, spend := range spends {
+		if _, ok := m.txs[*spend.TxID]; !ok {
+			return utxo.NewErrTxmetaNotFound(spend.TxID)
+		}
+
+		spendTxID, ok := m.txs[*spend.TxID].utxoMap[*spend.Hash]
+		if !ok {
+			return utxo.NewErrTxmetaNotFound(spend.TxID)
+		}
+
+		if spendTxID != nil {
+			if *spendTxID != *spend.SpendingTxID {
+				return utxo.NewErrSpent(spendTxID, spend.Vout, spend.Hash, spend.Hash)
+			}
+			// same spend tx ID, just ignore and continue
+			continue
+		}
+
+		m.txs[*spend.TxID].utxoMap[*spend.Hash] = spend.SpendingTxID
+	}
+
+	return nil
+}
+
+func (m *Memory) UnSpend(_ context.Context, spends []*utxo.Spend) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	for _, spend := range spends {
+		if _, ok := m.txs[*spend.TxID]; !ok {
+			return utxo.NewErrTxmetaNotFound(spend.TxID)
+		}
+
+		_, ok := m.txs[*spend.TxID].utxoMap[*spend.Hash]
+		if !ok {
+			return utxo.NewErrTxmetaNotFound(spend.TxID)
+		}
+
+		m.txs[*spend.TxID].utxoMap[*spend.Hash] = nil
+	}
+
+	return nil
+}
+
+func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	for _, hash := range hashes {
+		if _, ok := m.txs[*hash]; !ok {
+			return utxo.NewErrTxmetaNotFound(hash)
+		}
+
+		m.txs[*hash].blockIDs = append(m.txs[*hash].blockIDs, blockID)
+	}
+
+	return nil
+}
+
+func (m *Memory) MetaBatchDecorate(_ context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	for _, unresolvedMetaData := range unresolvedMetaDataSlice {
+		if _, ok := m.txs[unresolvedMetaData.Hash]; !ok {
+			// do not throw error, MetaBatchDecorate should not fail if a tx is not found
+			// just add the error to the item itself
+			unresolvedMetaData.Err = utxo.NewErrTxmetaNotFound(&unresolvedMetaData.Hash)
+			continue
+		}
+
+		txMeta, err := util.TxMetaDataFromTx(m.txs[unresolvedMetaData.Hash].tx)
+		if err != nil {
+			return err
+		}
+
+		txMeta.BlockIDs = m.txs[unresolvedMetaData.Hash].blockIDs
+		txMeta.LockTime = m.txs[unresolvedMetaData.Hash].lockTime
+
+		unresolvedMetaData.Data = txMeta
+	}
+
+	return nil
+}
+
+func (m *Memory) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	for _, outpoint := range outpoints {
+		data, ok := m.txs[outpoint.PreviousTxID]
+		if !ok {
+			return utxo.NewErrTxmetaNotFound(&outpoint.PreviousTxID)
+		}
+
+		if len(data.tx.Outputs) <= int(outpoint.Vout) {
+			return utxo.NewErrTxmetaNotFound(&outpoint.PreviousTxID)
+		}
+
+		input := data.tx.Inputs[outpoint.Vout]
+		if input == nil {
+			return utxo.NewErrTxmetaNotFound(&outpoint.PreviousTxID)
+		}
+
+		outpoint.LockingScript = *input.PreviousTxScript
+		outpoint.Satoshis = input.PreviousTxSatoshis
+	}
+
+	return nil
+}
+
 func (m *Memory) SetBlockHeight(height uint32) error {
-	m.BlockHeight = height
+	m.blockHeight.Store(height)
 	return nil
 }
 
 func (m *Memory) GetBlockHeight() (uint32, error) {
-	return m.BlockHeight, nil
-}
-
-func (m *Memory) Health(_ context.Context) (int, string, error) {
-	return 0, "Memory Store", nil
-}
-
-func (m *Memory) Get(_ context.Context, spend *utxostore.Spend) (*utxostore.Response, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if utxo, ok := m.m[*spend.Hash]; ok {
-		if utxo.SpendingTxID == nil {
-			return &utxostore.Response{
-				Status:   int(utxostore.Status_OK),
-				LockTime: utxo.LockTime,
-			}, nil
-		}
-		return &utxostore.Response{
-			Status:       int(utxostore.Status_SPENT),
-			SpendingTxID: utxo.SpendingTxID,
-			LockTime:     utxo.LockTime,
-		}, nil
-	}
-
-	return &utxostore.Response{
-		Status: int(utxostore.Status_NOT_FOUND),
-	}, nil
-}
-
-// Store stores the utxos of the tx in aerospike
-// the lockTime optional argument is needed for coinbase transactions that do not contain the lock time
-func (m *Memory) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	if m.timeout > 0 {
-		var cancel context.CancelFunc
-		_, cancel = context.WithTimeout(ctx, m.timeout)
-		defer cancel()
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	utxoHashes, err := utxostore.GetUtxoHashes(tx)
-	if err != nil {
-		return err
-	}
-
-	storeLockTime := tx.LockTime
-	if len(lockTime) > 0 {
-		storeLockTime = lockTime[0]
-	}
-
-	for _, hash := range utxoHashes {
-		_, found := m.m[hash]
-		if found {
-			return utxostore.ErrAlreadyExists
-		}
-
-		m.m[hash] = UTXO{
-			SpendingTxID: nil,
-			LockTime:     storeLockTime,
-		}
-	}
-
-	return nil
-}
-
-func (m *Memory) StoreFromHashes(_ context.Context, _ chainhash.Hash, hashes []chainhash.Hash, lockTime uint32) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for _, hash := range hashes {
-		_, found := m.m[hash]
-		if found {
-			return utxostore.ErrAlreadyExists
-		}
-
-		m.m[hash] = UTXO{
-			SpendingTxID: nil,
-			LockTime:     lockTime,
-		}
-	}
-
-	return nil
-}
-
-func (m *Memory) Spend(_ context.Context, spends []*utxostore.Spend) (err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for idx, spend := range spends {
-		if spend == nil {
-			continue
-		}
-
-		err = m.spendUtxo(spend)
-		if err != nil {
-			for i := 0; i < idx; i++ {
-				err = m.unSpend(spends[i])
-				if err != nil {
-					return err
-				}
-			}
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (m *Memory) spendUtxo(spend *utxostore.Spend) error {
-	if utxo, found := m.m[*spend.Hash]; found {
-		if utxo.SpendingTxID == nil {
-			if util.ValidLockTime(utxo.LockTime, m.BlockHeight) {
-				if m.DeleteSpentUtxos {
-					delete(m.m, *spend.Hash)
-				} else {
-					m.m[*spend.Hash] = UTXO{
-						SpendingTxID: spend.SpendingTxID,
-						LockTime:     utxo.LockTime,
-					}
-				}
-				return nil
-			}
-
-			return utxostore.NewErrLockTime(utxo.LockTime, m.BlockHeight)
-		} else {
-			if utxo.SpendingTxID.IsEqual(spend.SpendingTxID) {
-				return nil
-			}
-
-			return utxostore.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, utxo.SpendingTxID)
-		}
-	}
-
-	return utxostore.ErrNotFound
-}
-
-func (m *Memory) UnSpend(_ context.Context, spends []*utxostore.Spend) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for _, spend := range spends {
-		err := m.unSpend(spend)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (m *Memory) unSpend(spend *utxostore.Spend) error {
-	utxo, ok := m.m[*spend.Hash]
-	if !ok {
-		return utxostore.ErrNotFound
-	}
-
-	utxo.SpendingTxID = nil
-	m.m[*spend.Hash] = utxo
-
-	return nil
-}
-
-func (m *Memory) Delete(_ context.Context, tx *bt.Tx) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	delete(m.m, *tx.TxIDChainHash())
-
-	return nil
-}
-
-func (m *Memory) delete(hash *chainhash.Hash) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	delete(m.m, *hash)
-
-	return nil
-}
-
-func (m *Memory) DeleteSpends(deleteSpends bool) {
-	m.DeleteSpentUtxos = deleteSpends
+	return m.blockHeight.Load(), nil
 }

@@ -10,8 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -31,13 +30,11 @@ func getMemoryStore(t *testing.T) blob.Store {
 }
 
 func TestTransaction(t *testing.T) {
-	var utxoStore utxo.Interface
 	var subtreeStore blob.Store
 	var blockStore blob.Store
 
 	txStore := getMemoryStore(t)
-
-	txMetaStore := memory.New(ulogger.TestLogger{})
+	utxoStore := memory.New(ulogger.TestLogger{})
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
 	require.NoError(t, err)
@@ -54,7 +51,7 @@ func TestTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, txMetaStore, blockchainClient, subtreeStore, blockStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	require.NoError(t, err)
 
 	// Get the transaction from the repository
@@ -141,12 +138,10 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 		require.NoError(t, err)
 	}
 
-	var utxoStore utxo.Interface
-	var blockStore blob.Store
-
+	blockStore := getMemoryStore(t)
 	subtreeStore := getMemoryStore(t)
 	txStore := getMemoryStore(t)
-	txMetaStore := memory.New(ulogger.TestLogger{})
+	utxoStore := memory.New(ulogger.TestLogger{})
 
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
 	require.NoError(t, err)
@@ -163,7 +158,7 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, txMetaStore, blockchainClient, subtreeStore, blockStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, utxoStore, txStore, blockchainClient, subtreeStore, blockStore)
 	require.NoError(t, err)
 
 	return txns, key, repo

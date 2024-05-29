@@ -6,7 +6,6 @@
 package merkleblock
 
 import (
-	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -42,7 +41,17 @@ func (m *MerkleBlock) calcHash(height, pos uint32) *chainhash.Hash {
 	} else {
 		right = left
 	}
-	return blockchain.HashMerkleBranches(left, right)
+	return hashMerkleBranches(left, right)
+}
+
+func hashMerkleBranches(left *chainhash.Hash, right *chainhash.Hash) *chainhash.Hash {
+	// Concatenate the left and right nodes.
+	var hash [chainhash.HashSize * 2]byte
+	copy(hash[:chainhash.HashSize], left[:])
+	copy(hash[chainhash.HashSize:], right[:])
+
+	newHash := chainhash.DoubleHashH(hash[:])
+	return &newHash
 }
 
 // traverseAndBuild builds a partial merkle tree using a recursive depth-first

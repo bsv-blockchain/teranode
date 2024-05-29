@@ -9,13 +9,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -41,7 +43,7 @@ type BlockValidation struct {
 	subtreeStore                       blob.Store
 	subtreeTTL                         time.Duration
 	txStore                            blob.Store
-	txMetaStore                        txmeta.Store
+	utxoStore                          utxo.Store
 	recentBlocksBloomFilters           []*model.BlockBloomFilter
 	recentBlocksBloomFiltersMu         sync.Mutex
 	recentBlocksBloomFiltersExpiration time.Duration
@@ -62,7 +64,8 @@ type BlockValidation struct {
 }
 
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
-	txStore blob.Store, txMetaStore txmeta.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation {
+	txStore blob.Store, txMetaStore utxo.Store, validatorClient validator.Interface, subtreeValidationClient subtreevalidation.Interface, bloomExpiration time.Duration) *BlockValidation {
+
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("blockvalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
@@ -75,7 +78,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 		subtreeStore:                       subtreeStore,
 		subtreeTTL:                         subtreeTTL,
 		txStore:                            txStore,
-		txMetaStore:                        txMetaStore,
+		utxoStore:                          txMetaStore,
 		recentBlocksBloomFilters:           make([]*model.BlockBloomFilter, 0),
 		recentBlocksBloomFiltersExpiration: bloomExpiration,
 		validatorClient:                    validatorClient,
@@ -285,7 +288,7 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 	bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
 	u.recentBlocksBloomFiltersMu.Unlock()
 
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.txMetaStore, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
+	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
 		if iErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); err != nil {
 			u.logger.Errorf("[BlockValidation:start][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), iErr)
 		}
@@ -384,7 +387,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	if err = model.UpdateTxMinedStatus(
 		ctx,
 		u.logger,
-		u.txMetaStore,
+		u.utxoStore,
 		block,
 		blockID,
 	); err != nil {
@@ -424,8 +427,8 @@ func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.
 	return parentBlockMined, nil
 }
 
-func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *txmeta.Data) error {
-	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Hash, txMeta *meta.Data) error {
+	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMetaCache")
 		defer func() {
 			span.Finish()
@@ -438,7 +441,7 @@ func (u *BlockValidation) SetTxMetaCache(ctx context.Context, hash *chainhash.Ha
 }
 
 func (u *BlockValidation) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []byte) error {
-	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		return cache.SetCacheFromBytes(key, txMetaBytes)
 	}
 
@@ -446,7 +449,7 @@ func (u *BlockValidation) SetTxMetaCacheFromBytes(_ context.Context, key, txMeta
 }
 
 func (u *BlockValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
-	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMetaCacheMinedMulti")
 		defer func() {
 			span.Finish()
@@ -459,7 +462,7 @@ func (u *BlockValidation) SetTxMetaCacheMinedMulti(ctx context.Context, hashes [
 }
 
 func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte, values [][]byte) error {
-	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:SetTxMetaCacheMulti")
 		defer func() {
 			span.Finish()
@@ -472,7 +475,7 @@ func (u *BlockValidation) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte
 }
 
 func (u *BlockValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) error {
-	if cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache); ok {
+	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		span, _ := opentracing.StartSpanFromContext(ctx, "BlockValidation:DelTxMetaCacheMulti")
 		defer func() {
 			span.Finish()
@@ -594,7 +597,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
 			u.recentBlocksBloomFiltersMu.Unlock()
 
-			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.txMetaStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+			if ok, err := block.Valid(validateCtx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 				u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 				if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
@@ -635,7 +638,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
 		u.recentBlocksBloomFiltersMu.Unlock()
 
-		if ok, err := block.Valid(spanCtx, u.logger, u.subtreeStore, u.txMetaStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+		if ok, err := block.Valid(spanCtx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 			return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
@@ -731,7 +734,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	}
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees DONE", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
-	if ok, err := blockData.block.Valid(spanCtx, u.logger, u.subtreeStore, u.txMetaStore, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
+	if ok, err := blockData.block.Valid(spanCtx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
@@ -809,7 +812,7 @@ func (u *BlockValidation) _(spanCtx context.Context, block *model.Block) (err er
 	}()
 
 	// TODO - we need to consider if we can do this differently
-	if _, err = u.txMetaStore.Create(childSpanCtx, block.CoinbaseTx); err != nil {
+	if _, err = u.utxoStore.Create(childSpanCtx, block.CoinbaseTx); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			return fmt.Errorf("[ValidateBlock][%s] failed to create coinbase transaction in txMetaStore [%s]", block.Hash().String(), err.Error())
 		}

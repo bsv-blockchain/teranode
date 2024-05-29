@@ -5,16 +5,17 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"io"
 	"strings"
+
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -25,16 +26,15 @@ import (
 
 type Repository struct {
 	logger           ulogger.Logger
-	UtxoStore        utxo.Interface
+	UtxoStore        utxo.Store
 	TxStore          blob.Store
-	TxMetaStore      txmeta.Store
 	SubtreeStore     blob.Store
 	BlockStore       blob.Store
 	BlockchainClient blockchain.ClientI
 	CoinbaseProvider coinbase_api.CoinbaseAPIClient
 }
 
-func NewRepository(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob.Store, txMetaStore txmeta.Store,
+func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store,
 	blockchainClient blockchain.ClientI, SubtreeStore blob.Store, BlockStore blob.Store) (*Repository, error) {
 
 	// SAO - Loading the grpc client directly without using the coinbase.NewClient() method as it causes a circular dependency
@@ -59,7 +59,6 @@ func NewRepository(logger ulogger.Logger, utxoStore utxo.Interface, txStore blob
 		CoinbaseProvider: cbc,
 		UtxoStore:        utxoStore,
 		TxStore:          txStore,
-		TxMetaStore:      txMetaStore,
 		SubtreeStore:     SubtreeStore,
 		BlockStore:       BlockStore,
 	}, nil
@@ -103,7 +102,7 @@ func (r *Repository) Health(ctx context.Context) (int, string, error) {
 func (r *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
 	r.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 
-	txMeta, err := r.TxMetaStore.Get(ctx, hash)
+	txMeta, err := r.UtxoStore.GetMeta(ctx, hash)
 	if err == nil && txMeta != nil {
 		return txMeta.Tx.ExtendedBytes(), nil
 	}
@@ -125,9 +124,9 @@ func (r *Repository) GetBlockGraphData(ctx context.Context, periodMillis uint64)
 	return r.BlockchainClient.GetBlockGraphData(ctx, periodMillis)
 }
 
-func (r *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.Hash) (*txmeta.Data, error) {
+func (r *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	r.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
-	txMeta, err := r.TxMetaStore.Get(ctx, hash)
+	txMeta, err := r.UtxoStore.GetMeta(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -281,9 +280,9 @@ func (r *Repository) GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byt
 	return resp.SpendingTxID.CloneBytes(), nil
 }
 
-func (r *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.Response, error) {
+func (r *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	r.logger.Debugf("[Repository] GetUtxo: %s", spend.Hash.String())
-	resp, err := r.UtxoStore.Get(ctx, spend)
+	resp, err := r.UtxoStore.GetSpend(ctx, spend)
 	if err != nil {
 		return nil, err
 	}

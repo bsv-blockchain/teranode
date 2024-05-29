@@ -205,7 +205,7 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 	return nil
 }
 
-func (ps *PropagationServer) quicServer(ctx context.Context, quicAddresses string) error {
+func (ps *PropagationServer) quicServer(_ context.Context, quicAddresses string) error {
 	ps.logger.Infof("Starting QUIC listeners on %s", quicAddresses)
 
 	server := http3.Server{

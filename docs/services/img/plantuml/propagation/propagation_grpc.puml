@@ -4,7 +4,7 @@ participant "gRPC Client" as Client
 participant "gRPC Server" as Server
 participant "PropagationServer" as PropagationServer
 participant "Tx Store" as TxStore
-participant "Validation Service" as Validator
+participant "Validator" as Validator
 
 Client -> Server: Send gRPC request (ProcessTransaction)
 activate Server
@@ -33,6 +33,6 @@ deactivate PropagationServer
 Server -> Client: Return response
 deactivate Server
 
-left footer Last Modified On: 18-Dec-2023
+left footer Last Modified On: 28-May-2024
 
 @enduml

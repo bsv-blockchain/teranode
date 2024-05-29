@@ -1,15 +1,15 @@
 package test
 
 import (
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"sync"
 
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 var (
 	LoadMetaToMemoryOnce         sync.Once
-	CachedTxMetaStore            txmeta.Store
+	CachedTxMetaStore            utxo.Store
 	FileDir                      string
 	FileNameTemplate             string
 	FileNameTemplateMerkleHashes string

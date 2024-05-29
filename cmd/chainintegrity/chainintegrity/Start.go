@@ -6,8 +6,6 @@ import (
 	"os"
 	"strings"
 
-	txmetafactory "github.com/bitcoin-sv/ubsv/stores/txmeta/_factory"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -107,18 +105,6 @@ func Start() {
 		panic(err)
 	}
 
-	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no txmeta_store setting found")
-	}
-	txMetaStore, err := txmetafactory.New(logger, txMetaStoreURL)
-	if err != nil {
-		panic(err)
-	}
-
 	// ------------------------------------------------------------------------------------------------
 	// start the actual tests
 	// ------------------------------------------------------------------------------------------------
@@ -187,7 +173,7 @@ func Start() {
 					logger.Errorf("failed to get utxo hash for output %d in coinbase %s: %s", vout, block.CoinbaseTx.TxIDChainHash(), err)
 					continue
 				}
-				utxo, err := utxoStore.Get(ctx, &utxostore.Spend{
+				utxo, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
 					TxID: block.CoinbaseTx.TxIDChainHash(),
 					Vout: uint32(vout),
 					Hash: utxoHash,
@@ -237,8 +223,8 @@ func Start() {
 				var tx []byte
 				var btTx *bt.Tx
 				subtreeFees := uint64(0)
+
 				for nodeIdx, node := range subtree.Nodes {
-					node := node
 					if !model.CoinbasePlaceholderHash.Equal(node.Hash) {
 						logger.Debugf("checking transaction %s", node.Hash)
 
@@ -254,7 +240,7 @@ func Start() {
 						// check that the transaction exists in the tx store
 						tx, err = txStore.Get(ctx, node.Hash[:])
 						if err != nil {
-							txMeta, err := txMetaStore.Get(ctx, &node.Hash)
+							txMeta, err := utxoStore.GetMeta(ctx, &node.Hash)
 							if err != nil {
 								logger.Errorf("failed to get transaction %s from txmeta store: %s", node.Hash, err)
 								continue
@@ -289,7 +275,7 @@ func Start() {
 										logger.Errorf("failed to get utxo hash for parent tx input %s in transaction %s: %s", input, btTx.TxIDChainHash(), err)
 										continue
 									}
-									utxo, err := utxoStore.Get(ctx, &utxostore.Spend{
+									utxo, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
 										TxID:         input.PreviousTxIDChainHash(),
 										SpendingTxID: btTx.TxIDChainHash(),
 										Vout:         uint32(inputIdx),
@@ -318,7 +304,7 @@ func Start() {
 								logger.Errorf("failed to get utxo hash for output %d in transaction %s: %s", vout, btTx.TxIDChainHash(), err)
 								continue
 							}
-							utxo, err := utxoStore.Get(ctx, &utxostore.Spend{
+							utxo, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
 								TxID: btTx.TxIDChainHash(),
 								Vout: uint32(vout),
 								Hash: utxoHash,

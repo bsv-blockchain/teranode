@@ -2,6 +2,7 @@ package blockassembly
 
 import (
 	"context"
+	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"math/big"
 	"net/url"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	txmetastore "github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -26,8 +26,7 @@ import (
 )
 
 type baTestItems struct {
-	utxoStore        *utxostore.Memory
-	txMetaStore      *txmetastore.Memory
+	utxoStore        utxoStore.Store
 	txStore          *memory.Memory
 	blobStore        *memory.Memory
 	newSubtreeChan   chan subtreeprocessor.NewSubtreeRequest
@@ -89,23 +88,23 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 			wg.Done()
 		}()
 
-		_, err := testItems.txMetaStore.Create(ctx, tx1)
+		_, err := testItems.utxoStore.Create(ctx, tx1)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash1, Fee: 111})
 
-		_, err = testItems.txMetaStore.Create(ctx, tx2)
+		_, err = testItems.utxoStore.Create(ctx, tx2)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222})
 
-		_, err = testItems.txMetaStore.Create(ctx, tx3)
+		_, err = testItems.utxoStore.Create(ctx, tx3)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 333})
 
-		_, err = testItems.txMetaStore.Create(ctx, tx4)
+		_, err = testItems.utxoStore.Create(ctx, tx4)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444})
 
-		_, err = testItems.txMetaStore.Create(ctx, tx5)
+		_, err = testItems.utxoStore.Create(ctx, tx5)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555})
 
@@ -288,10 +287,9 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	items := baTestItems{}
 
-	items.utxoStore = utxostore.New(false)                    // utxo memory store
-	items.txMetaStore = txmetastore.New(ulogger.TestLogger{}) // tx status memory store
-	items.blobStore = memory.New()                            // blob memory store
-	items.txStore = memory.New()                              // tx memory store
+	items.utxoStore = utxostore.New(ulogger.TestLogger{}) // utxo memory store
+	items.blobStore = memory.New()                        // blob memory store
+	items.txStore = memory.New()                          // tx memory store
 
 	_ = os.Setenv("initial_merkle_items_per_subtree", "4")
 	items.newSubtreeChan = make(chan subtreeprocessor.NewSubtreeRequest)
@@ -310,7 +308,6 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 		context.Background(),
 		ulogger.TestLogger{},
 		items.utxoStore,
-		items.txMetaStore,
 		items.blobStore,
 		items.blockchainClient,
 		items.newSubtreeChan,
@@ -320,7 +317,6 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	ba.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(
 		context.Background(),
 		ulogger.TestLogger{},
-		nil,
 		nil,
 		nil,
 		items.newSubtreeChan,

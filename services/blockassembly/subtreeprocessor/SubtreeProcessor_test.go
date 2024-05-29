@@ -18,7 +18,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
-	txmeta_memory "github.com/bitcoin-sv/ubsv/stores/txmeta/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -30,7 +29,6 @@ import (
 )
 
 var (
-
 	// Fill the array with 0xFF
 	coinbaseHash, _ = chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
 	coinbaseTx, _   = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1a03a403002f746572616e6f64652f9f9fba46d5a08a6be11ddb2dffffffff0a0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac00000000")
@@ -85,7 +83,7 @@ func TestRotate(t *testing.T) {
 		}
 	}()
 
-	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, nil, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, newSubtreeChan)
 
 	for _, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -147,7 +145,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		}()
 
 		_ = os.Setenv("initial_merkle_items_per_subtree", "8")
-		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, nil, newSubtreeChan)
+		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, newSubtreeChan)
 		for i, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
 			require.NoError(t, err)
@@ -175,7 +173,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 		}()
 
 		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
-		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, nil, newSubtreeChan)
+		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, newSubtreeChan)
 		for i, txid := range txIDs {
 			hash, err := chainhash.NewHashFromStr(txid)
 			require.NoError(t, err)
@@ -238,10 +236,9 @@ func TestMoveUpBlock(t *testing.T) {
 
 	logger := ulogger.TestLogger{}
 	subtreeStore, _ := null.New(logger)
-	utxosStore := memory.New(true)
-	txMetaStore := txmeta_memory.New(logger)
+	utxosStore := memory.New(logger)
 
-	stp := NewSubtreeProcessor(context.Background(), logger, subtreeStore, utxosStore, txMetaStore, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), logger, subtreeStore, utxosStore, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -316,10 +313,9 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 	}()
 
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
-	utxosStore := memory.New(true)
-	txMetaStore := txmeta_memory.New(ulogger.TestLogger{})
+	utxosStore := memory.New(ulogger.TestLogger{})
 
-	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, txMetaStore, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -393,10 +389,9 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 	}()
 
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
-	utxosStore := memory.New(true)
-	txMetaStore := txmeta_memory.New(ulogger.TestLogger{})
+	utxosStore := memory.New(ulogger.TestLogger{})
 
-	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, txMetaStore, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -468,10 +463,9 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	}()
 
 	subtreeStore, _ := null.New(ulogger.TestLogger{})
-	utxosStore := memory.New(true)
-	txMetaStore := txmeta_memory.New(ulogger.TestLogger{})
+	utxosStore := memory.New(ulogger.TestLogger{})
 
-	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, txMetaStore, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
 		require.NoError(t, err)
@@ -553,7 +547,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		}
 	}()
 
-	subtreeProcessor := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, nil, newSubtreeChan, WithBatcherSize(1))
+	subtreeProcessor := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, newSubtreeChan, WithBatcherSize(1))
 	for i, hash := range hashes {
 		if i == 0 {
 			subtreeProcessor.currentSubtree.ReplaceRootNode(hash, 0, 0)
@@ -660,7 +654,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 				<-newSubtreeChan
 			}
 		}()
-		subtreeProcessor := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, nil, newSubtreeChan)
+		subtreeProcessor := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, newSubtreeChan)
 
 		hashes := make([]*chainhash.Hash, len(txIDs))
 		for idx, txid := range txIDs {
@@ -758,7 +752,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 		}
 	}()
 
-	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, nil, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, newSubtreeChan)
 
 	txHashes := make([]*chainhash.Hash, 100_000)
 	for i := 0; i < 100_000; i++ {
@@ -826,10 +820,9 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		}()
 
 		subtreeStore := blob_memory.New()
-		utxosStore := memory.New(true)
-		txMetaStore := txmeta_memory.New(ulogger.TestLogger{})
+		utxosStore := memory.New(ulogger.TestLogger{})
 
-		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, txMetaStore, newSubtreeChan)
+		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
 		for _, txHash := range txHashes {
 			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1})
 		}
@@ -857,6 +850,8 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		require.NoError(t, err)
 		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes)
 		require.NoError(t, err)
+
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx)
 
 		stp.SetCurrentBlockHeader(blockHeader)
 		err = stp.moveDownBlock(context.Background(), &model.Block{
@@ -918,10 +913,9 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 	t.Run("small", func(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
-		utxosStore := memory.New(true)
-		txMetaStore := txmeta_memory.New(ulogger.TestLogger{})
+		utxosStore := memory.New(ulogger.TestLogger{})
 
-		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, txMetaStore, newSubtreeChan)
+		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
 
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
@@ -966,10 +960,9 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		subtreeStore := blob_memory.New()
-		utxosStore := memory.New(true)
-		txMetaStore := txmeta_memory.New(ulogger.TestLogger{})
+		utxosStore := memory.New(ulogger.TestLogger{})
 
-		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, txMetaStore, newSubtreeChan)
+		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
 
 		subtreeSize := uint64(1024 * 1024)
 		nrSubtrees := 10
@@ -1135,7 +1128,7 @@ func initTestAddNodeBenchmark(t *testing.T) (*errgroup.Group, *SubtreeProcessor,
 		}
 	})
 
-	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, nil, newSubtreeChan)
+	stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, nil, nil, newSubtreeChan)
 
 	nrTxs := 1_048_576
 	txHashes := make([]chainhash.Hash, 10*nrTxs)

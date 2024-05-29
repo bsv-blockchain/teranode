@@ -1,16 +1,16 @@
-package utxo_test
+package utxo
 
 import (
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestIs(t *testing.T) {
-	err1 := errors.New(errors.ERR_NOT_FOUND, "utxo not found")
-	err2 := errors.New(errors.ERR_NOT_FOUND, "meta not found")
-
-	assert.ErrorIs(t, err1, err2)
+func TestErrNotExist(t *testing.T) {
+	err := NewErrTxmetaAlreadyExists(&chainhash.Hash{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TXMETA_ALREADY_EXISTS")
 
 }

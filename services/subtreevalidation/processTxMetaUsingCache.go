@@ -8,15 +8,15 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
-func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*txmeta.Data, failFast bool) (int, error) {
+func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data, failFast bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, fmt.Errorf("txHashes and txMetaSlice must be the same length")
 	}
@@ -31,7 +31,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateSubtreeInternalConcurrency)
 
-	cache, ok := u.txMetaStore.(*txmetacache.TxMetaCache)
+	cache, ok := u.utxoStore.(*txmetacache.TxMetaCache)
 	if !ok {
 		u.logger.Errorf("[processTxMetaUsingCache] txMetaStore is not a cached implementation")
 		return len(txHashes), nil // As there was no cache, we "missed" all the txHashes
@@ -44,7 +44,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 		i := i
 
 		g.Go(func() error {
-			var txMeta *txmeta.Data
+			var txMeta *meta.Data
 
 			// cycle through the batch size, making sure not to go over the length of the txHashes
 			for j := 0; j < util.Min(batchSize, len(txHashes)-i); j++ {
@@ -73,7 +73,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 
 					newMissed := missed.Add(1)
 					if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
-						return errors.ErrThresholdExceeded
+						return errors.New(errors.ERR_THRESHOLD_EXCEEDED, "threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
 					}
 				}
 			}

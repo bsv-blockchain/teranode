@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/txmeta/aerospikemap"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	url2 "net/url"

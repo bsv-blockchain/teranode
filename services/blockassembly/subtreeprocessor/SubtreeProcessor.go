@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,9 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/txmeta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -80,8 +79,7 @@ type SubtreeProcessor struct {
 	removeMap                 *util.SwissMap
 	doubleSpendWindowDuration time.Duration
 	subtreeStore              blob.Store
-	utxoStore                 utxostore.Interface
-	txMetaStore               txmeta.Store
+	utxoStore                 utxostore.Store
 	logger                    ulogger.Logger
 	stat                      *gocore.Stat
 	currentRunningState       atomic.Value
@@ -91,8 +89,8 @@ var (
 	ExpectedNumberOfSubtrees = 1024 // this is the number of subtrees we expect to be in a block, with a subtree create about every second
 )
 
-func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, utxoStore utxostore.Interface,
-	txMetaStore txmeta.Store, newSubtreeChan chan NewSubtreeRequest, options ...Options) *SubtreeProcessor {
+func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, utxoStore utxostore.Store,
+	newSubtreeChan chan NewSubtreeRequest, options ...Options) *SubtreeProcessor {
 
 	initPrometheusMetrics()
 
@@ -139,7 +137,6 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		doubleSpendWindowDuration: time.Duration(doubleSpendWindowMillis) * time.Millisecond,
 		subtreeStore:              subtreeStore,
 		utxoStore:                 utxoStore,
-		txMetaStore:               txMetaStore,
 		logger:                    logger,
 		stat:                      gocore.NewStat("subtreeProcessor").NewStat("Add", false),
 		currentRunningState:       atomic.Value{},
@@ -308,26 +305,13 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 	movedUpBlocks := make([]*model.Block, 0, len(moveUpBlocks))
 
 	for _, block := range moveDownBlocks {
-		if err := stp.utxoStore.Delete(context.Background(), block.CoinbaseTx); err != nil {
+		if err := stp.utxoStore.Delete(context.Background(), block.CoinbaseTx.TxIDChainHash()); err != nil {
 			// no need to error out if the key doesn't exist anyway
-			if !errors.Is(err, utxostore.ErrNotFound) {
+			if !errors.Is(err, utxo.NewErrTxmetaNotFound(block.CoinbaseTx.TxIDChainHash())) {
 				responseCh <- ResetResponse{
 					MovedDownBlocks: movedDownBlocks,
 					MovedUpBlocks:   movedUpBlocks,
 					Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting utxos for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
-				}
-				return
-			}
-		}
-
-		// delete tx meta
-		if err := stp.txMetaStore.Delete(context.Background(), block.CoinbaseTx.TxIDChainHash()); err != nil {
-			// no need to error out if the key doesn't exist anyway
-			if !errors.Is(err, txmeta.NewErrTxmetaNotFound(block.CoinbaseTx.TxIDChainHash())) {
-				responseCh <- ResetResponse{
-					MovedDownBlocks: movedDownBlocks,
-					MovedUpBlocks:   movedUpBlocks,
-					Err:             fmt.Errorf("[SubtreeProcessor][Reset] error deleting tx meta data for tx %s: %s", block.CoinbaseTx.String(), err.Error()),
 				}
 				return
 			}
@@ -475,10 +459,10 @@ func (stp *SubtreeProcessor) Reorg(moveDownBlocks []*model.Block, modeUpBlocks [
 // TODO handle conflicting transactions
 func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block) error {
 	if moveDownBlocks == nil {
-		return errors.New("you must pass in blocks to move down the chain")
+		return errors.New(errors.ERR_PROCESSING, "you must pass in blocks to move down the chain")
 	}
 	if moveUpBlocks == nil {
-		return errors.New("you must pass in blocks to move up the chain")
+		return errors.New(errors.ERR_PROCESSING, "you must pass in blocks to move up the chain")
 	}
 
 	stp.logger.Infof("reorgBlocks with %d moveDownBlocks and %d moveUpBlocks", len(moveDownBlocks), len(moveUpBlocks))
@@ -522,7 +506,7 @@ func (stp *SubtreeProcessor) setTxCount() {
 // TODO handle conflicting transactions
 func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Block) (err error) {
 	if block == nil {
-		return errors.New("[moveDownBlock] you must pass in a block to moveDownBlock")
+		return errors.New(errors.ERR_PROCESSING, "[moveDownBlock] you must pass in a block to moveDownBlock")
 	}
 
 	startTime := time.Now()
@@ -597,13 +581,8 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	for idx, subtreeNode := range subtreesNodes {
 		if idx == 0 {
 			// process coinbase utxos
-			if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx); err != nil {
+			if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
 				return fmt.Errorf("[moveDownBlock][%s] error deleting utxos for tx %s: %s", block.String(), block.CoinbaseTx.String(), err.Error())
-			}
-
-			// delete tx meta data
-			if err = stp.txMetaStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
-				return fmt.Errorf("[moveDownBlock][%s] error deleting tx meta data for tx %s: %s", block.String(), block.CoinbaseTx.String(), err.Error())
 			}
 
 			// skip the first transaction of the first subtree (coinbase)
@@ -647,7 +626,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 // TODO handle conflicting transactions
 func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block, skipNotification bool) error {
 	if block == nil {
-		return errors.New("[moveUpBlock] you must pass in a block to moveUpBlock")
+		return errors.New(errors.ERR_PROCESSING, "[moveUpBlock] you must pass in a block to moveUpBlock")
 	}
 
 	startTime := time.Now()
@@ -902,16 +881,9 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return fmt.Errorf("[SubtreeProcessor][coinbase:%s]error extracting coinbase height via utxo store: %v", block.CoinbaseTx.TxIDChainHash(), err)
 	}
 
-	if err = stp.utxoStore.Store(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
-		return fmt.Errorf("[SubtreeProcessor][coinbase:%s] error storing utxos: %v", block.CoinbaseTx.TxIDChainHash(), err)
-	}
-
-	if _, err = stp.txMetaStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
-		return fmt.Errorf("[SubtreeProcessor][coinbase:%s] error storing txmeta: %v", block.CoinbaseTx.TxIDChainHash(), err)
-	}
-
-	for _, utxo := range utxos {
-		stp.logger.Debugf("[SubtreeProcessor][coinbase:%s] store SUCCESS utxo: %s", block.CoinbaseTx.TxIDChainHash(), utxo.String())
+	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
+		// error will be handled below
+		stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
 	}
 
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
