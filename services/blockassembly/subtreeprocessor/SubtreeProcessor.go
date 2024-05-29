@@ -307,7 +307,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 	for _, block := range moveDownBlocks {
 		if err := stp.utxoStore.Delete(context.Background(), block.CoinbaseTx.TxIDChainHash()); err != nil {
 			// no need to error out if the key doesn't exist anyway
-			if !errors.Is(err, utxo.NewErrTxmetaNotFound(block.CoinbaseTx.TxIDChainHash())) {
+			if !errors.Is(err, errors.ErrTxNotFound) {
 				responseCh <- ResetResponse{
 					MovedDownBlocks: movedDownBlocks,
 					MovedUpBlocks:   movedUpBlocks,
@@ -566,7 +566,6 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 			// TODO add metrics about how many txs we are reading per second
 			subtreesNodes[idx] = subtree.Nodes
 
-			subtree = nil
 			return nil
 		})
 	}

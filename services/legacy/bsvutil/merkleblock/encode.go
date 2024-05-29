@@ -146,7 +146,7 @@ func (m *MerkleBlock) calcBlock(block *bsvutil.Block) *wire.MsgMerkleBlock {
 		Flags:        make([]byte, (len(m.bits)+7)/8),
 	}
 	for _, hash := range m.finalHashes {
-		msgMerkleBlock.AddTxHash(hash)
+		_ = msgMerkleBlock.AddTxHash(hash)
 	}
 	for i := uint32(0); i < uint32(len(m.bits)); i++ {
 		msgMerkleBlock.Flags[i/8] |= m.bits[i] << (i % 8)

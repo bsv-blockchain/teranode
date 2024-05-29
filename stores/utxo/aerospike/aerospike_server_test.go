@@ -168,7 +168,7 @@ func internalTest(t *testing.T) {
 
 		_, err = db.Create(context.Background(), tx)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, utxo.NewErrTxmetaAlreadyExists(tx.TxIDChainHash()))
+		assert.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
 		err = db.SetMined(context.Background(), tx.TxIDChainHash(), blockID)
 		require.NoError(t, err)
@@ -311,14 +311,15 @@ func internalTest(t *testing.T) {
 
 		txMeta, err = db.Create(context.Background(), tx)
 		assert.Nil(t, txMeta)
-		require.ErrorIs(t, err, utxo.NewErrTxmetaAlreadyExists(tx.TxIDChainHash()))
+		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
 		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		txMeta, err = db.Create(context.Background(), tx)
 		assert.Nil(t, txMeta)
-		require.ErrorIs(t, err, utxo.NewErrTxmetaAlreadyExists(tx.TxIDChainHash()))
+		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
+
 	})
 
 	t.Run("aerospike spend", func(t *testing.T) {

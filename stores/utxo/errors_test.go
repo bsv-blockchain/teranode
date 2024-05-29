@@ -4,17 +4,13 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestErrNotExist(t *testing.T) {
-	err := NewErrTxmetaAlreadyExists(&chainhash.Hash{})
+func TestErrTxNotFound(t *testing.T) {
+	err := errors.New(errors.ERR_TX_NOT_FOUND, "tx not found")
 	require.Error(t, err)
 
-	assert.True(t, errors.Is(err, errors.ErrTxmetaAlreadyExists))
-
-	assert.Contains(t, err.Error(), "TXMETA_ALREADY_EXISTS")
-
+	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
 }

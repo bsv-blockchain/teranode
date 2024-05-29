@@ -641,7 +641,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())))
 
 						if err != nil {
-							if errors.Is(err, utxo.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
+							if errors.Is(err, errors.ErrTxNotFound) {
 								return errors.New(errors.ERR_NOT_FOUND, "[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
 							}
 							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
@@ -681,7 +681,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						// option for now.
 						txMeta, err := txMetaStore.GetMeta(gCtx, &subtreeNode.Hash)
 						if err != nil {
-							if errors.Is(err, utxo.NewErrTxmetaNotFound(&subtreeNode.Hash)) {
+							if errors.Is(err, errors.ErrTxNotFound) {
 								continue
 							}
 							return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s][%s:%d]:%d error getting transaction %s from txMetaStore", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
@@ -748,7 +748,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, txMetaStore utxo.
 	// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 	// for the first situation we don't start validating the current block until the parent is validated.
 	parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
-	if err != nil && !errors.Is(err, utxo.NewErrTxmetaNotFound(&parentTxStruct.parentTxHash)) {
+	if err != nil && !errors.Is(err, errors.ErrTxNotFound) {
 		return errors.New(errors.ERR_STORAGE_ERROR, "[BLOCK][%s] error getting parent transaction %s from txMetaStore", b.Hash().String(), parentTxStruct.parentTxHash.String(), err)
 	}
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block

@@ -51,7 +51,7 @@ func (h *HTTP) Search(c echo.Context) error {
 
 		// Check if it's a transaction
 		tx, err := h.repository.GetTransactionMeta(c.Request().Context(), hash)
-		if err != nil && !errors.Is(err, utxo.NewErrTxmetaNotFound(hash)) {
+		if err != nil && !errors.Is(err, errors.ErrTxNotFound) {
 			return sendError(c, http.StatusBadRequest, 5, fmt.Errorf("error searching for tx: %w", err))
 		}
 

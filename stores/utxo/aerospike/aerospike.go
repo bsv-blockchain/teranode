@@ -242,8 +242,8 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		if err != nil {
 			var aErr *aerospike.AerospikeError
 			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
-				s.logger.Warnf("[STORE_BATCH][%s:%d] txMeta already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
-				batch[idx].done <- utxo.NewErrTxmetaAlreadyExists(hash)
+				s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
+				batch[idx].done <- errors.New(errors.ERR_TX_ALREADY_EXISTS, fmt.Sprintf("%s already exists in store", batch[idx].tx.TxIDChainHash().String()))
 				continue
 			}
 
@@ -629,7 +629,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 			items[idx].Data = nil
 			if !model.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
 				if errors.Is(err, aerospike.ErrKeyNotFound) {
-					items[idx].Err = utxo.NewErrTxmetaNotFound(&items[idx].Hash)
+					items[idx].Err = errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", items[idx].Hash))
 				} else {
 					items[idx].Err = err
 				}

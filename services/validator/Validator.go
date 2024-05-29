@@ -183,9 +183,9 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 
 	txMetaData, err := v.storeTxInUtxoMap(setSpan, tx)
 	if err != nil {
-		if errors.Is(err, utxo.NewErrTxmetaAlreadyExists(tx.TxIDChainHash())) {
+		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			// stop all processing, this transaction has already been validated and passed into the block assembly
-			v.logger.Debugf("[Validate][%s] tx already exists in metaStore, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
+			v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
 			return nil
 		}
 
