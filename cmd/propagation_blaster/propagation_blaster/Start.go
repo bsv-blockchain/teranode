@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"log"
 	"net/http"
 	"net/url"
@@ -228,13 +229,13 @@ func sendToPropagationServer(ctx context.Context, logger ulogger.Logger, txExten
 		httpClient := &http.Client{}
 		resp, err := httpClient.Do(req)
 		if err != nil {
-			return fmt.Errorf("error sending request: %v", err)
+			return errors.New(errors.ERR_PROCESSING, "error sending request: %v", err)
 		}
 		defer resp.Body.Close()
 
 		// Check the response status
 		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("POST request failed with status: %v", resp.Status)
+			return errors.New(errors.ERR_SERVICE_ERROR, "POST request failed with status: %v", resp.Status)
 		}
 
 		return nil

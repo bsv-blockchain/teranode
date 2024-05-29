@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"strings"
 
 	"github.com/IBM/sarama"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/gocore"
 )
@@ -32,11 +32,11 @@ func main() {
 func resetTopic(configName string) error {
 	url, err, ok := gocore.Config().GetURL(configName)
 	if err != nil {
-		return fmt.Errorf("error getting Kafka URL (%s): %w", configName, err)
+		return errors.New(errors.ERR_PROCESSING, "error getting Kafka URL (%s)", configName, err)
 	}
 
 	if !ok {
-		return fmt.Errorf("kafka URL not found (%s)", configName)
+		return errors.New(errors.ERR_PROCESSING, "kafka URL not found (%s)", configName)
 	}
 
 	// log.Printf("URL: %s", url.String())
@@ -52,7 +52,7 @@ func resetTopic(configName string) error {
 
 	admin, err := sarama.NewClusterAdmin(hosts, config)
 	if err != nil {
-		return fmt.Errorf("error creating cluster admin: %w", err)
+		return errors.New(errors.ERR_SERVICE_ERROR, "error creating cluster admin", err)
 	}
 	defer admin.Close()
 
@@ -75,7 +75,7 @@ func resetTopic(configName string) error {
 	}
 	err = admin.CreateTopic(topic, topicDetail, false)
 	if err != nil {
-		return fmt.Errorf("failed to create topic %s: %w", topic, err)
+		return errors.New(errors.ERR_SERVICE_ERROR, "failed to create topic %s", topic, err)
 	}
 
 	log.Printf("%q topic created successfully with %d partitions and a replication factor of %d", topic, partitions, replication)

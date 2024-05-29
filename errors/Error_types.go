@@ -6,6 +6,7 @@ var (
 	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
 	ErrNotFound                   = New(ERR_NOT_FOUND, "not found")
 	ErrProcessing                 = New(ERR_PROCESSING, "error processing")
+	ErrConfiguration              = New(ERR_CONFIGURATION, "configuration error")
 	ErrError                      = New(ERR_ERROR, "generic error")
 	ErrBlockNotFound              = New(ERR_BLOCK_NOT_FOUND, "block not found")
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")

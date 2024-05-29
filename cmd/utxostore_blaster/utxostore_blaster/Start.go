@@ -6,24 +6,19 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	utxo "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
-
-	//"github.com/bitcoin-sv/ubsv/stores/utxomap/memory"
-	//"github.com/bitcoin-sv/ubsv/stores/utxomap/nullstore"
-	//"github.com/bitcoin-sv/ubsv/stores/utxomap/redis"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
-
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -188,7 +183,7 @@ func worker(logger ulogger.Logger) {
 
 		walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 		if err != nil {
-			panic(fmt.Errorf("can't create coinbase address: %v", err))
+			panic(errors.New(errors.ERR_PROCESSING, "can't create coinbase address: %v", err))
 		}
 
 		btTx := bt.NewTx()

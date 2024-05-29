@@ -2,10 +2,10 @@ package nothing
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 )
@@ -134,8 +134,8 @@ func (s *Nothing) Deleter(_ context.Context, wg *sync.WaitGroup, deleteCh chan *
 	}()
 }
 
-var ErrTimeout = errors.New("timeout")
-var ErrChannelClosed = errors.New("channel closed")
+var ErrTimeout = errors.New(errors.ERR_PROCESSING, "timeout")
+var ErrChannelClosed = errors.New(errors.ERR_PROCESSING, "channel closed")
 
 func writeToChannel[T any](ctx context.Context, ch chan *T, hash *T) (time.Duration, error) {
 	start := time.Now()

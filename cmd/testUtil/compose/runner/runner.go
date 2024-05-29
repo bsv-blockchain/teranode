@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -57,10 +58,10 @@ func Run() error {
 		// alternative to above line
 		cmd := exec.Command("bash", "-c", "docker-compose", "-f", composeFilePath, "build")
 		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("Failed to execute command: %s, error: %s", output, err)
+			return errors.New(errors.ERR_PROCESSING, "Failed to execute command: %s", output, err)
 		}
 	} else {
-		return fmt.Errorf("no valid command provided. Use --up to start services or --clean for cleanup")
+		return errors.New(errors.ERR_PROCESSING, "no valid command provided. Use --up to start services or --clean for cleanup")
 	}
 	return nil
 }
@@ -156,7 +157,7 @@ func getBlockHeight(url string) (int, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return 0, errors.New(errors.ERR_PROCESSING, "unexpected status code: %d", resp.StatusCode)
 	}
 
 	var blocks []struct {
@@ -167,7 +168,7 @@ func getBlockHeight(url string) (int, error) {
 	}
 
 	if len(blocks) == 0 {
-		return 0, fmt.Errorf("no blocks found in response")
+		return 0, errors.New(errors.ERR_PROCESSING, "no blocks found in response")
 	}
 
 	return blocks[0].Height, nil
@@ -179,7 +180,7 @@ func execCommand(name string, args ...string) error {
 	cmd.Stderr = os.Stderr
 	err := cmd.Start()
 	if err != nil {
-		return fmt.Errorf("error executing command: %w", err)
+		return errors.New(errors.ERR_PROCESSING, "error executing command", err)
 	}
 	return nil
 }

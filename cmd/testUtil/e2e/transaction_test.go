@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -29,7 +30,7 @@ func TestPropagation(t *testing.T) {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
 
-	txDistributor, _ := distributor.NewDistributor(logger,
+	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
 		distributor.WithRetryAttempts(3),
 		distributor.WithFailureTolerance(0),
@@ -123,7 +124,7 @@ func getBlockHeight(url string) (int, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return 0, errors.New(errors.ERR_PROCESSING, "unexpected status code: %d", resp.StatusCode)
 	}
 
 	var blocks []struct {
@@ -134,7 +135,7 @@ func getBlockHeight(url string) (int, error) {
 	}
 
 	if len(blocks) == 0 {
-		return 0, fmt.Errorf("no blocks found in response")
+		return 0, errors.New(errors.ERR_PROCESSING, "no blocks found in response")
 	}
 
 	return blocks[0].Height, nil
