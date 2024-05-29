@@ -58,6 +58,10 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta
 		utxoMap:  make(map[chainhash.Hash]*chainhash.Hash),
 	}
 
+	if len(blockIDs) > 0 {
+		m.txs[*txHash].blockIDs = blockIDs
+	}
+
 	txMetaData, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
 		return nil, err
@@ -198,7 +202,7 @@ func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, bloc
 	return nil
 }
 
-func (m *Memory) MetaBatchDecorate(_ context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
+func (m *Memory) BatchDecorate(_ context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 

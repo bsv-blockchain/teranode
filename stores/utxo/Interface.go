@@ -36,6 +36,11 @@ type SpendResponse struct {
 	LockTime     uint32          `json:"lockTime,omitempty"`
 }
 
+var (
+	MetaFields       = []string{"locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
+	MetaFieldsWithTx = []string{"tx", "locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
+)
+
 // UnresolvedMetaData is a struct that holds the hash of a tx and the index in the original list
 // of hashes that was passed to the MetaBatchDecorate function. It also holds the optional fields
 // that should be fetched and the error that was returned when fetching the data.
@@ -51,11 +56,13 @@ type UnresolvedMetaData struct {
 type Store interface {
 	// CRUD functions
 	Health(ctx context.Context) (int, string, error)
+
 	Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error)
 	Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error)
+	Delete(ctx context.Context, hash *chainhash.Hash) error
+
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error)    // Remove? Only used in tests
 	GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) // Remove?
-	Delete(ctx context.Context, hash *chainhash.Hash) error
 
 	// Blockchain specific functions
 	Spend(ctx context.Context, spends []*Spend) error
@@ -63,7 +70,7 @@ type Store interface {
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
 
 	// these functions are not pure as they will update the data object in place
-	MetaBatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...string) error
+	BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...string) error
 	PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error
 
 	// internal state functions

@@ -196,8 +196,8 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, _ ...[]stri
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...string) error {
-	if err := t.utxoStore.MetaBatchDecorate(ctx, hashes, fields...); err != nil {
+func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...string) error {
+	if err := t.utxoStore.BatchDecorate(ctx, hashes, fields...); err != nil {
 		return err
 	}
 

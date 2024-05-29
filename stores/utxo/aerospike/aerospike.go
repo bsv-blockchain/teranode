@@ -266,7 +266,7 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 
 	retries := 0
 	for {
-		if err := s.MetaBatchDecorate(context.Background(), items); err != nil {
+		if err := s.BatchDecorate(context.Background(), items); err != nil {
 			if retries < 3 {
 				retries++
 				s.logger.Errorf("failed to get batch of txmeta: %v", err)
@@ -496,11 +496,11 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return s.get(ctx, hash, []string{"locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"})
+	return s.get(ctx, hash, utxo.MetaFields)
 }
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
-	bins := []string{"tx", "locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
+	bins := utxo.MetaFieldsWithTx
 	if len(fields) > 0 {
 		bins = fields[0]
 	}
@@ -590,7 +590,7 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 	return bins
 }
 
-func (s *Store) MetaBatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, fields ...string) error {
+func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, fields ...string) error {
 	batchPolicy := util.GetAerospikeBatchPolicy()
 	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
 
