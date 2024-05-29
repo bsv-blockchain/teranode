@@ -13,7 +13,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5 # v4 has caching enabled by default
         with:
-          go-version: '1.21.0'
+          go-version: '1.22.3'
 
       #      - name: Install deps and lint deps
       #        run: make install-lint
