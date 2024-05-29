@@ -502,6 +502,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	// do http request to baseUrl + subtreeHash.String()
 	u.logger.Infof("[getSubtreeTxHashes][%s] getting subtree from %s", subtreeHash.String(), baseUrl)
 	url := fmt.Sprintf("%s/subtree/%s", baseUrl, subtreeHash.String())
+	// TODO add the metric for how long this takes
 	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("[getSubtreeTxHashes][%s] failed to do http request", subtreeHash.String()), err)

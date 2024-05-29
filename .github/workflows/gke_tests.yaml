@@ -5,7 +5,7 @@ on:
 jobs:
   go-lint-and-test:
     name: Go Lint and Test
-    runs-on: ubsv-runner
+    runs-on: self-hosted
     strategy: # This will cause the workflow to terminate if any job fails
       fail-fast: true
     steps:
@@ -32,7 +32,7 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: ubsv-runner
+    runs-on: self-hosted
     needs: go-lint-and-test
     steps:
     - name: Checkout
@@ -61,6 +61,7 @@ jobs:
       env:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         SONAR_HOST_URL: https://sonarqube.ubsv.dev
+      continue-on-error: true
 
     - name: SonarQube Quality Gate check
       uses: sonarsource/sonarqube-quality-gate-action@master

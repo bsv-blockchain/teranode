@@ -225,6 +225,8 @@ func Start() {
 				subtreeFees := uint64(0)
 
 				for nodeIdx, node := range subtree.Nodes {
+					nodeIdx := nodeIdx
+					node := node
 					if !model.CoinbasePlaceholderHash.Equal(node.Hash) {
 						logger.Debugf("checking transaction %s", node.Hash)
 

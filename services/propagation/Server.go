@@ -33,6 +33,7 @@ import (
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	http3 "github.com/quic-go/quic-go/http3"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
 
@@ -371,7 +372,43 @@ func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *p
 	})
 }
 
-func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
+func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
+	return &propagation_api.EmptyMessage{}, ps.processTransaction(ctx, req)
+}
+
+func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
+	response := &propagation_api.ProcessTransactionBatchResponse{
+		Error: make([]string, len(req.Tx)),
+	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+	for idx, tx := range req.Tx {
+		idx := idx
+		tx := tx
+		g.Go(func() error {
+			// just call the internal process transaction function for every transaction
+			err := ps.processTransaction(gCtx, &propagation_api.ProcessTransactionRequest{
+				Tx: tx,
+			})
+			if err != nil {
+				// TODO how can we send the real error back and not just a string?
+				response.Error[idx] = err.Error()
+			} else {
+				response.Error[idx] = ""
+			}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return response, nil
+}
+
+func (ps *PropagationServer) processTransaction(cntxt context.Context, req *propagation_api.ProcessTransactionRequest) error {
 	start, stat, ctx := util.NewStatFromContext(cntxt, "ProcessTransaction", propagationStat)
 	defer func() {
 		stat.AddTime(start)
@@ -385,17 +422,17 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return nil, fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %w", err)
+		return fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %w", err)
 	}
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
-		return nil, fmt.Errorf("[ProcessTransaction][%s] received coinbase transaction: %w", btTx.TxID(), ErrBadRequest)
+		return fmt.Errorf("[ProcessTransaction][%s] received coinbase transaction: %w", btTx.TxID(), ErrBadRequest)
 	}
 
 	if !btTx.IsExtended() {
-		return nil, fmt.Errorf("[ProcessTransaction][%s] transaction is not extended: %w", btTx.TxID(), ErrBadRequest)
+		return fmt.Errorf("[ProcessTransaction][%s] transaction is not extended: %w", btTx.TxID(), ErrBadRequest)
 	}
 
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
@@ -404,7 +441,7 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 
 	// we should store all transactions, if this fails we should not validate the transaction
 	if err = ps.storeTransaction(setCtx, btTx); err != nil {
-		return nil, fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v: %w", btTx.TxIDChainHash(), err, ErrInternal)
+		return fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v: %w", btTx.TxIDChainHash(), err, ErrInternal)
 	}
 
 	// All transactions entering Teranode can be assumed to be after Genesis activation height
@@ -415,14 +452,17 @@ func (ps *PropagationServer) ProcessTransaction(cntxt context.Context, req *prop
 			err = fmt.Errorf("%v: %w", err, ErrBadRequest)
 		}
 
+		// TEMP: Log the error for now
+		ps.logger.Errorf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
+
 		prometheusInvalidTransactions.Inc()
-		return nil, err
+		return err
 	}
 
 	prometheusTransactionSize.Observe(float64(len(req.Tx)))
 	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
-	return &propagation_api.EmptyMessage{}, nil
+	return nil
 }
 
 func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.PropagationAPI_ProcessTransactionStreamServer) error {

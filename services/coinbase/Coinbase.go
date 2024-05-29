@@ -95,7 +95,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 
 	failureTolerance, _ := gocore.Config().GetInt("distributor_failure_tolerance", 0)
 
-	d, err := distributor.NewDistributor(logger, distributor.WithBackoffDuration(backoffDuration), distributor.WithRetryAttempts(int32(maxRetries)), distributor.WithFailureTolerance(failureTolerance))
+	d, err := distributor.NewDistributor(context.Background(), logger, distributor.WithBackoffDuration(backoffDuration), distributor.WithRetryAttempts(int32(maxRetries)), distributor.WithFailureTolerance(failureTolerance))
 	if err != nil {
 		return nil, fmt.Errorf("could not create distributor: %v", err)
 	}
