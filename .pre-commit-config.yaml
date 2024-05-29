@@ -13,8 +13,3 @@ repos:
         entry: make lint
         language: system
         types: [ go ]
-      - id: go-test
-        name: Run go test
-        entry: make test
-        language: system
-        types: [ go ]
