@@ -881,8 +881,12 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 	}
 
 	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
-		// error will be handled below
-		stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
+		if errors.Is(err, errors.ErrTxAlreadyExists) {
+			stp.logger.Infof("[SubtreeProcessor] coinbase utxos already exist (assume BlockValidation created them). Skipping")
+		} else {
+			stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
+			return err
+		}
 	}
 
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
