@@ -535,13 +535,13 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
 	// Add the coinbase transaction to the metaTxStore
-	// TODO why is this needed?
-	//u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx", block.Header.Hash().String())
-	//err = u.storeCoinbaseTx(spanCtx, block)
-	//if err != nil {
-	//	return err
-	//}
-	//u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
+	// don't be tempted to rely on BlockAssembly to do this.
+	// We need to be sure that the coinbase transaction is stored before we try and do setMinedMulti().
+	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx", block.Header.Hash().String())
+	if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height+100); err != nil {
+		return errors.New(errors.ERR_TX_ERROR, fmt.Sprintf("[ValidateBlock][%s] error storing utxos: %v", block.Header.Hash().String(), err))
+	}
+	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
 	var optimisticMiningWg sync.WaitGroup
 	if u.optimisticMining {
