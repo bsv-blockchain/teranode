@@ -539,7 +539,11 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// We need to be sure that the coinbase transaction is stored before we try and do setMinedMulti().
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx", block.Header.Hash().String())
 	if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height+100); err != nil {
-		return errors.New(errors.ERR_TX_ERROR, fmt.Sprintf("[ValidateBlock][%s] error storing utxos: %v", block.Header.Hash().String(), err))
+		if errors.Is(err, errors.ErrTxAlreadyExists) {
+			u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
+		} else {
+			return errors.New(errors.ERR_TX_ERROR, fmt.Sprintf("[ValidateBlock][%s] error storing utxos: %v", block.Header.Hash().String(), err))
+		}
 	}
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
