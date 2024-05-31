@@ -109,6 +109,7 @@ testall:
 	$(MAKE) longtests
 
 smoketests:
+	docker compose build
 	rm -rf data
 	unzip data.zip
 	cd test/functional && \
