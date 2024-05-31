@@ -72,26 +72,26 @@ services:
       - 19092:9092
       - 19093:9093
 
-  kafka-console-shared:
-    container_name: kafka-console-shared
-    image: docker.redpanda.com/redpandadata/console:latest
-    networks:
-      - ubsv-network
-    restart: on-failure
-    entrypoint: /bin/sh
-    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
-    environment:
-      CONFIG_FILEPATH: /tmp/config.yml
-      CONSOLE_CONFIG_FILE: |
-        kafka:
-          brokers: ["kafka-shared:9092"]
-          schemaRegistry:
-            enabled: true
-            urls: ["http://kafka-shared:8081"]
-    ports:
-      - "18080:8080"
-    depends_on:
-      - kafka-shared
+  # kafka-console-shared:
+  #   container_name: kafka-console-shared
+  #   image: docker.redpanda.com/redpandadata/console:latest
+  #   networks:
+  #     - ubsv-network
+  #   restart: on-failure
+  #   entrypoint: /bin/sh
+  #   command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+  #   environment:
+  #     CONFIG_FILEPATH: /tmp/config.yml
+  #     CONSOLE_CONFIG_FILE: |
+  #       kafka:
+  #         brokers: ["kafka-shared:9092"]
+  #         schemaRegistry:
+  #           enabled: true
+  #           urls: ["http://kafka-shared:8081"]
+  #   ports:
+  #     - "18080:8080"
+  #   depends_on:
+  #     - kafka-shared
 
   ubsv-1:
     <<: *ubsv-base
@@ -204,52 +204,52 @@ services:
       - ./data/txblaster1:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
 
-  prometheus-1:
-    container_name: prometheus-1
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "19090:9090"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
+  # prometheus-1:
+  #   container_name: prometheus-1
+  #   image: prom/prometheus:v2.44.0
+  #   mem_limit: 64m
+  #   ports:
+  #     - "19090:9090"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
-  prometheus-2:
-    container_name: prometheus-2
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "29090:9090"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
+  # prometheus-2:
+  #   container_name: prometheus-2
+  #   image: prom/prometheus:v2.44.0
+  #   mem_limit: 64m
+  #   ports:
+  #     - "29090:9090"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
 
-  prometheus-3:
-    container_name: prometheus-3
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "39090:9090"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
+  # prometheus-3:
+  #   container_name: prometheus-3
+  #   image: prom/prometheus:v2.44.0
+  #   mem_limit: 64m
+  #   ports:
+  #     - "39090:9090"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
 
-  grafana:
-    container_name: grafana
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
-      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
-      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
-      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
-    depends_on:
-      - prometheus-1
-      - prometheus-2
-      - prometheus-3
+  # grafana:
+  #   container_name: grafana
+  #   image: grafana/grafana:latest
+  #   ports:
+  #     - "3000:3000"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
+  #     - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+  #     - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
+  #     - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
+  #   depends_on:
+  #     - prometheus-1
+  #     - prometheus-2
+  #     - prometheus-3
