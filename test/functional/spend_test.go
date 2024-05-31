@@ -1,39 +1,29 @@
 ////go:build e2eTest
 
 // How to run this test:
-// cd into this directory
-// Comment out the build tag above, then run `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowFairTx`
-// Once the test is complete, uncomment the build tag again and run `go test -run TestShouldAllowFairTx`
+// $ unzip data.zip
+// $ cd test/functional/
+// $ `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowFairTx`
 
 package test
 
 import (
 	"context"
-	"encoding/binary"
-	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
-	"net/http"
 	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	block_model "github.com/bitcoin-sv/ubsv/model"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	utxom "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
+	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -63,7 +53,7 @@ func TestMain(m *testing.M) {
 }
 
 func setupBitcoinTestFramework() {
-	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml"})
+	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
 	m := map[string]string{
 		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
 		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc1",
@@ -168,7 +158,7 @@ func TestShouldAllowFairTx(t *testing.T) {
 	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
 	time.Sleep(10 * time.Second)
 
-	height, _ := getBlockHeight(url)
+	height, _ := helper.GetBlockHeight(url)
 	fmt.Printf("Block height: %d\n", height)
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
@@ -176,37 +166,14 @@ func TestShouldAllowFairTx(t *testing.T) {
 	assert.Less(t, utxoBalanceAfter, utxoBalanceBefore)
 
 	baClient := ba.NewClient(ctx, logger)
-	miningCandidate, err := baClient.GetMiningCandidate(ctx)
+	blockHash, err := helper.MineBlock(ctx, *baClient, logger)
 	if err != nil {
-		t.Fatalf("Failed to get mining candidate: %v", err)
+		t.Fatalf("Failed to mine block: %v", err)
 	}
-	fmt.Printf("Mining candidate: %d\n", miningCandidate.SubtreeCount)
-
-	// mine block
-
-	solution, err := cpuminer.Mine(ctx, miningCandidate)
-	require.NoError(t, err)
-
-	blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
-	require.NoError(t, err)
-
-	blockHash := util.Sha256d(blockHeader)
-	hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
-
-	target := model.NewNBitFromSlice(miningCandidate.NBits).CalculateTarget()
-
-	var bn = big.NewInt(0)
-	bn.SetString(hashStr, 16)
-
-	compare := bn.Cmp(target)
-	assert.LessOrEqual(t, compare, 0)
-
-	err = baClient.SubmitMiningSolution(ctx, solution)
-	require.NoError(t, err)
 
 	fmt.Printf("Block height: %d\n", height)
 	for {
-		newHeight, _ := getBlockHeight(url)
+		newHeight, _ := helper.GetBlockHeight(url)
 		if newHeight > height {
 			break
 		}
@@ -230,18 +197,22 @@ func TestShouldAllowFairTx(t *testing.T) {
 	// 	t.Errorf("error getting block: %v", err)
 	// }
 
-	blockStore := getBlockStore(logger)
+	blockStore := helper.GetBlockStore(logger)
 	var o []options.Options
 	o = append(o, options.WithFileExtension("block"))
 	//wait
 	time.Sleep(10 * time.Second)
 	blockchain, err := blockchain.NewClient(ctx, logger)
-	header, meta, err := blockchain.GetBestBlockHeader(ctx)
+	if err != nil {
+		t.Errorf("error creating blockchain client: %v", err)
+	}
+	header, meta, _ := blockchain.GetBestBlockHeader(ctx)
 	fmt.Printf("Best block header: %v\n", header.Hash())
+
 	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
 	// t.Errorf("error getting block reader: %v", err)
 	if err == nil {
-		if bl, err := readFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
+		if bl, err := helper.ReadFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
@@ -297,11 +268,6 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to generate private key: %v", err)
 	}
-
-	// privateKeyDouble, err := bec.NewPrivateKey(bec.S256())
-	// if err != nil {
-	// 	t.Fatalf("Failed to generate private key: %v", err)
-	// }
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	if err != nil {
@@ -377,7 +343,7 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	fmt.Printf("Double spend Transaction sent: %s %s\n", newTxDouble.TxIDChainHash(), newTxDouble.TxID())
 	time.Sleep(5 * time.Second)
 
-	height, _ := getBlockHeight(url)
+	height, _ := helper.GetBlockHeight(url)
 	fmt.Printf("Block height: %d\n", height)
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
@@ -453,7 +419,7 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 
 	fmt.Printf("Block height: %d\n", height)
 	for {
-		newHeight, _ := getBlockHeight(url)
+		newHeight, _ := helper.GetBlockHeight(url)
 		if newHeight > height {
 			break
 		}
@@ -472,24 +438,23 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
 	fmt.Printf("Block: %v\n", b)
 
-	blockStore := getBlockStore(logger)
+	blockStore := helper.GetBlockStore(logger)
 	var o []options.Options
 	o = append(o, options.WithFileExtension("block"))
-	//wait
-	blockchain, err := blockchain.NewClient(ctx, logger)
-	header, meta, err := blockchain.GetBestBlockHeader(ctx)
-	fmt.Printf("Best block header: %v\n", header.Hash())
+	blockchain, _ := blockchain.NewClient(ctx, logger)
+	header, meta, _ := blockchain.GetBestBlockHeader(ctx)
+
 	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
 	// t.Errorf("error getting block reader: %v", err)
 	if err == nil {
-		if bl, err := readFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
+		if bl, err := helper.ReadFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
 			assert.Equal(t, true, bl, "Test Tx not found in block")
 		}
 
-		if bl, err := readFile(ctx, "block", logger, r, *newTxDouble.TxIDChainHash(), ""); err != nil {
+		if bl, err := helper.ReadFile(ctx, "block", logger, r, *newTxDouble.TxIDChainHash(), ""); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
@@ -497,207 +462,4 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 		}
 	}
 
-}
-
-func getBlockHeight(url string) (int, error) {
-	resp, err := http.Get(url + "/api/v1/lastblocks?n=1")
-	if err != nil {
-		fmt.Printf("Error getting block height: %s\n", err)
-		return 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	var blocks []struct {
-		Height int `json:"height"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&blocks); err != nil {
-		return 0, err
-	}
-
-	if len(blocks) == 0 {
-		return 0, fmt.Errorf("no blocks found in response")
-	}
-
-	return blocks[0].Height, nil
-}
-
-func getBlockStore(logger ulogger.Logger) blob.Store {
-	blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("blockstore config not found")
-	}
-
-	blockStore, err := blob.NewStore(logger, blockStoreUrl)
-	if err != nil {
-		panic(err)
-	}
-
-	return blockStore
-}
-
-func readFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhash.Hash, dir string) (bool, error) {
-	switch ext {
-	case "utxodiff":
-		utxodiff, err := utxom.NewUTXODiffFromReader(logger, r)
-		if err != nil {
-			return false, fmt.Errorf("error reading utxodiff: %w\n", err)
-		}
-
-		fmt.Printf("UTXODiff block hash: %v\n", utxodiff.BlockHash)
-
-		fmt.Printf("UTXODiff removed %d UTXOs", utxodiff.Removed.Length())
-
-		fmt.Printf("UTXODiff added %d UTXOs", utxodiff.Added.Length())
-
-	case "utxoset":
-		utxoSet, err := utxom.NewUTXOSetFromReader(logger, r)
-		if err != nil {
-			return false, fmt.Errorf("error reading utxoSet: %v\n", err)
-		}
-
-		fmt.Printf("UTXOSet block hash: %v\n", utxoSet.BlockHash)
-
-		fmt.Printf("UTXOSet with %d UTXOs", utxoSet.Current.Length())
-
-	case "subtree":
-		bl := readSubtree(r, logger, true, queryTxId)
-		// fmt.Printf("Number of transactions: %d\n", num)
-		return bl, nil
-
-	case "":
-		blockHeaderBytes := make([]byte, 80)
-		// read the first 80 bytes as the block header
-		if _, err := io.ReadFull(r, blockHeaderBytes); err != nil {
-			return false, errors.New(errors.ERR_BLOCK_INVALID, "error reading block header", err)
-		}
-
-		// read the transaction count
-		txCount, err := wire.ReadVarInt(r, 0)
-		if err != nil {
-			return false, errors.New(errors.ERR_BLOCK_INVALID, "error reading transaction count", err)
-		}
-
-		fmt.Printf("\t%d transactions\n", txCount)
-
-	case "block":
-		block, err := block_model.NewBlockFromReader(r)
-		if err != nil {
-			return false, fmt.Errorf("error reading block: %v\n", err)
-		}
-
-		fmt.Printf("Block hash: %s\n", block.Hash())
-		fmt.Printf("%s", block.Header.StringDump())
-		fmt.Printf("Number of transactions: %d\n", block.TransactionCount)
-
-		for _, subtree := range block.Subtrees {
-			// fmt.Printf("Subtree %s\n", subtree)
-
-			if true {
-				filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
-				_, _, stReader, err := getReader(ctx, filename, logger)
-				if err != nil {
-					return false, err
-				}
-				return readSubtree(stReader, logger, true, queryTxId), nil
-			}
-		}
-
-	default:
-		return false, fmt.Errorf("unknown file type")
-	}
-
-	return false, nil
-}
-
-func readSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId chainhash.Hash) bool {
-	var num uint32
-
-	if err := binary.Read(r, binary.LittleEndian, &num); err != nil {
-		fmt.Printf("error reading transaction count: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Number of transactions: %d\n", num)
-	if verbose {
-		for i := uint32(0); i < num; i++ {
-			var tx bt.Tx
-			_, err := tx.ReadFrom(r)
-			if err != nil {
-				fmt.Printf("error reading transaction: %v\n", err)
-				os.Exit(1)
-			}
-
-			// if block_model.IsCoinbasePlaceHolderTx(&tx) {
-			// 	fmt.Printf("%10d: Coinbase Placeholder\n", i)
-			// } else {
-			// 	fmt.Printf("%10d: %v", i, tx.TxIDChainHash())
-			// }
-			fmt.Printf("%10d: %v", i, tx.TxIDChainHash())
-			if *tx.TxIDChainHash() == queryTxId {
-				fmt.Printf(" (test txid) %v found\n", queryTxId)
-				return true
-			}
-
-		}
-	}
-	return false
-}
-
-func getReader(ctx context.Context, path string, logger ulogger.Logger) (string, string, io.Reader, error) {
-	dir, file := filepath.Split(path)
-
-	ext := filepath.Ext(file)
-	fileWithoutExtension := strings.TrimSuffix(file, ext)
-
-	if ext[0] == '.' {
-		ext = ext[1:]
-	}
-
-	// if ext == "" {
-	// 	usage()
-	// }
-
-	hash, err := chainhash.NewHashFromStr(fileWithoutExtension)
-
-	if dir == "" && err == nil {
-		store := getBlockStore(logger)
-
-		r, err := store.GetIoReader(ctx, hash[:], options.WithFileExtension(ext))
-		if err != nil {
-			return "", "", nil, fmt.Errorf("error getting reader from store: %w", err)
-		}
-
-		return dir, ext, r, nil
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("error opening file: %v\n", err)
-	}
-
-	return dir, ext, f, nil
-}
-
-func mineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) error {
-	miningCandidate, err := baClient.GetMiningCandidate(ctx)
-	if err != nil {
-		return fmt.Errorf("error getting mining candidate: %w", err)
-	}
-
-	solution, err := cpuminer.Mine(ctx, miningCandidate)
-	if err != nil {
-		return fmt.Errorf("error mining block: %w", err)
-	}
-
-	err = baClient.SubmitMiningSolution(ctx, solution)
-	if err != nil {
-		return fmt.Errorf("error submitting mining solution: %w", err)
-	}
-
-	return nil
 }

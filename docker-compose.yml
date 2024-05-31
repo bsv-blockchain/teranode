@@ -175,34 +175,34 @@ services:
       - "39091:9091"
       - "39905:9905"
 
-  # tx-blaster-1:
-  #   <<: *ubsv-base
-  #   container_name: tx-blaster-1
-  #   depends_on:
-  #     - ubsv-1
-  #     - ubsv-2
-  #     - ubsv-3
-  #   environment:
-  #     SETTINGS_CONTEXT: "docker.ci"
-  #     tx_blaster_profilerAddr: ":9092"
-  #     asset_httpAddress: "http://ubsv-1:8090"
-  #     propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
-  #     coinbase_grpcAddress: ubsv-1:8093
-  #     coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-  #     blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-  #     utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
-  #     coinbase_assetGrpcAddress: ubsv-1:8091
-  #     BLASTER_ARGS: "-workers=2"
-  #     p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
-  #     propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
-  #   # pass arguments to the command
-  #   command: ["/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=10", "--quic=false"]
-  #   networks:
-  #     - ubsv-network
-  #   volumes:
-  #     - ./settings_local.conf:/app/settings_local.conf
-  #     - ./data/txblaster1:/app/data
-  #     # - ./data/txblaster.log:/app/data/txblaster.log
+  tx-blaster-1:
+    <<: *ubsv-base
+    container_name: tx-blaster-1
+    depends_on:
+      - ubsv-1
+      - ubsv-2
+      - ubsv-3
+    environment:
+      SETTINGS_CONTEXT: "docker.ci"
+      tx_blaster_profilerAddr: ":9092"
+      asset_httpAddress: "http://ubsv-1:8090"
+      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
+      coinbase_grpcAddress: ubsv-1:8093
+      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
+      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
+      coinbase_assetGrpcAddress: ubsv-1:8091
+      BLASTER_ARGS: "-workers=2"
+      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
+      propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
+    # pass arguments to the command
+    command: ["/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=10", "--quic=false"]
+    networks:
+      - ubsv-network
+    volumes:
+      - ./settings_local.conf:/app/settings_local.conf
+      - ./data/txblaster1:/app/data
+      # - ./data/txblaster.log:/app/data/txblaster.log
 
   prometheus-1:
     container_name: prometheus-1
