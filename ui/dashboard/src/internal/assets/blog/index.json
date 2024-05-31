@@ -69,6 +69,13 @@
       "slug": "next-steps",
       "path": "next-steps.md",
       "timestamp": "1715606141505"
+    },
+    {
+      "title": "Milestone: 6 Nodes, 1M TPS for two weeks",
+      "summary": "Teranode benchmark sets the stage for blockchain's next evolution, achieving over 1M TPS with 6 globally distributed nodes.",
+      "slug": "6nodes-success",
+      "path": "6nodes-success.md",
+      "timestamp": "1717154708"
     }
   ]
 }
