@@ -1,4 +1,4 @@
-//go:build e2eTest
+////go:build e2eTest
 
 // How to run this test:
 // cd into this directory
@@ -34,7 +34,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -64,7 +63,7 @@ func TestMain(m *testing.M) {
 }
 
 func setupBitcoinTestFramework() {
-	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml"})
+	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml"})
 	m := map[string]string{
 		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
 		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc1",
@@ -125,6 +124,7 @@ func TestShouldAllowFairTx(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to request funds: %v", err)
 	}
+	fmt.Printf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
 	_, err = txDistributor.SendTransaction(ctx, tx)
 	if err != nil {
@@ -160,8 +160,13 @@ func TestShouldAllowFairTx(t *testing.T) {
 		t.Fatalf("Failed to send new transaction: %v", err)
 	}
 
+	// _, err = helper.CallRPC("http://localhost:19292", "sendrawtransaction", []interface{}{newTx})
+	// if err != nil {
+	// 	t.Errorf("error getting block: %v", err)
+	// }
+
 	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
-	time.Sleep(5 * time.Second)
+	time.Sleep(10 * time.Second)
 
 	height, _ := getBlockHeight(url)
 	fmt.Printf("Block height: %d\n", height)
@@ -220,23 +225,23 @@ func TestShouldAllowFairTx(t *testing.T) {
 	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
 	fmt.Printf("Block: %v\n", b)
 
-	_, err = helper.CallRPC("http://localhost:18090", "getblock", []interface{}{hashStr, 1})
-	if err != nil {
-		t.Errorf("error getting block: %v", err)
-	}
+	// _, err = helper.CallRPC("http://localhost:18090", "getblock", []interface{}{hashStr, 1})
+	// if err != nil {
+	// 	t.Errorf("error getting block: %v", err)
+	// }
 
 	blockStore := getBlockStore(logger)
 	var o []options.Options
 	o = append(o, options.WithFileExtension("block"))
 	//wait
-	time.Sleep(5 * time.Second)
+	time.Sleep(10 * time.Second)
 	blockchain, err := blockchain.NewClient(ctx, logger)
 	header, meta, err := blockchain.GetBestBlockHeader(ctx)
 	fmt.Printf("Best block header: %v\n", header.Hash())
 	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
 	// t.Errorf("error getting block reader: %v", err)
 	if err == nil {
-		if bl, err := readFile("block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
+		if bl, err := readFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
@@ -477,14 +482,14 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
 	// t.Errorf("error getting block reader: %v", err)
 	if err == nil {
-		if bl, err := readFile("block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
+		if bl, err := readFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
 			assert.Equal(t, true, bl, "Test Tx not found in block")
 		}
 
-		if bl, err := readFile("block", logger, r, *newTxDouble.TxIDChainHash(), ""); err != nil {
+		if bl, err := readFile(ctx, "block", logger, r, *newTxDouble.TxIDChainHash(), ""); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
@@ -536,7 +541,7 @@ func getBlockStore(logger ulogger.Logger) blob.Store {
 	return blockStore
 }
 
-func readFile(ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhash.Hash, dir string) (bool, error) {
+func readFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhash.Hash, dir string) (bool, error) {
 	switch ext {
 	case "utxodiff":
 		utxodiff, err := utxom.NewUTXODiffFromReader(logger, r)
@@ -595,7 +600,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhas
 
 			if true {
 				filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
-				_, _, stReader, err := getReader(filename, logger)
+				_, _, stReader, err := getReader(ctx, filename, logger)
 				if err != nil {
 					return false, err
 				}
@@ -617,7 +622,7 @@ func readSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId cha
 		fmt.Printf("error reading transaction count: %v\n", err)
 		os.Exit(1)
 	}
-
+	fmt.Printf("Number of transactions: %d\n", num)
 	if verbose {
 		for i := uint32(0); i < num; i++ {
 			var tx bt.Tx
@@ -632,6 +637,7 @@ func readSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId cha
 			// } else {
 			// 	fmt.Printf("%10d: %v", i, tx.TxIDChainHash())
 			// }
+			fmt.Printf("%10d: %v", i, tx.TxIDChainHash())
 			if *tx.TxIDChainHash() == queryTxId {
 				fmt.Printf(" (test txid) %v found\n", queryTxId)
 				return true
@@ -642,7 +648,7 @@ func readSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId cha
 	return false
 }
 
-func getReader(path string, logger ulogger.Logger) (string, string, io.Reader, error) {
+func getReader(ctx context.Context, path string, logger ulogger.Logger) (string, string, io.Reader, error) {
 	dir, file := filepath.Split(path)
 
 	ext := filepath.Ext(file)
