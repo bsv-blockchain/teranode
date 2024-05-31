@@ -37,6 +37,8 @@ jobs:
           name: coverage-report
           path: coverage.out
           retention-days: 1
+      - name: Run Smoke tests
+        run: make smoketests
 
   sonarqube:
     name: Sonarqube
