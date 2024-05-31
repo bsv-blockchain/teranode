@@ -43,9 +43,10 @@ services:
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -p 15432 -U postgres" ]
-      interval: 1s
+      interval: 2s
       timeout: 5s
       retries: 5
+    restart: on-failure
 
   aerospike-1:
     container_name: aerospike-1
@@ -166,7 +167,7 @@ services:
       SETTINGS_CONTEXT: "docker.host.ubsv1"
       BLASTER_ARGS: "-workers=2"
     # pass arguments to the command
-    command: ["/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=10", "--quic=false"]
+    command: ["/app/blaster.run", "-workers=100", "-print=0", "-profile=:9092", "-log=0", "-limit=100", "--quic=false"]
     volumes:
       - ./data/txblaster1:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
