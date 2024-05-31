@@ -107,11 +107,11 @@ func (p *PeerHeight) blockHandler(ctx context.Context, msg []byte, from string) 
 		return true // continue iterating
 	})
 
-	previousBlockMessage, ok := p.lastMsgByPeerId.Load(from)
+	previousBlockMessage, ok := p.lastMsgByPeerId.Load(blockMessage.PeerId)
 	if ok && previousBlockMessage.(BlockMessage).Height > blockMessage.Height {
 		p.logger.Debugf("[PeerHeight] Ignoring block message from %s for block height %d as we are already at %d", from, blockMessage.Height, previousBlockMessage.(BlockMessage).Height)
 	} else {
-		p.lastMsgByPeerId.Store(from, blockMessage)
+		p.lastMsgByPeerId.Store(blockMessage.PeerId, blockMessage)
 	}
 
 	after := 0
