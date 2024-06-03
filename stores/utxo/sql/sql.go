@@ -28,7 +28,6 @@ import (
 
 var (
 	prometheusUtxoGet    prometheus.Counter
-	prometheusUtxoStore  prometheus.Counter
 	prometheusUtxoSpend  prometheus.Counter
 	prometheusUtxoReset  prometheus.Counter
 	prometheusUtxoDelete prometheus.Counter
@@ -40,12 +39,6 @@ func init() {
 		prometheus.CounterOpts{
 			Name: "sql_utxo_get",
 			Help: "Number of utxo get calls done to sql",
-		},
-	)
-	prometheusUtxoStore = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "sql_utxo_store",
-			Help: "Number of utxo store calls done to sql",
 		},
 	)
 	prometheusUtxoSpend = promauto.NewCounter(
@@ -205,6 +198,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		,previous_tx_idx
 		,previous_tx_satoshis
 		,previous_tx_script
+		,unlocking_script
+		,sequence_number
 		) VALUES (
      $1
 		,$2
@@ -212,11 +207,13 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		,$4
 		,$5
 		,$6
+		,$7
+		,$8
 		)
 	`
 
 	for i, input := range tx.Inputs {
-		_, err = txn.ExecContext(ctx, q, transactionId, i, input.PreviousTxIDChainHash()[:], input.PreviousTxOutIndex, input.PreviousTxSatoshis, input.PreviousTxScript)
+		_, err = txn.ExecContext(ctx, q, transactionId, i, input.PreviousTxIDChainHash()[:], input.PreviousTxOutIndex, input.PreviousTxSatoshis, input.PreviousTxScript, input.UnlockingScript, input.SequenceNumber)
 		if err != nil {
 			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
 				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store: %v", err)
@@ -360,7 +357,18 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 	}
 
 	if contains(bins, "tx") || contains(bins, "inputs") || contains(bins, "parentTxHashes") {
-		q := `SELECT previous_transaction_hash, previous_tx_idx, previous_tx_satoshis, previous_tx_script FROM inputs WHERE transaction_id = $1 ORDER BY idx`
+		q := `
+			SELECT
+			 previous_transaction_hash
+			,previous_tx_idx
+			,previous_tx_satoshis
+			,previous_tx_script
+			,unlocking_script
+			,sequence_number
+			FROM inputs
+			WHERE transaction_id = $1
+			ORDER BY idx
+		`
 
 		rows, err := s.db.QueryContext(ctx, q, id)
 		if err != nil {
@@ -372,7 +380,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 			input := &bt.Input{}
 			var previousTxHashBytes []byte
 
-			if err := rows.Scan(&previousTxHashBytes, &input.PreviousTxOutIndex, &input.PreviousTxSatoshis, &input.PreviousTxScript); err != nil {
+			if err := rows.Scan(&previousTxHashBytes, &input.PreviousTxOutIndex, &input.PreviousTxSatoshis, &input.PreviousTxScript, &input.UnlockingScript, &input.SequenceNumber); err != nil {
 				return nil, err
 			}
 
@@ -482,16 +490,16 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 			}
 
 			q := `
-			SELECT
-			 o.transaction_id
-			,o.coinbase_spending_height
-			,o.utxo_hash
-			,o.spending_transaction_id
-			FROM outputs o
-			JOIN transactions t ON o.transaction_id = t.id
-			WHERE t.hash = $1
-			AND o.idx = $2
-		`
+				SELECT
+				 o.transaction_id
+				,o.coinbase_spending_height
+				,o.utxo_hash
+				,o.spending_transaction_id
+				FROM outputs o
+				JOIN transactions t ON o.transaction_id = t.id
+				WHERE t.hash = $1
+				AND o.idx = $2
+			`
 
 			// Lock the row for update
 			switch s.engine {
@@ -523,7 +531,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 			}
 
 			// Check if the utxo is already spent
-			if spendingTransactionID != nil && len(spendingTransactionID) > 0 && !bytes.Equal(spendingTransactionID, spend.SpendingTxID[:]) {
+			if len(spendingTransactionID) > 0 && !bytes.Equal(spendingTransactionID, spend.SpendingTxID[:]) {
 				return fmt.Errorf("[Spend] utxo already spent for %s:%d", spend.TxID, spend.Vout)
 			}
 
@@ -610,8 +618,8 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 	return nil
 }
 
-func (s *Store) Delete(cntxt context.Context, tx *bt.Tx) error {
-	ctx, cancelTimeout := context.WithTimeout(cntxt, s.dbTimeout)
+func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
 	defer cancelTimeout()
 
 	// Start a database transaction
@@ -631,7 +639,7 @@ func (s *Store) Delete(cntxt context.Context, tx *bt.Tx) error {
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
-	_, err = txn.ExecContext(ctx, q, tx.TxIDChainHash()[:])
+	_, err = txn.ExecContext(ctx, q, hash[:])
 	if err != nil {
 		return err
 	}
@@ -644,7 +652,7 @@ func (s *Store) Delete(cntxt context.Context, tx *bt.Tx) error {
 		)
 	`
 
-	_, err = txn.ExecContext(ctx, q, tx.TxIDChainHash()[:])
+	_, err = txn.ExecContext(ctx, q, hash[:])
 	if err != nil {
 		return err
 	}
@@ -656,7 +664,7 @@ func (s *Store) Delete(cntxt context.Context, tx *bt.Tx) error {
 			SELECT id FROM transactions WHERE hash = $1
 		)
 	`
-	_, err = txn.ExecContext(ctx, q, tx.TxIDChainHash()[:])
+	_, err = txn.ExecContext(ctx, q, hash[:])
 	if err != nil {
 		return err
 	}
@@ -667,7 +675,7 @@ func (s *Store) Delete(cntxt context.Context, tx *bt.Tx) error {
 		WHERE hash = $1
 	`
 
-	_, err = txn.ExecContext(ctx, q, tx.TxIDChainHash()[:])
+	_, err = txn.ExecContext(ctx, q, hash[:])
 	if err != nil {
 		return err
 	}
@@ -682,8 +690,147 @@ func (s *Store) Delete(cntxt context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-func (s *Store) DeleteSpends(_ bool) {
-	// noop
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	defer cancelTimeout()
+
+	// Start a database transaction
+	txn, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		_ = txn.Rollback()
+	}()
+
+	// Update the block_ids
+	q := `
+		INSERT INTO block_ids (
+		 transaction_id	
+		,block_id
+		) VALUES (
+		 (SELECT id FROM transactions WHERE hash = $1)
+		,$2
+		)
+		ON CONFLICT DO NOTHING
+	`
+
+	for _, hash := range hashes {
+		_, err = txn.ExecContext(ctx, q, hash[:], blockID)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Commit the transaction
+	if err := txn.Commit(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	defer cancelTimeout()
+
+	q := `
+		SELECT
+		 o.coinbase_spending_height
+		,o.spending_transaction_id
+		FROM outputs o
+		JOIN transactions t ON o.transaction_id = t.id
+		WHERE t.hash = $1
+		AND o.idx = $2
+	`
+
+	var coinbaseSpendingHeight uint32
+	var spendingTransactionID []byte
+
+	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&coinbaseSpendingHeight, &spendingTransactionID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New(errors.ERR_NOT_FOUND, "utxo not found for %s:%d", spend.TxID, spend.Vout)
+		}
+
+		return nil, err
+	}
+
+	var spendingTxId *chainhash.Hash
+
+	if len(spendingTransactionID) > 0 {
+		spendingTxId, err = chainhash.NewHash(spendingTransactionID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &utxo.SpendResponse{
+		Status:       int(utxostore.CalculateUtxoStatus(spendingTxId, coinbaseSpendingHeight, s.blockHeight.Load())),
+		SpendingTxID: spendingTxId,
+		LockTime:     coinbaseSpendingHeight,
+	}, nil
+}
+
+func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	defer cancelTimeout()
+
+	for _, unresolvedMetaData := range unresolvedMetaDataSlice {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		default:
+			if unresolvedMetaData == nil {
+				continue
+			}
+
+			data, err := s.Get(ctx, &unresolvedMetaData.Hash)
+			if err != nil {
+				unresolvedMetaData.Err = err
+			} else {
+				unresolvedMetaData.Data = data
+			}
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
+	defer cancelTimeout()
+
+	q := `
+		SELECT
+		 o.locking_script
+		,o.satoshis
+		FROM outputs o
+		JOIN transactions t ON o.transaction_id = t.id
+		WHERE t.hash = $1
+		AND o.idx = $2
+	`
+
+	for _, outpoint := range outpoints {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		default:
+			if outpoint == nil {
+				continue
+			}
+
+			err := s.db.QueryRowContext(ctx, q, outpoint.PreviousTxID[:], outpoint.Vout).Scan(&outpoint.LockingScript, &outpoint.Satoshis)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 func createPostgresSchema(db *usql.DB) error {
@@ -716,6 +863,8 @@ func createPostgresSchema(db *usql.DB) error {
 			,previous_tx_idx           INTEGER NOT NULL
 	    ,previous_tx_satoshis      BIGINT NOT NULL
 			,previous_tx_script        BYTEA NOT NULL
+			,unlocking_script          BYTEA NOT NULL
+			,sequence_number           BIGINT NOT NULL
       ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -787,6 +936,8 @@ func createSqliteSchema(db *usql.DB) error {
 			,previous_tx_idx           INTEGER NOT NULL
 	    ,previous_tx_satoshis      BIGINT NOT NULL
 			,previous_tx_script        BLOB NOT NULL
+			,unlocking_script          BYTEA NOT NULL
+			,sequence_number           BIGINT NOT NULL
       ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {

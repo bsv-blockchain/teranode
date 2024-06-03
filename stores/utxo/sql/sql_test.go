@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -33,7 +34,7 @@ func setup(t *testing.T) (*Store, *bt.Tx) {
 	require.NoError(t, err)
 
 	// Delete the tx so the tests can run cleanly...
-	err = store.Delete(context.Background(), tx)
+	err = store.Delete(context.Background(), tx.TxIDChainHash())
 	require.NoError(t, err)
 
 	return store, tx
@@ -112,7 +113,7 @@ func TestDelete(t *testing.T) {
 	_, err := store.Create(context.Background(), tx)
 	require.NoError(t, err)
 
-	err = store.Delete(context.Background(), tx)
+	err = store.Delete(context.Background(), tx.TxIDChainHash())
 	require.NoError(t, err)
 }
 
@@ -180,4 +181,81 @@ func TestUnSpend(t *testing.T) {
 
 	err = store.Spend(context.Background(), []*utxo.Spend{spend})
 	require.NoError(t, err)
+}
+
+func TestGetSpend(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	spend := &utxo.Spend{
+		TxID: tx.TxIDChainHash(),
+		Vout: 0,
+	}
+
+	res, err := store.GetSpend(context.Background(), spend)
+	require.NoError(t, err)
+
+	assert.Equal(t, int(utxo.Status_OK), res.Status)
+}
+
+func TestSetMinedMulti(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	err = store.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, 1)
+	require.NoError(t, err)
+
+	meta, err := store.Get(context.Background(), tx.TxIDChainHash(), []string{"blockIDs"})
+	require.NoError(t, err)
+
+	assert.Len(t, meta.BlockIDs, 1)
+	assert.Equal(t, uint32(1), meta.BlockIDs[0])
+}
+
+func TestBatchDecorate(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	unresolved := utxo.UnresolvedMetaData{
+		Hash: *tx.TxIDChainHash(),
+		Idx:  0,
+	}
+
+	err = store.BatchDecorate(context.Background(), []*utxo.UnresolvedMetaData{&unresolved})
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(0), unresolved.Data.Fee)
+	assert.Equal(t, uint32(0), unresolved.Data.LockTime)
+	assert.False(t, unresolved.Data.IsCoinbase)
+	assert.Equal(t, uint64(259), unresolved.Data.SizeInBytes)
+	assert.Len(t, unresolved.Data.ParentTxHashes, 1)
+	assert.Len(t, unresolved.Data.Tx.Inputs, 1)
+	assert.Len(t, unresolved.Data.Tx.Outputs, 2)
+	assert.Equal(t, uint64(50e8), unresolved.Data.Tx.Inputs[0].PreviousTxSatoshis)
+	assert.Len(t, unresolved.Data.BlockIDs, 0)
+	assert.Equal(t, "fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4", unresolved.Data.Tx.TxIDChainHash().String())
+}
+
+func TestPreviousOutputsDecorate(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	previousOutput := &meta.PreviousOutput{
+		PreviousTxID: *tx.TxIDChainHash(),
+		Vout:         0,
+	}
+
+	err = store.PreviousOutputsDecorate(context.Background(), []*meta.PreviousOutput{previousOutput})
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(556_000_000), previousOutput.Satoshis)
+	assert.Len(t, previousOutput.LockingScript, 25)
 }

@@ -3,25 +3,21 @@ package utxo
 import (
 	"context"
 	"fmt"
+
 	"github.com/bitcoin-sv/ubsv/errors"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHeight uint32) Status {
+func CalculateUtxoStatus(spendingTxId *chainhash.Hash, coinbaseSpendingHeight uint32, blockHeight uint32) Status {
 	status := Status_OK
+
 	if spendingTxId != nil {
 		status = Status_SPENT
-	} else if lockTime > 0 {
-		if lockTime < 500000000 && lockTime > blockHeight {
-			status = Status_LOCKED
-		} else if lockTime >= 500000000 && lockTime > uint32(time.Now().Unix()) {
-			// TODO this should be a check for the median time past for the last 11 blocks
-			status = Status_LOCKED
-		}
+	} else if coinbaseSpendingHeight > 0 && coinbaseSpendingHeight > blockHeight {
+		status = Status_LOCKED
 	}
 
 	return status
