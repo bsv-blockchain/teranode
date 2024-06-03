@@ -1,0 +1,183 @@
+package sql
+
+import (
+	"context"
+	"net/url"
+	"os"
+	"testing"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func setup(t *testing.T) (*Store, *bt.Tx) {
+	os.Setenv("utxostore_dbTimeoutMillis", "30000")
+
+	logger := ulogger.TestLogger{}
+
+	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a187000000008c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c9331586c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac0200e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c2f6b52de3d7c88ac00000000")
+	require.NoError(t, err)
+
+	// storeUrl, err := url.Parse("postgres://ubsv:ubsv@localhost:5432/ubsv")
+	// storeUrl, err := url.Parse("sqlite:///test")
+	storeUrl, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	store, err := New(logger, storeUrl)
+	require.NoError(t, err)
+
+	// Delete the tx so the tests can run cleanly...
+	err = store.Delete(context.Background(), tx)
+	require.NoError(t, err)
+
+	return store, tx
+}
+
+func TestCreate(t *testing.T) {
+	store, tx := setup(t)
+
+	meta, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(259), meta.SizeInBytes)
+}
+
+func TestCreateDuplicate(t *testing.T) {
+	store, tx := setup(t)
+
+	meta, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(259), meta.SizeInBytes)
+
+	_, err = store.Create(context.Background(), tx)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
+}
+
+func TestGet(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	meta, err := store.Get(context.Background(), tx.TxIDChainHash())
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(0), meta.Fee)
+	assert.Equal(t, uint32(0), meta.LockTime)
+	assert.False(t, meta.IsCoinbase)
+	assert.Equal(t, uint64(259), meta.SizeInBytes)
+	assert.Len(t, meta.ParentTxHashes, 1)
+	assert.Len(t, meta.Tx.Inputs, 1)
+	assert.Len(t, meta.Tx.Outputs, 2)
+	assert.Equal(t, uint64(50e8), meta.Tx.Inputs[0].PreviousTxSatoshis)
+	assert.Len(t, meta.BlockIDs, 0)
+	assert.Equal(t, "fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4", tx.TxIDChainHash().String())
+}
+
+func TestGetMeta(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	meta, err := store.GetMeta(context.Background(), tx.TxIDChainHash())
+	require.NoError(t, err)
+
+	assert.Nil(t, meta.Tx)
+}
+
+func TestGetBlockIDs(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx, 1, 2, 3)
+	require.NoError(t, err)
+
+	meta, err := store.GetMeta(context.Background(), tx.TxIDChainHash())
+	require.NoError(t, err)
+
+	assert.Len(t, meta.BlockIDs, 3)
+}
+
+func TestDelete(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	err = store.Delete(context.Background(), tx)
+	require.NoError(t, err)
+}
+
+func TestSpend(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	spendingTxID1 := chainhash.HashH([]byte("test1"))
+
+	spend := &utxo.Spend{
+		TxID:         tx.TxIDChainHash(),
+		Vout:         0,
+		Hash:         utxohash,
+		SpendingTxID: &spendingTxID1,
+	}
+
+	err = store.Spend(context.Background(), []*utxo.Spend{spend})
+	require.NoError(t, err)
+
+	// Spend again with the same spendingTxID
+	err = store.Spend(context.Background(), []*utxo.Spend{spend})
+	require.NoError(t, err)
+
+	// Spend again with a different spendingTxID
+	spendingTxID2 := chainhash.HashH([]byte("test2"))
+	spend.SpendingTxID = &spendingTxID2
+
+	err = store.Spend(context.Background(), []*utxo.Spend{spend})
+	require.Error(t, err)
+}
+
+func TestUnSpend(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	spendingTxID1 := chainhash.HashH([]byte("test1"))
+
+	spend := &utxo.Spend{
+		TxID:         tx.TxIDChainHash(),
+		Vout:         0,
+		Hash:         utxohash,
+		SpendingTxID: &spendingTxID1,
+	}
+
+	err = store.Spend(context.Background(), []*utxo.Spend{spend})
+	require.NoError(t, err)
+
+	// Unspend the utxo
+	err = store.UnSpend(context.Background(), []*utxo.Spend{spend})
+	require.NoError(t, err)
+
+	// Spend again with a different spendingTxID
+	spendingTxID2 := chainhash.HashH([]byte("test2"))
+	spend.SpendingTxID = &spendingTxID2
+
+	err = store.Spend(context.Background(), []*utxo.Spend{spend})
+	require.NoError(t, err)
+}
