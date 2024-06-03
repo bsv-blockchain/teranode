@@ -243,7 +243,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			var aErr *aerospike.AerospikeError
 			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
 				s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
-				batch[idx].done <- errors.New(errors.ERR_TX_ALREADY_EXISTS, fmt.Sprintf("%s already exists in store", batch[idx].tx.TxIDChainHash().String()))
+				batch[idx].done <- errors.New(errors.ERR_TX_ALREADY_EXISTS, "%v already exists in store", batch[idx].tx.TxIDChainHash())
 				continue
 			}
 
@@ -545,7 +545,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
 			tx.Inputs[i] = &bt.Input{}
 			_, err := tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 			if err != nil {
-				return nil, errors.New(errors.ERR_TX_INVALID, "could not read input", err)
+				return nil, errors.New(errors.ERR_TX_INVALID, "could not read input: %v", err)
 			}
 		}
 	}
@@ -558,7 +558,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
 			tx.Outputs[i] = &bt.Output{}
 			_, err := tx.Outputs[i].ReadFrom(bytes.NewReader(output))
 			if err != nil {
-				return nil, errors.New(errors.ERR_TX_INVALID, "could not read output", err)
+				return nil, errors.New(errors.ERR_TX_INVALID, "could not read output: %v", err)
 			}
 		}
 	}
@@ -629,7 +629,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 			items[idx].Data = nil
 			if !model.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
 				if errors.Is(err, aerospike.ErrKeyNotFound) {
-					items[idx].Err = errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", items[idx].Hash))
+					items[idx].Err = errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", items[idx].Hash)
 				} else {
 					items[idx].Err = err
 				}
@@ -645,7 +645,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 				case "tx":
 					tx, txErr := s.getTxFromBins(bins)
 					if txErr != nil {
-						return errors.New(errors.ERR_TX_INVALID, "invalid tx", txErr)
+						return errors.New(errors.ERR_TX_INVALID, "invalid tx: %v", txErr)
 					}
 					items[idx].Data.Tx = tx
 				case "fee":
@@ -724,7 +724,7 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 		bins := batchRecord.Record.Bins
 		previousTx, err := s.getTxFromBins(bins)
 		if err != nil {
-			return errors.New(errors.ERR_TX_INVALID, "invalid tx", err)
+			return errors.New(errors.ERR_TX_INVALID, "invalid tx: %v", err)
 		}
 
 		outpoints[idx].Satoshis = previousTx.Outputs[outpoints[idx].Vout].Satoshis
@@ -947,7 +947,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 		}
 
 		prometheusUtxoMapErrors.WithLabelValues("Spend", err.Error()).Inc()
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike spend PutBins", err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike spend PutBins: %v", err)
 	}
 
 	prometheusUtxoMapSpend.Inc()

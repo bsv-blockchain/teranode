@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -49,7 +48,7 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta
 	txHash := tx.TxIDChainHash()
 
 	if _, ok := m.txs[*txHash]; ok {
-		return nil, errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", txHash))
+		return nil, errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", txHash)
 	}
 
 	m.txs[*txHash] = &memoryData{
@@ -95,7 +94,7 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash, fields ...[]string
 		return txMeta, nil
 	}
 
-	return nil, errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", hash))
+	return nil, errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", hash)
 }
 
 func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
@@ -108,12 +107,12 @@ func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResp
 	}
 
 	if _, ok := m.txs[*spend.TxID]; !ok {
-		return nil, errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", spend.TxID))
+		return nil, errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 	}
 
 	txSpend, ok := m.txs[*spend.TxID].utxoMap[*spend.Hash]
 	if !ok {
-		return nil, errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", spend.TxID))
+		return nil, errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 	}
 
 	return &utxo.SpendResponse{
@@ -132,7 +131,7 @@ func (m *Memory) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	defer m.txsMu.Unlock()
 
 	if _, ok := m.txs[*hash]; !ok {
-		return errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", hash))
+		return errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", hash)
 	}
 
 	delete(m.txs, *hash)
@@ -146,12 +145,12 @@ func (m *Memory) Spend(ctx context.Context, spends []*utxo.Spend) error {
 
 	for _, spend := range spends {
 		if _, ok := m.txs[*spend.TxID]; !ok {
-			return errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", spend.TxID))
+			return errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 		}
 
 		spendTxID, ok := m.txs[*spend.TxID].utxoMap[*spend.Hash]
 		if !ok {
-			return errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", spend.TxID))
+			return errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 		}
 
 		if spendTxID != nil {
@@ -174,12 +173,12 @@ func (m *Memory) UnSpend(_ context.Context, spends []*utxo.Spend) error {
 
 	for _, spend := range spends {
 		if _, ok := m.txs[*spend.TxID]; !ok {
-			return errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", spend.TxID))
+			return errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 		}
 
 		_, ok := m.txs[*spend.TxID].utxoMap[*spend.Hash]
 		if !ok {
-			return errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", spend.TxID))
+			return errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 		}
 
 		m.txs[*spend.TxID].utxoMap[*spend.Hash] = nil
@@ -194,7 +193,7 @@ func (m *Memory) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, bloc
 
 	for _, hash := range hashes {
 		if _, ok := m.txs[*hash]; !ok {
-			return errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", hash))
+			return errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", hash)
 		}
 
 		m.txs[*hash].blockIDs = append(m.txs[*hash].blockIDs, blockID)
@@ -211,7 +210,7 @@ func (m *Memory) BatchDecorate(_ context.Context, unresolvedMetaDataSlice []*utx
 		if _, ok := m.txs[unresolvedMetaData.Hash]; !ok {
 			// do not throw error, MetaBatchDecorate should not fail if a tx is not found
 			// just add the error to the item itself
-			unresolvedMetaData.Err = errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", unresolvedMetaData.Hash))
+			unresolvedMetaData.Err = errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", unresolvedMetaData.Hash)
 			continue
 		}
 
@@ -236,16 +235,16 @@ func (m *Memory) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.
 	for _, outpoint := range outpoints {
 		data, ok := m.txs[outpoint.PreviousTxID]
 		if !ok {
-			return errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", outpoint.PreviousTxID))
+			return errors.New(errors.ERR_TX_NOT_FOUND, "previous Tx %v not found", outpoint.PreviousTxID)
 		}
 
 		if len(data.tx.Outputs) <= int(outpoint.Vout) {
-			return errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", outpoint.PreviousTxID))
+			return errors.New(errors.ERR_TX_NOT_FOUND, "previous Tx %v not found", outpoint.PreviousTxID)
 		}
 
 		input := data.tx.Inputs[outpoint.Vout]
 		if input == nil {
-			return errors.New(errors.ERR_TX_NOT_FOUND, fmt.Sprintf("%s not found", outpoint.PreviousTxID))
+			return errors.New(errors.ERR_TX_NOT_FOUND, "previous Tx %v not found", outpoint.PreviousTxID)
 		}
 
 		outpoint.LockingScript = *input.PreviousTxScript
