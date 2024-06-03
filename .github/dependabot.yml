@@ -1,7 +1,10 @@
 # .github/dependabot.yml
-version: 2
-updates:
-  - package-ecosystem: "gomod"  # "gomod" is the ecosystem for Go modules
-    directory: "/"              # Root directory (assumes go.mod is at the root of the repo)
-    schedule:
-      interval: "weekly"        # Adjust this as needed
+# Dependabot isn't compatible with the pull request analysis, because it can't access secrets
+# There have also been problems with auto-updates of dependencies in the past
+# So, we are disabling it for now
+#version: 2
+#updates:
+#  - package-ecosystem: "gomod"  # "gomod" is the ecosystem for Go modules
+#    directory: "/"              # Root directory (assumes go.mod is at the root of the repo)
+#    schedule:
+#      interval: "weekly"        # Adjust this as needed
