@@ -106,7 +106,6 @@ services:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
       logLevel: "DEBUG"
       # utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
-      # txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
     volumes:
@@ -134,7 +133,6 @@ services:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ci.ubsv2}
       logLevel: "DEBUG"
       # utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
-      # txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
     volumes:
@@ -161,7 +159,6 @@ services:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ci.ubsv3}
       logLevel: "DEBUG"
       # utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
-      # txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
     volumes:

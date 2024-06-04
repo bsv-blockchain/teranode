@@ -74,12 +74,12 @@ func main() {
 	}
 	defer db.Close()
 
-	// txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+	// txMetaStoreURL, err, found := gocore.Config().GetURL("utxostore")
 	// if err != nil {
 	// 	panic(err)
 	// }
 	// if !found {
-	// 	panic("no txmeta_store setting found")
+	// 	panic("no utxostore setting found")
 	// }
 
 	// logger := ulogger.New("chainstate-importer")

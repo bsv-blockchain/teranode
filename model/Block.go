@@ -795,7 +795,7 @@ func (b *Block) getFromAerospike(parentTxStruct missingParentTx) error {
 		}
 	}()
 
-	aeroURL, err, _ := gocore.Config().GetURL("txmeta_store")
+	aeroURL, err, _ := gocore.Config().GetURL("utxostore")
 	if err != nil {
 		return fmt.Errorf("aerospike get URL error: %w", err)
 	}
