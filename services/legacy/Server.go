@@ -29,15 +29,15 @@ import (
 )
 
 type Server struct {
-	logger          ulogger.Logger
-	stats           *gocore.Stat
-	config          *peer.Config
-	peer            *peer.Peer
-	tb              *TeranodeBridge
-	params          chaincfg.Params
-	lastHash        *chainhash.Hash
-	height          uint32
-	wg              sync.WaitGroup
+	logger   ulogger.Logger
+	stats    *gocore.Stat
+	config   *peer.Config
+	peer     *peer.Peer
+	tb       *TeranodeBridge
+	params   chaincfg.Params
+	lastHash *chainhash.Hash
+	height   uint32
+	// wg              sync.WaitGroup
 	blockchainStore blockchain.Store
 	utxoStore       utxo.Store
 	subtreeStore    blob.Store
@@ -72,6 +72,9 @@ func (s *Server) Init(ctx context.Context) error {
 		}
 	}
 
+	var mutex sync.Mutex
+	cond := sync.NewCond(&mutex)
+
 	// Create a new Bitcoin peer configuration
 	s.config = &peer.Config{
 		UserAgentName:    "headers-sync",
@@ -94,19 +97,26 @@ func (s *Server) Init(ctx context.Context) error {
 				}
 				s.logger.Infof("Header chain is valid")
 
-				s.wg.Add(len(msg.Headers))
+				// s.wg.Add(len(msg.Headers))
 
 				// Now get each block in turn and process it
 				go func() {
 					for _, header := range msg.Headers {
+						cond.L.Lock()
+
 						blockHash := header.BlockHash()
 						getDataMsg := wire.NewMsgGetData()
 						getDataMsg.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash))
 
+						s.logger.Infof("Requesting block %s\n", blockHash)
+
 						s.peer.QueueMessage(getDataMsg, nil)
+						cond.Wait()
+
+						cond.L.Unlock()
 					}
 
-					s.wg.Wait()
+					// s.wg.Wait()
 
 					h := msg.Headers[len(msg.Headers)-1].BlockHash()
 					s.lastHash = &h
@@ -123,6 +133,8 @@ func (s *Server) Init(ctx context.Context) error {
 			},
 
 			OnBlock: func(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
+				cond.L.Lock() // Lock the mutex to prevent processing the next block before the signal is received
+
 				s.height++
 
 				s.logger.Warnf("Received block with %d txns %s (Height: %d)\n", len(msg.Transactions), msg.BlockHash(), s.height)
@@ -140,7 +152,10 @@ func (s *Server) Init(ctx context.Context) error {
 					}
 				}
 
-				s.wg.Done()
+				cond.Signal()
+				cond.L.Unlock()
+
+				// s.wg.Done()
 			},
 		},
 	}
@@ -189,8 +204,13 @@ func (s *Server) Start(ctx context.Context) error {
 		invMsg.AddBlockLocatorHash(s.lastHash) // First time this is Genesis block hash
 		invMsg.HashStop = chainhash.Hash{}
 
+		if s.height == 0 {
+			s.logger.Infof("Requesting headers starting from genesis\n")
+		} else {
+			s.logger.Infof("Requesting headers starting from %s\n", s.lastHash)
+		}
+
 		// Send the getheaders message
-		s.logger.Infof("Requesting headers starting from genesis\n")
 		s.peer.QueueMessage(invMsg, nil)
 
 		// Keep the program running to receive headers
