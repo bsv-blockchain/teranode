@@ -137,7 +137,7 @@ func (s *Server) Init(ctx context.Context) error {
 
 				s.height++
 
-				s.logger.Warnf("Received block with %d txns %s (Height: %d)\n", len(msg.Transactions), msg.BlockHash(), s.height)
+				s.logger.Warnf("Received block   %s with %d txns (Height: %d)\n", msg.BlockHash(), len(msg.Transactions), s.height)
 
 				block := bsvutil.NewBlock(msg)
 				block.SetHeight(int32(s.height))
