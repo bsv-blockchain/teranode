@@ -156,54 +156,71 @@ func (s *Server) Start(ctx context.Context) error {
 	addresses, _ := gocore.Config().GetMulti("legacy_connect_peers", "|", []string{"54.169.45.196:8333"})
 	addr := addresses[0]
 
-	s.peer, err = peer.NewOutboundPeer(s.config, addr)
-	if err != nil {
-		log.Fatalf("Failed to create peer: %v", err)
-	}
-
-	// Establish a connection to the peer
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		log.Fatalf("Failed to connect to peer: %v", err)
-	}
-	s.peer.AssociateConnection(conn)
-
-	// Wait for connection
-	time.Sleep(time.Second * 5)
-
-	bestBlockHeader, bestBlockMeta, err := s.blockchainStore.GetBestBlockHeader(ctx)
-	if err != nil {
-		log.Fatalf("Failed to get best block header: %v", err)
-	}
-
-	s.height = bestBlockMeta.Height
-	s.lastHash = bestBlockHeader.Hash()
-
-	if s.height > 0 {
-		s.height--
-		s.lastHash = bestBlockHeader.HashPrevBlock
-	}
-
-	invMsg := wire.NewMsgGetHeaders()
-	invMsg.AddBlockLocatorHash(s.lastHash) // First time this is Genesis block hash
-	invMsg.HashStop = chainhash.Hash{}
-
-	// Send the getheaders message
-	s.logger.Infof("Requesting headers starting from genesis\n")
-	s.peer.QueueMessage(invMsg, nil)
-
-	// Keep the program running to receive headers
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		s.peer, err = peer.NewOutboundPeer(s.config, addr)
+		if err != nil {
+			log.Fatalf("Failed to create peer: %v", err)
+		}
 
-		case <-time.After(time.Second * 10):
-			// Send a ping message to the peer
-			ping := wire.NewMsgPing(0)
-			s.peer.QueueMessage(ping, nil)
+		// Establish a connection to the peer
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			log.Fatalf("Failed to connect to peer: %v", err)
+		}
+		s.peer.AssociateConnection(conn)
+
+		// Wait for connection
+		time.Sleep(time.Second * 5)
+
+		bestBlockHeader, bestBlockMeta, err := s.blockchainStore.GetBestBlockHeader(ctx)
+		if err != nil {
+			log.Fatalf("Failed to get best block header: %v", err)
+		}
+
+		s.height = bestBlockMeta.Height
+		s.lastHash = bestBlockHeader.Hash()
+
+		if s.height > 0 {
+			s.height--
+			s.lastHash = bestBlockHeader.HashPrevBlock
+		}
+
+		invMsg := wire.NewMsgGetHeaders()
+		invMsg.AddBlockLocatorHash(s.lastHash) // First time this is Genesis block hash
+		invMsg.HashStop = chainhash.Hash{}
+
+		// Send the getheaders message
+		s.logger.Infof("Requesting headers starting from genesis\n")
+		s.peer.QueueMessage(invMsg, nil)
+
+		// Keep the program running to receive headers
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+
+			case <-s.WaitForPeerQuitChannel():
+				break
+
+			case <-time.After(time.Second * 10):
+				// Send a ping message to the peer
+				ping := wire.NewMsgPing(0)
+				s.peer.QueueMessage(ping, nil)
+			}
 		}
 	}
+}
+
+// This method is needed because the peer.quit channel is not exported
+func (s *Server) WaitForPeerQuitChannel() <-chan struct{} {
+	ch := make(chan struct{})
+
+	go func() {
+		s.peer.WaitForDisconnect()
+		close(ch)
+	}()
+
+	return ch
 }
 
 func (s *Server) Stop(ctx context.Context) error {
