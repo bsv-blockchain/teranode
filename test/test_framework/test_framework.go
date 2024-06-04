@@ -22,7 +22,7 @@ func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 }
 
 func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
-	compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(b.ComposeFilePaths...))
+	compose, err := tc.NewDockerCompose(b.ComposeFilePaths...)
 	if err != nil {
 		return err
 	}

@@ -72,26 +72,26 @@ services:
       - 19092:9092
       - 19093:9093
 
-  kafka-console-shared:
-    container_name: kafka-console-shared
-    image: docker.redpanda.com/redpandadata/console:latest
-    networks:
-      - ubsv-network
-    restart: on-failure
-    entrypoint: /bin/sh
-    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
-    environment:
-      CONFIG_FILEPATH: /tmp/config.yml
-      CONSOLE_CONFIG_FILE: |
-        kafka:
-          brokers: ["kafka-shared:9092"]
-          schemaRegistry:
-            enabled: true
-            urls: ["http://kafka-shared:8081"]
-    ports:
-      - "18080:8080"
-    depends_on:
-      - kafka-shared
+  # kafka-console-shared:
+  #   container_name: kafka-console-shared
+  #   image: docker.redpanda.com/redpandadata/console:latest
+  #   networks:
+  #     - ubsv-network
+  #   restart: on-failure
+  #   entrypoint: /bin/sh
+  #   command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+  #   environment:
+  #     CONFIG_FILEPATH: /tmp/config.yml
+  #     CONSOLE_CONFIG_FILE: |
+  #       kafka:
+  #         brokers: ["kafka-shared:9092"]
+  #         schemaRegistry:
+  #           enabled: true
+  #           urls: ["http://kafka-shared:8081"]
+  #   ports:
+  #     - "18080:8080"
+  #   depends_on:
+  #     - kafka-shared
 
   ubsv-1:
     <<: *ubsv-base
@@ -105,8 +105,8 @@ services:
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
       logLevel: "DEBUG"
-      utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
-      txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      # utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
+      # txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
     volumes:
@@ -133,8 +133,8 @@ services:
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ci.ubsv2}
       logLevel: "DEBUG"
-      utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
-      txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
+      # utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
+      # txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
     volumes:
@@ -160,8 +160,8 @@ services:
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ci.ubsv3}
       logLevel: "DEBUG"
-      utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
-      txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      # utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
+      # txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
     volumes:
@@ -204,52 +204,52 @@ services:
       - ./data/txblaster1:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
 
-  prometheus-1:
-    container_name: prometheus-1
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "19090:9090"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
+  # prometheus-1:
+  #   container_name: prometheus-1
+  #   image: prom/prometheus:v2.44.0
+  #   mem_limit: 64m
+  #   ports:
+  #     - "19090:9090"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
-  prometheus-2:
-    container_name: prometheus-2
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "29090:9090"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
+  # prometheus-2:
+  #   container_name: prometheus-2
+  #   image: prom/prometheus:v2.44.0
+  #   mem_limit: 64m
+  #   ports:
+  #     - "29090:9090"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
 
-  prometheus-3:
-    container_name: prometheus-3
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "39090:9090"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
+  # prometheus-3:
+  #   container_name: prometheus-3
+  #   image: prom/prometheus:v2.44.0
+  #   mem_limit: 64m
+  #   ports:
+  #     - "39090:9090"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
 
-  grafana:
-    container_name: grafana
-    image: grafana/grafana:latest
-    ports:
-      - "3000:3000"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
-      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
-      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
-      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
-    depends_on:
-      - prometheus-1
-      - prometheus-2
-      - prometheus-3
+  # grafana:
+  #   container_name: grafana
+  #   image: grafana/grafana:latest
+  #   ports:
+  #     - "3000:3000"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
+  #     - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+  #     - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
+  #     - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
+  #   depends_on:
+  #     - prometheus-1
+  #     - prometheus-2
+  #     - prometheus-3
