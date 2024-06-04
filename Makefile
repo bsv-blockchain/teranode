@@ -55,6 +55,10 @@ build: build-dashboard build-ubsv
 build-ubsv: build-dashboard set_debug_flags set_race_flag set_txmetacache_flag
 	go build $(RACE_FLAG) -tags aerospike,native,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
+.PHONY: build-ubsv-ci
+build-ubsv-ci: set_debug_flags set_race_flag set_txmetacache_flag
+	go build $(RACE_FLAG) -tags aerospike,native,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags set_race_flag
 	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o chainintegrity.run ./cmd/chainintegrity/
@@ -108,8 +112,9 @@ testall:
 	$(MAKE) lint
 	$(MAKE) longtests
 
+.PHONY: smoketests
 smoketests:
-	docker compose build
+	docker compose -f docker-compose.ci.build.yml build
 	rm -rf data
 	unzip data.zip
 	cd test/functional && \

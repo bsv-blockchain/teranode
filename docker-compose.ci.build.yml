@@ -1,0 +1,30 @@
+version: '3.8'
+# Define a common base configuration for ubsv nodes
+x-ubsv-base:
+  &ubsv-base
+  image: ubsv:latest
+  depends_on:
+    - postgres
+    - kafka-shared
+  networks:
+    - ubsv-network
+  volumes:
+    - ./data:/app/data
+  expose:
+    - 8081-8093
+networks:
+  ubsv-network:
+    name: my-ubsv-network
+services:
+
+  ubsv-builder:
+    image: ubsv:latest
+    build:
+      context: .
+      dockerfile: ci.Dockerfile
+      args:
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-2db1b0e
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-2db1b0e
+    networks:
+      - ubsv-network
+    entrypoint: ["pwd"]
