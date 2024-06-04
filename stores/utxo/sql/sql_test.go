@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -25,9 +26,9 @@ func setup(t *testing.T) (*Store, *bt.Tx) {
 	tx, err := bt.NewTxFromString("010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a187000000008c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c9331586c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac0200e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c2f6b52de3d7c88ac00000000")
 	require.NoError(t, err)
 
-	// storeUrl, err := url.Parse("postgres://ubsv:ubsv@localhost:5432/ubsv")
+	storeUrl, err := url.Parse("postgres://ubsv:ubsv@localhost:5432/ubsv?expiration=1")
 	// storeUrl, err := url.Parse("sqlite:///test")
-	storeUrl, err := url.Parse("sqlitememory:///test")
+	// storeUrl, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
 
 	store, err := New(logger, storeUrl)
@@ -258,4 +259,67 @@ func TestPreviousOutputsDecorate(t *testing.T) {
 
 	assert.Equal(t, uint64(556_000_000), previousOutput.Satoshis)
 	assert.Len(t, previousOutput.LockingScript, 25)
+}
+
+func TestCreateCoinbase(t *testing.T) {
+	store, _ := setup(t)
+
+	// Coinbase from block 500,000
+	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff580320a107152f5669614254432f48656c6c6f20576f726c64212f2cfabe6d6dbcbb1b0222e1aeebaca2a9c905bb23a3ad0302898ec600a9033a87ec1645a446010000000000000010f829ba0b13a84def80c389cde9840000ffffffff0174fdaf4a000000001976a914f1c075a01882ae0972f95d3a4177c86c852b7d9188ac00000000")
+	require.NoError(t, err)
+
+	meta, err := store.Create(context.Background(), coinbaseTx)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(1253047668), meta.Fee)
+	assert.Equal(t, uint32(0), meta.LockTime)
+	assert.True(t, meta.IsCoinbase)
+	assert.Equal(t, uint64(173), meta.SizeInBytes)
+	assert.Len(t, meta.ParentTxHashes, 0)
+	assert.Len(t, meta.Tx.Inputs, 1)
+	assert.Len(t, meta.Tx.Outputs, 1)
+	assert.Len(t, meta.BlockIDs, 0)
+	assert.Equal(t, "5ebaa53d24c8246c439ccd9f142cbe93fc59582e7013733954120e9baab201df", coinbaseTx.TxIDChainHash().String())
+}
+
+func TestTombstone(t *testing.T) {
+	store, tx := setup(t)
+
+	_, err := store.Create(context.Background(), tx)
+	require.NoError(t, err)
+
+	utxohash0, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	utxohash1, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[1], 1)
+	require.NoError(t, err)
+
+	spendingTxID0 := chainhash.HashH([]byte("test1"))
+	spendingTxID1 := chainhash.HashH([]byte("test2"))
+
+	spend0 := &utxo.Spend{
+		TxID:         tx.TxIDChainHash(),
+		Vout:         0,
+		Hash:         utxohash0,
+		SpendingTxID: &spendingTxID0,
+	}
+
+	spend1 := &utxo.Spend{
+		TxID:         tx.TxIDChainHash(),
+		Vout:         1,
+		Hash:         utxohash1,
+		SpendingTxID: &spendingTxID1,
+	}
+
+	err = store.Spend(context.Background(), []*utxo.Spend{spend0, spend1})
+	require.NoError(t, err)
+
+	time.Sleep(1100 * time.Millisecond)
+
+	err = deleteTombstoned(store.db)
+	require.NoError(t, err)
+
+	_, err = store.Get(context.Background(), tx.TxIDChainHash())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
 }
