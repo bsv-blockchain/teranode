@@ -109,13 +109,13 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	subtreeValidationClient := subtreevalidation.NewClient(ctx, u.logger)
 
-	txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+	storeURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil || !found {
-		return fmt.Errorf("could not get txmeta_store URL: %v", err)
+		return fmt.Errorf("could not get utxostore URL: %v", err)
 	}
 
 	expiration := uint64(0)
-	expirationValue := txMetaStoreURL.Query().Get("expiration")
+	expirationValue := storeURL.Query().Get("expiration")
 	if expirationValue != "" {
 		expiration, err = strconv.ParseUint(expirationValue, 10, 64)
 		if err != nil {

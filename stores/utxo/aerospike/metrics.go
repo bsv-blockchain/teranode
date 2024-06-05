@@ -1,9 +1,10 @@
 package aerospike
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"sync"
 )
 
 var (
@@ -16,7 +17,7 @@ var (
 	prometheusUtxoMapErrors     *prometheus.CounterVec
 
 	prometheusTxMetaAerospikeMapGet       prometheus.Counter
-	prometheusTxMetaAerospikeMapStore     prometheus.Counter
+	prometheusUtxostoreCreate             prometheus.Counter
 	prometheusTxMetaAerospikeMapSetMined  prometheus.Counter
 	prometheusTxMetaAerospikeMapErrors    *prometheus.CounterVec
 	prometheusTxMetaAerospikeMapGetMulti  prometheus.Counter
@@ -40,10 +41,10 @@ func _initPrometheusMetrics() {
 			Help: "Number of txmeta get calls done to aerospike",
 		},
 	)
-	prometheusTxMetaAerospikeMapStore = promauto.NewCounter(
+	prometheusUtxostoreCreate = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_txmeta_store",
-			Help: "Number of txmeta set calls done to aerospike",
+			Name: "aerospike_utxo_store",
+			Help: "Number of Create calls done to aerospike",
 		},
 	)
 	prometheusTxMetaAerospikeMapSetMined = promauto.NewCounter(

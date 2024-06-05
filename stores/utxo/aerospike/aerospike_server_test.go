@@ -92,19 +92,12 @@ var (
 )
 
 func TestAerospike(t *testing.T) {
-	gocore.Config().Set("utxostore_spendBatcherEnabled", "false")
-	gocore.Config().Set("utxostore_lastSpendBatcherEnabled", "false")
-	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
-	gocore.Config().Set("txmeta_store_getBatcherEnabled", "false")
-	gocore.Config().Set("utxostore_lastSpendBatcherEnabled", "false")
+	gocore.Config().Set("utxostore_batchingEnabled", "false")
 	internalTest(t)
 }
 
 func TestAerospikeBatching(t *testing.T) {
-	gocore.Config().Set("utxostore_spendBatcherEnabled", "true")
-	gocore.Config().Set("utxostore_lastSpendBatcherEnabled", "true")
-	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "true")
-	gocore.Config().Set("txmeta_store_getBatcherEnabled", "true")
+	gocore.Config().Set("utxostore_batchingEnabled", "true")
 	internalTest(t)
 }
 

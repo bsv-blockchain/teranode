@@ -18,7 +18,6 @@
       - blockchain_grpcAddress={{ .BlockchainGRPCAddress }}
       - blockchain_store=postgres://postgres:postgres@postgres:5432/blockchain{{ .Index }}
       - utxostore=postgres://postgres:postgres@postgres:5432/utxostore{{ .Index }}
-      - txmeta_store=postgres://postgres:postgres@postgres:5432/txmeta{{ .Index }}
       - blockassembly_grpcAddress={{ .BlockAssemblyGRPCAddress }}
       - blockvalidation_httpAddress={{ .BlockValidationHTTPAddress }}
       - coinbase_store=postgres://postgres:postgres@postgres:5432/coinbase{{ .Index }}

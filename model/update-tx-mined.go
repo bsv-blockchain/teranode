@@ -15,10 +15,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-//func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *BlockHeader) error {
-//	return nil
-//}
-
 type txMinedStatus interface {
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
 }
@@ -114,13 +110,13 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 
 	logger.Infof("[UpdateTxMinedStatus][%s] blockID %d for %d subtrees", block.Hash().String(), blockID, len(block.Subtrees))
 
-	updateTxMinedStatusEnabled := gocore.Config().GetBool("txmeta_store_updateTxMinedStatus", true)
+	updateTxMinedStatusEnabled := gocore.Config().GetBool("utxostore_updateTxMinedStatus", true)
 	if !updateTxMinedStatusEnabled {
 		return nil
 	}
 
-	maxMinedRoutines, _ := gocore.Config().GetInt("txmeta_store_maxMinedRoutines", 128)
-	maxMinedBatchSize, _ := gocore.Config().GetInt("txmeta_store_maxMinedBatchSize", 1024)
+	maxMinedRoutines, _ := gocore.Config().GetInt("utxostore_maxMinedRoutines", 128)
+	maxMinedBatchSize, _ := gocore.Config().GetInt("utxostore_maxMinedBatchSize", 1024)
 
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(maxMinedRoutines)

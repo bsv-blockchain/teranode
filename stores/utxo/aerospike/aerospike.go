@@ -131,18 +131,18 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		logger:     logger,
 	}
 
-	storeBatcherEnabled := gocore.Config().GetBool("txmeta_store_storeBatcherEnabled", true)
-	if storeBatcherEnabled {
-		batchSize, _ := gocore.Config().GetInt("txmeta_store_storeBatcherSize", 256)
-		batchDuration, _ := gocore.Config().GetInt("txmeta_store_storeBatcherDurationMillis", 10)
+	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
+
+	if batchingEnabled {
+		batchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
+		batchDuration, _ := gocore.Config().GetInt("utxostore_storeBatcherDurationMillis", 10)
 		duration := time.Duration(batchDuration) * time.Millisecond
 		s.storeBatcher = batcher.New[batchStoreItem](batchSize, duration, s.sendStoreBatch, true)
 	}
 
-	getBatcherEnabled := gocore.Config().GetBool("txmeta_store_getBatcherEnabled", true)
-	if getBatcherEnabled {
-		batchSize, _ := gocore.Config().GetInt("txmeta_store_getBatcherSize", 1024)
-		batchDuration, _ := gocore.Config().GetInt("txmeta_store_getBatcherDurationMillis", 10)
+	if batchingEnabled {
+		batchSize, _ := gocore.Config().GetInt("utxostore_getBatcherSize", 1024)
+		batchDuration, _ := gocore.Config().GetInt("utxostore_getBatcherDurationMillis", 10)
 		duration := time.Duration(batchDuration) * time.Millisecond
 		s.getBatcher = batcher.New[batchGetItem](batchSize, duration, s.sendGetBatch, true)
 	}
@@ -174,8 +174,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		}
 	}
 
-	spendBatcherEnabled := gocore.Config().GetBool("utxostore_spendBatcherEnabled", true)
-	if spendBatcherEnabled {
+	if batchingEnabled {
 		batchSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 256)
 		batchDuration, _ := gocore.Config().GetInt("utxostore_spendBatcherDurationMillis", 10)
 		duration := time.Duration(batchDuration) * time.Millisecond
@@ -767,7 +766,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		return nil, err
 	}
 
-	prometheusTxMetaAerospikeMapStore.Inc()
+	prometheusUtxostoreCreate.Inc()
 	return txMeta, nil
 }
 
@@ -1141,7 +1140,7 @@ func getBinsToStore(tx *bt.Tx, blockIDs ...uint32) ([]*aerospike.Bin, error) {
 	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx)
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
-		return nil, errors.New(errors.ERR_PROCESSING, "failed to get fees and utxo hashes", err)
+		return nil, errors.New(errors.ERR_PROCESSING, "failed to get fees and utxo hashes for %s: %v", tx.TxIDChainHash(), err)
 	}
 
 	utxos := make(map[interface{}]interface{})

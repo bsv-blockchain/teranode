@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -72,11 +73,12 @@ func init() {
 }
 
 type Store struct {
-	logger      ulogger.Logger
-	db          *usql.DB
-	engine      string
-	blockHeight atomic.Uint32
-	dbTimeout   time.Duration
+	logger           ulogger.Logger
+	db               *usql.DB
+	engine           string
+	blockHeight      atomic.Uint32
+	dbTimeout        time.Duration
+	expirationMillis uint64
 }
 
 func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
@@ -108,6 +110,32 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 		engine:      storeUrl.Scheme,
 		blockHeight: atomic.Uint32{},
 		dbTimeout:   time.Duration(dbTimeoutMillis) * time.Millisecond,
+	}
+
+	expirationValue := storeUrl.Query().Get("expiration") // This is specified in seconds
+	if expirationValue != "" {
+		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
+		if err != nil {
+			logger.Fatalf("could not parse expiration %s: %v", expirationValue, err)
+		}
+		s.expirationMillis = expiration64 * 1000
+
+		// // Create a goroutine to remove transactions that are marked with a tombstone time
+		// db2, err := util.InitSQLDB(logger, storeUrl)
+		// if err != nil {
+		// 	return nil, fmt.Errorf("failed to init sql db: %+v", err)
+		// }
+
+		go func() {
+			for {
+				time.Sleep(1 * time.Minute)
+
+				if err := deleteTombstoned(s.db); err != nil {
+					logger.Errorf("failed to delete tombstoned transactions: %v", err)
+				}
+			}
+		}()
+
 	}
 
 	return s, nil
@@ -186,7 +214,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
 			return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store: %v", sqliteErr)
 		}
-		return nil, err
+		return nil, fmt.Errorf("Failed to insert transaction: %v", err)
 	}
 
 	// Insert the inputs...
@@ -220,7 +248,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 			} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
 				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store: %v", sqliteErr)
 			}
-			return nil, err
+			return nil, fmt.Errorf("Failed to insert input: %v", err)
 		}
 	}
 
@@ -269,7 +297,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 			} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
 				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store: %v", sqliteErr)
 			}
-			return nil, err
+			return nil, fmt.Errorf("Failed to insert output: %v", err)
 		}
 	}
 
@@ -293,7 +321,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 				} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
 					return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store: %v", sqliteErr)
 				}
-				return nil, err
+				return nil, fmt.Errorf("Failed to insert block_ids: %v", err)
 			}
 		}
 	}
@@ -346,8 +374,9 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, utxostore.ErrNotFound
+			return nil, errors.New(errors.ERR_TX_NOT_FOUND, "transaction %s not found: %v", hash, err)
 		}
+
 		return nil, err
 	}
 
@@ -479,6 +508,38 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 		_ = txn.Rollback()
 	}()
 
+	q1 := `
+		SELECT
+		 o.transaction_id
+		,o.coinbase_spending_height
+		,o.utxo_hash
+		,o.spending_transaction_id
+		FROM outputs o
+		JOIN transactions t ON o.transaction_id = t.id
+		WHERE t.hash = $1
+		AND o.idx = $2
+	`
+
+	if s.engine == "postgres" {
+		q1 += ` FOR UPDATE NOWAIT`
+	}
+
+	q2 := `
+		UPDATE outputs
+		SET spending_transaction_id = $1
+		WHERE transaction_id = $2
+		AND idx = $3
+	`
+
+	q3 := `
+		UPDATE transactions
+		SET tombstone_millis = $2
+		WHERE id = $1
+		AND NOT EXISTS (
+			SELECT 1 FROM outputs WHERE transaction_id = $1 AND spending_transaction_id IS NULL
+		)
+	`
+
 	for _, spend := range spends {
 		select {
 		case <-ctx.Done():
@@ -489,43 +550,15 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 				continue
 			}
 
-			q := `
-				SELECT
-				 o.transaction_id
-				,o.coinbase_spending_height
-				,o.utxo_hash
-				,o.spending_transaction_id
-				FROM outputs o
-				JOIN transactions t ON o.transaction_id = t.id
-				WHERE t.hash = $1
-				AND o.idx = $2
-			`
-
-			// Lock the row for update
-			switch s.engine {
-			case "sqlite", "sqlitememory":
-				// Try to lock the row without waiting
-				// Using busy timeout as 0 to simulate NO WAIT behavior
-				_, err = txn.Exec("PRAGMA busy_timeout = 0;")
-				if err != nil {
-					return err
-				}
-
-			case "postgres":
-				q += `
-				FOR UPDATE NOWAIT
-			`
-			}
-
 			var transactionId int
 			var coinbaseSpendingHeight uint32
 			var utxoHash []byte
 			var spendingTransactionID []byte
 
-			err := txn.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&transactionId, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID)
+			err := txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					return utxostore.ErrNotFound
+					return errors.New(errors.ERR_NOT_FOUND, "output %s:%d not found", spend.TxID[:], spend.Vout)
 				}
 				return err
 			}
@@ -545,13 +578,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 				return fmt.Errorf("[Spend] coinbase utxo not ready to spend for %s:%d", spend.TxID, spend.Vout)
 			}
 
-			q = `
-			UPDATE outputs
-			SET spending_transaction_id = $1
-			WHERE transaction_id = $2
-		`
-
-			result, err := txn.ExecContext(ctx, q, spend.SpendingTxID[:], transactionId)
+			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionId, spend.Vout)
 			if err != nil {
 				return fmt.Errorf("[Spend] error spending utxo for %s:%d: %v", spend.TxID, spend.Vout, err)
 			}
@@ -563,6 +590,15 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 
 			if affected == 0 {
 				return fmt.Errorf("[Spend] utxo not spent for %s:%d", spend.TxID, spend.Vout)
+			}
+
+			if s.expirationMillis > 0 {
+				// Now mark the transaction as tombstoned if there are no more unspent outputs
+				tombstoneTime := time.Now().Add(time.Duration(s.expirationMillis)*time.Millisecond).UnixNano() / 1e6
+
+				if _, err := txn.ExecContext(ctx, q3, transactionId, tombstoneTime); err != nil {
+					return err
+				}
 			}
 
 			prometheusUtxoSpend.Inc()
@@ -589,22 +625,46 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 		_ = txn.Rollback()
 	}()
 
+	q1 := `
+		UPDATE outputs
+		SET spending_transaction_id = NULL
+		WHERE transaction_id IN (
+			SELECT id FROM transactions WHERE hash = $1
+		)
+		AND idx = $2
+		RETURNING transaction_id
+	`
+
+	q2 := `
+		UPDATE transactions
+		SET tombstone_millis = NULL
+		WHERE id = $1
+	`
+
 	for _, spend := range spends {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 
 		default:
-			q := `
-				UPDATE outputs
-				SET spending_transaction_id = NULL
-				WHERE transaction_id IN (
-					SELECT id FROM transactions WHERE hash = $1
-				)
-				AND idx = $2
-			`
-			if _, err := s.db.ExecContext(ctx, q, spend.TxID[:], spend.Vout); err != nil {
+			if spend == nil {
+				continue
+			}
+
+			var transactionId int
+
+			err := txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return errors.New(errors.ERR_NOT_FOUND, "output %s:%d not found", spend.TxID, spend.Vout)
+				}
 				return err
+			}
+
+			if s.expirationMillis > 0 {
+				if _, err := s.db.ExecContext(ctx, q2, transactionId); err != nil {
+					return fmt.Errorf("[UnSpend] error removing tombstone for %s:%d: %v", spend.TxID, spend.Vout, err)
+				}
 			}
 
 			prometheusUtxoReset.Inc()
@@ -836,13 +896,14 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 func createPostgresSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS transactions (
-	     id            BIGSERIAL PRIMARY KEY
-	    ,hash          BYTEA NOT NULL
-			,version       INTEGER NOT NULL
-	    ,lock_time     BIGINT NOT NULL
-      ,fee				   BIGINT NOT NULL
-			,size_in_bytes BIGINT NOT NULL
-      ,inserted_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+	     id               BIGSERIAL PRIMARY KEY
+	    ,hash             BYTEA NOT NULL
+			,version          BIGINT NOT NULL
+	    ,lock_time        BIGINT NOT NULL
+      ,fee				      BIGINT NOT NULL
+			,size_in_bytes    BIGINT NOT NULL
+			,tombstone_millis BIGINT
+      ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -854,15 +915,20 @@ func createPostgresSchema(db *usql.DB) error {
 		return fmt.Errorf("could not create ux_transactions_hash index - [%+v]", err)
 	}
 
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS ux_transactions_tombstone_millis ON transactions (tombstone_millis) WHERE tombstone_millis IS NOT NULL;`); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("could not create ux_transactions_hash index - [%+v]", err)
+	}
+
 	// The previous transaction hash may exist in this table
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS inputs (
 	     transaction_id            BIGINT NOT NULL REFERENCES transactions(id)
-			,idx 				               INTEGER NOT NULL
+			,idx 				               BIGINT NOT NULL
 			,previous_transaction_hash BYTEA NOT NULL
-			,previous_tx_idx           INTEGER NOT NULL
+			,previous_tx_idx           BIGINT NOT NULL
 	    ,previous_tx_satoshis      BIGINT NOT NULL
-			,previous_tx_script        BYTEA NOT NULL
+			,previous_tx_script        BYTEA
 			,unlocking_script          BYTEA NOT NULL
 			,sequence_number           BIGINT NOT NULL
       ,PRIMARY KEY (transaction_id, idx)
@@ -879,7 +945,7 @@ func createPostgresSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS outputs (
 	      transaction_id           BIGINT NOT NULL REFERENCES transactions(id)
-			 ,idx 				             INTEGER NOT NULL
+			 ,idx 				             BIGINT NOT NULL
 			 ,locking_script           BYTEA NOT NULL
 			 ,satoshis                 BIGINT NOT NULL
 			 ,coinbase_spending_height BIGINT NOT NULL
@@ -909,13 +975,14 @@ func createPostgresSchema(db *usql.DB) error {
 func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS transactions (
-	     id            INTEGER PRIMARY KEY AUTOINCREMENT
-	    ,hash          BLOB NOT NULL
-			,version       INTEGER NOT NULL
-	    ,lock_time     BIGINT NOT NULL
-			,fee				   BIGINT NOT NULL
-			,size_in_bytes BIGINT NOT NULL
-      ,inserted_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+	     id               INTEGER PRIMARY KEY AUTOINCREMENT
+	    ,hash             BLOB NOT NULL
+			,version          BIGINT NOT NULL
+	    ,lock_time        BIGINT NOT NULL
+			,fee				      BIGINT NOT NULL
+			,size_in_bytes    BIGINT NOT NULL
+			,tombstone_millis BIGINT
+      ,inserted_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -931,11 +998,11 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS inputs (
 	     transaction_id            INTEGER NOT NULL REFERENCES transactions(id)
-			,idx 				               INTEGER NOT NULL
+			,idx 				               BIGINT NOT NULL
 			,previous_transaction_hash BLOB NOT NULL
-			,previous_tx_idx           INTEGER NOT NULL
+			,previous_tx_idx           BIGINT NOT NULL
 	    ,previous_tx_satoshis      BIGINT NOT NULL
-			,previous_tx_script        BLOB NOT NULL
+			,previous_tx_script        BLOB
 			,unlocking_script          BYTEA NOT NULL
 			,sequence_number           BIGINT NOT NULL
       ,PRIMARY KEY (transaction_id, idx)
@@ -951,8 +1018,8 @@ func createSqliteSchema(db *usql.DB) error {
 	// the spending transaction may not have been removed from the database.
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS outputs (
-	      transaction_id           BIGINT NOT NULL REFERENCES transactions(id)
-			 ,idx 				             INTEGER NOT NULL
+	      transaction_id           INTEGER NOT NULL REFERENCES transactions(id)
+			 ,idx 				             BIGINT NOT NULL
 			 ,locking_script           BLOB NOT NULL
 			 ,satoshis                 BIGINT NOT NULL
 			 ,coinbase_spending_height BIGINT NOT NULL
@@ -974,6 +1041,62 @@ func createSqliteSchema(db *usql.DB) error {
 	`); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("could not create block_ids table - [%+v]", err)
+	}
+
+	return nil
+}
+
+func deleteTombstoned(db *usql.DB) error {
+	q := `SELECT id FROM transactions WHERE tombstone_millis < $1;`
+
+	rows, err := db.Query(q, time.Now().UnixNano()/1e6)
+	if err != nil {
+		return fmt.Errorf("failed to get transactions with tombstone: %v", err)
+	}
+
+	var ids []int
+
+	for rows.Next() {
+		var id int
+
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("failed to scan transaction id: %v", err)
+		}
+
+		ids = append(ids, id)
+	}
+
+	_ = rows.Close()
+
+	for _, id := range ids {
+		txn, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("failed to start transaction: %v", err)
+		}
+
+		if _, err := txn.Exec("DELETE FROM block_ids WHERE transaction_id = $1", id); err != nil {
+			_ = txn.Rollback()
+			return fmt.Errorf("failed to delete block_ids: %v", err)
+		}
+
+		if _, err := txn.Exec("DELETE FROM outputs WHERE transaction_id = $1", id); err != nil {
+			_ = txn.Rollback()
+			return fmt.Errorf("failed to delete outputs: %v", err)
+		}
+
+		if _, err := txn.Exec("DELETE FROM inputs WHERE transaction_id = $1", id); err != nil {
+			_ = txn.Rollback()
+			return fmt.Errorf("failed to delete inputs: %v", err)
+		}
+		if _, err := txn.Exec("DELETE FROM transactions WHERE id = $1", id); err != nil {
+			_ = txn.Rollback()
+			return fmt.Errorf("failed to delete transaction: %v", err)
+		}
+
+		if err := txn.Commit(); err != nil {
+			return fmt.Errorf("failed to commit transaction: %v", err)
+		}
 	}
 
 	return nil

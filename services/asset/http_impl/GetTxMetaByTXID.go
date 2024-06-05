@@ -31,24 +31,24 @@ func (h *HTTP) GetTxMetaByTXID(mode ReadMode) func(c echo.Context) error {
 		}()
 
 		// get
-		txMetaStoreURL, err, found := gocore.Config().GetURL("txmeta_store")
+		storeURL, err, found := gocore.Config().GetURL("utxostore")
 		if err != nil {
 			h.logger.Errorf("[Asset_http] GetUTXOsByTXID error: %s", err.Error())
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 		if !found {
-			h.logger.Errorf("[Asset_http] GetUTXOsByTXID error: no txmeta_store setting found")
-			return echo.NewHTTPError(http.StatusInternalServerError, "no txmeta_store setting found")
+			h.logger.Errorf("[Asset_http] GetUTXOsByTXID error: no utxostore setting found")
+			return echo.NewHTTPError(http.StatusInternalServerError, "no utxostore setting found")
 		}
 
-		client, err := util.GetAerospikeClient(h.logger, txMetaStoreURL)
+		client, err := util.GetAerospikeClient(h.logger, storeURL)
 		if err != nil {
 			h.logger.Errorf("[Asset_http] GetUTXOsByTXID error: %s", err.Error())
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
-		namespace := txMetaStoreURL.Path[1:]
-		setName := txMetaStoreURL.Query().Get("set")
+		namespace := storeURL.Path[1:]
+		setName := storeURL.Query().Get("set")
 		if setName == "" {
 			setName = "txmeta"
 		}
