@@ -3,6 +3,7 @@
 package _factory
 
 import (
+	"context"
 	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -11,7 +12,7 @@ import (
 )
 
 func init() {
-	availableDatabases["aerospike"] = func(logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
+	availableDatabases["aerospike"] = func(_ context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
 		return aerospike.New(logger, url)
 	}
 }

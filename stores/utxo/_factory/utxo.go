@@ -12,7 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
-var availableDatabases = map[string]func(logger ulogger.Logger, url *url.URL) (utxo.Store, error){}
+var availableDatabases = map[string]func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error){}
 
 func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, source string, startBlockchainListener ...bool) (utxo.Store, error) {
 
@@ -35,7 +35,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 		// TODO retry on connection failure
 
 		logger.Infof("[UTXOStore] connecting to %s service at %s:%d", storeUrl.Scheme, storeUrl.Hostname(), port)
-		utxoStore, err = dbInit(logger, storeUrl)
+		utxoStore, err = dbInit(ctx, logger, storeUrl)
 		if err != nil {
 			return nil, err
 		}
