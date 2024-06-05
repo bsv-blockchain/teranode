@@ -81,7 +81,7 @@ type Store struct {
 	expirationMillis uint64
 }
 
-func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
+func New(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init sql db: %+v", err)
@@ -128,10 +128,15 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
 
 		go func() {
 			for {
-				time.Sleep(1 * time.Minute)
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					time.Sleep(1 * time.Minute)
 
-				if err := deleteTombstoned(s.db); err != nil {
-					logger.Errorf("failed to delete tombstoned transactions: %v", err)
+					if err := deleteTombstoned(s.db); err != nil {
+						logger.Errorf("failed to delete tombstoned transactions: %v", err)
+					}
 				}
 			}
 		}()
@@ -662,7 +667,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 			}
 
 			if s.expirationMillis > 0 {
-				if _, err := s.db.ExecContext(ctx, q2, transactionId); err != nil {
+				if _, err := txn.ExecContext(ctx, q2, transactionId); err != nil {
 					return fmt.Errorf("[UnSpend] error removing tombstone for %s:%d: %v", spend.TxID, spend.Vout, err)
 				}
 			}

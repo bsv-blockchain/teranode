@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setup(t *testing.T) (*Store, *bt.Tx) {
+func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
 	os.Setenv("utxostore_dbTimeoutMillis", "30000")
 
 	logger := ulogger.TestLogger{}
@@ -31,45 +31,54 @@ func setup(t *testing.T) (*Store, *bt.Tx) {
 	storeUrl, err := url.Parse("sqlitememory:///test?expiration=1")
 	require.NoError(t, err)
 
-	store, err := New(logger, storeUrl)
+	store, err := New(ctx, logger, storeUrl)
 	require.NoError(t, err)
 
 	// Delete the tx so the tests can run cleanly...
-	err = store.Delete(context.Background(), tx.TxIDChainHash())
+	err = store.Delete(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
 	return store, tx
 }
 
 func TestCreate(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	meta, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	meta, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(259), meta.SizeInBytes)
 }
 
 func TestCreateDuplicate(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	meta, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	meta, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(259), meta.SizeInBytes)
 
-	_, err = store.Create(context.Background(), tx)
+	_, err = store.Create(ctx, tx)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 }
 
 func TestGet(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
-	meta, err := store.Get(context.Background(), tx.TxIDChainHash())
+	meta, err := store.Get(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(0), meta.Fee)
@@ -85,43 +94,55 @@ func TestGet(t *testing.T) {
 }
 
 func TestGetMeta(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
-	meta, err := store.GetMeta(context.Background(), tx.TxIDChainHash())
+	meta, err := store.GetMeta(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
 	assert.Nil(t, meta.Tx)
 }
 
 func TestGetBlockIDs(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx, 1, 2, 3)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx, 1, 2, 3)
 	require.NoError(t, err)
 
-	meta, err := store.GetMeta(context.Background(), tx.TxIDChainHash())
+	meta, err := store.GetMeta(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
 	assert.Len(t, meta.BlockIDs, 3)
 }
 
 func TestDelete(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
-	err = store.Delete(context.Background(), tx.TxIDChainHash())
+	err = store.Delete(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 }
 
 func TestSpend(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
 	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
@@ -136,25 +157,28 @@ func TestSpend(t *testing.T) {
 		SpendingTxID: &spendingTxID1,
 	}
 
-	err = store.Spend(context.Background(), []*utxo.Spend{spend})
+	err = store.Spend(ctx, []*utxo.Spend{spend})
 	require.NoError(t, err)
 
 	// Spend again with the same spendingTxID
-	err = store.Spend(context.Background(), []*utxo.Spend{spend})
+	err = store.Spend(ctx, []*utxo.Spend{spend})
 	require.NoError(t, err)
 
 	// Spend again with a different spendingTxID
 	spendingTxID2 := chainhash.HashH([]byte("test2"))
 	spend.SpendingTxID = &spendingTxID2
 
-	err = store.Spend(context.Background(), []*utxo.Spend{spend})
+	err = store.Spend(ctx, []*utxo.Spend{spend})
 	require.Error(t, err)
 }
 
 func TestUnSpend(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
 	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
@@ -169,25 +193,28 @@ func TestUnSpend(t *testing.T) {
 		SpendingTxID: &spendingTxID1,
 	}
 
-	err = store.Spend(context.Background(), []*utxo.Spend{spend})
+	err = store.Spend(ctx, []*utxo.Spend{spend})
 	require.NoError(t, err)
 
 	// Unspend the utxo
-	err = store.UnSpend(context.Background(), []*utxo.Spend{spend})
+	err = store.UnSpend(ctx, []*utxo.Spend{spend})
 	require.NoError(t, err)
 
 	// Spend again with a different spendingTxID
 	spendingTxID2 := chainhash.HashH([]byte("test2"))
 	spend.SpendingTxID = &spendingTxID2
 
-	err = store.Spend(context.Background(), []*utxo.Spend{spend})
+	err = store.Spend(ctx, []*utxo.Spend{spend})
 	require.NoError(t, err)
 }
 
 func TestGetSpend(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
 	spend := &utxo.Spend{
@@ -195,22 +222,25 @@ func TestGetSpend(t *testing.T) {
 		Vout: 0,
 	}
 
-	res, err := store.GetSpend(context.Background(), spend)
+	res, err := store.GetSpend(ctx, spend)
 	require.NoError(t, err)
 
 	assert.Equal(t, int(utxo.Status_OK), res.Status)
 }
 
 func TestSetMinedMulti(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
-	err = store.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, 1)
+	err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, 1)
 	require.NoError(t, err)
 
-	meta, err := store.Get(context.Background(), tx.TxIDChainHash(), []string{"blockIDs"})
+	meta, err := store.Get(ctx, tx.TxIDChainHash(), []string{"blockIDs"})
 	require.NoError(t, err)
 
 	assert.Len(t, meta.BlockIDs, 1)
@@ -218,9 +248,12 @@ func TestSetMinedMulti(t *testing.T) {
 }
 
 func TestBatchDecorate(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
 	unresolved := utxo.UnresolvedMetaData{
@@ -228,7 +261,7 @@ func TestBatchDecorate(t *testing.T) {
 		Idx:  0,
 	}
 
-	err = store.BatchDecorate(context.Background(), []*utxo.UnresolvedMetaData{&unresolved})
+	err = store.BatchDecorate(ctx, []*utxo.UnresolvedMetaData{&unresolved})
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(0), unresolved.Data.Fee)
@@ -244,9 +277,12 @@ func TestBatchDecorate(t *testing.T) {
 }
 
 func TestPreviousOutputsDecorate(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
 	previousOutput := &meta.PreviousOutput{
@@ -254,7 +290,7 @@ func TestPreviousOutputsDecorate(t *testing.T) {
 		Vout:         0,
 	}
 
-	err = store.PreviousOutputsDecorate(context.Background(), []*meta.PreviousOutput{previousOutput})
+	err = store.PreviousOutputsDecorate(ctx, []*meta.PreviousOutput{previousOutput})
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(556_000_000), previousOutput.Satoshis)
@@ -262,16 +298,19 @@ func TestPreviousOutputsDecorate(t *testing.T) {
 }
 
 func TestCreateCoinbase(t *testing.T) {
-	store, _ := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, _ := setup(ctx, t)
 
 	// Coinbase from block 500,000
 	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff580320a107152f5669614254432f48656c6c6f20576f726c64212f2cfabe6d6dbcbb1b0222e1aeebaca2a9c905bb23a3ad0302898ec600a9033a87ec1645a446010000000000000010f829ba0b13a84def80c389cde9840000ffffffff0174fdaf4a000000001976a914f1c075a01882ae0972f95d3a4177c86c852b7d9188ac00000000")
 	require.NoError(t, err)
 
-	err = store.Delete(context.Background(), coinbaseTx.TxIDChainHash())
+	err = store.Delete(ctx, coinbaseTx.TxIDChainHash())
 	require.NoError(t, err)
 
-	meta, err := store.Create(context.Background(), coinbaseTx)
+	meta, err := store.Create(ctx, coinbaseTx)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(1253047668), meta.Fee)
@@ -286,9 +325,12 @@ func TestCreateCoinbase(t *testing.T) {
 }
 
 func TestTombstoneAfterSpend(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
 	utxohash0, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
@@ -314,7 +356,7 @@ func TestTombstoneAfterSpend(t *testing.T) {
 		SpendingTxID: &spendingTxID1,
 	}
 
-	err = store.Spend(context.Background(), []*utxo.Spend{spend0, spend1})
+	err = store.Spend(ctx, []*utxo.Spend{spend0, spend1})
 	require.NoError(t, err)
 
 	time.Sleep(1100 * time.Millisecond)
@@ -322,15 +364,18 @@ func TestTombstoneAfterSpend(t *testing.T) {
 	err = deleteTombstoned(store.db)
 	require.NoError(t, err)
 
-	_, err = store.Get(context.Background(), tx.TxIDChainHash())
+	_, err = store.Get(ctx, tx.TxIDChainHash())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, errors.ErrTxNotFound))
 }
 
 func TestTombstoneAfterUnSpend(t *testing.T) {
-	store, tx := setup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	_, err := store.Create(context.Background(), tx)
+	store, tx := setup(ctx, t)
+
+	_, err := store.Create(ctx, tx)
 	require.NoError(t, err)
 
 	utxohash0, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
@@ -356,10 +401,10 @@ func TestTombstoneAfterUnSpend(t *testing.T) {
 		SpendingTxID: &spendingTxID1,
 	}
 
-	err = store.Spend(context.Background(), []*utxo.Spend{spend0, spend1})
+	err = store.Spend(ctx, []*utxo.Spend{spend0, spend1})
 	require.NoError(t, err)
 
-	err = store.UnSpend(context.Background(), []*utxo.Spend{spend0})
+	err = store.UnSpend(ctx, []*utxo.Spend{spend0})
 	require.NoError(t, err)
 
 	time.Sleep(1100 * time.Millisecond)
@@ -367,6 +412,6 @@ func TestTombstoneAfterUnSpend(t *testing.T) {
 	err = deleteTombstoned(store.db)
 	require.NoError(t, err)
 
-	_, err = store.Get(context.Background(), tx.TxIDChainHash())
+	_, err = store.Get(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 }
