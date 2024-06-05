@@ -1140,7 +1140,7 @@ func getBinsToStore(tx *bt.Tx, blockIDs ...uint32) ([]*aerospike.Bin, error) {
 	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx)
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
-		return nil, errors.New(errors.ERR_PROCESSING, "failed to get fees and utxo hashes", err)
+		return nil, errors.New(errors.ERR_PROCESSING, "failed to get fees and utxo hashes for %s: %v", tx.TxIDChainHash(), err)
 	}
 
 	utxos := make(map[interface{}]interface{})
