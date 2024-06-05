@@ -119,8 +119,7 @@ smoketests:
 	unzip data.zip
 	chmod -R +x data
 	cd test/functional && \
-		SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldNotAllowDoubleSpend
-	rm -rf data
+		SETTINGS_CONTEXT=docker.ci.tc1.run go test
 
 .PHONY: gen
 gen:
