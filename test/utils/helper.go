@@ -181,16 +181,13 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 		fmt.Printf("Number of transactions: %d\n", block.TransactionCount)
 
 		for _, subtree := range block.Subtrees {
-			// fmt.Printf("Subtree %s\n", subtree)
 
-			if true {
-				filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
-				_, _, stReader, err := GetReader(ctx, filename, logger)
-				if err != nil {
-					return false, err
-				}
-				return ReadSubtree(stReader, logger, true, queryTxId), nil
+			filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
+			_, _, stReader, err := GetReader(ctx, filename, logger)
+			if err != nil {
+				return false, err
 			}
+			return ReadSubtree(stReader, logger, true, queryTxId), nil
 		}
 
 	default:
@@ -288,6 +285,8 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 	}
 
 	err = baClient.SubmitMiningSolution(ctx, solution)
-
-	return blockHash, err
+	if err != nil {
+		return nil, fmt.Errorf("error submitting mining solution: %w", err)
+	}
+	return blockHash, nil
 }

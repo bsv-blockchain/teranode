@@ -358,18 +358,17 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	}
 	fmt.Printf("Mining candidate: %d\n", miningCandidate2.SubtreeCount)
 
-	// mine block
-
 	blockHash, err := helper.MineBlock(ctx, *baClientNode1, logger)
-	t.Errorf("error getting block: %v", err)
+	if err != nil {
+		t.Errorf("Failed to mine block: %v with error: %v", err, blockHash)
+	}
 
 	blockHashNode2, err := helper.MineBlock(ctx, *baClientNode2, logger)
-	t.Errorf("error getting block: %v", err)
 	if err != nil {
 		t.Errorf("error getting block: %v", blockHashNode2)
 	}
 
-	time.Sleep(3000 * time.Second)
+	time.Sleep(30 * time.Second)
 
 	fmt.Printf("Block height: %d\n", height)
 	for {
@@ -380,26 +379,25 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 		time.Sleep(1 * time.Second)
 	}
 
-	blockchainStoreURL, _, found := gocore.Config().GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
-	blockchainDB, err := blockchain_store.NewStore(logger, blockchainStoreURL)
-	logger.Debugf("blockchainStoreURL: %v", blockchainStoreURL)
-	if err != nil {
-		panic(err.Error())
-	}
-	if !found {
-		panic("no blockchain_store setting found")
-	}
-	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
-	fmt.Printf("Block: %v\n", b)
-
+	// blockchainStoreURLNode1, _, found := gocore.Config().GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
+	// blockchainDB, err := blockchain_store.NewStore(logger, blockchainStoreURLNode1)
+	// logger.Debugf("blockchainStoreURLNode1: %v", blockchainStoreURLNode1)
+	// if err != nil {
+	// 	panic(err.Error())
+	// }
+	// if !found {
+	// 	panic("no blockchain_store setting found")
+	// }
+	// b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
+	// fmt.Printf("Block: %v\n", b)
 	blockStore := helper.GetBlockStore(logger)
 	var o []options.Options
 	o = append(o, options.WithFileExtension("block"))
-	blockchain, _ := blockchain.NewClient(ctx, logger)
-	header, meta, _ := blockchain.GetBestBlockHeader(ctx)
+
+	blockchainC, _ := blockchain.NewClientWithAddress(ctx, logger, "localhost:18085")
+	header, meta, _ := blockchainC.GetBestBlockHeader(ctx)
 
 	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
-	// t.Errorf("error getting block reader: %v", err)
 	if err == nil {
 		if bl, err := helper.ReadFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
 			t.Errorf("error reading block: %v", err)
@@ -407,8 +405,21 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
 			assert.Equal(t, true, bl, "Test Tx not found in block")
 		}
+	}
 
-		if bl, err := helper.ReadFile(ctx, "block", logger, r, *newTxDouble.TxIDChainHash(), ""); err != nil {
+	err = os.Setenv("SETTINGS_CONTEXT", "docker.ci.ubsv2")
+	if err != nil {
+		fmt.Println("Error setting environment variable:", err)
+		return
+	}
+	blockStore = helper.GetBlockStore(logger)
+
+	blockchainC, _ = blockchain.NewClientWithAddress(ctx, logger, "localhost:28085")
+	header, meta, _ = blockchainC.GetBestBlockHeader(ctx)
+
+	r, err = blockStore.GetIoReader(ctx, header.Hash()[:], o...)
+	if err == nil {
+		if bl, err := helper.ReadFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
