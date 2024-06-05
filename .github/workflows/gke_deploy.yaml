@@ -24,13 +24,21 @@ jobs:
       - name: ref
         run: echo "Github Event Ref is ${{ github.event.ref }}"
 
+<<<<<<< Updated upstream
   eks-deploy-euc-allinone:
+=======
+  eks-deploy-eu-testing:
+>>>>>>> Stashed changes
     uses: ./.github/workflows/deploy-to-region.yaml
     secrets: inherit
     if: startsWith(github.event.ref, 'refs/tags/v')
     with:
       region: eu-central-1
+<<<<<<< Updated upstream
       ubsv_env: allinone
+=======
+      ubsv_env: testing
+>>>>>>> Stashed changes
 
 #  eks-deploy-eu-allinone:
 #    uses: ./.github/workflows/deploy-to-region.yaml
@@ -48,6 +56,7 @@ jobs:
       region: eu-west-1
       ubsv_env: scaling
 
+<<<<<<< Updated upstream
 #  eks-deploy-us-allinone:
 #    uses: ./.github/workflows/deploy-to-region.yaml
 #    secrets: inherit
@@ -55,6 +64,8 @@ jobs:
 #    with:
 #      region: us-east-1
 #      ubsv_env: allinone
+=======
+>>>>>>> Stashed changes
 
   eks-deploy-us-scaling:
     uses: ./.github/workflows/deploy-to-region.yaml
@@ -64,6 +75,7 @@ jobs:
       region: us-east-1
       ubsv_env: scaling
 
+<<<<<<< Updated upstream
 #  eks-deploy-asia-allinone:
 #    uses: ./.github/workflows/deploy-to-region.yaml
 #    secrets: inherit
@@ -72,6 +84,8 @@ jobs:
 #      region: ap-south-1
 #      ubsv_env: allinone
 
+=======
+>>>>>>> Stashed changes
   eks-deploy-asia-scaling:
     uses: ./.github/workflows/deploy-to-region.yaml
     secrets: inherit

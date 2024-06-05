@@ -2,7 +2,7 @@ on:
   workflow_dispatch:
     inputs:
       ubsv_env:
-        description: 'Environment that we are deploying to (either scaling or allinone)'
+        description: 'Environment that we are deploying to (either scaling or testing)'
         required: true
         type: string
       logLevel:
@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       ubsv_env:
-        description: 'Environment that we are deploying to (either scaling or allinone)'
+        description: 'Environment that we are deploying to (either scaling or testing)'
         required: true
         type: string
 
@@ -71,7 +71,7 @@ jobs:
             export tag=$GITHUB_SHA
             echo "version tag is $tag"
           fi
-          kustomize edit set image REPO:IMAGE:TAG=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$tag
+          kustomize edit set image 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:latest-arm64=434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$tag
 
           # kustomize render & apply
           echo "Building kustomize build in $(pwd)"
