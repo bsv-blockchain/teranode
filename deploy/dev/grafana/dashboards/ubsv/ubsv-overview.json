@@ -2451,7 +2451,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(increase(aerospike_map_txmeta_store[$grouping_interval]))/ 60",
+          "expr": "sum(increase(aerospike_utxo_store[$grouping_interval]))/ 60",
           "hide": false,
           "instant": false,
           "legendFormat": "Set",

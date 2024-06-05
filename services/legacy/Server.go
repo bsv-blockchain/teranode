@@ -461,5 +461,8 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 		// TODO s.blockchainStore.Se(ctx context.Context, blockHash *chainhash.Hash)
 	}
 
+	height := block.Height()
+	s.utxoStore.SetBlockHeight(uint32(height))
+
 	return nil
 }

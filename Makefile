@@ -117,6 +117,7 @@ smoketests:
 	docker compose -f docker-compose.ci.build.yml build
 	rm -rf data
 	unzip data.zip
+	chmod +x data
 	cd test/functional && \
 		SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldNotAllowDoubleSpend
 	rm -rf data
