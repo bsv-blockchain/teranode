@@ -2,12 +2,14 @@ package utxo
 
 import (
 	"context"
+	"testing"
+	"time"
+
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 var (
@@ -28,7 +30,7 @@ var (
 
 func TestGetFeesAndUtxoHashes(t *testing.T) {
 	t.Run("should return fees and utxo hashes", func(t *testing.T) {
-		fees, utxoHashes, err := GetFeesAndUtxoHashes(context.Background(), tx)
+		fees, utxoHashes, err := GetFeesAndUtxoHashes(context.Background(), tx, util.GenesisActivationHeight)
 		require.NoError(t, err)
 
 		assert.Equal(t, uint64(215), fees)

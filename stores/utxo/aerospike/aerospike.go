@@ -201,6 +201,12 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	var binsToStore []*aerospike.Bin
 	var err error
 
+	blockHeight, err := s.GetBlockHeight()
+	if err != nil {
+		s.logger.Warnf("Could not get block height, using Genesis activation height")
+		blockHeight = util.GenesisActivationHeight
+	}
+
 	for idx, bItem := range batch {
 		hash = bItem.tx.TxIDChainHash()
 		key, err = aerospike.NewKey(s.namespace, s.setName, hash[:])
@@ -209,7 +215,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			continue
 		}
 
-		binsToStore, err = getBinsToStore(bItem.tx)
+		binsToStore, err = getBinsToStore(bItem.tx, blockHeight)
 		if err != nil {
 			bItem.done <- errors.New(errors.ERR_PROCESSING, "could not get bins to store", err)
 			continue
@@ -1136,8 +1142,8 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func getBinsToStore(tx *bt.Tx, blockIDs ...uint32) ([]*aerospike.Bin, error) {
-	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx)
+func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aerospike.Bin, error) {
+	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
 		return nil, errors.New(errors.ERR_PROCESSING, "failed to get fees and utxo hashes for %s: %v", tx.TxIDChainHash(), err)

@@ -25,8 +25,8 @@ func CalculateUtxoStatus(spendingTxId *chainhash.Hash, coinbaseSpendingHeight ui
 
 // GetFeesAndUtxoHashes returns the fees and utxo hashes for the outputs of a transaction.
 // It will return an error if the context is cancelled.
-func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
-	if !util.IsExtended(tx, util.GenesisActivationHeight) && !tx.IsCoinbase() {
+func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (uint64, []*chainhash.Hash, error) {
+	if !util.IsExtended(tx, blockHeight) && !tx.IsCoinbase() {
 		return 0, nil, fmt.Errorf("tx is not extended")
 	}
 
