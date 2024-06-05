@@ -181,13 +181,14 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 		fmt.Printf("Number of transactions: %d\n", block.TransactionCount)
 
 		for _, subtree := range block.Subtrees {
-
-			filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
-			_, _, stReader, err := GetReader(ctx, filename, logger)
-			if err != nil {
-				return false, err
+			if true {
+				filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
+				_, _, stReader, err := GetReader(ctx, filename, logger)
+				if err != nil {
+					return false, err
+				}
+				return ReadSubtree(stReader, logger, true, queryTxId), nil
 			}
-			return ReadSubtree(stReader, logger, true, queryTxId), nil
 		}
 
 	default:
