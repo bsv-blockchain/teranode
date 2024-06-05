@@ -114,7 +114,7 @@ testall:
 
 .PHONY: smoketests
 smoketests:
-	# docker compose -f docker-compose.ci.build.yml build
+	docker compose -f docker-compose.ci.build.yml build
 	rm -rf data
 	unzip data.zip
 	chmod -R +x data
