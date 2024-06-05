@@ -118,7 +118,7 @@ smoketests:
 	rm -rf data
 	unzip data.zip
 	cd test/functional && \
-		SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowFairTx
+		SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldNotAllowDoubleSpend
 	rm -rf data
 
 .PHONY: gen
