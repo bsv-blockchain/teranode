@@ -252,7 +252,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				continue
 			}
 
-			batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[STORE_BATCH][%s:%d] error in aerospike store batch record for txMeta (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
+			batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
 		} else {
 			batch[idx].done <- nil
 		}
