@@ -18,6 +18,14 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		stat.AddTime(start)
 	}()
 
+	header, meta, er := s.blocksCache.GetBlockHeader(*blockHash)
+	if er != nil {
+		return nil, nil, fmt.Errorf("error in GetBlockHeader: %w", er)
+	}
+	if header != nil {
+		return header, meta, nil
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

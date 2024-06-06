@@ -11,32 +11,25 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-type getBlockHeadersCache struct {
-	blockHeaders []*model.BlockHeader
-	heights      []uint32
-}
-
-func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
+func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockHeaders")
 	defer func() {
 		stat.AddTime(start)
 	}()
 
-	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
-	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaders-%d-%s", numberOfHeaders, blockHashFrom)))
-	cached := cache.Get(cacheId)
-	if cached != nil && cached.Value() != nil {
-		if cacheData, ok := cached.Value().(*getBlockHeadersCache); ok && cacheData != nil {
-			s.logger.Debugf("GetBlockHeaders cache hit")
-			return cacheData.blockHeaders, cacheData.heights, nil
-		}
+	headers, metas, err := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error in GetBlockHeaders: %w", err)
+	}
+	if headers != nil {
+		return headers, metas, nil
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
-	heights := make([]uint32, 0, numberOfHeaders)
+	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
 
 	q := `
 		SELECT
@@ -46,7 +39,13 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			,b.previous_hash
 			,b.merkle_root
 			,b.n_bits
+			,b.id
 			,b.height
+			,b.tx_count
+			,b.size_in_bytes
+			,b.peer_id
+			,b.block_time
+			,b.inserted_at
 		FROM blocks b
 		WHERE id IN (
 			SELECT id FROM blocks
@@ -70,7 +69,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return blockHeaders, heights, nil
+			return blockHeaders, blockHeaderMetas, nil
 		}
 		return nil, nil, fmt.Errorf("failed to get headers: %w", err)
 	}
@@ -79,9 +78,10 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	var hashPrevBlock []byte
 	var hashMerkleRoot []byte
 	var nBits []byte
-	var height uint32
+	var insertedAt CustomTime
 	for rows.Next() {
 		blockHeader := &model.BlockHeader{}
+		blockHeaderMeta := &model.BlockHeaderMeta{}
 
 		if err = rows.Scan(
 			&blockHeader.Version,
@@ -90,7 +90,13 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			&hashPrevBlock,
 			&hashMerkleRoot,
 			&nBits,
-			&height,
+			&blockHeaderMeta.ID,
+			&blockHeaderMeta.Height,
+			&blockHeaderMeta.TxCount,
+			&blockHeaderMeta.SizeInBytes,
+			&blockHeaderMeta.Miner,
+			&blockHeaderMeta.BlockTime,
+			&insertedAt,
 		); err != nil {
 			return nil, nil, fmt.Errorf("failed to scan row: %w", err)
 		}
@@ -107,13 +113,8 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 		}
 
 		blockHeaders = append(blockHeaders, blockHeader)
-		heights = append(heights, height)
+		blockHeaderMetas = append(blockHeaderMetas, blockHeaderMeta)
 	}
 
-	cache.Set(cacheId, &getBlockHeadersCache{
-		blockHeaders: blockHeaders,
-		heights:      heights,
-	}, cacheTTL)
-
-	return blockHeaders, heights, nil
+	return blockHeaders, blockHeaderMetas, nil
 }

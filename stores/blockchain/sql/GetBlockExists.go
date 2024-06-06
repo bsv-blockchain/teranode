@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -16,14 +15,9 @@ func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bo
 		stat.AddTime(start)
 	}()
 
-	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
-	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetBlockExists-%s", blockHash.String())))
-	cached := cache.Get(cacheId)
-	if cached != nil && cached.Value() != nil {
-		if exists, ok := cached.Value().(bool); ok {
-			s.logger.Debugf("GetBlockExists cache hit")
-			return exists, nil
-		}
+	exists, ok := s.blocksCache.GetExists(*blockHash) // resets whenever a new block is added
+	if ok {
+		return exists, nil
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -41,12 +35,12 @@ func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bo
 		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			s.blocksCache.SetExists(*blockHash, false) // resets whenever a new block is added
 			return false, nil
 		}
 		return false, err
 	}
 
-	cache.Set(cacheId, true, cacheTTL)
-
+	s.blocksCache.SetExists(*blockHash, true) // resets whenever a new block is added
 	return true, nil
 }
