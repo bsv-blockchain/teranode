@@ -166,12 +166,16 @@ func TestShouldAllowFairTx(t *testing.T) {
 	}
 
 	fmt.Printf("Block height: %d\n", height)
-	for {
-		newHeight, _ := helper.GetBlockHeight(url)
+	var newHeight int
+	for i := 0; i < 30; i++ {
+		newHeight, _ = helper.GetBlockHeight(url)
 		if newHeight > height {
 			break
 		}
 		time.Sleep(1 * time.Second)
+	}
+	if newHeight <= height {
+		t.Fatalf("Block height did not increase after mining block")
 	}
 
 	blockchainStoreURL, _, found := gocore.Config().GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
@@ -371,12 +375,16 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	time.Sleep(30 * time.Second)
 
 	fmt.Printf("Block height: %d\n", height)
-	for {
-		newHeight, _ := helper.GetBlockHeight(url)
+	var newHeight int
+	for i := 0; i < 30; i++ {
+		newHeight, _ = helper.GetBlockHeight(url)
 		if newHeight > height {
 			break
 		}
 		time.Sleep(1 * time.Second)
+	}
+	if newHeight <= height {
+		t.Fatalf("Block height did not increase after mining block")
 	}
 
 	// blockchainStoreURLNode1, _, found := gocore.Config().GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
