@@ -52,18 +52,18 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 
 	q := `
 		SELECT
-	     b.version
+	   b.version
 		,b.block_time
 		,b.n_bits
-	    ,b.nonce
+	  ,b.nonce
 		,b.previous_hash
 		,b.merkle_root
-	    ,b.tx_count
 		,b.size_in_bytes
 		,b.coinbase_tx
+		,b.height
+	  ,b.tx_count
 		,b.subtree_count
 		,b.subtrees
-		,b.height
 		FROM blocks b
 		WHERE b.hash = $1
 	`
@@ -90,12 +90,12 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		&block.Header.Nonce,
 		&hashPrevBlock,
 		&hashMerkleRoot,
-		&transactionCount,
 		&sizeInBytes,
 		&coinbaseTx,
+		&height,
+		&transactionCount,
 		&subtreeCount,
 		&subtreeBytes,
-		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, 0, fmt.Errorf("error in GetBlock: %w", err)

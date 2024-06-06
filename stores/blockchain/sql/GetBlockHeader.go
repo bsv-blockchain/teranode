@@ -33,14 +33,14 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		SELECT
 	   b.version
 		,b.block_time
+		,b.n_bits
 	  ,b.nonce
 		,b.previous_hash
 		,b.merkle_root
-		,b.n_bits
-		,b.height
-		,b.tx_count
 		,b.size_in_bytes
 		,b.coinbase_tx
+		,b.height
+		,b.tx_count
 		FROM blocks b
 		WHERE b.hash = $1
 	`
@@ -57,14 +57,14 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
 		&blockHeader.Version,
 		&blockHeader.Timestamp,
+		&nBits,
 		&blockHeader.Nonce,
 		&hashPrevBlock,
 		&hashMerkleRoot,
-		&nBits,
-		&blockHeaderMeta.Height,
-		&blockHeaderMeta.TxCount,
 		&blockHeaderMeta.SizeInBytes,
 		&coinbaseBytes,
+		&blockHeaderMeta.Height,
+		&blockHeaderMeta.TxCount,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, fmt.Errorf("error in GetBlockHeader: %w", errors.ErrNotFound)
