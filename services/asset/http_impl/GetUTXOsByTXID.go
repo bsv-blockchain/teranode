@@ -73,7 +73,7 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 
 			g.Go(func() error {
 				// Get the UTXOHash for this output.
-				utxoHash, err := util.UTXOHash(hash, uint32(safeI), *safeOutput.LockingScript, safeOutput.Satoshis)
+				utxoHash, err := util.UTXOHash(hash, uint32(safeI), safeOutput.LockingScript, safeOutput.Satoshis)
 				if err != nil {
 					return err
 				}
