@@ -1,9 +1,3 @@
-x-aerospike-base: &aerospike-base
-  image: aerospike:ce-6.4.0.7_2
-  # mem_limit: 1024m
-  network_mode: "host"
-  command: --config-file /etc/aerospike.conf
-
 x-ubsv-base:
   &ubsv-base
   image: ubsv:latest
@@ -48,24 +42,6 @@ services:
       retries: 5
     restart: on-failure
 
-  aerospike-1:
-    container_name: aerospike-1
-    <<: *aerospike-base
-    volumes:
-      - ./deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
-
-  aerospike-2:
-    container_name: aerospike-2
-    <<: *aerospike-base
-    volumes:
-      - ./deploy/dev/aerospike/aerospike-2.conf:/etc/aerospike.conf
-
-  aerospike-3:
-    container_name: aerospike-3
-    <<: *aerospike-base
-    volumes:
-      - ./deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
-
   kafka-shared:
     container_name: kafka-shared
     image: vectorized/redpanda:latest
@@ -107,9 +83,7 @@ services:
         condition: service_healthy
       kafka-shared:
         condition: service_started
-      aerospike-1:
-        condition: service_started
-    entrypoint: ["/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv1"
     volumes:
@@ -126,9 +100,7 @@ services:
         condition: service_healthy
       kafka-shared:
         condition: service_started
-      aerospike-2:
-        condition: service_started
-    entrypoint: ["/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv2"
     volumes:
@@ -145,9 +117,7 @@ services:
         condition: service_healthy
       kafka-shared:
         condition: service_started
-      aerospike-3:
-        condition: service_started
-    entrypoint: ["/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv3"
     volumes:
@@ -167,7 +137,7 @@ services:
       SETTINGS_CONTEXT: "docker.host.ubsv1"
       BLASTER_ARGS: "-workers=2"
     # pass arguments to the command
-    command: ["/app/blaster.run", "-workers=100", "-print=0", "-profile=:9092", "-log=0", "-limit=100", "--quic=false"]
+    command: ["/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=100", "--quic=false"]
     volumes:
       - ./data/txblaster1:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
@@ -218,33 +188,3 @@ services:
       - prometheus-1
       - prometheus-2
       - prometheus-3
-
-  aerospike-exporter-1:
-    image: aerospike/aerospike-prometheus-exporter:latest
-    container_name: aerospike-exporter-1
-    environment:
-      AS_HOST: "localhost"
-      AS_PORT: "3100"
-      AGENT_BIND_PORT: "19145"
-      METRIC_LABELS: "type='development',source='aerospike'"
-    network_mode: "host"
-
-  aerospike-exporter-2:
-    image: aerospike/aerospike-prometheus-exporter:latest
-    container_name: aerospike-exporter-2
-    environment:
-      AS_HOST: "localhost"
-      AS_PORT: "3200"
-      AGENT_BIND_PORT: "29145"
-      METRIC_LABELS: "type='development',source='aerospike'"
-    network_mode: "host"
-
-  aerospike-exporter-3:
-    image: aerospike/aerospike-prometheus-exporter:latest
-    container_name: aerospike-exporter-3
-    environment:
-      AS_HOST: "localhost"
-      AS_PORT: "3300"
-      AGENT_BIND_PORT: "39145"
-      METRIC_LABELS: "type='development',source='aerospike'"
-    network_mode: "host"
