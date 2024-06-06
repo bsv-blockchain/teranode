@@ -99,7 +99,7 @@ func (c LocalClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Ha
 	return c.store.GetBlockHeader(ctx, blockHash)
 }
 
-func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
+func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 

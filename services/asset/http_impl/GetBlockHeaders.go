@@ -35,15 +35,16 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 		}
 
 		h.logger.Debugf("[Asset_http] Get %s Block Headers in %s for %s", mode, c.Request().RemoteAddr, hashStr)
+		defer h.logger.Debugf("[Asset_http] Get %s Block Headers completed in %s for %s", mode, c.Request().RemoteAddr, hashStr)
 
 		var headers []*model.BlockHeader
-		var heights []uint32
+		var headerMetas []*model.BlockHeaderMeta
 		hash, err := chainhash.NewHashFromStr(hashStr)
 		if err != nil {
 			return err
 		}
 
-		headers, heights, err = h.repository.GetBlockHeaders(c.Request().Context(), hash, uint64(numberOfHeaders))
+		headers, headerMetas, err = h.repository.GetBlockHeaders(c.Request().Context(), hash, uint64(numberOfHeaders))
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
 				return echo.NewHTTPError(http.StatusNotFound, err.Error())
@@ -59,7 +60,7 @@ func (h *HTTP) GetBlockHeaders(mode ReadMode) func(c echo.Context) error {
 			for idx, header := range headers {
 				headerResponses = append(headerResponses, &blockHeaderResponse{
 					BlockHeader: header,
-					Height:      heights[idx],
+					Height:      headerMetas[idx].Height,
 					Hash:        header.String(),
 				})
 			}

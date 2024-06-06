@@ -23,9 +23,23 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		stat.AddTime(start)
 	}()
 
+	// header, meta, er := cache.GetBlock(*blockHash)
+	// if er != nil {
+	// 	return nil, 0, fmt.Errorf("error in GetBlock: %w", er)
+	// }
+	// if header != nil {
+	// 	block := &model.Block{
+	// 		Header:           header,
+	// 		TransactionCount: meta.TxCount,
+	// 		SizeInBytes:      meta.SizeInBytes,
+	// 		Height:           meta.Height,
+	// 	}
+	// 	return block, meta.Height, nil
+	// }
+
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
 	cacheId := chainhash.HashH([]byte(fmt.Sprintf("getBlock-%s", blockHash.String())))
-	cached := cache.Get(cacheId)
+	cached := s.responseCache.Get(cacheId)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*getBlockCache); ok && cacheData != nil {
 			s.logger.Debugf("GetBlock cache hit")
@@ -112,10 +126,10 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		return nil, 0, fmt.Errorf("failed to convert subtrees: %w", err)
 	}
 
-	cache.Set(cacheId, &getBlockCache{
+	s.responseCache.Set(cacheId, &getBlockCache{
 		block:  block,
 		height: height,
-	}, cacheTTL)
+	}, s.cacheTTL)
 
 	return block, height, nil
 }

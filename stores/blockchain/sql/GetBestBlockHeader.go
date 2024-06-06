@@ -12,25 +12,18 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-type getBestBlockHeaderCache struct {
-	blockHeader *model.BlockHeader
-	meta        *model.BlockHeaderMeta
-}
-
 func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	start, stat, ctx := util.StartStatFromContext(ctx, "GetBestBlockHeader")
 	defer func() {
 		stat.AddTime(start)
 	}()
 
-	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
-	cacheId := chainhash.HashH([]byte("GetBestBlockHeader"))
-	cached := cache.Get(cacheId)
-	if cached != nil && cached.Value() != nil {
-		if cacheData, ok := cached.Value().(*getBestBlockHeaderCache); ok && cacheData != nil {
-			s.logger.Debugf("GetBestBlockHeader cache hit")
-			return cacheData.blockHeader, cacheData.meta, nil
-		}
+	header, meta, er := s.blocksCache.GetBestBlockHeader()
+	if er != nil {
+		return nil, nil, fmt.Errorf("error in GetBestBlockHeader: %w", er)
+	}
+	if header != nil {
+		return header, meta, nil
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -105,12 +98,6 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	}
 
 	blockHeaderMeta.Miner = miner
-
-	// set cache
-	cache.Set(cacheId, &getBestBlockHeaderCache{
-		blockHeader: blockHeader,
-		meta:        blockHeaderMeta,
-	}, cacheTTL)
 
 	return blockHeader, blockHeaderMeta, nil
 }
