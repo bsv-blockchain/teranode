@@ -146,7 +146,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		if block.Header.Version > 1 {
 			blockHeight, err := block.ExtractCoinbaseHeight()
 			if err != nil {
-				if height > 227835 {
+				if height < 227835 {
 					s.logger.Warnf("failed to extract coinbase height for block %s: %v", block.Hash(), err)
 				} else {
 					return 0, 0, err
