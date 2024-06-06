@@ -153,7 +153,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 				}
 			}
 
-			if blockHeight != uint32(height) {
+			if height >= 227835 && blockHeight != uint32(height) {
 				return 0, 0, fmt.Errorf("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
 			}
 		}
