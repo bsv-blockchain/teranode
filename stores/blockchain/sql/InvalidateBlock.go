@@ -46,9 +46,10 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return fmt.Errorf("block %s was not updated to invalid", blockHash.String())
 	}
 
-	if err := s.Reset(ctx); err != nil {
+	if err := s.ResetBlocksCache(ctx); err != nil {
 		return fmt.Errorf("error clearing caches: %v", err)
 	}
+	s.ResetResponseCache()
 
 	return nil
 }

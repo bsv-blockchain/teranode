@@ -30,9 +30,10 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return fmt.Errorf("error updating block to invalid: %v", err)
 	}
 
-	if err := s.Reset(ctx); err != nil {
+	if err := s.ResetBlocksCache(ctx); err != nil {
 		return fmt.Errorf("error clearing caches: %v", err)
 	}
+	s.ResetResponseCache()
 
 	return nil
 }

@@ -370,8 +370,11 @@ func (c *blockchainCache) RebuildBlockchain(blockHeaders []*model.BlockHeader, b
 		c.addBlockHeader(blockHeader, blockHeaderMetas[i])
 	}
 }
+func (s *SQL) ResetResponseCache() {
+	s.responseCache.DeleteAll()
+}
 
-func (s *SQL) Reset(ctx context.Context) error {
+func (s *SQL) ResetBlocksCache(ctx context.Context) error {
 	s.logger.Warnf("Reset")
 	defer s.logger.Warnf("Reset completed")
 
@@ -387,7 +390,6 @@ func (s *SQL) Reset(ctx context.Context) error {
 		return err
 	}
 
-	s.responseCache.DeleteAll()
 	s.blocksCache.RebuildBlockchain(blockHeaders, blockHeaderMetas)
 
 	return nil

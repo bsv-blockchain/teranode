@@ -44,10 +44,11 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 
 	ok := s.blocksCache.AddBlockHeader(block.Header, meta)
 	if !ok {
-		if err := s.Reset(ctx); err != nil {
+		if err := s.ResetBlocksCache(ctx); err != nil {
 			s.logger.Errorf("error clearing caches: %v", err)
 		}
 	}
+	s.ResetResponseCache()
 
 	return newBlockId, nil
 }
