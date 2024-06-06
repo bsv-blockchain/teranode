@@ -118,6 +118,7 @@ smoketests:
 	rm -rf data
 	unzip data.zip
 	chmod -R +x data
+	sleep 2
 	cd test/functional && \
 		SETTINGS_CONTEXT=docker.ci.tc1.run go test
 
