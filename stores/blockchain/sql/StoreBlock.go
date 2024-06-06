@@ -143,7 +143,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		// Check that the coinbase transaction includes the correct block height for all
 		// blocks that are version 2 or higher.
 		// BIP34 - Block number 227,835 (timestamp 2013-03-24 15:49:13 GMT) was the last version 1 block.
-		if block.Header.Version > 1 {
+		if height >= 227835 && block.Header.Version > 1 {
 			blockHeight, err := block.ExtractCoinbaseHeight()
 			if err != nil {
 				return 0, 0, err
