@@ -1,0 +1,16 @@
+@startuml
+participant "Block Validation" as BlockValidation
+participant "UTXO Store" as UTXOStore
+
+== Create Coinbase TX ==
+
+BlockValidation -> BlockValidation: processCoinbaseUtxos(ctx, block)
+BlockValidation -> UTXOStore: Create(ctx, block.CoinbaseTx)
+activate UTXOStore
+
+UTXOStore --> BlockValidation: Confirmation
+deactivate UTXOStore
+
+left footer Last Modified On: 4-June-2024
+
+@enduml

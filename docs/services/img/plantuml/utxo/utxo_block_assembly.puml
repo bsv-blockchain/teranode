@@ -1,17 +1,12 @@
 @startuml
 participant "Block Assembly" as BlockAssembly
 participant "UTXO Store" as UTXOStore
-database "Datastore Implementation" as Datastore
 
 == Create Coinbase TX ==
 
-BlockAssembly -> UTXOStore: Store(Coinbase UTXO)
+BlockAssembly -> BlockAssembly: processCoinbaseUtxos(ctx, block)
+BlockAssembly -> UTXOStore: Create(ctx, block.CoinbaseTx, blockHeight+100)
 activate UTXOStore
-
-UTXOStore -> Datastore: Store UTXO
-activate Datastore
-Datastore --> UTXOStore: Acknowledgement
-deactivate Datastore
 
 UTXOStore --> BlockAssembly: Confirmation
 deactivate UTXOStore
@@ -22,14 +17,9 @@ deactivate UTXOStore
 BlockAssembly -> UTXOStore: Delete(Coinbase UTXO)
 activate UTXOStore
 
-UTXOStore -> Datastore: Delete UTXO
-activate Datastore
-Datastore --> UTXOStore: Acknowledgement
-deactivate Datastore
-
 UTXOStore --> BlockAssembly: Confirmation
 deactivate UTXOStore
 
-left footer Last Modified On: 23-Nov-2023
+left footer Last Modified On: 4-June-2024
 
 @enduml
