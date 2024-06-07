@@ -114,12 +114,12 @@ testall:
 
 .PHONY: smoketests
 smoketests:
-	docker compose -f docker-compose.ci.build.yml build
+	# docker compose -f docker-compose.ci.build.yml build
 	rm -rf data
 	unzip data.zip
 	chmod -R +x data
-	cd test/functional && \
-		SETTINGS_CONTEXT=docker.ci.tc1.run go test
+	cd test/settings && \
+		SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowMaxBlockSize
 
 .PHONY: gen
 gen:

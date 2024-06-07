@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
@@ -290,4 +291,64 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 		return nil, fmt.Errorf("error submitting mining solution: %w", err)
 	}
 	return blockHash, nil
+}
+
+type Transaction struct {
+	Tx string `json:"tx"`
+}
+
+func CreateAndSendRawTx(address, faucetURL, rpcURL string) (string, error) {
+	payload := []byte(fmt.Sprintf(`{"address":"%s"}`, address))
+
+	// Create a new HTTP request with POST method and payload
+	req, err := http.NewRequest("POST", faucetURL, bytes.NewBuffer(payload))
+	if err != nil {
+		return "", fmt.Errorf("error creating request: %v", err)
+	}
+
+	// Set the Content-Type header to application/json
+	req.Header.Set("Content-Type", "application/json")
+
+	// Create an HTTP client
+	client := &http.Client{}
+
+	// Send the request
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("error sending request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var response Transaction
+
+	// Decode the response JSON
+	err = json.NewDecoder(resp.Body).Decode(&response)
+	if err != nil {
+		return "", fmt.Errorf("error decoding response: %v", err)
+	}
+
+	tx := response.Tx
+
+	// Send the transaction using RPC
+	_, err = CallRPC(rpcURL, "sendrawtransaction", []interface{}{tx})
+	if err != nil {
+		return "", fmt.Errorf("error sending transaction via RPC: %v", err)
+	}
+
+	return tx, nil
+}
+
+func CreateAndSendRawTxs(ctx context.Context, count int, logger ulogger.Logger) ([]chainhash.Hash, error) {
+	var rawTxs []chainhash.Hash
+
+	for i := 0; i < count; i++ {
+		tx, err := CreateAndSendRawTx("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", "http://localhost:18097/faucet/request", "http://localhost:19292")
+		if err != nil {
+			return nil, fmt.Errorf("error creating raw transaction: %v", err)
+		}
+		rawTxs = append(rawTxs, chainhash.HashH([]byte(tx)))
+		time.Sleep(1 * time.Second) // Wait 10 seconds between transactions
+	}
+
+	return rawTxs, nil
 }
