@@ -13,6 +13,7 @@ services:
     <<: *aerospike-base
     ports:
       - 3100:3000
+    restart: on-failure
     volumes:
     - ./deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
     - ./data/aerospike-1/data:/opt/aerospike/data
@@ -22,6 +23,7 @@ services:
     <<: *aerospike-base
     ports:
       - 3200:3000
+    restart: on-failure
     volumes:
     - ./deploy/dev/aerospike/aerospike-2.conf:/etc/aerospike.conf
     - ./data/aerospike-2/data:/opt/aerospike/data
@@ -31,6 +33,7 @@ services:
     <<: *aerospike-base
     ports:
       - 3300:3000
+    restart: on-failure
     volumes:
     - ./deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
     - ./data/aerospike-3/data:/opt/aerospike/data

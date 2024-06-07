@@ -17,13 +17,12 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 		stat.AddTime(start)
 	}()
 
-	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetHeader-%s", blockHash.String())))
-	cached := cache.Get(cacheId)
-	if cached != nil && cached.Value() != nil {
-		if cacheData, ok := cached.Value().(*model.BlockHeader); ok && cacheData != nil {
-			s.logger.Debugf("GetHeader cache hit")
-			return cacheData, nil
-		}
+	header, _, err := s.blocksCache.GetBlockHeader(*blockHash)
+	if err != nil {
+		return nil, fmt.Errorf("error in GetHeader: %w", err)
+	}
+	if header != nil {
+		return header, nil
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -47,8 +46,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 	var hashMerkleRoot []byte
 	var nBits []byte
 
-	var err error
-	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
+	if err := s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
 		&blockHeader.Version,
 		&blockHeader.Timestamp,
 		&blockHeader.Nonce,
@@ -72,8 +70,6 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 	}
 
 	blockHeader.Bits = model.NewNBitFromSlice(nBits)
-
-	cache.Set(cacheId, blockHeader, cacheTTL)
 
 	return blockHeader, nil
 }

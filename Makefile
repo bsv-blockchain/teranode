@@ -118,8 +118,9 @@ smoketests:
 	rm -rf data
 	unzip data.zip
 	chmod -R +x data
-	cd test/settings && \
-		SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowMaxBlockSize
+	sleep 2
+	cd test/functional && \
+		SETTINGS_CONTEXT=docker.ci.tc1.run go test
 
 .PHONY: gen
 gen:
