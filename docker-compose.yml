@@ -101,7 +101,7 @@ services:
       - kafka-shared
       # - aerospike-1
       - postgres
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1", "-rpc=1", "-faucet=1"]
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=0", "-coinbase=1", "blockpersister=1", "-rpc=1", "-faucet=1"]
     # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
@@ -128,7 +128,7 @@ services:
       - kafka-shared
       # - aerospike-2
       - postgres
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=0", "-coinbase=1", "blockpersister=1"]
     # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ci.ubsv2}
@@ -154,7 +154,7 @@ services:
       - kafka-shared
       # - aerospike-3
       - postgres
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=0", "-coinbase=1", "blockpersister=1"]
     # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ci.ubsv3}
@@ -202,52 +202,52 @@ services:
       - ./data/txblaster1:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
 
-  # prometheus-1:
-  #   container_name: prometheus-1
-  #   image: prom/prometheus:v2.44.0
-  #   mem_limit: 64m
-  #   ports:
-  #     - "19090:9090"
-  #   networks:
-  #     - ubsv-network
-  #   volumes:
-  #     - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
+  prometheus-1:
+    container_name: prometheus-1
+    image: prom/prometheus:v2.44.0
+    mem_limit: 64m
+    ports:
+      - "19090:9090"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
-  # prometheus-2:
-  #   container_name: prometheus-2
-  #   image: prom/prometheus:v2.44.0
-  #   mem_limit: 64m
-  #   ports:
-  #     - "29090:9090"
-  #   networks:
-  #     - ubsv-network
-  #   volumes:
-  #     - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
+  prometheus-2:
+    container_name: prometheus-2
+    image: prom/prometheus:v2.44.0
+    mem_limit: 64m
+    ports:
+      - "29090:9090"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
 
-  # prometheus-3:
-  #   container_name: prometheus-3
-  #   image: prom/prometheus:v2.44.0
-  #   mem_limit: 64m
-  #   ports:
-  #     - "39090:9090"
-  #   networks:
-  #     - ubsv-network
-  #   volumes:
-  #     - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
+  prometheus-3:
+    container_name: prometheus-3
+    image: prom/prometheus:v2.44.0
+    mem_limit: 64m
+    ports:
+      - "39090:9090"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
 
-  # grafana:
-  #   container_name: grafana
-  #   image: grafana/grafana:latest
-  #   ports:
-  #     - "3000:3000"
-  #   networks:
-  #     - ubsv-network
-  #   volumes:
-  #     - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
-  #     - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
-  #     - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
-  #     - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
-  #   depends_on:
-  #     - prometheus-1
-  #     - prometheus-2
-  #     - prometheus-3
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
+    depends_on:
+      - prometheus-1
+      - prometheus-2
+      - prometheus-3

@@ -11,16 +11,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
 
 	block_model "github.com/bitcoin-sv/ubsv/model"
@@ -290,4 +296,119 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 		return nil, fmt.Errorf("error submitting mining solution: %w", err)
 	}
 	return blockHash, nil
+}
+
+type Transaction struct {
+	Tx string `json:"tx"`
+}
+
+func CreateAndSendRawTx(ctx context.Context, faucetURL, rpcURL string) (chainhash.Hash, error) {
+
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
+
+	txDistributor, _ := distributor.NewDistributor(ctx, logger,
+		distributor.WithBackoffDuration(200*time.Millisecond),
+		distributor.WithRetryAttempts(3),
+		distributor.WithFailureTolerance(0),
+	)
+
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		fmt.Printf("Failed to generate private key: %v", err)
+	}
+
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	if err != nil {
+		fmt.Printf("Failed to create address: %v", err)
+	}
+
+	// payload := []byte(fmt.Sprintf(`{"address":"%s"}`, address.AddressString))
+	// req, err := http.NewRequest("POST", faucetURL, bytes.NewBuffer(payload))
+	// if err != nil {
+	// 	fmt.Printf("error creating request: %v", err)
+	// }
+
+	// req.Header.Set("Content-Type", "application/json")
+	// client := &http.Client{}
+	// resp, err := client.Do(req)
+	// if err != nil {
+	// 	fmt.Printf("error sending request: %v", err)
+	// }
+
+	// defer resp.Body.Close()
+
+	// var response Transaction
+	// err = json.NewDecoder(resp.Body).Decode(&response)
+	// if err != nil {
+	// 	fmt.Printf("error decoding response: %v", err)
+	// }
+
+	// tx := response.Tx
+
+	coinbaseClient, err := coinbase.NewClientWithAddress(ctx, logger, "localhost:18093")
+	if err != nil {
+		fmt.Printf("Failed to create Coinbase client: %v", err)
+	}
+
+	// faucetTx, err := bt.NewTxFromString(tx)
+	// if err != nil {
+	// 	fmt.Printf("error creating transaction from string: %v", err)
+	// }
+
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	if err != nil {
+		fmt.Printf("Failed to request funds: %v", err)
+	}
+	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	if err != nil {
+		fmt.Printf("Failed to send transaction: %v", err)
+	}
+
+	output := faucetTx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      faucetTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+	if err != nil {
+		fmt.Printf("error creating new transaction: %v\n", err)
+	}
+
+	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
+	if err != nil {
+		fmt.Printf("Error adding output to transaction: %v", err)
+	}
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		fmt.Printf("Error filling transaction inputs: %v", err)
+	}
+
+	// Send the transaction using RPC
+	_, err = txDistributor.SendTransaction(ctx, newTx)
+	if err != nil {
+		fmt.Printf("Failed to send new transaction: %v", err)
+	}
+
+	return *newTx.TxIDChainHash(), nil
+}
+
+func CreateAndSendRawTxs(ctx context.Context, count int, logger ulogger.Logger) ([]chainhash.Hash, error) {
+	var txHashes []chainhash.Hash
+
+	for i := 0; i < count; i++ {
+		tx, err := CreateAndSendRawTx(ctx, "http://localhost:18097/faucet/request", "http://localhost:19292")
+		if err != nil {
+			return nil, fmt.Errorf("error creating raw transaction: %v", err)
+		}
+		txHashes = append(txHashes, tx)
+		time.Sleep(1 * time.Second) // Wait 10 seconds between transactions
+	}
+
+	return txHashes, nil
 }
