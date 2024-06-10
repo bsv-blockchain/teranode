@@ -1,4 +1,4 @@
-////go:build e2eTest
+//go:build e2eTest
 
 // How to run this test:
 // $ unzip data.zip
