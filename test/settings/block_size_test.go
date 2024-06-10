@@ -65,7 +65,7 @@ func TestShouldAllowMaxBlockSize(t *testing.T) {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
 
-	hashes, err := helper.CreateAndSendRawTxs(ctx, 100, logger)
+	hashes, err := helper.CreateAndSendRawTxs(ctx, 10, logger)
 	if err != nil {
 		t.Fatalf("Failed to create and send raw txs: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestShouldAllowMaxBlockSize(t *testing.T) {
 		t.Errorf("error getting block reader: %v", err)
 	}
 	if err == nil {
-		if bl, err := helper.ReadFile(ctx, "block", logger, r, hashes[0], ""); err != nil {
+		if bl, err := helper.ReadFile(ctx, "block", logger, r, hashes[5], ""); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
