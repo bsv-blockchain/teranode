@@ -235,7 +235,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchId, err)
+		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %w", batchId, err)
 		for _, bItem := range batch {
 			bItem.done <- err
 		}
@@ -625,7 +625,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records", err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records: %w", err)
 	}
 
 	for idx, batchRecord := range batchRecords {
@@ -706,7 +706,7 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 	for idx, item := range outpoints {
 		key, err := aerospike.NewKey(s.namespace, s.setName, item.PreviousTxID[:])
 		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta", err)
+			return errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta: %w", err)
 		}
 
 		bins := []string{"version", "locktime", "inputs", "outputs"}
@@ -717,13 +717,13 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records", err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records: %w", err)
 	}
 
 	for idx, batchRecordIfc := range batchRecords {
 		batchRecord := batchRecordIfc.BatchRec()
 		if batchRecord.Err != nil {
-			return errors.New(errors.ERR_PROCESSING, "error in aerospike map store batch record", batchRecord.Err)
+			return errors.New(errors.ERR_PROCESSING, "error in aerospike map store batch record: %w", batchRecord.Err)
 		}
 
 		bins := batchRecord.Record.Bins
@@ -754,6 +754,10 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		return nil, errors.New(errors.ERR_PROCESSING, "failed to get tx meta data", err)
 	}
 
+	if isLargeTransaction(int(txMeta.SizeInBytes), len(tx.Outputs)) {
+		return nil, errors.New(errors.ERR_PROCESSING, "transaction is too large to store")
+	}
+
 	done := make(chan error)
 	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, done: done}
 
@@ -774,6 +778,23 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 
 	prometheusUtxostoreCreate.Inc()
 	return txMeta, nil
+}
+
+// Calculate the size we will need for the utxomap.  Each entry comprises a key being the hash of the utxo and the value being the spending tx hash,
+// each of these is a 64 byte hex string, making each entry up to 128 bytes (plus map overhead).
+// assume raw tx is stored as a hex string (2 bytes per byte) as a worst case
+// version, locktime, fee, sizeInBytes, nrUtxos, spentUtxos, blockIds, isCoinbase
+// If the size is greater than 1MB, we will class this as a large transaction and store it in a non-standard way
+func isLargeTransaction(sizeInBytes int, outputCount int) bool {
+	estimatedSize := outputCount * 128
+	estimatedSize += sizeInBytes * 2
+	estimatedSize += 100
+
+	if estimatedSize > 1024*1024 {
+		return true
+	}
+
+	return false
 }
 
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) (err error) {

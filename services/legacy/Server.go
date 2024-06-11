@@ -430,16 +430,10 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 			}
 		}
 
-		// TODO remove
-		if txHash.String() == "bb41a757f405890fb0f5856228e23b715702d714d59bf2b1feb70d8b2b4e3e08" {
-			s.logger.Infof("Found tx %s - SKIPPING", txHash.String())
-			fmt.Printf("\n\n%x\n\n", tx.ExtendedBytes())
-		} else {
-			// Store the tx in the store
-			if _, err := s.utxoStore.Create(ctx, tx, uint32(dbID)); err != nil {
-				if !errors.Is(err, errors.ErrTxAlreadyExists) {
-					return fmt.Errorf("Failed to store tx: %w", err)
-				}
+		// Store the tx in the store
+		if _, err := s.utxoStore.Create(ctx, tx, uint32(dbID)); err != nil {
+			if !errors.Is(err, errors.ErrTxAlreadyExists) {
+				return fmt.Errorf("Failed to store tx: %w", err)
 			}
 		}
 	}
