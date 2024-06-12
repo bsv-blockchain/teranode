@@ -2,7 +2,6 @@
 entity "Server" as Server
 entity "Validator" as Validator
 entity "DefaultValidator" as DefaultValidator
-database "TX Meta Store" as TXMetaStore
 database "UTXO Store" as UTXOStore
 participant "Block Assembly Service" as BlockAssembly
 participant P2P
@@ -24,12 +23,6 @@ alt if TX is valid
     UTXOStore -> Validator: OK
     deactivate Validator
 
-    Validator -> Validator: registerTxInMetaStore()
-    activate Validator
-    Validator -> TXMetaStore: txMetaStore.Create() # Persist new TX in TX Meta Store
-    TXMetaStore -> Validator: OK
-
-    deactivate Validator
 
     Validator -> Validator: sendToBlockAssembler()
     activate Validator
@@ -60,6 +53,6 @@ else if TX is invalid
     deactivate Server
 end
 
-left footer Last Modified On: 22-December-2023
+left footer Last Modified On: 10-June-2024
 
 @enduml
