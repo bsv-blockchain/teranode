@@ -4,6 +4,7 @@ on:
     branches:
       - master
       - staging
+      - feature-test-net
 
 env:
   REPO: ubsv
