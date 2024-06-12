@@ -100,7 +100,7 @@ jobs:
     uses: ./.github/workflows/gke_build.yaml
     secrets: inherit
     # only run if branch is equal to master
-    if: github.base_ref == 'refs/heads/feature-test-net'
+    if: github.base_ref == 'feature-test-net'
     with:
       arch: amd64
       repo: ubsv
@@ -112,7 +112,7 @@ jobs:
     uses: ./.github/workflows/gke_build.yaml
     secrets: inherit
     # only run if branch is equal to master
-    if: github.base_ref == 'refs/heads/feature-test-net'
+    if: github.base_ref == 'feature-test-net'
     with:
       arch: arm64
       repo: ubsv
