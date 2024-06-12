@@ -76,7 +76,24 @@ jobs:
       - name: Run Smoke tests
         run: make smoketests
         continue-on-error: false
-
+  # Get version tag
+  get_tag:
+    runs-on: self-hosted
+    steps:
+      - name: Determine deployment tag
+        id: deployment_tag
+        run: |
+          if [[ '${{ github.ref_type }}' == 'tag' ]]; then
+            export tag=${{ github.ref_name }}
+            echo "version tag is $tag"
+            echo "id=$tag" >> $GITHUB_OUTPUT
+          else
+            export tag=${{ github.sha }}
+            echo "version tag is $tag"
+            echo "id=$tag" >> $GITHUB_OUTPUT
+          fi
+    outputs:
+      deployment_tag: ${{ steps.deployment_tag.outputs.id }}
   # Build for X86 (AMD64)
   build_amd64:
     needs: [get_tag]
