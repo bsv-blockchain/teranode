@@ -569,27 +569,21 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 		return fmt.Errorf("could not store block: %+v", err)
 	}
 
-	// process coinbase into utxos
-	// first check whether we are in sync with the blob server, otherwise we wait for the next block
-	_, blobBestBlockHeight, _ := c.AssetClient.GetBestBlockHeader(ctx)
+	// _, blobBestBlockHeight, _ := c.AssetClient.GetBestBlockHeader(ctx)
 	_, coinbaseBestBlockMeta, _ := c.store.GetBestBlockHeader(ctx)
 
 	if c.waitForPeers {
 		/* Wait until all nodes are at least on same block height as this coinbase block */
 		/* Do this before attempting to distribute the coinbase splitting transactions to all nodes */
-		err = c.peerSync.WaitForAllPeers(ctx, blobBestBlockHeight, true)
+		err = c.peerSync.WaitForAllPeers(ctx, coinbaseBestBlockMeta.Height, true)
 		if err != nil {
 			return fmt.Errorf("peers are not in sync: %s", err)
 		}
 	}
 
-	if blobBestBlockHeight <= coinbaseBestBlockMeta.Height {
-		err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
-		if err != nil {
-			return fmt.Errorf("could not process coinbase %+v", err)
-		}
-	} else {
-		c.logger.Warnf("coinbase processing skipped - asset service reports block height of %d whereas coinbase service reports %d", blobBestBlockHeight, coinbaseBestBlockMeta.Height)
+	err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
+	if err != nil {
+		return fmt.Errorf("could not process coinbase %+v", err)
 	}
 
 	return nil

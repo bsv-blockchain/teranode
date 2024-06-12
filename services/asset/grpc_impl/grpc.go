@@ -326,7 +326,7 @@ func (g *GRPC) GetBlockHeaders(ctx context.Context, req *asset_api.GetBlockHeade
 		nrOfHeaders = 1000 // max is 1000
 	}
 
-	blockHeaders, heights, err := g.repository.GetBlockHeaders(ctx, startHash, nrOfHeaders)
+	blockHeaders, blockHeaderMetas, err := g.repository.GetBlockHeaders(ctx, startHash, nrOfHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -336,9 +336,14 @@ func (g *GRPC) GetBlockHeaders(ctx context.Context, req *asset_api.GetBlockHeade
 		blockHeaderBytes[i] = blockHeader.Bytes()
 	}
 
+	blockHeaderMetaBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeaderMeta := range blockHeaderMetas {
+		blockHeaderMetaBytes[i] = blockHeaderMeta.Bytes()
+	}
+
 	return &asset_api.GetBlockHeadersResponse{
 		BlockHeaders: blockHeaderBytes,
-		Heights:      heights,
+		Metas:        blockHeaderMetaBytes,
 	}, nil
 }
 

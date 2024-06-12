@@ -1,0 +1,41 @@
+@startuml
+participant "Subtree Validation" as SubtreeValidation
+participant "UtxoStore" as UtxoStore
+
+== Fetch UTXO ==
+SubtreeValidation -> SubtreeValidation: validateSubtreeInternal(ctx, validateSubtree, blockHeight)
+activate SubtreeValidation
+
+SubtreeValidation -> SubtreeValidation: Collect the list of txHashes in the Subtree
+
+SubtreeValidation -> SubtreeValidation: processTxMetaUsingStore(ctx, txHashes, txBytes)
+activate SubtreeValidation
+
+
+alt \t batched processing
+
+activate UtxoStore
+
+SubtreeValidation -> UtxoStore: MetaBatchDecorate(ctx, txHashes, "tx")
+
+UtxoStore -> SubtreeValidation: Return UTXO Meta Data for the tx hashes\n
+
+else \t \t \t single processing
+
+loop for each tx hash in the subtree
+
+activate UtxoStore
+
+SubtreeValidation -> UtxoStore: GetMeta(ctx, txHash)
+
+UtxoStore -> SubtreeValidation: Return UTXO Meta Data for the tx hash\n
+
+end
+end
+deactivate UtxoStore
+
+deactivate SubtreeValidation
+
+left footer Last Modified On: 4-June-2024
+
+@enduml

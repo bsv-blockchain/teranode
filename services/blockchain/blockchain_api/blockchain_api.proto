@@ -115,7 +115,7 @@ message GetBlockHeadersRequest {
 // swagger:model GetBlockHeadersResponse
 message GetBlockHeadersResponse {
   repeated bytes blockHeaders = 1;
-  repeated uint32 heights = 2;
+  repeated bytes metas = 2;
 }
 
 // swagger:model GetBlockHeadersFromHeightRequest

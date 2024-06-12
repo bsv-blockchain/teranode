@@ -11,6 +11,8 @@ import (
 func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	s.logger.Infof("InvalidateBlock %s", blockHash.String())
 
+	s.blocksCache.RebuildBlockchain(nil, nil) // reset cache so that GetBlockExists goes to the DB
+
 	exists, err := s.GetBlockExists(ctx, blockHash)
 	if err != nil {
 		return fmt.Errorf("error checking block exists: %v", err)
@@ -44,8 +46,10 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return fmt.Errorf("block %s was not updated to invalid", blockHash.String())
 	}
 
-	// clear all caches
-	cache.DeleteAll()
+	if err := s.ResetBlocksCache(ctx); err != nil {
+		return fmt.Errorf("error clearing caches: %v", err)
+	}
+	s.ResetResponseCache()
 
 	return nil
 }

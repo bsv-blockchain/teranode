@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -20,7 +21,7 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
 	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetBlockByHeight-%d", height)))
-	cached := cache.Get(cacheId)
+	cached := s.responseCache.Get(cacheId)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*model.Block); ok && cacheData != nil {
 			s.logger.Debugf("GetBlockByHeight cache hit")
@@ -129,7 +130,7 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "failed to convert subtrees", err)
 	}
 
-	cache.Set(cacheId, block, cacheTTL)
+	s.responseCache.Set(cacheId, block, s.cacheTTL)
 
 	return block, nil
 }

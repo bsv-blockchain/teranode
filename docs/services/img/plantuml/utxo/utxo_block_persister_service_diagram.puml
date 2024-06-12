@@ -1,0 +1,46 @@
+@startuml
+participant "Block Persister" as BlockPersister
+participant "UtxoStore" as UtxoStore
+
+== Fetch UTXO ==
+BlockPersister -> BlockPersister: persistBlock(ctx, blockHash, blockBytes)
+activate BlockPersister
+loop for each subtree in the block
+BlockPersister -> BlockPersister: processSubtree(ctx, subtreeHash, utxoDiff)
+activate BlockPersister
+
+BlockPersister -> BlockPersister: Collect the list of txHashes in the Subtree
+
+BlockPersister -> BlockPersister: processTxMetaUsingStore(ctx, txHashes, txBytes)
+activate BlockPersister
+
+
+alt \t batched processing
+
+activate UtxoStore
+
+BlockPersister -> UtxoStore: MetaBatchDecorate(ctx, txHashes, "tx")
+
+UtxoStore -> BlockPersister: Return UTXO Meta Data for the tx hashes\n
+
+else \t \t \t single processing
+
+loop for each tx hash in the subtree
+
+activate UtxoStore
+
+BlockPersister -> UtxoStore: GetMeta(ctx, txHash)
+
+UtxoStore -> BlockPersister: Return UTXO Meta Data for the tx hash\n
+
+end
+end
+deactivate UtxoStore
+
+deactivate BlockPersister
+end
+deactivate BlockPersister
+
+left footer Last Modified On: 4-June-2024
+
+@enduml

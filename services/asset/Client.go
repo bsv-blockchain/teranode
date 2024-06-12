@@ -149,7 +149,7 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 	return header, resp.Height, nil
 }
 
-func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
+func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeaders(ctx, &asset_api.GetBlockHeadersRequest{
 		StartHash:       blockHash.CloneBytes(),
 		NumberOfHeaders: numberOfHeaders,
@@ -167,7 +167,16 @@ func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash,
 		headers = append(headers, header)
 	}
 
-	return headers, resp.Heights, nil
+	metas := make([]*model.BlockHeaderMeta, 0, len(resp.Metas))
+	for _, metaBytes := range resp.Metas {
+		meta, err := model.NewBlockHeaderMetaFromBytes(metaBytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		metas = append(metas, meta)
+	}
+
+	return headers, metas, nil
 }
 
 func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {

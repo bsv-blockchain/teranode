@@ -2,8 +2,7 @@
 participant "Blockchain Service" as Blockchain
 participant "Kafka" as Kafka
 participant "Block Persister Service" as BlockPersister
-database "TxMetaStore" as TMS
-database "Substree Store" as SubtreeStore
+database "UTXO Store" as TMS
 database "Substree Store" as SubtreeStore
 database "File Storage" as FileStorage
 
@@ -32,12 +31,12 @@ loop for each Subtree in the Block
     end
 
     BlockPersister -> BlockPersister: Write number of txs in the subtree to subtree file
-    loop for each Tx Meta in Subtree
+    loop for each UTXO Meta in Subtree
         alt Coinbase Tx
            BlockPersister -> TMS: Write Coinbase Tx to subtree fil
         else
-            BlockPersister -> TMS: Write Tx Meta to subtree file
-            BlockPersister -> TMS: Process Tx Meta in UTXODiff
+            BlockPersister -> TMS: Write UTXO Meta to subtree file
+            BlockPersister -> TMS: Process UTXO Meta in UTXODiff
         end
 
         TMS --> BlockPersister
@@ -64,6 +63,6 @@ deactivate BlockPersister
 deactivate BlockPersister
 
 
-left footer Last Modified On: 6-May-2024
+left footer Last Modified On: 7-June-2024
 
 @enduml

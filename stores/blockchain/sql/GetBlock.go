@@ -23,9 +23,23 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		stat.AddTime(start)
 	}()
 
+	// header, meta, er := cache.GetBlock(*blockHash)
+	// if er != nil {
+	// 	return nil, 0, fmt.Errorf("error in GetBlock: %w", er)
+	// }
+	// if header != nil {
+	// 	block := &model.Block{
+	// 		Header:           header,
+	// 		TransactionCount: meta.TxCount,
+	// 		SizeInBytes:      meta.SizeInBytes,
+	// 		Height:           meta.Height,
+	// 	}
+	// 	return block, meta.Height, nil
+	// }
+
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
 	cacheId := chainhash.HashH([]byte(fmt.Sprintf("getBlock-%s", blockHash.String())))
-	cached := cache.Get(cacheId)
+	cached := s.responseCache.Get(cacheId)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*getBlockCache); ok && cacheData != nil {
 			s.logger.Debugf("GetBlock cache hit")
@@ -38,18 +52,18 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 
 	q := `
 		SELECT
-	     b.version
+	   b.version
 		,b.block_time
 		,b.n_bits
-	    ,b.nonce
+	  ,b.nonce
 		,b.previous_hash
 		,b.merkle_root
-	    ,b.tx_count
 		,b.size_in_bytes
 		,b.coinbase_tx
+		,b.height
+	  ,b.tx_count
 		,b.subtree_count
 		,b.subtrees
-		,b.height
 		FROM blocks b
 		WHERE b.hash = $1
 	`
@@ -76,12 +90,12 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		&block.Header.Nonce,
 		&hashPrevBlock,
 		&hashMerkleRoot,
-		&transactionCount,
 		&sizeInBytes,
 		&coinbaseTx,
+		&height,
+		&transactionCount,
 		&subtreeCount,
 		&subtreeBytes,
-		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, 0, fmt.Errorf("error in GetBlock: %w", err)
@@ -112,10 +126,10 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		return nil, 0, fmt.Errorf("failed to convert subtrees: %w", err)
 	}
 
-	cache.Set(cacheId, &getBlockCache{
+	s.responseCache.Set(cacheId, &getBlockCache{
 		block:  block,
 		height: height,
-	}, cacheTTL)
+	}, s.cacheTTL)
 
 	return block, height, nil
 }
