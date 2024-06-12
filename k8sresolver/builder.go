@@ -16,7 +16,6 @@ const (
 )
 
 var (
-	// TODO this logger does not go to sentry
 	logger = ulogger.New("k8sres")
 )
 

@@ -3,14 +3,11 @@ package ulogger
 import (
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/ordishs/gocore"
 	"github.com/rs/zerolog"
 	"golang.org/x/term"
@@ -30,23 +27,6 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 	opts := DefaultOptions()
 	for _, o := range options {
 		o(opts)
-	}
-
-	if sentryDsn, ok := gocore.Config().Get("sentry_dsn"); ok {
-		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
-		serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
-		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
-		if err != nil {
-			log.Fatalf("failed to parse sentry_traces_sample_rate: %v", err)
-		}
-
-		if err = sentry.Init(sentry.ClientOptions{
-			Dsn:              sentryDsn,
-			ServerName:       serviceName,
-			TracesSampleRate: tracesSampleRate,
-		}); err != nil {
-			log.Fatalf("sentry.Init: %s", err)
-		}
 	}
 
 	var z *ZLoggerWrapper

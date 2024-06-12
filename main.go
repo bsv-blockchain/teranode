@@ -17,7 +17,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"golang.org/x/term"
 
-	zlogsentry "github.com/archdx/zerolog-sentry"
 	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/aerospiketest"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
@@ -43,7 +42,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
-	"github.com/getsentry/sentry-go"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
@@ -69,9 +67,6 @@ func init() {
 }
 
 func main() {
-	// Flush buffered events before the program terminates.
-	defer sentry.Flush(2 * time.Second)
-
 	switch path.Base(os.Args[0]) {
 	case "aerospiketest.run":
 		// aerospiketest.Init()
@@ -468,29 +463,7 @@ func initLogger(serviceName string) ulogger.Logger {
 		NoColor: !isTerminal, // Disable color if output is not a terminal
 	}
 
-	// sentry
-	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok && sentryDns != "" {
-		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
-		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
-		if err != nil {
-			panic("failed to parse sentry_traces_sample_rate: " + err.Error())
-		}
-
-		w, err := zlogsentry.New(sentryDns,
-			zlogsentry.WithEnvironment("dev"),
-			zlogsentry.WithRelease("1.0.0"),
-			zlogsentry.WithServerName(serviceName),
-			zlogsentry.WithSampleRate(tracesSampleRate),
-		)
-		if err != nil {
-			panic("sentry.Init: " + err.Error())
-		}
-
-		multi := zerolog.MultiLevelWriter(output, w)
-		logOptions = append(logOptions, ulogger.WithWriter(multi))
-	} else {
-		logOptions = append(logOptions, ulogger.WithWriter(output))
-	}
+	logOptions = append(logOptions, ulogger.WithWriter(output))
 
 	useLogger, ok := gocore.Config().Get("logger")
 	if ok && useLogger != "" {
