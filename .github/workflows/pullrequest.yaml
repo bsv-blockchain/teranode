@@ -77,7 +77,30 @@ jobs:
         run: make smoketests
         continue-on-error: false
 
-
+  # Build for X86 (AMD64)
+  build_amd64:
+    needs: [get_tag]
+    uses: ./.github/workflows/gke_build.yaml
+    secrets: inherit
+    # only run if branch is equal to master
+    if: github.ref == 'refs/heads/feature-test-net'
+    with:
+      arch: amd64
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      region: eu-north-1
+  # Build for ARM64 (Graviton and Darwin)
+  build_arm64:
+    needs: [ get_tag]
+    uses: ./.github/workflows/gke_build.yaml
+    secrets: inherit
+    # only run if branch is equal to master
+    if: github.ref == 'refs/heads/feature-test-net'
+    with:
+      arch: arm64
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      region: eu-north-1
   sonarqube:
     name: Sonarqube
     runs-on: ubsv-runner
