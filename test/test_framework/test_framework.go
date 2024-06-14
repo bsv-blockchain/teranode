@@ -49,3 +49,36 @@ func (b *BitcoinTestFramework) StopNodes() error {
 	}
 	return nil
 }
+
+func (b *BitcoinTestFramework) StopNode(nodeName string) error {
+	if b.Compose != nil {
+		// Stop the Docker Compose services
+		node, err := b.Compose.ServiceContainer(b.ctx, nodeName)
+		if err != nil {
+			return err
+		}
+
+		err = node.Stop(b.ctx, nil)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *BitcoinTestFramework) StartNode(nodeName string) error {
+	if b.Compose != nil {
+		// Stop the Docker Compose services
+		node, err := b.Compose.ServiceContainer(b.ctx, nodeName)
+		if err != nil {
+			return err
+		}
+
+		err = node.Start(b.ctx)
+		if err != nil {
+			return err
+		}
+
+	}
+	return nil
+}

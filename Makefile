@@ -97,10 +97,10 @@ build-dashboard:
 
 .PHONY: test
 test: set_race_flag
-	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/functional)
+	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/functional | grep -v test/settings | grep -v test/state)
 .PHONY: longtests
 longtests: set_race_flag
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/functional | grep -v test/settings)
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/functional | grep -v test/settings | grep -v test/state)
 
 .PHONY: racetest
 racetest: set_race_flag
@@ -113,14 +113,32 @@ testall:
 	$(MAKE) longtests
 
 .PHONY: smoketests
-smoketests:
+
+# Default target
+smoketests: 
+ifdef no-build
+	@echo "Skipping build step."
+else
 	docker compose -f docker-compose.ci.build.yml build
+endif
+ifdef no-reset
+	@echo "Skipping reset step."
+else
 	rm -rf data
 	unzip data.zip
 	chmod -R +x data
 	sleep 2
+endif
+ifdef test
+	# TEST_DIR := "$(firstword $(subst ., ,$(test)))"
+	# TEST_NAME := "$(word 2,$(subst ., ,$(test)))"
+	cd test/$(firstword $(subst ., ,$(test))) && \
+	SETTINGS_CONTEXT=docker.ci.tc1.run go test -run $(word 2,$(subst ., ,$(test)))
+else
 	cd test/functional && \
-		SETTINGS_CONTEXT=docker.ci.tc1.run go test
+	SETTINGS_CONTEXT=docker.ci.tc1.run go test
+endif
+
 
 .PHONY: gen
 gen:

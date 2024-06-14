@@ -1,7 +1,8 @@
 @startuml
 participant "Validator" as ValidateSubtree
 entity "Subtree Data" as SubtreeData
-database "Tx Meta Store" as TxMetaStore
+database "Tx Meta Cache" as TxMetaStore
+database "UTXO Store" as UTXOStore
 database "Subtree Store" as SubtreeStore
 participant "Util HTTP Request" as Util
 
@@ -39,7 +40,7 @@ activate ValidateSubtree
 
 activate TxMetaStore
 loop for each txHash in the subtree
-   ValidateSubtree -> TxMetaStore: txMetaStore.GetMetaCached(gCtx, &txHash)
+   ValidateSubtree -> TxMetaStore: GetMetaCached(gCtx, &txHash)
     TxMetaStore --> ValidateSubtree: txMeta / err
 end
 deactivate TxMetaStore
@@ -50,8 +51,16 @@ deactivate ValidateSubtree
 ValidateSubtree -> ValidateSubtree: processTxMetaUsingStore(ctx, txHashes, txMetaSlice, failFast)
 activate ValidateSubtree
 
-ValidateSubtree -> TxMetaStore: txMetaStore.MetaBatchDecorate(gCtx, &txHash)
+ValidateSubtree -> TxMetaStore: MetaBatchDecorate(gCtx, &txHash)
 activate TxMetaStore
+
+TxMetaStore -> UTXOStore: MetaBatchDecorate(gCtx, &txHash)
+activate UTXOStore
+UTXOStore --> TxMetaStore: txMeta / err
+deactivate UTXOStore
+
+TxMetaStore -> TxMetaStore: SetCache(&data.Hash, data.Data)
+
 TxMetaStore --> ValidateSubtree: txMeta / err
 deactivate TxMetaStore
 
@@ -82,6 +91,6 @@ deactivate SubtreeStore
 
 deactivate ValidateSubtree
 
-left footer Last Modified On: 19-March-2024
+left footer Last Modified On: 10-June-2024
 
 @enduml
