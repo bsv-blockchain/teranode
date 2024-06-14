@@ -113,14 +113,32 @@ testall:
 	$(MAKE) longtests
 
 .PHONY: smoketests
-smoketests:
+
+# Default target
+smoketests: 
+ifdef no-build
+	@echo "Skipping build step."
+else
 	docker compose -f docker-compose.ci.build.yml build
+endif
+ifdef no-reset
+	@echo "Skipping reset step."
+else
 	rm -rf data
 	unzip data.zip
 	chmod -R +x data
 	sleep 2
+endif
+ifdef test
+	# TEST_DIR := "$(firstword $(subst ., ,$(test)))"
+	# TEST_NAME := "$(word 2,$(subst ., ,$(test)))"
+	cd test/$(firstword $(subst ., ,$(test))) && \
+	SETTINGS_CONTEXT=docker.ci.tc1.run go test -run $(word 2,$(subst ., ,$(test)))
+else
 	cd test/functional && \
-		SETTINGS_CONTEXT=docker.ci.tc1.run go test
+	SETTINGS_CONTEXT=docker.ci.tc1.run go test
+endif
+
 
 .PHONY: gen
 gen:
