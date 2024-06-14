@@ -1,9 +1,9 @@
-//go:build e2eTest
+////go:build e2eTest
 
 // How to run this test:
 // $ unzip data.zip
-// $ cd test/functional/
-// $ `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowFairTx`
+// $ cd test/settings/
+// $ `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowMaxBlockSize`
 
 package test
 
