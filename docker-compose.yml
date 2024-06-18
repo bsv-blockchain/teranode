@@ -111,9 +111,9 @@ services:
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/ubsv1/txstore
-      - ./data/ubsv1/subtreestore:/app/data/ubsv1/subtreestore
-      - ./data/ubsv1/blockstore:/app/data/ubsv1/blockstore
+      - ./data/ubsv1/txstore:/app/data/txstore
+      - ./data/ubsv1/subtreestore:/app/data/subtreestore
+      - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18097:8090-8097"
@@ -138,9 +138,9 @@ services:
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv2/txstore:/app/data/ubsv2/txstore
-      - ./data/ubsv2/subtreestore:/app/data/ubsv2/subtreestore
-      - ./data/ubsv2/blockstore:/app/data/ubsv2/blockstore
+      - ./data/ubsv2/txstore:/app/data/txstore
+      - ./data/ubsv2/subtreestore:/app/data/subtreestore
+      - ./data/ubsv2/blockstore:/app/data/blockstore
     ports:
       - "28081-28089:8081-8089"
       - "28090-28093:8090-8093"
@@ -164,9 +164,9 @@ services:
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv3/txstore:/app/data/ubsv3/txstore
-      - ./data/ubsv3/subtreestore:/app/data/ubsv3/subtreestore
-      - ./data/ubsv3/blockstore:/app/data/ubsv3/blockstore
+      - ./data/ubsv3/txstore:/app/data/txstore
+      - ./data/ubsv3/subtreestore:/app/data/subtreestore
+      - ./data/ubsv3/blockstore:/app/data/blockstore
     ports:
       - "38081-38089:8081-8089"
       - "38090-38093:8090-8093"
