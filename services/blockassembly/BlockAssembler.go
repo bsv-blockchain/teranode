@@ -662,10 +662,10 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 		// set to start difficulty
 		return b.defaultMiningNBits, nil
 	} else if b.currentDifficulty != nil {
-		b.logger.Debugf("setting difficulty to current difficulty")
+		b.logger.Debugf("setting difficulty to current difficulty %s", b.currentDifficulty.String())
 		return b.currentDifficulty, nil
 	} else {
-		b.logger.Debugf("setting difficulty to default mining bits")
+		b.logger.Debugf("setting difficulty to default mining bits %s", b.defaultMiningNBits.String())
 		return b.defaultMiningNBits, nil
 	}
 }
