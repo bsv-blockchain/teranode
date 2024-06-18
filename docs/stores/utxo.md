@@ -91,9 +91,11 @@ The following datastores are supported (either in development / experimental or 
 
 2. **Memory (In-Memory Store)**.
 
-3. **Nullstore**.
+3. **Sql** (Postgres and SQLLite).
 
-Notice how one of the databases is in-memory, while another one (Aerospike) is persistent (and shared with other services).
+4. **Nullstore**.
+
+Notice how SqlLite and the In-Memory store are in-memory, while Aerospike and Postgres are persistent (and shared with other services).
 
 More details about the specific stores can be found in the [Technology](#5-technology) section.
 
@@ -336,7 +338,12 @@ The following datastores are supported (either in development / experimental or 
     - Offers the fastest access times but lacks persistence; data is lost if the service restarts.
     - Useful for development or testing purposes.
 
-3. **Nullstore**:
+3. **Sql**:
+    - A SQL database, currently Postgresql and SqlLite are in scope, can be used to store UTXOs.
+    - Provides a balance of performance and persistence, suitable for medium to large-scale applications.
+    - Offers the ability to query and analyze UTXO data using SQL.
+
+4. **Nullstore**:
     - A dummy or placeholder implementation, used for testing (when no actual storage is needed).
     - Can be used to mock UTXO store functionality in a development or test environment.
 
@@ -399,6 +406,8 @@ UTXO Store Package Structure (stores/utxo)
 │   └── data_test.go                # Tests for UTXO metadata
 ├── nullstore                       # Null UTXO Store implementation for testing
 │   └── nullstore.go                # Main nullstore implementation
+├── sql                             # SQL UTXO Store implementation
+│   └── sql.go                      # Main sql implementation (provides support for SqlLite and Postgres)
 ├── status.pb.go                    # Generated protocol buffer code for UTXO status
 ├── status.proto                    # Protocol buffer definition for UTXO status
 ├── utils.go                        # Utility functions for the UTXO Store
@@ -426,11 +435,15 @@ The `utxostore` setting must be set to pick a specific datastore implementation.
 
 - **aerospike**: Aerospike UTXO store implementation.
 
-`utxostore.dev.[YOUR_USERNAME]=aerospike://xxxx.ubsv.dev:3000/ubsv-store?ConnectionQueueSize=5&LimitConnectionsToQueueSize=false`
+`utxostore.dev.[YOUR_USERNAME]=aerospike://aerospikeserver.ubsv.dev:3000/ubsv-store?ConnectionQueueSize=5&LimitConnectionsToQueueSize=false`
 
 - **memory**: Basic in-memory UTXO store.
 
 `utxostore.dev.[YOUR_USERNAME]=memory://localhost:${UTXO_STORE_GRPC_PORT}/splitbyhash`
+
+- **sql**: Implementation of a postgres UTXO store.
+
+`utxostore.dev.[YOUR_USERNAME]=postgres://miner1:miner1@postgresserver.ubsv.dev:5432/ubsv-store`
 
 - **nullstore**: Implementation of a null or dummy UTXO store.
 
