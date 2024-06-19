@@ -9,7 +9,10 @@ import (
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	cb "github.com/bitcoin-sv/ubsv/services/coinbase"
+	blob "github.com/bitcoin-sv/ubsv/stores/blob"
+	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	distributor "github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/ordishs/gocore"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -26,6 +29,9 @@ type BitcoinNode struct {
 	CoinbaseClient      cb.Client
 	BlockchainClient    bc.ClientI
 	BlockassemblyClient ba.Client
+	DistributorClient   distributor.Distributor
+	BlockChainDB        blockchain_store.Store
+	Blockstore          blob.Store
 }
 
 func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
@@ -88,6 +94,37 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		}
 		blockassemblyClient := ba.NewClientWithAddress(b.Context, logger, getHostAddress(blockassembly_grpcAddress))
 		b.Nodes[i].BlockassemblyClient = *blockassemblyClient
+
+		propagation_grpcAddress, ok := gocore.Config().Get(fmt.Sprintf("propagation_grpcAddress.%s", node.SETTINGS_CONTEXT))
+		if !ok {
+			return fmt.Errorf("no propagation_grpcAddress setting found")
+		}
+		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, getHostAddress(propagation_grpcAddress))
+		if err != nil {
+			return err
+		}
+		b.Nodes[i].DistributorClient = *distributorClient
+
+		blockchainStoreURL, _, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s", node.SETTINGS_CONTEXT))
+		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
+		if err != nil {
+			return err
+		}
+		b.Nodes[i].BlockChainDB = blockchainStore
+
+		//TODO - This should be refactored to use mapped docker volumes
+		blockStoreUrl, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.run", node.SETTINGS_CONTEXT))
+		if err != nil {
+			panic(err)
+		}
+		if !found {
+			panic("blockstore config not found")
+		}
+		blockStore, err := blob.NewStore(logger, blockStoreUrl)
+		if err != nil {
+			panic(err)
+		}
+		b.Nodes[i].Blockstore = blockStore
 	}
 	return nil
 }
