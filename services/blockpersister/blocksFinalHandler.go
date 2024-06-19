@@ -123,6 +123,8 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return fmt.Errorf("error processing subtrees: %w", err)
 	}
 
+	utxoDiff.Trim()
+
 	// Now, write the block file
 	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())
 
