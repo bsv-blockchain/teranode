@@ -30,7 +30,13 @@ func (p *UTXOProcessor) DiffExists(blockHash chainhash.Hash) (bool, error) {
 	return p.store.Exists(context.Background(), blockHash[:], options.WithFileExtension("utxodiff"))
 }
 
-func (p *UTXOProcessor) VerifyDiff(blockHeader *model.BlockHeader, diff1 *p_model.UTXODiff, diff2 *p_model.UTXODiff) error {
+func (p *UTXOProcessor) VerifyDiff(blockHeader *model.BlockHeader, diff2 *p_model.UTXODiff) error {
+	diff1, err := LoadDiff(p, blockHeader)
+	if err != nil {
+		return err
+	}
+	diff1.Trim()
+
 	if diff1 == nil {
 		return fmt.Errorf("utxodiff for block %s is nil", blockHeader.Hash())
 	}

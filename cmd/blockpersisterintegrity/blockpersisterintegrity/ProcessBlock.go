@@ -56,22 +56,10 @@ func (bp *BlockProcessor) ProcessBlock(ctx context.Context, blockHeader *model.B
 		return fmt.Errorf("coinbase height %d does not match block height %d", coinbaseHeight, height)
 	}
 
-	p := NewUTXOProcessor(bp.logger, bp.store)
-	var diff1 *p_model.UTXODiff
+	diff := p_model.NewUTXODiff(bp.logger, blockHeader.Hash())
+	stp := NewSubtreeProcessor(bp.logger, bp.store, block, NewTxProcessor(bp.logger, diff))
 
-	if exists, err := p.DiffExists(*blockHeader.Hash()); err != nil {
-		return fmt.Errorf("failed to check if diff exists for block %s: %s", blockHeader.Hash(), err)
-	} else if exists {
-		diff1, err = LoadDiff(p, blockHeader)
-		if err != nil {
-			return err
-		}
-	}
-
-	diff2 := p_model.NewUTXODiff(bp.logger, blockHeader.Hash())
-	stp := NewSubtreeProcessor(bp.logger, bp.store, block, NewTxProcessor(bp.logger, diff1, diff2))
-
-	stp.tp.diff2.ProcessTx(block.CoinbaseTx)
+	diff.ProcessTx(block.CoinbaseTx)
 
 	for _, subtreeHash := range block.Subtrees {
 		err := stp.ProcessSubtree(ctx, *subtreeHash)
@@ -80,8 +68,12 @@ func (bp *BlockProcessor) ProcessBlock(ctx context.Context, blockHeader *model.B
 		}
 	}
 
-	if diff1 != nil {
-		if err := p.VerifyDiff(blockHeader, diff1, diff2); err != nil {
+	p := NewUTXOProcessor(bp.logger, bp.store)
+
+	if exists, err := p.DiffExists(*blockHeader.Hash()); err != nil {
+		return fmt.Errorf("failed to check if diff exists for block %s: %s", blockHeader.Hash(), err)
+	} else if exists {
+		if err := p.VerifyDiff(blockHeader, diff); err != nil {
 			bp.logger.Errorf("failed to verify diff for block %s: %s\n", blockHeader.Hash(), err)
 		}
 	}
@@ -89,7 +81,7 @@ func (bp *BlockProcessor) ProcessBlock(ctx context.Context, blockHeader *model.B
 	if exists, err := p.SetExists(*blockHeader.Hash()); err != nil {
 		bp.logger.Errorf("failed to check if set exists for block %s: %s\n", blockHeader.Hash(), err)
 	} else if exists {
-		if err := p.VerifySet(blockHeader, diff2); err != nil {
+		if err := p.VerifySet(blockHeader, diff); err != nil {
 			bp.logger.Errorf("failed to verify diff for block %s: %s\n", blockHeader.Hash(), err)
 		}
 	}

@@ -12,16 +12,14 @@ import (
 
 type TxProcessor struct {
 	logger ulogger.Logger
-	diff1  *p_model.UTXODiff
-	diff2  *p_model.UTXODiff
+	diff   *p_model.UTXODiff
 	idx    int
 }
 
-func NewTxProcessor(logger ulogger.Logger, diff1 *p_model.UTXODiff, diff2 *p_model.UTXODiff) *TxProcessor {
+func NewTxProcessor(logger ulogger.Logger, diff *p_model.UTXODiff) *TxProcessor {
 	return &TxProcessor{
 		logger: logger,
-		diff1:  diff1,
-		diff2:  diff2,
+		diff:   diff,
 		idx:    0,
 	}
 }
@@ -29,11 +27,7 @@ func NewTxProcessor(logger ulogger.Logger, diff1 *p_model.UTXODiff, diff2 *p_mod
 func (tp *TxProcessor) ProcessTx(ctx context.Context, tx *bt.Tx) error {
 	defer func() { tp.idx++ }()
 
-	if tp.diff1 != nil {
-		trimFixBlockPersisterDiff(tx, tp)
-
-		tp.diff2.ProcessTx(tx)
-	}
+	tp.diff.ProcessTx(tx)
 
 	if tp.idx == 0 {
 		// this must be a coinbase transaction
@@ -162,33 +156,4 @@ func (tp *TxProcessor) ProcessTx(ctx context.Context, tx *bt.Tx) error {
 	// } // if !coinbaseTx
 
 	return nil
-}
-
-func trimFixBlockPersisterDiff(tx *bt.Tx, tp *TxProcessor) {
-	// the utxo diff file created  by the block persister has a bug
-	// where is stores too many diffs, so we need to remove the extra ones
-	// uv := p_model.NewUTXOValue(output.Satoshis, tx.LockTime, *output.LockingScript)
-
-	if !tx.IsCoinbase() {
-		for _, input := range tx.Inputs {
-			uk := p_model.NewUTXOKey(*input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
-			if tp.diff1.Added.Exists(uk) {
-				tp.diff1.Added.Delete(uk)
-				tp.diff1.Removed.Delete(uk)
-			}
-		}
-	}
-
-	for i, output := range tx.Outputs {
-		if output.LockingScript.IsData() {
-			continue
-		}
-
-		uk := p_model.NewUTXOKey(*tx.TxIDChainHash(), uint32(i))
-
-		if tp.diff1.Removed.Exists(uk) {
-			tp.diff1.Removed.Delete(uk)
-			tp.diff1.Added.Delete(uk)
-		}
-	}
 }
