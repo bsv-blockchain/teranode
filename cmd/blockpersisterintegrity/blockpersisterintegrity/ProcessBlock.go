@@ -42,8 +42,7 @@ func (bp *BlockProcessor) ProcessBlock(ctx context.Context, blockHeader *model.B
 		return fmt.Errorf("failed to parse block %s: %s", blockHeader.Hash(), err)
 	}
 
-	bp.logger.Debugf("checking block %s", block.Hash())
-
+	bp.logger.Debugf("checking block %d %s\n", height, block.Hash())
 	if block.CoinbaseTx == nil || !block.CoinbaseTx.IsCoinbase() {
 		return fmt.Errorf("block %s does not have a valid coinbase transaction", block.Hash())
 	}
@@ -65,7 +64,7 @@ func (bp *BlockProcessor) ProcessBlock(ctx context.Context, blockHeader *model.B
 	for _, subtreeHash := range block.Subtrees {
 		err := stp.ProcessSubtree(ctx, *subtreeHash)
 		if err != nil {
-			bp.logger.Errorf("failed to process subtree %s: %s", subtreeHash, err)
+			bp.logger.Errorf("failed to process subtree %s: %s\n", subtreeHash, err)
 		}
 	}
 
@@ -75,24 +74,24 @@ func (bp *BlockProcessor) ProcessBlock(ctx context.Context, blockHeader *model.B
 		return fmt.Errorf("failed to check if diff exists for block %s: %s", blockHeader.Hash(), err)
 	} else if exists {
 		if err := p.VerifyDiff(blockHeader, diff); err != nil {
-			bp.logger.Errorf("failed to verify diff for block %s: %s", blockHeader.Hash(), err)
+			bp.logger.Errorf("failed to verify diff for block %s: %s\n", blockHeader.Hash(), err)
 		}
 	}
 
 	if exists, err := p.SetExists(*blockHeader.Hash()); err != nil {
-		bp.logger.Errorf("failed to check if set exists for block %s: %s", blockHeader.Hash(), err)
+		bp.logger.Errorf("failed to check if set exists for block %s: %s\n", blockHeader.Hash(), err)
 	} else if exists {
 		if err := p.VerifySet(blockHeader, diff); err != nil {
-			bp.logger.Errorf("failed to verify diff for block %s: %s", blockHeader.Hash(), err)
+			bp.logger.Errorf("failed to verify diff for block %s: %s\n", blockHeader.Hash(), err)
 		}
 	}
 
 	blockReward := block.CoinbaseTx.TotalOutputSatoshis()
 	blockSubsidy := util.GetBlockSubsidyForHeight(height)
 	if blockFees+blockSubsidy != blockReward {
-		return fmt.Errorf("block %s has incorrect fees: %d != %d", block.Hash(), blockFees, blockReward)
-	} else {
-		bp.logger.Debugf("block %s has %d in fees, subsidy %d", block.Hash(), blockFees, blockSubsidy)
+		return fmt.Errorf("block %s has incorrect fees: %d != %d\n", block.Hash(), blockFees, blockReward)
+		// } else {
+		// bp.logger.Debugf("block %s has %d in fees, subsidy %d\n", block.Hash(), blockFees, blockSubsidy)
 	}
 
 	return nil
