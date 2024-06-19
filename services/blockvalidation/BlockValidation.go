@@ -61,6 +61,7 @@ type BlockValidation struct {
 	setMinedChan                       chan *chainhash.Hash
 	revalidateBlockChan                chan revalidateBlockData
 	stats                              *gocore.Stat
+	excessiveblocksize                 int
 }
 
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
@@ -71,6 +72,8 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 
 	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
 	logger.Infof("optimisticMining = %v", optimisticMining)
+
+	excessiveblocksize, _ := gocore.Config().GetInt("excessiveblocksize", 0)
 
 	bv := &BlockValidation{
 		logger:                             logger,
@@ -95,6 +98,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 		setMinedChan:                       make(chan *chainhash.Hash, 1000),
 		revalidateBlockChan:                make(chan revalidateBlockData, 2),
 		stats:                              gocore.NewStat("blockvalidation"),
+		excessiveblocksize:                 excessiveblocksize,
 	}
 
 	go func() {
@@ -509,6 +513,15 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	initialDelay := 10 * time.Millisecond // Initial delay of 10ms
 	maxDelay := 5 * time.Second           // Maximum delay
 	delay := initialDelay
+
+	// check the size of the block
+
+	// 0 is unlimited so don't check the size
+	if u.excessiveblocksize > 0 {
+		if block.SizeInBytes > uint64(u.excessiveblocksize) {
+			return errors.New(errors.ERR_BLOCK_INVALID, fmt.Sprintf("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.excessiveblocksize))
+		}
+	}
 
 	for {
 		parentBlockMined, err := u.isParentMined(ctx, block.Header)
