@@ -14,14 +14,12 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -32,7 +30,12 @@ import (
 	block_model "github.com/bitcoin-sv/ubsv/model"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	utxom "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
+	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 )
+
+type Transaction struct {
+	Tx string `json:"tx"`
+}
 
 // Function to call the RPC endpoint with any method and parameters, returning the response and error
 func CallRPC(url string, method string, params []interface{}) (string, error) {
@@ -298,20 +301,7 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 	return blockHash, nil
 }
 
-type Transaction struct {
-	Tx string `json:"tx"`
-}
-
-func CreateAndSendRawTx(ctx context.Context, faucetURL, rpcURL string) (chainhash.Hash, error) {
-
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
-
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
-		distributor.WithFailureTolerance(0),
-	)
+func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Hash, error) {
 
 	privateKey, err := bec.NewPrivateKey(bec.S256())
 	if err != nil {
@@ -323,44 +313,13 @@ func CreateAndSendRawTx(ctx context.Context, faucetURL, rpcURL string) (chainhas
 		fmt.Printf("Failed to create address: %v", err)
 	}
 
-	// payload := []byte(fmt.Sprintf(`{"address":"%s"}`, address.AddressString))
-	// req, err := http.NewRequest("POST", faucetURL, bytes.NewBuffer(payload))
-	// if err != nil {
-	// 	fmt.Printf("error creating request: %v", err)
-	// }
-
-	// req.Header.Set("Content-Type", "application/json")
-	// client := &http.Client{}
-	// resp, err := client.Do(req)
-	// if err != nil {
-	// 	fmt.Printf("error sending request: %v", err)
-	// }
-
-	// defer resp.Body.Close()
-
-	// var response Transaction
-	// err = json.NewDecoder(resp.Body).Decode(&response)
-	// if err != nil {
-	// 	fmt.Printf("error decoding response: %v", err)
-	// }
-
-	// tx := response.Tx
-
-	coinbaseClient, err := coinbase.NewClientWithAddress(ctx, logger, "localhost:18093")
-	if err != nil {
-		fmt.Printf("Failed to create Coinbase client: %v", err)
-	}
-
-	// faucetTx, err := bt.NewTxFromString(tx)
-	// if err != nil {
-	// 	fmt.Printf("error creating transaction from string: %v", err)
-	// }
+	coinbaseClient := node.CoinbaseClient
 
 	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	if err != nil {
 		fmt.Printf("Failed to request funds: %v", err)
 	}
-	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
 	if err != nil {
 		fmt.Printf("Failed to send transaction: %v", err)
 	}
@@ -390,7 +349,7 @@ func CreateAndSendRawTx(ctx context.Context, faucetURL, rpcURL string) (chainhas
 	}
 
 	// Send the transaction using RPC
-	_, err = txDistributor.SendTransaction(ctx, newTx)
+	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
 	if err != nil {
 		fmt.Printf("Failed to send new transaction: %v", err)
 	}
@@ -398,11 +357,11 @@ func CreateAndSendRawTx(ctx context.Context, faucetURL, rpcURL string) (chainhas
 	return *newTx.TxIDChainHash(), nil
 }
 
-func CreateAndSendRawTxs(ctx context.Context, count int, logger ulogger.Logger) ([]chainhash.Hash, error) {
+func CreateAndSendRawTxs(ctx context.Context, node tf.BitcoinNode, count int) ([]chainhash.Hash, error) {
 	var txHashes []chainhash.Hash
 
 	for i := 0; i < count; i++ {
-		tx, err := CreateAndSendRawTx(ctx, "http://localhost:18097/faucet/request", "http://localhost:19292")
+		tx, err := CreateAndSendRawTx(ctx, node)
 		if err != nil {
 			return nil, fmt.Errorf("error creating raw transaction: %v", err)
 		}
@@ -412,3 +371,31 @@ func CreateAndSendRawTxs(ctx context.Context, count int, logger ulogger.Logger) 
 
 	return txHashes, nil
 }
+
+// faucetTx, err := bt.NewTxFromString(tx)
+// if err != nil {
+// 	fmt.Printf("error creating transaction from string: %v", err)
+// }
+
+// payload := []byte(fmt.Sprintf(`{"address":"%s"}`, address.AddressString))
+// req, err := http.NewRequest("POST", faucetURL, bytes.NewBuffer(payload))
+// if err != nil {
+// 	fmt.Printf("error creating request: %v", err)
+// }
+
+// req.Header.Set("Content-Type", "application/json")
+// client := &http.Client{}
+// resp, err := client.Do(req)
+// if err != nil {
+// 	fmt.Printf("error sending request: %v", err)
+// }
+
+// defer resp.Body.Close()
+
+// var response Transaction
+// err = json.NewDecoder(resp.Body).Decode(&response)
+// if err != nil {
+// 	fmt.Printf("error decoding response: %v", err)
+// }
+
+// tx := response.Tx
