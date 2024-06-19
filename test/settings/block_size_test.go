@@ -163,7 +163,7 @@ func TestShouldRejectExcessiveBlockSize(t *testing.T) {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
-			assert.Equal(t, true, bl, "Test Tx not found in block")
+			assert.Equal(t, false, bl, "Test Tx not found in block")
 		}
 	}
 
