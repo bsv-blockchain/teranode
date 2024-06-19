@@ -111,7 +111,6 @@ func Start() {
 
 	var previousBlockHeader *model.BlockHeader
 	for _, blockHeader := range blockHeaders {
-		logger.Debugf("checking block header %s\n", blockHeader)
 		if previousBlockHeader != nil {
 			if !previousBlockHeader.HashPrevBlock.IsEqual(blockHeader.Hash()) {
 				logger.Errorf("block header %s does not match previous block header %s\n", blockHeader.Hash(), previousBlockHeader.HashPrevBlock)
@@ -123,7 +122,7 @@ func Start() {
 	bp := NewBlockProcessor(logger, blobStore)
 
 	// range through the block headers in reverse order, oldest first
-	for i := len(blockHeaders) - 4001; i >= 0; i-- {
+	for i := len(blockHeaders) - 4010; i >= 0; i-- {
 		if err := bp.ProcessBlock(ctx, blockHeaders[i], blockMetas[i]); err != nil {
 			logger.Errorf("failed to process block %s: %s\n", blockHeaders[i].Hash(), err)
 		}

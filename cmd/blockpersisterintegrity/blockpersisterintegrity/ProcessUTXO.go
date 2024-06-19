@@ -30,35 +30,39 @@ func (p *UTXOProcessor) DiffExists(blockHash chainhash.Hash) (bool, error) {
 	return p.store.Exists(context.Background(), blockHash[:], options.WithFileExtension("utxodiff"))
 }
 
-func (p *UTXOProcessor) VerifyDiff(blockHeader *model.BlockHeader, diff *p_model.UTXODiff) error {
-	var utxoDiff *p_model.UTXODiff
-	r, err := p.store.GetIoReader(context.Background(), blockHeader.Hash()[:], options.WithFileExtension("utxodiff"))
-	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "error getting reader from store", err)
-	}
-
-	utxoDiff, err = p_model.NewUTXODiffFromReader(p.logger, r)
-	if err != nil {
-		p.logger.Errorf("failed to parse utxodiff for block %s: %s", blockHeader.Hash(), err)
-	}
-
-	if utxoDiff == nil {
+func (p *UTXOProcessor) VerifyDiff(blockHeader *model.BlockHeader, diff1 *p_model.UTXODiff, diff2 *p_model.UTXODiff) error {
+	if diff1 == nil {
 		return fmt.Errorf("utxodiff for block %s is nil", blockHeader.Hash())
 	}
 
-	if !utxoDiff.BlockHash.IsEqual(blockHeader.Hash()) {
-		return fmt.Errorf("utxodiff block hash %s does not match block header hash %s", utxoDiff.BlockHash, blockHeader.Hash())
+	if !diff1.BlockHash.IsEqual(blockHeader.Hash()) {
+		return fmt.Errorf("utxodiff block hash %s does not match block header hash %s", diff1.BlockHash, blockHeader.Hash())
 	}
 
-	if ok, difference := utxoDiff.Added.IsEqual(diff.Added, ValueCompareFn); !ok {
+	if ok, difference := diff1.Added.IsEqual(diff2.Added, ValueCompareFn); !ok {
 		return fmt.Errorf("utxodiff added set does not match block diff added set: %s", difference)
 	}
 
-	if ok, difference := utxoDiff.Removed.IsEqual(diff.Removed, ValueCompareFn); !ok {
+	if ok, difference := diff1.Removed.IsEqual(diff2.Removed, ValueCompareFn); !ok {
 		return fmt.Errorf("utxodiff removed set does not match block diff removed set: %s", difference)
 	}
 
 	return nil
+}
+
+func LoadDiff(p *UTXOProcessor, blockHeader *model.BlockHeader) (*p_model.UTXODiff, error) {
+	var utxoDiff *p_model.UTXODiff
+	r, err := p.store.GetIoReader(context.Background(), blockHeader.Hash()[:], options.WithFileExtension("utxodiff"))
+	if err != nil {
+		return nil, errors.New(errors.ERR_PROCESSING, "error getting reader from store", err)
+	}
+
+	utxoDiff, err = p_model.NewUTXODiffFromReader(p.logger, r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse utxodiff for block %s: %s", blockHeader.Hash(), err)
+	}
+
+	return utxoDiff, nil
 }
 
 func (p *UTXOProcessor) SetExists(blockHash chainhash.Hash) (bool, error) {

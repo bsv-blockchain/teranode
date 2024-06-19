@@ -12,14 +12,16 @@ import (
 
 type TxProcessor struct {
 	logger ulogger.Logger
-	diff   *p_model.UTXODiff
+	diff1  *p_model.UTXODiff
+	diff2  *p_model.UTXODiff
 	idx    int
 }
 
-func NewTxProcessor(logger ulogger.Logger, diff *p_model.UTXODiff) *TxProcessor {
+func NewTxProcessor(logger ulogger.Logger, diff1 *p_model.UTXODiff, diff2 *p_model.UTXODiff) *TxProcessor {
 	return &TxProcessor{
 		logger: logger,
-		diff:   diff,
+		diff1:  diff1,
+		diff2:  diff2,
 		idx:    0,
 	}
 }
@@ -27,7 +29,11 @@ func NewTxProcessor(logger ulogger.Logger, diff *p_model.UTXODiff) *TxProcessor 
 func (tp *TxProcessor) ProcessTx(ctx context.Context, tx *bt.Tx) error {
 	defer func() { tp.idx++ }()
 
-	tp.ProcessUtxoDiffForTx(tx)
+	if tp.diff1 != nil {
+		trimFixBlockPersisterDiff(tx, tp)
+
+		tp.diff2.ProcessTx(tx)
+	}
 
 	if tp.idx == 0 {
 		// this must be a coinbase transaction
@@ -158,25 +164,31 @@ func (tp *TxProcessor) ProcessTx(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-func (tp *TxProcessor) ProcessUtxoDiffForTx(tx *bt.Tx) {
-	// Note: utxodiff files have a list of utxos spent and created by a transaction
-	// from a previous block. Chained txs where the inputs and outputs are spent in
-	// the same block are not included in the utxodiff files
+func trimFixBlockPersisterDiff(tx *bt.Tx, tp *TxProcessor) {
+	// the utxo diff file created  by the block persister has a bug
+	// where is stores too many diffs, so we need to remove the extra ones
+	// uv := p_model.NewUTXOValue(output.Satoshis, tx.LockTime, *output.LockingScript)
 
 	if !tx.IsCoinbase() {
-		// each input should be in the removed utxos
-		// but only when the input is from a tx from a previous block
-		// If the input is from a tx in the same block, it will not be in the removed utxos
 		for _, input := range tx.Inputs {
-			tp.diff.Delete(*input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
+			uk := p_model.NewUTXOKey(*input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
+			if tp.diff1.Added.Exists(uk) {
+				tp.diff1.Added.Delete(uk)
+				tp.diff1.Removed.Delete(uk)
+			}
 		}
 	}
 
-	// each output should be in the added utxos
 	for i, output := range tx.Outputs {
 		if output.LockingScript.IsData() {
 			continue
 		}
-		tp.diff.Add(*tx.TxIDChainHash(), uint32(i), output.Satoshis, tx.LockTime, *output.LockingScript)
+
+		uk := p_model.NewUTXOKey(*tx.TxIDChainHash(), uint32(i))
+
+		if tp.diff1.Removed.Exists(uk) {
+			tp.diff1.Removed.Delete(uk)
+			tp.diff1.Added.Delete(uk)
+		}
 	}
 }
