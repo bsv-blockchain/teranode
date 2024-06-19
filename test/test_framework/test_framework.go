@@ -42,6 +42,7 @@ func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 }
 
 // StopNodes starts the nodes with docker-compose up operation.
+// The settings map is used to pass the environment variables to the docker-compose services.
 func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
@@ -137,6 +138,25 @@ func (b *BitcoinTestFramework) StopNodes() error {
 			return err
 		}
 	}
+	return nil
+}
+
+// Restart the nodes with docker-compose down operation.
+func (b *BitcoinTestFramework) RestartNodes(m map[string]string) error {
+	if b.Compose != nil {
+		// Stop the Docker Compose services
+		if err := b.Compose.Down(b.Context); err != nil {
+			return err
+		}
+
+		if err := b.Compose.WithEnv(m).Up(b.Context); err != nil {
+			return err
+		}
+
+		// Wait for the services to be ready
+		time.Sleep(10 * time.Second)
+	}
+
 	return nil
 }
 
