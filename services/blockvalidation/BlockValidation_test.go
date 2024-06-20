@@ -10,6 +10,7 @@ import (
 	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
 
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -45,6 +46,7 @@ func newTx(random uint32) *bt.Tx {
 }
 
 type MockSubtreeValidationClient struct {
+	server subtreevalidation.Server
 }
 
 func (m *MockSubtreeValidationClient) Health(ctx context.Context) (int, string, error) {
@@ -52,7 +54,13 @@ func (m *MockSubtreeValidationClient) Health(ctx context.Context) (int, string, 
 }
 
 func (m *MockSubtreeValidationClient) CheckSubtree(ctx context.Context, subtreeHash chainhash.Hash, baseURL string, blockHeight uint32) error {
-	return nil
+	request := subtreevalidation_api.CheckSubtreeRequest{
+		Hash:        subtreeHash[:],
+		BaseUrl:     baseURL,
+		BlockHeight: blockHeight,
+	}
+	_, err := m.server.CheckSubtree(ctx, &request)
+	return err
 }
 
 func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation.Interface, blob.Store, blob.Store, func()) {
@@ -76,7 +84,12 @@ func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation
 
 	validatorClient := &validator.MockValidatorClient{TxMetaStore: txMetaStore}
 
-	subtreeValidationClient := &MockSubtreeValidationClient{}
+	subtreeValidationServer := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
+	subtreeValidationServer.Init(context.Background())
+
+	subtreeValidationClient := &MockSubtreeValidationClient{
+		server: *subtreeValidationServer,
+	}
 
 	return txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, func() {
 		httpmock.DeactivateAndReset()
@@ -283,30 +296,12 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
 
-func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
+func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T) {
 
 	initPrometheusMetrics()
 
 	txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, deferFunc := setup()
 	defer deferFunc()
-
-	subtree, err := util.NewTreeByLeafCount(4)
-	require.NoError(t, err)
-	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
-
-	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
-
-	_, err = txMetaStore.Create(context.Background(), tx1)
-	require.NoError(t, err)
-
-	nodeBytes, err := subtree.SerializeNodes()
-	require.NoError(t, err)
-
-	httpmock.RegisterResponder(
-		"GET",
-		`=~^/subtree/[a-z0-9]+\z`,
-		httpmock.NewBytesResponder(200, nodeBytes),
-	)
 
 	nBits := model.NewNBitFromString("2000ffff")
 	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
@@ -317,13 +312,106 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	coinbase.Outputs = nil
 	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+300)
 
-	require.NoError(t, subtree.AddNode(*coinbase.TxIDChainHash(), 100, 0))
+	require.True(t, coinbase.IsCoinbase())
+
+	_, err = txMetaStore.Create(context.Background(), coinbase)
+	require.NoError(t, err)
+
+	subtree, err := util.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, nodeBytes),
+	)
+
+	subtreeHashes := make([]*chainhash.Hash, 0)
+	subtreeHashes = append(subtreeHashes, subtree.RootHash())
+	// now create a subtree with the coinbase to calculate the merkle root
+	replicatedSubtree := subtree.Duplicate()
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+
+	calculatedMerkleRootHash := replicatedSubtree.RootHash()
+
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  hashPrevBlock,
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           nBits,
+		Nonce:          0,
+	}
+
+	// mine to the target difficulty
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+
+		if blockHeader.Nonce%1000000 == 0 {
+			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
+		}
+	}
+
+	block := &model.Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: uint64(subtree.Length()),
+		SizeInBytes:      123123,
+		Subtrees:         subtreeHashes, // should be the subtree with placeholder
+	}
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
+	require.NoError(t, err)
+
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
+	start := time.Now()
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	require.Error(t, err)
+	t.Logf("Time taken: %s\n", time.Since(start))
+}
+func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
+
+	initPrometheusMetrics()
+
+	txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	nBits := model.NewNBitFromString("2000ffff")
+	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+	coinbase.Outputs = nil
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+300)
+
+	require.True(t, coinbase.IsCoinbase())
+
+	_, err = txMetaStore.Create(context.Background(), coinbase)
+	require.NoError(t, err)
+
+	subtree, err := util.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
 	require.NoError(t, subtree.AddNode(*coinbase.TxIDChainHash(), 100, 0))
 
-	subtreeBytes, err := subtree.Serialize()
+	nodeBytes, err := subtree.SerializeNodes()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
-	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, nodeBytes),
+	)
 
 	subtreeHashes := make([]*chainhash.Hash, 0)
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
