@@ -243,6 +243,11 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 						continue
 					}
 
+					if txReq.node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+						stp.logger.Errorf("[SubtreeProcessor] error adding node: skipping request to add coinbase tx placeholder")
+						continue
+					}
+
 					err = stp.addNode(txReq.node, false)
 					if err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
