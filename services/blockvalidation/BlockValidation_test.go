@@ -46,7 +46,7 @@ func newTx(random uint32) *bt.Tx {
 }
 
 type MockSubtreeValidationClient struct {
-	server subtreevalidation.Server
+	server *subtreevalidation.Server
 }
 
 func (m *MockSubtreeValidationClient) Health(ctx context.Context) (int, string, error) {
@@ -85,10 +85,12 @@ func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation
 	validatorClient := &validator.MockValidatorClient{TxMetaStore: txMetaStore}
 
 	subtreeValidationServer := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
-	subtreeValidationServer.Init(context.Background())
+	if err := subtreeValidationServer.Init(context.Background()); err != nil {
+		panic(err)
+	}
 
 	subtreeValidationClient := &MockSubtreeValidationClient{
-		server: *subtreeValidationServer,
+		server: subtreeValidationServer,
 	}
 
 	return txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, func() {
