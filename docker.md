@@ -85,7 +85,7 @@ $ docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml 
 
 ## To override the base compose to run a local build
 ```
-$ GOOS=linux GOARCH=arm64 make build -j 32
+$ GOOS=linux GOARCH=arm64 TXMETA_SMALL_TAG=true make build -j 32
 $ docker compose -f docker-compose.yml -f docker-compose.localBinary.override.yml up -d
 $ docker compose -f docker-compose.yml -f docker-compose.localBinary.override.yml down
 ```
