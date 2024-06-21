@@ -247,6 +247,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
 	// todo return tx meta data
+	// u.logger.Debugf("[blessMissingTransaction][%s] validating transaction (pq:)", tx.TxID())
 	err = u.validatorClient.Validate(ctx, tx, blockHeight)
 	if err != nil {
 		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting

@@ -309,8 +309,8 @@ func (t *TxMetaCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Sp
 	return t.utxoStore.GetSpend(ctx, spend)
 }
 
-func (t *TxMetaCache) Spend(ctx context.Context, spends []*utxo.Spend) error {
-	return t.utxoStore.Spend(ctx, spends)
+func (t *TxMetaCache) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
+	return t.utxoStore.Spend(ctx, spends, blockHeight)
 }
 
 func (t *TxMetaCache) UnSpend(ctx context.Context, spends []*utxo.Spend) error {

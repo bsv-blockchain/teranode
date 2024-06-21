@@ -58,7 +58,7 @@ func (m *NullStore) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (
 	return &meta.Data{}, nil
 }
 
-func (m *NullStore) Spend(_ context.Context, spend []*utxostore.Spend) error {
+func (m *NullStore) Spend(_ context.Context, spend []*utxostore.Spend, blockHeight uint32) error {
 	return nil
 }
 

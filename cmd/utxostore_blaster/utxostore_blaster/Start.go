@@ -219,7 +219,8 @@ func worker(logger ulogger.Logger) {
 
 		// Spend the txid
 		timeStart = time.Now()
-		if err = utxostore.Spend(ctx, []*utxo.Spend{spend}); err != nil {
+		blockHeight, _ := utxostore.GetBlockHeight()
+		if err = utxostore.Spend(ctx, []*utxo.Spend{spend}, blockHeight); err != nil {
 			logger.Errorf("couldn't spend utxo: %+v", err)
 			// panic(err)
 		}
