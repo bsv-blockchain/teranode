@@ -885,6 +885,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return fmt.Errorf("[SubtreeProcessor][coinbase:%s]error extracting coinbase height via utxo store: %v", block.CoinbaseTx.TxIDChainHash(), err)
 	}
 
+	stp.logger.Infof("[SubtreeProcessor][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), blockHeight, block.CoinbaseTx.TxIDChainHash().String())
 	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			stp.logger.Infof("[SubtreeProcessor] coinbase utxos already exist (assume BlockValidation created them). Skipping")
