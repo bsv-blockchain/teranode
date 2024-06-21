@@ -128,7 +128,21 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 						continue
 					}
 
-					if notification.Type == model.NotificationType_Block {
+					if notification.Type == model.NotificationType_BlockSubtreesSet {
+
+						bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", notification.Hash.String())
+
+						// if blocks, err := bv.blockchainClient.GetBlocksSubtreesNotSet(ctx); err != nil {
+						// 	bv.logger.Errorf("[BlockValidation:setMined] failed to getBlocksSubtreesNotSet: %s", err)
+						// } else {
+						// 	for _, block := range blocks {
+						// 		if block.Header.Hash().IsEqual(notification.Hash) {
+						// 			bv.logger.Warnf("[BlockValidation:setMined] block's subtrees aren't processed yet STU: %s", notification.Hash.String())
+						// 			break
+						// 		}
+						// 	}
+						// }
+
 						// push block hash to the setMinedChan
 						bv.setMinedChan <- notification.Hash
 					}
@@ -550,7 +564,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// Add the coinbase transaction to the metaTxStore
 	// don't be tempted to rely on BlockAssembly to do this.
 	// We need to be sure that the coinbase transaction is stored before we try and do setMinedMulti().
-	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx", block.Header.Hash().String())
+	u.logger.Infof("[ValidateBlock][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), block.Height, block.CoinbaseTx.TxIDChainHash().String())
 	if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height+100); err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
