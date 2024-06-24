@@ -135,7 +135,7 @@ ifdef test
 	cd test/$(firstword $(subst ., ,$(test))) && \
 	SETTINGS_CONTEXT=docker.ci.tc1.run go test -run $(word 2,$(subst ., ,$(test)))
 else
-	cd test/functional && \
+	cd test/e2e && \
 	SETTINGS_CONTEXT=docker.ci.tc1.run go test
 endif
 

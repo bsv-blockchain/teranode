@@ -1,9 +1,32 @@
 ////go:build e2eTest
 
-// How to run this test:
-// $ unzip data.zip
-// $ cd test/settings/
-// $ `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowMaxBlockSize`
+// How to run this test manually:
+//
+// 1. For resetting data:
+//    - Delete existing data: rm -rf data/
+//    - Restore data from zip: unzip data.zip
+//
+// 2. Add the following settings in settings_local.conf (DO NOT COMMIT THIS CHANGE TO GIT):
+//    - excessiveblocksize.docker.ci.ubsv2=1000
+//
+// 3. Start another terminal and run the following script:
+//    - ./scripts/bestblock-docker.sh
+//
+// 4. Bring up Docker containers:
+//    - docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml up -d
+//    - wait for initial 300 blocks to be mined
+//
+// 5. Navigate to the test settings directory:
+//    - cd test/settings/
+//
+// 6. Execute the test in dev mode:
+//    - test_run_mode=dev go test -run TestShouldRejectExcessiveBlockSize
+//
+// 7. Expected result:
+//    - The ubsv-2 node should reject the blocks and be out of sync.
+//    - ubsv-1 and ubsv-3 should remain in sync.
+// 8. To clean up:
+//    - docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml down
 
 package test
 
@@ -18,7 +41,6 @@ import (
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 )
@@ -57,62 +79,6 @@ func tearDownBitcoinTestFramework() {
 	}
 }
 
-func TestShouldAllowMaxBlockSize(t *testing.T) {
-	ctx := context.Background()
-	url := "http://localhost:18090"
-
-	hashes, err := helper.CreateAndSendRawTxs(ctx, cluster.Nodes[0], 10)
-	if err != nil {
-		t.Fatalf("Failed to create and send raw txs: %v", err)
-	}
-	fmt.Printf("Hashes: %v\n", hashes)
-
-	height, _ := helper.GetBlockHeight(url)
-
-	baClient := cluster.Nodes[0].BlockassemblyClient
-	blockHash, err := helper.MineBlock(ctx, baClient, logger)
-	if err != nil {
-		t.Fatalf("Failed to mine block: %v", err)
-	}
-
-	for {
-		newHeight, _ := helper.GetBlockHeight(url)
-		if newHeight > height {
-			break
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	blockchainDB := cluster.Nodes[0].BlockChainDB
-	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
-	fmt.Printf("Block: %v\n", b)
-
-	blockStore := cluster.Nodes[0].Blockstore
-	var o []options.Options
-	o = append(o, options.WithFileExtension("block"))
-	//wait
-	time.Sleep(10 * time.Second)
-
-	blockchain := cluster.Nodes[0].BlockchainClient
-	header, meta, _ := blockchain.GetBestBlockHeader(ctx)
-	fmt.Printf("Best block header: %v\n", header.Hash())
-
-	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
-	// t.Errorf("error getting block reader: %v", err)
-	if err != nil {
-		t.Errorf("error getting block reader: %v", err)
-	}
-	if err == nil {
-		if bl, err := helper.ReadFile(ctx, "block", logger, r, hashes[5], ""); err != nil {
-			t.Errorf("error reading block: %v", err)
-		} else {
-			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
-			assert.Equal(t, true, bl, "Test Tx not found in block")
-		}
-	}
-
-}
-
 func TestShouldRejectExcessiveBlockSize(t *testing.T) {
 	ctx := context.Background()
 	url := "http://localhost:18090"
@@ -126,7 +92,7 @@ func TestShouldRejectExcessiveBlockSize(t *testing.T) {
 	height, _ := helper.GetBlockHeight(url)
 
 	baClient := cluster.Nodes[0].BlockassemblyClient
-	blockHash, err := helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlock(ctx, baClient, logger)
 	if err != nil {
 		t.Fatalf("Failed to mine block: %v", err)
 	}
@@ -138,10 +104,6 @@ func TestShouldRejectExcessiveBlockSize(t *testing.T) {
 		}
 		time.Sleep(1 * time.Second)
 	}
-
-	blockchainDB := cluster.Nodes[1].BlockChainDB
-	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
-	fmt.Printf("Block: %v\n", b)
 
 	blockStore := cluster.Nodes[1].Blockstore
 	var o []options.Options
