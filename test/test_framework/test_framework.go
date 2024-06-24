@@ -44,26 +44,31 @@ func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 // StopNodes starts the nodes with docker-compose up operation.
 // The settings map is used to pass the environment variables to the docker-compose services.
 func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
+	var testRunMode, _ = gocore.Config().Get("test_run_mode", "ci")
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
+	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
-	compose, err := tc.NewDockerCompose(b.ComposeFilePaths...)
-	if err != nil {
-		return err
+	if testRunMode == "ci" {
+		// Start the nodes with docker-compose up operation
+		compose, err := tc.NewDockerCompose(b.ComposeFilePaths...)
+		if err != nil {
+			return err
+		}
+
+		if err := compose.WithEnv(m).Up(b.Context); err != nil {
+			return err
+		}
+
+		// Wait for the services to be ready
+		time.Sleep(10 * time.Second)
+
+		b.Compose = compose
 	}
 
-	if err := compose.WithEnv(m).Up(b.Context); err != nil {
-		return err
-	}
-
-	// Wait for the services to be ready
-	time.Sleep(10 * time.Second)
-
-	b.Compose = compose
-
-	for setting := range m {
+	order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
+	for _, key := range order {
 		b.Nodes = append(b.Nodes, BitcoinNode{
-			SETTINGS_CONTEXT: m[setting],
+			SETTINGS_CONTEXT: m[key],
 		})
 	}
 

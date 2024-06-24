@@ -100,7 +100,7 @@ test: set_race_flag
 	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/functional | grep -v test/settings | grep -v test/state)
 .PHONY: longtests
 longtests: set_race_flag
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/functional | grep -v test/settings | grep -v test/state)
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state)
 
 .PHONY: racetest
 racetest: set_race_flag
@@ -135,7 +135,7 @@ ifdef test
 	cd test/$(firstword $(subst ., ,$(test))) && \
 	SETTINGS_CONTEXT=docker.ci.tc1.run go test -run $(word 2,$(subst ., ,$(test)))
 else
-	cd test/functional && \
+	cd test/e2e && \
 	SETTINGS_CONTEXT=docker.ci.tc1.run go test
 endif
 

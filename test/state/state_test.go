@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
@@ -37,8 +38,8 @@ func TestMain(m *testing.M) {
 }
 
 func setupBitcoinTestFramework() {
-	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml", "../../docker-compose.p2p.down.yml"})
-	settingsMap := map[string]string{
+	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
+	settingsMap = map[string]string{
 		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
 		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc1",
 		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tc1",
@@ -61,6 +62,11 @@ func TestNodeCatchUpState(t *testing.T) {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
 
+	err := framework.StopNode("ubsv-2")
+	if err != nil {
+		t.Fatalf("Failed to stop node: %v", err)
+	}
+
 	for i := 0; i < 5; i++ {
 		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
 		if err != nil {
@@ -75,11 +81,18 @@ func TestNodeCatchUpState(t *testing.T) {
 		}
 	}
 
-	framework.ComposeFilePaths = []string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"}
-	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Fatalf("Failed to restart nodes: %v", err)
+	// framework.ComposeFilePaths = []string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"}
+	// if err := framework.RestartNodes(settingsMap); err != nil {
+	// 	t.Fatalf("Failed to restart nodes: %v", err)
+	// }
+
+	err = framework.StartNode("ubsv-2")
+	if err != nil {
+		t.Fatalf("Failed to start node: %v", err)
 	}
 
+	// Wait for the nodes to catch up
+	time.Sleep(30 * time.Second)
 	blockchain := framework.Nodes[1].BlockchainClient
 	response, err := blockchain.GetFSMCurrentState(context.Background())
 	require.NoError(t, err)
