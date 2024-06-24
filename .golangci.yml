@@ -7,6 +7,8 @@ issues:
   # exclude-dirs:
   #   - services/legacy/bsvutil
   #   - services/legacy/wire
+  exclude:
+    - "G108: Profiling endpoint is automatically exposed on /debug/pprof"
 
   exclude-rules:
     - path: services/legacy
