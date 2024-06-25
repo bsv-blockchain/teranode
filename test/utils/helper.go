@@ -348,8 +348,82 @@ func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Has
 		fmt.Printf("Error filling transaction inputs: %v", err)
 	}
 
-	// Send the transaction using RPC
 	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
+	if err != nil {
+		fmt.Printf("Failed to send new transaction: %v", err)
+	}
+
+	return *newTx.TxIDChainHash(), nil
+}
+
+func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (chainhash.Hash, error) {
+
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		fmt.Printf("Failed to generate private key: %v", err)
+	}
+
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	if err != nil {
+		fmt.Printf("Failed to create address: %v", err)
+	}
+
+	coinbaseClient := node[0].CoinbaseClient
+
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	if err != nil {
+		fmt.Printf("Failed to request funds: %v", err)
+	}
+	_, err = node[0].DistributorClient.SendTransaction(ctx, faucetTx)
+	if err != nil {
+		fmt.Printf("Failed to send transaction: %v", err)
+	}
+
+	output := faucetTx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      faucetTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+	if err != nil {
+		fmt.Printf("error creating new transaction: %v\n", err)
+	}
+	newTx.LockTime = 0
+
+	newTxDouble := bt.NewTx()
+	err = newTxDouble.FromUTXOs(utxo)
+	if err != nil {
+		fmt.Printf("error creating new transaction: %v\n", err)
+	}
+	newTxDouble.LockTime = 1
+
+	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
+	if err != nil {
+		fmt.Printf("Error adding output to transaction: %v", err)
+	}
+	err = newTxDouble.AddP2PKHOutputFromAddress("14qViLJfdGaP4EeHnDyJbEGQysnCpwk3gd", 10000)
+	if err != nil {
+		fmt.Printf("Error adding output to transaction: %v", err)
+	}
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		fmt.Printf("Error filling transaction inputs: %v", err)
+	}
+	err = newTxDouble.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		fmt.Printf("Error filling transaction inputs: %v", err)
+	}
+
+	_, err = node[0].DistributorClient.SendTransaction(ctx, newTx)
+	if err != nil {
+		fmt.Printf("Failed to send new transaction: %v", err)
+	}
+	_, err = node[1].DistributorClient.SendTransaction(ctx, newTxDouble)
 	if err != nil {
 		fmt.Printf("Failed to send new transaction: %v", err)
 	}
