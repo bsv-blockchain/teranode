@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   tx-blaster-2:
     container_name: tx-blaster-2

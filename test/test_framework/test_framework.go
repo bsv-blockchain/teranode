@@ -154,6 +154,7 @@ func (b *BitcoinTestFramework) RestartNodes(m map[string]string) error {
 			return err
 		}
 
+		b.Compose, _ = tc.NewDockerCompose(b.ComposeFilePaths...)
 		if err := b.Compose.WithEnv(m).Up(b.Context); err != nil {
 			return err
 		}

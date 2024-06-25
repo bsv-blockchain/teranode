@@ -1,5 +1,3 @@
-version: '3.8'
-
 x-aerospike-base: &aerospike-base
   image: aerospike:ce-6.4.0.7_2
   # mem_limit: 1024m

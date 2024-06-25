@@ -1,6 +1,3 @@
-
-version: '3.8'
-
 services:
 
   p2p-bootstrap-1:

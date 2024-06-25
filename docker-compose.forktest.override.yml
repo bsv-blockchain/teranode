@@ -1,5 +1,3 @@
-version: '3.8'
-# Define a common base configuration for ubsv nodes
 services:
 
   ubsv-1:
