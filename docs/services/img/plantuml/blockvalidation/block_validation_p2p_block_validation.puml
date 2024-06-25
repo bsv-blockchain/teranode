@@ -6,7 +6,7 @@ participant "Util HTTP Request" as Util
 participant "Blockchain Client" as BC
 entity "Block" as Block
 database "Subtree Store" as SubtreeStore
-database "Tx Meta Store" as TxMetaStore
+database "UTXO Store" as UTXOStore
 database "Tx Store" as TxStore
 queue "catchupCh\nCatchup Channel" as CCC
 participant "Subtree Validation" as SVS
@@ -62,14 +62,14 @@ alt Not Exists - Start the Validation process
 
     BVVB -> BVVB: storeCoinbaseTx(ctx, block)
     activate BVVB
-    BVVB -> TxMetaStore: Create(ctx, block.CoinbaseTx)
-    activate TxMetaStore
-    TxMetaStore -> BVVB
-    deactivate TxMetaStore
+    BVVB -> UTXOStore: Create(ctx, block.CoinbaseTx)
+    activate UTXOStore
+    UTXOStore -> BVVB
+    deactivate UTXOStore
     deactivate BVVB
 
 
-    BVVB -> Block: Valid(ctx, subtreeStore, txMetaStore, blockHeaders)
+    BVVB -> Block: Valid(ctx, subtreeStore, UTXOStore, blockHeaders)
     activate Block
     Block --> BVVB
     deactivate Block
@@ -100,10 +100,10 @@ alt Not Exists - Start the Validation process
     loop For each Subtree in the Block
        BVVB -> BVVB: updateSubtreesTTL(ctx, block)
        activate BVVB
-       BVVB -> BVVB: UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, subtrees, block.Header)
+       BVVB -> BVVB: UpdateTxMinedStatus(ctx, u.logger, u.UTXOStore, subtrees, block.Header)
        activate BVVB
        loop For each Node (Tx) in the Subtree
-          BVVB  -> TxMetaStore: SetMinedMulti(ctx, hashes, blockHeaderHash) ## mark tx as mined
+          BVVB  -> UTXOStore: SetMinedMulti(ctx, hashes, blockHeaderHash) ## mark tx as mined
        end
 
        deactivate BVVB
