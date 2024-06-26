@@ -100,6 +100,12 @@ $ docker compose logs
 $ docker compose logs ubsv-1
 ```
 
+## When using 'network: host' in Docker Desktop
+
+If it seems you cannot access the various ports then you may need to enable port access.
+
+Go to 'Settings..', 'Features in development' and tick 'Enable host networking'
+
 ## URLs for viewing dashboards
 
 Most of the ports you are familiair with are mapped to unique ports spanning all 3 nodes.
