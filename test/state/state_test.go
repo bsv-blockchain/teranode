@@ -34,7 +34,7 @@ func TestMain(m *testing.M) {
 
 	m.Run()
 
-	// os.Exit(exitCode)
+	// os.Exit(0)
 }
 
 func setupBitcoinTestFramework() {
@@ -69,7 +69,7 @@ func TestNodeCatchUpState_WithStartAndStopNodes(t *testing.T) {
 	)
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
+	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
 	err := framework.StopNode("ubsv-2")
 	if err != nil {
@@ -110,12 +110,12 @@ func TestNodeCatchUpState_WithStartAndStopNodes(t *testing.T) {
 					lastState = response
 					mu.Unlock()
 				}
-				time.Sleep(100 * time.Millisecond) // Adjust the interval as needed
+				// time.Sleep(10 * time.Millisecond) // Adjust the interval as needed
 			}
 		}
 	}()
 
-	time.Sleep(180 * time.Second)
+	time.Sleep(120 * time.Second)
 	close(done)
 	wg.Wait()
 
@@ -153,7 +153,7 @@ func TestNodeCatchUpState_WithP2PSwitch(t *testing.T) {
 	ctx := context.Background()
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
+	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
 	for i := 0; i < 5; i++ {
 		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
@@ -189,12 +189,12 @@ func TestNodeCatchUpState_WithP2PSwitch(t *testing.T) {
 					lastState = response
 					mu.Unlock()
 				}
-				time.Sleep(10 * time.Millisecond)
+				// time.Sleep(10 * time.Millisecond)
 			}
 		}
 	}()
 
-	time.Sleep(180 * time.Second)
+	time.Sleep(120 * time.Second)
 	close(done)
 	wg.Wait()
 

@@ -210,7 +210,7 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	url := "http://localhost:18090"
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
+	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),

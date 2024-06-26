@@ -60,7 +60,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		}
 
 		// Wait for the services to be ready
-		time.Sleep(10 * time.Second)
+		time.Sleep(30 * time.Second)
 
 		b.Compose = compose
 	}
@@ -160,7 +160,7 @@ func (b *BitcoinTestFramework) RestartNodes(m map[string]string) error {
 		}
 
 		// Wait for the services to be ready
-		time.Sleep(10 * time.Second)
+		time.Sleep(30 * time.Second)
 	}
 
 	return nil
@@ -179,6 +179,8 @@ func (b *BitcoinTestFramework) StartNode(nodeName string) error {
 		if err != nil {
 			return err
 		}
+
+		time.Sleep(10 * time.Second)
 
 	}
 	return nil

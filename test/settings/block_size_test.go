@@ -49,7 +49,7 @@ var (
 	cluster *tf.BitcoinTestFramework
 )
 var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-var logger = ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
+var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
 func TestMain(m *testing.M) {
 	setupBitcoinTestFramework()
