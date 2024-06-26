@@ -58,7 +58,7 @@ func tearDownBitcoinTestFramework() {
 	}
 }
 
-func TestRejectLongerChainWithDoubleSpend_01(t *testing.T) {
+func TestRejectLongerChainWithDoubleSpend(t *testing.T) {
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
 
@@ -77,7 +77,7 @@ func TestRejectLongerChainWithDoubleSpend_01(t *testing.T) {
 	ctx := context.Background()
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
+	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
 	for i := 0; i < 5; i++ {
 		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
@@ -154,7 +154,7 @@ func TestRejectLongerChainWithDoubleSpend_01(t *testing.T) {
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
 }
 
-func TestRejectChainWithDoubleSpend_02(t *testing.T) {
+func TestRejectChainWithDoubleSpend(t *testing.T) {
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
 
@@ -173,7 +173,7 @@ func TestRejectChainWithDoubleSpend_02(t *testing.T) {
 	ctx := context.Background()
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
+	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
 	for i := 0; i < 5; i++ {
 		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
@@ -231,7 +231,7 @@ func TestRejectChainWithDoubleSpend_02(t *testing.T) {
 		}
 	}()
 
-	time.Sleep(180 * time.Second)
+	time.Sleep(120 * time.Second)
 	close(done)
 	wg.Wait()
 
