@@ -563,9 +563,9 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 			err := txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					return errors.New(errors.ERR_NOT_FOUND, "output %s:%d not found", spend.TxID[:], spend.Vout)
+					return errors.New(errors.ERR_NOT_FOUND, "output %s:%d not found", spend.TxID, spend.Vout)
 				}
-				return fmt.Errorf("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d", spend.TxID, spend.Vout)
+				return fmt.Errorf("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d: %v", spend.TxID, spend.Vout, err)
 			}
 
 			// Check if the utxo is already spent
