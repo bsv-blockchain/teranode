@@ -3,9 +3,10 @@ package blockassembly
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"net/url"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"go.uber.org/atomic"
 
@@ -719,6 +720,11 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 	if err = ba.blockchainClient.AddBlock(ctx, block, ""); err != nil {
 		return nil, fmt.Errorf("[BlockAssembly][%s][%s] failed to add block: %w", jobID, block.Hash().String(), err)
 	}
+
+	// don't wait for blockchain to notify us of new block.
+	// if we are mining initial blocks or mining 'immediately' then we won't get notified quick enough
+	// and we'll fork unnecessarily
+	ba.blockAssembler.UpdateBestBlock(ctx)
 
 	// send the block for validation in the blockvalidation server, this makes sure we also mark the block as
 	// invalid if there is something wrong with it
