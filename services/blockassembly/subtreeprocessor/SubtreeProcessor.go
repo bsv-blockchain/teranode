@@ -625,7 +625,6 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	return nil
 }
 
-/*
 // moveDownBlocks adds all transactions that are in given blocks to current stp subtrees
 func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model.Block) (err error) {
 	if len(blocks) == 0 || blocks[0] == nil {
@@ -634,27 +633,16 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 
 	startTime := time.Now()
 	prometheusSubtreeProcessorMoveDownBlock.Inc()
-
-	// add all the transactions from the block, excluding the coinbase, which needs to be reverted in the utxo store
-	stp.logger.Infof("[moveDownBlock][%s] with %d subtrees", block.String(), len(block.Subtrees))
-	defer func() {
-		stp.logger.Infof("[moveDownBlock][%s] with %d subtrees DONE in %s", block.String(), len(block.Subtrees), time.Since(startTime).String())
-		err := recover()
-		if err != nil {
-			stp.logger.Errorf("[moveDownBlock] with block %s: %s", block.String(), err)
-		}
-	}()
+	stp.logger.Infof("[moveDownBlocks] with %d blocks", len(blocks))
 
 	lastIncompleteSubtree := stp.currentSubtree
 	chainedSubtrees := stp.chainedSubtrees
 
-	// TODO add check for the correct parent block
-
-	// reset the subtree processor
 	stp.currentSubtree, err = util.NewTreeByLeafCount(stp.currentItemsPerFile)
 	if err != nil {
-		return fmt.Errorf("[moveDownBlock][%s] error creating new subtree: %s", block.String(), err.Error())
+		return fmt.Errorf("[moveDownBlocks] error creating new subtree: %s", err.Error())
 	}
+
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
 
@@ -664,62 +652,76 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 	g, gCtx := errgroup.WithContext(ctx)
 	moveDownBlockConcurrency, _ := gocore.Config().GetInt("blockassembly_moveDownBlockConcurrency", 64)
 	g.SetLimit(moveDownBlockConcurrency)
+	var block *model.Block
 
-	// get all the subtrees in parallel
-	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees: get subtrees", block.String(), len(block.Subtrees))
-	subtreesNodes := make([][]util.SubtreeNode, len(block.Subtrees))
-	for idx, subtreeHash := range block.Subtrees {
-		idx := idx
-		subtreeHash := subtreeHash
-		g.Go(func() error {
-			subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+	for i := 0; i < len(blocks); i++ {
+		block = blocks[i]
+		// add all the transactions from the block, excluding the coinbase, which needs to be reverted in the utxo store
+		stp.logger.Infof("[moveDownBlocks][%s], block %d (block hash: %v), with %d subtrees", block.String(), i, block.Hash(), len(block.Subtrees))
+		defer func() {
+			stp.logger.Infof("[moveDownBlocks][%s], block %d (block hash: %v), with %d subtrees DONE in %s", block.String(), i, block.Hash(), len(block.Subtrees), time.Since(startTime).String())
+			err := recover()
 			if err != nil {
-				return fmt.Errorf("[moveDownBlock][%s] error getting subtree %s: %s", block.String(), subtreeHash.String(), err.Error())
+				stp.logger.Errorf("[moveDownBlocks] with block %s: %s", block.String(), err)
 			}
-			defer func() {
-				_ = subtreeReader.Close()
-			}()
+		}()
 
-			subtree := &util.Subtree{}
-			err = subtree.DeserializeFromReader(subtreeReader)
-			if err != nil {
-				return fmt.Errorf("[moveDownBlock][%s] error deserializing subtree: %s", block.String(), err.Error())
-			}
+		// get all the subtrees in parallel
+		stp.logger.Warnf("[moveDownBlocks][%s], block %d (block hash: %v)  with %d subtrees: get subtrees", block.String(), i, block.Hash(), len(block.Subtrees))
+		subtreesNodes := make([][]util.SubtreeNode, len(block.Subtrees))
+		for idx, subtreeHash := range block.Subtrees {
+			idx := idx
+			subtreeHash := subtreeHash
+			g.Go(func() error {
+				subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+				if err != nil {
+					return fmt.Errorf("[moveDownBlocks][%s], block %d (block hash: %v), error getting subtree %s: %s", block.String(), i, block.Hash(), subtreeHash.String(), err.Error())
+				}
+				defer func() {
+					_ = subtreeReader.Close()
+				}()
 
-			// TODO add metrics about how many txs we are reading per second
-			subtreesNodes[idx] = subtree.Nodes
+				subtree := &util.Subtree{}
+				err = subtree.DeserializeFromReader(subtreeReader)
+				if err != nil {
+					return fmt.Errorf("[moveDownBlocks][%s], block %d (block hash: %v), error deserializing subtree: %s", block.String(), i, block.Hash(), err.Error())
+				}
 
-			return nil
-		})
-	}
+				// TODO add metrics about how many txs we are reading per second
+				subtreesNodes[idx] = subtree.Nodes
 
-	if err := g.Wait(); err != nil {
-		return fmt.Errorf("[moveDownBlock][%s] error getting subtrees: %s", block.String(), err.Error())
-	}
-	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees: get subtrees DONE", block.String(), len(block.Subtrees))
+				return nil
+			})
+		}
 
-	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees: create new subtrees", block.String(), len(block.Subtrees))
-	// run through the nodes of the subtrees in order and add to the new subtrees
-	for idx, subtreeNode := range subtreesNodes {
-		if idx == 0 {
-			// process coinbase utxos
-			if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
-				return fmt.Errorf("[moveDownBlock][%s] error deleting utxos for tx %s: %s", block.String(), block.CoinbaseTx.String(), err.Error())
-			}
+		if err := g.Wait(); err != nil {
+			return fmt.Errorf("[moveDownBlocks][%s], block %d (block hash: %v), error getting subtrees: %s", block.String(), i, block.Hash(), err.Error())
+		}
+		stp.logger.Warnf("[moveDownBlocks][%s], block %d (block hash: %v), with %d subtrees: get subtrees DONE", block.String(), i, block.Hash(), len(block.Subtrees))
 
-			// skip the first transaction of the first subtree (coinbase)
-			for i := 1; i < len(subtreeNode); i++ {
-				_ = stp.addNode(subtreeNode[i], true)
-			}
-		} else {
-			for _, node := range subtreeNode {
-				_ = stp.addNode(node, true)
+		stp.logger.Warnf("[moveDownBlocks][%s] with %d subtrees: create new subtrees", block.String(), i, block.Hash(), len(block.Subtrees))
+		// run through the nodes of the subtrees in order and add to the new subtrees
+		for idx, subtreeNode := range subtreesNodes {
+			if idx == 0 {
+				// process coinbase utxos
+				if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
+					return fmt.Errorf("[moveDownBlocks][%s], block %d (block hash: %v), error deleting utxos for tx %s: %s", block.String(), i, block.Hash(), block.CoinbaseTx.String(), err.Error())
+				}
+
+				// skip the first transaction of the first subtree (coinbase)
+				for i := 1; i < len(subtreeNode); i++ {
+					_ = stp.addNode(subtreeNode[i], true)
+				}
+			} else {
+				for _, node := range subtreeNode {
+					_ = stp.addNode(node, true)
+				}
 			}
 		}
+		stp.logger.Warnf("[moveDownBlocks][%s], block %d (block hash: %v), with %d subtrees: create new subtrees DONE", block.String(), i, block.Hash(), len(block.Subtrees))
 	}
-	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees: create new subtrees DONE", block.String(), len(block.Subtrees))
 
-	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees: add previous nodes to subtrees", block.String(), len(block.Subtrees))
+	stp.logger.Warnf("[moveDownBlocks] add previous nodes to subtrees")
 	// add all the transactions from the previous state
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
@@ -735,14 +737,13 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 	}
 	stp.logger.Warnf("[moveDownBlock][%s] with %d subtrees: add previous nodes to subtrees DONE", block.String(), len(block.Subtrees))
 
-	// we must set the current block header
+	// we must set the current block header to the last block header we have added
 	stp.currentBlockHeader = block.Header
 
 	prometheusSubtreeProcessorMoveDownBlockDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 
 	return nil
 }
-*/
 
 // moveUpBlock cleans out all transactions that are in the current subtrees and also in the block
 // given. It is akin moving up the blockchain to the next block.
