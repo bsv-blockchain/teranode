@@ -41,11 +41,8 @@ jobs:
           name: coverage-report
           path: coverage.out
           retention-days: 1
-      - name: Test Summary
-        uses: test-summary/action@v2
-        with:
-            paths: "unit-tests.xml"
-        if: always()
+      - name: Publish Test Summary Results
+        run: npx github-actions-ctrf ctrf/ctrf-report.json
 
   smoketest:
     name: smoketest

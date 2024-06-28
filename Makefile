@@ -95,12 +95,16 @@ build-blockchainstatus:
 build-dashboard:
 	npm install --prefix ./ui/dashboard && npm run build --prefix ./ui/dashboard
 
+.PHONY: install-tools
+install-tools:
+	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
+
 .PHONY: test
-test: set_race_flag
-	SETTINGS_CONTEXT=test go run gotest.tools/gotestsum@latest --junitfile unit-tests.xml --format pkgname $(RACE_FLAG) $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork)
+test: set_race_flag install-tools
+	SETTINGS_CONTEXT=test go test -json $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork) | go-ctrf-json-reporter -output ctrf-report.json
 .PHONY: longtests
-longtests: set_race_flag
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go run gotest.tools/gotestsum@latest --junitfile unit-tests.xml --format pkgname -tags fulltest $(RACE_FLAG) -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork)
+longtests: set_race_flag install-tools
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork) | go-ctrf-json-reporter -output ctrf-report.json
 
 .PHONY: racetest
 racetest: set_race_flag
