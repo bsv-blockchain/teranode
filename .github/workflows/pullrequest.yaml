@@ -33,7 +33,7 @@ jobs:
         with:
           go-version: '1.21.0'
       - name: Run Go tests
-        run: make longtests
+        run: USE_JSON_REPORTER=true make longtests
         continue-on-error: false
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
