@@ -95,12 +95,27 @@ build-blockchainstatus:
 build-dashboard:
 	npm install --prefix ./ui/dashboard && npm run build --prefix ./ui/dashboard
 
+.PHONY: install-tools
+install-tools:
+	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
+
 .PHONY: test
 test: set_race_flag
+ifeq ($(USE_JSON_REPORTER),true)
+	$(MAKE) install-tools
+	SETTINGS_CONTEXT=test go test -json $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork) | go-ctrf-json-reporter -output ctrf-report.json
+else
 	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork)
+endif
+
 .PHONY: longtests
 longtests: set_race_flag
+ifeq ($(USE_JSON_REPORTER),true)
+	$(MAKE) install-tools
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork) | go-ctrf-json-reporter -output ctrf-report.json
+else
 	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork)
+endif
 
 .PHONY: racetest
 racetest: set_race_flag

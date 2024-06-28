@@ -56,3 +56,5 @@ deploy/dev/grafana/grafana.db/
 vendor
 
 .ipynb_checkpoints/
+unit-tests.xml
+ctrf-report.json
