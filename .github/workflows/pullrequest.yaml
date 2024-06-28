@@ -42,7 +42,7 @@ jobs:
           path: coverage.out
           retention-days: 1
       - name: Publish Test Summary Results
-        run: npx github-actions-ctrf ctrf/ctrf-report.json
+        run: npx github-actions-ctrf ctrf-report.json
 
   smoketest:
     name: smoketest
