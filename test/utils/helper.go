@@ -301,6 +301,31 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 	return blockHash, nil
 }
 
+func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) {
+	solution, err := cpuminer.Mine(ctx, miningCandidate)
+	if err != nil {
+		return nil, fmt.Errorf("error mining block: %w", err)
+	}
+
+	blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+	if err != nil {
+		return nil, fmt.Errorf("error building block header: %w", err)
+	}
+
+	blockHash := util.Sha256d(blockHeader)
+
+	err = baClient.SubmitMiningSolution(ctx, solution)
+	if err != nil {
+		return nil, fmt.Errorf("error submitting mining solution: %w", err)
+	}
+
+	err = baClient.SubmitMiningSolution(ctx, solution)
+	if err != nil {
+		return nil, fmt.Errorf("error submitting mining solution: %w", err)
+	}
+	return blockHash, nil
+}
+
 func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Hash, error) {
 
 	privateKey, err := bec.NewPrivateKey(bec.S256())

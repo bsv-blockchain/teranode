@@ -9,6 +9,7 @@ issues:
   #   - services/legacy/wire
   exclude:
     - "G108: Profiling endpoint is automatically exposed on /debug/pprof"
+    - "G601: Implicit memory aliasing in for loop."
 
   exclude-rules:
     - path: services/legacy
