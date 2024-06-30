@@ -148,10 +148,12 @@ ifdef test
 	# TEST_DIR := "$(firstword $(subst ., ,$(test)))"
 	# TEST_NAME := "$(word 2,$(subst ., ,$(test)))"
 	cd test/$(firstword $(subst ., ,$(test))) && \
-	SETTINGS_CONTEXT=docker.ci.tc1.run go test -run $(word 2,$(subst ., ,$(test)))
+	SETTINGS_CONTEXT=docker.ci go test -run $(word 2,$(subst ., ,$(test)))
 else
 	cd test/e2e && \
 	SETTINGS_CONTEXT=docker.ci.tc1.run go test
+	cd test/blockassembly && \
+	SETTINGS_CONTEXT=docker.ci go test
 endif
 
 

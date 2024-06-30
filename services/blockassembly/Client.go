@@ -193,3 +193,7 @@ func (s *Client) ResetBlockAssembly(_ context.Context) error {
 func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	return s.client.GetBlockAssemblyState(ctx, &blockassembly_api.EmptyMessage{})
 }
+
+func (s *Client) BlockAssemblyAPIClient() blockassembly_api.BlockAssemblyAPIClient {
+	return s.client
+}

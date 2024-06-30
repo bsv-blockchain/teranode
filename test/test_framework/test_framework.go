@@ -11,6 +11,7 @@ import (
 	cb "github.com/bitcoin-sv/ubsv/services/coinbase"
 	blob "github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/sql"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	distributor "github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/ordishs/gocore"
@@ -32,6 +33,7 @@ type BitcoinNode struct {
 	DistributorClient   distributor.Distributor
 	BlockChainDB        blockchain_store.Store
 	Blockstore          blob.Store
+	UtxoStore           *utxostore.Store
 }
 
 func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
@@ -131,6 +133,8 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 			panic(err)
 		}
 		b.Nodes[i].Blockstore = blockStore
+		utxoStoreUrl, _, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SETTINGS_CONTEXT))
+		b.Nodes[i].UtxoStore, _ = utxostore.New(b.Context, logger, utxoStoreUrl)
 	}
 	return nil
 }
