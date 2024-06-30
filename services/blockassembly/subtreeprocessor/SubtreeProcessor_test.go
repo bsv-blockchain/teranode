@@ -51,6 +51,24 @@ var (
 		Nonce:          1234,
 	}
 
+	nextBlockHeader = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  blockHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1234567890,
+		Bits:           model.NBit{},
+		Nonce:          1234,
+	}
+
+	aBlockHeader = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{'a'},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1234567890,
+		Bits:           model.NBit{},
+		Nonce:          1234,
+	}
+
 	txIds = []string{
 		"fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4",
 		"6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4",
@@ -436,7 +454,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 }
 
 func TestMoveUpBlockLarge(t *testing.T) {
-	util.SkipVeryLongTests(t)
+	//util.SkipVeryLongTests(t)
 
 	n := 1049576
 	txIds := make([]string, n)
@@ -854,6 +872,9 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx)
 
 		stp.SetCurrentBlockHeader(blockHeader)
+
+		fmt.Println("stp len", len(stp.chainedSubtrees))
+
 		err = stp.moveDownBlock(context.Background(), &model.Block{
 			Header: prevBlockHeader,
 			Subtrees: []*chainhash.Hash{
@@ -863,6 +884,8 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 			CoinbaseTx: coinbaseTx,
 		})
 		require.NoError(t, err)
+
+		fmt.Println("stp len2", len(stp.chainedSubtrees))
 
 		assert.Equal(t, 6, len(stp.chainedSubtrees))
 		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
@@ -889,6 +912,129 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 	})
 }
 
+func TestMoveDownBlocks(t *testing.T) {
+	t.Run("multiple blocks", func(t *testing.T) {
+		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
+
+		n := 34 // Number of transactions
+		txHashes := make([]chainhash.Hash, n)
+
+		for i := 0; i < n; i++ {
+			txHash, err := generateTxHash()
+			if err != nil {
+				t.Errorf("error generating txid: %s", err)
+			}
+
+			txHashes[i] = txHash
+		}
+
+		newSubtreeChan := make(chan NewSubtreeRequest)
+		var wg sync.WaitGroup
+		wg.Add(8) // we are expecting 8 subtrees (2 blocks with 4 subtrees each)
+		go func() {
+			for {
+				<-newSubtreeChan
+				//fmt.Println("subtreee", subtreee.Subtree.Length())
+				wg.Done()
+			}
+		}()
+
+		subtreeStore := blob_memory.New()
+		utxosStore := memory.New(ulogger.TestLogger{})
+
+		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
+		for _, txHash := range txHashes {
+			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1})
+		}
+
+		wg.Wait()
+
+		// Ensure subtrees are added to the chain
+		for stp.txCount.Load() < 34 {
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		// there should be 8 chained subtrees
+		assert.Equal(t, 8, len(stp.chainedSubtrees))
+		// subtrees should be 4 in size
+		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
+		// current subtree should have 1 + 2 = 3 txs
+		assert.Equal(t, 3, stp.currentSubtree.Length())
+
+		// create 2 subtrees from previous blocks
+		subtree1 := createSubtree(t, 4, true)
+		subtreeBytes, err := subtree1.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes)
+		require.NoError(t, err)
+
+		subtree2 := createSubtree(t, 4, false)
+		subtreeBytes, err = subtree2.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes)
+		require.NoError(t, err)
+
+		subtree3 := createSubtree(t, 4, true)
+		subtreeBytes, err = subtree3.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeBytes)
+		require.NoError(t, err)
+
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx)
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx)
+
+		stp.SetCurrentBlockHeader(nextBlockHeader)
+
+		// moveDownBlock1 := &model.Block{
+		// 	Header: blockHeader,
+		// 	Subtrees: []*chainhash.Hash{
+		// 		subtree1.RootHash(),
+		// 	},
+		// 	CoinbaseTx: coinbaseTx,
+		// }
+
+		fmt.Println("stp len", len(stp.chainedSubtrees))
+
+		moveDownBlock2 := &model.Block{
+			Header: prevBlockHeader,
+			Subtrees: []*chainhash.Hash{
+				subtree2.RootHash(),
+			},
+			CoinbaseTx: nil,
+		}
+
+		// moveDownBlock3 := &model.Block{
+		// 	Header: aBlockHeader,
+		// 	Subtrees: []*chainhash.Hash{
+		// 		//subtree1.RootHash(),
+		// 		subtree3.RootHash(),
+		// 	},
+		// 	CoinbaseTx: nil,
+		// }
+
+		// err = stp.moveDownBlock(context.Background(), moveDownBlock1)
+		// require.NoError(t, err)
+
+		//	fmt.Println("stp len1: ", len(stp.chainedSubtrees))
+
+		err = stp.moveDownBlock(context.Background(), moveDownBlock2)
+		require.NoError(t, err)
+
+		// err = stp.moveDownBlock(context.Background(), moveDownBlock3)
+		// require.NoError(t, err)
+
+		// err = stp.moveDownBlocks(context.Background(), []*model.Block{moveDownBlock1, moveDownBlock2, moveDownBlock3})
+		// require.NoError(t, err)
+
+		fmt.Println("stp len2: ", len(stp.chainedSubtrees))
+
+		assert.Equal(t, 11, len(stp.chainedSubtrees))
+		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
+		assert.Equal(t, 2, stp.currentSubtree.Length())
+
+	})
+}
+
 func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtree {
 	subtree, err := util.NewTreeByLeafCount(int(length))
 	require.NoError(t, err)
@@ -903,8 +1049,10 @@ func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtr
 		require.NoError(t, err)
 		err = subtree.AddNode(txHash, i, i)
 		require.NoError(t, err)
-		//fmt.Printf("created subtree1 txHash: %s\n", txHash.String())
+		fmt.Printf("created subtree1 txHash: %s\n", txHash.String())
 	}
+
+	fmt.Println("done with subtree: ", subtree)
 
 	return subtree
 }
