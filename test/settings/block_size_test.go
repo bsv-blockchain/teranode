@@ -37,7 +37,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -54,7 +53,7 @@ var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 func TestMain(m *testing.M) {
 	setupBitcoinTestFramework()
 	defer tearDownBitcoinTestFramework()
-
+	// time.Sleep(10 * time.Second)
 	m.Run()
 
 	// os.Exit(exitCode)
@@ -87,7 +86,7 @@ func TestShouldRejectExcessiveBlockSize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create and send raw txs: %v", err)
 	}
-	fmt.Printf("Hashes: %v\n", hashes)
+	fmt.Printf("Hashes in created block: %v\n", hashes)
 
 	height, _ := helper.GetBlockHeight(url)
 
@@ -105,28 +104,15 @@ func TestShouldRejectExcessiveBlockSize(t *testing.T) {
 		time.Sleep(1 * time.Second)
 	}
 
-	blockStore := cluster.Nodes[1].Blockstore
-	var o []options.Options
-	o = append(o, options.WithFileExtension("block"))
-	//wait
 	time.Sleep(10 * time.Second)
 
-	blockchain := cluster.Nodes[1].BlockchainClient
-	header, meta, _ := blockchain.GetBestBlockHeader(ctx)
+	blockchain := cluster.Nodes[0].BlockchainClient
+	header, _, _ := blockchain.GetBestBlockHeader(ctx)
 	fmt.Printf("Best block header: %v\n", header.Hash())
+	blockchain1 := cluster.Nodes[1].BlockchainClient
+	header1, _, _ := blockchain1.GetBestBlockHeader(ctx)
+	fmt.Printf("Best block header1: %v\n", header1.Hash())
 
-	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
-	// t.Errorf("error getting block reader: %v", err)
-	if err != nil {
-		t.Errorf("error getting block reader: %v", err)
-	}
-	if err == nil {
-		if bl, err := helper.ReadFile(ctx, "block", logger, r, hashes[90], ""); err != nil {
-			t.Errorf("error reading block: %v", err)
-		} else {
-			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
-			assert.Equal(t, false, bl, "Test Tx not found in block")
-		}
-	}
+	assert.NotEqual(t, header.Hash(), header1.Hash(), "Blocks are equal")
 
 }
