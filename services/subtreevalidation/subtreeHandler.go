@@ -77,7 +77,7 @@ type Exister interface {
 }
 
 func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exister, hash *chainhash.Hash) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
-	b, err := exister.Exists(ctx, hash[:])
+	b, err := exister.Exists(ctx, hash[:], options.WithFileExtension("meta"))
 	if err != nil {
 		return false, false, err
 	}
