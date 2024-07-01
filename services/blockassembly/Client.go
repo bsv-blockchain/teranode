@@ -65,12 +65,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	return client
 }
 
-func NewClientFromAddress(blockAssemblyGrpcAddress string, ctx context.Context, logger ulogger.Logger) *Client {
-	// blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockassembly_grpcAddress")
-	// if !ok {
-	// 	panic("no blockassembly_grpcAddress setting found")
-	// }
-
+func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, blockAssemblyGrpcAddress string) *Client {
 	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
 		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
@@ -197,4 +192,8 @@ func (s *Client) ResetBlockAssembly(_ context.Context) error {
 
 func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
 	return s.client.GetBlockAssemblyState(ctx, &blockassembly_api.EmptyMessage{})
+}
+
+func (s *Client) BlockAssemblyAPIClient() blockassembly_api.BlockAssemblyAPIClient {
+	return s.client
 }

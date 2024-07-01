@@ -3,7 +3,7 @@ participant "Validator" as ValidateSubtree
 entity "Subtree Data" as SubtreeData
 participant "Util HTTP Request" as Util
 database "Subtree Store" as SubtreeStore
-database "Tx Meta Store" as TxMetaStore
+database "Tx Meta Cache" as TxMetaStore
 
 
 ValidateSubtree -> ValidateSubtree: validateSubtree(ctx, subtreeHash, baseURL)
@@ -23,7 +23,7 @@ alt subtreeExists is false
     ValidateSubtree -> ValidateSubtree: Process subtreeBytes
     activate TxMetaStore
     loop for each txHash
-       ValidateSubtree -> TxMetaStore: txMetaStore.GetMeta(gCtx, &txHash)
+       ValidateSubtree -> TxMetaStore: GetMeta(gCtx, &txHash)
         TxMetaStore --> ValidateSubtree: txMeta / err
     end
     deactivate TxMetaStore

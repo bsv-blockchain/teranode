@@ -1,9 +1,32 @@
 ////go:build e2eTest
 
-// How to run this test:
-// $ unzip data.zip
-// $ cd test/settings/
-// $ `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowMaxBlockSize`
+// How to run this test manually:
+//
+// 1. For resetting data:
+//    - Delete existing data: rm -rf data/
+//    - Restore data from zip: unzip data.zip
+//
+// 2. Add the following settings in settings_local.conf (DO NOT COMMIT THIS CHANGE TO GIT):
+//    - excessiveblocksize.docker.ci.ubsv2=1000
+//
+// 3. Start another terminal and run the following script:
+//    - ./scripts/bestblock-docker.sh
+//
+// 4. Bring up Docker containers:
+//    - docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml up -d
+//    - wait for initial 300 blocks to be mined
+//
+// 5. Navigate to the test settings directory:
+//    - cd test/settings/
+//
+// 6. Execute the test in dev mode:
+//    - test_run_mode=dev go test -run TestShouldRejectExcessiveBlockSize
+//
+// 7. Expected result:
+//    - The ubsv-2 node should reject the blocks and be out of sync.
+//    - ubsv-1 and ubsv-3 should remain in sync.
+// 8. To clean up:
+//    - docker compose -f docker-compose.yml -f docker-compose.aerospike.override.yml down
 
 package test
 
@@ -14,21 +37,19 @@ import (
 	"testing"
 	"time"
 
-	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 )
 
 var (
-	framework *tf.BitcoinTestFramework
+	cluster *tf.BitcoinTestFramework
 )
+var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
 func TestMain(m *testing.M) {
 	setupBitcoinTestFramework()
@@ -40,32 +61,29 @@ func TestMain(m *testing.M) {
 }
 
 func setupBitcoinTestFramework() {
-	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
+	cluster = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
 	m := map[string]string{
 		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc1",
+		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc2",
 		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tc1",
 	}
-	if err := framework.SetupNodes(m); err != nil {
+	if err := cluster.SetupNodes(m); err != nil {
 		fmt.Printf("Error setting up nodes: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func tearDownBitcoinTestFramework() {
-	if err := framework.StopNodes(); err != nil {
+	if err := cluster.StopNodes(); err != nil {
 		fmt.Printf("Error stopping nodes: %v\n", err)
 	}
 }
 
-func TestShouldAllowMaxBlockSize(t *testing.T) {
+func TestShouldRejectExcessiveBlockSize(t *testing.T) {
 	ctx := context.Background()
 	url := "http://localhost:18090"
 
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
-
-	hashes, err := helper.CreateAndSendRawTxs(ctx, 10, logger)
+	hashes, err := helper.CreateAndSendRawTxs(ctx, cluster.Nodes[0], 100)
 	if err != nil {
 		t.Fatalf("Failed to create and send raw txs: %v", err)
 	}
@@ -73,8 +91,8 @@ func TestShouldAllowMaxBlockSize(t *testing.T) {
 
 	height, _ := helper.GetBlockHeight(url)
 
-	baClient := ba.NewClient(ctx, logger)
-	blockHash, err := helper.MineBlock(ctx, *baClient, logger)
+	baClient := cluster.Nodes[0].BlockassemblyClient
+	_, err = helper.MineBlock(ctx, baClient, logger)
 	if err != nil {
 		t.Fatalf("Failed to mine block: %v", err)
 	}
@@ -87,26 +105,13 @@ func TestShouldAllowMaxBlockSize(t *testing.T) {
 		time.Sleep(1 * time.Second)
 	}
 
-	blockchainStoreURL, _, found := gocore.Config().GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
-	blockchainDB, err := blockchain_store.NewStore(logger, blockchainStoreURL)
-	if err != nil {
-		panic(err.Error())
-	}
-	if !found {
-		panic("no blockchain_store setting found")
-	}
-	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
-	fmt.Printf("Block: %v\n", b)
-
-	blockStore := helper.GetBlockStore(logger)
+	blockStore := cluster.Nodes[1].Blockstore
 	var o []options.Options
 	o = append(o, options.WithFileExtension("block"))
 	//wait
 	time.Sleep(10 * time.Second)
-	blockchain, err := blockchain.NewClient(ctx, logger)
-	if err != nil {
-		t.Errorf("error creating blockchain client: %v", err)
-	}
+
+	blockchain := cluster.Nodes[1].BlockchainClient
 	header, meta, _ := blockchain.GetBestBlockHeader(ctx)
 	fmt.Printf("Best block header: %v\n", header.Hash())
 
@@ -116,11 +121,11 @@ func TestShouldAllowMaxBlockSize(t *testing.T) {
 		t.Errorf("error getting block reader: %v", err)
 	}
 	if err == nil {
-		if bl, err := helper.ReadFile(ctx, "block", logger, r, hashes[5], ""); err != nil {
+		if bl, err := helper.ReadFile(ctx, "block", logger, r, hashes[90], ""); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
-			assert.Equal(t, true, bl, "Test Tx not found in block")
+			assert.Equal(t, false, bl, "Test Tx not found in block")
 		}
 	}
 

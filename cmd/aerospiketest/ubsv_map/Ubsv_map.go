@@ -116,7 +116,8 @@ func (s *UbsvMap) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh cha
 					SpendingTxID: spendingTxHash,
 				})
 			}
-			err = s.store.Spend(ctx, spends)
+			blockHeight, _ := s.store.GetBlockHeight()
+			err = s.store.Spend(ctx, spends, blockHeight)
 			if err != nil {
 				s.logger.Warnf("spend failed: %v\n", err)
 			}

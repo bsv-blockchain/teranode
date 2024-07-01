@@ -48,7 +48,7 @@ func (ns *NullStore) StoreFromHashes(ctx context.Context, txID chainhash.Hash, u
 	return nil
 }
 
-func (ns *NullStore) Spend(ctx context.Context, spends []*utxostore.Spend) error {
+func (ns *NullStore) Spend(ctx context.Context, spends []*utxostore.Spend, blockHeight uint32) error {
 	return nil
 }
 

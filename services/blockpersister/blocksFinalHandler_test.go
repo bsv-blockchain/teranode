@@ -115,7 +115,7 @@ func (m *MockStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Spen
 	return nil, nil
 }
 
-func (m *MockStore) Spend(ctx context.Context, spends []*utxo.Spend) error {
+func (m *MockStore) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
 	return nil
 }
 

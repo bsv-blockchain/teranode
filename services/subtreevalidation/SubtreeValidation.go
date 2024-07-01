@@ -247,6 +247,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
 	// todo return tx meta data
+	// u.logger.Debugf("[blessMissingTransaction][%s] validating transaction (pq:)", tx.TxID())
 	err = u.validatorClient.Validate(ctx, tx, blockHeight)
 	if err != nil {
 		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
@@ -425,12 +426,16 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			continue
 		}
 
-		// finally add the transaction hash and fee to the subtree
 		txMeta = txMetaSlice[idx]
 		if txMeta == nil {
 			return fmt.Errorf("[validateSubtreeInternal][%s] tx meta not found in txMetaSlice at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
+		if txMeta.IsCoinbase {
+			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] invalid subtree index for coinbase tx %d", v.SubtreeHash.String(), idx), err)
+		}
+
+		// finally add the transaction hash and fee to the subtree
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
 		if err != nil {
 			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to add node to subtree / subtreeMeta", v.SubtreeHash.String()), err)

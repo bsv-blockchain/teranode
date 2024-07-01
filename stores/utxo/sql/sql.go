@@ -493,7 +493,7 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
+func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) (err error) {
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
 	defer cancelTimeout()
 
@@ -563,9 +563,9 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 			err := txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					return errors.New(errors.ERR_NOT_FOUND, "output %s:%d not found", spend.TxID[:], spend.Vout)
+					return errors.New(errors.ERR_NOT_FOUND, "output %s:%d not found", spend.TxID, spend.Vout)
 				}
-				return err
+				return fmt.Errorf("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d: %v", spend.TxID, spend.Vout, err)
 			}
 
 			// Check if the utxo is already spent
@@ -579,13 +579,13 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 			}
 
 			// If this utxo has a coinbase spending height, check it is time to spend it
-			if coinbaseSpendingHeight > 0 && s.blockHeight.Load() < coinbaseSpendingHeight {
+			if coinbaseSpendingHeight > 0 && blockHeight < coinbaseSpendingHeight {
 				return fmt.Errorf("[Spend] coinbase utxo not ready to spend for %s:%d", spend.TxID, spend.Vout)
 			}
 
 			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionId, spend.Vout)
 			if err != nil {
-				return fmt.Errorf("[Spend] error spending utxo for %s:%d: %v", spend.TxID, spend.Vout, err)
+				return fmt.Errorf("[Spend] failed: UPDATE outputs: error spending utxo for %s:%d: %v", spend.TxID, spend.Vout, err)
 			}
 
 			affected, err := result.RowsAffected()
@@ -602,7 +602,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 				tombstoneTime := time.Now().Add(time.Duration(s.expirationMillis)*time.Millisecond).UnixNano() / 1e6
 
 				if _, err := txn.ExecContext(ctx, q3, transactionId, tombstoneTime); err != nil {
-					return err
+					return fmt.Errorf("[Spend] failed UPDATE transactions: utxo already spent for %s:%d", spend.TxID, spend.Vout)
 				}
 			}
 
@@ -784,7 +784,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 	for _, hash := range hashes {
 		_, err = txn.ExecContext(ctx, q, hash[:], blockID)
 		if err != nil {
-			return err
+			return fmt.Errorf("SQL error calling SetMinedMulti on tx %s:%v", hash.String(), err)
 		}
 	}
 

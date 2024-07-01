@@ -21,6 +21,11 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+type s3bucket struct {
+	url   string
+	store blob.Store
+}
+
 // Function to process each row
 func Start() {
 
@@ -68,7 +73,9 @@ func Start() {
 		panic(err)
 	}
 
-	s3buckets := make(map[string]blob.Store)
+	// s3buckets := make(map[string]blob.Store)
+
+	s3buckets := []s3bucket{}
 
 	for i := 1; i <= 6; i++ {
 		url, err, _ := gocore.Config().GetURL(fmt.Sprintf("blockstore_m%d", i))
@@ -80,7 +87,9 @@ func Start() {
 		if err != nil {
 			panic(err)
 		}
-		s3buckets[url.String()] = store
+		// s3buckets[url.String()] = store
+		s3buckets = append(s3buckets, s3bucket{url.String(), store})
+
 	}
 
 	ctx := context.Background()
@@ -150,6 +159,7 @@ func Start() {
 			if filenames[subtreeHash.String()+".subtree"] {
 				foundSubtrees++
 			} else {
+
 				if existsInAnotherS3Bucket(ctx, s3buckets, *subtreeHash, "subtree", time.Unix(int64(blockHeader.Timestamp), 0), verboseLogger) {
 					foundSubtrees++
 				}
@@ -163,18 +173,23 @@ func Start() {
 
 }
 
-func existsInAnotherS3Bucket(ctx context.Context, s3buckets map[string]blob.Store, hash chainhash.Hash, extension string, time time.Time, verboseLogger ulogger.Logger) bool {
+func existsInAnotherS3Bucket(ctx context.Context, s3buckets []s3bucket, hash chainhash.Hash, extension string, time time.Time, verboseLogger ulogger.Logger) bool {
 	found := false
-	for storeName, store := range s3buckets {
+	for i, s3bucket := range s3buckets {
+		storeName := s3bucket.url
+		store := s3bucket.store
 		exists, err := store.Exists(ctx, hash[:], options.WithFileExtension(extension))
 		if err != nil {
 			fmt.Printf("failed to check if %s.block exists in %s: %s\n", hash, storeName, err)
 			continue
 		}
 		if exists {
-			verboseLogger.Infof("%s.%s not found in CSV file but exists in %s\n", hash, extension, storeName)
-			// fmt.Printf("%s.%s not found in CSV file but exists in %s\n", hash, extension, storeName)
-			// fmt.Printf("%s.%s %s\n", hash, extension, storeName)
+			if i != 0 {
+				// found in m1, skip
+				verboseLogger.Infof("%s.%s not found in CSV file but exists in %s\n", hash, extension, storeName)
+				// fmt.Printf("%s.%s not found in CSV file but exists in %s\n", hash, extension, storeName)
+				// fmt.Printf("%s.%s %s\n", hash, extension, storeName)
+			}
 			found = true
 			break
 		}

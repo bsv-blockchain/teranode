@@ -177,7 +177,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 	// this will reverse the spends if there is an error
 	// TODO make this stricter, checking whether this utxo was already spent by the same tx and return early if so
 	//      do not allow any utxo be spent more than once
-	if spentUtxos, err = v.spendUtxos(setSpan, tx); err != nil {
+	if spentUtxos, err = v.spendUtxos(setSpan, tx, blockHeight); err != nil {
 		return errors.New(errors.ERR_PROCESSING, "[Validate][%s] error spending utxos: %v", tx.TxID(), err)
 	}
 
@@ -274,7 +274,7 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx) (*meta.D
 	return data, nil
 }
 
-func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxo.Spend, error) {
+func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) ([]*utxo.Spend, error) {
 	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "spendUtxos")
 	defer func() {
 		stat.AddTime(start)
@@ -314,7 +314,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx) ([]*utxo.Spend
 		}
 	}
 
-	err = v.utxoStore.Spend(ctx, spends)
+	err = v.utxoStore.Spend(ctx, spends, blockHeight)
 	if err != nil {
 		traceSpan.RecordError(err)
 

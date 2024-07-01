@@ -4,7 +4,7 @@ entity "Block Header" as Header
 entity "Subtree Data" as SubtreeData
 entity "Merkle Root Check" as MerkleRootCheck
 database "Subtree Store" as SubtreeStore
-database "Tx Meta Store" as TxMetaStore
+database "Tx Meta Cache" as TxMetaStore
 
 Block -> Block: Valid()
 activate Block

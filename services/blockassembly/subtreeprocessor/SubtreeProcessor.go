@@ -243,6 +243,11 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 						continue
 					}
 
+					if txReq.node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+						stp.logger.Errorf("[SubtreeProcessor] error adding node: skipping request to add coinbase tx placeholder")
+						continue
+					}
+
 					err = stp.addNode(txReq.node, false)
 					if err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
@@ -880,6 +885,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		return fmt.Errorf("[SubtreeProcessor][coinbase:%s]error extracting coinbase height via utxo store: %v", block.CoinbaseTx.TxIDChainHash(), err)
 	}
 
+	stp.logger.Infof("[SubtreeProcessor][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), blockHeight, block.CoinbaseTx.TxIDChainHash().String())
 	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			stp.logger.Infof("[SubtreeProcessor] coinbase utxos already exist (assume BlockValidation created them). Skipping")

@@ -134,3 +134,21 @@ func (ud *UTXODiff) Write(w io.Writer) error {
 
 	return nil
 }
+
+/* Trim removes any UTXOs that are in both the Added and Removed maps. */
+/* This can occur when processing multiple subtrees in parallel. */
+func (ud *UTXODiff) Trim() {
+	var keysToDelete []UTXOKey
+
+	ud.Added.Iter(func(uk UTXOKey, uv *UTXOValue) (stop bool) {
+		if ud.Removed.Exists(uk) {
+			keysToDelete = append(keysToDelete, uk)
+		}
+		return false
+	})
+
+	for _, uk := range keysToDelete {
+		ud.Added.Delete(uk)
+		ud.Removed.Delete(uk)
+	}
+}

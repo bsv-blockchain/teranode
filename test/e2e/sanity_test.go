@@ -14,9 +14,7 @@ import (
 	"testing"
 	"time"
 
-	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
@@ -70,7 +68,7 @@ func TestShouldAllowFairTx(t *testing.T) {
 	url := "http://localhost:18090"
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
+	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
 
 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
@@ -78,11 +76,7 @@ func TestShouldAllowFairTx(t *testing.T) {
 		distributor.WithFailureTolerance(0),
 	)
 
-	coinbaseClient, err := coinbase.NewClientWithAddress(ctx, logger, "localhost:18093")
-	if err != nil {
-		t.Fatalf("Failed to create Coinbase client: %v", err)
-	}
-
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 	fmt.Printf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
@@ -145,12 +139,6 @@ func TestShouldAllowFairTx(t *testing.T) {
 		t.Fatalf("Failed to send new transaction: %v", err)
 	}
 
-	//TODO: Add separate RPC tests
-	// _, err = helper.CallRPC("http://localhost:19292", "sendrawtransaction", []interface{}{newTx})
-	// if err != nil {
-	// 	t.Errorf("error getting block: %v", err)
-	// }
-
 	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
 	time.Sleep(10 * time.Second)
 
@@ -161,8 +149,8 @@ func TestShouldAllowFairTx(t *testing.T) {
 	fmt.Printf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 	// assert.Less(t, utxoBalanceAfter, utxoBalanceBefore)
 
-	baClient := ba.NewClient(ctx, logger)
-	blockHash, err := helper.MineBlock(ctx, *baClient, logger)
+	baClient := framework.Nodes[0].BlockassemblyClient
+	blockHash, err := helper.MineBlock(ctx, baClient, logger)
 	if err != nil {
 		t.Fatalf("Failed to mine block: %v", err)
 	}
@@ -192,22 +180,13 @@ func TestShouldAllowFairTx(t *testing.T) {
 	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
 	fmt.Printf("Block: %v\n", b)
 
-	//TODO: Add separate RPC tests
-	// _, err = helper.CallRPC("http://localhost:18090", "getblock", []interface{}{hashStr, 1})
-	// if err != nil {
-	// 	t.Errorf("error getting block: %v", err)
-	// }
-
 	blockStore := helper.GetBlockStore(logger)
 	var o []options.Options
 	o = append(o, options.WithFileExtension("block"))
 	//wait
 	time.Sleep(10 * time.Second)
-	blockchain, err := blockchain.NewClient(ctx, logger)
-	if err != nil {
-		t.Errorf("error creating blockchain client: %v", err)
-	}
-	header, meta, _ := blockchain.GetBestBlockHeader(ctx)
+	blockchainClient := framework.Nodes[0].BlockchainClient
+	header, meta, _ := blockchainClient.GetBestBlockHeader(ctx)
 	fmt.Printf("Best block header: %v\n", header.Hash())
 
 	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
@@ -231,7 +210,7 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	url := "http://localhost:18090"
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("txblast", ulogger.WithLevel(logLevelStr))
+	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
@@ -251,10 +230,7 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 		distributor.WithFailureTolerance(0),
 	)
 
-	coinbaseClient, err := coinbase.NewClientWithAddress(ctx, logger, "localhost:18093")
-	if err != nil {
-		t.Fatalf("Failed to create Coinbase client: %v", err)
-	}
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
 
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
 	fmt.Printf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
@@ -354,26 +330,26 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	fmt.Printf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 	// assert.Less(t, utxoBalanceAfter, utxoBalanceBefore)
 
-	baClientNode1 := ba.NewClientFromAddress("localhost:18085", ctx, logger)
+	baClientNode1 := framework.Nodes[0].BlockassemblyClient
 	miningCandidate, err := baClientNode1.GetMiningCandidate(ctx)
 	if err != nil {
 		t.Fatalf("Failed to get mining candidate: %v", err)
 	}
 	fmt.Printf("Mining candidate: %d\n", miningCandidate.SubtreeCount)
 
-	baClientNode2 := ba.NewClientFromAddress("localhost:28085", ctx, logger)
+	baClientNode2 := framework.Nodes[1].BlockassemblyClient
 	miningCandidate2, err := baClientNode2.GetMiningCandidate(ctx)
 	if err != nil {
 		t.Fatalf("Failed to get mining candidate: %v", err)
 	}
 	fmt.Printf("Mining candidate: %d\n", miningCandidate2.SubtreeCount)
 
-	blockHash, err := helper.MineBlock(ctx, *baClientNode1, logger)
+	blockHash, err := helper.MineBlock(ctx, baClientNode1, logger)
 	if err != nil {
 		t.Errorf("Failed to mine block: %v with error: %v", err, blockHash)
 	}
 
-	blockHashNode2, err := helper.MineBlock(ctx, *baClientNode2, logger)
+	blockHashNode2, err := helper.MineBlock(ctx, baClientNode2, logger)
 	if err != nil {
 		t.Errorf("error getting block: %v", blockHashNode2)
 	}

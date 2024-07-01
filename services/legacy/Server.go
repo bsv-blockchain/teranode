@@ -431,7 +431,7 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 			}
 
 			// Spend the inputs
-			if err := s.utxoStore.Spend(ctx, spends); err != nil {
+			if err := s.utxoStore.Spend(ctx, spends, uint32(block.Height())); err != nil {
 				return fmt.Errorf("Failed to spend utxos: %w", err)
 			}
 		}

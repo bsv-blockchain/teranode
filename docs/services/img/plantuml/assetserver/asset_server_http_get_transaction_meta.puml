@@ -1,23 +1,23 @@
 @startuml
 participant "HTTP Client" as Client
 participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
-participant "TxMetaStore" as MetaStore
+participant "UTXO Store" as UTXOStore
 
 Client -> HTTPServer : GET /txmeta/:hash/json
 activate HTTPServer
 
-HTTPServer -> MetaStore : Get(ctx, hash)
-activate MetaStore
-alt TxMetaStore has metadata
-    MetaStore --> HTTPServer : Transaction metadata in JSON
-else TxMetaStore does not have metadata
-    MetaStore --> HTTPServer : Data not found
+HTTPServer -> UTXOStore : Get(ctx, hash)
+activate UTXOStore
+alt UTXO Store has metadata
+    UTXOStore --> HTTPServer : Transaction metadata in JSON
+else UTXO Store does not have metadata
+    UTXOStore --> HTTPServer : Data not found
 end
-deactivate MetaStore
+deactivate UTXOStore
 
 HTTPServer --> Client : Response (JSON metadata or error)
 deactivate HTTPServer
 
-left footer Last Modified On: 4-Dec-2023
+left footer Last Modified On: 12-June-2024
 
 @enduml

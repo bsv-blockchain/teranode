@@ -834,6 +834,11 @@ func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_ap
 		return nil, err
 	}
 
+	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: model.NotificationType_BlockSubtreesSet,
+		Hash: blockHash.CloneBytes(),
+	})
+
 	return &emptypb.Empty{}, nil
 }
 

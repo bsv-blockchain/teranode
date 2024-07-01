@@ -54,7 +54,7 @@ type Store interface {
 	GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) // Remove?
 
 	// Blockchain specific functions
-	Spend(ctx context.Context, spends []*Spend) error
+	Spend(ctx context.Context, spends []*Spend, blockHeight uint32) error
 	UnSpend(ctx context.Context, spends []*Spend) error
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
 
