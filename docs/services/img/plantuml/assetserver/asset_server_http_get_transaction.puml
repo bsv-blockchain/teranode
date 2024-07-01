@@ -1,18 +1,18 @@
 @startuml
 participant "HTTP Client" as Client
 participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
-participant "TxMetaStore" as MetaStore
+participant "UTXO Store" as UTXOStore
 participant "TxStore" as Store
 
 ' GET request for a single transaction in different formats
 Client -> HTTPServer : GET /tx/:hash (BINARY_STREAM, HEX, JSON)
 activate HTTPServer
-HTTPServer -> MetaStore : Get(ctx, hash)
-activate MetaStore
-alt MetaStore has data
-    MetaStore --> HTTPServer : transactionData
-else MetaStore does not have data
-    MetaStore --> HTTPServer
+HTTPServer -> UTXOStore : Get(ctx, hash)
+activate UTXOStore
+alt UTXOStore has data
+    UTXOStore --> HTTPServer : transactionData
+else UTXOStore does not have data
+    UTXOStore --> HTTPServer
     HTTPServer -> Store : Get(ctx, hash)
     activate Store
     Store --> HTTPServer : transactionData
@@ -26,12 +26,12 @@ Client -> HTTPServer : POST /txs (List of hashes)
 activate HTTPServer
 alt For Each Hash in List
     loop
-        HTTPServer -> MetaStore : Get(ctx, hash)
-        activate MetaStore
-        alt MetaStore has data
-            MetaStore --> HTTPServer : transactionData
-        else MetaStore does not have data
-            MetaStore --> HTTPServer
+        HTTPServer -> UTXOStore : Get(ctx, hash)
+        activate UTXOStore
+        alt UTXO Store has data
+            UTXOStore --> HTTPServer : transactionData
+        else UTXO Store does not have data
+            UTXOStore --> HTTPServer
             HTTPServer -> Store : Get(ctx, hash)
             activate Store
             Store --> HTTPServer : transactionData
@@ -42,6 +42,6 @@ end
 HTTPServer --> Client : All transactionData
 deactivate HTTPServer
 
-left footer Last Modified On: 4-Dec-2023
+left footer Last Modified On: 12-June-2024
 
 @enduml

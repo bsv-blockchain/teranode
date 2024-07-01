@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   tx-blaster-1:
     command: ["/app/blaster.run", "-workers=0", "-print=0", "-profile=:9092", "-log=0", "-limit=10", "--quic=false"]

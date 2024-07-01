@@ -15,7 +15,7 @@
 - [4.1. Block Data Model](#41-block-data-model)
   - [4.2. Subtree Data Model](#42-subtree-data-model)
 - [4.3. Transaction Data Model](#43-transaction-data-model)
-- [4.4. Transaction Metadata Model](#44-transaction-metadata-model)
+- [4.4. UTXO Metadata Model](#44-transaction-metadata-model)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
@@ -36,7 +36,7 @@ The Block Validator is responsible for ensuring the integrity and consistency of
 
 3. **Block Header Verification**: Validates the block header, including the proof of work , timestamp, and reference to the previous block, maintaining the blockchain's unbroken chain.
 
-![Block_Validation_Service_Container_Diagram.png](img%2FBlock_Validation_Service_Container_Diagram.png)
+![Block_Validation_Service_Container_Diagram.png](img/Block_Validation_Service_Container_Diagram.png)
 
 The Block Validation Service:
 
@@ -46,9 +46,9 @@ The Block Validation Service:
 
 The P2P Service communicates with the Block Validation over either gRPC (Recommended) or fRPC (Experimental) protocols.
 
-![Block_Validation_Service_Component_Diagram.png](img%2FBlock_Validation_Service_Component_Diagram.png)
+![Block_Validation_Service_Component_Diagram.png](img/Block_Validation_Service_Component_Diagram.png)
 
-To improve performance, the Block Validation Service uses a caching mechanism for Tx Meta data. This prevents repeated fetch calls to the store by retaining recently loaded transactions in memory (for a limited time). This can be enabled or disabled via the `blockvalidation_txMetaCacheEnabled` setting. The caching mechanism is implemented in the `txmetacache` package, and is used by the Block Validation Service:
+To improve performance, the Block Validation Service uses a caching mechanism for UTXO Meta data, called `Tx Meta Cache`. This prevents repeated fetch calls to the store by retaining recently loaded transactions in memory (for a limited time). This can be enabled or disabled via the `blockvalidation_txMetaCacheEnabled` setting. The caching mechanism is implemented in the `txmetacache` package, and is used by the Block Validation Service:
 
 ```go
 	// create a caching tx meta store
@@ -65,7 +65,7 @@ Finally, note that the Block Validation service benefits of the use of Lustre Fs
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](..%2Flustre_fs.svg)
+![lustre_fs.svg](../lustre_fs.svg)
 
 
 ## 2. Functionality
@@ -75,7 +75,7 @@ The block validator is a service that validates blocks. After validating them, i
 
 ### 2.1. Receiving blocks for validation
 
-![block_validation_p2p_block_found.svg](img%2Fplantuml%2Fblockvalidation%2Fblock_validation_p2p_block_found.svg)
+![block_validation_p2p_block_found.svg](img/plantuml/blockvalidation/block_validation_p2p_block_found.svg)
 
 * The P2P service is responsible for receiving new blocks from the network. When a new block is found, it will notify the block validation service via the `BlockFound()` gRPC endpoint.
 * The block validation service will then check if the block is already known. If not, it will start the validation process.
@@ -86,7 +86,7 @@ The block validator is a service that validates blocks. After validating them, i
 
 #### 2.2.1. Overview
 
-![block_validation_p2p_block_validation.svg](img%2Fplantuml%2Fblockvalidation%2Fblock_validation_p2p_block_validation.svg)
+![block_validation_p2p_block_validation.svg](img/plantuml/blockvalidation/block_validation_p2p_block_validation.svg)
 
 * As seen in the section 2.1, a new block is queued for validation in the blockFoundCh. The block validation server will pick it up and start the validation process.
 * The server will request the block data from the remote node (`DoHTTPRequest()`).
@@ -95,10 +95,10 @@ The block validator is a service that validates blocks. After validating them, i
   * First, the service validates all the block subtrees.
     * For each subtree, we check if it is known. If not, we kick off a subtree validation process (see section 2.2.3 for more details).
   * The validator retrieves the last 100 block headers, which are used to validate the block data. We can see more about this specific step in the section 2.2.4.
-  * The validator stores the coinbase Tx in the Tx Meta Store and the Tx Store.
+  * The validator stores the coinbase Tx in the UTXO Store and the Tx Store.
   * The validator adds the block to the Blockchain.
   * For each Subtree in the block, the validator updates the TTL (Time To Live) to zero for the subtree. This allows the Store to clear out data the services will no longer use.
-  * For each Tx for each Subtree, we set the Tx as mined in the Tx Meta Store. This allows the Tx Meta Store to know which blocks the Tx is in.
+  * For each Tx for each Subtree, we set the Tx as mined in the UTXO Store. This allows the UTXO Store to know which block(s) the Tx is in.
   * Should an error occur during the validation process, the block will be invalidated and removed from the blockchain.
 
 Note - there is a `optimisticMining` setting that allows to reverse the block validation and block addition to the blockchain steps.
@@ -115,7 +115,7 @@ Also note - Teranode has a `blockvalidation_localSetMined` setting. This setting
 
 #### 2.2.2. Catching up after a parent block is not found
 
-![block_validation_p2p_block_catchup.svg](img%2Fplantuml%2Fblockvalidation%2Fblock_validation_p2p_block_catchup.svg)
+![block_validation_p2p_block_catchup.svg](img/plantuml/blockvalidation/block_validation_p2p_block_catchup.svg)
 
 When a block parent is not found in the local blockchain, the node will start a catchup process. The catchup process will iterate through the parent blocks until it finds a known block in the blockchain.
 
@@ -125,7 +125,7 @@ When a block is not known, it will be requested from the remote node. Once recei
 
 Should the validation process for a block encounter a subtree it does not know about, it can request its processing off the Subtree Validation service.
 
-![block_validation_subtree_validation_request.svg](img%2Fplantuml%2Fsubtreevalidation%2Fblock_validation_subtree_validation_request.svg)
+![block_validation_subtree_validation_request.svg](img/plantuml/subtreevalidation/block_validation_subtree_validation_request.svg)
 
 If any transaction under the subtree is also missing, the subtree validation process will kick off a recovery process for those transactions.
 
@@ -134,7 +134,7 @@ If any transaction under the subtree is also missing, the subtree validation pro
 
 As part of the overall block validation, the service will validate the block data, ensuring the format and integrity of the data, as well as confirming that coinbase tx, subtrees and transactions are valid. This is done in the `Valid()` method under the `Block` struct.
 
-![block_data_validation.svg](img%2Fplantuml%2Fblockvalidation%2Fblock_data_validation.svg)
+![block_data_validation.svg](img/plantuml/blockvalidation/block_data_validation.svg)
 
 
 
@@ -196,18 +196,20 @@ This refers to the extended transaction format, as seen below:
 More information on the extended tx structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
 
 
-### 4.4. Transaction Metadata Model
+### 4.4. UTXO Metadata Model
 
-The TX Meta data model is defined in `stores/txmeta/data.go`:
+The UTXO Meta data model is defined in `stores/utxo/meta/data.go`:
 
-| Field Name  | Description                                                     | Data Type             |
-|-------------|-----------------------------------------------------------------|-----------------------|
-| Hash        | Unique identifier for the transaction.                          | String/Hexadecimal    |
-| Fee         | The fee associated with the transaction.                        | Decimal       |
-| Size in Bytes | The size of the transaction in bytes.                        | Integer               |
-| Parents     | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals |
-| Blocks      | List of hashes of the blocks that include this transaction.     | Array of Strings/Hexadecimals |
-| LockTime    | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
+| Field Name    | Description                                                     | Data Type                         |
+|---------------|-----------------------------------------------------------------|-----------------------------------|
+| Tx            | The raw transaction data.                                       | *bt.Tx Object                     |
+| Hash          | Unique identifier for the transaction.                          | String/Hexadecimal                |
+| Fee           | The fee associated with the transaction.                        | Decimal                           |
+| Size in Bytes | The size of the transaction in bytes.                           | Integer                           |
+| Parents       | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals     |
+| Blocks        | List of IDs of the blocks that include this transaction.        | Array of Integers                 |
+| LockTime      | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
+| IsCoinbase    | Indicates whether the transaction is a coinbase transaction.    | Boolean                           |
 
 Note:
 
@@ -215,8 +217,8 @@ Note:
 
 
 - **Blocks**: 1 or more block hashes. Each block represents a block that mined the transaction.
-  - Typically, a tx should only belong to one block. i.e. a) a tx is created (and its meta is stored in the tx meta store) and b) the tx is mined, and the mined block hash is tracked in the tx meta store for the given transaction.
-  - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the tx meta store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
+  - Typically, a tx should only belong to one block. i.e. a) a tx is created (and it is stored in the UTXO store) and b) the tx is mined, and the mined block hash is tracked in the UTXO store for the given transaction.
+  - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the UTXO store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
 
 
 ## 5. Technology

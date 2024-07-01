@@ -85,7 +85,7 @@ $ docker compose -f docker-compose.yml -f docker-compose.txBlaster.override.yml 
 
 ## To override the base compose to run a local build
 ```
-$ GOOS=linux GOARCH=arm64 make build -j 32
+$ GOOS=linux GOARCH=arm64 TXMETA_SMALL_TAG=true make build -j 32
 $ docker compose -f docker-compose.yml -f docker-compose.localBinary.override.yml up -d
 $ docker compose -f docker-compose.yml -f docker-compose.localBinary.override.yml down
 ```
@@ -99,6 +99,12 @@ $ docker compose logs
 ```
 $ docker compose logs ubsv-1
 ```
+
+## When using 'network: host' in Docker Desktop
+
+If it seems you cannot access the various ports then you may need to enable port access.
+
+Go to 'Settings..', 'Features in development' and tick 'Enable host networking'
 
 ## URLs for viewing dashboards
 

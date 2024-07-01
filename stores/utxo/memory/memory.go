@@ -139,7 +139,7 @@ func (m *Memory) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func (m *Memory) Spend(ctx context.Context, spends []*utxo.Spend) error {
+func (m *Memory) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 

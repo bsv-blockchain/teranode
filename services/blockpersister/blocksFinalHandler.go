@@ -113,7 +113,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		i := i
 
 		g.Go(func() error {
-			u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i, len(block.Subtrees), subtreeHash.String())
+			u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i+1, len(block.Subtrees), subtreeHash.String())
 
 			return u.processSubtree(gCtx, *subtreeHash, utxoDiff)
 		})
@@ -122,6 +122,8 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	if err := g.Wait(); err != nil {
 		return fmt.Errorf("error processing subtrees: %w", err)
 	}
+
+	utxoDiff.Trim()
 
 	// Now, write the block file
 	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())

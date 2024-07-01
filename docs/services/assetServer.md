@@ -11,7 +11,6 @@
 - [3.3. Subtrees](#33-subtrees)
 - [3.4. Txs](#34-txs)
 - [3.5. UTXOs](#35-utxos)
-- [3.6. TX Meta](#36-tx-meta)
 4. [Use Cases](#4-use-cases)
 - [4.1. gRPC](#41-grpc)
 - [4.1.1. getBlock(), getBestBlockHeader(), getBlockHeaders()](#411-getblock-getbestblockheader-getblockheaders)
@@ -49,9 +48,6 @@ The Asset Service acts as an interface ("Front" or "Facade") to various data sto
 - **Unspent Transaction Outputs (UTXO)**.
 
 
-- **Metadata for a Transaction (TXMeta)**.
-
-
 The server uses both HTTP and gRPC as communication protocols:
 
 - **HTTP**: A ubiquitous protocol that allows the server to be accessible from the web, enabling other nodes or clients to interact with the server using standard web requests.
@@ -67,7 +63,7 @@ Finally, the Asset Service also offers a WebSocket interface, allowing clients t
 
 ## 2. Architecture
 
-![Asset_Server_System_Context_Diagram.png](img%2FAsset_Server_System_Context_Diagram.png)
+![Asset_Server_System_Context_Diagram.png](img/Asset_Server_System_Context_Diagram.png)
 
 The Asset Server provides data to other Teranode components over gRPC. It also provides data to external clients over HTTP / Websockets, such as the Teranode UI Dashboard.
 
@@ -75,16 +71,15 @@ All data is retrieved from other Teranode services / stores.
 
 Here we can see the Asset Server's relationship with other Teranode components in more detail:
 
-![Asset_Server_System_Container_Diagram.png](img%2FAsset_Server_System_Container_Diagram.png)
+![Asset_Server_System_Container_Diagram.png](img/Asset_Server_System_Container_Diagram.png)
 
 
 The Asset Server is composed of the following components:
 
-![Asset_Server_System_Component_Diagram.png](img%2FAsset_Server_System_Component_Diagram.png)
+![Asset_Server_System_Component_Diagram.png](img/Asset_Server_System_Component_Diagram.png)
 
 
 * **UTXO Store**: Provides UTXO data to the Asset Server.
-* **TX Meta Store**: Provides TX Meta data to the Asset Server.
 * **Blob Store**: Provides Subtree and Extended TX data to the Asset Server, referred here as Subtree Store and TX Store.
 * **Blockchain Server**: Provides blockchain data (blocks and block headers) to the Asset Server.
 
@@ -93,7 +88,7 @@ Finally, note that the Asset Server benefits of the use of Lustre Fs (filesystem
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](..%2Flustre_fs.svg)
+![lustre_fs.svg](../lustre_fs.svg)
 
 
 ## 3. Data Model
@@ -177,22 +172,31 @@ The UTXO are kept with the following structure.
 | tx_id     | The transaction ID where this UTXO was spent                  |
 
 
+Additionally, in some scenarios, the Asset Server can be used to retrieve the UTXO meta data. The UTXO Meta data model is defined in `stores/utxo/meta/data.go`:
+
+| Field Name    | Description                                                     | Data Type                         |
+|---------------|-----------------------------------------------------------------|-----------------------------------|
+| Tx            | The raw transaction data.                                       | *bt.Tx Object                     |
+| Hash          | Unique identifier for the transaction.                          | String/Hexadecimal                |
+| Fee           | The fee associated with the transaction.                        | Decimal                           |
+| Size in Bytes | The size of the transaction in bytes.                           | Integer                           |
+| Parents       | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals     |
+| Blocks        | List of IDs of the blocks that include this transaction.        | Array of Integers                 |
+| LockTime      | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
+| IsCoinbase    | Indicates whether the transaction is a coinbase transaction.    | Boolean                           |
+
+Note:
+
+- **Parent Transactions**: 1 or more parent transaction hashes. For each input that our transaction has, we can have a different parent transaction. I.e. a TX can be spending UTXOs from multiple transactions.
+
+
+- **Blocks**: 1 or more block hashes. Each block represents a block that mined the transaction.
+   - Typically, a tx should only belong to one block. i.e. a) a tx is created (and its meta is stored in the UTXO store) and b) the tx is mined, and the mined block hash is tracked in the UTXO store for the given transaction.
+   - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the UTXO store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
+
+
+
 More information on the UTXO structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md) and the [UTXO Store Documentation](../stores/utxo.md).
-
-### 3.6. TX Meta
-
-
-| Field Name  | Description                                                     | Data Type             |
-|-------------|-----------------------------------------------------------------|-----------------------|
-| Hash        | Unique identifier for the transaction.                          | String/Hexadecimal    |
-| Fee         | The fee associated with the transaction.                        | Decimal       |
-| Size in Bytes | The size of the transaction in bytes.                        | Integer               |
-| Parents     | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals |
-| Blocks      | List of hashes of the blocks that include this transaction.     | Array of Strings/Hexadecimals |
-| LockTime    | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
-
-
-More information on the TX Meta structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md) and the [TX Meta Store Documentation](../stores/txmeta.md).
 
 
 ## 4. Use Cases
@@ -203,17 +207,17 @@ The Asset Service exposes the following gRPC methods:
 
 ### 4.1.1. getBlock(), getBestBlockHeader(), getBlockHeaders()
 
-![asset_server_grpc_get_block.svg](img%2Fplantuml%2Fassetserver%2Fasset_server_grpc_get_block.svg)
+![asset_server_grpc_get_block.svg](img/plantuml/assetserver/asset_server_grpc_get_block.svg)
 
 ### 4.1.2. Subtree Get()
 
-![asset_server_grpc_get_subtree.svg](img%2Fplantuml%2Fassetserver%2Fasset_server_grpc_get_subtree.svg)
+![asset_server_grpc_get_subtree.svg](img/plantuml/assetserver/asset_server_grpc_get_subtree.svg)
 
 ### 4.1.3. Subtree Set() and SetTTL()
 
 The Asset Server also permits to store subtrees and to update their retention TTL in the Subtree (Blob) Store.
 
-![asset_server_grpc_set_subtree.svg](img%2Fplantuml%2Fassetserver%2Fasset_server_grpc_set_subtree.svg)
+![asset_server_grpc_set_subtree.svg](img/plantuml/assetserver/asset_server_grpc_set_subtree.svg)
 
 - The **New Subtree Scenario** shows the process of setting a new subtree in the Blob Subtree Store via the Block Assembly Server, Remote TTL, Asset Client, and Asset Server.
 
@@ -221,7 +225,7 @@ The Asset Server also permits to store subtrees and to update their retention TT
 
 ### 4.1.5. Subscribe to notifications
 
-![asset_server_grpc_subscribe_notifications.svg](img%2Fplantuml%2Fassetserver%2Fasset_server_grpc_subscribe_notifications.svg)
+![asset_server_grpc_subscribe_notifications.svg](img/plantuml/assetserver/asset_server_grpc_subscribe_notifications.svg)
 
 1. The Coinbase service initiates a subscription through the Asset Client. We expect to receive **Block, MiningOn, and Subtree** notifications.
    * In all cases, a (block or subtree) hash is sent out. The Coinbase service can then request the full block or subtree from the Asset Server.
@@ -238,32 +242,32 @@ The Asset Service exposes the following HTTP and Websocket methods:
 
 ### 4.2.1. getTransaction() and getTransactions()
 
-![asset_server_http_get_transaction.svg](img%2Fplantuml%2Fassetserver%2Fasset_server_http_get_transaction.svg)
+![asset_server_http_get_transaction.svg](img/plantuml/assetserver/asset_server_http_get_transaction.svg)
 
 ### 4.2.2. GetTransactionMeta()
 
-![asset_server_http_get_transaction_meta.svg](img%2Fplantuml%2Fassetserver%2Fasset_server_http_get_transaction_meta.svg)
+![asset_server_http_get_transaction_meta.svg](img/plantuml/assetserver/asset_server_http_get_transaction_meta.svg)
 
 ### 4.2.3. GetSubtree()
 
-![asset_server_http_get_subtree.svg](img%2Fplantuml%2Fassetserver%2Fasset_server_http_get_subtree.svg)
+![asset_server_http_get_subtree.svg](img/plantuml/assetserver/asset_server_http_get_subtree.svg)
 
 ### 4.2.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()
 
-![asset_server_http_get_block_header.svg](img%2Fplantuml%2Fassetserver%2Fasset_server_http_get_block_header.svg)
+![asset_server_http_get_block_header.svg](img/plantuml/assetserver/asset_server_http_get_block_header.svg)
 
 ### 4.2.5. GetBlock() and GetLastNBlocks()
 
-![asset_server_http_get_block.svg](img%2Fplantuml%2Fassetserver%2Fasset_server_http_get_block.svg)
+![asset_server_http_get_block.svg](img/plantuml/assetserver/asset_server_http_get_block.svg)
 
 ### 4.2.6. GetUTXO() and GetUTXOsByTXID()
 
-![asset_server_http_get_utxo.svg](img%2Fplantuml%2Fassetserver%2Fasset_server_http_get_utxo.svg)
+![asset_server_http_get_utxo.svg](img/plantuml/assetserver/asset_server_http_get_utxo.svg)
 
 * For specific UTXO by hash requests (/utxo/:hash), the HTTP Server requests UTXO data from the UtxoStore using a hash.
 
 
-* For getting UTXOs by a transaction ID (/utxos/:hash/json), the HTTP Server requests transaction meta data from the TxMetaStore using a transaction hash. Then for each output in the transaction, it queries the UtxoStore to get UTXO data for the corresponding output hash.
+* For getting UTXOs by a transaction ID (/utxos/:hash/json), the HTTP Server requests transaction meta data from the UTXO Store using a transaction hash. Then for each output in the transaction, it queries the UtxoStore to get UTXO data for the corresponding output hash.
 
 ### 4.2.7. Websocket Subscriptions
 
@@ -284,7 +288,7 @@ The `HandleWebSocket(c)` (`services/asset/http_impl/HandleWebsocket.go`) functio
     - The WebSocket server sends data to connected clients via the `clientChannels`.
     - If an error occurs during message sending (e.g., if a client disconnects), the client is marked as dead and removed from active client channels.
 
-![asset_webserver_websocket.svg](img%2Fplantuml%2Fassetserver%2Fasset_webserver_websocket.svg)
+![asset_webserver_websocket.svg](img/plantuml/assetserver/asset_webserver_websocket.svg)
 
 Notice that the notifications are the same notifications sent by the gRPC subscriber (see [Subscribe to notifications](#415-subscribe-to-notifications-)) - i.e. `Subtree`, `Block`, `MiningOn`.
 

@@ -157,18 +157,20 @@ func TestSpend(t *testing.T) {
 		SpendingTxID: &spendingTxID1,
 	}
 
-	err = store.Spend(ctx, []*utxo.Spend{spend})
+	var blockHeight uint32
+
+	err = store.Spend(ctx, []*utxo.Spend{spend}, blockHeight)
 	require.NoError(t, err)
 
 	// Spend again with the same spendingTxID
-	err = store.Spend(ctx, []*utxo.Spend{spend})
+	err = store.Spend(ctx, []*utxo.Spend{spend}, blockHeight)
 	require.NoError(t, err)
 
 	// Spend again with a different spendingTxID
 	spendingTxID2 := chainhash.HashH([]byte("test2"))
 	spend.SpendingTxID = &spendingTxID2
 
-	err = store.Spend(ctx, []*utxo.Spend{spend})
+	err = store.Spend(ctx, []*utxo.Spend{spend}, blockHeight)
 	require.Error(t, err)
 }
 
@@ -193,7 +195,9 @@ func TestUnSpend(t *testing.T) {
 		SpendingTxID: &spendingTxID1,
 	}
 
-	err = store.Spend(ctx, []*utxo.Spend{spend})
+	var blockHeight uint32
+
+	err = store.Spend(ctx, []*utxo.Spend{spend}, blockHeight)
 	require.NoError(t, err)
 
 	// Unspend the utxo
@@ -204,7 +208,7 @@ func TestUnSpend(t *testing.T) {
 	spendingTxID2 := chainhash.HashH([]byte("test2"))
 	spend.SpendingTxID = &spendingTxID2
 
-	err = store.Spend(ctx, []*utxo.Spend{spend})
+	err = store.Spend(ctx, []*utxo.Spend{spend}, blockHeight)
 	require.NoError(t, err)
 }
 
@@ -356,7 +360,8 @@ func TestTombstoneAfterSpend(t *testing.T) {
 		SpendingTxID: &spendingTxID1,
 	}
 
-	err = store.Spend(ctx, []*utxo.Spend{spend0, spend1})
+	var blockHeight uint32
+	err = store.Spend(ctx, []*utxo.Spend{spend0, spend1}, blockHeight)
 	require.NoError(t, err)
 
 	time.Sleep(1100 * time.Millisecond)
@@ -401,7 +406,8 @@ func TestTombstoneAfterUnSpend(t *testing.T) {
 		SpendingTxID: &spendingTxID1,
 	}
 
-	err = store.Spend(ctx, []*utxo.Spend{spend0, spend1})
+	var blockHeight uint32
+	err = store.Spend(ctx, []*utxo.Spend{spend0, spend1}, blockHeight)
 	require.NoError(t, err)
 
 	err = store.UnSpend(ctx, []*utxo.Spend{spend0})

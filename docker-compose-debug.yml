@@ -1,4 +1,3 @@
-version: '3.8'
 # Define a common base configuration for ubsv nodes
 x-ubsv-base:
   &ubsv-base

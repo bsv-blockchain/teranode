@@ -28,12 +28,12 @@ type Miner struct {
 	blockchainClient                 blockchain.ClientI
 	blockAssemblyClient              *blockassembly.Client
 	candidateTimer                   *time.Timer
+	timeMining                       bool
 	waitSeconds                      int
 	MineBlocksNImmediatelyChan       chan int
 	MineBlocksNImmediatelyCancelChan chan bool
 	isMiningImmediately              bool
 	candidateRequestInterval         time.Duration
-	difficultyAdjustment             bool
 	initialBlockFinalWaitDuration    time.Duration
 	maxSubtreeCount                  int
 }
@@ -51,7 +51,7 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 
 	// The number of seconds to wait before requesting a new mining candidate
 	candidateRequestInterval, _ := gocore.Config().GetInt("mine_candidate_request_interval", 10)
-	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
+	timeMining := gocore.Config().GetBool("miner_time_mining", false)
 
 	// How long to wait between mining the last few blocks
 	initialBlockFinalWaitDuration, err, _ := gocore.Config().GetDuration("mine_initial_blocks_final_wait", 5*time.Second)
@@ -70,7 +70,7 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 		logger:                        logger,
 		blockAssemblyClient:           blockassembly.NewClient(ctx, logger),
 		candidateRequestInterval:      time.Duration(candidateRequestInterval),
-		difficultyAdjustment:          difficultyAdjustment,
+		timeMining:                    timeMining,
 		initialBlockFinalWaitDuration: initialBlockFinalWaitDuration,
 		maxSubtreeCount:               maxSubtreeCount,
 	}
@@ -250,7 +250,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 
 	blockHash, _ := chainhash.NewHash(solution.BlockHash)
 
-	if !generateBlocks && !m.difficultyAdjustment { // SAO - Mine the first <initialBlockCount> blocks without delay
+	if !generateBlocks && m.timeMining { // SAO - Mine the first <initialBlockCount> blocks without delay
 		//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		randWait := r.Intn(waitSeconds)

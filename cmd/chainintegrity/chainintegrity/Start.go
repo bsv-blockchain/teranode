@@ -240,7 +240,7 @@ func Start() {
 						// check that the transaction exists in the tx store
 						tx, err = txStore.Get(ctx, node.Hash[:])
 						if err != nil {
-							txMeta, err := utxoStore.GetMeta(ctx, &node.Hash)
+							txMeta, err := utxoStore.Get(ctx, &node.Hash)
 							if err != nil {
 								logger.Errorf("failed to get transaction %s from txmeta store: %s", node.Hash, err)
 								continue
@@ -260,7 +260,7 @@ func Start() {
 						}
 
 						// check the topological order of the transactions
-						for inputIdx, input := range btTx.Inputs {
+						for _, input := range btTx.Inputs {
 							// the input tx id (parent tx) should already be in the transaction map
 							inputHash := chainhash.Hash(input.PreviousTxID())
 							if !inputHash.Equal(chainhash.Hash{}) { // coinbase is parent
@@ -278,7 +278,7 @@ func Start() {
 									utxo, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
 										TxID:         input.PreviousTxIDChainHash(),
 										SpendingTxID: btTx.TxIDChainHash(),
-										Vout:         uint32(inputIdx),
+										Vout:         input.PreviousTxOutIndex,
 										Hash:         utxoHash,
 									})
 									if err != nil {
@@ -288,7 +288,7 @@ func Start() {
 									if utxo == nil {
 										logger.Errorf("parent utxo %s does not exist in utxo store", utxoHash)
 									} else if !utxo.SpendingTxID.IsEqual(btTx.TxIDChainHash()) {
-										logger.Errorf("parent utxo %s is not marked as spent by transaction %s", utxoHash, btTx.TxIDChainHash())
+										logger.Errorf("parent utxo %s (%s:%d) is not marked as spent by transaction %s instead it is spent by %s", utxoHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, btTx.TxIDChainHash(), utxo.SpendingTxID)
 									} else {
 										logger.Debugf("transaction %s parent utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", btTx.TxIDChainHash(), utxoHash, utxostore.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
 									}

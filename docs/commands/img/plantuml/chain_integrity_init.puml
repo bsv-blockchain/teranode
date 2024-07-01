@@ -6,7 +6,6 @@ database "Blockchain Store" as BlockchainDB
 database "Subtree Store" as SubtreeStore
 database "Transaction Store" as TxStore
 database "UTXO Store" as UTXOStore
-database "TX Meta Store" as TxMetaStore
 
 Main -> ConfigLoader: GetURL("blockchain_store")
 ConfigLoader --> Main: Return blockchainStoreURL
@@ -28,11 +27,6 @@ ConfigLoader --> Main: Return utxoStoreURL
 Main -> UTXOStore: Initialize with utxoStoreURL
 UTXOStore --> Main: Initialized
 
-Main -> ConfigLoader: GetURL("txmeta_store")
-ConfigLoader --> Main: Return txMetaStoreURL
-Main -> TxMetaStore: Initialize with txMetaStoreURL
-TxMetaStore --> Main: Initialized
-
-left footer " Last Modified On: 15-April-2024. © 2024 Bitcoin SV. All rights reserved."
+left footer " Last Modified On: 18-June-2024. © 2024 Bitcoin SV. All rights reserved."
 
 @enduml

@@ -1,8 +1,7 @@
 @startuml
 participant "HTTP Client" as Client
 participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
-participant "UtxoStore" as Utxo
-participant "TxMetaStore" as TxMeta
+participant "UTXO Store" as Utxo
 
 ' Specific UTXO by hash request
 Client -> HTTPServer : GET /utxo/:hash (BINARY_STREAM, HEX, JSON)
@@ -17,10 +16,10 @@ deactivate HTTPServer
 ' Get UTXOs by Tx ID
 Client -> HTTPServer : GET /utxos/:hash/json
 activate HTTPServer
-HTTPServer -> TxMeta : Get(ctx, hash)
-activate TxMeta
-TxMeta --> HTTPServer : Tx Meta Data
-deactivate TxMeta
+HTTPServer -> Utxo : Get(ctx, hash)
+activate Utxo
+Utxo --> HTTPServer : Tx Meta Data
+deactivate Utxo
 
 loop For each TX output
     HTTPServer -> Utxo : Get(ctx, &utxo.Spend{Hash: output hash})
@@ -32,6 +31,6 @@ end
 HTTPServer --> Client : Response (List of UTXOs)
 deactivate HTTPServer
 
-left footer Last Modified On: 4-Dec-2023
+left footer Last Modified On: 12-June-2024
 
 @enduml

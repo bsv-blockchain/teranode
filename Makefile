@@ -95,12 +95,27 @@ build-blockchainstatus:
 build-dashboard:
 	npm install --prefix ./ui/dashboard && npm run build --prefix ./ui/dashboard
 
+.PHONY: install-tools
+install-tools:
+	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
+
 .PHONY: test
 test: set_race_flag
-	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/functional | grep -v test/settings | grep -v test/state)
+ifeq ($(USE_JSON_REPORTER),true)
+	$(MAKE) install-tools
+	SETTINGS_CONTEXT=test go test -json $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly) | go-ctrf-json-reporter -output ctrf-report.json
+else
+	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly)
+endif
+
 .PHONY: longtests
 longtests: set_race_flag
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/functional | grep -v test/settings | grep -v test/state)
+ifeq ($(USE_JSON_REPORTER),true)
+	$(MAKE) install-tools
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly) | go-ctrf-json-reporter -output ctrf-report.json
+else
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly)
+endif
 
 .PHONY: racetest
 racetest: set_race_flag
@@ -133,10 +148,12 @@ ifdef test
 	# TEST_DIR := "$(firstword $(subst ., ,$(test)))"
 	# TEST_NAME := "$(word 2,$(subst ., ,$(test)))"
 	cd test/$(firstword $(subst ., ,$(test))) && \
-	SETTINGS_CONTEXT=docker.ci.tc1.run go test -run $(word 2,$(subst ., ,$(test)))
+	SETTINGS_CONTEXT=docker.ci go test -run $(word 2,$(subst ., ,$(test)))
 else
-	cd test/functional && \
+	cd test/e2e && \
 	SETTINGS_CONTEXT=docker.ci.tc1.run go test
+	cd test/blockassembly && \
+	SETTINGS_CONTEXT=docker.ci go test
 endif
 
 

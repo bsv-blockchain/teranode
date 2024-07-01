@@ -770,7 +770,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 	return txMeta, nil
 }
 
-func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
+func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) (err error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()

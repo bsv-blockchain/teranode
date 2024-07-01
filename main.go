@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/filereader/filereader"
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
+	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	"github.com/bitcoin-sv/ubsv/cmd/utxostore_blaster/utxostore_blaster"
 	"github.com/bitcoin-sv/ubsv/services/asset"
@@ -107,6 +109,9 @@ func main() {
 	case "filereader.run":
 		// filereader.Init()
 		filereader.Start()
+		return
+	case "s3inventoryintegrity.run":
+		s3inventoryintegrity.Start()
 		return
 	}
 
