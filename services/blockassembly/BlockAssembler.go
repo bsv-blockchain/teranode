@@ -236,6 +236,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		return
 	}
 	b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
+	defer b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), meta.Height)
 
 	prometheusBlockAssemblyBestBlockHeight.Set(float64(meta.Height))
 
@@ -290,8 +291,6 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 	if err != nil {
 		b.logger.Errorf("[BlockAssembler][%s] error setting current chain: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
-
-	b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), meta.Height)
 
 }
 
