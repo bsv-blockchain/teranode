@@ -82,12 +82,6 @@ func (s *Server) Init(ctx context.Context) error {
 		ChainParams:      &s.params,
 		Listeners: peer.MessageListeners{
 
-			OnPing: func(p *peer.Peer, msg *wire.MsgPing) {
-				s.logger.Infof("Received ping\n")
-				pong := wire.NewMsgPong(msg.Nonce)
-				s.peer.QueueMessage(pong, nil)
-			},
-
 			OnHeaders: func(p *peer.Peer, msg *wire.MsgHeaders) {
 				s.logger.Infof("Received %d headers\n", len(msg.Headers))
 

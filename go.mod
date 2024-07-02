@@ -17,9 +17,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.16.21
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.54.3
 	github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173
+	github.com/bitcoinsv/bsvlog v0.0.0-20181216181007-cb81b076bf2e
 	github.com/bitcoinsv/bsvutil v0.0.0-20181216182056-1d77cf353ea9
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
+	github.com/btcsuite/websocket v0.0.0-20150119174127-31079b680792
+	github.com/btcsuite/winsvc v1.0.0
 	github.com/centrifugal/centrifuge v0.30.1
 	github.com/centrifugal/centrifuge-go v0.10.1
 	github.com/cespare/xxhash v1.1.0
@@ -33,6 +36,8 @@ require (
 	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645
 	github.com/jarcoal/httpmock v1.3.1
 	github.com/jellydator/ttlcache/v3 v3.0.1
+	github.com/jessevdk/go-flags v1.6.1
+	github.com/jrick/logrotate v1.0.0
 	github.com/json-iterator/go v1.1.12
 	github.com/kpango/fastime v1.1.9
 	github.com/lib/pq v1.10.7
@@ -69,7 +74,7 @@ require (
 	golang.org/x/exp v0.0.0-20240112132812-db7319d0e0e3
 	golang.org/x/net v0.24.0
 	golang.org/x/sync v0.6.0
-	golang.org/x/sys v0.20.0
+	golang.org/x/sys v0.21.0
 	golang.org/x/term v0.20.0
 	golang.org/x/text v0.14.0
 	golang.org/x/time v0.5.0
@@ -91,6 +96,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.2.1 // indirect
 	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/Microsoft/hcsshim v0.11.4 // indirect
+	github.com/aead/siphash v1.0.1 // indirect
 	github.com/aerospike/aerospike-client-go/v6 v6.13.0 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.2 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.16 // indirect
@@ -215,6 +221,7 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/jpillora/backoff v1.0.0 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
+	github.com/kkdai/bstream v1.0.0 // indirect
 	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.5 // indirect
 	github.com/koron/go-ssdp v0.0.4 // indirect
