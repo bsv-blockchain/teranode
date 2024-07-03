@@ -3,7 +3,7 @@
 -- utxoHash []byte - 32 byte little-endian hash of the UTXO
 -- spendingTxID []byte - 32 byte little-endian hash of the spending transaction
 -- ttl number - the time-to-live for the UTXO record
-function spend(rec, vout, utxoHash, spendingTxID, ttl)
+function unSpend(rec, vout, utxoHash)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
     end
@@ -18,61 +18,30 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
         return "ERROR:UTXOs list not found"
     end
 
-    warn("type of utxos: %s", type(utxos))
-    warn(tostring(utxos))
-
     local utxo = utxos[vout+1] -- NB - lua arrays are 1-based!!!!
     if utxo == nil then
-        return "ERROR:UTXO not found for vout " .. vout
+        return "ERROR:UTXO not found"
     end
-
-    warn("type of utxo: %s", type(utxo))
-    warn("size of utxo: %s", bytes.size(utxo))
 
     -- The first 32 bytes are the utxoHash
     local existingUTXOHash = bytes.get_bytes(utxo, 1, 32) -- NB - lua arrays are 1-based!!!!
-    warn("existingUTXOHash: %s", existingUTXOHash)
-    warn("utxoHash: %s", utxoHash)
-
     if not bytes_equal(existingUTXOHash, utxoHash) then
         return "ERROR:Output utxohash mismatch"
     end
 
+    -- If the utxo has been spent, remove the spendingTxID
     if bytes.size(utxo) == 64 then
-        local existingSpendingTxID = bytes.get_bytes(utxo, 33, 32) -- NB - lua arrays are 1-based!!!!
-        if bytes_equal(existingSpendingTxID, spendingTxID) then
-            return 'OK'
-        else
-            return 'SPENT:' .. existingSpendingTxID
-        end
+
+        -- Truncate the utxo to remove the spendingTxID
+        bytes.set_size(utxo, 32)
+
+        -- Update the record
+        utxos[vout+1] = utxo -- NB - lua arrays are 1-based!!!!
+        rec['utxos'] = utxos
+        rec['spentUtxos'] = rec['spentUtxos'] - 1
     end
 
-    -- Update the output to spend it by appending the spendingTxID
-    -- Resize the utxo to 64 bytes
-    local newUtxo = bytes(64)
-    
-    for i = 1, 32 do
-        newUtxo[i] = utxo[i]
-    end
-    
-    for i = 1, 32 do
-        newUtxo[32 + i] = spendingTxID[i]
-    end
-
-    -- Update the record
-    utxos[vout+1] = newUtxo -- NB - lua arrays are 1-based!!!!
-    rec['utxos'] = utxos
-    rec['spentUtxos'] = rec['spentUtxos'] + 1
-
-    -- check whether all utxos have been spent
-    if rec['spentUtxos'] == rec['nrUtxos'] then
-        rec['lastSpend'] = os.time()
-        record.set_ttl(rec, ttl)
-    else
-        -- why is this needed? the record should already have a non expiring ttl
-        -- tests showed the ttl being set to some default value
-        record.set_ttl(rec, -1)
-    end
+    record.set_ttl(rec, -1)
 
     aerospike:update(rec)
 
