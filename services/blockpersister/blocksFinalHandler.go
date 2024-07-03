@@ -62,7 +62,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 
 		gotLock, exists, err = tryLockIfNotExists(ctx, u.logger, hash, u.blockStore, options.WithFileExtension("block"))
 		if err != nil {
-			u.logger.Infof("error getting lock for Subtree %s", hash.String())
+			u.logger.Infof("error getting lock for Subtree %s: %v", hash.String(), err)
 			return
 		}
 
