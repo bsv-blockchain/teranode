@@ -754,10 +754,6 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		return nil, errors.New(errors.ERR_PROCESSING, "failed to get tx meta data", err)
 	}
 
-	if isLargeTransaction(int(txMeta.SizeInBytes), len(tx.Outputs)) {
-		return nil, errors.New(errors.ERR_PROCESSING, "transaction is too large to store")
-	}
-
 	done := make(chan error)
 	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, done: done}
 
