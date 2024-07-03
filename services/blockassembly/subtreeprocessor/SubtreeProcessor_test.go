@@ -32,7 +32,9 @@ var (
 	// Fill the array with 0xFF
 	coinbaseHash, _ = chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
 	coinbaseTx, _   = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1a03a403002f746572616e6f64652f9f9fba46d5a08a6be11ddb2dffffffff0a0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac00000000")
-
+	coinbaseTx2, _  = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fc00002f6d312d65752fec97bce568b53123b2adfe06ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	coinbaseTx3, _  = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb00002f6d312d65752f622127f93431de4016036b10ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	coinbaseTx4, _  = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fa00002f6d312d65752f83df000138d5f03188eb156effffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
 	prevBlockHeader = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  &chainhash.Hash{},
@@ -874,6 +876,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		stp.SetCurrentBlockHeader(blockHeader)
 
 		fmt.Println("stp len", len(stp.chainedSubtrees))
+		fmt.Println("current subtree len: ", stp.currentSubtree.Length())
 
 		err = stp.moveDownBlock(context.Background(), &model.Block{
 			Header: prevBlockHeader,
@@ -886,6 +889,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		require.NoError(t, err)
 
 		fmt.Println("stp len2", len(stp.chainedSubtrees))
+		fmt.Println("current subtree len: ", stp.currentSubtree.Length())
 
 		assert.Equal(t, 6, len(stp.chainedSubtrees))
 		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
@@ -981,56 +985,50 @@ func TestMoveDownBlocks(t *testing.T) {
 		require.NoError(t, err)
 
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx)
-		_, _ = utxosStore.Create(context.Background(), coinbaseTx)
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx2)
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx3)
 
 		stp.SetCurrentBlockHeader(nextBlockHeader)
 
-		// moveDownBlock1 := &model.Block{
-		// 	Header: blockHeader,
-		// 	Subtrees: []*chainhash.Hash{
-		// 		subtree1.RootHash(),
-		// 	},
-		// 	CoinbaseTx: coinbaseTx,
-		// }
-
-		fmt.Println("stp len", len(stp.chainedSubtrees))
+		moveDownBlock1 := &model.Block{
+			Header: blockHeader,
+			Subtrees: []*chainhash.Hash{
+				subtree1.RootHash(),
+			},
+			CoinbaseTx: coinbaseTx,
+		}
 
 		moveDownBlock2 := &model.Block{
 			Header: prevBlockHeader,
 			Subtrees: []*chainhash.Hash{
 				subtree2.RootHash(),
 			},
-			CoinbaseTx: nil,
+			CoinbaseTx: coinbaseTx2,
 		}
 
-		// moveDownBlock3 := &model.Block{
-		// 	Header: aBlockHeader,
-		// 	Subtrees: []*chainhash.Hash{
-		// 		//subtree1.RootHash(),
-		// 		subtree3.RootHash(),
-		// 	},
-		// 	CoinbaseTx: nil,
-		// }
+		moveDownBlock3 := &model.Block{
+			Header: aBlockHeader,
+			Subtrees: []*chainhash.Hash{
+				subtree3.RootHash(),
+			},
+			CoinbaseTx: coinbaseTx3,
+		}
 
 		// err = stp.moveDownBlock(context.Background(), moveDownBlock1)
 		// require.NoError(t, err)
 
-		//	fmt.Println("stp len1: ", len(stp.chainedSubtrees))
-
-		err = stp.moveDownBlock(context.Background(), moveDownBlock2)
-		require.NoError(t, err)
+		// err = stp.moveDownBlock(context.Background(), moveDownBlock2)
+		// require.NoError(t, err)
 
 		// err = stp.moveDownBlock(context.Background(), moveDownBlock3)
 		// require.NoError(t, err)
 
-		// err = stp.moveDownBlocks(context.Background(), []*model.Block{moveDownBlock1, moveDownBlock2, moveDownBlock3})
-		// require.NoError(t, err)
-
-		fmt.Println("stp len2: ", len(stp.chainedSubtrees))
+		err = stp.moveDownBlocks(context.Background(), []*model.Block{moveDownBlock1, moveDownBlock2, moveDownBlock3})
+		require.NoError(t, err)
 
 		assert.Equal(t, 11, len(stp.chainedSubtrees))
 		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
-		assert.Equal(t, 2, stp.currentSubtree.Length())
+		assert.Equal(t, 0, stp.currentSubtree.Length())
 
 	})
 }
@@ -1049,10 +1047,10 @@ func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtr
 		require.NoError(t, err)
 		err = subtree.AddNode(txHash, i, i)
 		require.NoError(t, err)
-		fmt.Printf("created subtree1 txHash: %s\n", txHash.String())
+		// fmt.Printf("created subtree1 txHash: %s\n", txHash.String())
 	}
 
-	fmt.Println("done with subtree: ", subtree)
+	// fmt.Println("done with subtree: ", subtree)
 
 	return subtree
 }
