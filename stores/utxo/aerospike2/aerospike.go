@@ -323,10 +323,10 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 		batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 		batchRecords[idx] = aerospike.NewBatchUDF(batchUDFPolicy, key, luaSpendFunction, "spend",
-			aerospike.NewValue(bItem.spend.Vout),                  // vout
-			aerospike.NewValue(bItem.spend.UTXOHash.String()),     // utxo hash
-			aerospike.NewValue(bItem.spend.SpendingTxID.String()), // spending tx id
-			aerospike.NewValue(s.expiration),                      // ttl
+			aerospike.NewValue(bItem.spend.Vout),            // vout
+			aerospike.NewValue(bItem.spend.UTXOHash[:]),     // utxo hash
+			aerospike.NewValue(bItem.spend.SpendingTxID[:]), // spending tx id
+			aerospike.NewValue(s.expiration),                // ttl
 		)
 	}
 
@@ -355,18 +355,13 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						batch[idx].done <- nil
 					case "SPENT":
 						// spent by another transaction
+						// TODO - Check if this needs to be reversed
 						spendingTxID, hashErr := chainhash.NewHashFromStr(responseMsgParts[1])
 						if hashErr != nil {
 							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.UTXOHash.String(), hashErr)
 						}
 						// TODO we need to be able to send the spending TX ID in the error down the line
 						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxID)
-					case "LOCKED":
-						locktime, hashErr := strconv.ParseUint(responseMsgParts[1], 10, 32)
-						if hashErr != nil {
-							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse locktime: %w", spend.UTXOHash.String(), hashErr)
-						}
-						batch[idx].done <- utxo.NewErrLockTime(uint32(locktime), s.blockHeight.Load(), err)
 					case "ERROR":
 						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
 					default:
