@@ -168,6 +168,9 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 }
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+
+	// s.logger.Infof("Storing transaction %s", tx.TxIDChainHash())
+
 	start, stat, _ := util.StartStatFromContext(ctx, "Create")
 
 	defer func() {
@@ -526,7 +529,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 	`
 
 	if s.engine == "postgres" {
-		q1 += ` FOR UPDATE NOWAIT`
+		q1 += ` FOR UPDATE`
 	}
 
 	q2 := `
@@ -574,7 +577,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 			}
 
 			// Check the utxo hash is correct
-			if !bytes.Equal(utxoHash, spend.Hash[:]) {
+			if !bytes.Equal(utxoHash, spend.UTXOHash[:]) {
 				return fmt.Errorf("[Spend] utxo hash mismatch for %s:%d", spend.TxID, spend.Vout)
 			}
 

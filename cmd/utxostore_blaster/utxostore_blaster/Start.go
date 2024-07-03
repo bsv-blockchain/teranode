@@ -197,7 +197,7 @@ func worker(logger ulogger.Logger) {
 		spend := &utxo.Spend{
 			TxID:         btTx.TxIDChainHash(),
 			Vout:         0,
-			Hash:         utxoHash,
+			UTXOHash:     utxoHash,
 			SpendingTxID: utxoHash,
 		}
 

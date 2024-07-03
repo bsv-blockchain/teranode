@@ -198,7 +198,7 @@ func (tb *TeranodeBridge) HandleBlock(ctx context.Context, block *bsvutil.Block)
 						return fmt.Errorf("Failed to lookup previous tx (%s:%d): %w", *input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, err)
 					}
 
-					if po.LockingScript == nil || len(po.LockingScript) == 0 {
+					if po.LockingScript == nil {
 						return fmt.Errorf("Previous output script is empty for %s:%d", *input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
 					}
 

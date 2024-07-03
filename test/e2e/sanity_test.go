@@ -180,7 +180,7 @@ func TestShouldAllowFairTx(t *testing.T) {
 	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
 	fmt.Printf("Block: %v\n", b)
 
-	blockStore := helper.GetBlockStore(logger)
+	blockStore := framework.Nodes[0].Blockstore
 	var o []options.Options
 	o = append(o, options.WithFileExtension("block"))
 	//wait
@@ -195,7 +195,7 @@ func TestShouldAllowFairTx(t *testing.T) {
 		t.Errorf("error getting block reader: %v", err)
 	}
 	if err == nil {
-		if bl, err := helper.ReadFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
+		if bl, err := helper.ReadFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), framework.Nodes[0].BlockstoreUrl); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
@@ -369,7 +369,7 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 		t.Fatalf("Block height did not increase after mining block")
 	}
 
-	blockStore := helper.GetBlockStore(logger)
+	blockStore := framework.Nodes[0].Blockstore
 	var o []options.Options
 	o = append(o, options.WithFileExtension("block"))
 
@@ -378,7 +378,7 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 
 	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
 	if err == nil {
-		if _, err := helper.ReadFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), ""); err != nil {
+		if _, err := helper.ReadFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), framework.Nodes[0].BlockstoreUrl); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)

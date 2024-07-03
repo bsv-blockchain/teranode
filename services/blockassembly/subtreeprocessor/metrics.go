@@ -9,13 +9,13 @@ import (
 )
 
 var (
-	prometheusSubtreeProcessorAddTx                        prometheus.Counter
-	prometheusSubtreeProcessorMoveUpBlock                  prometheus.Counter
-	prometheusSubtreeProcessorMoveUpBlockDuration          prometheus.Histogram
-	prometheusSubtreeProcessorMoveDownBlock                prometheus.Counter
-	prometheusSubtreeProcessorMoveDownBlocks               prometheus.Counter
-	prometheusSubtreeProcessorMoveDownBlockDuration        prometheus.Histogram
-	prometheusSubtreeProcessorMoveDownBlocksDuration       prometheus.Histogram
+	prometheusSubtreeProcessorAddTx               prometheus.Counter
+	prometheusSubtreeProcessorMoveUpBlock         prometheus.Counter
+	prometheusSubtreeProcessorMoveUpBlockDuration prometheus.Histogram
+	prometheusSubtreeProcessorMoveDownBlock       prometheus.Counter
+	// prometheusSubtreeProcessorMoveDownBlocks               prometheus.Counter
+	prometheusSubtreeProcessorMoveDownBlockDuration prometheus.Histogram
+	// prometheusSubtreeProcessorMoveDownBlocksDuration       prometheus.Histogram
 	prometheusSubtreeProcessorProcessCoinbaseTx            prometheus.Counter
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration    prometheus.Histogram
 	prometheusSubtreeProcessorCreateTransactionMap         prometheus.Counter
@@ -73,22 +73,22 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusSubtreeProcessorMoveDownBlocks = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "subtreeprocessor",
-			Name:      "move_down_blocks",
-			Help:      "Number of times multple blocks moved down in subtree processor",
-		},
-	)
+	// prometheusSubtreeProcessorMoveDownBlocks = promauto.NewCounter(
+	// 	prometheus.CounterOpts{
+	// 		Namespace: "subtreeprocessor",
+	// 		Name:      "move_down_blocks",
+	// 		Help:      "Number of times multple blocks moved down in subtree processor",
+	// 	},
+	// )
 
-	prometheusSubtreeProcessorMoveDownBlocksDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "subtreeprocessor",
-			Name:      "move_down_blocks_duration_seconds",
-			Help:      "Duration of moving down blocks in subtree processor",
-			Buckets:   util.MetricsBucketsSeconds,
-		},
-	)
+	// prometheusSubtreeProcessorMoveDownBlocksDuration = promauto.NewHistogram(
+	// 	prometheus.HistogramOpts{
+	// 		Namespace: "subtreeprocessor",
+	// 		Name:      "move_down_blocks_duration_seconds",
+	// 		Help:      "Duration of moving down blocks in subtree processor",
+	// 		Buckets:   util.MetricsBucketsSeconds,
+	// 	},
+	// )
 
 	prometheusSubtreeProcessorProcessCoinbaseTx = promauto.NewCounter(
 		prometheus.CounterOpts{

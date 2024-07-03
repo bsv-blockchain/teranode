@@ -1,6 +1,6 @@
 // //go:build aerospike
 
-package aerospike
+package aerospike2
 
 import (
 	"bytes"
@@ -37,7 +37,7 @@ import (
 //go:embed spend.lua
 var spendLUA []byte
 
-var luaSpendFunction = "spend_v1"
+var luaSpendFunction = "spend_v2"
 
 type batchStoreItem struct {
 	tx       *bt.Tx
@@ -323,11 +323,10 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 		batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 		batchRecords[idx] = aerospike.NewBatchUDF(batchUDFPolicy, key, luaSpendFunction, "spend",
-			aerospike.NewValue(bItem.spend.UTXOHash.String()),     // utxo hash
-			aerospike.NewValue(bItem.spend.SpendingTxID.String()), // spending tx id
-			aerospike.NewValue(s.blockHeight.Load()),              // current block height
-			aerospike.NewValue(time.Now().Unix()),                 // current time
-			aerospike.NewValue(s.expiration),                      // ttl
+			aerospike.NewValue(bItem.spend.Vout),            // vout
+			aerospike.NewValue(bItem.spend.UTXOHash[:]),     // utxo hash
+			aerospike.NewValue(bItem.spend.SpendingTxID[:]), // spending tx id
+			aerospike.NewValue(s.expiration),                // ttl
 		)
 	}
 
@@ -356,18 +355,13 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						batch[idx].done <- nil
 					case "SPENT":
 						// spent by another transaction
+						// TODO - Check if this needs to be reversed
 						spendingTxID, hashErr := chainhash.NewHashFromStr(responseMsgParts[1])
 						if hashErr != nil {
 							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.UTXOHash.String(), hashErr)
 						}
 						// TODO we need to be able to send the spending TX ID in the error down the line
 						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxID)
-					case "LOCKED":
-						locktime, hashErr := strconv.ParseUint(responseMsgParts[1], 10, 32)
-						if hashErr != nil {
-							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse locktime: %w", spend.UTXOHash.String(), hashErr)
-						}
-						batch[idx].done <- utxo.NewErrLockTime(uint32(locktime), s.blockHeight.Load(), err)
 					case "ERROR":
 						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
 					default:
@@ -754,8 +748,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		return nil, errors.New(errors.ERR_PROCESSING, "failed to get tx meta data", err)
 	}
 
-	done := make(chan error)
-	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, done: done}
+	if isLargeTransaction(int(txMeta.SizeInBytes), len(tx.Outputs)) {
+		return nil, errors.New(errors.ERR_PROCESSING, "transaction is too large to store")
+	}
+
+	errCh := make(chan error)
+	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, done: errCh}
 
 	if s.storeBatcher != nil {
 		s.storeBatcher.Put(item)
@@ -766,8 +764,10 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		}()
 	}
 
-	err = <-done
+	err = <-errCh
 	if err != nil {
+		// TODO - If the error is RecordToBig, we should store the transaction in a different way...
+
 		// return raw err, should already be wrapped
 		return nil, err
 	}
@@ -793,7 +793,7 @@ func isLargeTransaction(sizeInBytes int, outputCount int) bool {
 	return false
 }
 
-func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) (err error) {
+func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
@@ -1166,11 +1166,6 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 		return nil, errors.New(errors.ERR_PROCESSING, "failed to get fees and utxo hashes for %s: %v", tx.TxIDChainHash(), err)
 	}
 
-	utxos := make(map[interface{}]interface{})
-	for _, utxoHash := range utxoHashes {
-		utxos[utxoHash.String()] = aerospike.NewStringValue("")
-	}
-
 	// create a tx interface[] map
 	inputs := make([]interface{}, len(tx.Inputs))
 	for i, input := range tx.Inputs {
@@ -1204,6 +1199,11 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 		outputs[i] = output.Bytes()
 	}
 
+	utxos := make([]interface{}, len(tx.Outputs))
+	for i, utxoHash := range utxoHashes {
+		utxos[i] = utxoHash[:]
+	}
+
 	bins := []*aerospike.Bin{
 		aerospike.NewBin("inputs", inputs),
 		aerospike.NewBin("outputs", outputs),
@@ -1211,7 +1211,7 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
 		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(tx.Size())),
-		aerospike.NewBin("utxos", aerospike.NewMapValue(utxos)),
+		aerospike.NewBin("utxos", utxos),
 		aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(len(utxos))),
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
 		aerospike.NewBin("blockIDs", blockIDs),

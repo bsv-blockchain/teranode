@@ -3,6 +3,7 @@ package test_framework
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -33,6 +34,7 @@ type BitcoinNode struct {
 	DistributorClient   distributor.Distributor
 	BlockChainDB        blockchain_store.Store
 	Blockstore          blob.Store
+	BlockstoreUrl       *url.URL
 	UtxoStore           *utxostore.Store
 }
 
@@ -133,6 +135,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 			panic(err)
 		}
 		b.Nodes[i].Blockstore = blockStore
+		b.Nodes[i].BlockstoreUrl = blockStoreUrl
 		utxoStoreUrl, _, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SETTINGS_CONTEXT))
 		b.Nodes[i].UtxoStore, _ = utxostore.New(b.Context, logger, utxoStoreUrl)
 	}

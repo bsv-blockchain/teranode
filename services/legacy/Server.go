@@ -404,7 +404,7 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 					spends[i] = &utxo.Spend{
 						TxID:         input.PreviousTxIDChainHash(),
 						Vout:         input.PreviousTxOutIndex,
-						Hash:         hash,
+						UTXOHash:     hash,
 						SpendingTxID: &txHash,
 					}
 				}
@@ -416,7 +416,7 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 			}
 
 			for i, po := range previousOutputs {
-				if po.LockingScript == nil || len(po.LockingScript) == 0 {
+				if po.LockingScript == nil {
 					return fmt.Errorf("Previous output script is empty for %s:%d", po.PreviousTxID, po.Vout)
 				}
 
