@@ -798,7 +798,7 @@ func isLargeTransaction(sizeInBytes int, outputCount int) bool {
 	return false
 }
 
-func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
+func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
