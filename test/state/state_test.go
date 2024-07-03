@@ -30,7 +30,7 @@ var (
 
 func TestMain(m *testing.M) {
 	setupBitcoinTestFramework()
-	//defer tearDownBitcoinTestFramework()
+	defer tearDownBitcoinTestFramework()
 
 	m.Run()
 

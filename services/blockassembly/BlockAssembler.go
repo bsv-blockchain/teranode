@@ -221,7 +221,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.currentRunningState.Store("blockchainSubscription")
 				switch notification.Type {
 				case model.NotificationType_Block:
-					b.logger.Infof("[BlockAssembler] received new block notification: %s, updating best block", notification.Hash)
 					b.UpdateBestBlock(ctx)
 				}
 				b.currentRunningState.Store("running")

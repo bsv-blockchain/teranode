@@ -456,7 +456,7 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 }
 
 func TestMoveUpBlockLarge(t *testing.T) {
-	//util.SkipVeryLongTests(t)
+	util.SkipVeryLongTests(t)
 
 	n := 1049576
 	txIds := make([]string, n)

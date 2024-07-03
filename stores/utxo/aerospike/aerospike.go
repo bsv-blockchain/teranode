@@ -667,17 +667,12 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 						}
 					}
 				case "blockIDs":
-					if value != nil {
-						temp := value.([]interface{})
-						var blockIDs []uint32
-						for _, val := range temp {
-							blockIDs = append(blockIDs, uint32(val.(int)))
-						}
-						items[idx].Data.BlockIDs = blockIDs
-					} else {
-						s.logger.Errorf("BatchDecorate blockIDs is nil for %s", items[idx].Hash.String())
+					temp := value.([]interface{})
+					var blockIDs []uint32
+					for _, val := range temp {
+						blockIDs = append(blockIDs, uint32(val.(int)))
 					}
-
+					items[idx].Data.BlockIDs = blockIDs
 				case "isCoinbase":
 					coinbaseBool, ok := value.(bool)
 					if ok {
