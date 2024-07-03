@@ -577,7 +577,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 			}
 
 			// Check the utxo hash is correct
-			if !bytes.Equal(utxoHash, spend.Hash[:]) {
+			if !bytes.Equal(utxoHash, spend.UTXOHash[:]) {
 				return fmt.Errorf("[Spend] utxo hash mismatch for %s:%d", spend.TxID, spend.Vout)
 			}
 

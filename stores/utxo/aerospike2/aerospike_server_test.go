@@ -1,6 +1,6 @@
 //go:build aerospike
 
-package aerospike
+package aerospike2
 
 import (
 	"context"
@@ -140,7 +140,6 @@ func internalTest(t *testing.T) {
 		_, err = client.Delete(policy, key)
 		require.NoError(t, err)
 	})
-	blockHeight := uint32(0)
 
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
@@ -240,7 +239,7 @@ func internalTest(t *testing.T) {
 		assert.Equal(t, uint32(0), resp.LockTime)
 		assert.Nil(t, resp.SpendingTxID)
 
-		err = db.Spend(context.Background(), spends, blockHeight)
+		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		resp, err = db.GetSpend(context.Background(), spend)
@@ -307,7 +306,7 @@ func internalTest(t *testing.T) {
 		assert.Nil(t, txMeta)
 		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
-		err = db.Spend(context.Background(), spends, blockHeight)
+		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		txMeta, err = db.Create(context.Background(), tx)
@@ -322,7 +321,7 @@ func internalTest(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		err = db.Spend(context.Background(), spends, blockHeight)
+		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -334,7 +333,7 @@ func internalTest(t *testing.T) {
 		require.Equal(t, hash.String(), utxoSpendTxID)
 
 		// try to spend with different txid
-		err = db.Spend(context.Background(), spends2, blockHeight)
+		err = db.Spend(context.Background(), spends2)
 		require.ErrorIs(t, err, errors.NewUtxoSpentErr(*tx.TxIDChainHash(), *utxo.ErrTypeSpent.SpendingTxID, time.Now(), err))
 
 		// get the doc to check expiry etc.
@@ -364,7 +363,7 @@ func internalTest(t *testing.T) {
 		require.NoError(t, aErr)
 		assert.Equal(t, "OK", ret)
 
-		err = db.Spend(context.Background(), spends, blockHeight)
+		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -376,7 +375,7 @@ func internalTest(t *testing.T) {
 		require.Equal(t, hash.String(), utxoSpendTxID)
 
 		// try to spend with different txid
-		err = db.Spend(context.Background(), spends2, blockHeight)
+		err = db.Spend(context.Background(), spends2)
 		require.ErrorIs(t, err, utxo.ErrTypeSpent)
 
 		// get the doc to check expiry etc.
@@ -443,7 +442,7 @@ func internalTest(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		err = db.Spend(context.Background(), spendsAll, blockHeight)
+		err = db.Spend(context.Background(), spendsAll)
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -458,7 +457,7 @@ func internalTest(t *testing.T) {
 		require.Equal(t, value.Expiration, aerospikeExpiration)
 
 		// try to spend with different txid
-		err = db.Spend(context.Background(), spends3, blockHeight)
+		err = db.Spend(context.Background(), spends3)
 		require.Error(t, err)
 		require.ErrorIs(t, err, utxo.ErrTypeSpent)
 
@@ -483,7 +482,7 @@ func internalTest(t *testing.T) {
 		}
 
 		// try to spend with different txid
-		err = db.Spend(context.Background(), spends3, blockHeight)
+		err = db.Spend(context.Background(), spends3)
 		require.Error(t, err)
 		require.ErrorIs(t, err, utxo.ErrTypeSpent)
 
@@ -511,7 +510,7 @@ func internalTest(t *testing.T) {
 			UTXOHash:     utxoHash0,
 			SpendingTxID: hash,
 		}}
-		err = db.Spend(context.Background(), spends, blockHeight)
+		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), key)
@@ -557,7 +556,7 @@ func internalTest(t *testing.T) {
 			UTXOHash:     utxoHash0,
 			SpendingTxID: hash,
 		}}
-		err = db.Spend(context.Background(), spends, blockHeight)
+		err = db.Spend(context.Background(), spends)
 		require.ErrorIs(t, err, utxo.ErrTypeLockTime)
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), key)
@@ -570,7 +569,7 @@ func internalTest(t *testing.T) {
 
 		_ = db.SetBlockHeight(1001)
 
-		err = db.Spend(context.Background(), spends, blockHeight)
+		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
@@ -603,7 +602,7 @@ func internalTest(t *testing.T) {
 			UTXOHash:     utxoHash0,
 			SpendingTxID: hash,
 		}}
-		err = db.Spend(context.Background(), spends, blockHeight)
+		err = db.Spend(context.Background(), spends)
 		require.ErrorIs(t, err, utxo.ErrTypeLockTime)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
@@ -616,7 +615,7 @@ func internalTest(t *testing.T) {
 
 		time.Sleep(2 * time.Second)
 
-		err = db.Spend(context.Background(), spends, blockHeight)
+		err = db.Spend(context.Background(), spends)
 		require.NoError(t, err)
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)

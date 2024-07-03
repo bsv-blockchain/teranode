@@ -281,7 +281,7 @@ func (r *Repository) GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byt
 }
 
 func (r *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
-	r.logger.Debugf("[Repository] GetUtxo: %s", spend.Hash.String())
+	r.logger.Debugf("[Repository] GetUtxo: %s", spend.UTXOHash.String())
 	resp, err := r.UtxoStore.GetSpend(ctx, spend)
 	if err != nil {
 		return nil, err

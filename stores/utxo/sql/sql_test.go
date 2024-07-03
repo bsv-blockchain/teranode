@@ -153,7 +153,7 @@ func TestSpend(t *testing.T) {
 	spend := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
-		Hash:         utxohash,
+		UTXOHash:     utxohash,
 		SpendingTxID: &spendingTxID1,
 	}
 
@@ -191,7 +191,7 @@ func TestUnSpend(t *testing.T) {
 	spend := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
-		Hash:         utxohash,
+		UTXOHash:     utxohash,
 		SpendingTxID: &spendingTxID1,
 	}
 
@@ -349,14 +349,14 @@ func TestTombstoneAfterSpend(t *testing.T) {
 	spend0 := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
-		Hash:         utxohash0,
+		UTXOHash:     utxohash0,
 		SpendingTxID: &spendingTxID0,
 	}
 
 	spend1 := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         1,
-		Hash:         utxohash1,
+		UTXOHash:     utxohash1,
 		SpendingTxID: &spendingTxID1,
 	}
 
@@ -395,14 +395,14 @@ func TestTombstoneAfterUnSpend(t *testing.T) {
 	spend0 := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
-		Hash:         utxohash0,
+		UTXOHash:     utxohash0,
 		SpendingTxID: &spendingTxID0,
 	}
 
 	spend1 := &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         1,
-		Hash:         utxohash1,
+		UTXOHash:     utxohash1,
 		SpendingTxID: &spendingTxID1,
 	}
 

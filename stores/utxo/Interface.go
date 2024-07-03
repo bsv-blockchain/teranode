@@ -9,12 +9,12 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// Spend is a struct that holds the txid and vout of the output being spent, the hash of the tx
+// Spend is a struct that holds the txid and vout of the output being spent, the hash of the utxohash
 // that being spent and the spending txid.
 type Spend struct {
 	TxID         *chainhash.Hash `json:"txId"`
 	Vout         uint32          `json:"vout"`
-	Hash         *chainhash.Hash `json:"hash"`
+	UTXOHash     *chainhash.Hash `json:"utxoHash"`
 	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
 }
 

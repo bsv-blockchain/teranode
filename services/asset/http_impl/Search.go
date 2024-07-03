@@ -74,7 +74,7 @@ func (h *HTTP) Search(c echo.Context) error {
 
 		// Check if it's a utxo
 		u, err := h.repository.GetUtxo(c.Request().Context(), &utxo.Spend{
-			Hash: hash,
+			UTXOHash: hash,
 		})
 		if err != nil && !errors.Is(err, errors.ErrNotFound) {
 			return sendError(c, http.StatusBadRequest, 6, fmt.Errorf("error searching for utxo: %w", err))

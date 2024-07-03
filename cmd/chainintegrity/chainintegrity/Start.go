@@ -172,9 +172,9 @@ func Start() {
 					continue
 				}
 				utxo, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
-					TxID: block.CoinbaseTx.TxIDChainHash(),
-					Vout: uint32(vout),
-					Hash: utxoHash,
+					TxID:     block.CoinbaseTx.TxIDChainHash(),
+					Vout:     uint32(vout),
+					UTXOHash: utxoHash,
 				})
 				if err != nil {
 					logger.Errorf("failed to get utxo %s from utxo store: %s", utxoHash, err)
@@ -279,7 +279,7 @@ func Start() {
 										TxID:         input.PreviousTxIDChainHash(),
 										SpendingTxID: btTx.TxIDChainHash(),
 										Vout:         input.PreviousTxOutIndex,
-										Hash:         utxoHash,
+										UTXOHash:     utxoHash,
 									})
 									if err != nil {
 										logger.Errorf("failed to get parent utxo %s from utxo store: %s", utxoHash, err)
@@ -305,9 +305,9 @@ func Start() {
 								continue
 							}
 							utxo, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
-								TxID: btTx.TxIDChainHash(),
-								Vout: uint32(vout),
-								Hash: utxoHash,
+								TxID:     btTx.TxIDChainHash(),
+								Vout:     uint32(vout),
+								UTXOHash: utxoHash,
 							})
 							if err != nil {
 								logger.Errorf("failed to get utxo %s from utxo store: %s", utxoHash, err)
