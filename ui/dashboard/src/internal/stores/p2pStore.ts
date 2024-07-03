@@ -25,7 +25,7 @@ export function connectToP2PServer() {
       url.port = '8090'
     }
 
-    url.pathname = '/connection/websocket'
+    url.pathname = '/p2p-ws'
 
     wsUrl.set(url)
     error.set(null)
