@@ -37,7 +37,7 @@ services:
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -p 15432 -U postgres" ]
-      interval: 2s
+      interval: 5s
       timeout: 5s
       retries: 5
     restart: on-failure
@@ -83,7 +83,7 @@ services:
         condition: service_healthy
       kafka-shared:
         condition: service_started
-    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run"]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv1"
     volumes:
@@ -100,7 +100,7 @@ services:
         condition: service_healthy
       kafka-shared:
         condition: service_started
-    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run"]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv2"
     volumes:
@@ -117,7 +117,7 @@ services:
         condition: service_healthy
       kafka-shared:
         condition: service_started
-    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run"]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv3"
     volumes:

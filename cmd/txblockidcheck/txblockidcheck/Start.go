@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -82,11 +83,13 @@ func Start() {
 
 	fmt.Printf("Tx %s (coinbase=%v) (blockID=%v)\n", txHash, txMeta.IsCoinbase, txMeta.BlockIDs)
 
+	var parentTxs []*meta.Data
 	for _, hash := range txMeta.ParentTxHashes {
 		txMeta, err := utxoStore.GetMeta(ctx, &hash)
 		if err != nil {
 			fmt.Printf("Parent tx %s not found\n", hash)
 		} else {
+			parentTxs = append(parentTxs, txMeta)
 			fmt.Printf("Parent tx %s (coinbase=%v) (blockID=%v)\n", hash, txMeta.IsCoinbase, txMeta.BlockIDs)
 		}
 	}
@@ -96,11 +99,11 @@ func Start() {
 		usage(err.Error())
 	}
 
-	blockchainIDs, err := blockchainStore.GetBlockHeaderIDs(ctx, blockHeader.Hash(), 10000)
-	if err != nil {
-		usage(err.Error())
-	}
-	fmt.Printf("Best block IDs: %v\n", blockchainIDs)
+	// blockchainIDs, err := blockchainStore.GetBlockHeaderIDs(ctx, blockHeader.Hash(), 10000)
+	// if err != nil {
+	// 	usage(err.Error())
+	// }
+	// fmt.Printf("Best block IDs: %v\n", blockchainIDs)
 
 	blockHeaders, blockMetas, err := blockchainStore.GetBlockHeaders(ctx, blockHeader.Hash(), 10000)
 	if err != nil {
@@ -108,8 +111,9 @@ func Start() {
 	}
 
 	foundCount := 0
-	foundParentCount := 0
 	foundBlockID := false
+	foundParentCount := 0
+	foundParentBlockID := false
 
 	for i, blocHeader := range blockHeaders {
 		blockMeta := blockMetas[i]
@@ -117,7 +121,18 @@ func Start() {
 		for _, blockID := range txMeta.BlockIDs {
 			if blockMeta.ID == blockID {
 				foundBlockID = true
+				fmt.Printf("Block ID %d found in main chain\n", blockID)
 				break
+			}
+		}
+
+		for _, parentTx := range parentTxs {
+			for _, blockID := range parentTx.BlockIDs {
+				if blockMeta.ID == blockID {
+					foundParentBlockID = true
+					fmt.Printf("Parent Block ID %d found in main chain\n", blockID)
+					break
+				}
 			}
 		}
 
@@ -163,6 +178,9 @@ func Start() {
 	}
 	if foundCount == 0 {
 		fmt.Printf("Tx not found in any block on main chain\n")
+	}
+	if !foundParentBlockID {
+		fmt.Printf("Parent %v not in main chain\n", txMeta.BlockIDs)
 	}
 	if foundParentCount == 0 {
 		fmt.Printf("Parent tx not found in any block on main chain\n")

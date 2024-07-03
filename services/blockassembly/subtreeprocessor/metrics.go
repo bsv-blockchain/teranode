@@ -1,10 +1,11 @@
 package subtreeprocessor
 
 import (
+	"sync"
+
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"sync"
 )
 
 var (
@@ -12,7 +13,9 @@ var (
 	prometheusSubtreeProcessorMoveUpBlock                  prometheus.Counter
 	prometheusSubtreeProcessorMoveUpBlockDuration          prometheus.Histogram
 	prometheusSubtreeProcessorMoveDownBlock                prometheus.Counter
+	prometheusSubtreeProcessorMoveDownBlocks               prometheus.Counter
 	prometheusSubtreeProcessorMoveDownBlockDuration        prometheus.Histogram
+	prometheusSubtreeProcessorMoveDownBlocksDuration       prometheus.Histogram
 	prometheusSubtreeProcessorProcessCoinbaseTx            prometheus.Counter
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration    prometheus.Histogram
 	prometheusSubtreeProcessorCreateTransactionMap         prometheus.Counter
@@ -57,7 +60,7 @@ func _initPrometheusMetrics() {
 		prometheus.CounterOpts{
 			Namespace: "subtreeprocessor",
 			Name:      "move_down",
-			Help:      "Number of times a block is moved up in subtree processor",
+			Help:      "Number of times a block is moved down in subtree processor",
 		},
 	)
 
@@ -66,6 +69,23 @@ func _initPrometheusMetrics() {
 			Namespace: "subtreeprocessor",
 			Name:      "move_down_duration_seconds",
 			Help:      "Duration of moving down block in subtree processor",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusSubtreeProcessorMoveDownBlocks = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "subtreeprocessor",
+			Name:      "move_down_blocks",
+			Help:      "Number of times multple blocks moved down in subtree processor",
+		},
+	)
+
+	prometheusSubtreeProcessorMoveDownBlocksDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "subtreeprocessor",
+			Name:      "move_down_blocks_duration_seconds",
+			Help:      "Duration of moving down blocks in subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
