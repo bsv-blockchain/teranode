@@ -311,13 +311,13 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		key, err = aerospike.NewKey(s.namespace, s.setName, bItem.spend.TxID.CloneBytes())
 		if err != nil {
 			// we just return the error on the channel, we cannot process this utxo any further
-			bItem.done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend: %w", bItem.spend.Hash.String(), err)
+			bItem.done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend: %w", bItem.spend.UTXOHash.String(), err)
 			continue
 		}
 
 		batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 		batchRecords[idx] = aerospike.NewBatchUDF(batchUDFPolicy, key, luaSpendFunction, "spend",
-			aerospike.NewValue(bItem.spend.Hash.String()),         // utxo hash
+			aerospike.NewValue(bItem.spend.UTXOHash.String()),     // utxo hash
 			aerospike.NewValue(bItem.spend.SpendingTxID.String()), // spending tx id
 			aerospike.NewValue(s.blockHeight.Load()),              // current block height
 			aerospike.NewValue(time.Now().Unix()),                 // current time
@@ -329,7 +329,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	if err != nil {
 		s.logger.Errorf("[SPEND_BATCH_LUA][%d] failed to batch spend aerospike map utxos in batchId %d: %v", batchId, len(batch), err)
 		for idx, bItem := range batch {
-			bItem.done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.Hash.String(), batchId, idx, err)
+			bItem.done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.UTXOHash.String(), batchId, idx, err)
 		}
 	}
 
@@ -338,7 +338,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		spend := batch[idx].spend
 		err = batchRecord.BatchRec().Err
 		if err != nil {
-			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %w", spend.Hash.String(), s.blockHeight.Load(), batchId, err)
+			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %w", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, err)
 		} else {
 			response := batchRecord.BatchRec().Record
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
@@ -352,24 +352,24 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						// spent by another transaction
 						spendingTxID, hashErr := chainhash.NewHashFromStr(responseMsgParts[1])
 						if hashErr != nil {
-							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.Hash.String(), hashErr)
+							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.UTXOHash.String(), hashErr)
 						}
 						// TODO we need to be able to send the spending TX ID in the error down the line
-						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxID)
+						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxID)
 					case "LOCKED":
 						locktime, hashErr := strconv.ParseUint(responseMsgParts[1], 10, 32)
 						if hashErr != nil {
-							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse locktime: %w", spend.Hash.String(), hashErr)
+							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse locktime: %w", spend.UTXOHash.String(), hashErr)
 						}
 						batch[idx].done <- utxo.NewErrLockTime(uint32(locktime), s.blockHeight.Load(), err)
 					case "ERROR":
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.Hash.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
 					default:
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.Hash.String(), s.blockHeight.Load(), batchId, responseMsg)
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsg)
 					}
 				}
 			} else {
-				batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse response", spend.Hash.String())
+				batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse response", spend.UTXOHash.String())
 			}
 		}
 	}
@@ -469,7 +469,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	if value != nil {
 		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		if ok {
-			spendingTxIdStr, ok := utxoMap[spend.Hash.String()].(string)
+			spendingTxIdStr, ok := utxoMap[spend.UTXOHash.String()].(string)
 			if ok && spendingTxIdStr != "" {
 				spendingTxId, err = chainhash.NewHashFromStr(spendingTxIdStr)
 				if err != nil {
@@ -838,7 +838,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 
 			err = s.spendUtxo(policy, spend)
 			if err != nil {
-				if errors.Is(err, utxo.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spend.SpendingTxID)) {
+				if errors.Is(err, utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spend.SpendingTxID)) {
 					return err
 				}
 
@@ -880,7 +880,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 		aerospike.ExpEq(aerospike.ExpMapGetByKey(
 			aerospike.MapReturnType.VALUE,
 			aerospike.ExpTypeSTRING,
-			aerospike.ExpStringVal(spend.Hash.String()),
+			aerospike.ExpStringVal(spend.UTXOHash.String()),
 			aerospike.ExpMapBin("utxos"),
 		), aerospike.ExpStringVal("")),
 	)
@@ -889,7 +889,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 		aerospike.MapPutOp(
 			aerospike.DefaultMapPolicy(),
 			"utxos",
-			spend.Hash.String(),
+			spend.UTXOHash.String(),
 			spend.SpendingTxID.String(),
 		),
 		aerospike.GetBinOp("utxos"),
@@ -921,7 +921,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 			utxosValue, ok := value.Bins["utxos"].(map[interface{}]interface{})
 			if ok {
 				// get utxo from map
-				valueStr, ok := utxosValue[spend.Hash.String()].(string)
+				valueStr, ok := utxosValue[spend.UTXOHash.String()].(string)
 				if ok {
 					valueHash, err := chainhash.NewHashFromStr(valueStr)
 					if err != nil {
@@ -939,7 +939,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 
 						s.logger.Debugf("utxo %s was spent by %s", spend.TxID.String(), spendingTxHash)
 						// TODO replace this error with the new one
-						return utxo.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxHash)
+						return utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxHash)
 					}
 				}
 			}
@@ -969,7 +969,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 					if s.lastSpendBatcher != nil {
 						s.lastSpendBatcher.Put(&batchLastSpend{
 							key:  key,
-							hash: *spend.Hash,
+							hash: *spend.UTXOHash,
 							time: int(time.Now().Unix()),
 						})
 					} else {
@@ -1002,7 +1002,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 			}
 			return errors.New(errors.ERR_STORAGE_ERROR, "context cancelled un-spending %d of %d utxos", i, len(spends))
 		default:
-			s.logger.Warnf("unspending utxo %s of tx %s:%d, spending tx: %s", spend.Hash.String(), spend.TxID.String(), spend.Vout, spend.SpendingTxID.String())
+			s.logger.Warnf("unspending utxo %s of tx %s:%d, spending tx: %s", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingTxID.String())
 			if err = s.unSpend(ctx, spend); err != nil {
 				// just return the raw error, should already be wrapped
 				return err
@@ -1025,7 +1025,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxo.Spend) error {
 	_, err = s.client.Operate(policy, key, aerospike.MapPutOp(
 		aerospike.DefaultMapPolicy(),
 		"utxos",
-		spend.Hash.String(),
+		spend.UTXOHash.String(),
 		aerospike.NewStringValue(""),
 	))
 	if err != nil {

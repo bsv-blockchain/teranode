@@ -404,7 +404,7 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 					spends[i] = &utxo.Spend{
 						TxID:         input.PreviousTxIDChainHash(),
 						Vout:         input.PreviousTxOutIndex,
-						Hash:         hash,
+						UTXOHash:     hash,
 						SpendingTxID: &txHash,
 					}
 				}

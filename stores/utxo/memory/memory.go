@@ -110,7 +110,7 @@ func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResp
 		return nil, errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 	}
 
-	txSpend, ok := m.txs[*spend.TxID].utxoMap[*spend.Hash]
+	txSpend, ok := m.txs[*spend.TxID].utxoMap[*spend.UTXOHash]
 	if !ok {
 		return nil, errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 	}
@@ -148,20 +148,20 @@ func (m *Memory) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight ui
 			return errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 		}
 
-		spendTxID, ok := m.txs[*spend.TxID].utxoMap[*spend.Hash]
+		spendTxID, ok := m.txs[*spend.TxID].utxoMap[*spend.UTXOHash]
 		if !ok {
 			return errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 		}
 
 		if spendTxID != nil {
 			if *spendTxID != *spend.SpendingTxID {
-				return utxo.NewErrSpent(spendTxID, spend.Vout, spend.Hash, spend.Hash)
+				return utxo.NewErrSpent(spendTxID, spend.Vout, spend.UTXOHash, spend.UTXOHash)
 			}
 			// same spend tx ID, just ignore and continue
 			continue
 		}
 
-		m.txs[*spend.TxID].utxoMap[*spend.Hash] = spend.SpendingTxID
+		m.txs[*spend.TxID].utxoMap[*spend.UTXOHash] = spend.SpendingTxID
 	}
 
 	return nil
@@ -176,12 +176,12 @@ func (m *Memory) UnSpend(_ context.Context, spends []*utxo.Spend) error {
 			return errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 		}
 
-		_, ok := m.txs[*spend.TxID].utxoMap[*spend.Hash]
+		_, ok := m.txs[*spend.TxID].utxoMap[*spend.UTXOHash]
 		if !ok {
 			return errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", spend.TxID)
 		}
 
-		m.txs[*spend.TxID].utxoMap[*spend.Hash] = nil
+		m.txs[*spend.TxID].utxoMap[*spend.UTXOHash] = nil
 	}
 
 	return nil

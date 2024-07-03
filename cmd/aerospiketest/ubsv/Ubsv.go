@@ -111,7 +111,7 @@ func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *
 
 				spends = append(spends, &utxostore.Spend{
 					TxID:         tx.TxIDChainHash(),
-					Hash:         utxoHash,
+					UTXOHash:     utxoHash,
 					Vout:         uint32(idx),
 					SpendingTxID: spendingTxHash,
 				})

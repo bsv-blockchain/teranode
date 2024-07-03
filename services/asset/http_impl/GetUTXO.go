@@ -28,7 +28,7 @@ func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 		utxoResponse, err := h.repository.GetUtxo(c.Request().Context(), &utxo.Spend{
 			TxID:         nil,
 			Vout:         0,
-			Hash:         hash,
+			UTXOHash:     hash,
 			SpendingTxID: nil,
 		})
 		if err != nil {

@@ -309,7 +309,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 		spends[idx] = &utxo.Spend{
 			TxID:         input.PreviousTxIDChainHash(),
 			Vout:         input.PreviousTxOutIndex,
-			Hash:         hash,
+			UTXOHash:     hash,
 			SpendingTxID: txIDChainHash,
 		}
 	}

@@ -47,46 +47,46 @@ var (
 	spend = &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
-		Hash:         utxoHash0,
+		UTXOHash:     utxoHash0,
 		SpendingTxID: hash,
 	}
 	spends  = []*utxo.Spend{spend}
 	spends2 = []*utxo.Spend{{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
-		Hash:         utxoHash0,
+		UTXOHash:     utxoHash0,
 		SpendingTxID: hash2,
 	}}
 	spends3 = []*utxo.Spend{{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
-		Hash:         utxoHash0,
+		UTXOHash:     utxoHash0,
 		SpendingTxID: utxoHash3,
 	}}
 	spendsAll = []*utxo.Spend{{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
-		Hash:         utxoHash0,
+		UTXOHash:     utxoHash0,
 		SpendingTxID: hash2,
 	}, {
 		TxID:         tx.TxIDChainHash(),
 		Vout:         1,
-		Hash:         utxoHash1,
+		UTXOHash:     utxoHash1,
 		SpendingTxID: hash2,
 	}, {
 		TxID:         tx.TxIDChainHash(),
 		Vout:         2,
-		Hash:         utxoHash2,
+		UTXOHash:     utxoHash2,
 		SpendingTxID: hash2,
 	}, {
 		TxID:         tx.TxIDChainHash(),
 		Vout:         3,
-		Hash:         utxoHash3,
+		UTXOHash:     utxoHash3,
 		SpendingTxID: hash2,
 	}, {
 		TxID:         tx.TxIDChainHash(),
 		Vout:         4,
-		Hash:         utxoHash4,
+		UTXOHash:     utxoHash4,
 		SpendingTxID: hash2,
 	}}
 )
@@ -260,9 +260,9 @@ func internalTest(t *testing.T) {
 		require.NoError(t, err)
 
 		spend := &utxo.Spend{
-			TxID: tx2.TxIDChainHash(),
-			Vout: 0,
-			Hash: hash,
+			TxID:     tx2.TxIDChainHash(),
+			Vout:     0,
+			UTXOHash: hash,
 		}
 		resp, err := db.GetSpend(context.Background(), spend)
 		require.NoError(t, err)
@@ -329,7 +329,7 @@ func internalTest(t *testing.T) {
 		require.NoError(t, err)
 		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
-		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
+		utxoSpendTxID, ok := utxoMap[spends[0].UTXOHash.String()]
 		require.True(t, ok)
 		require.Equal(t, hash.String(), utxoSpendTxID)
 
@@ -355,7 +355,7 @@ func internalTest(t *testing.T) {
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
 		ret, aErr := client.Execute(wPolicy, txKey, luaSpendFunction, "spend",
-			aero.NewValue(spends[0].Hash.String()),
+			aero.NewValue(spends[0].UTXOHash.String()),
 			aero.NewValue(spends[0].SpendingTxID.String()),
 			aero.NewValue(100),
 			aero.NewValue(time.Now().Unix()),
@@ -371,7 +371,7 @@ func internalTest(t *testing.T) {
 		require.NoError(t, err)
 		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
-		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
+		utxoSpendTxID, ok := utxoMap[spends[0].UTXOHash.String()]
 		require.True(t, ok)
 		require.Equal(t, hash.String(), utxoSpendTxID)
 
@@ -397,7 +397,7 @@ func internalTest(t *testing.T) {
 
 		for _, s := range spendsAll {
 			ret, aErr := client.Execute(wPolicy, txKey, luaSpendFunction, "spend",
-				aero.NewValue(s.Hash.String()),
+				aero.NewValue(s.UTXOHash.String()),
 				aero.NewValue(s.SpendingTxID.String()),
 				aero.NewValue(100),
 				aero.NewValue(time.Now().Unix()),
@@ -411,7 +411,7 @@ func internalTest(t *testing.T) {
 		require.NoError(t, err)
 		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
-		utxoSpendTxID, ok := utxoMap[spendsAll[0].Hash.String()]
+		utxoSpendTxID, ok := utxoMap[spendsAll[0].UTXOHash.String()]
 		require.True(t, ok)
 		require.Equal(t, hash2.String(), utxoSpendTxID)
 	})
@@ -427,7 +427,7 @@ func internalTest(t *testing.T) {
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
 		fakeKey, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, []byte{})
 		ret, aErr := client.Execute(wPolicy, fakeKey, luaSpendFunction, "spend",
-			aero.NewValue(spends[0].Hash.String()),
+			aero.NewValue(spends[0].UTXOHash.String()),
 			aero.NewValue(spends[0].SpendingTxID.String()),
 			aero.NewValue(100),
 			aero.NewValue(time.Now().Unix()),
@@ -451,7 +451,7 @@ func internalTest(t *testing.T) {
 		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
 		for i := 0; i < 5; i++ {
-			utxoSpendTxID, ok := utxoMap[spendsAll[i].Hash.String()]
+			utxoSpendTxID, ok := utxoMap[spendsAll[i].UTXOHash.String()]
 			require.True(t, ok)
 			require.Equal(t, hash2.String(), utxoSpendTxID)
 		}
@@ -477,7 +477,7 @@ func internalTest(t *testing.T) {
 		utxoMap, ok = value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
 		for i := 0; i < 5; i++ {
-			utxoSpendTxID, ok := utxoMap[spendsAll[i].Hash.String()]
+			utxoSpendTxID, ok := utxoMap[spendsAll[i].UTXOHash.String()]
 			require.True(t, ok)
 			require.Equal(t, hash2.String(), utxoSpendTxID)
 		}
@@ -508,7 +508,7 @@ func internalTest(t *testing.T) {
 		spends := []*utxo.Spend{{
 			TxID:         tx2.TxIDChainHash(),
 			Vout:         0,
-			Hash:         utxoHash0,
+			UTXOHash:     utxoHash0,
 			SpendingTxID: hash,
 		}}
 		err = db.Spend(context.Background(), spends, blockHeight)
@@ -518,7 +518,7 @@ func internalTest(t *testing.T) {
 		require.NoError(t, err)
 		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
-		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
+		utxoSpendTxID, ok := utxoMap[spends[0].UTXOHash.String()]
 		require.True(t, ok)
 		require.Equal(t, hash.String(), utxoSpendTxID)
 
@@ -526,7 +526,7 @@ func internalTest(t *testing.T) {
 		err = db.UnSpend(context.Background(), []*utxo.Spend{{
 			TxID:         tx2.TxIDChainHash(),
 			Vout:         0,
-			Hash:         utxoHash0,
+			UTXOHash:     utxoHash0,
 			SpendingTxID: hash2,
 		}})
 		require.NoError(t, err)
@@ -535,7 +535,7 @@ func internalTest(t *testing.T) {
 		require.NoError(t, err)
 		utxoMap, ok = value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
-		utxoSpendTxID, ok = utxoMap[spends[0].Hash.String()]
+		utxoSpendTxID, ok = utxoMap[spends[0].UTXOHash.String()]
 		require.True(t, ok)
 		require.Equal(t, "", utxoSpendTxID)
 	})
@@ -554,7 +554,7 @@ func internalTest(t *testing.T) {
 		spends := []*utxo.Spend{{
 			TxID:         tx2.TxIDChainHash(),
 			Vout:         0,
-			Hash:         utxoHash0,
+			UTXOHash:     utxoHash0,
 			SpendingTxID: hash,
 		}}
 		err = db.Spend(context.Background(), spends, blockHeight)
@@ -564,7 +564,7 @@ func internalTest(t *testing.T) {
 		require.NoError(t, err)
 		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
-		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
+		utxoSpendTxID, ok := utxoMap[spends[0].UTXOHash.String()]
 		require.True(t, ok)
 		require.Equal(t, "", utxoSpendTxID)
 
@@ -577,7 +577,7 @@ func internalTest(t *testing.T) {
 		require.NoError(t, err)
 		utxoMap, ok = value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
-		utxoSpendTxID, ok = utxoMap[spends[0].Hash.String()]
+		utxoSpendTxID, ok = utxoMap[spends[0].UTXOHash.String()]
 		require.True(t, ok)
 		require.Equal(t, hash.String(), utxoSpendTxID)
 	})
@@ -600,7 +600,7 @@ func internalTest(t *testing.T) {
 		spends := []*utxo.Spend{{
 			TxID:         tx2.TxIDChainHash(),
 			Vout:         0,
-			Hash:         utxoHash0,
+			UTXOHash:     utxoHash0,
 			SpendingTxID: hash,
 		}}
 		err = db.Spend(context.Background(), spends, blockHeight)
@@ -610,7 +610,7 @@ func internalTest(t *testing.T) {
 		require.NoError(t, err)
 		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
-		utxoSpendTxID, ok := utxoMap[spends[0].Hash.String()]
+		utxoSpendTxID, ok := utxoMap[spends[0].UTXOHash.String()]
 		require.True(t, ok)
 		require.Equal(t, "", utxoSpendTxID)
 
@@ -623,7 +623,7 @@ func internalTest(t *testing.T) {
 		require.NoError(t, err)
 		utxoMap, ok = value.Bins["utxos"].(map[interface{}]interface{})
 		require.True(t, ok)
-		utxoSpendTxID, ok = utxoMap[spends[0].Hash.String()]
+		utxoSpendTxID, ok = utxoMap[spends[0].UTXOHash.String()]
 		require.True(t, ok)
 		require.Equal(t, hash.String(), utxoSpendTxID)
 	})
