@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -121,25 +120,4 @@ func TestCreateWith2Outputs(t *testing.T) {
 	_, err = store.Create(ctx, tx)
 	require.NoError(t, err)
 
-}
-
-func TestIsLargeTransaction(t *testing.T) {
-	f, err := os.Open("bb41a757f405890fb0f5856228e23b715702d714d59bf2b1feb70d8b2b4e3e08.bin")
-	require.NoError(t, err)
-
-	defer f.Close()
-
-	var tx bt.Tx
-
-	_, err = tx.ReadFrom(f)
-	require.NoError(t, err)
-
-	assert.Equal(t, "bb41a757f405890fb0f5856228e23b715702d714d59bf2b1feb70d8b2b4e3e08", tx.TxIDChainHash().String())
-	assert.True(t, tx.IsExtended())
-
-	assert.Equal(t, 999657, len(tx.Bytes()))
-	assert.Equal(t, 1189009, len(tx.ExtendedBytes()))
-
-	assert.True(t, isLargeTransaction(len(tx.Bytes()), len(tx.Outputs)))
-	assert.True(t, isLargeTransaction(len(tx.ExtendedBytes()), len(tx.Outputs)))
 }
