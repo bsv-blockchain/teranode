@@ -1171,11 +1171,6 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 		return nil, errors.New(errors.ERR_PROCESSING, "failed to get fees and utxo hashes for %s: %v", tx.TxIDChainHash(), err)
 	}
 
-	utxos := make(map[interface{}]interface{})
-	for _, utxoHash := range utxoHashes {
-		utxos[utxoHash.String()] = aerospike.NewStringValue("")
-	}
-
 	// create a tx interface[] map
 	inputs := make([]interface{}, len(tx.Inputs))
 	for i, input := range tx.Inputs {
@@ -1209,6 +1204,11 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 		outputs[i] = output.Bytes()
 	}
 
+	utxos := make([]interface{}, len(tx.Outputs))
+	for i, utxoHash := range utxoHashes {
+		utxos[i] = utxoHash[:]
+	}
+
 	bins := []*aerospike.Bin{
 		aerospike.NewBin("inputs", inputs),
 		aerospike.NewBin("outputs", outputs),
@@ -1216,7 +1216,7 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
 		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(tx.Size())),
-		aerospike.NewBin("utxos", aerospike.NewMapValue(utxos)),
+		aerospike.NewBin("utxos", utxos),
 		aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(len(utxos))),
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
 		aerospike.NewBin("blockIDs", blockIDs),
