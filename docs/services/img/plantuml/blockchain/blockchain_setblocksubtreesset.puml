@@ -1,0 +1,38 @@
+@startuml
+participant "Block Validation" as BlockValidation
+participant "Block Assembly" as BlockAssembly
+participant "Blockchain" as Blockchain
+participant "Blockchain Store" as BlockchainStore
+
+== Block Validation validates a new block ==
+
+BlockValidation -> Blockchain: SetBlockSubtreesSet(ctx, blockHash)
+activate Blockchain
+
+Blockchain -> BlockchainStore: SetBlockSubtreesSet(ctx, blockHash)
+activate BlockchainStore
+BlockchainStore --> Blockchain: Ack
+deactivate BlockchainStore
+
+Blockchain -> Blockchain: SendNotification(ctx, \n   &blockchain_api.Notification{ \n     Type: model.NotificationType_BlockSubtreesSet, \n     Hash: blockHashBytes\n})
+Blockchain --> BlockValidation: Ack
+deactivate Blockchain
+
+== Block Assembly mines a new block ==
+
+BlockAssembly -> Blockchain: SetBlockSubtreesSet(ctx, blockHash)
+activate Blockchain
+
+Blockchain -> BlockchainStore: SetBlockSubtreesSet(ctx, blockHash)
+activate BlockchainStore
+BlockchainStore --> Blockchain: Ack
+deactivate BlockchainStore
+
+Blockchain -> Blockchain: SendNotification(ctx, \n   &blockchain_api.Notification{ \n     Type: model.NotificationType_BlockSubtreesSet, \n     Hash: blockHashBytes\n})
+Blockchain --> BlockAssembly: Ack
+deactivate Blockchain
+
+
+left footer Last Modified On: 3-July-2024
+
+@enduml

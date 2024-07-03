@@ -1,45 +1,89 @@
-
 @startuml
-participant "Client" as Client
-participant "Blockchain Service" as Service
-database "Block Store" as Store
-queue "Notifications" as Notify
+participant "Mining" as Mining
+participant "Block Assembly Client" as BlockClient
+participant "Block Assembly Server" as BlockServer
+participant "blockSubmissionCh" as SubmissionCh
+participant "JobStore" as JobStore
+entity "Block" as Block
+entity "Model" as Model
+database "Transaction Store" as TxStore
+database "UTXO Store" as UTXOStore
+database "Subtree Store" as SubtreeStore
+participant "Blockchain Client" as BlockchainClient
 
-Client -> Service: AddBlock(ctx, request)
-activate Service
+Mining -> BlockClient: Solve the mining challenge
+activate BlockClient
 
-Service -> Service: Parse Block Header
-alt If Error Parsing Header
-    Service --> Client: Return Error
-    deactivate Service
-else If Successful
-    Service -> Service: Parse Coinbase Transaction
-    alt If Error Parsing Coinbase Tx
-        Service --> Client: Return Error
-        deactivate Service
-    else If Successful
-        Service -> Service: Parse Subtree Hashes
-        alt If Error Parsing Subtree Hashes
-            Service --> Client: Return Error
-            deactivate Service
-        else If Successful
-            Service -> Store: StoreBlock(ctx, block, peerId)
-            alt If Error Storing Block
-                Store --> Service: Return Error
-                Service --> Client: Return Error
-                deactivate Service
-            else If Successful
-                Store --> Service
-                loop For each notification type
-                    Service -> Notify: SendNotification(ctx, notification)
-                end
-                Service --> Client: Success
-            end
-        end
-    end
+BlockClient -> BlockServer: SubmitMiningSolution(ctx, solution)
+activate BlockServer
+
+BlockServer -> SubmissionCh: Add block submission
+activate SubmissionCh
+
+SubmissionCh -> BlockServer: submitMiningSolution(ctx, blockSubmission)
+deactivate SubmissionCh
+
+BlockServer -> JobStore: jobItem = Get(*storeId)
+activate JobStore
+JobStore --> BlockServer: return jobItem
+deactivate JobStore
+
+BlockServer -> BlockServer: Create new block with proof of work
+BlockServer -> Model: block.Valid(cntxt, nil, nil, nil)
+activate Model
+
+Model --> BlockServer: Validation result
+deactivate Model
+
+BlockServer -> TxStore: Set(context.Background(), block.CoinbaseTx.TxIDChainHash().CloneBytes(), block.CoinbaseTx.ExtendedBytes())
+activate TxStore
+TxStore --> BlockServer: Coinbase Transaction stored
+deactivate TxStore
+
+BlockServer -> UTXOStore: Create(cntxt, block.CoinbaseTx)
+activate UTXOStore
+UTXOStore --> BlockServer: Coinbase Metadata stored
+deactivate UTXOStore
+
+BlockServer -> BlockchainClient: AddBlock(cntxt, block, "")
+activate BlockchainClient
+BlockchainClient -> BlockServer: Block added to the local Blockchain
+deactivate BlockchainClient
+
+BlockServer -> BlockServer: removeSubtreesTTL(gCtx, block)
+activate BlockServer
+
+alt [for each subtree]
+    BlockServer -> SubtreeStore: SetTTL(setCtx, subtreeHashBytes, 0) # 0 means delete the subtree
+    activate SubtreeStore
+    SubtreeStore --> BlockServer: Subtree TTL updated
+    deactivate SubtreeStore
 end
-deactivate Service
 
-left footer Last Modified On: 23-Jan-2024
+
+BlockServer -> BlockchainClient : SetBlockSubtreesSet(ctx, blockHash)
+activate BlockchainClient
+BlockchainClient --> BlockServer : Block Subtrees marked as "set"
+deactivate BlockchainClient
+
+deactivate BlockServer
+
+
+BlockServer -> JobStore: DeleteAll()
+activate JobStore
+JobStore -> BlockServer: All jobs deleted
+deactivate JobStore
+
+alt [If Error Occurs]
+    BlockServer -> BlockchainClient: InvalidateBlock(setCtx, block.Header.Hash())
+    activate BlockchainClient
+    BlockchainClient --> BlockServer: Block invalidated
+    deactivate BlockchainClient
+end
+
+BlockServer --> BlockClient: Return result
+BlockClient --> Mining: Return result
+
+left footer Last Modified On: 2-July-2024
 
 @enduml
