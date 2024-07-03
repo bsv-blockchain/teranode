@@ -9,7 +9,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// Spend is a struct that holds the txid and vout of the output being spent, the hash of the utxo
+// Spend is a struct that holds the txid and vout of the output being spent, the hash of the utxohash
 // that being spent and the spending txid.
 type Spend struct {
 	TxID         *chainhash.Hash `json:"txId"`
