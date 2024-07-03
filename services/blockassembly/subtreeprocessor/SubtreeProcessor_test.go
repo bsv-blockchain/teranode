@@ -32,7 +32,9 @@ var (
 	// Fill the array with 0xFF
 	coinbaseHash, _ = chainhash.NewHashFromStr("8c14f0db3df150123e6f3dbbf30f8b955a8249b62ac1d1ff16284aefa3d06d87")
 	coinbaseTx, _   = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1a03a403002f746572616e6f64652f9f9fba46d5a08a6be11ddb2dffffffff0a0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac0065cd1d000000001976a914d1a5c9ee12cade94281609fc8f96bbc95db6335488ac00000000")
-
+	coinbaseTx2, _  = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fc00002f6d312d65752fec97bce568b53123b2adfe06ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	coinbaseTx3, _  = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb00002f6d312d65752f622127f93431de4016036b10ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	// coinbaseTx4, _  = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fa00002f6d312d65752f83df000138d5f03188eb156effffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
 	prevBlockHeader = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  &chainhash.Hash{},
@@ -45,6 +47,24 @@ var (
 	blockHeader = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  prevBlockHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1234567890,
+		Bits:           model.NBit{},
+		Nonce:          1234,
+	}
+
+	nextBlockHeader = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  blockHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      1234567890,
+		Bits:           model.NBit{},
+		Nonce:          1234,
+	}
+
+	aBlockHeader = &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{'a'},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      1234567890,
 		Bits:           model.NBit{},
@@ -854,6 +874,10 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx)
 
 		stp.SetCurrentBlockHeader(blockHeader)
+
+		fmt.Println("stp len", len(stp.chainedSubtrees))
+		fmt.Println("current subtree len: ", stp.currentSubtree.Length())
+
 		err = stp.moveDownBlock(context.Background(), &model.Block{
 			Header: prevBlockHeader,
 			Subtrees: []*chainhash.Hash{
@@ -863,6 +887,9 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 			CoinbaseTx: coinbaseTx,
 		})
 		require.NoError(t, err)
+
+		fmt.Println("stp len2", len(stp.chainedSubtrees))
+		fmt.Println("current subtree len: ", stp.currentSubtree.Length())
 
 		assert.Equal(t, 6, len(stp.chainedSubtrees))
 		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
@@ -889,6 +916,123 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 	})
 }
 
+func TestMoveDownBlocks(t *testing.T) {
+	t.Run("multiple blocks", func(t *testing.T) {
+		_ = os.Setenv("initial_merkle_items_per_subtree", "4")
+
+		n := 34 // Number of transactions
+		txHashes := make([]chainhash.Hash, n)
+
+		for i := 0; i < n; i++ {
+			txHash, err := generateTxHash()
+			if err != nil {
+				t.Errorf("error generating txid: %s", err)
+			}
+
+			txHashes[i] = txHash
+		}
+
+		newSubtreeChan := make(chan NewSubtreeRequest)
+		var wg sync.WaitGroup
+		wg.Add(8) // we are expecting 8 subtrees (2 blocks with 4 subtrees each)
+		go func() {
+			for {
+				<-newSubtreeChan
+				//fmt.Println("subtreee", subtreee.Subtree.Length())
+				wg.Done()
+			}
+		}()
+
+		subtreeStore := blob_memory.New()
+		utxosStore := memory.New(ulogger.TestLogger{})
+
+		stp := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, subtreeStore, utxosStore, newSubtreeChan)
+		for _, txHash := range txHashes {
+			stp.Add(util.SubtreeNode{Hash: txHash, Fee: 1})
+		}
+
+		wg.Wait()
+
+		// Ensure subtrees are added to the chain
+		for stp.txCount.Load() < 34 {
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		// there should be 8 chained subtrees
+		assert.Equal(t, 8, len(stp.chainedSubtrees))
+		// subtrees should be 4 in size
+		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
+		// current subtree should have 1 + 2 = 3 txs
+		assert.Equal(t, 3, stp.currentSubtree.Length())
+
+		// create 2 subtrees from previous blocks
+		subtree1 := createSubtree(t, 4, true)
+		subtreeBytes, err := subtree1.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes)
+		require.NoError(t, err)
+
+		subtree2 := createSubtree(t, 4, false)
+		subtreeBytes, err = subtree2.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes)
+		require.NoError(t, err)
+
+		subtree3 := createSubtree(t, 4, true)
+		subtreeBytes, err = subtree3.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeBytes)
+		require.NoError(t, err)
+
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx)
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx2)
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx3)
+
+		stp.SetCurrentBlockHeader(nextBlockHeader)
+
+		moveDownBlock1 := &model.Block{
+			Header: blockHeader,
+			Subtrees: []*chainhash.Hash{
+				subtree1.RootHash(),
+			},
+			CoinbaseTx: coinbaseTx,
+		}
+
+		moveDownBlock2 := &model.Block{
+			Header: prevBlockHeader,
+			Subtrees: []*chainhash.Hash{
+				subtree2.RootHash(),
+			},
+			CoinbaseTx: coinbaseTx2,
+		}
+
+		moveDownBlock3 := &model.Block{
+			Header: aBlockHeader,
+			Subtrees: []*chainhash.Hash{
+				subtree3.RootHash(),
+			},
+			CoinbaseTx: coinbaseTx3,
+		}
+
+		// err = stp.moveDownBlock(context.Background(), moveDownBlock1)
+		// require.NoError(t, err)
+
+		// err = stp.moveDownBlock(context.Background(), moveDownBlock2)
+		// require.NoError(t, err)
+
+		// err = stp.moveDownBlock(context.Background(), moveDownBlock3)
+		// require.NoError(t, err)
+
+		err = stp.moveDownBlocks(context.Background(), []*model.Block{moveDownBlock1, moveDownBlock2, moveDownBlock3})
+		require.NoError(t, err)
+
+		assert.Equal(t, 11, len(stp.chainedSubtrees))
+		assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
+		assert.Equal(t, 0, stp.currentSubtree.Length())
+
+	})
+}
+
 func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtree {
 	subtree, err := util.NewTreeByLeafCount(int(length))
 	require.NoError(t, err)
@@ -903,8 +1047,10 @@ func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtr
 		require.NoError(t, err)
 		err = subtree.AddNode(txHash, i, i)
 		require.NoError(t, err)
-		//fmt.Printf("created subtree1 txHash: %s\n", txHash.String())
+		// fmt.Printf("created subtree1 txHash: %s\n", txHash.String())
 	}
+
+	// fmt.Println("done with subtree: ", subtree)
 
 	return subtree
 }

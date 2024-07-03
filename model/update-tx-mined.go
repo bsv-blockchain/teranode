@@ -129,8 +129,14 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 			for idx := 0; idx < len(subtree.Nodes); idx++ {
 				if subtreeIdx == 0 && idx == 0 {
-					// add the coinbase as the first transaction to be set to mined
-					hashes = append(hashes, block.CoinbaseTx.TxIDChainHash())
+					// mark coinbase tx as mined
+					// NOTE: it's possible this block is not the tip of the chain so the coinbaseTx may not exist in the utxo store
+					// therefore we log the error rather than return an error in this case only
+					coinbaseHashes := []*chainhash.Hash{block.CoinbaseTx.TxIDChainHash()}
+					if err := txMetaStore.SetMinedMulti(gCtx, coinbaseHashes, blockID); err != nil {
+						logger.Warnf("[UpdateTxMinedStatus][%s] failed to set mined info on coinbase tx: %v", block.Hash().String(), err)
+						continue
+					}
 				} else {
 					hashes = append(hashes, &subtree.Nodes[idx].Hash)
 				}

@@ -37,6 +37,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -107,12 +108,45 @@ func TestShouldRejectExcessiveBlockSize(t *testing.T) {
 	time.Sleep(10 * time.Second)
 
 	blockchain := cluster.Nodes[0].BlockchainClient
-	header, _, _ := blockchain.GetBestBlockHeader(ctx)
+	header, meta, _ := blockchain.GetBestBlockHeader(ctx)
 	fmt.Printf("Best block header: %v\n", header.Hash())
 	blockchain1 := cluster.Nodes[1].BlockchainClient
-	header1, _, _ := blockchain1.GetBestBlockHeader(ctx)
+	header1, meta1, _ := blockchain1.GetBestBlockHeader(ctx)
 	fmt.Printf("Best block header1: %v\n", header1.Hash())
 
 	assert.NotEqual(t, header.Hash(), header1.Hash(), "Blocks are equal")
+
+	var o []options.Options
+	o = append(o, options.WithFileExtension("block"))
+
+	blockStore := cluster.Nodes[1].Blockstore
+	r, err := blockStore.GetIoReader(ctx, header1.Hash()[:], o...)
+	if err != nil {
+		t.Errorf("error getting block reader: %v", err)
+	}
+	fmt.Printf("Block reader: %v\n", cluster.Nodes[1].BlockstoreUrl)
+	if err == nil {
+		if bl, err := helper.ReadFile(ctx, "block", logger, r, hashes[90], cluster.Nodes[1].BlockstoreUrl); err != nil {
+			t.Errorf("error reading block: %v", err)
+		} else {
+			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta1.Height)
+			assert.Equal(t, false, bl, "Test Tx not found in block")
+		}
+	}
+
+	blockStore = cluster.Nodes[0].Blockstore
+	r, err = blockStore.GetIoReader(ctx, header.Hash()[:], o...)
+	if err != nil {
+		t.Errorf("error getting block reader: %v", err)
+	}
+	fmt.Printf("Block reader: %v\n", cluster.Nodes[0].BlockstoreUrl)
+	if err == nil {
+		if bl, err := helper.ReadFile(ctx, "block", logger, r, hashes[90], cluster.Nodes[0].BlockstoreUrl); err != nil {
+			t.Errorf("error reading block: %v", err)
+		} else {
+			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
+			assert.Equal(t, true, bl, "Test Tx not found in block")
+		}
+	}
 
 }

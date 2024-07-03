@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,7 +136,7 @@ func GetBlockStore(logger ulogger.Logger) blob.Store {
 	return blockStore
 }
 
-func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhash.Hash, dir string) (bool, error) {
+func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhash.Hash, dir *url.URL) (bool, error) {
 	switch ext {
 	case "utxodiff":
 		utxodiff, err := utxom.NewUTXODiffFromReader(logger, r)
@@ -191,8 +192,10 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 
 		for _, subtree := range block.Subtrees {
 			if true {
-				filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
-				_, _, stReader, err := GetReader(ctx, filename, logger)
+				// filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
+				filename := fmt.Sprintf("%s.subtree", subtree.String())
+				fmt.Printf("Reading subtree from %s\n", filename)
+				_, _, stReader, err := GetReader(ctx, filename, dir, logger)
 				if err != nil {
 					return false, err
 				}
@@ -240,8 +243,8 @@ func ReadSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId cha
 	return false
 }
 
-func GetReader(ctx context.Context, path string, logger ulogger.Logger) (string, string, io.Reader, error) {
-	dir, file := filepath.Split(path)
+func GetReader(ctx context.Context, file string, dir *url.URL, logger ulogger.Logger) (*url.URL, string, io.Reader, error) {
+	// dir, file := filepath.Split(path)
 
 	ext := filepath.Ext(file)
 	fileWithoutExtension := strings.TrimSuffix(file, ext)
@@ -250,25 +253,28 @@ func GetReader(ctx context.Context, path string, logger ulogger.Logger) (string,
 		ext = ext[1:]
 	}
 
-	hash, err := chainhash.NewHashFromStr(fileWithoutExtension)
+	hash, _ := chainhash.NewHashFromStr(fileWithoutExtension)
 
-	if dir == "" && err == nil {
-		store := GetBlockStore(logger)
-
-		r, err := store.GetIoReader(ctx, hash[:], options.WithFileExtension(ext))
-		if err != nil {
-			return "", "", nil, fmt.Errorf("error getting reader from store: %w", err)
-		}
-
-		return dir, ext, r, nil
-	}
-
-	f, err := os.Open(path)
+	// if dir == "" && err == nil {
+	// store := GetBlockStore(logger)
+	store, err := blob.NewStore(logger, dir)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("error opening file: %v\n", err)
+		return nil, "", nil, fmt.Errorf("error creating block store: %w", err)
+	}
+	r, err := store.GetIoReader(ctx, hash[:], options.WithFileExtension(ext))
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("error getting reader from store: %w", err)
 	}
 
-	return dir, ext, f, nil
+	return dir, ext, r, nil
+	// }
+
+	// f, err := os.Open(path)
+	// if err != nil {
+	// 	return "", "", nil, fmt.Errorf("error opening file: %v\n", err)
+	// }
+
+	// return dir, ext, f, nil
 }
 
 func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) ([]byte, error) {
