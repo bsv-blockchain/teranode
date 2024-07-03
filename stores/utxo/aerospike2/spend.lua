@@ -13,27 +13,24 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
     end
 
     -- Get the correct output record
-    local outputs = rec['outputs'] 
-    if outputs == nil then
-        return "ERROR:Outputs not found"
+    local utxos = rec['utxos'] 
+    if utxos == nil then
+        return "ERROR:UTXOs list not found"
     end
 
-    local output = outputs[vout]
-    if output == nil then
-        return "ERROR:Output not found"
-    end
-
-    if output.utxoHash ~= utxoHash then
-        return "ERROR:Output utxohash mismatch"
-    end
-
-    existingSpendingTxID = output.spendingTxID
-    if existingSpendingTxID == nil then
+    local utxo = utxos[vout]
+    if utxo == nil then
         return "ERROR:UTXO not found"
     end
 
-    -- Check if spendable
-    if existingSpendingTxID ~= "" then
+    -- The first 32 bytes are the utxoHash
+    local existingUTXOHash = bytes.get_bytes(utxo, 0, 32)
+    if existingUTXOHash ~= utxoHash then
+        return "ERROR:Output utxohash mismatch"
+    end
+
+    if bytes.size(utxo) == 64 then
+        local existingSpendingTxID = bytes.get_bytes(utxo, 32, 32)
         if existingSpendingTxID == spendingTxID then
             return 'OK'
         else
@@ -41,17 +38,17 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
         end
     end
 
-    -- Update the output to spend it
-    output.spendingTxID = spendingTxID
+    -- Update the output to spend it by appending the spendingTxID
+    bytes.append_bytes(utxo, spendingTxID)
 
     -- Update the record
-    outputs[vout] = output
-    rec['outputs'] = outputs
+    utxos[vout] = utxo
+    rec['utxos'] = utxos
     rec['spentUtxos'] = rec['spentUtxos'] + 1
 
     -- check whether all utxos have been spent
     if rec['spentUtxos'] == rec['nrUtxos'] then
-        rec['lastSpend'] = currentUnixTime
+        rec['lastSpend'] = os.time()
         record.set_ttl(rec, ttl)
     else
         -- why is this needed? the record should already have a non expiring ttl
