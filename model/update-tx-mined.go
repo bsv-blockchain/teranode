@@ -140,8 +140,13 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 			for idx := 0; idx < len(subtree.Nodes); idx++ {
 				if subtreeIdx == 0 && idx == 0 {
-					continue
+					if subtree.Nodes[idx].Hash.IsEqual(CoinbasePlaceholderHash) {
+						continue
+					}
+					logger.Warnf("[UpdateTxMinedStatus][%s] first tx in block is not coinbase tx: %s", block.Hash().String(), subtree.Nodes[idx].Hash.String())
 				}
+
+				hashes = append(hashes, &subtree.Nodes[idx].Hash)
 
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
 					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, batch %d, for subtree %s in block %d", block.Hash().String(), len(hashes), idx/maxMinedBatchSize, block.Subtrees[subtreeIdx].String(), blockID)
