@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -99,15 +100,32 @@ func Start() {
 		panic(err)
 	}
 
-	blockHeaders, _, err := blockchainDB.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100000)
-	if err != nil {
-		panic(err)
-	}
-
-	verboseLogger.Infof("found %d block headers\n", len(blockHeaders))
-
 	filenames := loadFilenames(*filename)
 
+	if blockHeaders, _, err := blockchainDB.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100000); err != nil {
+		panic(err)
+	} else {
+		verboseLogger.Infof("found %d block headers\n", len(blockHeaders))
+		checkFile(ctx, blockHeaders, verboseLogger, filenames, s3buckets, blockchainDB, true)
+	}
+
+	if forkedBlockHeaders, _, err := blockchainDB.GetForkedBlockHeaders(ctx, bestBlockHeader.Hash(), 100000); err != nil {
+		panic(err)
+	} else {
+		verboseLogger.Infof("found %d forked block headers\n", len(forkedBlockHeaders))
+		checkFile(ctx, forkedBlockHeaders, verboseLogger, filenames, s3buckets, blockchainDB, false)
+	}
+
+	if len(filenames) > 0 {
+		fmt.Printf("files found in CSV but not found in blockchain store:\n")
+		for filename := range filenames {
+			fmt.Printf("%s\n", filename)
+		}
+	}
+
+}
+
+func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLogger ulogger.Logger, filenames map[string]bool, s3buckets []s3bucket, blockchainDB blockchain_store.Store, testChainIntegrity bool) {
 	numBlocks := 0
 	numDiffs := 0
 	numSubtrees := 0
@@ -126,7 +144,7 @@ func Start() {
 
 		numBlocks++
 
-		if !blockHeader.HashPrevBlock.IsEqual(&previousHash) && !blockHeader.HashPrevBlock.IsEqual(hashGenesisBlock) {
+		if testChainIntegrity && !blockHeader.HashPrevBlock.IsEqual(&previousHash) && !blockHeader.HashPrevBlock.IsEqual(hashGenesisBlock) {
 			verboseLogger.Infof("block %s has incorrect previous block hash %s\n", blockHeader.Hash(), blockHeader.HashPrevBlock)
 		}
 		previousHash = *blockHeader.Hash()
@@ -138,6 +156,7 @@ func Start() {
 				foundBlocks++
 			}
 		}
+		delete(filenames, blockHeader.Hash().String()+".block")
 
 		numDiffs++
 		if filenames[blockHeader.Hash().String()+".utxodiff"] {
@@ -147,6 +166,7 @@ func Start() {
 				foundDiffs++
 			}
 		}
+		delete(filenames, blockHeader.Hash().String()+".utxodiff")
 
 		block, _, err := blockchainDB.GetBlock(ctx, blockHeader.Hash())
 		if err != nil {
@@ -164,13 +184,13 @@ func Start() {
 					foundSubtrees++
 				}
 			}
+			delete(filenames, subtreeHash.String()+".subtree")
 		}
 	}
 
 	fmt.Printf("block headers: found %.2f%% (%d of %d) \n", float64(foundBlocks)/float64(numBlocks)*100, foundBlocks, numBlocks)
 	fmt.Printf("utxodiffs: found %.2f%% (%d of %d)\n", float64(foundDiffs)/float64(numDiffs)*100, foundDiffs, numDiffs)
 	fmt.Printf("subtrees: found %.2f%% (%d of %d)\n", float64(foundSubtrees)/float64(numSubtrees)*100, foundSubtrees, numSubtrees)
-
 }
 
 func existsInAnotherS3Bucket(ctx context.Context, s3buckets []s3bucket, hash chainhash.Hash, extension string, time time.Time, verboseLogger ulogger.Logger) bool {
