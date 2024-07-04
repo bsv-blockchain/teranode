@@ -78,7 +78,7 @@ func Start() {
 		usage(err.Error())
 	}
 
-	txMeta, err := utxoStore.GetMeta(ctx, txHash)
+	txMeta, err := utxoStore.Get(ctx, txHash)
 	if errors.Is(err, errors.ErrTxNotFound) {
 		fmt.Printf("Tx %s not found in utxoStore\n", txHash)
 	} else if err != nil && err != utxo.ErrNotFound {
@@ -91,7 +91,7 @@ func Start() {
 		fmt.Printf("Tx %s (coinbase=%v) (blockID=%v)\n", txHash, txMeta.IsCoinbase, txMeta.BlockIDs)
 
 		for _, hash := range txMeta.ParentTxHashes {
-			txMeta, err := utxoStore.GetMeta(ctx, &hash)
+			txMeta, err := utxoStore.Get(ctx, &hash)
 			if errors.Is(err, errors.ErrTxNotFound) {
 				fmt.Printf("Parent tx %s not found in utxoStore\n", txHash)
 			} else if err != nil {
@@ -143,7 +143,7 @@ func checkBlocks(ctx context.Context, blockHeaders []*model.BlockHeader, blockMe
 			for _, blockID := range txMeta.BlockIDs {
 				if blockMeta.ID == blockID {
 					foundBlockID = true
-					fmt.Printf("Block ID %d found\n", blockID)
+					fmt.Printf("Block ID found %d \n", blockID)
 					break
 				}
 			}
@@ -153,7 +153,7 @@ func checkBlocks(ctx context.Context, blockHeaders []*model.BlockHeader, blockMe
 			for _, blockID := range parentTx.BlockIDs {
 				if blockMeta.ID == blockID {
 					foundParentBlockID = true
-					fmt.Printf("Parent Block ID %d found\n", blockID)
+					fmt.Printf("Parent block ID found %d\n", blockID)
 					break
 				}
 			}
@@ -167,6 +167,27 @@ func checkBlocks(ctx context.Context, blockHeaders []*model.BlockHeader, blockMe
 		if err := block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore); err != nil {
 			fmt.Println(err.Error())
 			continue
+		}
+
+		if parentTxs != nil && parentTxs[0].IsCoinbase {
+			if block, _, err := blockchainStore.GetBlock(ctx, blockHeader.Hash()); err != nil {
+				fmt.Println(err.Error())
+			} else {
+				// fmt.Printf("%s[%d] coinbase tx %s\n", blockHeader.Hash(), blockMeta.ID, block.CoinbaseTx.TxIDChainHash())
+
+				for _, parentTx := range parentTxs {
+					parentTxHash := parentTx.Tx.TxIDChainHash()
+					if block.CoinbaseTx.TxIDChainHash().IsEqual(parentTxHash) {
+						foundParentCount++
+						fmt.Print("===============\n")
+						fmt.Printf("Coinbase Parent tx found: %s\n", parentTxHash)
+						fmt.Printf("Block Height: %d\n", blockMeta.Height)
+						fmt.Printf("Block ID: %d\n", blockMeta.ID)
+						fmt.Printf("Block Hash: %s\n", blockHeader.Hash())
+						fmt.Print("===============\n")
+					}
+				}
+			}
 		}
 
 		for _, subtreeSlice := range block.SubtreeSlices {
@@ -207,13 +228,15 @@ func checkBlocks(ctx context.Context, blockHeaders []*model.BlockHeader, blockMe
 	}
 
 	if txMeta != nil && !foundBlockID {
-		fmt.Printf("%v not found\n", txMeta.BlockIDs)
+		fmt.Printf("Block ID %v not found\n", txMeta.BlockIDs)
 	}
 	if foundCount == 0 {
 		fmt.Printf("Tx not found\n")
 	}
 	if txMeta != nil && !foundParentBlockID {
-		fmt.Printf("Parent %v not found\n", txMeta.BlockIDs)
+		for _, parentTx := range parentTxs {
+			fmt.Printf("Parent block ID %v not found\n", parentTx.BlockIDs)
+		}
 	}
 	if txMeta != nil && foundParentCount == 0 {
 		fmt.Printf("Parent tx not found\n")
