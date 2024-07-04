@@ -2,8 +2,9 @@
 -- vout number - the output index of the UTXO
 -- utxoHash []byte - 32 byte little-endian hash of the UTXO
 -- spendingTxID []byte - 32 byte little-endian hash of the spending transaction
+-- currentBlockHeight number - the current block height
 -- ttl number - the time-to-live for the UTXO record
-function spend(rec, vout, utxoHash, spendingTxID, ttl)
+function spend(rec, vout, utxoHash, spendingTxID, currentBlockHeight, ttl)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
     end
@@ -11,6 +12,11 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
 	if rec['frozen'] then
 		return "FROZEN:TX is frozen"
 	end
+
+    local coinbaseSpendingHeight = rec['spendingHeight']
+    if coinbaseSpendingHeight and coinbaseSpendingHeight > 0 and coinbaseSpendingHeight > currentBlockHeight then
+        return "ERROR:Coinbase UTXO can only be spent after 100 blocks"
+    end
 
     if rec['big'] then
         return "ERROR:Big TX"
@@ -67,7 +73,6 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
 
     -- check whether all utxos have been spent
     if rec['spentUtxos'] == rec['nrUtxos'] then
-        rec['lastSpend'] = os.time()
         record.set_ttl(rec, ttl)
     else
         -- why is this needed? the record should already have a non expiring ttl

@@ -41,7 +41,6 @@ function unSpend(rec, vout, utxoHash)
         utxos[vout+1] = newUtxo -- NB - lua arrays are 1-based!!!!
         rec['utxos'] = utxos
         rec['spentUtxos'] = rec['spentUtxos'] - 1
-        rec['lastSpend'] = nil
     end
 
     record.set_ttl(rec, -1)
