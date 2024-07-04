@@ -37,6 +37,8 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
 
     if bytes.size(utxo) == 64 then
         local existingSpendingTxID = bytes.get_bytes(utxo, 33, 32) -- NB - lua arrays are 1-based!!!!
+        warn("existingSpendingTxID: " .. tostring(existingSpendingTxID))
+        warn("size of existingSpendingTxID: " .. bytes.size(existingSpendingTxID))
         if frozen(existingSpendingTxID) then
 			return "FROZEN:UTXO is frozen"
 		elseif bytes_equal(existingSpendingTxID, spendingTxID) then
@@ -79,11 +81,11 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
 end
 
 function bytes_equal(a, b)
-    if #a ~= #b then -- This syntax #a is the length of the array a and #b is the length of the array b.  They should be equal.
+    if bytes.size(a) ~= bytes.size(b) then
         return false
     end
 
-    for i = 1, #a do 
+    for i = 1, bytes.size(a) do 
         if a[i] ~= b[i] then
             return false
         end
@@ -92,14 +94,15 @@ function bytes_equal(a, b)
 end
 
 function frozen(a)
-	if #a ~= 32 then -- Frozen utxos have 32 'FF' bytes.
+    if bytes.size(a) ~= 32 then -- Frozen utxos have 32 'FF' bytes.
         return false
     end
 
-    for i = 1, #a do 
+    for i = 1, bytes.size(a) do
         if a[i] ~= 255 then
             return false
         end
     end
+
     return true
 end

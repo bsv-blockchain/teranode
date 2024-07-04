@@ -635,3 +635,79 @@ func TestStoreOPReturn(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, utxo1, 32)
 }
+
+func TestFrozenTX(t *testing.T) {
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	require.NoError(t, err)
+
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	key, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	_, err = client.Delete(nil, key)
+	require.NoError(t, err)
+
+	txMeta, err := db.Create(context.Background(), tx)
+	require.NoError(t, err)
+	assert.NotNil(t, txMeta)
+
+	frozenBin := aero.NewBin("frozen", aero.NewIntegerValue(1))
+
+	// Write the bin to the record
+	err = client.PutBins(nil, key, frozenBin)
+	require.NoError(t, err)
+
+	err = db.Spend(context.Background(), spends, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "FROZEN:TX is frozen")
+}
+
+func TestFrozenUTXO(t *testing.T) {
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	require.NoError(t, err)
+
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	key, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	_, err = client.Delete(nil, key)
+	require.NoError(t, err)
+
+	txMeta, err := db.Create(context.Background(), tx)
+	require.NoError(t, err)
+	assert.NotNil(t, txMeta)
+
+	frozenMarker, err := chainhash.NewHashFromStr("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")
+	require.NoError(t, err)
+
+	err = db.Spend(context.Background(), []*utxo.Spend{
+		{
+			TxID:         tx.TxIDChainHash(),
+			Vout:         0,
+			UTXOHash:     utxoHash0,
+			SpendingTxID: frozenMarker,
+		},
+	}, 0)
+	require.NoError(t, err)
+
+	err = db.Spend(context.Background(), spends, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "FROZEN:UTXO is frozen")
+
+}

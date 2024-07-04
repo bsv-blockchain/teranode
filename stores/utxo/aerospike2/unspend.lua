@@ -52,11 +52,11 @@ function unSpend(rec, vout, utxoHash)
 end
 
 function bytes_equal(a, b)
-    if #a ~= #b then -- This syntax #a is the length of the array a and #b is the length of the array b.  They should be equal.
+    if bytes.size(a) ~= bytes.size(b) then
         return false
     end
 
-    for i = 1, #a do
+    for i = 1, bytes.size(a) do 
         if a[i] ~= b[i] then
             return false
         end
