@@ -115,6 +115,17 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 		return nil
 	}
 
+	if blockID > 0 {
+		// mark coinbase tx as mined
+		// NOTE: it's possible this block is not the tip of the chain so the coinbaseTx may not exist in the utxo store
+		// therefore we log the error rather than return an error in this case only
+		coinbaseHashes := []*chainhash.Hash{block.CoinbaseTx.TxIDChainHash()}
+		logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for coinbase tx %s in block ID %d", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String(), blockID)
+		if err := txMetaStore.SetMinedMulti(ctx, coinbaseHashes, blockID); err != nil {
+			logger.Warnf("[UpdateTxMinedStatus][%s] failed to set mined info on coinbase tx: %v", block.Hash().String(), err)
+		}
+	}
+
 	maxMinedRoutines, _ := gocore.Config().GetInt("utxostore_maxMinedRoutines", 128)
 	maxMinedBatchSize, _ := gocore.Config().GetInt("utxostore_maxMinedBatchSize", 1024)
 
@@ -129,16 +140,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 			for idx := 0; idx < len(subtree.Nodes); idx++ {
 				if subtreeIdx == 0 && idx == 0 {
-					// mark coinbase tx as mined
-					// NOTE: it's possible this block is not the tip of the chain so the coinbaseTx may not exist in the utxo store
-					// therefore we log the error rather than return an error in this case only
-					coinbaseHashes := []*chainhash.Hash{block.CoinbaseTx.TxIDChainHash()}
-					if err := txMetaStore.SetMinedMulti(gCtx, coinbaseHashes, blockID); err != nil {
-						logger.Warnf("[UpdateTxMinedStatus][%s] failed to set mined info on coinbase tx: %v", block.Hash().String(), err)
-						continue
-					}
-				} else {
-					hashes = append(hashes, &subtree.Nodes[idx].Hash)
+					continue
 				}
 
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
