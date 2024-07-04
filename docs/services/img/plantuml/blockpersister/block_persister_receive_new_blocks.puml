@@ -2,9 +2,6 @@
 participant "Blockchain Service" as Blockchain
 participant "Kafka" as Kafka
 participant "Block Persister Service" as BlockPersister
-database "TxMetaStore" as TMS
-database "Substree Store" as SubtreeStore
-database "Substree Store" as SubtreeStore
 database "File Storage" as FileStorage
 
 Blockchain -> Kafka: Emit Kafka Block Notification
@@ -35,6 +32,6 @@ deactivate BlockPersister
 deactivate BlockPersister
 
 
-left footer Last Modified On: 6-May-2024
+left footer Last Modified On: 7-June-2024
 
 @enduml

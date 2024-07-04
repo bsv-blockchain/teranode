@@ -30,9 +30,7 @@ type BlockSubtree struct {
 
 func Start() {
 	// turn off all batching in aerospike, in this case it will only slow us down, since we are reading in 1 thread
-	gocore.Config().Set("utxostore_spendBatcherEnabled", "false")
-	gocore.Config().Set("txmeta_store_storeBatcherEnabled", "false")
-	gocore.Config().Set("txmeta_store_getBatcherEnabled", "false")
+	gocore.Config().Set("utxostore_batchingEnabled", "false")
 
 	path, err := os.Getwd()
 	if err != nil {
@@ -174,9 +172,9 @@ func Start() {
 					continue
 				}
 				utxo, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
-					TxID: block.CoinbaseTx.TxIDChainHash(),
-					Vout: uint32(vout),
-					Hash: utxoHash,
+					TxID:     block.CoinbaseTx.TxIDChainHash(),
+					Vout:     uint32(vout),
+					UTXOHash: utxoHash,
 				})
 				if err != nil {
 					logger.Errorf("failed to get utxo %s from utxo store: %s", utxoHash, err)
@@ -242,7 +240,7 @@ func Start() {
 						// check that the transaction exists in the tx store
 						tx, err = txStore.Get(ctx, node.Hash[:])
 						if err != nil {
-							txMeta, err := utxoStore.GetMeta(ctx, &node.Hash)
+							txMeta, err := utxoStore.Get(ctx, &node.Hash)
 							if err != nil {
 								logger.Errorf("failed to get transaction %s from txmeta store: %s", node.Hash, err)
 								continue
@@ -262,7 +260,7 @@ func Start() {
 						}
 
 						// check the topological order of the transactions
-						for inputIdx, input := range btTx.Inputs {
+						for _, input := range btTx.Inputs {
 							// the input tx id (parent tx) should already be in the transaction map
 							inputHash := chainhash.Hash(input.PreviousTxID())
 							if !inputHash.Equal(chainhash.Hash{}) { // coinbase is parent
@@ -280,8 +278,8 @@ func Start() {
 									utxo, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
 										TxID:         input.PreviousTxIDChainHash(),
 										SpendingTxID: btTx.TxIDChainHash(),
-										Vout:         uint32(inputIdx),
-										Hash:         utxoHash,
+										Vout:         input.PreviousTxOutIndex,
+										UTXOHash:     utxoHash,
 									})
 									if err != nil {
 										logger.Errorf("failed to get parent utxo %s from utxo store: %s", utxoHash, err)
@@ -290,7 +288,7 @@ func Start() {
 									if utxo == nil {
 										logger.Errorf("parent utxo %s does not exist in utxo store", utxoHash)
 									} else if !utxo.SpendingTxID.IsEqual(btTx.TxIDChainHash()) {
-										logger.Errorf("parent utxo %s is not marked as spent by transaction %s", utxoHash, btTx.TxIDChainHash())
+										logger.Errorf("parent utxo %s (%s:%d) is not marked as spent by transaction %s instead it is spent by %s", utxoHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, btTx.TxIDChainHash(), utxo.SpendingTxID)
 									} else {
 										logger.Debugf("transaction %s parent utxo %s exists in utxo store with status %s, spending tx %s, locktime %d", btTx.TxIDChainHash(), utxoHash, utxostore.Status(utxo.Status), utxo.SpendingTxID, utxo.LockTime)
 									}
@@ -307,9 +305,9 @@ func Start() {
 								continue
 							}
 							utxo, err := utxoStore.GetSpend(ctx, &utxostore.Spend{
-								TxID: btTx.TxIDChainHash(),
-								Vout: uint32(vout),
-								Hash: utxoHash,
+								TxID:     btTx.TxIDChainHash(),
+								Vout:     uint32(vout),
+								UTXOHash: utxoHash,
 							})
 							if err != nil {
 								logger.Errorf("failed to get utxo %s from utxo store: %s", utxoHash, err)

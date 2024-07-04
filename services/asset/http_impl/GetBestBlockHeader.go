@@ -16,6 +16,7 @@ func (h *HTTP) GetBestBlockHeader(mode ReadMode) func(c echo.Context) error {
 		}()
 
 		h.logger.Debugf("[Asset_http] GetBestBlockHeader in %s for %s", mode, c.Request().RemoteAddr)
+		defer h.logger.Debugf("[Asset_http] GetBestBlockHeader completed in %s for %s", mode, c.Request().RemoteAddr)
 
 		blockHeader, meta, err := h.repository.GetBestBlockHeader(c.Request().Context())
 		if err != nil {

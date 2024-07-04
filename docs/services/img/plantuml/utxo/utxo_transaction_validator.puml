@@ -1,62 +1,64 @@
 @startuml
 participant "TX Validator (Validator.go)" as TXValidator
 participant "UTXO Store" as UTXOStore
-database "Datastore Implementation" as Datastore
 
 == Fetch Block Height ==
 
 TXValidator -> UTXOStore: getBlockHeight()
 activate UTXOStore
 
-UTXOStore -> Datastore: Fetch Current Block Height
-activate Datastore
-Datastore --> UTXOStore: Current Block Height
-deactivate Datastore
 
 UTXOStore --> TXValidator: Block Height
 deactivate UTXOStore
 
-== Spend TX ==
+== Spend UTXO ==
 
 
-TXValidator -> UTXOStore: Spend(UTXO)
+TXValidator -> UTXOStore: Spend(ctx, spends)
 activate UTXOStore
 
-UTXOStore -> Datastore: Mark UTXO as Spent
-activate Datastore
-Datastore --> UTXOStore: Acknowledgement
-deactivate Datastore
 
 UTXOStore --> TXValidator: Confirmation of Spend
 deactivate UTXOStore
 
-== Unspend TX ==
+== Unspend UTXO ==
 
 
-TXValidator -> UTXOStore: Unspend(UTXO)
+TXValidator -> UTXOStore: UnSpend(ctx, spentUtxos)
 activate UTXOStore
-
-UTXOStore -> Datastore: Revert UTXO to Unspent
-activate Datastore
-Datastore --> UTXOStore: Acknowledgement
-deactivate Datastore
 
 UTXOStore --> TXValidator: Confirmation of Unspend
 deactivate UTXOStore
 
-== Store TX ==
+== Create UTXO ==
 
-TXValidator -> UTXOStore: Store(New UTXO)
+TXValidator -> UTXOStore: Create(ctx, tx)
 activate UTXOStore
 
-UTXOStore -> Datastore: Store New UTXO
-activate Datastore
-Datastore --> UTXOStore: Acknowledgement
-deactivate Datastore
 
-UTXOStore --> TXValidator: Confirmation of Store
+UTXOStore --> TXValidator: Confirmation of UTXO Creation
 deactivate UTXOStore
 
-left footer Last Modified On: 24-Nov-2023
+
+== Delete UTXO ==
+
+TXValidator -> UTXOStore: Delete(ctx, txId)
+activate UTXOStore
+
+
+UTXOStore --> TXValidator: Confirmation of Deleted UTXO
+deactivate UTXOStore
+
+
+== Decorate previous outputs ==
+
+TXValidator -> UTXOStore: PreviousOutputsDecorate(ctx, outputs)
+activate UTXOStore
+
+
+UTXOStore --> TXValidator: Decorated outputs
+deactivate UTXOStore
+
+left footer Last Modified On: 5-June-2024
 
 @enduml

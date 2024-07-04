@@ -77,7 +77,13 @@ type Exister interface {
 }
 
 func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exister, hash *chainhash.Hash) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
-	b, err := exister.Exists(ctx, hash[:])
+
+	// Check to see if .meta file exists rather than just the subtree file itself.
+	// BlockAssembly creates subtree files with no associated .meta file
+	// SubtreeValidation creates subtree files with an associated .meta file
+	// Occasionally it dev environments in particular, multiple node instances
+	// create a clashing subtree file so sometimes the subtree file exists but not the .meta file
+	b, err := exister.Exists(ctx, hash[:], options.WithFileExtension("meta"))
 	if err != nil {
 		return false, false, err
 	}

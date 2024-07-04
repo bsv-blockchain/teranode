@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"math"
 	"sync"
 
@@ -15,6 +16,7 @@ type genericMap[K comparable, V any] interface {
 	Iter(cb func(K, V) (stop bool))
 	Exists(K) bool
 	Length() int // TODO remove the need for this method
+	IsEqual(other genericMap[K, V], fn ValueCompareFn[V]) (bool, string)
 }
 
 // hashable is a custom interface that defines a method that must be implemented by a type in order to be used as a key in a splitSwiss map
@@ -92,6 +94,35 @@ func (ssm *splitMap[K, V]) Length() int {
 	return length
 }
 
+type ValueCompareFn[V any] func(V, V) bool
+
+func (ssm *splitMap[K, V]) IsEqual(other genericMap[K, V], fn ValueCompareFn[V]) (bool, string) {
+
+	if ssm.Length() != other.Length() {
+		return false, fmt.Sprintf("Lengths are different: %d vs %d", ssm.Length(), other.Length())
+	}
+
+	// compare contents of ssm with other
+	different := false
+	var difference string
+	ssm.Iter(func(k K, v V) bool {
+		otherV, ok := other.Get(k)
+		if !ok || !fn(v, otherV) {
+			different = true
+			difference = fmt.Sprintf("Values are different for key %v: %v vs %v", k, v, otherV)
+			return false // stop iterating
+		}
+
+		return true // continue iterating
+	})
+
+	if different {
+		return false, difference
+	}
+
+	return true, ""
+}
+
 type swissMap[K comparable, V any] struct {
 	mu     sync.RWMutex
 	m      *swiss.Map[K, V]
@@ -159,6 +190,32 @@ func (s *swissMap[K, V]) Length() int {
 	return s.length
 }
 
+func (ssm *swissMap[K, V]) IsEqual(other genericMap[K, V], fn ValueCompareFn[V]) (bool, string) {
+	if ssm.Length() != other.Length() {
+		return false, fmt.Sprintf("Lengths are different: %d vs %d", ssm.Length(), other.Length())
+	}
+
+	// compare contents of ssm with other
+	different := false
+	var difference string
+	ssm.Iter(func(k K, v V) bool {
+		otherV, ok := other.Get(k)
+		if !ok || !fn(v, otherV) {
+			different = true
+			difference = fmt.Sprintf("Values are different for key %v: %v vs %v", k, v, otherV)
+			return false // stop iterating
+		}
+
+		return true // continue iterating
+	})
+
+	if different {
+		return false, difference
+	}
+
+	return true, ""
+}
+
 type goMap[K comparable, V any] struct {
 	mu sync.RWMutex
 	m  map[K]V
@@ -217,4 +274,30 @@ func (s *goMap[K, V]) Length() int {
 	defer s.mu.RUnlock()
 
 	return len(s.m)
+}
+
+func (ssm *goMap[K, V]) IsEqual(other genericMap[K, V], fn ValueCompareFn[V]) (bool, string) {
+	if ssm.Length() != other.Length() {
+		return false, fmt.Sprintf("Lengths are different: %d vs %d", ssm.Length(), other.Length())
+	}
+
+	// compare contents of ssm with other
+	different := false
+	var difference string
+	ssm.Iter(func(k K, v V) bool {
+		otherV, ok := other.Get(k)
+		if !ok || !fn(v, otherV) {
+			different = true
+			difference = fmt.Sprintf("Values are different for key %v: %v vs %v", k, v, otherV)
+			return false // stop iterating
+		}
+
+		return true // continue iterating
+	})
+
+	if different {
+		return false, difference
+	}
+
+	return true, ""
 }

@@ -1,7 +1,0 @@
-# .github/dependabot.yml
-version: 2
-updates:
-  - package-ecosystem: "gomod"  # "gomod" is the ecosystem for Go modules
-    directory: "/"              # Root directory (assumes go.mod is at the root of the repo)
-    schedule:
-      interval: "weekly"        # Adjust this as needed

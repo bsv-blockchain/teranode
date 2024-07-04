@@ -2,12 +2,13 @@ package blockassembly
 
 import (
 	"context"
-	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"math/big"
 	"net/url"
 	"os"
 	"sync"
 	"testing"
+
+	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
@@ -326,4 +327,81 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	items.blockAssembler = ba
 
 	return &items
+}
+
+func TestBlockAssembly_ShouldNotAllowMoreThanOneCBTx(t *testing.T) {
+	t.Run("AddTx", func(t *testing.T) {
+		initPrometheusMetrics()
+
+		ctx := context.Background()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+
+		testItems.blockAssembler.startChannelListeners(ctx)
+		testItems.blockAssembler.bestBlockHeader.Store(model.GenesisBlockHeader)
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			subtreeRequest := <-testItems.newSubtreeChan
+			subtree := subtreeRequest.Subtree
+			assert.NotNil(t, subtree)
+			assert.Equal(t, *model.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+			assert.Len(t, subtree.Nodes, 4)
+			assert.NotEqual(t, uint64(5000000556), subtree.Fees)
+			wg.Done()
+		}()
+
+		_, err := testItems.utxoStore.Create(ctx, tx1)
+		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *model.CoinbasePlaceholderHash, Fee: 5000000000})
+
+		_, err = testItems.utxoStore.Create(ctx, tx2)
+		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222})
+
+		_, err = testItems.utxoStore.Create(ctx, tx3)
+		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 334})
+
+		_, err = testItems.utxoStore.Create(ctx, tx4)
+		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444})
+
+		_, err = testItems.utxoStore.Create(ctx, tx5)
+		require.NoError(t, err)
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555})
+
+		wg.Wait()
+		miningCandidate, subtree, err := testItems.blockAssembler.GetMiningCandidate(ctx)
+		require.NoError(t, err)
+		assert.NotNil(t, miningCandidate)
+		assert.NotNil(t, subtree)
+		// assert.Equal(t, uint64(5000000667), miningCandidate.CoinbaseValue)
+		assert.NotEqual(t, uint64(10000000556), miningCandidate.CoinbaseValue)
+		assert.Equal(t, uint32(1), miningCandidate.Height)
+		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Len(t, subtree, 1)
+		assert.Len(t, subtree[0].Nodes, 4)
+
+		// mine block
+
+		solution, err := cpuminer.Mine(ctx, miningCandidate)
+		require.NoError(t, err)
+
+		blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+		require.NoError(t, err)
+
+		blockHash := util.Sha256d(blockHeader)
+		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+
+		target := model.NewNBitFromSlice(miningCandidate.NBits).CalculateTarget()
+
+		var bn = big.NewInt(0)
+		bn.SetString(hashStr, 16)
+
+		compare := bn.Cmp(target)
+		assert.LessOrEqual(t, compare, 0)
+
+	})
 }

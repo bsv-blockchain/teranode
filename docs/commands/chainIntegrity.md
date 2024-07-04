@@ -19,22 +19,22 @@ The ChainIntegrity utility is particularly useful for validation of large perfor
 
 ## 2. Architecture
 
-![Chain_Integrity_Container_Diagram.png](img%2FChain_Integrity_Container_Diagram.png)
+![Chain_Integrity_Container_Diagram.png](img/Chain_Integrity_Container_Diagram.png)
 
-The Chain Integrity utility connects to various data stores (blockchain, subtree, transaction, UTXO, and transaction metadata stores) to validate the integrity of the blockchain data.
+The Chain Integrity utility connects to various data stores (blockchain, subtree, transaction, UTXO stores) to validate the integrity of the blockchain data.
 
 ## 3. Functionality
 
 ### 3.1. Chain Integrity Initialization and Configuration
 
-The utility first action is to load configuration URLs for various data stores (blockchain, subtree, transaction, UTXO, and transaction metadata stores) and initialize them.
+The utility first action is to load configuration URLs for various data stores (blockchain, subtree, transaction, UTXO stores) and initialize them.
 
-![chain_integrity_init.svg](img%2Fplantuml%2Fchain_integrity_init.svg)
+![chain_integrity_init.svg](img/plantuml/chain_integrity_init.svg)
 
 
 ### 3.2. Chain Integrity Verification
 
-![chain_integrity_tests.svg](img%2Fplantuml%2Fchain_integrity_tests.svg)
+![chain_integrity_tests.svg](img/plantuml/chain_integrity_tests.svg)
 
 
 - **Best Block Header and All Block Headers Retrieval**: Starts by fetching the best block header to identify the current chain tip and then retrieves all block headers up to a specified limit to analyze the blockchain's structure and integrity.
@@ -54,7 +54,7 @@ The utility first action is to load configuration URLs for various data stores (
 
 Key Components and Libraries:
 
-- **`github.com/bitcoin-sv/ubsv/*`**: Libraries and modules specific to the Bitcoin SV ecosystem, used for interacting with blockchain data, transaction metadata, and UTXO stores.
+- **`github.com/bitcoin-sv/ubsv/*`**: Libraries and modules specific to the Bitcoin SV ecosystem, used for interacting with blockchain data and UTXO stores.
 - **`github.com/libsv/go-bt/v2`**: A library for constructing, parsing, and manipulating Bitcoin transactions.
 - **`github.com/libsv/go-bt/v2/chainhash`**: Provides utilities for hashing used within Bitcoin, enabling block and transaction hash computations.
 - **`github.com/ordishs/gocore`**: A utility library providing core functionality, such as configuration management.

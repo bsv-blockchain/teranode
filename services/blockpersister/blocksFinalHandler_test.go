@@ -73,7 +73,7 @@ func (m *MockStore) GetIoReader(ctx context.Context, key []byte, opts ...options
 	return newReadCloserFromBytes(b), nil
 }
 
-func (m *MockStore) MetaBatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...string) error {
+func (m *MockStore) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...string) error {
 	for _, missing := range hashes {
 		missing.Data = &meta.Data{
 			Tx: m.txs[missing.Idx],
@@ -115,7 +115,7 @@ func (m *MockStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Spen
 	return nil, nil
 }
 
-func (m *MockStore) Spend(ctx context.Context, spends []*utxo.Spend) error {
+func (m *MockStore) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
 	return nil
 }
 

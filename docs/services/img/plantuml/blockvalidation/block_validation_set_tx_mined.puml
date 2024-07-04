@@ -1,0 +1,39 @@
+@startuml
+participant "Blockchain" as Blockchain
+participant "Block Validation" as BlockValidation
+participant "Subtree Store" as SubtreeStore
+participant "UTXO Store" as UTXOStore
+
+BlockValidation -> Blockchain: Subscribe
+
+Blockchain -> BlockValidation: SendNotification(ctx, \n   &blockchain_api.Notification{ \n     Type: model.NotificationType_BlockSubtreesSet, \n     Hash: blockHashBytes\n})
+activate BlockValidation
+
+BlockValidation -> BlockValidation: setTxMined(ctx, blockHash)
+activate BlockValidation
+
+BlockValidation -> Blockchain: GetBlock(ctx, blockHash)
+activate Blockchain
+Blockchain -> BlockValidation: Block
+deactivate Blockchain
+
+loop for each subtree hash in the block
+    BlockValidation -> SubtreeStore: Get(ctx, subtreeHash)
+    activate SubtreeStore
+    SubtreeStore -> BlockValidation: Subtree
+    deactivate SubtreeStore
+end
+
+loop for each batch of tx hashes in the block subtrees
+    BlockValidation -> UTXOStore: SetMinedMulti(gCtx, txBatchHashes, blockID)
+    activate UTXOStore
+    UTXOStore --> BlockValidation
+    deactivate UTXOStore
+end
+deactivate BlockValidation
+deactivate BlockValidation
+
+
+left footer Last Modified On: 3-July-2024
+
+@enduml

@@ -73,7 +73,7 @@ func (h *HTTP) GetTransactions() func(c echo.Context) error {
 
 		if err := g.Wait(); err != nil {
 			h.logger.Errorf("[GetTransactions] failed to get txs from repository: %s", err.Error())
-			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			return err
 		}
 
 		prometheusAssetHttpGetTransactions.WithLabelValues("OK", "200").Add(float64(nrTxAdded))

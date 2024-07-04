@@ -15,10 +15,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-//func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore txmeta_store.Store, subtrees []*util.Subtree, blockHeader *BlockHeader) error {
-//	return nil
-//}
-
 type txMinedStatus interface {
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error
 }
@@ -114,13 +110,24 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 
 	logger.Infof("[UpdateTxMinedStatus][%s] blockID %d for %d subtrees", block.Hash().String(), blockID, len(block.Subtrees))
 
-	updateTxMinedStatusEnabled := gocore.Config().GetBool("txmeta_store_updateTxMinedStatus", true)
+	updateTxMinedStatusEnabled := gocore.Config().GetBool("utxostore_updateTxMinedStatus", true)
 	if !updateTxMinedStatusEnabled {
 		return nil
 	}
 
-	maxMinedRoutines, _ := gocore.Config().GetInt("txmeta_store_maxMinedRoutines", 128)
-	maxMinedBatchSize, _ := gocore.Config().GetInt("txmeta_store_maxMinedBatchSize", 1024)
+	if blockID > 0 {
+		// mark coinbase tx as mined
+		// NOTE: it's possible this block is not the tip of the chain so the coinbaseTx may not exist in the utxo store
+		// therefore we log the error rather than return an error in this case only
+		coinbaseHashes := []*chainhash.Hash{block.CoinbaseTx.TxIDChainHash()}
+		logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for coinbase tx %s in block ID %d", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String(), blockID)
+		if err := txMetaStore.SetMinedMulti(ctx, coinbaseHashes, blockID); err != nil {
+			logger.Warnf("[UpdateTxMinedStatus][%s] failed to set mined info on coinbase tx: %v", block.Hash().String(), err)
+		}
+	}
+
+	maxMinedRoutines, _ := gocore.Config().GetInt("utxostore_maxMinedRoutines", 128)
+	maxMinedBatchSize, _ := gocore.Config().GetInt("utxostore_maxMinedBatchSize", 1024)
 
 	g, gCtx := errgroup.WithContext(spanCtx)
 	g.SetLimit(maxMinedRoutines)
@@ -133,11 +140,13 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 			for idx := 0; idx < len(subtree.Nodes); idx++ {
 				if subtreeIdx == 0 && idx == 0 {
-					// add the coinbase as the first transaction to be set to mined
-					hashes = append(hashes, block.CoinbaseTx.TxIDChainHash())
-				} else {
-					hashes = append(hashes, &subtree.Nodes[idx].Hash)
+					if subtree.Nodes[idx].Hash.IsEqual(CoinbasePlaceholderHash) {
+						continue
+					}
+					logger.Warnf("[UpdateTxMinedStatus][%s] first tx in block is not coinbase tx: %s", block.Hash().String(), subtree.Nodes[idx].Hash.String())
 				}
+
+				hashes = append(hashes, &subtree.Nodes[idx].Hash)
 
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
 					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, batch %d, for subtree %s in block %d", block.Hash().String(), len(hashes), idx/maxMinedBatchSize, block.Subtrees[subtreeIdx].String(), blockID)

@@ -2,14 +2,14 @@
 queue "blockFoundCh\nBlock Found Channel" as BFC
 participant "Block Validation Server\n(Server.go)" as BVS
 entity "Block Validation\n(BlockValidation.go)" as BVVB
-participant "Util HTTP Request" as Util
-participant "Blockchain Client" as BC
+participant "Util HTTP\nRequest" as Util
+queue "catchupCh\nCatchup Channel" as CCC
 entity "Block" as Block
 database "Subtree Store" as SubtreeStore
-database "Tx Meta Store" as TxMetaStore
+database "UTXO Store" as UTXOStore
 database "Tx Store" as TxStore
-queue "catchupCh\nCatchup Channel" as CCC
-participant "Subtree Validation" as SVS
+participant "Blockchain\nService" as BC
+participant "Subtree Validation\nService" as SVS
 
 BFC -> BVS: processBlockFound(ctx, hash, baseURL)
 activate BVS
@@ -49,7 +49,9 @@ alt Not Exists - Start the Validation process
 
         alt Subtree Not Exists
            BVVB -> SVS: CheckSubtree(ctx, subtreeHash, baseURL)
+           activate SVS
            SVS --> BVVB
+           deactivate SVS
         end
     end
 
@@ -62,14 +64,14 @@ alt Not Exists - Start the Validation process
 
     BVVB -> BVVB: storeCoinbaseTx(ctx, block)
     activate BVVB
-    BVVB -> TxMetaStore: Create(ctx, block.CoinbaseTx)
-    activate TxMetaStore
-    TxMetaStore -> BVVB
-    deactivate TxMetaStore
+    BVVB -> UTXOStore: Create(ctx, block.CoinbaseTx)
+    activate UTXOStore
+    UTXOStore -> BVVB
+    deactivate UTXOStore
     deactivate BVVB
 
 
-    BVVB -> Block: Valid(ctx, subtreeStore, txMetaStore, blockHeaders)
+    BVVB -> Block: Valid(ctx, subtreeStore, UTXOStore, blockHeaders)
     activate Block
     Block --> BVVB
     deactivate Block
@@ -93,22 +95,30 @@ alt Not Exists - Start the Validation process
     activate Block
     loop For each subtree hash in the block
         Block -> SubtreeStore: Get(gCtx, subtreeHash[:])
+        activate SubtreeStore
         SubtreeStore -> Block: subtree
+        deactivate SubtreeStore
     end
     Block -> BVVB
     deactivate Block
-    loop For each Subtree in the Block
-       BVVB -> BVVB: updateSubtreesTTL(ctx, block)
-       activate BVVB
-       BVVB -> BVVB: UpdateTxMinedStatus(ctx, u.logger, u.txMetaStore, subtrees, block.Header)
-       activate BVVB
-       loop For each Node (Tx) in the Subtree
-          BVVB  -> TxMetaStore: SetMinedMulti(ctx, hashes, blockHeaderHash) ## mark tx as mined
-       end
 
-       deactivate BVVB
+
+    BVVB -> BVVB: updateSubtreesTTL(ctx, block)
+    activate BVVB
+    loop For each Subtree in the Block
+        BVVB -> SubtreeStore: SetTTL(ctx, subtreeHash, 0)
+        activate SubtreeStore
+        SubtreeStore --> BVVB: TTL set to 0 for the subtree
+        deactivate SubtreeStore
     end
+    BVVB -> BC: SetBlockSubtreesSet(ctx, block.Header.Hash())
+    activate BC
+    BC --> BVVB
+    deactivate BC
     deactivate BVVB
+
+    deactivate BVVB
+
     alt If Error
     BVVB  -> BC: InvalidateBlock(ctx, block.Header.Hash())
     end
@@ -119,6 +129,6 @@ end
 
 deactivate BVS
 
-left footer Last Modified On: 28-Jan-2024
+left footer Last Modified On: 3-July-2024
 
 @enduml

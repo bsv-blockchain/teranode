@@ -3,9 +3,10 @@ package ubsv
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/util"
 	"net/url"
 	"sync"
+
+	"github.com/bitcoin-sv/ubsv/util"
 
 	// "github.com/aerospike/aerospike-client-go/v7"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -110,13 +111,13 @@ func (s *Ubsv) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh chan *
 
 				spends = append(spends, &utxostore.Spend{
 					TxID:         tx.TxIDChainHash(),
-					Hash:         utxoHash,
+					UTXOHash:     utxoHash,
 					Vout:         uint32(idx),
 					SpendingTxID: spendingTxHash,
 				})
 			}
 
-			err = s.store.Spend(ctx, spends)
+			err = s.store.Spend(ctx, spends, 0)
 			if err != nil {
 				s.logger.Warnf("spend failed: %v\n", err)
 			}

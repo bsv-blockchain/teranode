@@ -18,7 +18,7 @@
 3. [Data Model](#3-data-model)
 - [3.1. Block Data Model](#31-block-data-model)
     - [3.2. Subtree Data Model](#32-subtree-data-model)
-    - [3.3 TX Meta Data Model](#33-tx-meta-data-model)
+    - [3.3 UTXO Meta Data Model](#33-utxo-meta-data-model)
 4. [gRPC Protobuf Definitions](#4-grpc-protobuf-definitions)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
@@ -166,10 +166,6 @@ Once a miner solves the mining challenge, it submits a solution to the Block Ass
 
 
 - The block is validated, and if valid, the coinbase transaction is persisted in the Tx Store.
-- Depending on the node's settings, the Block Assembly might be performing Subtree and Tx maintenance next.
-  - Teranode has a `blockvalidation_localSetMined` setting. This setting signals whether the Block Validation service exclusively validates and processes other node's mined blocks (`blockvalidation_localSetMined=false`, default behaviour), or both locally and remotely mined blocks.
-    - In the default `localSetMined = false` mode, Block Assembly marks all Subtrees' Txs as mined through the TX Meta Store, and sets the Subtrees TTL to 0 (so they are evicted from the Subtree store).
-    - In the alternative `localSetMined = true` mode, the Block Assembly does not mark the Txs as mined, nor expires the Subtrees. This logic is left for the Block Validation service to handle.
 
 - The block is added to the blockchain via the Blockchain Client. This will be propagated to other nodes via the P2P service.
 
@@ -308,18 +304,20 @@ Here's a table documenting the structure of the `Subtree` type:
 
 Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
 
-#### 3.3 TX Meta Data Model
+#### 3.3 UTXO Meta Data Model
 
-The TX Meta data model is defined in `stores/txmeta/data.go`:
+The UTXO Meta data model is defined in `stores/utxo/meta/data.go`:
 
-| Field Name  | Description                                                     | Data Type             |
-|-------------|-----------------------------------------------------------------|-----------------------|
-| Hash        | Unique identifier for the transaction.                          | String/Hexadecimal    |
-| Fee         | The fee associated with the transaction.                        | Decimal       |
-| Size in Bytes | The size of the transaction in bytes.                        | Integer               |
-| Parents     | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals |
-| Blocks      | List of hashes of the blocks that include this transaction.     | Array of Strings/Hexadecimals |
-| LockTime    | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
+| Field Name    | Description                                                     | Data Type                         |
+|---------------|-----------------------------------------------------------------|-----------------------------------|
+| Tx            | The raw transaction data.                                       | *bt.Tx Object                     |
+| Hash          | Unique identifier for the transaction.                          | String/Hexadecimal                |
+| Fee           | The fee associated with the transaction.                        | Decimal                           |
+| Size in Bytes | The size of the transaction in bytes.                           | Integer                           |
+| Parents       | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals     |
+| Blocks        | List of IDs of the blocks that include this transaction.        | Array of Integers                 |
+| LockTime      | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
+| IsCoinbase    | Indicates whether the transaction is a coinbase transaction.    | Boolean                           |
 
 Note:
 

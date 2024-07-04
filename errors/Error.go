@@ -121,7 +121,8 @@ func New(code ERR, message string, params ...interface{}) *Error {
 
 	// Format the message with the remaining parameters
 	if len(params) > 0 {
-		message = fmt.Sprintf(message, params...)
+		err := fmt.Errorf(message, params...)
+		message = err.Error()
 	}
 
 	// Check if the code exists in the ErrorConstants enum

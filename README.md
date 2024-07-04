@@ -150,8 +150,6 @@ Store Documentation:
 
 + [UTXO Store](docs/stores/utxo.md)
 
-+ [TXMeta Service](docs/stores/txmeta.md)
-
 Overlay Service documentation:
 
 + [Block Persister Service](docs/services/blockPersister.md)
@@ -382,7 +380,6 @@ ubsv/
 ├── stores/                       # This directory contains the different stores used by the node.
 │   ├── blob/                     # A collection of supported or experimental stores for the Blob service.
 │   ├── blockchain/               # A collection of supported or experimental stores for the Blockchain service.
-│   ├── txmeta/                   # A collection of supported or experimental stores for the TXMeta service.
 │   └── utxo/                     # A collection of supported or experimental stores for the UTXO service.
 │
 ├── tracing/                      # Tracing, Stats and Metric utilities

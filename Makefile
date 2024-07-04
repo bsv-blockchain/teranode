@@ -55,6 +55,10 @@ build: build-dashboard build-ubsv
 build-ubsv: build-dashboard set_debug_flags set_race_flag set_txmetacache_flag
 	go build $(RACE_FLAG) -tags aerospike,native,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
+.PHONY: build-ubsv-ci
+build-ubsv-ci: set_debug_flags set_race_flag set_txmetacache_flag
+	go build $(RACE_FLAG) -tags aerospike,native,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags set_race_flag
 	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o chainintegrity.run ./cmd/chainintegrity/
@@ -91,12 +95,27 @@ build-blockchainstatus:
 build-dashboard:
 	npm install --prefix ./ui/dashboard && npm run build --prefix ./ui/dashboard
 
+.PHONY: install-tools
+install-tools:
+	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
+
 .PHONY: test
 test: set_race_flag
-	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc)
+ifeq ($(USE_JSON_REPORTER),true)
+	$(MAKE) install-tools
+	SETTINGS_CONTEXT=test go test -json $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly) | go-ctrf-json-reporter -output ctrf-report.json
+else
+	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly)
+endif
+
 .PHONY: longtests
 longtests: set_race_flag
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc)
+ifeq ($(USE_JSON_REPORTER),true)
+	$(MAKE) install-tools
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly) | go-ctrf-json-reporter -output ctrf-report.json
+else
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly)
+endif
 
 .PHONY: racetest
 racetest: set_race_flag
@@ -107,6 +126,35 @@ testall:
 	# call makefile lint command
 	$(MAKE) lint
 	$(MAKE) longtests
+
+.PHONY: smoketests
+
+# Default target
+smoketests: 
+ifdef no-build
+	@echo "Skipping build step."
+else
+	docker compose -f docker-compose.ci.build.yml build
+endif
+ifdef no-reset
+	@echo "Skipping reset step."
+else
+	rm -rf data
+	unzip data.zip
+	chmod -R +x data
+	sleep 2
+endif
+ifdef test
+	# TEST_DIR := "$(firstword $(subst ., ,$(test)))"
+	# TEST_NAME := "$(word 2,$(subst ., ,$(test)))"
+	cd test/$(firstword $(subst ., ,$(test))) && \
+	SETTINGS_CONTEXT=docker.ci go test -run $(word 2,$(subst ., ,$(test)))
+else
+	cd test/e2e && \
+	SETTINGS_CONTEXT=docker.ci.tc1.run go test
+	cd test/blockassembly && \
+	SETTINGS_CONTEXT=docker.ci go test
+endif
 
 
 .PHONY: gen

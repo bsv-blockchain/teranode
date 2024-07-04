@@ -601,7 +601,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
 	}
 
-	blockHeaders, heights, err := b.store.GetBlockHeaders(ctx1, startHash, req.NumberOfHeaders)
+	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeaders(ctx1, startHash, req.NumberOfHeaders)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -611,9 +611,14 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 		blockHeaderBytes[i] = blockHeader.Bytes()
 	}
 
+	blockHeaderMetaBytes := make([][]byte, len(blockHeaders))
+	for i, meta := range blockHeaderMetas {
+		blockHeaderMetaBytes[i] = meta.Bytes()
+	}
+
 	return &blockchain_api.GetBlockHeadersResponse{
 		BlockHeaders: blockHeaderBytes,
-		Heights:      heights,
+		Metas:        blockHeaderMetaBytes,
 	}, nil
 }
 
@@ -828,6 +833,11 @@ func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_ap
 	if err != nil {
 		return nil, err
 	}
+
+	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: model.NotificationType_BlockSubtreesSet,
+		Hash: blockHash.CloneBytes(),
+	})
 
 	return &emptypb.Empty{}, nil
 }

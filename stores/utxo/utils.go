@@ -3,25 +3,21 @@ package utxo
 import (
 	"context"
 	"fmt"
+
 	"github.com/bitcoin-sv/ubsv/errors"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHeight uint32) Status {
+func CalculateUtxoStatus(spendingTxId *chainhash.Hash, coinbaseSpendingHeight uint32, blockHeight uint32) Status {
 	status := Status_OK
+
 	if spendingTxId != nil {
 		status = Status_SPENT
-	} else if lockTime > 0 {
-		if lockTime < 500000000 && lockTime > blockHeight {
-			status = Status_LOCKED
-		} else if lockTime >= 500000000 && lockTime > uint32(time.Now().Unix()) {
-			// TODO this should be a check for the median time past for the last 11 blocks
-			status = Status_LOCKED
-		}
+	} else if coinbaseSpendingHeight > 0 && coinbaseSpendingHeight > blockHeight {
+		status = Status_LOCKED
 	}
 
 	return status
@@ -29,8 +25,8 @@ func CalculateUtxoStatus(spendingTxId *chainhash.Hash, lockTime uint32, blockHei
 
 // GetFeesAndUtxoHashes returns the fees and utxo hashes for the outputs of a transaction.
 // It will return an error if the context is cancelled.
-func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx) (uint64, []*chainhash.Hash, error) {
-	if !util.IsExtended(tx, util.GenesisActivationHeight) && !tx.IsCoinbase() {
+func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (uint64, []*chainhash.Hash, error) {
+	if !util.IsExtended(tx, blockHeight) && !tx.IsCoinbase() {
 		return 0, nil, fmt.Errorf("tx is not extended")
 	}
 

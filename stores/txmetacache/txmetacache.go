@@ -196,8 +196,8 @@ func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, _ ...[]stri
 	return txMeta, nil
 }
 
-func (t *TxMetaCache) MetaBatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...string) error {
-	if err := t.utxoStore.MetaBatchDecorate(ctx, hashes, fields...); err != nil {
+func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...string) error {
+	if err := t.utxoStore.BatchDecorate(ctx, hashes, fields...); err != nil {
 		return err
 	}
 
@@ -309,8 +309,8 @@ func (t *TxMetaCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Sp
 	return t.utxoStore.GetSpend(ctx, spend)
 }
 
-func (t *TxMetaCache) Spend(ctx context.Context, spends []*utxo.Spend) error {
-	return t.utxoStore.Spend(ctx, spends)
+func (t *TxMetaCache) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
+	return t.utxoStore.Spend(ctx, spends, blockHeight)
 }
 
 func (t *TxMetaCache) UnSpend(ctx context.Context, spends []*utxo.Spend) error {

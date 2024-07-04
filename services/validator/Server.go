@@ -216,6 +216,7 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 		}, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
 	}
 
+	// v.logger.Debugf("[ValidateTransactions][%s] validating transaction (pq:)", tx.TxID())
 	err = v.validator.Validate(ctx, tx, req.BlockHeight)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()

@@ -83,12 +83,12 @@ func NewTeranodeBridge(ctx context.Context, logger ulogger.Logger) (*TeranodeBri
 		blockvalidationClient = blockvalidation.NewClient(ctx, logger)
 	}
 
-	storeURL, err, found := gocore.Config().GetURL("txmeta_store")
+	storeURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
-		return nil, fmt.Errorf("could not read txmeta_store: %w", err)
+		return nil, fmt.Errorf("could not read utxostore: %w", err)
 	}
 	if !found {
-		return nil, fmt.Errorf("could not find txmeta_store: %w", err)
+		return nil, fmt.Errorf("could not find utxostore: %w", err)
 	}
 
 	utxoStore, err := utxoFactory.NewStore(ctx, logger, storeURL, "teranode_bridge", false)
@@ -198,7 +198,7 @@ func (tb *TeranodeBridge) HandleBlock(ctx context.Context, block *bsvutil.Block)
 						return fmt.Errorf("Failed to lookup previous tx (%s:%d): %w", *input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, err)
 					}
 
-					if po.LockingScript == nil || len(po.LockingScript) == 0 {
+					if po.LockingScript == nil {
 						return fmt.Errorf("Previous output script is empty for %s:%d", *input.PreviousTxIDChainHash(), input.PreviousTxOutIndex)
 					}
 

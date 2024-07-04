@@ -22,6 +22,38 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	newBlockId, height, err := s.storeBlock(ctx, block, peerID)
+	if err != nil {
+		return 0, err
+	}
+
+	var miner string
+	if block.CoinbaseTx.OutputCount() != 0 {
+		miner = block.CoinbaseTx.Outputs[0].LockingScript.String()
+	}
+
+	meta := &model.BlockHeaderMeta{
+		ID:          uint32(newBlockId),
+		Height:      uint32(height),
+		TxCount:     block.TransactionCount,
+		SizeInBytes: block.SizeInBytes,
+		Miner:       miner,
+		// BlockTime   uint32 `json:"block_time"`    // Time of the block.
+		// Timestamp   uint32 `json:"timestamp"`     // Timestamp of the block.
+	}
+
+	ok := s.blocksCache.AddBlockHeader(block.Header, meta)
+	if !ok {
+		if err := s.ResetBlocksCache(ctx); err != nil {
+			s.logger.Errorf("error clearing caches: %v", err)
+		}
+	}
+	s.ResetResponseCache()
+
+	return newBlockId, nil
+}
+
+func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string) (uint64, uint64, error) {
 	var err error
 	var previousBlockId uint64
 	var previousChainWork []byte
@@ -102,9 +134,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 			&previousBlockInvalid,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return 0, fmt.Errorf("error storing block %s as previous block %s not found: %w", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
+				return 0, 0, fmt.Errorf("error storing block %s as previous block %s not found: %w", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
 			}
-			return 0, err
+			return 0, 0, err
 		}
 		height = previousHeight + 1
 
@@ -114,26 +146,31 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 		if block.Header.Version > 1 {
 			blockHeight, err := block.ExtractCoinbaseHeight()
 			if err != nil {
-				return 0, err
+				if height < 227835 {
+					s.logger.Warnf("failed to extract coinbase height for block %s: %v", block.Hash(), err)
+				} else {
+					return 0, 0, err
+				}
 			}
-			if blockHeight != uint32(height) {
-				return 0, fmt.Errorf("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
+
+			if height >= 227835 && blockHeight != uint32(height) {
+				return 0, 0, fmt.Errorf("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
 			}
 		}
 	}
 
 	subtreeBytes, err := block.SubTreeBytes()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get subtree bytes: %w", err)
+		return 0, 0, fmt.Errorf("failed to get subtree bytes: %w", err)
 	}
 
 	chainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(previousChainWork))
 	if err != nil {
-		return 0, fmt.Errorf("failed to convert chain work hash: %w", err)
+		return 0, 0, fmt.Errorf("failed to convert chain work hash: %w", err)
 	}
 	cumulativeChainWork, err := getCumulativeChainWork(chainWorkHash, block)
 	if err != nil {
-		return 0, fmt.Errorf("failed to calculate cumulative chain work: %w", err)
+		return 0, 0, fmt.Errorf("failed to calculate cumulative chain work: %w", err)
 	}
 
 	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
@@ -172,25 +209,22 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 		previousBlockInvalid,
 	)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	defer rows.Close()
 
 	rowFound := rows.Next()
 	if !rowFound {
-		return 0, fmt.Errorf("block already exists: %s", block.Hash())
+		return 0, 0, fmt.Errorf("block already exists: %s", block.Hash())
 	}
 
 	var newBlockId uint64
 	if err = rows.Scan(&newBlockId); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
-	// clear all caches after a new block is added
-	cache.DeleteAll()
-
-	return newBlockId, nil
+	return newBlockId, height, nil
 }
 
 func getCumulativeChainWork(chainWork *chainhash.Hash, block *model.Block) (*chainhash.Hash, error) {

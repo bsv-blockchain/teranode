@@ -1,4 +1,3 @@
-version: '3.8'
 # Define a common base configuration for ubsv nodes
 x-ubsv-base:
   &ubsv-base
@@ -46,6 +45,7 @@ services:
       # - ./deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
       - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./data/postgres:/var/lib/postgresql/data
+    restart: on-failure
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
@@ -72,26 +72,26 @@ services:
       - 19092:9092
       - 19093:9093
 
-  kafka-console-shared:
-    container_name: kafka-console-shared
-    image: docker.redpanda.com/redpandadata/console:latest
-    networks:
-      - ubsv-network
-    restart: on-failure
-    entrypoint: /bin/sh
-    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
-    environment:
-      CONFIG_FILEPATH: /tmp/config.yml
-      CONSOLE_CONFIG_FILE: |
-        kafka:
-          brokers: ["kafka-shared:9092"]
-          schemaRegistry:
-            enabled: true
-            urls: ["http://kafka-shared:8081"]
-    ports:
-      - "18080:8080"
-    depends_on:
-      - kafka-shared
+  # kafka-console-shared:
+  #   container_name: kafka-console-shared
+  #   image: docker.redpanda.com/redpandadata/console:latest
+  #   networks:
+  #     - ubsv-network
+  #   restart: on-failure
+  #   entrypoint: /bin/sh
+  #   command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+  #   environment:
+  #     CONFIG_FILEPATH: /tmp/config.yml
+  #     CONSOLE_CONFIG_FILE: |
+  #       kafka:
+  #         brokers: ["kafka-shared:9092"]
+  #         schemaRegistry:
+  #           enabled: true
+  #           urls: ["http://kafka-shared:8081"]
+  #   ports:
+  #     - "18080:8080"
+  #   depends_on:
+  #     - kafka-shared
 
   ubsv-1:
     <<: *ubsv-base
@@ -100,13 +100,12 @@ services:
       - kafka-shared
       # - aerospike-1
       - postgres
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1", "-rpc=1", "-faucet=1"]
-    # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
+    # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=0", "-coinbase=1", "blockpersister=1", "-rpc=1", "-faucet=1"]
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
       logLevel: "DEBUG"
       utxostore: postgres://miner1:miner1@postgres:5432/ubsv1
-      txmeta_store: postgres://miner1:miner1@postgres:5432/ubsv1
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
     volumes:
@@ -128,13 +127,12 @@ services:
       - kafka-shared
       # - aerospike-2
       - postgres
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
-    # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
+    # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=0", "-coinbase=1", "blockpersister=1"]
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ci.ubsv2}
       logLevel: "DEBUG"
       utxostore: postgres://miner2:miner2@postgres:5432/ubsv2
-      txmeta_store: postgres://miner2:miner2@postgres:5432/ubsv2
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
     volumes:
@@ -155,13 +153,12 @@ services:
       - kafka-shared
       # - aerospike-3
       - postgres
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "blockpersister=1"]
-    # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "blockpersister=1"]
+    # entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=0", "-coinbase=1", "blockpersister=1"]
+    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run"]
     environment:
       SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ci.ubsv3}
       logLevel: "DEBUG"
       utxostore: postgres://miner3:miner3@postgres:5432/ubsv3
-      txmeta_store: postgres://miner3:miner3@postgres:5432/ubsv3
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
     volumes:

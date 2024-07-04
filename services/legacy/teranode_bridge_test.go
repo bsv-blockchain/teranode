@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
 
 	"github.com/ordishs/gocore"
@@ -47,7 +48,7 @@ func (ns *NullStore) StoreFromHashes(ctx context.Context, txID chainhash.Hash, u
 	return nil
 }
 
-func (ns *NullStore) Spend(ctx context.Context, spends []*utxo.Spend) error {
+func (ns *NullStore) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
 	return nil
 }
 
@@ -56,6 +57,14 @@ func (ns *NullStore) UnSpend(ctx context.Context, spends []*utxo.Spend) error {
 }
 
 func (ns *NullStore) Delete(ctx context.Context, tx *bt.Tx) error {
+	return nil
+}
+
+func (ns *NullStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
+	return nil
+}
+
+func (ns *NullStore) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
 	return nil
 }
 

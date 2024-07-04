@@ -5,7 +5,7 @@ on:
 jobs:
   go-lint-and-test:
     name: Go Lint and Test
-    runs-on: self-hosted
+    runs-on: ubsv-runner
     strategy: # This will cause the workflow to terminate if any job fails
       fail-fast: true
     steps:
@@ -32,7 +32,7 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: self-hosted
+    runs-on: ubsv-runner
     needs: go-lint-and-test
     steps:
     - name: Checkout

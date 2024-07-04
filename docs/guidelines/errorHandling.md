@@ -14,9 +14,9 @@
 - [2.2. Sentinel Errors in Teranode](#22-sentinel-errors-in-teranode)
 - [2.3. Error Wrapping in Teranode](#23-error-wrapping-in-teranode)
 - [2.4. gRPC Error Wrapping in Teranode](#24-grpc-error-wrapping-in-teranode)
-- [2.6. Extra Data](#26-extra-data)
-- [2.7. Error Protobuf](#27-error-protobuf)
-- [2.8. Unit Tests](#28-unit-tests)
+- [2.5. Extra Data](#26-extra-data)
+- [2.6. Error Protobuf](#27-error-protobuf)
+- [2.7. Unit Tests](#28-unit-tests)
 
 
 ## 1. Introduction
@@ -194,7 +194,7 @@ As mentioned in previous sections, sentinel errors are predefined errors that se
 
 **Code Example:**
 
-Here we can see how the sentinel errors are defined in the `errors/Error.go` file:
+Here we can see how the sentinel errors are defined in the `errors/Error_types.go` file:
 
 ```go
 package errors
@@ -256,34 +256,36 @@ The `New` function in Teranode's error package creates and returns a pointer to 
 
 ```go
 func New(code ERR, message string, params ...interface{}) *Error {
-	var wErr error
+    var wErr *Error
 
-	// sprintf the message with the params except the last one if the last one is an error
-	if len(params) > 0 {
-		if err, ok := params[len(params)-1].(error); ok {
-			wErr = err
-			params = params[:len(params)-1]
-		}
-	}
+    // Extract the wrapped error, if present
+    if len(params) > 0 {
+        if err, ok := params[len(params)-1].(*Error); ok {
+            wErr = err
+            //data = err.Data
+            params = params[:len(params)-1]
+        }
+    }
 
-	if len(params) > 0 {
-		message = fmt.Sprintf(message, params...)
-	}
+    // Format the message with the remaining parameters
+    if len(params) > 0 {
+        message = fmt.Sprintf(message, params...)
+    }
 
-	// Check the code exists in the ErrorConstants enum
-	if _, ok := ERR_name[int32(code)]; !ok {
-		return &Error{
-			Code:       code,
-			Message:    "invalid error code",
-			WrappedErr: wErr,
-		}
-	}
+    // Check if the code exists in the ErrorConstants enum
+    if _, ok := ERR_name[int32(code)]; !ok {
+        return &Error{
+            Code:       code,
+            Message:    "invalid error code",
+            WrappedErr: wErr,
+        }
+    }
 
-	return &Error{
-		Code:       code,
-		Message:    message,
-		WrappedErr: wErr,
-	}
+    return &Error{
+        Code:       code,
+        Message:    message,
+        WrappedErr: wErr,
+    }
 }
 ```
 
@@ -456,7 +458,7 @@ This is then interpreted by the Client (`GetBlock` in the Blockchain `Client.go`
 From this point on, the service invoking the blockchain client can handle the error as a Teranode error, even though it was originally delivered as a gRPC error.
 
 
-### 2.6. Extra Data
+### 2.5. Extra Data
 
 As we saw before, a Teranode error is represented by the following struct:
 
@@ -519,6 +521,7 @@ In this example, we can see:
 * To provide a more descriptive error, a new `UtxoSpentErrData` struct is created.
 * The `Data` field of the error (`e.Data`) is set to the `utxoSpentErrStruct`, attaching the UtxoSpentErrData to the error.
 
+
 The `Data` field is not only used to attach additional context to the error but also in the `errors.As` method for error type assertions.
 
 ```go
@@ -538,9 +541,21 @@ func (e *Error) As(target interface{}) bool {
 
 Here, if the `Data` field of the error (`e.Data`) is not `nil`, it checks if the `Data` implements the `error` interface. If it does, it calls `errors.As(data, target)`, attempting to assign the `Data` to the target.
 
+An example:
+
+```go
+baseErr := New(ERR_ERROR, "invalid tx error")
+
+utxoSpentError := NewUtxoSpentErr(chainhash.Hash{}, chainhash.Hash{}, time.Now(), baseErr)
+
+var spentErr *UtxoSpentErrData
+
+require.True(t, utxoSpentError.As(&spentErr))
+```
+
 So, in the context of the `NewUtxoSpentErr` function example, the `Data` field, which contains `utxoSpentErrStruct`, is used both for attaching context to the error and for performing type assertions using `errors.As`. This ensures that if the caller of this function needs to extract specific details about the error, it can do so by using `errors.As` on the error returned by `NewUtxoSpentErr`.
 
-### 2.7. Error Protobuf
+### 2.6. Error Protobuf
 
 `error.proto` defines a protocol buffer message for error handling in Teranode. This file specifies the structure of error messages, including error codes and messages, using the Protobuf language.
 
@@ -548,6 +563,6 @@ The `enum ERR` defines an enumeration of possible error codes with explicit valu
 
 Use `protoc-gen-go` to compile the proto file.
 
-### 2.8. Unit Tests
+### 2.7. Unit Tests
 
 Extensive unit tests are available under the `errors` package (`Error_test.go`). Should you add any new functionality or scenario, it is recommended to update the unit tests to ensure that the error handling logic remains consistent and reliable.

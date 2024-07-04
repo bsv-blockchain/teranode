@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"log"
 	"os"
 	"strconv"
@@ -34,11 +34,11 @@ func main() {
 func createPartitions(configName string, partitions int) error {
 	url, err, ok := gocore.Config().GetURL(configName)
 	if err != nil {
-		return fmt.Errorf("error getting Kafka URL (%s): %w", configName, err)
+		return errors.New(errors.ERR_PROCESSING, "error getting Kafka URL (%s)", configName, err)
 	}
 
 	if !ok {
-		return fmt.Errorf("kafka URL not found (%s)", configName)
+		return errors.New(errors.ERR_PROCESSING, "kafka URL not found (%s)", configName)
 	}
 
 	hosts := strings.Split(url.Host, ",")
@@ -49,13 +49,13 @@ func createPartitions(configName string, partitions int) error {
 
 	admin, err := sarama.NewClusterAdmin(hosts, config)
 	if err != nil {
-		return fmt.Errorf("error creating cluster admin: %w", err)
+		return errors.New(errors.ERR_SERVICE_ERROR, "error creating cluster admin", err)
 	}
 	defer admin.Close()
 
 	err = admin.CreatePartitions(topic, int32(partitions), nil, false)
 	if err != nil {
-		return fmt.Errorf("error changing partitions: %w", err)
+		return errors.New(errors.ERR_PROCESSING, "error changing partitions", err)
 	}
 
 	log.Printf("%q changed successfully with %d partitions", topic, partitions)

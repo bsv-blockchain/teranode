@@ -1,0 +1,66 @@
+@startuml
+actor User as "User"
+participant "UI Dashboard" as UIDashboard
+participant "AssetService" as AssetService
+participant "UtxoStore" as UtxoStore
+
+== Fetch UTXO ==
+User -> UIDashboard: Request UTXO Meta
+UIDashboard -> AssetService: /utxo/:hash (binary stream)\n/utxo/:hash/json\n/utxo/:hash/hex
+AssetService -> AssetService: GetUTXO()
+AssetService -> UtxoStore: GetSpend(context, hash)
+UtxoStore -> AssetService: Return UTXO Spend Response\n(Status, SpendingTxID)
+AssetService -> UIDashboard: Return UTXO Spend Response
+UIDashboard -> User: Display UTXO Spent Status
+
+== Fetch UTXOs by Tx Id ==
+User -> UIDashboard: Request UTXO Meta
+UIDashboard -> AssetService: /utxos/:hash/json
+AssetService -> AssetService: GetUTXOsByTXID()
+AssetService -> UtxoStore: GetMeta(context, hash)
+UtxoStore -> AssetService: Return UTXO Meta
+
+AssetService -> AssetService: Use tx =\n bt.NewTxFromBytes(txMeta.Tx.ExtendedBytes())
+
+loop for each output in tx.Outputs
+    AssetService -> "AssetService": Compute utxoHash from output
+    AssetService -> UtxoStore: GetSpend(context, utxoHash)
+    UtxoStore -> AssetService: Return UTXO Spend Response\n(Status, SpendingTxID)
+end
+
+AssetService -> UIDashboard: Return UTXOs
+UIDashboard -> User: Display UTXOs Spent Status
+
+== Fetch UTXO Meta Data ==
+User -> UIDashboard: Request UTXO Meta
+UIDashboard -> AssetService: /txmeta/:hash/json
+AssetService -> AssetService: GetTransactionMeta()
+AssetService -> UtxoStore: Get(context, hash)
+UtxoStore -> AssetService: Return UTXO Meta
+AssetService -> UIDashboard: Return UTXO Meta
+UIDashboard -> User: Display UTXO Meta
+
+
+== Fetch Transaction ==
+User -> UIDashboard: Request Transaction Details
+UIDashboard -> AssetService: /tx/:hash (binary stream)\n/tx/:hash/json\n/tx/:hash/hex
+AssetService -> AssetService: GetTransaction()
+AssetService -> UtxoStore: GetMeta(ctx, hash)
+UtxoStore -> AssetService: Return UTXO (txMeta)
+AssetService -> UIDashboard: Return txMeta.Tx.ExtendedBytes()
+UIDashboard -> User: Display Transaction Details
+
+== Fetch Transactions (Stream) ==
+User -> UIDashboard: Request Transactions List
+UIDashboard -> AssetService: POST /txs
+AssetService -> AssetService: GetTransactions()
+loop for each hash in the POST request body
+    AssetService -> UtxoStore: GetMeta(ctx, tx.Hash)
+    UtxoStore -> AssetService: Return UTXO (txMeta)
+end
+AssetService -> UIDashboard: Return list of txMeta.Tx.ExtendedBytes()
+UIDashboard -> User: Display Transactions List
+
+left footer Last Modified On: 4-June-2024
+
+@enduml

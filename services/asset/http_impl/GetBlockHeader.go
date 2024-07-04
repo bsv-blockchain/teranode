@@ -20,6 +20,7 @@ func (h *HTTP) GetBlockHeader(mode ReadMode) func(c echo.Context) error {
 
 		hashParam := c.Param("hash")
 		h.logger.Debugf("[Asset_http] GetBlockHeader in %s for %s: %s", mode, c.Request().RemoteAddr, hashParam)
+		defer h.logger.Debugf("[Asset_http] GetBlockHeader completed in %s for %s: %s", mode, c.Request().RemoteAddr, hashParam)
 
 		var hash *chainhash.Hash
 		var err error

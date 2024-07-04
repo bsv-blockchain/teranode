@@ -3,9 +3,10 @@ package blockpersister
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"runtime"
 	"sync/atomic"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
@@ -61,7 +62,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					}
 				}
 
-				if err := u.utxoStore.MetaBatchDecorate(gCtx, missingTxHashesCompacted, "tx"); err != nil {
+				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, "tx"); err != nil {
 					return err
 				}
 

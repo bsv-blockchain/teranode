@@ -36,6 +36,7 @@ enum NotificationType {
   Block = 2;
   MiningOn = 3;
   FSMEvent = 4;
+  BlockSubtreesSet = 5;
 }
 
 // swagger:model NotificationMetadata

@@ -2,8 +2,20 @@ package test_framework
 
 import (
 	"context"
+	"fmt"
+	"net/url"
+	"strings"
 	"time"
 
+	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
+	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
+	cb "github.com/bitcoin-sv/ubsv/services/coinbase"
+	blob "github.com/bitcoin-sv/ubsv/stores/blob"
+	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/sql"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	distributor "github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/ordishs/gocore"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 )
 
@@ -11,7 +23,19 @@ type BitcoinTestFramework struct {
 	ComposeFilePaths []string
 	Context          context.Context
 	Compose          tc.ComposeStack
-	ctx              context.Context
+	Nodes            []BitcoinNode
+}
+
+type BitcoinNode struct {
+	SETTINGS_CONTEXT    string
+	CoinbaseClient      cb.Client
+	BlockchainClient    bc.ClientI
+	BlockassemblyClient ba.Client
+	DistributorClient   distributor.Distributor
+	BlockChainDB        blockchain_store.Store
+	Blockstore          blob.Store
+	BlockstoreUrl       *url.URL
+	UtxoStore           *utxostore.Store
 }
 
 func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
@@ -21,31 +45,185 @@ func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 	}
 }
 
+// StopNodes starts the nodes with docker-compose up operation.
+// The settings map is used to pass the environment variables to the docker-compose services.
 func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
-	compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(b.ComposeFilePaths...))
-	if err != nil {
-		return err
+	var testRunMode, _ = gocore.Config().Get("test_run_mode", "ci")
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
+
+	if testRunMode == "ci" {
+		// Start the nodes with docker-compose up operation
+		compose, err := tc.NewDockerCompose(b.ComposeFilePaths...)
+		if err != nil {
+			return err
+		}
+
+		if err := compose.WithEnv(m).Up(b.Context); err != nil {
+			return err
+		}
+
+		// Wait for the services to be ready
+		time.Sleep(30 * time.Second)
+
+		b.Compose = compose
 	}
 
-	b.ctx = context.Background()
-	if err := compose.WithEnv(m).Up(b.ctx); err != nil {
-		return err
+	order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
+	for _, key := range order {
+		b.Nodes = append(b.Nodes, BitcoinNode{
+			SETTINGS_CONTEXT: m[key],
+		})
 	}
 
-	// Wait for the services to be ready
-	time.Sleep(10 * time.Second)
+	for i, node := range b.Nodes {
+		coinbaseGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_grpcAddress.%s", node.SETTINGS_CONTEXT))
+		fmt.Println(coinbaseGrpcAddress)
+		if !ok {
+			return fmt.Errorf("no coinbase_grpcAddress setting found")
+		}
+		coinbaseClient, err := cb.NewClientWithAddress(b.Context, logger, getHostAddress(coinbaseGrpcAddress))
+		if err != nil {
+			return err
+		}
+		b.Nodes[i].CoinbaseClient = *coinbaseClient
 
-	b.Compose = compose
+		blockchainGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockchain_grpcAddress.%s", node.SETTINGS_CONTEXT))
+		if !ok {
+			return fmt.Errorf("no blockchain_grpcAddress setting found")
+		}
+		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, getHostAddress(blockchainGrpcAddress))
+		if err != nil {
+			return err
+		}
+		b.Nodes[i].BlockchainClient = blockchainClient
+
+		blockassembly_grpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockassembly_grpcAddress.%s", node.SETTINGS_CONTEXT))
+		if !ok {
+			return fmt.Errorf("no blockassembly_grpcAddress setting found")
+		}
+		blockassemblyClient := ba.NewClientWithAddress(b.Context, logger, getHostAddress(blockassembly_grpcAddress))
+		b.Nodes[i].BlockassemblyClient = *blockassemblyClient
+
+		propagation_grpcAddress, ok := gocore.Config().Get(fmt.Sprintf("propagation_grpcAddress.%s", node.SETTINGS_CONTEXT))
+		if !ok {
+			return fmt.Errorf("no propagation_grpcAddress setting found")
+		}
+		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, getHostAddress(propagation_grpcAddress))
+		if err != nil {
+			return err
+		}
+		b.Nodes[i].DistributorClient = *distributorClient
+
+		blockchainStoreURL, _, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s", node.SETTINGS_CONTEXT))
+		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
+		if err != nil {
+			return err
+		}
+		b.Nodes[i].BlockChainDB = blockchainStore
+
+		//TODO - This should be refactored to use mapped docker volumes
+		blockStoreUrl, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.run", node.SETTINGS_CONTEXT))
+		if err != nil {
+			panic(err)
+		}
+		if !found {
+			panic("blockstore config not found")
+		}
+		blockStore, err := blob.NewStore(logger, blockStoreUrl)
+		if err != nil {
+			panic(err)
+		}
+		b.Nodes[i].Blockstore = blockStore
+		b.Nodes[i].BlockstoreUrl = blockStoreUrl
+		utxoStoreUrl, _, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SETTINGS_CONTEXT))
+		b.Nodes[i].UtxoStore, _ = utxostore.New(b.Context, logger, utxoStoreUrl)
+	}
 	return nil
 }
 
-// StopNodes stops the Bitcoin nodes.
+// StopNodes stops the nodes with docker-compose down operation.
 func (b *BitcoinTestFramework) StopNodes() error {
 	if b.Compose != nil {
 		// Stop the Docker Compose services
-		if err := b.Compose.Down(b.ctx); err != nil {
+		if err := b.Compose.Down(b.Context); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// Restart the nodes with docker-compose down operation.
+func (b *BitcoinTestFramework) RestartNodes(m map[string]string) error {
+	if b.Compose != nil {
+		// Stop the Docker Compose services
+		if err := b.Compose.Down(b.Context); err != nil {
+			return err
+		}
+
+		b.Compose, _ = tc.NewDockerCompose(b.ComposeFilePaths...)
+		if err := b.Compose.WithEnv(m).Up(b.Context); err != nil {
+			return err
+		}
+
+		// Wait for the services to be ready
+		time.Sleep(30 * time.Second)
+	}
+
+	return nil
+}
+
+// StopNodes starts a particular node.
+func (b *BitcoinTestFramework) StartNode(nodeName string) error {
+	if b.Compose != nil {
+		// Stop the Docker Compose services
+		node, err := b.Compose.ServiceContainer(b.Context, nodeName)
+		if err != nil {
+			return err
+		}
+
+		err = node.Start(b.Context)
+		if err != nil {
+			return err
+		}
+
+		time.Sleep(10 * time.Second)
+
+	}
+	return nil
+}
+
+// StopNodes stops a particular node.
+func (b *BitcoinTestFramework) StopNode(nodeName string) error {
+	if b.Compose != nil {
+		// Stop the Docker Compose services
+		node, err := b.Compose.ServiceContainer(b.Context, nodeName)
+		if err != nil {
+			return err
+		}
+
+		err = node.Stop(b.Context, nil)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// getHostAddress returns the host equivalent address for the given ubsv service.
+func getHostAddress(input string) string {
+	// Split the input string by ":" to separate the prefix and the port
+	parts := strings.Split(input, ":")
+
+	if len(parts) != 2 {
+		// Handle unexpected input format
+		return ""
+	}
+
+	// Extract the suffix after the "-"
+	suffix := parts[0][len(parts[0])-1:] // get the last character after "-"
+	port := parts[1]
+
+	// Construct the desired output
+	return fmt.Sprintf("localhost:%s%s", suffix, port)
 }

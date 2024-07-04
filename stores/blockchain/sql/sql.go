@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -18,20 +19,15 @@ import (
 )
 
 type SQL struct {
-	db     *usql.DB
-	engine util.SQLEngine
-	logger ulogger.Logger
+	db            *usql.DB
+	engine        util.SQLEngine
+	logger        ulogger.Logger
+	responseCache *ttlcache.Cache[chainhash.Hash, any]
+	cacheTTL      time.Duration
+	blocksCache   blockchainCache
 }
 
-var (
-	cache    *ttlcache.Cache[chainhash.Hash, any]
-	cacheTTL time.Duration
-)
-
-func init() {
-	cacheTTL = 2 * time.Minute
-	cache = ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](cacheTTL))
-}
+var ()
 
 func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 	logger = logger.New("bcsql")
@@ -57,9 +53,12 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 	}
 
 	s := &SQL{
-		db:     db,
-		engine: util.SQLEngine(storeUrl.Scheme),
-		logger: logger,
+		db:            db,
+		engine:        util.SQLEngine(storeUrl.Scheme),
+		logger:        logger,
+		cacheTTL:      2 * time.Minute,
+		responseCache: ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](2 * time.Minute)),
+		blocksCache:   *NewBlockchainCache(),
 	}
 
 	err = s.insertGenesisTransaction(logger)
@@ -291,4 +290,208 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 	}
 
 	return nil
+}
+
+type blockchainCache struct {
+	headers     map[chainhash.Hash]*model.BlockHeader
+	metas       map[chainhash.Hash]*model.BlockHeaderMeta
+	existsCache map[chainhash.Hash]bool
+	chain       []chainhash.Hash
+	mutex       sync.RWMutex
+}
+
+func NewBlockchainCache() *blockchainCache {
+	return &blockchainCache{
+		headers:     make(map[chainhash.Hash]*model.BlockHeader, 100),
+		metas:       make(map[chainhash.Hash]*model.BlockHeaderMeta, 100),
+		existsCache: make(map[chainhash.Hash]bool, 100),
+		chain:       make([]chainhash.Hash, 0, 100),
+		mutex:       sync.RWMutex{},
+	}
+}
+
+func (c *blockchainCache) AddBlockHeader(blockHeader *model.BlockHeader, blockHeaderMeta *model.BlockHeaderMeta) bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	return c.addBlockHeader(blockHeader, blockHeaderMeta)
+}
+
+func (c *blockchainCache) addBlockHeader(blockHeader *model.BlockHeader, blockHeaderMeta *model.BlockHeaderMeta) bool {
+	const added = true
+	const notAdded = false
+
+	// height := block.Height
+	// if len(c.chain) != 0 && height == 0 {
+	// 	return false, fmt.Errorf("block height is 0")
+	// }
+
+	c.headers[*blockHeader.Hash()] = blockHeader
+	c.metas[*blockHeader.Hash()] = blockHeaderMeta
+	c.existsCache[*blockHeader.Hash()] = true
+
+	if len(c.chain) == 0 {
+		c.chain = append(c.chain, *blockHeader.Hash())
+		return added
+	}
+
+	bestBlockHash := c.chain[len(c.chain)-1]
+	if *blockHeader.HashPrevBlock == bestBlockHash {
+		c.chain = append(c.chain, *blockHeader.Hash())
+
+		// only keep last 200 blocks in cache
+		if len(c.chain) >= 200 {
+			oldestHash := c.chain[0]
+			delete(c.headers, oldestHash)
+			delete(c.metas, oldestHash)
+			c.chain = c.chain[1:]
+		}
+
+		return added
+	}
+
+	return notAdded
+}
+
+func (c *blockchainCache) RebuildBlockchain(blockHeaders []*model.BlockHeader, blockHeaderMetas []*model.BlockHeaderMeta) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.headers = make(map[chainhash.Hash]*model.BlockHeader, 100)
+	c.metas = make(map[chainhash.Hash]*model.BlockHeaderMeta, 100)
+	c.existsCache = make(map[chainhash.Hash]bool, 100)
+	c.chain = c.chain[:0]
+
+	if blockHeaders == nil {
+		return
+	}
+
+	for i, blockHeader := range blockHeaders {
+		c.addBlockHeader(blockHeader, blockHeaderMetas[i])
+	}
+}
+func (s *SQL) ResetResponseCache() {
+	s.responseCache.DeleteAll()
+}
+
+func (s *SQL) ResetBlocksCache(ctx context.Context) error {
+	s.logger.Warnf("Reset")
+	defer s.logger.Warnf("Reset completed")
+
+	bestBlockHeader, _, err := s.GetBestBlockHeader(ctx)
+	if err != nil {
+		return err
+	}
+
+	var blockHeaders []*model.BlockHeader
+	var blockHeaderMetas []*model.BlockHeaderMeta
+	blockHeaders, blockHeaderMetas, err = s.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100)
+	if err != nil {
+		return err
+	}
+
+	s.blocksCache.RebuildBlockchain(blockHeaders, blockHeaderMetas)
+
+	return nil
+
+}
+
+func (c *blockchainCache) GetBestBlockHeader() (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	if len(c.chain) == 0 {
+		return nil, nil, nil
+	}
+
+	hash := c.chain[len(c.chain)-1]
+
+	return c.headers[hash], c.metas[hash], nil
+}
+
+func (c *blockchainCache) GetBlockHeader(hash chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	blockHeader, ok := c.headers[hash]
+	if !ok {
+		return nil, nil, nil
+	}
+
+	return blockHeader, c.metas[hash], nil
+}
+
+func (c *blockchainCache) GetBlockHeadersFromHeight(height uint32, limit int) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	if len(c.chain) == 0 {
+		return nil, nil, nil
+	}
+
+	for i, hash := range c.chain {
+		meta := c.metas[hash]
+		if meta.Height == height {
+			if i+limit > len(c.chain) {
+				// can't get all the headers requested, so return nothing
+				return nil, nil, nil
+			}
+
+			headers := make([]*model.BlockHeader, 0, limit)
+			metas := make([]*model.BlockHeaderMeta, 0, limit)
+			for j := i; j < i+limit; j++ {
+				headers = append(headers, c.headers[c.chain[j]])
+				metas = append(metas, c.metas[c.chain[j]])
+			}
+
+			return headers, metas, nil
+		}
+	}
+
+	return nil, nil, nil
+}
+
+func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	if len(c.chain) == 0 {
+		return nil, nil, nil
+	}
+
+	limit := int(numberOfHeaders)
+	for i, hash := range c.chain {
+		if hash == *blockHashFrom {
+			if i < limit {
+				// can't get all the headers requested, so return nothing
+				return nil, nil, nil
+			}
+
+			headers := make([]*model.BlockHeader, 0, limit)
+			metas := make([]*model.BlockHeaderMeta, 0, limit)
+			for j := i; j > i-limit; j-- {
+				headers = append(headers, c.headers[c.chain[j]])
+				metas = append(metas, c.metas[c.chain[j]])
+			}
+
+			return headers, metas, nil
+		}
+	}
+
+	return nil, nil, nil
+}
+
+func (c *blockchainCache) GetExists(blockHash chainhash.Hash) (bool, bool) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	exists, ok := c.existsCache[blockHash]
+	return exists, ok
+}
+
+func (c *blockchainCache) SetExists(blockHash chainhash.Hash, exists bool) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	c.existsCache[blockHash] = exists
 }

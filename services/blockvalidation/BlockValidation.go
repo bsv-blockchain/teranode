@@ -61,6 +61,7 @@ type BlockValidation struct {
 	setMinedChan                       chan *chainhash.Hash
 	revalidateBlockChan                chan revalidateBlockData
 	stats                              *gocore.Stat
+	excessiveblocksize                 int
 }
 
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
@@ -71,6 +72,8 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 
 	optimisticMining := gocore.Config().GetBool("optimisticMining", true)
 	logger.Infof("optimisticMining = %v", optimisticMining)
+
+	excessiveblocksize, _ := gocore.Config().GetInt("excessiveblocksize", 0)
 
 	bv := &BlockValidation{
 		logger:                             logger,
@@ -95,6 +98,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 		setMinedChan:                       make(chan *chainhash.Hash, 1000),
 		revalidateBlockChan:                make(chan revalidateBlockData, 2),
 		stats:                              gocore.NewStat("blockvalidation"),
+		excessiveblocksize:                 excessiveblocksize,
 	}
 
 	go func() {
@@ -124,7 +128,21 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 						continue
 					}
 
-					if notification.Type == model.NotificationType_Block {
+					if notification.Type == model.NotificationType_BlockSubtreesSet {
+
+						bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", notification.Hash.String())
+
+						// if blocks, err := bv.blockchainClient.GetBlocksSubtreesNotSet(ctx); err != nil {
+						// 	bv.logger.Errorf("[BlockValidation:setMined] failed to getBlocksSubtreesNotSet: %s", err)
+						// } else {
+						// 	for _, block := range blocks {
+						// 		if block.Header.Hash().IsEqual(notification.Hash) {
+						// 			bv.logger.Warnf("[BlockValidation:setMined] block's subtrees aren't processed yet STU: %s", notification.Hash.String())
+						// 			break
+						// 		}
+						// 	}
+						// }
+
 						// push block hash to the setMinedChan
 						bv.setMinedChan <- notification.Hash
 					}
@@ -510,6 +528,15 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	maxDelay := 5 * time.Second           // Maximum delay
 	delay := initialDelay
 
+	// check the size of the block
+
+	// 0 is unlimited so don't check the size
+	if u.excessiveblocksize > 0 {
+		if block.SizeInBytes > uint64(u.excessiveblocksize) {
+			return errors.New(errors.ERR_BLOCK_INVALID, fmt.Sprintf("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.excessiveblocksize))
+		}
+	}
+
 	for {
 		parentBlockMined, err := u.isParentMined(ctx, block.Header)
 		if err != nil {
@@ -535,13 +562,17 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
 	// Add the coinbase transaction to the metaTxStore
-	// TODO why is this needed?
-	//u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx", block.Header.Hash().String())
-	//err = u.storeCoinbaseTx(spanCtx, block)
-	//if err != nil {
-	//	return err
-	//}
-	//u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
+	// don't be tempted to rely on BlockAssembly to do this.
+	// We need to be sure that the coinbase transaction is stored before we try and do setMinedMulti().
+	u.logger.Infof("[ValidateBlock][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), block.Height, block.CoinbaseTx.TxIDChainHash().String())
+	if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height+100); err != nil {
+		if errors.Is(err, errors.ErrTxAlreadyExists) {
+			u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
+		} else {
+			return errors.New(errors.ERR_TX_ERROR, fmt.Sprintf("[ValidateBlock][%s] error storing utxos: %v", block.Header.Hash().String(), err))
+		}
+	}
+	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
 	var optimisticMiningWg sync.WaitGroup
 	if u.optimisticMining {

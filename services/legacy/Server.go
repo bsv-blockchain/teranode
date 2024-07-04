@@ -3,14 +3,13 @@ package legacy
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
@@ -30,15 +29,15 @@ import (
 )
 
 type Server struct {
-	logger          ulogger.Logger
-	stats           *gocore.Stat
-	config          *peer.Config
-	peer            *peer.Peer
-	tb              *TeranodeBridge
-	params          chaincfg.Params
-	lastHash        *chainhash.Hash
-	height          uint32
-	wg              sync.WaitGroup
+	logger   ulogger.Logger
+	stats    *gocore.Stat
+	config   *peer.Config
+	peer     *peer.Peer
+	tb       *TeranodeBridge
+	params   chaincfg.Params
+	lastHash *chainhash.Hash
+	height   uint32
+	// wg              sync.WaitGroup
 	blockchainStore blockchain.Store
 	utxoStore       utxo.Store
 	subtreeStore    blob.Store
@@ -73,18 +72,15 @@ func (s *Server) Init(ctx context.Context) error {
 		}
 	}
 
+	var mutex sync.Mutex
+	cond := sync.NewCond(&mutex)
+
 	// Create a new Bitcoin peer configuration
 	s.config = &peer.Config{
 		UserAgentName:    "headers-sync",
 		UserAgentVersion: "0.0.1",
 		ChainParams:      &s.params,
 		Listeners: peer.MessageListeners{
-
-			OnPing: func(p *peer.Peer, msg *wire.MsgPing) {
-				s.logger.Infof("Received ping\n")
-				pong := wire.NewMsgPong(msg.Nonce)
-				s.peer.QueueMessage(pong, nil)
-			},
 
 			OnHeaders: func(p *peer.Peer, msg *wire.MsgHeaders) {
 				s.logger.Infof("Received %d headers\n", len(msg.Headers))
@@ -95,19 +91,26 @@ func (s *Server) Init(ctx context.Context) error {
 				}
 				s.logger.Infof("Header chain is valid")
 
-				s.wg.Add(len(msg.Headers))
+				// s.wg.Add(len(msg.Headers))
 
 				// Now get each block in turn and process it
 				go func() {
 					for _, header := range msg.Headers {
+						cond.L.Lock()
+
 						blockHash := header.BlockHash()
 						getDataMsg := wire.NewMsgGetData()
 						getDataMsg.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash))
 
+						s.logger.Infof("Requesting block %s\n", blockHash)
+
 						s.peer.QueueMessage(getDataMsg, nil)
+						cond.Wait()
+
+						cond.L.Unlock()
 					}
 
-					s.wg.Wait()
+					// s.wg.Wait()
 
 					h := msg.Headers[len(msg.Headers)-1].BlockHash()
 					s.lastHash = &h
@@ -124,9 +127,11 @@ func (s *Server) Init(ctx context.Context) error {
 			},
 
 			OnBlock: func(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
+				cond.L.Lock() // Lock the mutex to prevent processing the next block before the signal is received
+
 				s.height++
 
-				s.logger.Warnf("Received block with %d txns %s (Height: %d)\n", len(msg.Transactions), msg.BlockHash(), s.height)
+				s.logger.Warnf("Received block   %s with %d txns (Height: %d)\n", msg.BlockHash(), len(msg.Transactions), s.height)
 
 				block := bsvutil.NewBlock(msg)
 				block.SetHeight(int32(s.height))
@@ -141,7 +146,10 @@ func (s *Server) Init(ctx context.Context) error {
 					}
 				}
 
-				s.wg.Done()
+				cond.Signal()
+				cond.L.Unlock()
+
+				// s.wg.Done()
 			},
 		},
 	}
@@ -157,54 +165,76 @@ func (s *Server) Start(ctx context.Context) error {
 	addresses, _ := gocore.Config().GetMulti("legacy_connect_peers", "|", []string{"54.169.45.196:8333"})
 	addr := addresses[0]
 
-	s.peer, err = peer.NewOutboundPeer(s.config, addr)
-	if err != nil {
-		log.Fatalf("Failed to create peer: %v", err)
-	}
-
-	// Establish a connection to the peer
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		log.Fatalf("Failed to connect to peer: %v", err)
-	}
-	s.peer.AssociateConnection(conn)
-
-	// Wait for connection
-	time.Sleep(time.Second * 5)
-
-	bestBlockHeader, bestBlockMeta, err := s.blockchainStore.GetBestBlockHeader(ctx)
-	if err != nil {
-		log.Fatalf("Failed to get best block header: %v", err)
-	}
-
-	s.height = bestBlockMeta.Height
-	s.lastHash = bestBlockHeader.Hash()
-
-	if s.height > 0 {
-		s.height--
-		s.lastHash = bestBlockHeader.HashPrevBlock
-	}
-
-	invMsg := wire.NewMsgGetHeaders()
-	invMsg.AddBlockLocatorHash(s.lastHash) // First time this is Genesis block hash
-	invMsg.HashStop = chainhash.Hash{}
-
-	// Send the getheaders message
-	s.logger.Infof("Requesting headers starting from genesis\n")
-	s.peer.QueueMessage(invMsg, nil)
-
-	// Keep the program running to receive headers
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		s.peer, err = peer.NewOutboundPeer(s.config, addr)
+		if err != nil {
+			log.Fatalf("Failed to create peer: %v", err)
+		}
 
-		case <-time.After(time.Second * 10):
-			// Send a ping message to the peer
-			ping := wire.NewMsgPing(0)
-			s.peer.QueueMessage(ping, nil)
+		// Establish a connection to the peer
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			log.Fatalf("Failed to connect to peer: %v", err)
+		}
+		s.peer.AssociateConnection(conn)
+
+		// Wait for connection
+		time.Sleep(time.Second * 5)
+
+		bestBlockHeader, bestBlockMeta, err := s.blockchainStore.GetBestBlockHeader(ctx)
+		if err != nil {
+			log.Fatalf("Failed to get best block header: %v", err)
+		}
+
+		s.height = bestBlockMeta.Height
+		s.lastHash = bestBlockHeader.Hash()
+
+		if s.height > 0 {
+			s.height--
+			s.lastHash = bestBlockHeader.HashPrevBlock
+		}
+
+		invMsg := wire.NewMsgGetHeaders()
+		invMsg.AddBlockLocatorHash(s.lastHash) // First time this is Genesis block hash
+		invMsg.HashStop = chainhash.Hash{}
+
+		if s.height == 0 {
+			s.logger.Infof("Requesting headers starting from genesis\n")
+		} else {
+			s.logger.Infof("Requesting headers starting from %s\n", s.lastHash)
+		}
+
+		// Send the getheaders message
+		s.peer.QueueMessage(invMsg, nil)
+
+		// Keep the program running to receive headers
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+
+			case <-s.WaitForPeerQuitChannel():
+				break
+
+			case <-time.After(time.Second * 10):
+				// Send a ping message to the peer
+				ping := wire.NewMsgPing(0)
+				s.peer.QueueMessage(ping, nil)
+			}
 		}
 	}
+}
+
+// This method is needed because the peer.quit channel is not exported
+func (s *Server) WaitForPeerQuitChannel() <-chan struct{} {
+	ch := make(chan struct{})
+
+	go func() {
+		s.peer.WaitForDisconnect()
+		close(ch)
+	}()
+
+	return ch
 }
 
 func (s *Server) Stop(ctx context.Context) error {
@@ -374,7 +404,7 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 					spends[i] = &utxo.Spend{
 						TxID:         input.PreviousTxIDChainHash(),
 						Vout:         input.PreviousTxOutIndex,
-						Hash:         hash,
+						UTXOHash:     hash,
 						SpendingTxID: &txHash,
 					}
 				}
@@ -386,7 +416,7 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 			}
 
 			for i, po := range previousOutputs {
-				if po.LockingScript == nil || len(po.LockingScript) == 0 {
+				if po.LockingScript == nil {
 					return fmt.Errorf("Previous output script is empty for %s:%d", po.PreviousTxID, po.Vout)
 				}
 
@@ -395,14 +425,14 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 			}
 
 			// Spend the inputs
-			if err := s.utxoStore.Spend(ctx, spends); err != nil {
+			if err := s.utxoStore.Spend(ctx, spends, uint32(block.Height())); err != nil {
 				return fmt.Errorf("Failed to spend utxos: %w", err)
 			}
 		}
 
 		// Store the tx in the store
 		if _, err := s.utxoStore.Create(ctx, tx, uint32(dbID)); err != nil {
-			if !strings.Contains(err.Error(), "TXMETA_ALREADY_EXISTS") {
+			if !errors.Is(err, errors.ErrTxAlreadyExists) {
 				return fmt.Errorf("Failed to store tx: %w", err)
 			}
 		}
@@ -424,6 +454,9 @@ func (s *Server) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) er
 		// Update the block with the correct subtree, if necessary
 		// TODO s.blockchainStore.Se(ctx context.Context, blockHash *chainhash.Hash)
 	}
+
+	height := block.Height()
+	s.utxoStore.SetBlockHeight(uint32(height))
 
 	return nil
 }

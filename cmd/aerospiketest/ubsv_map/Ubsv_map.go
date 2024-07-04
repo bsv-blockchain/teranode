@@ -111,12 +111,13 @@ func (s *UbsvMap) Spender(ctx context.Context, wg *sync.WaitGroup, spenderCh cha
 
 				spends = append(spends, &utxostore.Spend{
 					TxID:         tx.TxIDChainHash(),
-					Hash:         utxoHash,
+					UTXOHash:     utxoHash,
 					Vout:         uint32(idx),
 					SpendingTxID: spendingTxHash,
 				})
 			}
-			err = s.store.Spend(ctx, spends)
+			blockHeight, _ := s.store.GetBlockHeight()
+			err = s.store.Spend(ctx, spends, blockHeight)
 			if err != nil {
 				s.logger.Warnf("spend failed: %v\n", err)
 			}

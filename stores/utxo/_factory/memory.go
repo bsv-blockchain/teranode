@@ -11,7 +11,7 @@ package _factory
 //)
 //
 //func init() {
-//	availableDatabases["memory"] = func(logger ulogger.Logger, url *url.URL) (utxomap.Interface, error) {
+//	availableDatabases["memory"] = func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxomap.Interface, error) {
 //		return memory.New(true), nil
 //	}
 //}

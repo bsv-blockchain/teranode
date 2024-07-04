@@ -2,10 +2,9 @@
 
 ## Index
 
-
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Receiving Tx Meta and warming up the TXMeta Cache](#21-receiving-tx-meta-and-warming-up-the-txmeta-cache)
+- [2.1. Receiving UTXOs and warming up the TXMeta Cache](#21-receiving-utxos-and-warming-up-the-txmeta-cache)
 - [2.2. Receving subtrees for validation](#22-receving-subtrees-for-validation)
 - [2.3. Validating the Subtrees](#23-validating-the-subtrees)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
@@ -28,10 +27,10 @@ The Subtree Validator is responsible for ensuring the integrity and consistency 
 2. **Transaction Legitimacy**: Ensures all transactions within subtrees are valid, including checks for double-spending.
 
 3. **Decorates the Subtree with additional metadata**: Adds metadata to the subtree, to facilitate faster block validation at a later stage (by the Block Validation Service).
-   - Specifically, the subtree metadata will contain all of the transaction parent hashes. This decorated subtree can be validated and processed faster by the Block Validation Service, preventing unnecessary round trips to the TX Meta Store.
+   - Specifically, the subtree metadata will contain all of the transaction parent hashes. This decorated subtree can be validated and processed faster by the Block Validation Service, preventing unnecessary round trips to the UTXO Store.
 
 
-![Subtree_Validation_Service_Container_Diagram.png](img%2FSubtree_Validation_Service_Container_Diagram.png)
+![Subtree_Validation_Service_Container_Diagram.png](img/Subtree_Validation_Service_Container_Diagram.png)
 
 The Subtree Validation Service:
 
@@ -41,17 +40,17 @@ The Subtree Validation Service:
 
 The P2P Service communicates with the Block Validation over either gRPC (Recommended) or fRPC (Experimental) protocols.
 
-![Subtree_Validation_Service_Component_Diagram.png](img%2FSubtree_Validation_Service_Component_Diagram.png)
+![Subtree_Validation_Service_Component_Diagram.png](img/Subtree_Validation_Service_Component_Diagram.png)
 
-To improve performance, the Subtree Validation Service uses a caching mechanism for Tx MetaData. This prevents repeated fetch calls to the store by retaining recently loaded transactions in memory (for a limited time). This can be enabled or disabled via the `subtreevalidation_txMetaCacheEnabled` setting. The caching mechanism is implemented in the `txmetacache` package, and is used by the Subtree Validation Service:
+To improve performance, the Subtree Validation Service uses a caching mechanism for UTXO meta data (called `TX Meta Cache for historical reasons). This prevents repeated fetch calls to the store by retaining recently loaded transactions in memory (for a limited time). This can be enabled or disabled via the `subtreevalidation_txMetaCacheEnabled` setting. The caching mechanism is implemented in the `txmetacache` package, and is used by the Subtree Validation Service:
 
 ```go
 	// create a caching tx meta store
     if gocore.Config().GetBool("subtreevalidation_txMetaCacheEnabled", true) {
         logger.Infof("Using cached version of tx meta store")
-        u.txMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
+        u.utxoStore = txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, utxoStore)
     } else {
-        u.txMetaStore = txMetaStore
+        u.utxoStore = utxoStore
     }
 ```
 
@@ -60,7 +59,7 @@ Finally, note that the Subtree Validation service benefits of the use of Lustre 
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](..%2Flustre_fs.svg)
+![lustre_fs.svg](../lustre_fs.svg)
 
 
 
@@ -68,14 +67,14 @@ Teranode microservices make use of the Lustre file system in order to share subt
 
 The subtree validator is a service that validates subtrees. After validating them, it will update the relevant stores accordingly.
 
-### 2.1. Receiving Tx Meta and warming up the TXMeta Cache
+### 2.1. Receiving UTXOs and warming up the TXMeta Cache
 
 * The TX Validator service processes and validates new transactions.
-* After validating transactions, The Tx Validator Service sends them (in Tx Meta format) to the Subtree Validation Service via Kafka.
-* The Subtree Validation Service stores these Tx Meta in a Tx Meta Cache.
+* After validating transactions, The Tx Validator Service sends them (in UTXO Meta format) to the Subtree Validation Service via Kafka.
+* The Subtree Validation Service stores these UTXO Meta Data in the Tx Meta Cache.
 * At a later stage (next sections), the Subtree Validation Service will receive subtrees, composed of 1 million transactions. By having the Txs preloaded in a warmed up Tx Meta Cache, the Subtree Validation Service can quickly access the data required to validate the subtree.
 
-![tx_validation_subtree_validation.svg](img%2Fplantuml%2Fvalidator%2Ftx_validation_subtree_validation.svg)
+![tx_validation_subtree_validation.svg](img/plantuml/validator/tx_validation_subtree_validation.svg)
 
 ### 2.2. Receving subtrees for validation
 
@@ -86,16 +85,16 @@ The subtree validator is a service that validates subtrees. After validating the
 
 Receiving subtrees for validation via Kafka:
 
-![subtree_validation_kafka_subtree_found.svg](img%2Fplantuml%2Fsubtreevalidation%2Fsubtree_validation_kafka_subtree_found.svg)
+![subtree_validation_kafka_subtree_found.svg](img/plantuml/subtreevalidation/subtree_validation_kafka_subtree_found.svg)
 
 Receiving subtrees for validation via gRPC:
 
-![subtree_validation_subtree_found.svg](img%2Fplantuml%2Fsubtreevalidation%2Fsubtree_validation_subtree_found.svg)
+![subtree_validation_subtree_found.svg](img/plantuml/subtreevalidation/subtree_validation_subtree_found.svg)
 
 
 In addition to the P2P Service, the Block Validation service can also request for subtrees to be validated and added, together with its metadata, to the subtree store. Should the Block Validation service find, as part of the validation of a specific block, a subtree not known by the node, it can request its validation to the Subtree Validation service.
 
-![block_validation_subtree_validation_request.svg](img%2Fplantuml%2Fsubtreevalidation%2Fblock_validation_subtree_validation_request.svg)
+![block_validation_subtree_validation_request.svg](img/plantuml/subtreevalidation/block_validation_subtree_validation_request.svg)
 
 The detail of how the subtree is validated will be described in the next section.
 
@@ -103,7 +102,7 @@ The detail of how the subtree is validated will be described in the next section
 
 In the previous section, the process of validating a subtree was described. Here, we will go into more detail about the validation process.
 
-![subtree_validation_detail.svg](img%2Fplantuml%2Fsubtreevalidation%2Fsubtree_validation_detail.svg)
+![subtree_validation_detail.svg](img/plantuml/subtreevalidation/subtree_validation_detail.svg)
 
 The validation process is as follows:
 
@@ -111,9 +110,9 @@ The validation process is as follows:
 2. If the subtree is not found in the Subtree Store, the Validator will fetch the subtree from the remote asset server.
 3. The Validator will create a subtree metadata object.
 4. Next, the Validator will decorate all Txs. To do this, it will try 3 approaches (in order):
-    - First, it will try to fetch the tx metadata from the tx metadata cache (in-memory).
-    - If the tx metadata is not found, it will try to fetch the tx metadata from the tx metadata store.
-    - If the tx metadata is not found in the tx metadata store, the Validator will fetch the Tx from the remote asset server.
+    - First, it will try to fetch the UTXO metadata from the tx metadata cache (in-memory).
+    - If the tx metadata is not found, it will try to fetch the tx metadata from the UTXO store.
+    - If the tx metadata is not found in the UTXO store, the Validator will fetch the UTXO from the remote asset server.
     - If the tx is not found, the tx will be marked as invalid, and the subtree validation will fail.
 
 ## 3. gRPC Protobuf Definitions
@@ -161,16 +160,18 @@ More information on the extended tx structure and purpose can be found in the [A
 
 ### 4.3. Transaction Metadata Model
 
-The TX Meta data model is defined in `stores/txmeta/data.go`:
+The UTXO Meta data model is defined in `stores/utxo/meta/data.go`:
 
-| Field Name  | Description                                                     | Data Type             |
-|-------------|-----------------------------------------------------------------|-----------------------|
-| Hash        | Unique identifier for the transaction.                          | String/Hexadecimal    |
-| Fee         | The fee associated with the transaction.                        | Decimal       |
-| Size in Bytes | The size of the transaction in bytes.                        | Integer               |
-| Parents     | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals |
-| Blocks      | List of hashes of the blocks that include this transaction.     | Array of Strings/Hexadecimals |
-| LockTime    | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
+| Field Name    | Description                                                     | Data Type                         |
+|---------------|-----------------------------------------------------------------|-----------------------------------|
+| Tx            | The raw transaction data.                                       | *bt.Tx Object                     |
+| Hash          | Unique identifier for the transaction.                          | String/Hexadecimal                |
+| Fee           | The fee associated with the transaction.                        | Decimal                           |
+| Size in Bytes | The size of the transaction in bytes.                           | Integer                           |
+| Parents       | List of hashes representing the parent transactions.            | Array of Strings/Hexadecimals     |
+| Blocks        | List of IDs of the blocks that include this transaction.        | Array of Integers                 |
+| LockTime      | The earliest time or block number that this transaction can be included in the blockchain. | Integer/Timestamp or Block Number |
+| IsCoinbase    | Indicates whether the transaction is a coinbase transaction.    | Boolean                           |
 
 Note:
 
@@ -178,8 +179,8 @@ Note:
 
 
 - **Blocks**: 1 or more block hashes. Each block represents a block that mined the transaction.
-    - Typically, a tx should only belong to one block. i.e. a) a tx is created (and its meta is stored in the tx meta store) and b) the tx is mined, and the mined block hash is tracked in the tx meta store for the given transaction.
-    - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the tx meta store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
+    - Typically, a tx should only belong to one block. i.e. a) a tx is created (and its meta is stored in the UTXO store) and b) the tx is mined, and the mined block hash is tracked in the tx meta store for the given transaction.
+    - However, in the case of a fork, a tx can be mined in multiple blocks by different nodes. In this case, the UTXO store will track multiple block hashes for the given transaction, until such time that the fork is resolved and only one block is considered valid.
 
 
 ## 5. Technology
@@ -192,7 +193,7 @@ Note:
 - Used for implementing server-client communication. gRPC is a high-performance, open-source framework that supports efficient communication between services.
 
 4. **Data Stores**:
-- Integration with various stores: blob store, and transaction metadata store.
+- Integration with various stores: blob store, and UTXO store.
 
 5. **Caching Mechanisms (ttlcache)**:
 - Uses `ttlcache`, a Go library for in-memory caching with time-to-live settings, to avoid redundant processing and improve performance.

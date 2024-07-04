@@ -1,5 +1,9 @@
 # 📒 TXMeta Store
 
+## DEPRECATED - Kept for historical purposes only
+
+
+
 ## Index
 
 1. [Description ](#1-description-)
@@ -57,12 +61,12 @@ The TX Meta store offers the following functions:
 
 The TX Meta Store is a microservice that is used by other microservices to retrieve or store / modify TX Meta data.
 
-![TX_Meta_Store_Container_Context_Diagram.png](..%2Fservices%2Fimg%2FTX_Meta_Store_Container_Context_Diagram.png)
+![TX_Meta_Store_Container_Context_Diagram.png](../services/img/TX_Meta_Store_Container_Context_Diagram.png)
 
 
 From the point of view of the components:
 
-![TX_Meta_Store_Component_Context_Diagram.png](..%2Fservices%2Fimg%2FTX_Meta_Store_Component_Context_Diagram.png)
+![TX_Meta_Store_Component_Context_Diagram.png](../services/img/TX_Meta_Store_Component_Context_Diagram.png)
 
 
 
@@ -110,11 +114,11 @@ func getTxMetaStore(logger *gocore.Logger) txmetastore.Store {
 
 We can see here how a client works with either the TX Meta Service or the TX Meta Store:
 
-![tx_meta_service_vs_store.svg](..%2Fservices%2Fimg%2Fplantuml%2Ftxmeta%2Ftx_meta_service_vs_store.svg)
+![tx_meta_service_vs_store.svg](../services/img/plantuml/txmeta/tx_meta_service_vs_store.svg)
 
 Finally, note how the Block Validation implements a proxy cache for the TX Meta Store, which is used to cache the TX Meta data for a short period of time (15 minutes TTL by default). This is done to avoid repeated calls to the TX Meta Store for the same TX Meta data, which is a common scenario during block validation. Notice how this caching mechanism is implemented as part of the Block Validation service, and it is not a core feature of the TX Meta Store.
 
-![Block_Validation_And_TX_Meta_Cache_Component_Context_Diagram.png](..%2Fservices%2Fimg%2FBlock_Validation_And_TX_Meta_Cache_Component_Context_Diagram.png)
+![Block_Validation_And_TX_Meta_Cache_Component_Context_Diagram.png](../services/img/Block_Validation_And_TX_Meta_Cache_Component_Context_Diagram.png)
 
 The Block Validation TXMetaCache is implemented in `txmetacache.go`, and it offers the same API interfaces as the original TX Meta Store, in such a way that the Block Validation could use them indistinctly.
 
@@ -145,7 +149,7 @@ Note:
 
 ### 4.1. Asset Server
 
-![tx_meta_asset_service_diagram.svg](..%2Fservices%2Fimg%2Fplantuml%2Ftxmeta%2Ftx_meta_asset_service_diagram.svg)
+![tx_meta_asset_service_diagram.svg](../services/img/plantuml/txmeta/tx_meta_asset_service_diagram.svg)
 
 
 The UI Dashboard, and any third party HTTP client, will access the Asset Server to retrieve both transactions and their meta data.
@@ -155,7 +159,7 @@ In this case, the tx meta store is used for both tx meta and transactions. This 
 
 ### 4.2. Transaction Validation Service
 
-![tx_meta_transaction_validation.svg](..%2Fservices%2Fimg%2Fplantuml%2Ftxmeta%2Ftx_meta_transaction_validation.svg)
+![tx_meta_transaction_validation.svg](../services/img/plantuml/txmeta/tx_meta_transaction_validation.svg)
 
 The Transaction Validation Service will store the TX Meta when a transaction is validated, deleting it if there is any error sending the tx to the block assembler.
 
@@ -166,7 +170,7 @@ The Transaction Validation Service will store the TX Meta when a transaction is 
 
 The Block Validation service uses a proxy cache for the TX Meta Store, which is used to cache the Tx Meta data for a short period of time (15 minutes TTL by default, which should be enough for the block to be mined). This is done to avoid repeated calls to the TX Meta Store for the same TX Meta data, which is a common scenario during block validation.
 
-![tx_meta_caching.svg](..%2Fservices%2Fimg%2Fplantuml%2Ftxmeta%2Ftx_meta_caching.svg)
+![tx_meta_caching.svg](../services/img/plantuml/txmeta/tx_meta_caching.svg)
 
 
 1. The `TX Meta Cache` checks if the metadata is in the cache.
@@ -196,19 +200,19 @@ When the Block Validation service validates a subtree, it might find unknown (no
 As part of that missing subtree validation, it will retrieve the tx meta data for transactions in the new subtree from the TX Meta Store.
 
 
-![tx_meta_validate_subtree.svg](..%2Fservices%2Fimg%2Fplantuml%2Ftxmeta%2Ftx_meta_validate_subtree.svg)
+![tx_meta_validate_subtree.svg](../services/img/plantuml/txmeta/tx_meta_validate_subtree.svg)
 
 
 #### 4.3.3. Block Validation - Store Coinbase TX Meta Data
 
 
-![tx_meta_transaction_validation_coinbase_tx.svg](..%2Fservices%2Fimg%2Fplantuml%2Ftxmeta%2Ftx_meta_transaction_validation_coinbase_tx.svg)
+![tx_meta_transaction_validation_coinbase_tx.svg](../services/img/plantuml/txmeta/tx_meta_transaction_validation_coinbase_tx.svg)
 
 As part of the block validation, we store the coinbase tx meta data in the TX Meta Store.
 
 #### 4.3.4. Block Validation - Update TX Meta as Mined
 
-![tx_meta_transaction_validation_set_as_mined.svg](..%2Fservices%2Fimg%2Fplantuml%2Ftxmeta%2Ftx_meta_transaction_validation_set_as_mined.svg)
+![tx_meta_transaction_validation_set_as_mined.svg](../services/img/plantuml/txmeta/tx_meta_transaction_validation_set_as_mined.svg)
 
 Once a block is validated, the TX Meta data for the transactions included in the block needs to be updated to reflect that they have been mined. This is done by the Block Validation service, which calls the `SetMinedMulti()` method of the TX Meta Store.
 
@@ -218,7 +222,7 @@ This action updates the list of block hashes for this Tx Meta data. A mined Tx M
 ### 4.4. Block Assembly Service
 
 
-![tx_meta_block_assembly.svg](..%2Fservices%2Fimg%2Fplantuml%2Ftxmeta%2Ftx_meta_block_assembly.svg)
+![tx_meta_block_assembly.svg](../services/img/plantuml/txmeta/tx_meta_block_assembly.svg)
 
 
 1. **Submit Mining Solution**: The `BlockAssembly` component calls `submitMiningSolution()` on itself. It then interacts with the `TxMetaStore` to create metadata for the `coinbaseTx`.

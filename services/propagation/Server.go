@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
@@ -392,7 +393,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 			})
 			if err != nil {
 				// TODO how can we send the real error back and not just a string?
-				response.Error[idx] = err.Error()
+				response.Error[idx] = RemoveInvalidUTF8(err.Error())
 			} else {
 				response.Error[idx] = ""
 			}
@@ -445,6 +446,7 @@ func (ps *PropagationServer) processTransaction(cntxt context.Context, req *prop
 	}
 
 	// All transactions entering Teranode can be assumed to be after Genesis activation height
+	// ps.logger.Debugf("[processTransaction][%s] validating transaction (pq:)", btTx.TxID())
 	if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
 		if errors.Is(err, validator.ErrInternal) {
 			err = fmt.Errorf("%v: %w", err, ErrInternal)
@@ -551,4 +553,16 @@ func (ps *PropagationServer) generateTLSConfig() *tls.Config {
 		NextProtos:   []string{"txblaster2"},
 		MinVersion:   tls.VersionTLS12,
 	}
+}
+
+// RemoveInvalidUTF8 returns a string with all invalid UTF-8 characters removed
+func RemoveInvalidUTF8(s string) string {
+	var buf []rune
+	for _, r := range s {
+		if r == utf8.RuneError {
+			continue
+		}
+		buf = append(buf, r)
+	}
+	return string(buf)
 }

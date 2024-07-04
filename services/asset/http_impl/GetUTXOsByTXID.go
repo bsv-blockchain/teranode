@@ -73,7 +73,7 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 
 			g.Go(func() error {
 				// Get the UTXOHash for this output.
-				utxoHash, err := util.UTXOHash(hash, uint32(safeI), *safeOutput.LockingScript, safeOutput.Satoshis)
+				utxoHash, err := util.UTXOHash(hash, uint32(safeI), safeOutput.LockingScript, safeOutput.Satoshis)
 				if err != nil {
 					return err
 				}
@@ -88,9 +88,9 @@ func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 
 				// Get the UTXO for this output.
 				utxoRes, _ := h.repository.GetUtxo(ctx, &utxo.Spend{
-					Hash: utxoHash,
-					TxID: tx.TxIDChainHash(),
-					Vout: uint32(safeI),
+					UTXOHash: utxoHash,
+					TxID:     tx.TxIDChainHash(),
+					Vout:     uint32(safeI),
 				})
 
 				if utxoRes != nil && utxoRes.Status != int(utxo.Status_NOT_FOUND) {

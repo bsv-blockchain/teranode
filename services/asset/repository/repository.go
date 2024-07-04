@@ -102,7 +102,7 @@ func (r *Repository) Health(ctx context.Context) (int, string, error) {
 func (r *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
 	r.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 
-	txMeta, err := r.UtxoStore.GetMeta(ctx, hash)
+	txMeta, err := r.UtxoStore.Get(ctx, hash)
 	if err == nil && txMeta != nil {
 		return txMeta.Tx.ExtendedBytes(), nil
 	}
@@ -186,14 +186,14 @@ func (r *Repository) GetBlocks(ctx context.Context, hash *chainhash.Hash, n uint
 	return blocks, nil
 }
 
-func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []uint32, error) {
+func (r *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	r.logger.Debugf("[Repository] GetBlockHeaders: %s", hash.String())
-	blockHeaders, heights, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, numberOfHeaders)
+	blockHeaders, blockHeaderMetas, err := r.BlockchainClient.GetBlockHeaders(ctx, hash, numberOfHeaders)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return blockHeaders, heights, nil
+	return blockHeaders, blockHeaderMetas, nil
 }
 
 func (r *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
@@ -281,7 +281,7 @@ func (r *Repository) GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byt
 }
 
 func (r *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
-	r.logger.Debugf("[Repository] GetUtxo: %s", spend.Hash.String())
+	r.logger.Debugf("[Repository] GetUtxo: %s", spend.UTXOHash.String())
 	resp, err := r.UtxoStore.GetSpend(ctx, spend)
 	if err != nil {
 		return nil, err

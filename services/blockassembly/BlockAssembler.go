@@ -127,7 +127,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 		}
 
 		// variables are defined here to prevent unnecessary allocations
-		var block *model.Block
 		var bestBlockchainBlockHeader *model.BlockHeader
 		var meta *model.BlockHeaderMeta
 
@@ -222,72 +221,77 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.currentRunningState.Store("blockchainSubscription")
 				switch notification.Type {
 				case model.NotificationType_Block:
-					bestBlockchainBlockHeader, meta, err = b.blockchainClient.GetBestBlockHeader(ctx)
-					if err != nil {
-						b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
-						continue
-					}
-					b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
-
-					prometheusBlockAssemblyBestBlockHeight.Set(float64(meta.Height))
-
-					// if the bestBlockchainBlockHeader is the same as the current best block header, we already have this block, nothing to do, skip
-					if bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Load().Hash()) {
-						b.logger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
-						continue
-					} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Load().Hash()) { // if the bestBlockchainBlockHeader's previous block is not the same as the current best block header, reorg
-						b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
-						b.currentRunningState.Store("reorging")
-						err = b.handleReorg(ctx, bestBlockchainBlockHeader)
-						if err != nil {
-							b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
-							continue
-						}
-					} else { // if the bestBlockchainBlockHeader's previous block is the same as the current best block header, move up
-						b.logger.Infof("[BlockAssembler][%s] best block header is the same as the previous best block header, moving up: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
-						if block, err = b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
-							b.logger.Errorf("[BlockAssembler][%s] error getting block from blockchain: %v", bestBlockchainBlockHeader.Hash(), err)
-							continue
-						}
-
-						b.currentRunningState.Store("movingUp")
-						if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
-							b.logger.Errorf("[BlockAssembler][%s] error moveUpBlock in subtree processor: %v", bestBlockchainBlockHeader.Hash(), err)
-							continue
-						}
-					}
-
-					b.bestBlockHeader.Store(bestBlockchainBlockHeader)
-					b.bestBlockHeight.Store(meta.Height)
-
-					prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
-
-					if b.resetWaitCount.Load() > 0 {
-						// decrement the reset wait count, we just found and processed a block
-						b.resetWaitCount.Add(-1)
-						b.logger.Warnf("[BlockAssembler] decremented getMiningCandidate wait count: %d", b.resetWaitCount.Load())
-					}
-
-					err = b.SetState(ctx)
-					if err != nil {
-						b.logger.Errorf("[BlockAssembler][%s] error setting state: %v", bestBlockchainBlockHeader.Hash(), err)
-					}
-					b.currentDifficulty, err = b.blockchainClient.GetNextWorkRequired(ctx, bestBlockchainBlockHeader.Hash())
-					if err != nil {
-						b.logger.Errorf("[BlockAssembler][%s] error getting next work required: %v", bestBlockchainBlockHeader.Hash(), err)
-					}
-
-					err = b.setCurrentChain(ctx)
-					if err != nil {
-						b.logger.Errorf("[BlockAssembler][%s] error setting current chain: %v", bestBlockchainBlockHeader.Hash(), err)
-					}
-
-					b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), meta.Height)
+					b.UpdateBestBlock(ctx)
 				}
 				b.currentRunningState.Store("running")
-			}
-		}
+			} // select
+		} // for
 	}()
+}
+
+func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
+	bestBlockchainBlockHeader, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		b.logger.Errorf("[BlockAssembler] error getting best block header: %v", err)
+		return
+	}
+	b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
+	defer b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), meta.Height)
+
+	prometheusBlockAssemblyBestBlockHeight.Set(float64(meta.Height))
+
+	// if the bestBlockchainBlockHeader is the same as the current best block header, we already have this block, nothing to do, skip
+	if bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Load().Hash()) {
+		b.logger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
+		return
+	} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Load().Hash()) { // if the bestBlockchainBlockHeader's previous block is not the same as the current best block header, reorg
+		b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
+		b.currentRunningState.Store("reorging")
+		err = b.handleReorg(ctx, bestBlockchainBlockHeader)
+		if err != nil {
+			b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
+			return
+		}
+	} else { // if the bestBlockchainBlockHeader's previous block is the same as the current best block header, move up
+		b.logger.Infof("[BlockAssembler][%s] best block header is the same as the previous best block header, moving up: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
+		var block *model.Block
+		if block, err = b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
+			b.logger.Errorf("[BlockAssembler][%s] error getting block from blockchain: %v", bestBlockchainBlockHeader.Hash(), err)
+			return
+		}
+
+		b.currentRunningState.Store("movingUp")
+		if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
+			b.logger.Errorf("[BlockAssembler][%s] error moveUpBlock in subtree processor: %v", bestBlockchainBlockHeader.Hash(), err)
+			return
+		}
+	}
+
+	b.bestBlockHeader.Store(bestBlockchainBlockHeader)
+	b.bestBlockHeight.Store(meta.Height)
+
+	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
+
+	if b.resetWaitCount.Load() > 0 {
+		// decrement the reset wait count, we just found and processed a block
+		b.resetWaitCount.Add(-1)
+		b.logger.Warnf("[BlockAssembler] decremented getMiningCandidate wait count: %d", b.resetWaitCount.Load())
+	}
+
+	err = b.SetState(ctx)
+	if err != nil {
+		b.logger.Errorf("[BlockAssembler][%s] error setting state: %v", bestBlockchainBlockHeader.Hash(), err)
+	}
+	b.currentDifficulty, err = b.blockchainClient.GetNextWorkRequired(ctx, bestBlockchainBlockHeader.Hash())
+	if err != nil {
+		b.logger.Errorf("[BlockAssembler][%s] error getting next work required: %v", bestBlockchainBlockHeader.Hash(), err)
+	}
+
+	err = b.setCurrentChain(ctx)
+	if err != nil {
+		b.logger.Errorf("[BlockAssembler][%s] error setting current chain: %v", bestBlockchainBlockHeader.Hash(), err)
+	}
+
 }
 
 func (b *BlockAssembler) GetCurrentRunningState() string {
@@ -662,10 +666,10 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 		// set to start difficulty
 		return b.defaultMiningNBits, nil
 	} else if b.currentDifficulty != nil {
-		b.logger.Debugf("setting difficulty to current difficulty")
+		b.logger.Debugf("setting difficulty to current difficulty %s", b.currentDifficulty.String())
 		return b.currentDifficulty, nil
 	} else {
-		b.logger.Debugf("setting difficulty to default mining bits")
+		b.logger.Debugf("setting difficulty to default mining bits %s", b.defaultMiningNBits.String())
 		return b.defaultMiningNBits, nil
 	}
 }

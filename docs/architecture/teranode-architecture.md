@@ -1,15 +1,15 @@
 
-![BSVBA-Logo_FC.svg](img%2FBSVBA-Logo_FC.svg)
+![BSVBA-Logo_FC.svg](img/BSVBA-Logo_FC.svg)
 
 ---
 
-![teranode.png](img%2Fteranode.png)
+![teranode.png](img/teranode.png)
 
 ---
 
 # Teranode (Unbounded Bitcoin Satoshi Vision) - Architecture Overview
 
-[Last Modified - 17-January-2024]
+[Last Modified - 17-June-2024]
 
 ## Index
 
@@ -43,8 +43,7 @@
 - [4.12. Bootstrap](#412-bootstrap)
 - [4.13. P2P Legacy Service](#413-p2p-legacy-service)
 - [4.14. UTXO Store](#414-utxo-store)
-- [4.15. Transaction Meta Store](#415-transaction-meta-store)
-- [4.16. Banlist Service](#416-banlist-service)
+- [4.15. Banlist Service](#416-banlist-service)
 
 
 ## 1. Overview
@@ -57,7 +56,7 @@ Teranode provides a robust node processing system for Bitcoin that can consisten
 The node has been designed as a collection of services that work together to provide a decentralized, scalable, and secure blockchain network. The node is designed to be modular, allowing for easy integration of new services and features.
 
 
-![UBSV_System_Context.png](img%2FUBSV_System_Context.png)
+![UBSV_System_Context.png](img/UBSV_System_Context.png)
 
 Nodes are responsible for:
 
@@ -74,7 +73,7 @@ Nodes are responsible for:
 
 The diagram below shows the different microservices, together with their interactions, that make up Teranode.
 
-![UBSV_Container_Diagram.png](img%2FUBSV_Container_Diagram.png)
+![UBSV_Container_Diagram.png](img/UBSV_Container_Diagram.png)
 
 Various services and components are outlined to show their interactions and functions within the system:
 
@@ -87,7 +86,6 @@ Various services and components are outlined to show their interactions and func
   - **Block Validation Service**: Validates new blocks before they are added to the blockchain.-
   - **TX Store**: Queries "in scope" transaction and transaction ouput data.
   - **UTXO Store**: Retrieves information about **unspent** transaction outputs, which are essential for validating new transactions.
-  - **TX Meta Store**: Keeps track of the status of transactions within the system.
 
 2. **Overlay Services**:
   - **Legacy P2P Network Bridge**: This service handles the legacy peer-to-peer communications within the blockchain network. As older (legacy) nodes will not be able to directly communicate with the newer (Teranode) nodes, this service acts as a bridge between the two types of nodes.
@@ -136,7 +134,7 @@ _Current Transaction format:_
 
 Blocks contain all transaction data for the transactions included.
 
-![Legacy_Bitcoin_Block.png](img%2FLegacy_Bitcoin_Block.png)
+![Legacy_Bitcoin_Block.png](img/Legacy_Bitcoin_Block.png)
 
 Note how the Bitcoin block contains all transactions (including ALL transaction data) for each transaction it contains, not just the transaction Id. This means that the block size would be very large if many transactions were included. At scale, this is not practical, as the block size would be too large to propagate across the network in a timely manner.
 
@@ -220,13 +218,13 @@ _Lightweight_: Subtrees only include transaction IDs, not the full transaction d
 
 2. The subtree then allows nodes to confirm they have all the relevant transactions and to update their state accordingly without having to process vast amounts of data repeatedly.
 
-![UBSV_SubTree.png](img%2FUBSV_SubTree.png)
+![UBSV_SubTree.png](img/UBSV_SubTree.png)
 
 ##### 2.3.3. Blocks:
 
 Blocks contain lists of subtree identifiers, not transactions. This is practical for nodes because they have been processing subtrees continuously, this allows for quick validation of blocks.
 
-![UBSV_Block.png](img%2FUBSV_Block.png)
+![UBSV_Block.png](img/UBSV_Block.png)
 
 Please note that the use of subtrees within blocks represents a data abstraction for a more optimal propagation of transactions. The data model is still the same as Bitcoin, with blocks containing transactions. The subtrees are used to optimize the propagation of transactions and blocks.
 
@@ -258,7 +256,7 @@ At a high level, Teranode performs the following functions:
 1. **Transaction Submission**: Teranodes are subscribed to a IPv6 or alternative broadcast service, and transactions are expected to be received by all nodes.
 
 
-2. **Transaction Validator**: Transactions are validated by the TX Validator Service. This service checks each received transaction against the network's rules, ensuring they are correctly formed and that their inputs are valid and unspent (verified by the UTXO Lookup Service). Once validated, the status of transactions are updated in the TX Meta Store, indicating they have not been included in a block yet and are eligible for inclusion.
+2. **Transaction Validator**: Transactions are validated by the TX Validator Service. This service checks each received transaction against the network's rules, ensuring they are correctly formed and that their inputs are valid and unspent (verified by the UTXO Lookup Service). Once validated, the status of transactions are updated in the UTXO Store, indicating they have not been included in a block yet and are eligible for inclusion.
 
 
 3. **Subtree Assembly**: The Block Assembly Service ingests transactions and organizes them into subtrees. "Subtrees" are a key component of Teranode, allowing for efficient processing of transactions and blocks. A subtree can contain up to 1M transactions. Once a subtree is created, it is broadcast to all other nodes in the network.
@@ -276,7 +274,7 @@ At a high level, Teranode performs the following functions:
 6. **Block Validation**: Once a node finds a valid hashing solution (a successful proof-of-work), the found block is sent to the Block Validation Service. This service checks the new block against the network's consensus rules. If the block is valid, the node will append it to the blockchain. Each node maintains a local copy of the blockchain, which is updated as new blocks are added.
 
 
-![ValidationSequenceDiagram.svg](img%2FValidationSequenceDiagram.svg)
+![ValidationSequenceDiagram.svg](img/ValidationSequenceDiagram.svg)
 
 
 
@@ -290,7 +288,7 @@ The node has been designed as a collection of microservices, each handling speci
 
 The Propagation service is responsible for receiving transactions from other nodes and forwarding them to the Validation service.
 
-![Propagation_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FPropagation_Service_Container_Diagram.png)
+![Propagation_Service_Container_Diagram.png](../services/img/Propagation_Service_Container_Diagram.png)
 
 Here is a breakdown of the components as shown:
 
@@ -309,7 +307,7 @@ Here is a breakdown of the components as shown:
 
 A more detailed diagram is provided here:
 
-![Propagation_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FPropagation_Service_Component_Diagram.png)
+![Propagation_Service_Component_Diagram.png](../services/img/Propagation_Service_Component_Diagram.png)
 
 Notes:
 
@@ -323,13 +321,13 @@ Notes:
 
 ### 4.2. Transaction Validator
 
-The TX Validator Service is responsible for validating a transaction according to the rules of the Bitcoin network and then sending the approved transaction ID forwards to block assembly.
+The TX Validator is a component responsible for validating a transaction according to the rules of the Bitcoin network and then sending the approved transaction ID forwards to block assembly.
 
 The transactions that have passed the TX Validator Service are immediately marked as spent in the UTXO ("Unspent Transaction Output (UTXO)" store.
 
-After the UTXOs have been marked as spent, the transaction metadata is stored in the TX Meta store and sent onwards to the Block Assembly Service via a Message Broker.
+After the UTXOs have been marked as spent, the transaction metadata is stored in the UTXO store and sent onwards to the Block Assembly Service via a Message Broker.
 
-![Tx_Validator_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FTx_Validator_Service_Container_Diagram.png)
+![Tx_Validator_Service_Container_Diagram.png](../services/img/Tx_Validator_Service_Container_Diagram.png)
 
 
 
@@ -345,17 +343,17 @@ Here is a breakdown of the components as shown:
 
 5. **P2P Service**: The P2P Service is responsible for managing connections with peer nodes in the network. It is used by the TX Validator Service to send notifications about rejected transactions to other nodes.
 
-6. **UTXO Store:** Datastore of UTXOs (the outputs from transactions that have not been spent and can be used as inputs in new transactions).
+6. **UTXO Store:** Datastore of UTXOs (the outputs from transactions that have not been spent and can be used as inputs in new transactions). If transactions are validated and not yet mined, they will be eligible for inclusion in a block.
 
-7. **TX Meta Store:** Datastore managing the statuses of transactions. If transactions are validated and not yet mined, they will be eligible for inclusion in a block.
 
 A more detailed diagram can be seen here:
 
-![Tx_Validator_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FTx_Validator_Service_Component_Diagram.png)
+![Tx_Validator_Service_Component_Diagram.png](../services/img/Tx_Validator_Service_Component_Diagram.png)
 
 Notes:
 1. **Message Brokers:** The TX Validator will use a message broker, such as Kafka, to facilitate message passing between the Propagation Service and the TX Validator Service, and between the TX Validator Service and the Block Assembly. While direct gRPC (or other communication channels) communication between the Propagation and TX Validator Service is available, it is recommended to use a message broker in production.
 
+It must be noted that although the TX Validator is run as a component directly instantiated by various Services, it can also be run as an independent service, and accessed via gRPC, fRPC or Kafka.
 
 ---
 
@@ -364,7 +362,7 @@ Notes:
 
 This service is responsible for creating subtrees, as well as creating mining candidates (blocks) for Miner Services to hash against. The Block Assembly Service will broadcast any newly created subtrees and blocks to the network.
 
-![Block_Assembly_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FBlock_Assembly_Service_Container_Diagram.png)
+![Block_Assembly_Service_Container_Diagram.png](../services/img/Block_Assembly_Service_Container_Diagram.png)
 
 
 There are two distinct processes that the Block Assembly Service performs:
@@ -375,7 +373,7 @@ There are two distinct processes that the Block Assembly Service performs:
 2. **Block Assembly**: The Block Assembly Service compiles block templates consisting of subtrees. Once a hashing solution has been found, the block is broadcast to all other nodes for validation.
 
 
-![Block_Assembly_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FBlock_Assembly_Service_Component_Diagram.png)
+![Block_Assembly_Service_Component_Diagram.png](../services/img/Block_Assembly_Service_Component_Diagram.png)
 
 The relevant components and their interactions are described below:
 
@@ -388,7 +386,7 @@ The relevant components and their interactions are described below:
 3. **Block Assembler**: This component orchestrates the process of creating new subtrees and new blocks. It receives transaction IDs from the Message Broker, performs necessary checks, and assembles subtrees and blocks.
 
 
-4. **TX Meta Store**: This stores the status of transactions. Before a transaction ID is included in a subtree or block template, the Block Assembly Service checks this database to ensure that the transaction has not been previously included in another subtree / block.
+4. **UTXO Store**: This stores the status of transactions. Before a transaction ID is included in a subtree or block template, the Block Assembly Service checks this database to ensure that the transaction has not been previously included in another subtree / block.
 
 
 5. **Subtrees**: Completed subtrees are announced on the network, so other nodes can incorporate them into their blocks. All new subtrees that are completed are announced on the IPV6 multicast block subtree network address(es), or any other alternative broadcast service.
@@ -424,11 +422,11 @@ The Subtree Validation Service validates newly received Subtrees (as created by 
 
 The container diagram for this service is represented below:
 
-![Subtree_Validation_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FSubtree_Validation_Service_Container_Diagram.png)
+![Subtree_Validation_Service_Container_Diagram.png](../services/img/Subtree_Validation_Service_Container_Diagram.png)
 
 A more detailed view shows the various protocols the service can be interacted with:
 
-![Subtree_Validation_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FSubtree_Validation_Service_Component_Diagram.png)
+![Subtree_Validation_Service_Component_Diagram.png](../services/img/Subtree_Validation_Service_Component_Diagram.png)
 
 
 #### 4.5.1. Service Components and Dependencies:
@@ -445,7 +443,7 @@ A more detailed view shows the various protocols the service can be interacted w
 4. **Subtree Store:** Holds the Merkle subtrees, which are partial hashes of the complete block. These are crucial for quickly validating new blocks found by competing miners. These are discarded once they are no longer required (i.e., after a new block is found and the subtrees are no longer needed).
 
 
-5. **TX Meta Store:** Keeps track of the validation status of individual transactions.
+5. **UTXO Store:** Keeps track of the validation status of individual transactions.
 
 
 6. **Asset Server:** When a new Subtree notification is received, the Block Validation Service will download the subtree or block from the originating node, through the Asset Server in the remote node.
@@ -480,7 +478,7 @@ The validation process is continuous and iterative, designed to maintain the blo
     * If the Validator service successfully validates a subtree, it is "blessed," indicating approval. If a subtree (or a transaction within the subtree) fails validation, the subtree is rejected.
 
 
-3. **Decorated Subtrees**: The validated subtrees are decorated to include additional metadata. Specifically, the decorated subtrees will include all the parent Txs. This step represents an optimization, so the block validation process (performed by the Block Validation Service at a later stage), does not need to perform costly requests to the Tx Meta Store for each transaction.
+3. **Decorated Subtrees**: The validated subtrees are decorated to include additional metadata. Specifically, the decorated subtrees will include all the parent Txs. This step represents an optimization, so the block validation process (performed by the Block Validation Service at a later stage), does not need to perform costly requests to the UTXO Store for each transaction.
 
 
 4. **Subtree Store**: Validated subtrees are stored in the Subtree Store.
@@ -493,11 +491,11 @@ The Block Validation Service is responsible for receiving and processing new blo
 
 The container diagram for this service is represented below:
 
-![Block_Validation_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FBlock_Validation_Service_Container_Diagram.png)
+![Block_Validation_Service_Container_Diagram.png](../services/img/Block_Validation_Service_Container_Diagram.png)
 
 A more detailed view shows the various protocols the service can be interacted with:
 
-![Block_Validation_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FBlock_Validation_Service_Component_Diagram.png)
+![Block_Validation_Service_Component_Diagram.png](../services/img/Block_Validation_Service_Component_Diagram.png)
 
 
 #### 4.6.1. Service Components and Dependencies:
@@ -520,7 +518,7 @@ A more detailed view shows the various protocols the service can be interacted w
 6. **TX Store:** Maintains a record of all created transactions, including those that have not yet been confirmed and added to a block on the blockchain.
 
 
-7. **TX Meta Store:** Keeps track of the validation status of individual transactions.
+7. **UTXO Store:** Keeps track of the validation status of individual transactions.
 
 
 8. **Asset Server:** When a new Subtree or Block notification is received, the Block Validation Service will download the subtree or block from the originating node, through the Asset Server in the remote node.
@@ -557,7 +555,7 @@ The validation process is continuous and iterative, designed to maintain the blo
 The P2P Service allows peers to subscribe and receive blockchain notifications, effectively allowing nodes to receive notifications about new blocks and subtrees in the network.
 
 
-![P2P_System_Container_Diagram.png](..%2Fservices%2Fimg%2FP2P_System_Container_Diagram.png)
+![P2P_System_Container_Diagram.png](../services/img/P2P_System_Container_Diagram.png)
 
 The relevant components and their interactions are described below:
 
@@ -573,7 +571,7 @@ The relevant components and their interactions are described below:
 
 A more detailed component diagram can be seen below:
 
-![P2P_System_Component_Diagram.png](..%2Fservices%2Fimg%2FP2P_System_Component_Diagram.png)
+![P2P_System_Component_Diagram.png](../services/img/P2P_System_Component_Diagram.png)
 
 ---
 
@@ -581,7 +579,7 @@ A more detailed component diagram can be seen below:
 
 The service is responsible for managing block updates and adding them to the blockchain maintained by the node. The blocks can be received from other nodes or mined by the node itself. Blocks mined by the node are broadcast to other nodes via the Blockchain Service.
 
-![Blockchain_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FBlockchain_Service_Container_Diagram.png)
+![Blockchain_Service_Container_Diagram.png](../services/img/Blockchain_Service_Container_Diagram.png)
 
 
 
@@ -601,7 +599,7 @@ Here is an explanation of the process:
 
 A more detailed diagram can be seen below.
 
-![Blockchain_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FBlockchain_Service_Component_Diagram.png)
+![Blockchain_Service_Component_Diagram.png](../services/img/Blockchain_Service_Component_Diagram.png)
 
 
 An explanation of the components:
@@ -636,7 +634,7 @@ Whenever a new block is introduced to the blockchain, the Block Persister servic
 
 This service plays a key role within the Teranode network, guaranteeing that subtrees are accurately processed and stored with the essential metadata for necessary audit and traceability purposes.
 
-![Block_Persister_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FBlock_Persister_Service_Container_Diagram.png)
+![Block_Persister_Service_Container_Diagram.png](../services/img/Block_Persister_Service_Container_Diagram.png)
 
 - **Blockchain Service:**
     - Sends "new block" notifications to the Block Persister Service.
@@ -647,7 +645,7 @@ This service plays a key role within the Teranode network, guaranteeing that sub
 - **Subtree Store:**
     - Holds the subtree data. The Block Persister Service interacts with this store to retrieve (Get) subtree data.
 
-- **TX Meta Store:**
+- **UTXO Store:**
     - Maintains transaction metadata. The Block Persister Service accesses (Get) this store to decorate the transactions within the subtrees with metadata.
 
 - **Decorated Block Store:**
@@ -656,7 +654,7 @@ This service plays a key role within the Teranode network, guaranteeing that sub
 
 A more detailed diagram can be seen below, detailing the messaging mechanism between the Blockchain Service and the Block Persister Service.
 
-![Block_Persister_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FBlock_Persister_Service_Component_Diagram.png)
+![Block_Persister_Service_Component_Diagram.png](../services/img/Block_Persister_Service_Component_Diagram.png)
 
 ---
 
@@ -672,13 +670,13 @@ The Asset Service acts as an interface ("Front" or "Facade") to various data sto
 
 - **Unspent Transaction Outputs (UTXO)**.
 
-- **Metadata for a Transaction (TXMeta)**.
+- **Metadata for a Transaction (UTXO)**.
 
-![Asset_Server_System_Container_Diagram.png](..%2Fservices%2Fimg%2FAsset_Server_System_Container_Diagram.png)
+![Asset_Server_System_Container_Diagram.png](../services/img/Asset_Server_System_Container_Diagram.png)
 
 The server uses both HTTP and gRPC as communication protocols, as can be seen in the diagram below:
 
-![Asset_Server_System_Component_Diagram.png](..%2Fservices%2Fimg%2FAsset_Server_System_Component_Diagram.png)
+![Asset_Server_System_Component_Diagram.png](../services/img/Asset_Server_System_Component_Diagram.png)
 
 - **HTTP**: A ubiquitous protocol that allows the server to be accessible from the web, enabling other nodes or clients to interact with the server using standard web requests, as well as WebSockets.
 
@@ -700,7 +698,7 @@ The Coinbase primary function is to monitor all blocks being mined, ensuring acc
 
 The container diagram can be seen here:
 
-![Coinbase_Service_Container_Diagram.png](..%2Fservices%2Fimg%2FCoinbase_Service_Container_Diagram.png)
+![Coinbase_Service_Container_Diagram.png](../services/img/Coinbase_Service_Container_Diagram.png)
 
 The main elements in this diagram are:
 
@@ -711,7 +709,7 @@ The main elements in this diagram are:
 
 As we can see in the more detailed diagram below, the Service also starts a gRPC server, which can be used to interact with the Coinbase Service (this is not used by any production service, but by testing and experimental applications).
 
-![Coinbase_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FCoinbase_Service_Component_Diagram.png)
+![Coinbase_Service_Component_Diagram.png](../services/img/Coinbase_Service_Component_Diagram.png)
 
 
 When a miner intends to spend one of their coins, they need to retrieve the corresponding UTXO from the Coinbase Service. Subsequently, they can generate a valid transaction and transmit this through the Coinbase Service. This action labels the Coinbase UTXO as spent.
@@ -726,7 +724,7 @@ The Bootstrap Service helps new nodes find peers in a Teranode BSV network. It a
 
 The service is implemented using the `libp2p` library, a modular network stack for peer-to-peer applications.
 
-![P2P_Bootstrap_Component_Service.png](..%2Fservices%2Fimg%2FP2P_Bootstrap_Component_Service.png)
+![P2P_Bootstrap_Component_Service.png](../services/img/P2P_Bootstrap_Component_Service.png)
 
 ---
 
@@ -735,7 +733,7 @@ The service is implemented using the `libp2p` library, a modular network stack f
 
 The P2P Legacy Service is designed to facilitate communication and data exchange between traditional Bitcoin SV (BSV) nodes and the more advanced Teranode-BSV nodes.
 
-![P2P_Legacy_Container_Diagram.png](..%2Fservices%2Fimg%2FP2P_Legacy_Container_Diagram.png)
+![P2P_Legacy_Container_Diagram.png](../services/img/P2P_Legacy_Container_Diagram.png)
 
 This service ensures seamless interoperability between the two types of nodes, thereby supporting a smooth transition towards the Teranode infrastructure.
 
@@ -751,29 +749,11 @@ This legacy P2P network is to be phased out as transaction volumes increase, for
 
 The UTXO Store service is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store service is primarily used by the Validator service to retrieve UTXOs when validating transactions. The main purpose of this service is to provide a quick lookup service on behalf of other micro-services (such as the Validator service).
 
-![UTXO_Store_Component_Context_Diagram.png](..%2Fservices%2Fimg%2FUTXO_Store_Component_Context_Diagram.png)
+![UTXO_Store_Component_Context_Diagram.png](../services/img/UTXO_Store_Component_Context_Diagram.png)
 
 ---
 
-### 4.15. Transaction Meta Store
-
-The Transaction Meta Store service is responsible for storing and retrieving transaction metadata. This is used by many services, including the Validator and Block Assembly services, to retrieve transaction metadata when validating transactions. The Transaction Meta Store service is also used by the Block Assembly service to retrieve transaction metadata when assembling blocks.
-
-![TX_Meta_Store_Component_Context_Diagram.png](..%2Fservices%2Fimg%2FTX_Meta_Store_Component_Context_Diagram.png)
-
-The metadata in scope in this service refers to extra fields of interest during transaction-related processing.
-
-| Field          | Description                                             |
-|----------------|---------------------------------------------------------|
-| Tx             | The actual transaction data                             |
-| Fee            | The fee associated with the transaction                 |
-| SizeInBytes    | The size of the transaction in bytes                    |
-| FirstSeen      | Timestamp of when the transaction was first seen        |
-| ParentTxHashes | List of hashes of the transaction's parent transactions |
-
----
-
-### 4.16. Banlist Service
+### 4.15. Banlist Service
 
 Bitcoin is an open public system that anyone can use. While most participants act in good faith, the system needs to protect itself against rogue agents. If a node is breaching the network consensus rules (a "rogue" node), it will get banned.
 

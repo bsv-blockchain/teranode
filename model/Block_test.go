@@ -6,10 +6,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
@@ -517,4 +519,87 @@ func TestCheckDuplicateTransactions(t *testing.T) {
 	_ = err // To stop lint warning
 	// TODO reactivate this test when we have a way to check for duplicate transactions
 	// require.Error(t, err)
+}
+
+func TestCheckParentExistsOnChain(t *testing.T) {
+	txMetaStore := memory.New(ulogger.TestLogger{})
+
+	blockID1 := uint32(1)
+	blockID100 := uint32(100)
+	blockID101 := uint32(101)
+
+	txParent := newTx(1)
+	tx := newTx(2)
+
+	_, err := txMetaStore.Create(context.Background(), txParent, blockID100)
+	require.NoError(t, err)
+	_, err = txMetaStore.Create(context.Background(), tx, blockID101)
+	require.NoError(t, err)
+
+	currentBlockHeaderIDsMap := make(map[uint32]struct{})
+	currentBlockHeaderIDsMap[blockID100] = struct{}{}
+
+	block := &Block{}
+	logger := ulogger.TestLogger{}
+
+	t.Run("test parent is in a previous block", func(t *testing.T) {
+		parentTxStruct := missingParentTx{
+			parentTxHash: *txParent.TxIDChainHash(),
+			txHash:       *tx.TxIDChainHash(),
+		}
+
+		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		require.NoError(t, err)
+	})
+
+	t.Run("test parent is not in a previous block", func(t *testing.T) {
+		// swap parent/tx hashes to simulate a missing parent
+		parentTxStruct := missingParentTx{
+			parentTxHash: *tx.TxIDChainHash(),
+			txHash:       *txParent.TxIDChainHash(),
+		}
+
+		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		require.Error(t, err)
+		e := err.(*errors.Error)
+		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code, "expected error code ERR_BLOCK_INVALID")
+	})
+
+	t.Run("test parent has no block ID", func(t *testing.T) {
+		txParentWithNoBlockID := newTx(3)
+		_, err = txMetaStore.Create(context.Background(), txParentWithNoBlockID)
+		parentTxStruct := missingParentTx{
+			parentTxHash: *txParentWithNoBlockID.TxIDChainHash(),
+			txHash:       *tx.TxIDChainHash(),
+		}
+
+		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		require.Error(t, err)
+		e := err.(*errors.Error)
+		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code, "expected error code ERR_BLOCK_INVALID")
+	})
+
+	t.Run("test parent is not in store so assume is in a previous block", func(t *testing.T) {
+		txMissingParent := newTx(999) // don't put this in the store
+		parentTxStruct := missingParentTx{
+			parentTxHash: *txMissingParent.TxIDChainHash(),
+			txHash:       *tx.TxIDChainHash(),
+		}
+
+		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		require.NoError(t, err)
+	})
+
+	t.Run("test parent is in store and block ID is < min BlockID of last 100 blocks", func(t *testing.T) {
+		txMissingParent := newTx(4)
+		_, err = txMetaStore.Create(context.Background(), txMissingParent, blockID1)
+		parentTxStruct := missingParentTx{
+			parentTxHash: *txMissingParent.TxIDChainHash(),
+			txHash:       *tx.TxIDChainHash(),
+		}
+
+		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		require.NoError(t, err)
+	})
+
 }

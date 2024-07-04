@@ -131,18 +131,18 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		logger:     logger,
 	}
 
-	storeBatcherEnabled := gocore.Config().GetBool("txmeta_store_storeBatcherEnabled", true)
-	if storeBatcherEnabled {
-		batchSize, _ := gocore.Config().GetInt("txmeta_store_storeBatcherSize", 256)
-		batchDuration, _ := gocore.Config().GetInt("txmeta_store_storeBatcherDurationMillis", 10)
+	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
+
+	if batchingEnabled {
+		batchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
+		batchDuration, _ := gocore.Config().GetInt("utxostore_storeBatcherDurationMillis", 10)
 		duration := time.Duration(batchDuration) * time.Millisecond
 		s.storeBatcher = batcher.New[batchStoreItem](batchSize, duration, s.sendStoreBatch, true)
 	}
 
-	getBatcherEnabled := gocore.Config().GetBool("txmeta_store_getBatcherEnabled", true)
-	if getBatcherEnabled {
-		batchSize, _ := gocore.Config().GetInt("txmeta_store_getBatcherSize", 1024)
-		batchDuration, _ := gocore.Config().GetInt("txmeta_store_getBatcherDurationMillis", 10)
+	if batchingEnabled {
+		batchSize, _ := gocore.Config().GetInt("utxostore_getBatcherSize", 1024)
+		batchDuration, _ := gocore.Config().GetInt("utxostore_getBatcherDurationMillis", 10)
 		duration := time.Duration(batchDuration) * time.Millisecond
 		s.getBatcher = batcher.New[batchGetItem](batchSize, duration, s.sendGetBatch, true)
 	}
@@ -174,8 +174,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		}
 	}
 
-	spendBatcherEnabled := gocore.Config().GetBool("utxostore_spendBatcherEnabled", true)
-	if spendBatcherEnabled {
+	if batchingEnabled {
 		batchSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 256)
 		batchDuration, _ := gocore.Config().GetInt("utxostore_spendBatcherDurationMillis", 10)
 		duration := time.Duration(batchDuration) * time.Millisecond
@@ -202,6 +201,12 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	var binsToStore []*aerospike.Bin
 	var err error
 
+	blockHeight, err := s.GetBlockHeight()
+	if err != nil {
+		s.logger.Warnf("Could not get block height, using Genesis activation height")
+		blockHeight = util.GenesisActivationHeight
+	}
+
 	for idx, bItem := range batch {
 		hash = bItem.tx.TxIDChainHash()
 		key, err = aerospike.NewKey(s.namespace, s.setName, hash[:])
@@ -210,7 +215,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			continue
 		}
 
-		binsToStore, err = getBinsToStore(bItem.tx)
+		binsToStore, err = getBinsToStore(bItem.tx, blockHeight)
 		if err != nil {
 			bItem.done <- errors.New(errors.ERR_PROCESSING, "could not get bins to store", err)
 			continue
@@ -230,7 +235,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchId, err)
+		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %w", batchId, err)
 		for _, bItem := range batch {
 			bItem.done <- err
 		}
@@ -242,12 +247,12 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		if err != nil {
 			var aErr *aerospike.AerospikeError
 			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
-				s.logger.Warnf("[STORE_BATCH][%s:%d] txMeta already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
-				batch[idx].done <- utxo.NewErrTxmetaAlreadyExists(hash)
+				s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
+				batch[idx].done <- errors.New(errors.ERR_TX_ALREADY_EXISTS, "%v already exists in store", batch[idx].tx.TxIDChainHash())
 				continue
 			}
 
-			batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[STORE_BATCH][%s:%d] error in aerospike store batch record for txMeta (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
+			batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
 		} else {
 			batch[idx].done <- nil
 		}
@@ -266,7 +271,7 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 
 	retries := 0
 	for {
-		if err := s.MetaBatchDecorate(context.Background(), items); err != nil {
+		if err := s.BatchDecorate(context.Background(), items); err != nil {
 			if retries < 3 {
 				retries++
 				s.logger.Errorf("failed to get batch of txmeta: %v", err)
@@ -312,13 +317,13 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		key, err = aerospike.NewKey(s.namespace, s.setName, bItem.spend.TxID.CloneBytes())
 		if err != nil {
 			// we just return the error on the channel, we cannot process this utxo any further
-			bItem.done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend: %w", bItem.spend.Hash.String(), err)
+			bItem.done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend: %w", bItem.spend.UTXOHash.String(), err)
 			continue
 		}
 
 		batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 		batchRecords[idx] = aerospike.NewBatchUDF(batchUDFPolicy, key, luaSpendFunction, "spend",
-			aerospike.NewValue(bItem.spend.Hash.String()),         // utxo hash
+			aerospike.NewValue(bItem.spend.UTXOHash.String()),     // utxo hash
 			aerospike.NewValue(bItem.spend.SpendingTxID.String()), // spending tx id
 			aerospike.NewValue(s.blockHeight.Load()),              // current block height
 			aerospike.NewValue(time.Now().Unix()),                 // current time
@@ -330,7 +335,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	if err != nil {
 		s.logger.Errorf("[SPEND_BATCH_LUA][%d] failed to batch spend aerospike map utxos in batchId %d: %v", batchId, len(batch), err)
 		for idx, bItem := range batch {
-			bItem.done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.Hash.String(), batchId, idx, err)
+			bItem.done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.UTXOHash.String(), batchId, idx, err)
 		}
 	}
 
@@ -339,7 +344,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		spend := batch[idx].spend
 		err = batchRecord.BatchRec().Err
 		if err != nil {
-			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %w", spend.Hash.String(), s.blockHeight.Load(), batchId, err)
+			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %w", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, err)
 		} else {
 			response := batchRecord.BatchRec().Record
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
@@ -353,24 +358,24 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						// spent by another transaction
 						spendingTxID, hashErr := chainhash.NewHashFromStr(responseMsgParts[1])
 						if hashErr != nil {
-							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.Hash.String(), hashErr)
+							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.UTXOHash.String(), hashErr)
 						}
 						// TODO we need to be able to send the spending TX ID in the error down the line
-						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxID)
+						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxID)
 					case "LOCKED":
 						locktime, hashErr := strconv.ParseUint(responseMsgParts[1], 10, 32)
 						if hashErr != nil {
-							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse locktime: %w", spend.Hash.String(), hashErr)
+							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse locktime: %w", spend.UTXOHash.String(), hashErr)
 						}
 						batch[idx].done <- utxo.NewErrLockTime(uint32(locktime), s.blockHeight.Load(), err)
 					case "ERROR":
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.Hash.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
 					default:
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.Hash.String(), s.blockHeight.Load(), batchId, responseMsg)
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsg)
 					}
 				}
 			} else {
-				batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse response", spend.Hash.String())
+				batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse response", spend.UTXOHash.String())
 			}
 		}
 	}
@@ -470,7 +475,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	if value != nil {
 		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
 		if ok {
-			spendingTxIdStr, ok := utxoMap[spend.Hash.String()].(string)
+			spendingTxIdStr, ok := utxoMap[spend.UTXOHash.String()].(string)
 			if ok && spendingTxIdStr != "" {
 				spendingTxId, err = chainhash.NewHashFromStr(spendingTxIdStr)
 				if err != nil {
@@ -496,11 +501,11 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return s.get(ctx, hash, []string{"locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"})
+	return s.get(ctx, hash, utxo.MetaFields)
 }
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
-	bins := []string{"tx", "locktime", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
+	bins := utxo.MetaFieldsWithTx
 	if len(fields) > 0 {
 		bins = fields[0]
 	}
@@ -545,7 +550,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
 			tx.Inputs[i] = &bt.Input{}
 			_, err := tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 			if err != nil {
-				return nil, errors.New(errors.ERR_TX_INVALID, "could not read input", err)
+				return nil, errors.New(errors.ERR_TX_INVALID, "could not read input: %v", err)
 			}
 		}
 	}
@@ -558,7 +563,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
 			tx.Outputs[i] = &bt.Output{}
 			_, err := tx.Outputs[i].ReadFrom(bytes.NewReader(output))
 			if err != nil {
-				return nil, errors.New(errors.ERR_TX_INVALID, "could not read output", err)
+				return nil, errors.New(errors.ERR_TX_INVALID, "could not read output: %v", err)
 			}
 		}
 	}
@@ -590,7 +595,7 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 	return bins
 }
 
-func (s *Store) MetaBatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, fields ...string) error {
+func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, fields ...string) error {
 	batchPolicy := util.GetAerospikeBatchPolicy()
 	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
 
@@ -620,7 +625,7 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*utxo.UnresolvedMet
 
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records", err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records: %w", err)
 	}
 
 	for idx, batchRecord := range batchRecords {
@@ -629,7 +634,7 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*utxo.UnresolvedMet
 			items[idx].Data = nil
 			if !model.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
 				if errors.Is(err, aerospike.ErrKeyNotFound) {
-					items[idx].Err = utxo.NewErrTxmetaNotFound(&items[idx].Hash)
+					items[idx].Err = errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", items[idx].Hash)
 				} else {
 					items[idx].Err = err
 				}
@@ -645,7 +650,7 @@ func (s *Store) MetaBatchDecorate(_ context.Context, items []*utxo.UnresolvedMet
 				case "tx":
 					tx, txErr := s.getTxFromBins(bins)
 					if txErr != nil {
-						return errors.New(errors.ERR_TX_INVALID, "invalid tx", txErr)
+						return errors.New(errors.ERR_TX_INVALID, "invalid tx: %v", txErr)
 					}
 					items[idx].Data.Tx = tx
 				case "fee":
@@ -701,7 +706,7 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 	for idx, item := range outpoints {
 		key, err := aerospike.NewKey(s.namespace, s.setName, item.PreviousTxID[:])
 		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta", err)
+			return errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta: %w", err)
 		}
 
 		bins := []string{"version", "locktime", "inputs", "outputs"}
@@ -712,19 +717,19 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records", err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records: %w", err)
 	}
 
 	for idx, batchRecordIfc := range batchRecords {
 		batchRecord := batchRecordIfc.BatchRec()
 		if batchRecord.Err != nil {
-			return errors.New(errors.ERR_PROCESSING, "error in aerospike map store batch record", batchRecord.Err)
+			return errors.New(errors.ERR_PROCESSING, "error in aerospike map store batch record: %w", batchRecord.Err)
 		}
 
 		bins := batchRecord.Record.Bins
 		previousTx, err := s.getTxFromBins(bins)
 		if err != nil {
-			return errors.New(errors.ERR_TX_INVALID, "invalid tx", err)
+			return errors.New(errors.ERR_TX_INVALID, "invalid tx: %v", err)
 		}
 
 		outpoints[idx].Satoshis = previousTx.Outputs[outpoints[idx].Vout].Satoshis
@@ -767,11 +772,28 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		return nil, err
 	}
 
-	prometheusTxMetaAerospikeMapStore.Inc()
+	prometheusUtxostoreCreate.Inc()
 	return txMeta, nil
 }
 
-func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
+// Calculate the size we will need for the utxomap.  Each entry comprises a key being the hash of the utxo and the value being the spending tx hash,
+// each of these is a 64 byte hex string, making each entry up to 128 bytes (plus map overhead).
+// assume raw tx is stored as a hex string (2 bytes per byte) as a worst case
+// version, locktime, fee, sizeInBytes, nrUtxos, spentUtxos, blockIds, isCoinbase
+// If the size is greater than 1MB, we will class this as a large transaction and store it in a non-standard way
+func isLargeTransaction(sizeInBytes int, outputCount int) bool {
+	estimatedSize := outputCount * 128
+	estimatedSize += sizeInBytes * 2
+	estimatedSize += 100
+
+	if estimatedSize > 1024*1024 {
+		return true
+	}
+
+	return false
+}
+
+func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) (err error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
@@ -839,7 +861,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 
 			err = s.spendUtxo(policy, spend)
 			if err != nil {
-				if errors.Is(err, utxo.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spend.SpendingTxID)) {
+				if errors.Is(err, utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spend.SpendingTxID)) {
 					return err
 				}
 
@@ -881,7 +903,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 		aerospike.ExpEq(aerospike.ExpMapGetByKey(
 			aerospike.MapReturnType.VALUE,
 			aerospike.ExpTypeSTRING,
-			aerospike.ExpStringVal(spend.Hash.String()),
+			aerospike.ExpStringVal(spend.UTXOHash.String()),
 			aerospike.ExpMapBin("utxos"),
 		), aerospike.ExpStringVal("")),
 	)
@@ -890,7 +912,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 		aerospike.MapPutOp(
 			aerospike.DefaultMapPolicy(),
 			"utxos",
-			spend.Hash.String(),
+			spend.UTXOHash.String(),
 			spend.SpendingTxID.String(),
 		),
 		aerospike.GetBinOp("utxos"),
@@ -922,7 +944,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 			utxosValue, ok := value.Bins["utxos"].(map[interface{}]interface{})
 			if ok {
 				// get utxo from map
-				valueStr, ok := utxosValue[spend.Hash.String()].(string)
+				valueStr, ok := utxosValue[spend.UTXOHash.String()].(string)
 				if ok {
 					valueHash, err := chainhash.NewHashFromStr(valueStr)
 					if err != nil {
@@ -940,14 +962,14 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 
 						s.logger.Debugf("utxo %s was spent by %s", spend.TxID.String(), spendingTxHash)
 						// TODO replace this error with the new one
-						return utxo.NewErrSpent(spend.TxID, spend.Vout, spend.Hash, spendingTxHash)
+						return utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxHash)
 					}
 				}
 			}
 		}
 
 		prometheusUtxoMapErrors.WithLabelValues("Spend", err.Error()).Inc()
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike spend PutBins", err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike spend PutBins: %v", err)
 	}
 
 	prometheusUtxoMapSpend.Inc()
@@ -970,7 +992,7 @@ func (s *Store) spendUtxo(policy *aerospike.WritePolicy, spend *utxo.Spend) erro
 					if s.lastSpendBatcher != nil {
 						s.lastSpendBatcher.Put(&batchLastSpend{
 							key:  key,
-							hash: *spend.Hash,
+							hash: *spend.UTXOHash,
 							time: int(time.Now().Unix()),
 						})
 					} else {
@@ -1003,7 +1025,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 			}
 			return errors.New(errors.ERR_STORAGE_ERROR, "context cancelled un-spending %d of %d utxos", i, len(spends))
 		default:
-			s.logger.Warnf("unspending utxo %s of tx %s:%d, spending tx: %s", spend.Hash.String(), spend.TxID.String(), spend.Vout, spend.SpendingTxID.String())
+			s.logger.Warnf("unspending utxo %s of tx %s:%d, spending tx: %s", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingTxID.String())
 			if err = s.unSpend(ctx, spend); err != nil {
 				// just return the raw error, should already be wrapped
 				return err
@@ -1026,7 +1048,7 @@ func (s *Store) unSpend(_ context.Context, spend *utxo.Spend) error {
 	_, err = s.client.Operate(policy, key, aerospike.MapPutOp(
 		aerospike.DefaultMapPolicy(),
 		"utxos",
-		spend.Hash.String(),
+		spend.UTXOHash.String(),
 		aerospike.NewStringValue(""),
 	))
 	if err != nil {
@@ -1137,11 +1159,11 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func getBinsToStore(tx *bt.Tx, blockIDs ...uint32) ([]*aerospike.Bin, error) {
-	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx)
+func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aerospike.Bin, error) {
+	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
-		return nil, errors.New(errors.ERR_PROCESSING, "failed to get fees and utxo hashes", err)
+		return nil, errors.New(errors.ERR_PROCESSING, "failed to get fees and utxo hashes for %s: %v", tx.TxIDChainHash(), err)
 	}
 
 	utxos := make(map[interface{}]interface{})
