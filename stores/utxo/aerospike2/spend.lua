@@ -8,6 +8,10 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
         return "ERROR:TX not found"
     end
 
+	if rec['frozen'] then
+		return "FROZEN:TX is frozen"
+	end
+
     if rec['big'] then
         return "ERROR:Big TX"
     end
@@ -33,7 +37,9 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
 
     if bytes.size(utxo) == 64 then
         local existingSpendingTxID = bytes.get_bytes(utxo, 33, 32) -- NB - lua arrays are 1-based!!!!
-        if bytes_equal(existingSpendingTxID, spendingTxID) then
+        if frozen(existingSpendingTxID) then
+			return "FROZEN:UTXO is frozen"
+		elseif bytes_equal(existingSpendingTxID, spendingTxID) then
             return 'OK'
         else
             return 'SPENT:' .. existingSpendingTxID
@@ -79,6 +85,19 @@ function bytes_equal(a, b)
 
     for i = 1, #a do 
         if a[i] ~= b[i] then
+            return false
+        end
+    end
+    return true
+end
+
+function frozen(a)
+	if #a ~= 32 then -- Frozen utxos have 32 'FF' bytes.
+        return false
+    end
+
+    for i = 1, #a do 
+        if a[i] ~= 255 then
             return false
         end
     end
