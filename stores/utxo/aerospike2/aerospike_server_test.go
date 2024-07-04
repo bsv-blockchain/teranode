@@ -569,20 +569,30 @@ func TestLUAScripts(t *testing.T) {
 	err = db.Spend(context.Background(), spends, 0)
 	require.NoError(t, err)
 
-	resp, err = client.Get(nil, key, "utxos")
+	resp, err = client.Get(nil, key, "utxos", "spentUtxos", "lastSpend")
 	require.NoError(t, err)
 	utxos, ok = resp.Bins["utxos"].([]interface{})
 	require.True(t, ok)
 	require.Len(t, utxos, 5)
 	require.Len(t, utxos[0].([]byte), 64)
+	spendUtxos, ok := resp.Bins["spentUtxos"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 1, spendUtxos)
+	_, ok = resp.Bins["lastSpend"]
+	require.False(t, ok)
 
 	err = db.UnSpend(context.Background(), spends)
 	require.NoError(t, err)
 
-	resp, err = client.Get(nil, key, "utxos")
+	resp, err = client.Get(nil, key, "utxos", "spentUtxos", "lastSpend")
 	require.NoError(t, err)
 	utxos, ok = resp.Bins["utxos"].([]interface{})
 	require.True(t, ok)
 	require.Len(t, utxos, 5)
 	require.Len(t, utxos[0].([]byte), 32)
+	spendUtxos, ok = resp.Bins["spentUtxos"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 0, spendUtxos)
+	_, ok = resp.Bins["lastSpend"]
+	require.False(t, ok)
 }
