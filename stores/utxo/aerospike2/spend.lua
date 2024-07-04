@@ -77,7 +77,7 @@ function bytes_equal(a, b)
         return false
     end
 
-    for i = 1, #a do
+    for i = 1, #a do 
         if a[i] ~= b[i] then
             return false
         end

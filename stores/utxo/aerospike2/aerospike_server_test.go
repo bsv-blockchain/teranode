@@ -44,6 +44,8 @@ var (
 	utxoHash3, _ = util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[3], 3)
 	utxoHash4, _ = util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[4], 4)
 
+	txWithOPReturn, _ = bt.NewTxFromString("010000000000000000ef01977da9cf1e56bc7447e6561aa7d404e06343c3fd6034d5934eedddb222a928cc010000006b483045022100f7cd34af663f7ff3ab447476c1078610b0a258e88241bc98f93bec1275c65ace02205945dc2be5e855846e428c58e3758413b3f531f59a53528a3e4a75dfa09e894b4121033188d07302a394cdefba66bf83adf52b0922f16251a8dfb448cca061617f8953fffffffff5262400000000001976a9147f07da316209da8f3250d5ef06aa4fdf5179ffe288ac0200000000000000008a6a22314c74794d45366235416e4d6f70517242504c6b3446474e3855427568784b71726e0101357b2274223a32312e36362c2268223a38332c2270223a313031332c2263223a31372c227773223a312e35372c227764223a3232357d22314361674478397973596b4b79667952524a524d78793737454256776a64344c52780a31353638343830323731a2252400000000001976a9147f07da316209da8f3250d5ef06aa4fdf5179ffe288ac00000000")
+
 	spend = &utxo.Spend{
 		TxID:         tx.TxIDChainHash(),
 		Vout:         0,
@@ -559,7 +561,7 @@ func TestLUAScripts(t *testing.T) {
 	require.NoError(t, err)
 	utxos, ok := resp.Bins["utxos"].([]interface{})
 	require.True(t, ok)
-	require.Len(t, utxos, 5)
+	assert.Len(t, utxos, 5)
 
 	utxo, ok := utxos[0].([]byte)
 	require.True(t, ok)
@@ -595,4 +597,41 @@ func TestLUAScripts(t *testing.T) {
 	assert.Equal(t, 0, spendUtxos)
 	_, ok = resp.Bins["lastSpend"]
 	require.False(t, ok)
+}
+
+func TestStoreOPReturn(t *testing.T) {
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	require.NoError(t, err)
+
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	key, err := aero.NewKey(db.namespace, db.setName, txWithOPReturn.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	_, err = client.Delete(nil, key)
+	require.NoError(t, err)
+
+	txMeta, err := db.Create(context.Background(), txWithOPReturn)
+	require.NoError(t, err)
+	assert.NotNil(t, txMeta)
+
+	resp, err := client.Get(nil, key, "utxos")
+	require.NoError(t, err)
+	utxos, ok := resp.Bins["utxos"].([]interface{})
+	require.True(t, ok)
+	assert.Len(t, utxos, 2)
+
+	_, ok = utxos[0].([]byte)
+	require.False(t, ok)
+
+	utxo1, ok := utxos[1].([]byte)
+	require.True(t, ok)
+	require.Len(t, utxo1, 32)
 }

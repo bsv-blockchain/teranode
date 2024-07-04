@@ -7,6 +7,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"log"
 	"math"
 	"net/url"
 	"strconv"
@@ -42,6 +43,9 @@ var unSpendLUA []byte
 
 var luaSpendFunction = "spend_v2"
 var luaUnSpendFunction = "unspend_v2"
+
+// Used for NOOP batch operations
+var placeholderKey *aerospike.Key
 
 type batchStoreItem struct {
 	tx       *bt.Tx
@@ -109,6 +113,11 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	client, err := util.GetAerospikeClient(logger, aerospikeURL)
 	if err != nil {
 		return nil, err
+	}
+
+	placeholderKey, err = aerospike.NewKey(namespace, "placeholderKey", "placeHolderKey")
+	if err != nil {
+		log.Fatal("Failed to init placeholder key")
 	}
 
 	expiration := uint32(0)
@@ -229,12 +238,16 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		key, err = aerospike.NewKey(s.namespace, s.setName, hash[:])
 		if err != nil {
 			bItem.done <- err
+			//NOOP for this record
+			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 			continue
 		}
 
 		binsToStore, err = getBinsToStore(bItem.tx, blockHeight)
 		if err != nil {
 			bItem.done <- errors.New(errors.ERR_PROCESSING, "could not get bins to store", err)
+			//NOOP for this record
+			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 			continue
 		}
 
@@ -268,6 +281,13 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				batch[idx].done <- errors.New(errors.ERR_TX_ALREADY_EXISTS, "%v already exists in store", batch[idx].tx.TxIDChainHash())
 				continue
 			}
+
+			// TODO If the error is RecordToBig, we should store the transaction in a different way...
+			// 1. Store the raw tx in S3
+			// 2. If the number of utxos > 20,000, store each batch of 20,000 in a separate record with a key of txid + postfix
+			// 2. delete the inputs, outputs bins and create a new bin called "big" set to true
+			// 3. If the number of utxos <= 20,000, store the 1st 20_000  utxos in this record
+			// 5. Write this record to aerospike
 
 			batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
 		} else {
@@ -1084,13 +1104,14 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 	}
 
 	outputs := make([]interface{}, len(tx.Outputs))
+	utxos := make([]interface{}, len(tx.Outputs))
+
 	for i, output := range tx.Outputs {
 		outputs[i] = output.Bytes()
-	}
 
-	utxos := make([]interface{}, len(tx.Outputs))
-	for i, utxoHash := range utxoHashes {
-		utxos[i] = aerospike.NewBytesValue(utxoHash[:])
+		if !output.LockingScript.IsData() {
+			utxos[i] = aerospike.NewBytesValue(utxoHashes[i][:])
+		}
 	}
 
 	bins := []*aerospike.Bin{
