@@ -57,7 +57,7 @@ function bytes_equal(a, b)
     end
 
     for i = 1, #a do
-        if a:sub(i, i) ~= b:sub(i, i) then
+        if a[i] ~= b[i] then
             return false
         end
     end

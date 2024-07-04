@@ -12,27 +12,20 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
         return "ERROR:Big TX"
     end
 
-    -- Get the correct output record
+    -- Get the utxos list from the record
     local utxos = rec['utxos'] 
     if utxos == nil then
         return "ERROR:UTXOs list not found"
     end
 
-    warn("type of utxos: %s", type(utxos))
-    warn(tostring(utxos))
-
+    -- Get the utxo that we want from the utxos list
     local utxo = utxos[vout+1] -- NB - lua arrays are 1-based!!!!
     if utxo == nil then
         return "ERROR:UTXO not found for vout " .. vout
     end
 
-    warn("type of utxo: %s", type(utxo))
-    warn("size of utxo: %s", bytes.size(utxo))
-
     -- The first 32 bytes are the utxoHash
     local existingUTXOHash = bytes.get_bytes(utxo, 1, 32) -- NB - lua arrays are 1-based!!!!
-    warn("existingUTXOHash: %s", existingUTXOHash)
-    warn("utxoHash: %s", utxoHash)
 
     if not bytes_equal(existingUTXOHash, utxoHash) then
         return "ERROR:Output utxohash mismatch"
@@ -51,11 +44,11 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
     -- Resize the utxo to 64 bytes
     local newUtxo = bytes(64)
     
-    for i = 1, 32 do
+    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
         newUtxo[i] = utxo[i]
     end
     
-    for i = 1, 32 do
+    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
         newUtxo[32 + i] = spendingTxID[i]
     end
 
@@ -85,7 +78,7 @@ function bytes_equal(a, b)
     end
 
     for i = 1, #a do
-        if a:sub(i, i) ~= b:sub(i, i) then
+        if a[i] ~= b[i] then
             return false
         end
     end
