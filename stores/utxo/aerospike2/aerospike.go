@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"golang.org/x/exp/slices"
@@ -93,6 +94,7 @@ type Store struct {
 	storeBatcher *batcher.Batcher2[batchStoreItem]
 	getBatcher   *batcher.Batcher2[batchGetItem]
 	spendBatcher *batcher.Batcher2[batchSpend]
+	bigStore     blob.Store
 }
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
@@ -128,6 +130,16 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		setName = "txmeta"
 	}
 
+	bigStoreUrl, err := url.Parse(aerospikeURL.Query().Get("bigStore"))
+	if err != nil {
+		return nil, err
+	}
+
+	bigStore, err := blob.NewStore(logger, bigStoreUrl)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Store{
 		url:        aerospikeURL,
 		client:     client,
@@ -135,6 +147,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		setName:    setName,
 		expiration: expiration,
 		logger:     logger,
+		bigStore:   bigStore,
 	}
 
 	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
@@ -236,7 +249,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			continue
 		}
 
-		binsToStore, err = getBinsToStore(bItem.tx, blockHeight)
+		binsToStore, err = getBinsToStore(bItem.tx, blockHeight, false) // false is to say this is a normal record, not big.
 		if err != nil {
 			bItem.done <- errors.New(errors.ERR_PROCESSING, "could not get bins to store", err)
 			//NOOP for this record
@@ -268,21 +281,42 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
-			var aErr *aerospike.AerospikeError
-			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
-				s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
-				batch[idx].done <- errors.New(errors.ERR_TX_ALREADY_EXISTS, "%v already exists in store", batch[idx].tx.TxIDChainHash())
-				continue
+			aErr, ok := err.(*aerospike.AerospikeError)
+			if ok {
+				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
+					s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
+					batch[idx].done <- errors.New(errors.ERR_TX_ALREADY_EXISTS, "%v already exists in store", batch[idx].tx.TxIDChainHash())
+					continue
+				}
+
+				if aErr.ResultCode == types.RECORD_TOO_BIG {
+					if err := s.bigStore.Set(context.TODO(), batch[idx].tx.TxIDChainHash()[:], batch[idx].tx.Bytes()); err != nil {
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
+						continue
+					}
+
+					binsToStore, err = getBinsToStore(batch[idx].tx, blockHeight, true) // true is to say this is a big record
+					if err != nil {
+						batch[idx].done <- errors.New(errors.ERR_PROCESSING, "could not get bins to store", err)
+						continue
+					}
+
+					putOps := make([]*aerospike.Operation, len(binsToStore))
+					for i, bin := range binsToStore {
+						putOps[i] = aerospike.PutOp(bin)
+					}
+
+					if err := s.client.PutBins(nil, batchRecord.BatchRec().Key, binsToStore...); err != nil {
+						batch[idx].done <- errors.New(errors.ERR_PROCESSING, "could not put bins (big mode) to store", err)
+					}
+
+					batch[idx].done <- nil
+
+					continue
+				}
+
+				batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
 			}
-
-			// TODO If the error is RecordToBig, we should store the transaction in a different way...
-			// 1. Store the raw tx in S3
-			// 2. If the number of utxos > 20,000, store each batch of 20,000 in a separate record with a key of txid + postfix
-			// 2. delete the inputs, outputs bins and create a new bin called "big" set to true
-			// 3. If the number of utxos <= 20,000, store the 1st 20_000  utxos in this record
-			// 5. Write this record to aerospike
-
-			batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
 		} else {
 			batch[idx].done <- nil
 		}
@@ -779,10 +813,6 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		return nil, errors.New(errors.ERR_PROCESSING, "failed to get tx meta data", err)
 	}
 
-	if isLargeTransaction(int(txMeta.SizeInBytes), len(tx.Outputs)) {
-		return nil, errors.New(errors.ERR_PROCESSING, "transaction is too large to store")
-	}
-
 	errCh := make(chan error)
 	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, done: errCh}
 
@@ -805,19 +835,6 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 
 	prometheusUtxostoreCreate.Inc()
 	return txMeta, nil
-}
-
-// Calculate the size we will need for the utxomap.  Each entry comprises a key being the hash of the utxo and the value being the spending tx hash,
-// each of these is a 64 byte hex string, making each entry up to 128 bytes (plus map overhead).
-// assume raw tx is stored as a hex string (2 bytes per byte) as a worst case
-// version, locktime, fee, sizeInBytes, nrUtxos, spentUtxos, blockIds, isCoinbase
-// If the size is greater than 1MB, we will class this as a large transaction and store it in a non-standard way
-func isLargeTransaction(sizeInBytes int, outputCount int) bool {
-	estimatedSize := outputCount * 128
-	estimatedSize += sizeInBytes * 2
-	estimatedSize += 100
-
-	return estimatedSize > 1024*1024
 }
 
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err error) {
@@ -1058,7 +1075,7 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aerospike.Bin, error) {
+func getBinsToStore(tx *bt.Tx, blockHeight uint32, big bool, blockIDs ...uint32) ([]*aerospike.Bin, error) {
 	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
@@ -1094,6 +1111,7 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 	}
 
 	outputs := make([]interface{}, len(tx.Outputs))
+
 	utxos := make([]interface{}, len(tx.Outputs))
 
 	for i, output := range tx.Outputs {
@@ -1105,8 +1123,6 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 	}
 
 	bins := []*aerospike.Bin{
-		aerospike.NewBin("inputs", inputs),
-		aerospike.NewBin("outputs", outputs),
 		aerospike.NewBin("version", aerospike.NewIntegerValue(int(tx.Version))),
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
@@ -1120,6 +1136,13 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 
 	if tx.IsCoinbase() {
 		bins = append(bins, aerospike.NewBin("spendingHeight", aerospike.NewIntegerValue(int(blockHeight+100))))
+	}
+
+	if big {
+		bins = append(bins, aerospike.NewBin("big", true))
+	} else {
+		bins = append(bins, aerospike.NewBin("inputs", inputs))
+		bins = append(bins, aerospike.NewBin("outputs", outputs))
 	}
 
 	return bins, nil

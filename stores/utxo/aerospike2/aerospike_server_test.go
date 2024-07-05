@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"os"
 	"testing"
 	"time"
 
@@ -729,4 +730,47 @@ func TestCoinbase(t *testing.T) {
 	err = db.Spend(context.Background(), []*utxo.Spend{spend}, 0)
 	require.NoError(t, err)
 
+}
+
+func TestBigOPReturn(t *testing.T) {
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&bigStore=file:///data/bigstore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	require.NoError(t, err)
+
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	f, err := os.Open("d51051ebcd649ab7a02de85f130b55c357c514ee5f911da9a8dc3bd2ead750ac.bin")
+	require.NoError(t, err)
+	defer f.Close()
+
+	bigTx := new(bt.Tx)
+
+	_, err = bigTx.ReadFrom(f)
+	require.NoError(t, err)
+
+	key, err := aero.NewKey(db.namespace, db.setName, bigTx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	_, err = client.Delete(nil, key)
+	require.NoError(t, err)
+
+	txMeta, err := db.Create(context.Background(), bigTx)
+	require.NoError(t, err)
+	assert.NotNil(t, txMeta)
+
+	resp, err := client.Get(nil, key, "big", "utxos")
+	require.NoError(t, err)
+	big, ok := resp.Bins["big"].(bool)
+	require.True(t, ok)
+	assert.True(t, big)
+
+	utxos, ok := resp.Bins["utxos"].([]interface{})
+	require.True(t, ok)
+	assert.Len(t, utxos, 2)
 }
