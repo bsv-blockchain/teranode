@@ -170,7 +170,7 @@ func (v *Server) Start(ctx context.Context) error {
 			v.logger.Warnf("asset_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
 		}
 
-		AssetClientName, _ := gocore.Config().Get("asset_clientName")
+		AssetClientName, _ := gocore.Config().Get("clientName")
 
 		if v.useP2P {
 			// if using p2p we are already subscribed but will need to get the best block from peers.

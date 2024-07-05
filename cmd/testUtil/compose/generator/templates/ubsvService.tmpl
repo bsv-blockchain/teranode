@@ -14,7 +14,7 @@
       - validator_grpcAddress={{ .ValidatorGRPCAddress }}
       - asset_httpAddress={{ .AssetHTTPAddress }}
       - asset_grpcAddress={{ .AssetGRPCAddress }}
-      - asset_clientName=ubsv-{{ .Index }}
+      - clientName=ubsv-{{ .Index }}
       - blockchain_grpcAddress={{ .BlockchainGRPCAddress }}
       - blockchain_store=postgres://postgres:postgres@postgres:5432/blockchain{{ .Index }}
       - utxostore=postgres://postgres:postgres@postgres:5432/utxostore{{ .Index }}

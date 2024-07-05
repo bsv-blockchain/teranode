@@ -407,8 +407,8 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
         - Example: `feature_libP2P=false`
     - `feature_bootstrap`: Enables or disables the bootstrap feature for discovering peers.
         - Example: `feature_bootstrap=true`
-    - `asset_clientName`: Specifies the client name for identification purposes.
-        - Example: `asset_clientName=AssetClient`
+    - `clientName`: Specifies the client name for identification purposes.
+        - Example: `clientName=AssetClient`
 
 4. **Repository and Storage Configuration**
     - `txmeta_store_asset-service`: Connection string or configuration for the transaction metadata storage used by the Asset Service.
