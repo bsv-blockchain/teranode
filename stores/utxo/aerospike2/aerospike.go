@@ -69,12 +69,6 @@ type batchSpend struct {
 	done  chan error
 }
 
-type batchLastSpend struct {
-	key  *aerospike.Key
-	hash chainhash.Hash
-	time int
-}
-
 var (
 	binNames = []string{
 		"spendable",
@@ -88,18 +82,17 @@ var (
 )
 
 type Store struct {
-	url              *url.URL
-	client           *uaerospike.Client
-	namespace        string
-	setName          string
-	expiration       uint32
-	blockHeight      atomic.Uint32
-	logger           ulogger.Logger
-	batchId          atomic.Uint64
-	storeBatcher     *batcher.Batcher2[batchStoreItem]
-	getBatcher       *batcher.Batcher2[batchGetItem]
-	spendBatcher     *batcher.Batcher2[batchSpend]
-	lastSpendBatcher *batcher.Batcher2[batchLastSpend]
+	url          *url.URL
+	client       *uaerospike.Client
+	namespace    string
+	setName      string
+	expiration   uint32
+	blockHeight  atomic.Uint32
+	logger       ulogger.Logger
+	batchId      atomic.Uint64
+	storeBatcher *batcher.Batcher2[batchStoreItem]
+	getBatcher   *batcher.Batcher2[batchGetItem]
+	spendBatcher *batcher.Batcher2[batchSpend]
 }
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
@@ -824,11 +817,7 @@ func isLargeTransaction(sizeInBytes int, outputCount int) bool {
 	estimatedSize += sizeInBytes * 2
 	estimatedSize += 100
 
-	if estimatedSize > 1024*1024 {
-		return true
-	}
-
-	return false
+	return estimatedSize > 1024*1024
 }
 
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err error) {
