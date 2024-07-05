@@ -69,12 +69,6 @@ type batchSpend struct {
 	done  chan error
 }
 
-type batchLastSpend struct {
-	key  *aerospike.Key
-	hash chainhash.Hash
-	time int
-}
-
 var (
 	binNames = []string{
 		"spendable",
@@ -88,18 +82,17 @@ var (
 )
 
 type Store struct {
-	url              *url.URL
-	client           *uaerospike.Client
-	namespace        string
-	setName          string
-	expiration       uint32
-	blockHeight      atomic.Uint32
-	logger           ulogger.Logger
-	batchId          atomic.Uint64
-	storeBatcher     *batcher.Batcher2[batchStoreItem]
-	getBatcher       *batcher.Batcher2[batchGetItem]
-	spendBatcher     *batcher.Batcher2[batchSpend]
-	lastSpendBatcher *batcher.Batcher2[batchLastSpend]
+	url          *url.URL
+	client       *uaerospike.Client
+	namespace    string
+	setName      string
+	expiration   uint32
+	blockHeight  atomic.Uint32
+	logger       ulogger.Logger
+	batchId      atomic.Uint64
+	storeBatcher *batcher.Batcher2[batchStoreItem]
+	getBatcher   *batcher.Batcher2[batchGetItem]
+	spendBatcher *batcher.Batcher2[batchSpend]
 }
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
@@ -363,6 +356,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			aerospike.NewIntegerValue(int(bItem.spend.Vout)), // vout
 			aerospike.NewValue(bItem.spend.UTXOHash[:]),      // utxo hash
 			aerospike.NewValue(bItem.spend.SpendingTxID[:]),  // spending tx id
+			aerospike.NewValue(s.blockHeight.Load()),         // block height
 			aerospike.NewValue(s.expiration),                 // ttl
 		)
 	}
@@ -380,7 +374,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		spend := batch[idx].spend
 		err = batchRecord.BatchRec().Err
 		if err != nil {
-			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %w", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, err)
+			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %w", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, err)
 		} else {
 			response := batchRecord.BatchRec().Record
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
@@ -400,9 +394,9 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						// TODO we need to be able to send the spending TX ID in the error down the line
 						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxID)
 					case "ERROR":
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
 					default:
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, locktime %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsg)
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsg)
 					}
 				}
 			} else {
@@ -823,11 +817,7 @@ func isLargeTransaction(sizeInBytes int, outputCount int) bool {
 	estimatedSize += sizeInBytes * 2
 	estimatedSize += 100
 
-	if estimatedSize > 1024*1024 {
-		return true
-	}
-
-	return false
+	return estimatedSize > 1024*1024
 }
 
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err error) {
@@ -1126,6 +1116,10 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
 		aerospike.NewBin("blockIDs", blockIDs),
 		aerospike.NewBin("isCoinbase", tx.IsCoinbase()),
+	}
+
+	if tx.IsCoinbase() {
+		bins = append(bins, aerospike.NewBin("spendingHeight", aerospike.NewIntegerValue(int(blockHeight+100))))
 	}
 
 	return bins, nil

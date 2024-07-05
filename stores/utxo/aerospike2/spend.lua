@@ -2,8 +2,9 @@
 -- vout number - the output index of the UTXO
 -- utxoHash []byte - 32 byte little-endian hash of the UTXO
 -- spendingTxID []byte - 32 byte little-endian hash of the spending transaction
+-- currentBlockHeight number - the current block height
 -- ttl number - the time-to-live for the UTXO record
-function spend(rec, vout, utxoHash, spendingTxID, ttl)
+function spend(rec, vout, utxoHash, spendingTxID, currentBlockHeight, ttl)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
     end
@@ -11,6 +12,11 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
 	if rec['frozen'] then
 		return "FROZEN:TX is frozen"
 	end
+
+    local coinbaseSpendingHeight = rec['spendingHeight']
+    if coinbaseSpendingHeight and coinbaseSpendingHeight > 0 and coinbaseSpendingHeight > currentBlockHeight then
+        return "ERROR:Coinbase UTXO can only be spent after 100 blocks"
+    end
 
     if rec['big'] then
         return "ERROR:Big TX"
@@ -37,6 +43,8 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
 
     if bytes.size(utxo) == 64 then
         local existingSpendingTxID = bytes.get_bytes(utxo, 33, 32) -- NB - lua arrays are 1-based!!!!
+        warn("existingSpendingTxID: " .. tostring(existingSpendingTxID))
+        warn("size of existingSpendingTxID: " .. bytes.size(existingSpendingTxID))
         if frozen(existingSpendingTxID) then
 			return "FROZEN:UTXO is frozen"
 		elseif bytes_equal(existingSpendingTxID, spendingTxID) then
@@ -65,7 +73,6 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
 
     -- check whether all utxos have been spent
     if rec['spentUtxos'] == rec['nrUtxos'] then
-        rec['lastSpend'] = os.time()
         record.set_ttl(rec, ttl)
     else
         -- why is this needed? the record should already have a non expiring ttl
@@ -79,11 +86,11 @@ function spend(rec, vout, utxoHash, spendingTxID, ttl)
 end
 
 function bytes_equal(a, b)
-    if #a ~= #b then -- This syntax #a is the length of the array a and #b is the length of the array b.  They should be equal.
+    if bytes.size(a) ~= bytes.size(b) then
         return false
     end
 
-    for i = 1, #a do 
+    for i = 1, bytes.size(a) do 
         if a[i] ~= b[i] then
             return false
         end
@@ -92,14 +99,15 @@ function bytes_equal(a, b)
 end
 
 function frozen(a)
-	if #a ~= 32 then -- Frozen utxos have 32 'FF' bytes.
+    if bytes.size(a) ~= 32 then -- Frozen utxos have 32 'FF' bytes.
         return false
     end
 
-    for i = 1, #a do 
+    for i = 1, bytes.size(a) do
         if a[i] ~= 255 then
             return false
         end
     end
+
     return true
 end
