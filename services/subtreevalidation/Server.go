@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"runtime"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,15 +29,17 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	subtreevalidation_api.UnimplementedSubtreeValidationAPIServer
-	logger                   ulogger.Logger
-	subtreeStore             blob.Store
-	subtreeTTL               time.Duration
-	txStore                  blob.Store
-	utxoStore                utxo.Store
-	validatorClient          validator.Interface
-	subtreeCount             atomic.Int32
-	maxMerkleItemsPerSubtree int
-	stats                    *gocore.Stat
+	logger                            ulogger.Logger
+	subtreeStore                      blob.Store
+	subtreeTTL                        time.Duration
+	txStore                           blob.Store
+	utxoStore                         utxo.Store
+	validatorClient                   validator.Interface
+	subtreeCount                      atomic.Int32
+	maxMerkleItemsPerSubtree          int
+	stats                             *gocore.Stat
+	prioritySubtreeCheckActiveMap     map[string]bool
+	prioritySubtreeCheckActiveMapLock sync.Mutex
 }
 
 func New(
@@ -53,15 +56,17 @@ func New(
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
 
 	u := &Server{
-		logger:                   logger,
-		subtreeStore:             subtreeStore,
-		subtreeTTL:               subtreeTTL,
-		txStore:                  txStore,
-		utxoStore:                utxoStore,
-		validatorClient:          validatorClient,
-		subtreeCount:             atomic.Int32{},
-		maxMerkleItemsPerSubtree: maxMerkleItemsPerSubtree,
-		stats:                    gocore.NewStat("subtreevalidation"),
+		logger:                            logger,
+		subtreeStore:                      subtreeStore,
+		subtreeTTL:                        subtreeTTL,
+		txStore:                           txStore,
+		utxoStore:                         utxoStore,
+		validatorClient:                   validatorClient,
+		subtreeCount:                      atomic.Int32{},
+		maxMerkleItemsPerSubtree:          maxMerkleItemsPerSubtree,
+		stats:                             gocore.NewStat("subtreevalidation"),
+		prioritySubtreeCheckActiveMap:     map[string]bool{},
+		prioritySubtreeCheckActiveMapLock: sync.Mutex{},
 	}
 
 	// create a caching tx meta store
@@ -195,30 +200,44 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 
 	hash, err := chainhash.NewHash(request.Hash[:])
 	if err != nil {
-		return nil, fmt.Errorf("Failed to parse subtree hash from request: %w", err)
+		return nil, fmt.Errorf("[CheckSubtree] Failed to parse subtree hash from request: %w", err)
 	}
 
 	if request.BaseUrl == "" {
-		return nil, fmt.Errorf("Missing base URL in request")
+		return nil, fmt.Errorf("[CheckSubtree] Missing base URL in request")
 	}
 
-	u.logger.Infof("Received priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+	u.logger.Infof("[CheckSubtree] Received priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+	defer u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+
+	u.prioritySubtreeCheckActiveMapLock.Lock()
+	u.prioritySubtreeCheckActiveMap[hash.String()] = true
+	u.prioritySubtreeCheckActiveMapLock.Unlock()
+	defer func() {
+		u.prioritySubtreeCheckActiveMapLock.Lock()
+		delete(u.prioritySubtreeCheckActiveMap, hash.String())
+		u.prioritySubtreeCheckActiveMapLock.Unlock()
+	}()
 
 	retryCount := 0
 
 	for {
-		gotLock, exists, err := tryLockIfNotExists(ctx, u.logger, u.subtreeStore, hash)
+		gotLock, exists, releaseLockFunc, err := tryLockIfNotExists(ctx, u.logger, u.subtreeStore, hash)
 		if err != nil {
-			return nil, fmt.Errorf("error getting lock for Subtree %s: %w", hash.String(), err)
+			return nil, fmt.Errorf("[CheckSubtree] error getting lock for Subtree %s: %w", hash.String(), err)
 		}
+		defer releaseLockFunc()
 
 		if exists {
+			u.logger.Infof("[CheckSubtree] Priority subtree request no longer needed as subtree now exists for %s from %s", hash.String(), request.BaseUrl)
+
 			return &subtreevalidation_api.CheckSubtreeResponse{
 				Blessed: true,
 			}, nil
 		}
 
 		if gotLock {
+			u.logger.Infof("[CheckSubtree] Processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 			v := ValidateSubtree{
 				SubtreeHash:   *hash,
 				BaseUrl:       request.BaseUrl,
@@ -228,24 +247,27 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 
 			// Call the validateSubtreeInternal method
 			if err = u.validateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
-				return nil, fmt.Errorf("Failed to validate subtree %s: %w", hash.String(), err)
+				return nil, fmt.Errorf("[CheckSubtree] Failed to validate subtree %s: %w", hash.String(), err)
 			}
+
+			u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 			return &subtreevalidation_api.CheckSubtreeResponse{
 				Blessed: true,
 			}, nil
 
 		} else {
+			u.logger.Infof("[CheckSubtree] Failed to get lock for subtree %s, retry #%d", hash.String(), retryCount)
 			// Wait for a bit before retrying.
 			select {
 			case <-ctx.Done():
-				return nil, fmt.Errorf("context cancelled")
+				return nil, fmt.Errorf("[CheckSubtree] context cancelled")
 			case <-time.After(1 * time.Second):
 				retryCount++
 
 				// will retry for 20 seconds
 				if retryCount > 20 {
-					return nil, fmt.Errorf("failed to get lock for subtree %s after 10 retries", hash.String())
+					return nil, fmt.Errorf("[CheckSubtree] failed to get lock for subtree %s after 20 retries", hash.String())
 				}
 
 				// Automatically retries the loop.

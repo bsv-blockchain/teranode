@@ -351,7 +351,10 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	for attempt := 1; attempt <= maxRetries+1; attempt++ {
 		prometheusSubtreeValidationValidateSubtreeRetry.Inc()
 
-		if attempt > maxRetries {
+		if u.isPrioritySubtreeCheckActive(v.SubtreeHash.String()) {
+			failFast = false
+			u.logger.Infof("[validateSubtreeInternal][%s] [attempt #%d] Priority request (fail fast=%v) - final priority attempt to process subtree, this time with full checks enabled", v.SubtreeHash.String(), attempt, failFast)
+		} else if attempt > maxRetries {
 			failFast = false
 			u.logger.Infof("[validateSubtreeInternal][%s] [attempt #%d] final attempt to process subtree, this time with full checks enabled", v.SubtreeHash.String(), attempt)
 		} else {
@@ -365,7 +368,18 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		if err != nil {
 			if errors.Is(err, errors.ErrThresholdExceeded) {
 				u.logger.Warnf("[validateSubtreeInternal][%s] [attempt #%d] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String(), attempt)
-				time.Sleep(retrySleepDuration)
+				select {
+				case <-ctx.Done():
+					break
+				case <-time.After(retrySleepDuration):
+					break
+				case <-time.After(10 * time.Millisecond):
+					if u.isPrioritySubtreeCheckActive(v.SubtreeHash.String()) {
+						// break early - this is now a priority request. what the hell are we doing waiting around?
+						break
+					}
+				}
+
 				continue
 			}
 			return errors.New(errors.ERR_ERROR, "[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
@@ -651,4 +665,12 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []u
 	}
 
 	return missingTxs, nil
+}
+
+func (u *Server) isPrioritySubtreeCheckActive(subtreeHash string) bool {
+	u.prioritySubtreeCheckActiveMapLock.Lock()
+	defer u.prioritySubtreeCheckActiveMapLock.Unlock()
+
+	active, ok := u.prioritySubtreeCheckActiveMap[subtreeHash]
+	return ok && active
 }

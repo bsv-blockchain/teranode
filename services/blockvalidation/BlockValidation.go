@@ -921,6 +921,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				return fmt.Errorf("[validateBlockSubtrees][%s] failed to check if subtree exists in store: %w", subtreeHash.String(), err)
 			}
 			if !subtreeExists {
+				u.logger.Infof("[validateBlockSubtrees][%s] instructing stv to check missing subtree [%s]", block.Hash().String(), subtreeHash.String())
 				// we don't have the subtree, so we need to process it in the subtree validation service
 				// this will also store the subtree in the store and block while the subtree is being processed
 				// we do this with a timeout of max 2 minutes

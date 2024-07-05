@@ -35,11 +35,11 @@ func TestLock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	gotLock, _, err := tryLockIfNotExists(ctx, ulogger.TestLogger{}, exister, &hash)
+	gotLock, _, _, err := tryLockIfNotExists(ctx, ulogger.TestLogger{}, exister, &hash)
 	require.NoError(t, err)
 	assert.True(t, gotLock)
 
-	gotLock, _, err = tryLockIfNotExists(ctx, ulogger.TestLogger{}, exister, &hash)
+	gotLock, _, _, err = tryLockIfNotExists(ctx, ulogger.TestLogger{}, exister, &hash)
 	require.NoError(t, err)
 	assert.False(t, gotLock)
 
