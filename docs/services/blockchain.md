@@ -40,17 +40,17 @@ The main features of the service are:
 
 4. **Block Invalidation**: It allows to invalidate blocks (`InvalidateBlock` function), as part of a rollback process.
 
-![Blockchain_Service_Container_Diagram.png](img%2FBlockchain_Service_Container_Diagram.png)
+![Blockchain_Service_Container_Diagram.png](img/Blockchain_Service_Container_Diagram.png)
 
 To fulfill its purpose, the service interfaces with a blockchain store for data persistence and retrieval.
 
-![Blockchain_Service_Component_Diagram.png](img%2FBlockchain_Service_Component_Diagram.png)
+![Blockchain_Service_Component_Diagram.png](img/Blockchain_Service_Component_Diagram.png)
 
 ## 2. Functionality
 
 ### 2.1. Service initialization
 
-![blockchain_init.svg](img%2Fplantuml%2Fblockchain%2Fblockchain_init.svg)
+![blockchain_init.svg](img/plantuml/blockchain/blockchain_init.svg)
 
 Explanation of the sequence:
 
@@ -65,7 +65,7 @@ Explanation of the sequence:
 
 ### 2.2. Adding a new block to the blockchain
 
-![blockchain_add_block.svg](img%2Fplantuml%2Fblockchain%2Fblockchain_add_block.svg)
+![blockchain_add_block.svg](img/plantuml/blockchain/blockchain_add_block.svg)
 
 Explanation of the sequence:
 
@@ -101,7 +101,7 @@ There are 2 clients invoking this endpoint:
 
 ### 2.3. Getting a block from the blockchain
 
-![blockchain_get_block.svg](img%2Fplantuml%2Fblockchain%2Fblockchain_get_block.svg)
+![blockchain_get_block.svg](img/plantuml/blockchain/blockchain_get_block.svg)
 
 Explanation of the sequence:
 
@@ -135,7 +135,7 @@ There are 2 clients invoking this endpoint:
 
 ### 2.4. Getting the last N blocks from the blockchain
 
-![blockchain_get_last_n_blocks.svg](img%2Fplantuml%2Fblockchain%2Fblockchain_get_last_n_blocks.svg)
+![blockchain_get_last_n_blocks.svg](img/plantuml/blockchain/blockchain_get_last_n_blocks.svg)
 
 Explanation of the sequence:
 
@@ -157,7 +157,7 @@ The `Asset Server` service is the only client invoking this endpoint. It calls t
 
 ### 2.5. Checking if a Block Exists in the Blockchain
 
-![blockchain_check_exists.svg](img%2Fplantuml%2Fblockchain%2Fblockchain_check_exists.svg)
+![blockchain_check_exists.svg](img/plantuml/blockchain/blockchain_check_exists.svg)
 
 Explanation of the sequence:
 
@@ -180,7 +180,7 @@ The `Block Validation` service is the only client invoking this endpoint. It cal
 
 ### 2.6. Getting the Best Block Header
 
-![blockchain_get_best_block_header.svg](img%2Fplantuml%2Fblockchain%2Fblockchain_get_best_block_header.svg)
+![blockchain_get_best_block_header.svg](img/plantuml/blockchain/blockchain_get_best_block_header.svg)
 
 Explanation of the sequence:
 
@@ -204,7 +204,7 @@ Multiple services make use of this endpoint, including the `Block Assembly`, `P2
 
 The methods `GetBlockHeader`, `GetBlockHeaders`, and `GetBlockHeaderIDs` in the `Blockchain` service provide different ways to retrieve information about blocks in the blockchain.
 
-![blockchain_get_block_header.svg](img%2Fplantuml%2Fblockchain%2Fblockchain_get_block_header.svg)
+![blockchain_get_block_header.svg](img/plantuml/blockchain/blockchain_get_block_header.svg)
 
 1. **GetBlockHeader:**
     - **Purpose:** Retrieves a single block header.
@@ -240,7 +240,7 @@ Multiple services make use of these endpoints, including the `Block Assembly`, `
 
 ### 2.8. Invalidating a Block
 
-![blockchain_invalidate_block.svg](img%2Fplantuml%2Fblockchain%2Fblockchain_invalidate_block.svg)
+![blockchain_invalidate_block.svg](img/plantuml/blockchain/blockchain_invalidate_block.svg)
 
 1. The `Block Assembly` sends an `InvalidateBlock` request to the `Blockchain Service`.
 2. The `Blockchain Service` processes the request and calls the `InvalidateBlock` method on the `Store`, passing the block hash.
@@ -251,7 +251,7 @@ Multiple services make use of these endpoints, including the `Block Assembly`, `
 
 The Blockchain service provides a subscription mechanism for clients to receive notifications about blockchain events.
 
-![blockchain_subscribe.svg](img%2Fplantuml%2Fblockchain%2Fblockchain_subscribe.svg)
+![blockchain_subscribe.svg](img/plantuml/blockchain/blockchain_subscribe.svg)
 
 In this diagram, the sequence of operations is as follows:
 1. The `Client` sends a `Subscribe` request to the `Blockchain Client`.
@@ -261,16 +261,16 @@ In this diagram, the sequence of operations is as follows:
 5. The server then sends back a response to the client, indicating that the subscription has been established or ended.
 6. On the client side, after establishing the subscription, it manages the subscription by continuously receiving stream notifications from the server and processing them as they arrive.
 
-Multiple services make use of the subscription service, including the `Block Assembly`, `P2P`, and `Asset Server` services, and `UTXO` store. To know more, check the documentation of those services.
+Multiple services make use of the subscription service, including the `Block Assembly`, `Block Validation`, `P2P`, and `Asset Server` services, and `UTXO` store. To know more, check the documentation of those services.
 
 ### 2.10. Triggering a Subscription Notification
 
 There are two distinct paths for sending notifications, notifications originating from the `Blockchain Server` and notifications originating from a `Blockchain Client` gRPC client.
 
-![blockchain_send_notifications.svg](img%2Fplantuml%2Fblockchain%2Fblockchain_send_notifications.svg)
+![blockchain_send_notifications.svg](img/plantuml/blockchain/blockchain_send_notifications.svg)
 
 1. **Path 1: Notification Originating from Blockchain Server**
-   - The `Blockchain Server` processes an `AddBlock` call.
+   - The `Blockchain Server` processes an `AddBlock` or a `SetBlockSubtreesSet` call. The `AddBlock` sequence can be seen in the diagram above.
    - Inside this method, it creates a notification of type `MiningOn` or `Block`.
    - The server then calls its own `SendNotification` method to disseminate this notification.
    - The `Subscription Store` is queried to send the notification to all relevant subscribers.
@@ -282,7 +282,9 @@ There are two distinct paths for sending notifications, notifications originatin
 
 In both scenarios, the mechanism for reaching the subscribers through the `Subscription Store` remains consistent.
 
+For further detail, we show here the sequence for the `SetBlockSubtreesSet` call, not detailed in the diagram above.
 
+![blockchain_setblocksubtreesset.svg](img/plantuml/blockchain/blockchain_setblocksubtreesset.svg)
 
 ## 3. gRPC Protobuf Definitions
 

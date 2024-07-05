@@ -48,21 +48,21 @@ activate BlockchainClient
 BlockchainClient --> Server : Block added to the local Blockchain
 deactivate BlockchainClient
 
-Server -> SubtreeStore : removeSubtreesTTL(gCtx, block)
-activate SubtreeStore
+Server -> Server : removeSubtreesTTL(gCtx, block)
+activate Server
 loop for each subtree
-    SubtreeStore -> SubtreeStore : SetTTL(setCtx, subtreeHashBytes, 0) # 0 means delete the subtree
+    Server -> SubtreeStore : SetTTL(setCtx, subtreeHashBytes, 0) # 0 means delete the subtree
+    activate SubtreeStore
+    SubtreeStore --> Server : Subtree TTL updated
+    deactivate SubtreeStore
 end
-SubtreeStore --> Server : Subtrees TTL updated
-deactivate SubtreeStore
 
-alt if localSetMined mode is off
-    Server -> Model : UpdateTxMinedStatus(gCtx, logger, txMetaStore, subtreesInJob, block.Header)
-    activate Model
-    Model -> TxMetaStore: SetMinedMulti(gCtx, hashes, blockID)
-    Model --> TxMetaStore : TX Status updated as mined (for all Txs in all Subtrees)
-    deactivate Model
-end
+Server -> BlockchainClient : SetBlockSubtreesSet(ctx, blockHash)
+activate BlockchainClient
+BlockchainClient --> Server : Block Subtrees marked as "set"
+deactivate BlockchainClient
+
+deactivate Server
 
 
 

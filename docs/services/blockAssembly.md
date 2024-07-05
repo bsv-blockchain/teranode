@@ -166,10 +166,6 @@ Once a miner solves the mining challenge, it submits a solution to the Block Ass
 
 
 - The block is validated, and if valid, the coinbase transaction is persisted in the Tx Store.
-- Depending on the node's settings, the Block Assembly might be performing Subtree and Tx maintenance next.
-  - Teranode has a `blockvalidation_localSetMined` setting. This setting signals whether the Block Validation service exclusively validates and processes other node's mined blocks (`blockvalidation_localSetMined=false`, default behaviour), or both locally and remotely mined blocks.
-    - In the default `localSetMined = false` mode, Block Assembly marks all Subtrees' Txs as mined through the UTXO Meta Store, and sets the Subtrees TTL to 0 (so they are evicted from the Subtree store).
-    - In the alternative `localSetMined = true` mode, the Block Assembly does not mark the Txs as mined, nor expires the Subtrees. This logic is left for the Block Validation service to handle.
 
 - The block is added to the blockchain via the Blockchain Client. This will be propagated to other nodes via the P2P service.
 

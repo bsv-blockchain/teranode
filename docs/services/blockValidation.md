@@ -2,6 +2,7 @@
 
 ## Index
 
+
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
 - [2.1. Receiving blocks for validation](#21-receiving-blocks-for-validation)
@@ -10,12 +11,13 @@
   - [2.2.2. Catching up after a parent block is not found](#222-catching-up-after-a-parent-block-is-not-found)
   - [2.2.3. Validating the Subtrees](#223-validating-the-subtrees)
   - [2.2.4. Block Data Validation](#224-block-data-validation)
+- [2.3. Marking Txs as mined](#23-marking-txs-as-mined)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 - [4.1. Block Data Model](#41-block-data-model)
   - [4.2. Subtree Data Model](#42-subtree-data-model)
 - [4.3. Transaction Data Model](#43-transaction-data-model)
-- [4.4. UTXO Metadata Model](#44-transaction-metadata-model)
+- [4.4. UTXO Metadata Model](#44-utxo-metadata-model)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
@@ -105,13 +107,6 @@ Note - there is a `optimisticMining` setting that allows to reverse the block va
 * In the regular mode, the block is validated first, and, if valid, added to the block.
 * If `optimisticMining` is on, the block is optimistically added to the blockchain right away, and then validated in the background next. If it was to be found invalid after validation, it would be removed from the blockchain. This mode is not recommended for production use, as it can lead to a temporary fork in the blockchain. It however can be useful for performance testing purposes.
 
-Also note - Teranode has a `blockvalidation_localSetMined` setting. This setting signals whether the Block Validation service exclusively validates and processes other node's mined blocks (`blockvalidation_localSetMined=false`, default behaviour), or both locally and remotely mined blocks.
-  * The default `localSetMined = false` mode exhibits the behaviour described in the above sequence diagram, specifically within the `finalizeBlockValidation` method. In this mode, the service solely processes blocks mined by other nodes.
-  * In the alternative `localSetMined = true` mode, the service logic under `finalizeBlockValidation` is not executed, and, instead, a new blockchain listener is created to process both locally and remotely mined blocks. Independently of the source of the block, an in-memory cache will track which txs are mined.
-    * The purpose of this mode is to allow for lighter and faster throughput at Block Assembly level.
-    * This mode will not be detailed further in this document.
-
-
 
 #### 2.2.2. Catching up after a parent block is not found
 
@@ -136,6 +131,20 @@ As part of the overall block validation, the service will validate the block dat
 
 ![block_data_validation.svg](img/plantuml/blockvalidation/block_data_validation.svg)
 
+### 2.3. Marking Txs as mined
+
+When a block is validated, the transactions in the block are marked as mined in the UTXO store. This is done to ensure that the UTXO store knows which block(s) the transaction is in.
+
+The Block Validation service is exclusively responsible for marking block Txs as mined, independently of whether the transaction as mined by the local Block Assembly, or mined by another node.
+
+As a first step, either the `Block Validation` (after a remotely mined block is validated) or the `Block Assembly` (if a block is locally mined) marks the block subtrees as "set", by invoking the `Blockchain` `SetBlockSubtreesSet` gRPC call, as shown in the diagram below.
+
+![blockchain_setblocksubtreesset.svg](img/plantuml/blockchain/blockchain_setblocksubtreesset.svg)
+
+The `Blockchain` client then notifies subscribers (in this case, the `BlockValidation` service) of a new `NotificationType_BlockSubtreesSet` event.
+The `BlockValidation` proceeds to mark all transactions within the block as "mined" in the `UTXOStore`. This allows to identify in which block a given tx was mined. See diagram below:
+
+![block_validation_set_tx_mined.svg](img/plantuml/blockvalidation/block_validation_set_tx_mined.svg)
 
 
 ## 3. gRPC Protobuf Definitions
@@ -298,4 +307,3 @@ The Block Validation service uses the following configuration options:
 ### Performance and Optimization
 - **`blockvalidation_txMetaCacheEnabled`**: Enables or disables the transaction metadata cache. Turning on this cache can significantly improve performance by reducing the need to repeatedly fetch transaction metadata from persistent storage.
 - **`blockvalidation_validateBlockSubtreesConcurrency`**: Controls the concurrency level for validating block subtrees, a critical setting for optimizing the validation process of blocks composed of multiple subtrees.
-- **`blockvalidation_localSetMined`**: A boolean setting that, when enabled, indicates that the block validation service should mark transactions as mined for both local and remotely mined blocks.

@@ -284,7 +284,7 @@ To know more about the Block Assembly, please check its specific service documen
 
 ## 4.5. Subtree Validation
 
-![utxo_subtree_validation_service_diagram.svg](..%2Fservices%2Fimg%2Fplantuml%2Futxo%2Futxo_subtree_validation_service_diagram.svg)
+![utxo_subtree_validation_service_diagram.svg](../services/img/plantuml/utxo/utxo_subtree_validation_service_diagram.svg)
 
 In order to validate subtrees, the Subtree Validation service will retrieve the UTXO meta data for each tx in the subtree. This is done by sending a request to the UTXO Store, either in batches or one by one, depending on the settings.
 
@@ -331,7 +331,11 @@ The following datastores are supported (either in development / experimental or 
     - A high-performance, NoSQL distributed database.
     - Suitable for environments requiring high throughput and low latency.
     - Handles large volumes of UTXO data with fast read/write capabilities.
-    - https://aerospike.com.
+    - Aerospike is the reference datastore. Teranode has been guaranteed to process 1 million tps with Aerospike.
+    - Aerospike records can contain up to 1024 bytes.
+   ![AerospikeRecord.png](../services/img/AerospikeRecord.png)
+    - For more information, please refer to the official Aerospike documentation: https://aerospike.com.
+
 
 2. **Memory (In-Memory Store)**:
     - Stores UTXOs directly in the application's memory.

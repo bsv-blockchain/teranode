@@ -2,9 +2,10 @@ package model
 
 import (
 	"context"
+	"testing"
+
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
-	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -55,7 +56,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 			{
 				Nodes: []util.SubtreeNode{
 					{
-						Hash: chainhash.Hash{}, // placeholder
+						Hash: *CoinbasePlaceholderHash,
 					},
 					{
 						Hash: *tx1.TxIDChainHash(),
