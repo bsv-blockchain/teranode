@@ -46,12 +46,14 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) {
 		}
 
 		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseUrl)
+		defer u.logger.Infof("Finished processing subtree message for %s", hash.String())
 
-		gotLock, _, err := tryLockIfNotExists(ctx, u.logger, u.subtreeStore, hash)
+		gotLock, _, releaseLockFunc, err := tryLockIfNotExists(ctx, u.logger, u.subtreeStore, hash)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
 			return
 		}
+		defer releaseLockFunc()
 
 		if !gotLock {
 			u.logger.Infof("Subtree %s already exists", hash.String())
@@ -76,7 +78,9 @@ type Exister interface {
 	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
 }
 
-func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exister, hash *chainhash.Hash) (bool, bool, error) { // First bool is if the lock was acquired, second is if the subtree exists
+func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exister, hash *chainhash.Hash) (bool, bool, func(), error) { // First bool is if the lock was acquired, second is if the subtree exists
+
+	releaseLockFunc := func() {}
 
 	// Check to see if .meta file exists rather than just the subtree file itself.
 	// BlockAssembly creates subtree files with no associated .meta file
@@ -85,17 +89,17 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exis
 	// create a clashing subtree file so sometimes the subtree file exists but not the .meta file
 	b, err := exister.Exists(ctx, hash[:], options.WithFileExtension("meta"))
 	if err != nil {
-		return false, false, err
+		return false, false, releaseLockFunc, err
 	}
 	if b {
-		return false, true, nil
+		return false, true, releaseLockFunc, nil
 	}
 
 	quorumPath, _ := gocore.Config().Get("subtree_quorum_path", "")
 	quorumTimeout, _, _ := gocore.Config().GetDuration("subtree_quorum_timeout", 30*time.Second)
 
 	if quorumPath == "" {
-		return true, false, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked
+		return true, false, releaseLockFunc, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked
 	}
 
 	once.Do(func() {
@@ -122,11 +126,12 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exis
 	file, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
+			// logger.Errorf("Failed to acquire lock for Subtree %s: lock file already exists: %v", hash.String(), err)
 			// Failed to acquire lock (file already exists or other error)
-			return false, false, nil
+			return false, false, releaseLockFunc, nil
 		}
 
-		return false, false, err
+		return false, false, releaseLockFunc, err
 	}
 
 	// Close the file immediately after creating it
@@ -141,10 +146,17 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exis
 		case <-time.After(quorumTimeout):
 		}
 
-		if err := os.Remove(lockFile); err != nil {
-			logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
-		}
+		releaseLock(logger, lockFile)
 	}()
 
-	return true, false, nil
+	return true, false, func() { releaseLock(logger, lockFile) }, nil
+}
+
+func releaseLock(logger ulogger.Logger, lockFile string) {
+	// logger.Warnf("Releasing lock file %s", lockFile)
+	if err := os.Remove(lockFile); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
+		}
+	}
 }

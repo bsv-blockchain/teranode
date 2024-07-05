@@ -91,6 +91,7 @@ services:
       - ./data/ubsv1/txstore:/app/data/ubsv1/txstore
       - ./data/ubsv1/subtreestore:/app/data/ubsv1/subtreestore
       - ./data/ubsv1/blockstore:/app/data/ubsv1/blockstore
+      - ./data/ubsv1/subtree_quorum:/app/data/ubsv1/subtree_quorum
 
   ubsv-2:
     <<: *ubsv-base
@@ -108,6 +109,7 @@ services:
       - ./data/ubsv2/txstore:/app/data/ubsv2/txstore
       - ./data/ubsv2/subtreestore:/app/data/ubsv2/subtreestore
       - ./data/ubsv2/blockstore:/app/data/ubsv2/blockstore
+      - ./data/ubsv2/subtree_quorum:/app/data/ubsv2/subtree_quorum
 
   ubsv-3:
     <<: *ubsv-base
@@ -125,6 +127,7 @@ services:
       - ./data/ubsv3/txstore:/app/data/ubsv3/txstore
       - ./data/ubsv3/subtreestore:/app/data/ubsv3/subtreestore
       - ./data/ubsv3/blockstore:/app/data/ubsv3/blockstore
+      - ./data/ubsv3/subtree_quorum:/app/data/ubsv3/subtree_quorum
 
   tx-blaster-1:
     <<: *ubsv-base
