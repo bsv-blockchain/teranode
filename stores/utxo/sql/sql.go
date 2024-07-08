@@ -218,9 +218,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 	err = txn.QueryRowContext(ctx, q, tx.TxIDChainHash()[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes).Scan(&transactionId)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-			return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store: %v", err)
+			return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
 		} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-			return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store: %v", sqliteErr)
+			return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 		}
 		return nil, fmt.Errorf("Failed to insert transaction: %v", err)
 	}
@@ -252,9 +252,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		_, err = txn.ExecContext(ctx, q, transactionId, i, input.PreviousTxIDChainHash()[:], input.PreviousTxOutIndex, input.PreviousTxSatoshis, input.PreviousTxScript, input.UnlockingScript, input.SequenceNumber)
 		if err != nil {
 			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store: %v", err)
+				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
 			} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store: %v", sqliteErr)
+				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 			}
 			return nil, fmt.Errorf("Failed to insert input: %v", err)
 		}
@@ -301,9 +301,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 		_, err = txn.ExecContext(ctx, q, transactionId, i, output.LockingScript, output.Satoshis, coinbaseSpendingHeight, utxoHash[:], nil)
 		if err != nil {
 			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store: %v", err)
+				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
 			} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store: %v", sqliteErr)
+				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 			}
 			return nil, fmt.Errorf("Failed to insert output: %v", err)
 		}
@@ -325,9 +325,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 			_, err = txn.ExecContext(ctx, q, transactionId, blockID)
 			if err != nil {
 				if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-					return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store: %v", err)
+					return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
 				} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-					return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store: %v", sqliteErr)
+					return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 				}
 				return nil, fmt.Errorf("Failed to insert block_ids: %v", err)
 			}

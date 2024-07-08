@@ -247,7 +247,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		if err != nil {
 			var aErr *aerospike.AerospikeError
 			if errors.As(err, &aErr) && aErr != nil && aErr.ResultCode == types.KEY_EXISTS_ERROR {
-				s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
+				s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d (coinbase=%v), skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId, batch[idx].tx.IsCoinbase())
 				batch[idx].done <- errors.New(errors.ERR_TX_ALREADY_EXISTS, "%v already exists in store", batch[idx].tx.TxIDChainHash())
 				continue
 			}
