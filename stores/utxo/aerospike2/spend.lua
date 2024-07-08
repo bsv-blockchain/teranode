@@ -1,14 +1,16 @@
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
--- vout number - the output index of the UTXO
+-- offset number - the offset in the utxos list (vout % utxoBatchSize)
 -- utxoHash []byte - 32 byte little-endian hash of the UTXO
 -- spendingTxID []byte - 32 byte little-endian hash of the spending transaction
 -- currentBlockHeight number - the current block height
 -- ttl number - the time-to-live for the UTXO record
-function spend(rec, vout, utxoHash, spendingTxID, currentBlockHeight, ttl)
+function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
     end
 
+    -- TODO - when we implement the frozen logic in the RPC call, if the number of outputs are more than 20,000, we need to update
+    -- each of the extra records.
 	if rec['frozen'] then
 		return "FROZEN:TX is frozen"
 	end
@@ -29,9 +31,9 @@ function spend(rec, vout, utxoHash, spendingTxID, currentBlockHeight, ttl)
     end
 
     -- Get the utxo that we want from the utxos list
-    local utxo = utxos[vout+1] -- NB - lua arrays are 1-based!!!!
+    local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
     if utxo == nil then
-        return "ERROR:UTXO not found for vout " .. vout
+        return "ERROR:UTXO not found for offset " .. offset
     end
 
     -- The first 32 bytes are the utxoHash
@@ -50,7 +52,7 @@ function spend(rec, vout, utxoHash, spendingTxID, currentBlockHeight, ttl)
 		elseif bytes_equal(existingSpendingTxID, spendingTxID) then
             return 'OK'
         else
-            return 'SPENT:' .. existingSpendingTxID
+            return 'SPENT:' .. bytes_to_hex(existingSpendingTxID)
         end
     end
 
@@ -67,7 +69,7 @@ function spend(rec, vout, utxoHash, spendingTxID, currentBlockHeight, ttl)
     end
 
     -- Update the record
-    utxos[vout+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+    utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
     rec['utxos'] = utxos
     rec['spentUtxos'] = rec['spentUtxos'] + 1
 
@@ -110,4 +112,12 @@ function frozen(a)
     end
 
     return true
+end
+
+function bytes_to_hex(b)
+    local hex = ""
+    for i = bytes.size(b), 1, -1 do
+        hex = hex .. string.format("%02x", b[i])
+    end
+    return hex
 end

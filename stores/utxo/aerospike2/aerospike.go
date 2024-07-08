@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"math"
@@ -230,7 +231,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 	var hash *chainhash.Hash
 	var key *aerospike.Key
-	var binsToStore []*aerospike.Bin
+	var binsToStore [][]*aerospike.Bin
 	var err error
 
 	blockHeight, err := s.GetBlockHeight()
@@ -249,6 +250,9 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			continue
 		}
 
+		// We calculate the bin that we want to store, but we may get back lots of bin batches
+		// because we have had to split the UTXOs into multiple records
+
 		binsToStore, err = getBinsToStore(bItem.tx, blockHeight, false) // false is to say this is a normal record, not big.
 		if err != nil {
 			bItem.done <- errors.New(errors.ERR_PROCESSING, "could not get bins to store", err)
@@ -257,8 +261,34 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			continue
 		}
 
-		putOps := make([]*aerospike.Operation, len(binsToStore))
-		for i, bin := range binsToStore {
+		if len(binsToStore) > 1 {
+			// Make this batch item a NOOP and persist all of these to be written via a queue
+			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+
+			go func(binsToStore [][]*aerospike.Bin) {
+				for i, bins := range binsToStore {
+					keySource := calculateKeySource(bItem.tx.TxIDChainHash(), uint32(i))
+
+					key, err = aerospike.NewKey(s.namespace, s.setName, keySource)
+					if err != nil {
+						bItem.done <- err
+						continue
+					}
+
+					if err := s.client.PutBins(nil, key, bins...); err != nil {
+						bItem.done <- errors.New(errors.ERR_STORAGE_ERROR, "could not put bins to store", err)
+						continue
+					}
+				}
+
+				bItem.done <- nil
+			}(binsToStore)
+
+			continue
+		}
+
+		putOps := make([]*aerospike.Operation, len(binsToStore[0]))
+		for i, bin := range binsToStore[0] {
 			putOps[i] = aerospike.PutOp(bin)
 		}
 
@@ -276,6 +306,8 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			bItem.done <- err
 		}
 	}
+
+	utxoBatchSize, _ := gocore.Config().GetInt("utxoBatchSize", 20_000)
 
 	// batchOperate may have no errors, but some of the records may have failed
 	for idx, batchRecord := range batchRecords {
@@ -301,13 +333,23 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 						continue
 					}
 
-					putOps := make([]*aerospike.Operation, len(binsToStore))
-					for i, bin := range binsToStore {
-						putOps[i] = aerospike.PutOp(bin)
-					}
+					for i, bins := range binsToStore {
+						keySource := calculateKeySource(batch[idx].tx.TxIDChainHash(), uint32(i))
 
-					if err := s.client.PutBins(nil, batchRecord.BatchRec().Key, binsToStore...); err != nil {
-						batch[idx].done <- errors.New(errors.ERR_PROCESSING, "could not put bins (big mode) to store", err)
+						key, err = aerospike.NewKey(s.namespace, s.setName, keySource)
+						if err != nil {
+							batch[idx].done <- err
+							continue
+						}
+
+						putOps := make([]*aerospike.Operation, len(bins))
+						for i, bin := range bins {
+							putOps[i] = aerospike.PutOp(bin)
+						}
+
+						if err := s.client.PutBins(nil, batchRecord.BatchRec().Key, bins...); err != nil {
+							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "could not put bins (big mode) to store", err)
+						}
 					}
 
 					batch[idx].done <- nil
@@ -315,10 +357,20 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					continue
 				}
 
+				if aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
+					// This is a NOOP record
+					batch[idx].done <- nil
+					continue
+				}
+
 				batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
 			}
 		} else {
-			batch[idx].done <- nil
+			if len(batch[idx].tx.Outputs) <= utxoBatchSize {
+				// We notify the done channel that the operation was successful, except
+				// if this item was offloaded to the multi-record queue
+				batch[idx].done <- nil
+			}
 		}
 	}
 }
@@ -375,23 +427,29 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 
+	utxoBatchSize, _ := gocore.Config().GetInt("utxoBatchSize", 20_000)
+
 	var key *aerospike.Key
 	var err error
 	for idx, bItem := range batch {
-		key, err = aerospike.NewKey(s.namespace, s.setName, bItem.spend.TxID.CloneBytes())
+		keySource := calculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(utxoBatchSize))
+
+		key, err = aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
 			// we just return the error on the channel, we cannot process this utxo any further
 			bItem.done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend: %w", bItem.spend.UTXOHash.String(), err)
 			continue
 		}
 
+		offset := calculateOffsetForOutput(bItem.spend.Vout, uint32(utxoBatchSize))
+
 		batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 		batchRecords[idx] = aerospike.NewBatchUDF(batchUDFPolicy, key, luaSpendFunction, "spend",
-			aerospike.NewIntegerValue(int(bItem.spend.Vout)), // vout
-			aerospike.NewValue(bItem.spend.UTXOHash[:]),      // utxo hash
-			aerospike.NewValue(bItem.spend.SpendingTxID[:]),  // spending tx id
-			aerospike.NewValue(s.blockHeight.Load()),         // block height
-			aerospike.NewValue(s.expiration),                 // ttl
+			aerospike.NewIntegerValue(int(offset)),          // vout adjusted for utxo batch size
+			aerospike.NewValue(bItem.spend.UTXOHash[:]),     // utxo hash
+			aerospike.NewValue(bItem.spend.SpendingTxID[:]), // spending tx id
+			aerospike.NewValue(s.blockHeight.Load()),        // block height
+			aerospike.NewValue(s.expiration),                // ttl
 		)
 	}
 
@@ -506,7 +564,11 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	prometheusUtxoMapGet.Inc()
 
-	key, aErr := aerospike.NewKey(s.namespace, s.setName, spend.TxID[:])
+	utxoBatchSize, _ := gocore.Config().GetInt("utxoBatchSize", 20_000)
+
+	keySource := calculateKeySource(spend.TxID, spend.Vout/uint32(utxoBatchSize))
+
+	key, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if aErr != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Get", aErr.Error()).Inc()
 		s.logger.Errorf("Failed to init new aerospike key: %v\n", aErr)
@@ -530,32 +592,23 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 
 	var err error
 	var spendingTxId *chainhash.Hash
-	lockTime := uint32(0)
+
 	if value != nil {
-		utxoMap, ok := value.Bins["utxos"].(map[interface{}]interface{})
+		utxos, ok := value.Bins["utxos"].([]interface{})
 		if ok {
-			spendingTxIdStr, ok := utxoMap[spend.UTXOHash.String()].(string)
-			if ok && spendingTxIdStr != "" {
-				spendingTxId, err = chainhash.NewHashFromStr(spendingTxIdStr)
+			b, ok := utxos[spend.Vout].([]byte)
+			if ok && len(b) == 64 {
+				spendingTxId, err = chainhash.NewHash(b[32:])
 				if err != nil {
 					return nil, errors.New(errors.ERR_PROCESSING, "chain hash error", err)
 				}
 			}
 		}
-
-		iVal := value.Bins["locktime"]
-		if iVal != nil {
-			lockTimeInt, ok := iVal.(int)
-			if ok {
-				lockTime = uint32(lockTimeInt)
-			}
-		}
 	}
 
 	return &utxo.SpendResponse{
-		Status:       int(utxostore.CalculateUtxoStatus(spendingTxId, lockTime, s.blockHeight.Load())),
+		Status:       int(utxostore.CalculateUtxoStatus2(spendingTxId)),
 		SpendingTxID: spendingTxId,
-		LockTime:     lockTime,
 	}, nil
 }
 
@@ -838,6 +891,10 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 }
 
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err error) {
+	return s.spend(ctx, spends)
+}
+
+func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
@@ -934,6 +991,10 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, _ uint32) (err 
 }
 
 func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
+	return s.unSpend(ctx, spends)
+}
+
+func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	for i, spend := range spends {
 		select {
 		case <-ctx.Done():
@@ -954,17 +1015,23 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 }
 
 func (s *Store) unSpendLua(spend *utxo.Spend) error {
+	utxoBatchSize, _ := gocore.Config().GetInt("utxoBatchSize", 20_000)
+
 	policy := util.GetAerospikeWritePolicy(3, math.MaxUint32)
 
-	key, err := aerospike.NewKey(s.namespace, s.setName, spend.TxID[:])
+	keySource := calculateKeySource(spend.TxID, spend.Vout/uint32(utxoBatchSize))
+
+	key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", err.Error()).Inc()
 		return errors.New(errors.ERR_PROCESSING, "error in aerospike NewKey", err)
 	}
 
+	offset := calculateOffsetForOutput(spend.Vout, uint32(utxoBatchSize))
+
 	ret, err := s.client.Execute(policy, key, luaUnSpendFunction, "unSpend",
-		aerospike.NewIntegerValue(int(spend.Vout)), // vout
-		aerospike.NewValue(spend.UTXOHash[:]),      // utxo hash
+		aerospike.NewIntegerValue(int(offset)), // vout adjusted for utxoBatchSize
+		aerospike.NewValue(spend.UTXOHash[:]),  // utxo hash
 	)
 
 	if err != nil || ret != "OK" {
@@ -1075,7 +1142,23 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func getBinsToStore(tx *bt.Tx, blockHeight uint32, big bool, blockIDs ...uint32) ([]*aerospike.Bin, error) {
+func splitIntoBatches(utxos []interface{}, batchSize int, commonBins []*aerospike.Bin) [][]*aerospike.Bin {
+	var batches [][]*aerospike.Bin
+	for start := 0; start < len(utxos); start += batchSize {
+		end := start + batchSize
+		if end > len(utxos) {
+			end = len(utxos)
+		}
+		batchUtxos := utxos[start:end]
+		batch := append([]*aerospike.Bin(nil), commonBins...)
+		batch = append(batch, aerospike.NewBin("utxos", aerospike.NewListValue(batchUtxos)))
+		batch = append(batch, aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(len(batchUtxos))))
+		batches = append(batches, batch)
+	}
+	return batches
+}
+
+func getBinsToStore(tx *bt.Tx, blockHeight uint32, big bool, blockIDs ...uint32) ([][]*aerospike.Bin, error) {
 	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
@@ -1111,7 +1194,6 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, big bool, blockIDs ...uint32)
 	}
 
 	outputs := make([]interface{}, len(tx.Outputs))
-
 	utxos := make([]interface{}, len(tx.Outputs))
 
 	for i, output := range tx.Outputs {
@@ -1122,28 +1204,49 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, big bool, blockIDs ...uint32)
 		}
 	}
 
-	bins := []*aerospike.Bin{
+	commonBins := []*aerospike.Bin{
 		aerospike.NewBin("version", aerospike.NewIntegerValue(int(tx.Version))),
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
 		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(tx.Size())),
-		aerospike.NewBin("utxos", aerospike.NewListValue(utxos)),
-		aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(len(utxos))),
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
 		aerospike.NewBin("blockIDs", blockIDs),
 		aerospike.NewBin("isCoinbase", tx.IsCoinbase()),
 	}
 
 	if tx.IsCoinbase() {
-		bins = append(bins, aerospike.NewBin("spendingHeight", aerospike.NewIntegerValue(int(blockHeight+100))))
+		commonBins = append(commonBins, aerospike.NewBin("spendingHeight", aerospike.NewIntegerValue(int(blockHeight+100))))
 	}
+
+	// Split utxos into batches
+	utxoBatchSize, _ := gocore.Config().GetInt("utxoBatchSize", 20_000) // This should never be overwritten in settings.  It is a setting to allow testing to set a different value
+	batches := splitIntoBatches(utxos, utxoBatchSize, commonBins)
 
 	if big {
-		bins = append(bins, aerospike.NewBin("big", true))
+		batches[0] = append(batches[0], aerospike.NewBin("big", true))
 	} else {
-		bins = append(bins, aerospike.NewBin("inputs", inputs))
-		bins = append(bins, aerospike.NewBin("outputs", outputs))
+		batches[0] = append(batches[0], aerospike.NewBin("inputs", inputs))
+		batches[0] = append(batches[0], aerospike.NewBin("outputs", outputs))
 	}
 
-	return bins, nil
+	return batches, nil
+}
+
+func calculateOffsetForOutput(vout uint32, utxoBatchSize uint32) uint32 {
+	return vout % utxoBatchSize
+}
+
+func calculateKeySource(hash *chainhash.Hash, num uint32) []byte {
+	// The key is normally the hash of the transaction
+	keySource := hash.CloneBytes()
+	if num == 0 {
+		return keySource
+	}
+
+	// Convert the offset to int64 little ending
+	batchOffsetLE := make([]byte, 4)
+	binary.LittleEndian.PutUint32(batchOffsetLE, num)
+
+	keySource = append(keySource, batchOffsetLE...)
+	return keySource
 }

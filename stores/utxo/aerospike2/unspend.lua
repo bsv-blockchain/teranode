@@ -1,15 +1,10 @@
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
--- vout number - the output index of the UTXO
--- utxoHash []byte - 32 byte little-endian hash of the UTXO
+-- offset number - the offset in the utxos list (vout % utxoBatchSize)-- utxoHash []byte - 32 byte little-endian hash of the UTXO
 -- spendingTxID []byte - 32 byte little-endian hash of the spending transaction
 -- ttl number - the time-to-live for the UTXO record
-function unSpend(rec, vout, utxoHash)
+function unSpend(rec, offset, utxoHash)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
-    end
-
-    if rec['big'] then
-        return "ERROR:Big TX"
     end
 
     -- Get the correct output record
@@ -18,7 +13,7 @@ function unSpend(rec, vout, utxoHash)
         return "ERROR:UTXOs list not found"
     end
 
-    local utxo = utxos[vout+1] -- NB - lua arrays are 1-based!!!!
+    local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
     if utxo == nil then
         return "ERROR:UTXO not found"
     end
@@ -38,7 +33,7 @@ function unSpend(rec, vout, utxoHash)
         end
 
         -- Update the record
-        utxos[vout+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+        utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
         rec['utxos'] = utxos
         rec['spentUtxos'] = rec['spentUtxos'] - 1
     end

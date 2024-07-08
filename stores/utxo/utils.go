@@ -23,6 +23,16 @@ func CalculateUtxoStatus(spendingTxId *chainhash.Hash, coinbaseSpendingHeight ui
 	return status
 }
 
+func CalculateUtxoStatus2(spendingTxId *chainhash.Hash) Status {
+	status := Status_OK
+
+	if spendingTxId != nil {
+		status = Status_SPENT
+	}
+
+	return status
+}
+
 // GetFeesAndUtxoHashes returns the fees and utxo hashes for the outputs of a transaction.
 // It will return an error if the context is cancelled.
 func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (uint64, []*chainhash.Hash, error) {
