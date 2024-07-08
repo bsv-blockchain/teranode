@@ -42,6 +42,7 @@ func Start() {
 	}
 
 	verbose := flag.Bool("verbose", false, "enable verbose logging")
+	quick := flag.Bool("quick", false, "skip checking file exists in S3 storage (very slow)")
 	blockchainStoreURLString := flag.String("d", "", "blockchain store URL")
 	filename := flag.String("f", "", "CSV filename")
 	flag.Parse()
@@ -78,19 +79,21 @@ func Start() {
 
 	s3buckets := []s3bucket{}
 
-	for i := 1; i <= 6; i++ {
-		url, err, _ := gocore.Config().GetURL(fmt.Sprintf("blockstore_m%d", i))
-		if err != nil {
-			panic(err.Error())
-		}
+	if !*quick {
+		for i := 1; i <= 6; i++ {
+			url, err, _ := gocore.Config().GetURL(fmt.Sprintf("blockstore_m%d", i))
+			if err != nil {
+				panic(err.Error())
+			}
 
-		store, err := blob.NewStore(ulogger.TestLogger{}, url)
-		if err != nil {
-			panic(err)
-		}
-		// s3buckets[url.String()] = store
-		s3buckets = append(s3buckets, s3bucket{url.String(), store})
+			store, err := blob.NewStore(ulogger.TestLogger{}, url)
+			if err != nil {
+				panic(err)
+			}
+			// s3buckets[url.String()] = store
+			s3buckets = append(s3buckets, s3bucket{url.String(), store})
 
+		}
 	}
 
 	ctx := context.Background()
@@ -101,25 +104,63 @@ func Start() {
 	}
 
 	filenames := loadFilenames(*filename)
+	fmt.Printf("%d filenames in CSV\n", len(filenames))
 
 	if blockHeaders, _, err := blockchainDB.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100000); err != nil {
 		panic(err)
 	} else {
-		verboseLogger.Infof("found %d block headers\n", len(blockHeaders))
+		fmt.Printf("=================================================================\n")
+		fmt.Printf("found %d block headers\n", len(blockHeaders))
 		checkFile(ctx, blockHeaders, verboseLogger, filenames, s3buckets, blockchainDB, true)
 	}
 
 	if forkedBlockHeaders, _, err := blockchainDB.GetForkedBlockHeaders(ctx, bestBlockHeader.Hash(), 100000); err != nil {
 		panic(err)
 	} else {
-		verboseLogger.Infof("found %d forked block headers\n", len(forkedBlockHeaders))
+		fmt.Printf("=================================================================\n")
+		fmt.Printf("found %d forked block headers\n", len(forkedBlockHeaders))
 		checkFile(ctx, forkedBlockHeaders, verboseLogger, filenames, s3buckets, blockchainDB, false)
 	}
 
-	if len(filenames) > 0 {
-		fmt.Printf("files found in CSV but not found in blockchain store:\n")
+	fmt.Printf("=================================================================\n")
+	if len(filenames) == 0 {
+		fmt.Printf("No additional (non blockchain related) files found in CSV\n")
+	} else {
+		fmt.Printf("%d additional files in CSV that are not part of any block in the blockchain store\n", len(filenames))
+
+		fileTypesMap := make(map[string]int)
 		for filename := range filenames {
-			fmt.Printf("%s\n", filename)
+			fileType := "no-extension"
+			parts := strings.Split(filename, ".")
+			if len(parts) > 0 {
+				fileType = parts[len(parts)-1]
+			}
+			fileTypesMap[fileType]++
+		}
+		for fileType, count := range fileTypesMap {
+			switch fileType {
+			case "block", "utxodiff", "subtree":
+				fmt.Printf("%s: %d\n", fileType, count)
+			}
+		}
+		for fileType, count := range fileTypesMap {
+			switch fileType {
+			case "block", "utxodiff", "subtree":
+				continue
+			}
+			fmt.Printf("%s: %d\n", fileType, count)
+		}
+
+		// // print the others
+		// for filename, _ := range filenames {
+		// 	if strings.HasSuffix(filename, ".block") || strings.HasSuffix(filename, ".utxodiff") || strings.HasSuffix(filename, ".subtree") {
+		// 		continue
+		// 	}
+		// 	fmt.Printf("%s\n", filename)
+		// }
+
+		for filename := range filenames {
+			verboseLogger.Infof("%s\n", filename)
 		}
 	}
 
@@ -167,6 +208,7 @@ func checkFile(ctx context.Context, blockHeaders []*model.BlockHeader, verboseLo
 			}
 		}
 		delete(filenames, blockHeader.Hash().String()+".utxodiff")
+		delete(filenames, blockHeader.Hash().String()+".utxoset")
 
 		block, _, err := blockchainDB.GetBlock(ctx, blockHeader.Hash())
 		if err != nil {
@@ -251,7 +293,7 @@ func usage(msg string) {
 	if msg != "" {
 		fmt.Printf("Error: %s\n\n", msg)
 	}
-	fmt.Printf("Usage: s3inventoryintegrity [-verbose] -d <postgres-URL> -f <csv-filename>\n\n")
+	fmt.Printf("Usage: s3inventoryintegrity [-verbose] [-quick] -d <postgres-URL> -f <csv-filename>\n\n")
 	os.Exit(1)
 }
 

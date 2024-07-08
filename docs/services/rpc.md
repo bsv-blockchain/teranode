@@ -1,14 +1,33 @@
-#  🌐 P2P Service
+#  🌐 RPC Server
 
 ## Index
 
 1. [Introduction](#1-introduction)
+- [Supported RPC Commands](#supported-rpc-commands)
+- [Unimplemented RPC Commands](#unimplemented-rpc-commands)
+- [Command help](#command-help)
+- [Authentication](#authentication)
 2. [Architecture](#2-architecture)
-3. [Functionality](#4-functionality)
-4. [Technology](#5-technology)
-5. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
-6. [Settings](#7-settings)
-7. [How to run](#8-how-to-run)
+3. [Functionality](#3-functionality)
+- [3.1. RPC Server Initialization and Configuration](#31-rpc-server-initialization-and-configuration)
+- [3.2. Command Request Version](#32-command---request-version)
+- [3.3. Command Get Best Block Hash](#33-command---get-best-block-hash)
+- [3.4. Command Get Block](#34-command---get-block)
+- [3.5. Command Generate](#35-command---generate)
+- [3.6. Command Create Raw Transaction](#36-command---create-raw-transaction)
+  - [Input Parameters:](#input-parameters)
+  - [Steps:](#steps)
+  - [Outputs:](#outputs)
+- [3.7. Command Send Raw Transaction](#37-command---send-raw-transaction)
+  - [Function Overview](#function-overview)
+  - [Process Flow](#process-flow)
+4. [Technology](#4-technology)
+5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
+6. [Settings](#6-settings)
+- [Core Settings from `gocore` Configuration:](#core-settings-from-gocore-configuration)
+- [Usage of Settings:](#usage-of-settings)
+7. [How to run](#7-how-to-run)
+
 
 ## 1. Introduction
 
@@ -20,19 +39,22 @@ The below table summarises the services supported in the current version:
 
 ### Supported RPC Commands
 
-| RPC Command        | Status     |
-|--------------------|------------|
-| getbestblockhash   | Supported  |
-| getblock           | Supported  |
-| stop               | Supported  |
-| version            | Supported  |
+
+| RPC Command           | Status     |
+|-----------------------|------------|
+| createrawtransaction  | Supported  |
+| generate              | Supported  |
+| getbestblockhash      | Supported  |
+| getblock              | Supported  |
+| sendrawtransaction    | Supported  |
+| stop                  | Supported  |
+| version               | Supported  |
 
 ### Unimplemented RPC Commands
 
 | RPC Command             | Status       |
 |-------------------------|--------------|
 | addnode                 | Unimplemented|
-| createrawtransaction    | Unimplemented|
 | debuglevel              | Unimplemented|
 | decoderawtransaction    | Unimplemented|
 | decodescript            | Unimplemented|
@@ -68,7 +90,6 @@ The below table summarises the services supported in the current version:
 | ping                    | Unimplemented|
 | reconsiderblock         | Unimplemented|
 | searchrawtransactions   | Unimplemented|
-| sendrawtransaction      | Unimplemented|
 | setgenerate             | Unimplemented|
 | submitblock             | Unimplemented|
 | uptime                  | Unimplemented|
