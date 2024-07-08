@@ -128,32 +128,36 @@ func Start() {
 	} else {
 		fmt.Printf("%d additional files in CSV that are not part of any block in the blockchain store\n", len(filenames))
 
-		blocks := 0
-		utdodiffs := 0
-		subtrees := 0
-		others := 0
+		fileTypesMap := make(map[string]int)
 		for filename := range filenames {
-			if strings.HasSuffix(filename, ".block") {
-				blocks++
-			} else if strings.HasSuffix(filename, ".utxodiff") {
-				utdodiffs++
-			} else if strings.HasSuffix(filename, ".subtree") {
-				subtrees++
-			} else {
-				others++
+			fileType := "no-extension"
+			parts := strings.Split(filename, ".")
+			if len(parts) > 0 {
+				fileType = parts[len(parts)-1]
+			}
+			fileTypesMap[fileType]++
+		}
+		for fileType, count := range fileTypesMap {
+			switch fileType {
+			case "block", "utxodiff", "subtree":
+				fmt.Printf("%s: %d\n", fileType, count)
 			}
 		}
-		fmt.Printf("blocks: %d\n", blocks)
-		fmt.Printf("utxodiffs: %d\n", utdodiffs)
-		fmt.Printf("subtrees: %d\n", subtrees)
-		fmt.Printf("others: %d\n", others)
+		for fileType, count := range fileTypesMap {
+			switch fileType {
+			case "block", "utxodiff", "subtree":
+				continue
+			}
+			fmt.Printf("%s: %d\n", fileType, count)
+		}
 
-		// print the others
-		for filename := range filenames {
-			if !strings.HasSuffix(filename, ".block") && !strings.HasSuffix(filename, ".utxodiff") && !strings.HasSuffix(filename, ".subtree") {
-				fmt.Printf("%s\n", filename)
-			}
-		}
+		// // print the others
+		// for filename, _ := range filenames {
+		// 	if strings.HasSuffix(filename, ".block") || strings.HasSuffix(filename, ".utxodiff") || strings.HasSuffix(filename, ".subtree") {
+		// 		continue
+		// 	}
+		// 	fmt.Printf("%s\n", filename)
+		// }
 
 		for filename := range filenames {
 			verboseLogger.Infof("%s\n", filename)
