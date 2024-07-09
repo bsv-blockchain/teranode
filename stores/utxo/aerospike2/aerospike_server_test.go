@@ -805,6 +805,12 @@ func TestBigOPReturn(t *testing.T) {
 	utxos, ok := resp.Bins["utxos"].([]interface{})
 	require.True(t, ok)
 	assert.Len(t, utxos, 2)
+
+	// Get the tx back
+	txMeta, err = db.Get(context.Background(), bigTx.TxIDChainHash())
+	require.NoError(t, err)
+	txCopy := txMeta.Tx
+	assert.Equal(t, bigTx.TxIDChainHash().String(), txCopy.TxIDChainHash().String())
 }
 
 func TestMultiUTXORecords(t *testing.T) {
