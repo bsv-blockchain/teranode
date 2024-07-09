@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"golang.org/x/exp/slices"
@@ -84,18 +85,18 @@ var (
 )
 
 type Store struct {
-	url          *url.URL
-	client       *uaerospike.Client
-	namespace    string
-	setName      string
-	expiration   uint32
-	blockHeight  atomic.Uint32
-	logger       ulogger.Logger
-	batchId      atomic.Uint64
-	storeBatcher *batcher.Batcher2[batchStoreItem]
-	getBatcher   *batcher.Batcher2[batchGetItem]
-	spendBatcher *batcher.Batcher2[batchSpend]
-	bigStore     blob.Store
+	url           *url.URL
+	client        *uaerospike.Client
+	namespace     string
+	setName       string
+	expiration    uint32
+	blockHeight   atomic.Uint32
+	logger        ulogger.Logger
+	batchId       atomic.Uint64
+	storeBatcher  *batcher.Batcher2[batchStoreItem]
+	getBatcher    *batcher.Batcher2[batchGetItem]
+	spendBatcher  *batcher.Batcher2[batchSpend]
+	externalStore blob.Store
 }
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
@@ -131,24 +132,24 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		setName = "txmeta"
 	}
 
-	bigStoreUrl, err := url.Parse(aerospikeURL.Query().Get("bigStore"))
+	externalStoreUrl, err := url.Parse(aerospikeURL.Query().Get("externalStore"))
 	if err != nil {
 		return nil, err
 	}
 
-	bigStore, err := blob.NewStore(logger, bigStoreUrl)
+	externalStore, err := blob.NewStore(logger, externalStoreUrl)
 	if err != nil {
 		return nil, err
 	}
 
 	s := &Store{
-		url:        aerospikeURL,
-		client:     client,
-		namespace:  namespace,
-		setName:    setName,
-		expiration: expiration,
-		logger:     logger,
-		bigStore:   bigStore,
+		url:           aerospikeURL,
+		client:        client,
+		namespace:     namespace,
+		setName:       setName,
+		expiration:    expiration,
+		logger:        logger,
+		externalStore: externalStore,
 	}
 
 	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
@@ -322,7 +323,13 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					if err := s.bigStore.Set(context.TODO(), batch[idx].tx.TxIDChainHash()[:], batch[idx].tx.Bytes()); err != nil {
+					if err := s.externalStore.Set(
+						context.TODO(),
+						batch[idx].tx.TxIDChainHash()[:],
+						batch[idx].tx.Bytes(),
+						options.WithSubDirectory("legacy"),
+						options.WithFileExtension("tx"),
+					); err != nil {
 						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err)
 						continue
 					}
@@ -688,6 +695,7 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 	if slices.Contains(bins, "parentTxHashes") {
 		if !slices.Contains(bins, "inputs") {
 			bins = append(bins, "inputs")
+			bins = append(bins, "external")
 		}
 	}
 	if slices.Contains(bins, "tx") {
@@ -702,6 +710,9 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 		}
 		if !slices.Contains(bins, "locktime") {
 			bins = append(bins, "locktime")
+		}
+		if !slices.Contains(bins, "external") {
+			bins = append(bins, "external")
 		}
 	}
 	return bins
@@ -756,15 +767,42 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 
 			items[idx].Data = &meta.Data{}
 
+			externalTx := &bt.Tx{}
+
+			external, ok := bins["external"].(bool)
+			if ok && external {
+				// Get the raw transaction from the externalStore...
+				reader, err := s.externalStore.GetIoReader(
+					context.TODO(),
+					items[idx].Hash[:],
+					options.WithSubDirectory("legacy"),
+					options.WithFileExtension("tx"),
+				)
+				if err != nil {
+					items[idx].Err = errors.New(errors.ERR_STORAGE_ERROR, "could not get tx from external store", err)
+					continue
+				}
+
+				_, err = externalTx.ReadFrom(reader)
+				if err != nil {
+					items[idx].Err = errors.New(errors.ERR_TX_INVALID, "could not read tx from reader", err)
+					continue
+				}
+			}
+
 			for _, key := range items[idx].Fields {
 				value := bins[key]
 				switch key {
 				case "tx":
-					tx, txErr := s.getTxFromBins(bins)
-					if txErr != nil {
-						return errors.New(errors.ERR_TX_INVALID, "invalid tx: %v", txErr)
+					if external {
+						items[idx].Data.Tx = externalTx
+					} else {
+						tx, txErr := s.getTxFromBins(bins)
+						if txErr != nil {
+							return errors.New(errors.ERR_TX_INVALID, "invalid tx: %v", txErr)
+						}
+						items[idx].Data.Tx = tx
 					}
-					items[idx].Data.Tx = tx
 				case "fee":
 					fee, ok := value.(int)
 					if ok {
@@ -776,12 +814,19 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 						items[idx].Data.SizeInBytes = uint64(sizeInBytes)
 					}
 				case "parentTxHashes":
-					inputInterfaces, ok := bins["inputs"].([]interface{})
-					if ok {
-						items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(inputInterfaces))
-						for i, inputInterface := range inputInterfaces {
-							input := inputInterface.([]byte)
-							items[idx].Data.ParentTxHashes[i] = chainhash.Hash(input[:32])
+					if external {
+						items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(externalTx.Inputs))
+						for i, input := range externalTx.Inputs {
+							items[idx].Data.ParentTxHashes[i] = *input.PreviousTxIDChainHash()
+						}
+					} else {
+						inputInterfaces, ok := bins["inputs"].([]interface{})
+						if ok {
+							items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(inputInterfaces))
+							for i, inputInterface := range inputInterfaces {
+								input := inputInterface.([]byte)
+								items[idx].Data.ParentTxHashes[i] = chainhash.Hash(input[:32])
+							}
 						}
 					}
 				case "blockIDs":
@@ -808,6 +853,8 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 }
 
 func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+	var err error
+
 	batchPolicy := util.GetAerospikeBatchPolicy()
 	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
 
@@ -821,13 +868,13 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 			return errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta: %w", err)
 		}
 
-		bins := []string{"version", "locktime", "inputs", "outputs"}
+		bins := []string{"version", "locktime", "inputs", "outputs", "external"}
 		record := aerospike.NewBatchRead(policy, key, bins)
 		// Add to batch
 		batchRecords[idx] = record
 	}
 
-	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records: %w", err)
 	}
@@ -839,9 +886,32 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 		}
 
 		bins := batchRecord.Record.Bins
-		previousTx, err := s.getTxFromBins(bins)
-		if err != nil {
-			return errors.New(errors.ERR_TX_INVALID, "invalid tx: %v", err)
+
+		previousTx := &bt.Tx{}
+
+		external, ok := bins["external"].(bool)
+		if ok && external {
+			// Get the raw transaction from the externalStore...
+			reader, err := s.externalStore.GetIoReader(
+				context.TODO(),
+				outpoints[idx].PreviousTxID[:],
+				options.WithSubDirectory("legacy"),
+				options.WithFileExtension("tx"),
+			)
+			if err != nil {
+				return errors.New(errors.ERR_STORAGE_ERROR, "could not get tx from external store", err)
+			}
+
+			_, err = previousTx.ReadFrom(reader)
+			if err != nil {
+				return errors.New(errors.ERR_TX_INVALID, "could not read tx from reader", err)
+			}
+
+		} else {
+			previousTx, err = s.getTxFromBins(bins)
+			if err != nil {
+				return errors.New(errors.ERR_TX_INVALID, "invalid tx: %v", err)
+			}
 		}
 
 		outpoints[idx].Satoshis = previousTx.Outputs[outpoints[idx].Vout].Satoshis
@@ -1223,7 +1293,7 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, big bool, blockIDs ...uint32)
 	batches := splitIntoBatches(utxos, utxoBatchSize, commonBins)
 
 	if big {
-		batches[0] = append(batches[0], aerospike.NewBin("big", true))
+		batches[0] = append(batches[0], aerospike.NewBin("external", true))
 	} else {
 		batches[0] = append(batches[0], aerospike.NewBin("inputs", inputs))
 		batches[0] = append(batches[0], aerospike.NewBin("outputs", outputs))
