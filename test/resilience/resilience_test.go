@@ -113,8 +113,8 @@ func TestShutDownBlockAssembly(t *testing.T) {
 	if !blockchainHealth.Ok {
 		t.Errorf("Expected blockchainHealth to be true, but got false")
 	}
-	if !blockchainAssemblyHealth.Ok {
-		t.Errorf("Expected blockchainAssemblyHealth to be true, but got false")
+	if blockchainAssemblyHealth.Ok {
+		t.Errorf("Expected blockchainAssemblyHealth to be false, but got true")
 	}
 	if !coinbaseHealth.Ok {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
@@ -144,8 +144,8 @@ func TestShutDownBlockValidation(t *testing.T) {
 		t.Errorf("Failure of coinbase assembly: %v", err)
 	}
 
-	if !blockchainHealth.Ok {
-		t.Errorf("Expected blockchainHealth to be true, but got false")
+	if blockchainHealth.Ok {
+		t.Errorf("Expected blockchainHealth to be false, but got true")
 	}
 	if !blockchainAssemblyHealth.Ok {
 		t.Errorf("Expected blockchainAssemblyHealth to be true, but got false")
@@ -178,8 +178,8 @@ func TestShutDownBlockchain(t *testing.T) {
 		t.Errorf("Failure of coinbase assembly: %v", err)
 	}
 
-	if !blockchainHealth.Ok {
-		t.Errorf("Expected blockchainHealth to be true, but got false")
+	if blockchainHealth.Ok {
+		t.Errorf("Expected blockchainHealth to be false, but got true")
 	}
 	if !blockchainAssemblyHealth.Ok {
 		t.Errorf("Expected blockchainAssemblyHealth to be true, but got false")
