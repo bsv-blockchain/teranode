@@ -90,11 +90,6 @@ func TestShutDownBlockAssembly(t *testing.T) {
 
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
-	err := framework.StartNode("ubsv-2")
-	if err != nil {
-		t.Fatalf("Failed to start node: %v", err)
-	}
-
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc2"
 	if err := framework.RestartNodes(settingsMap); err != nil {
 		t.Fatalf("Failed to restart nodes: %v", err)
