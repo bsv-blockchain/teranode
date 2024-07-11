@@ -946,3 +946,103 @@ func TestCalculateOffsetOutput(t *testing.T) {
 	offset = calculateOffsetForOutput(4, 2)
 	assert.Equal(t, uint32(0), offset)
 }
+
+func TestLargeUTXO(t *testing.T) {
+	// For this test, we will assume that aerospike can never store more than 2 utxos in a single record
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	require.NoError(t, err)
+
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	fParent, err := os.Open("ac4849b3b03e44d5fcba8becfc642a8670049b59436d6c7ab89a4d3873d9a3ef.bin")
+	require.NoError(t, err)
+	defer fParent.Close()
+
+	parentTx := new(bt.Tx)
+	_, err = parentTx.ReadFrom(fParent)
+	require.NoError(t, err)
+	require.Equal(t, "ac4849b3b03e44d5fcba8becfc642a8670049b59436d6c7ab89a4d3873d9a3ef", parentTx.TxIDChainHash().String())
+
+	fChild, err := os.Open("1bd4f08ffbeefbb67d82a340dd35259a97c5626368f8a6efa056571b293fae52.bin")
+	require.NoError(t, err)
+	defer fChild.Close()
+
+	childTx := new(bt.Tx)
+	_, err = childTx.ReadFrom(fChild)
+	require.NoError(t, err)
+	require.Equal(t, "1bd4f08ffbeefbb67d82a340dd35259a97c5626368f8a6efa056571b293fae52", childTx.TxIDChainHash().String())
+
+	keyParent, err := aero.NewKey(db.namespace, db.setName, parentTx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, keyParent)
+
+	_, err = client.Delete(nil, keyParent)
+	require.NoError(t, err)
+
+	parentMeta, err := db.Create(context.Background(), parentTx)
+	require.NoError(t, err)
+	assert.NotNil(t, parentMeta)
+
+	keyChild, err := aero.NewKey(db.namespace, db.setName, childTx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, keyChild)
+
+	_, err = client.Delete(nil, keyChild)
+	require.NoError(t, err)
+
+	childMeta, err := db.Create(context.Background(), parentTx)
+	require.NoError(t, err)
+	assert.NotNil(t, childMeta)
+
+	// resp, err := client.Get(nil, key0, "utxos")
+	// require.NoError(t, err)
+	// utxos, ok := resp.Bins["utxos"].([]interface{})
+	// require.True(t, ok)
+	// assert.Len(t, utxos, 2)
+
+	// key1, err := aerospike.NewKey(db.namespace, db.setName, calculateKeySource(childTx.TxIDChainHash(), 1))
+	// require.NoError(t, err)
+	// assert.NotNil(t, key1)
+
+	// resp, err = client.Get(nil, key1, "utxos")
+	// require.NoError(t, err)
+	// utxos, ok = resp.Bins["utxos"].([]interface{})
+	// require.True(t, ok)
+	// assert.Len(t, utxos, 2)
+
+	// key2, err := aero.NewKey(db.namespace, db.setName, calculateKeySource(childTx.TxIDChainHash(), 2))
+	// require.NoError(t, err)
+	// assert.NotNil(t, key2)
+
+}
+
+func TestDecoratorPreviousOutput(t *testing.T) {
+	// client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	// require.NoError(t, aeroErr)
+	aeroURL, err := url.Parse("aerospike2://localhost:3000/test?set=utxo&externalStore=file:///external")
+	require.NoError(t, err)
+
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	previousTxID, err := chainhash.NewHashFromStr("ac4849b3b03e44d5fcba8becfc642a8670049b59436d6c7ab89a4d3873d9a3ef")
+	require.NoError(t, err)
+
+	previousOutput := &meta.PreviousOutput{
+		PreviousTxID: *previousTxID,
+		Vout:         31243,
+	}
+
+	err = db.PreviousOutputsDecorate(context.Background(), []*meta.PreviousOutput{previousOutput})
+	require.NoError(t, err)
+
+	t.Log(previousOutput)
+}

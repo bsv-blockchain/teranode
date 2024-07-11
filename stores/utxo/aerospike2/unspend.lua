@@ -24,6 +24,8 @@ function unSpend(rec, offset, utxoHash)
         return "ERROR:Output utxohash mismatch"
     end
 
+    local signal = ""
+
     -- If the utxo has been spent, remove the spendingTxID
     if bytes.size(utxo) == 64 then
         local newUtxo = bytes(32)
@@ -32,17 +34,24 @@ function unSpend(rec, offset, utxoHash)
             newUtxo[i] = utxo[i]
         end
 
+        local nrUtxos = rec['nrUtxos']
+        local spentUtxos = rec['spentUtxos']
+
+        if nrUtxos == spentUtxos then
+            signal = ":NOTALLSPENT"
+        end
+
         -- Update the record
         utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
         rec['utxos'] = utxos
-        rec['spentUtxos'] = rec['spentUtxos'] - 1
+        rec['spentUtxos'] = spentUtxos - 1
     end
 
     record.set_ttl(rec, -1)
 
     aerospike:update(rec)
 
-    return 'OK'
+    return 'OK' .. signal
 end
 
 function bytes_equal(a, b)

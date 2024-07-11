@@ -73,9 +73,12 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     rec['utxos'] = utxos
     rec['spentUtxos'] = rec['spentUtxos'] + 1
 
+    local signal = ""
+
     -- check whether all utxos have been spent
     if rec['spentUtxos'] == rec['nrUtxos'] then
         record.set_ttl(rec, ttl)
+        signal = ":ALLSPENT"
     else
         -- why is this needed? the record should already have a non expiring ttl
         -- tests showed the ttl being set to some default value
@@ -84,7 +87,7 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
 
     aerospike:update(rec)
 
-    return 'OK'
+    return 'OK' .. signal
 end
 
 function bytes_equal(a, b)
