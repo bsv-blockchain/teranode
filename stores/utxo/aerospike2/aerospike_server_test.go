@@ -776,7 +776,7 @@ func TestBigOPReturn(t *testing.T) {
 	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
-	f, err := os.Open("d51051ebcd649ab7a02de85f130b55c357c514ee5f911da9a8dc3bd2ead750ac.bin")
+	f, err := os.Open("testdata/d51051ebcd649ab7a02de85f130b55c357c514ee5f911da9a8dc3bd2ead750ac.bin")
 	require.NoError(t, err)
 	defer f.Close()
 
@@ -828,7 +828,7 @@ func TestMultiUTXORecords(t *testing.T) {
 	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
-	f, err := os.Open("8f7724e256343cf21dbb1d8ce8fa5caae79da212c90ca6aef3b415c0a9bc003c.bin")
+	f, err := os.Open("testdata/8f7724e256343cf21dbb1d8ce8fa5caae79da212c90ca6aef3b415c0a9bc003c.bin")
 	require.NoError(t, err)
 	defer f.Close()
 
@@ -960,7 +960,7 @@ func TestLargeUTXO(t *testing.T) {
 	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
-	fParent, err := os.Open("ac4849b3b03e44d5fcba8becfc642a8670049b59436d6c7ab89a4d3873d9a3ef.bin")
+	fParent, err := os.Open("testdata/ac4849b3b03e44d5fcba8becfc642a8670049b59436d6c7ab89a4d3873d9a3ef.bin")
 	require.NoError(t, err)
 	defer fParent.Close()
 
@@ -969,7 +969,7 @@ func TestLargeUTXO(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ac4849b3b03e44d5fcba8becfc642a8670049b59436d6c7ab89a4d3873d9a3ef", parentTx.TxIDChainHash().String())
 
-	fChild, err := os.Open("1bd4f08ffbeefbb67d82a340dd35259a97c5626368f8a6efa056571b293fae52.bin")
+	fChild, err := os.Open("testdata/1bd4f08ffbeefbb67d82a340dd35259a97c5626368f8a6efa056571b293fae52.bin")
 	require.NoError(t, err)
 	defer fChild.Close()
 
@@ -996,42 +996,9 @@ func TestLargeUTXO(t *testing.T) {
 	_, err = client.Delete(nil, keyChild)
 	require.NoError(t, err)
 
-	childMeta, err := db.Create(context.Background(), parentTx)
+	childMeta, err := db.Create(context.Background(), childTx)
 	require.NoError(t, err)
 	assert.NotNil(t, childMeta)
-
-	// resp, err := client.Get(nil, key0, "utxos")
-	// require.NoError(t, err)
-	// utxos, ok := resp.Bins["utxos"].([]interface{})
-	// require.True(t, ok)
-	// assert.Len(t, utxos, 2)
-
-	// key1, err := aerospike.NewKey(db.namespace, db.setName, calculateKeySource(childTx.TxIDChainHash(), 1))
-	// require.NoError(t, err)
-	// assert.NotNil(t, key1)
-
-	// resp, err = client.Get(nil, key1, "utxos")
-	// require.NoError(t, err)
-	// utxos, ok = resp.Bins["utxos"].([]interface{})
-	// require.True(t, ok)
-	// assert.Len(t, utxos, 2)
-
-	// key2, err := aero.NewKey(db.namespace, db.setName, calculateKeySource(childTx.TxIDChainHash(), 2))
-	// require.NoError(t, err)
-	// assert.NotNil(t, key2)
-
-}
-
-func TestDecoratorPreviousOutput(t *testing.T) {
-	// client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
-	// require.NoError(t, aeroErr)
-	aeroURL, err := url.Parse("aerospike2://localhost:3000/test?set=utxo&externalStore=file:///external")
-	require.NoError(t, err)
-
-	// ubsv db client
-	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
-	require.NoError(t, err)
 
 	previousTxID, err := chainhash.NewHashFromStr("ac4849b3b03e44d5fcba8becfc642a8670049b59436d6c7ab89a4d3873d9a3ef")
 	require.NoError(t, err)

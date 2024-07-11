@@ -321,6 +321,8 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, external bool, blockIDs ...ui
 	utxoBatchSize, _ := gocore.Config().GetInt("utxoBatchSize", 20_000) // This should never be overwritten in settings.  It is a setting to allow testing to set a different value
 	batches := splitIntoBatches(utxos, utxoBatchSize, commonBins)
 
+	batches[0] = append(batches[0], aerospike.NewBin("nrRecords", aerospike.NewIntegerValue(len(batches))))
+
 	if len(batches) > 1 {
 		// if we have more than one batch, we opt to store the transaction externally
 		external = true
