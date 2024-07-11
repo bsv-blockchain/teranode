@@ -2,11 +2,12 @@ package legacy
 
 import (
 	"context"
+	"net"
+
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"net"
 )
 
 type Peer struct {
@@ -15,19 +16,30 @@ type Peer struct {
 	peer   *peer.Peer
 }
 
+// see https://wiki.bitcoinsv.io/index.php/Peer-To-Peer_Protocol#sendheaders for peer msg protocol
 func NewPeer(pm *PeerManager, addr string) (*Peer, error) {
 	p, err := peer.NewOutboundPeer(&peer.Config{
 		UserAgentName:    "teranode-legacy-p2p",
 		UserAgentVersion: "0.0.1",
 		ChainParams:      &chaincfg.MainNetParams, // TODO make configurable
 		Listeners: peer.MessageListeners{
-			OnHeaders:   pm.onHeaders(),
-			OnBlock:     pm.onBlock(context.TODO()),
-			OnTx:        pm.onTx(),
-			OnInv:       pm.onInv(),
+			OnHeaders: pm.onHeaders(),
+			OnBlock:   pm.onBlock(context.TODO()),
+			OnTx:      pm.onTx(),
+			OnInv:     pm.onInv(),
+			OnGetAddr: pm.onGetAddr(),
+			OnVersion: pm.onVersion(),
+			OnVerAck:  pm.onVerAck(),
+			OnAddr:    pm.onAddr(),
+			OnReject:  pm.onReject(),
+
 			OnCFCheckpt: nil, // not implementing because of ....
 		},
 	}, addr)
+
+	if err != nil {
+		return nil, err
+	}
 
 	// Establish a connection to the peer
 	conn, err := net.Dial("tcp", addr)

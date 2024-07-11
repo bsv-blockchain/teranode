@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
@@ -19,7 +20,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-// onBlock processes a block message, after a block is requested by us via getBlockMsg
+// 0nBlock is invoked when a peer receives a block bitcoin message. We request the block via getBlockMs
 func (pm *PeerManager) onBlock(ctx context.Context) func(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	return func(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 		pm.cond.L.Lock() // Lock the mutex to prevent processing the next block before the signal is received

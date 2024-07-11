@@ -6,6 +6,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+// onHeaders is invoked when a peer receives a headers bitcoin message.
 func (pm *PeerManager) onHeaders() func(p *peer.Peer, msg *wire.MsgHeaders) {
 	return func(p *peer.Peer, msg *wire.MsgHeaders) {
 		pm.logger.Infof("Received %d headers\n", len(msg.Headers))

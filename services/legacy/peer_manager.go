@@ -41,7 +41,6 @@ func NewPeerManager(logger ulogger.Logger, blockchainStore blockchain.Store, sub
 // Start starts the PeerManager
 // TODO do we allow inbound connections?
 func (pm *PeerManager) Start(ctx context.Context) error {
-	var err error
 
 	// Create a new Bitcoin peer
 	addresses, _ := gocore.Config().GetMulti("legacy_connect_peers", "|", []string{"54.169.45.196:8333"})
@@ -52,10 +51,11 @@ func (pm *PeerManager) Start(ctx context.Context) error {
 
 	for {
 		// TODO connect as pruned node
-		pm.peers[0], err = NewPeer(pm, addr)
+		peer, err := NewPeer(pm, addr)
 		if err != nil {
 			pm.logger.Fatalf("Failed to create peer: %v", err)
 		}
+		pm.peers = append(pm.peers, peer)
 
 		// Wait for connection
 		time.Sleep(time.Second * 5)
