@@ -848,11 +848,14 @@ func TestMultiUTXORecords(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
-	resp, err := client.Get(nil, key0, "utxos")
+	resp, err := client.Get(nil, key0, "utxos", "nrRecords")
 	require.NoError(t, err)
 	utxos, ok := resp.Bins["utxos"].([]interface{})
 	require.True(t, ok)
 	assert.Len(t, utxos, 2)
+	nrRecords, ok := resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 3, nrRecords)
 
 	key1, err := aerospike.NewKey(db.namespace, db.setName, calculateKeySource(bigTx.TxIDChainHash(), 1))
 	require.NoError(t, err)
@@ -888,13 +891,16 @@ func TestMultiUTXORecords(t *testing.T) {
 	err = db.Spend(context.Background(), []*utxo.Spend{spend0}, 0)
 	require.NoError(t, err)
 
-	resp, err = client.Get(nil, key0, "utxos")
+	resp, err = client.Get(nil, key0, "utxos", "nrRecords")
 	require.NoError(t, err)
 	utxos, ok = resp.Bins["utxos"].([]interface{})
 	require.True(t, ok)
 	assert.Len(t, utxos, 2)
 	utxo0 := utxos[0].([]byte)
 	assert.Len(t, utxo0, 64)
+	nrRecords, ok = resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 3, nrRecords)
 
 	// Spend the 5th utxo
 	utxoHash4, err := util.UTXOHashFromOutput(bigTx.TxIDChainHash(), bigTx.Outputs[4], 4)
@@ -917,6 +923,11 @@ func TestMultiUTXORecords(t *testing.T) {
 	utxo4 := utxos[0].([]byte)
 	assert.Len(t, utxo4, 64)
 
+	resp, err = client.Get(nil, key0, "nrRecords")
+	require.NoError(t, err)
+	nrRecords, ok = resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 2, nrRecords)
 }
 
 func TestCalculateKeySource(t *testing.T) {
@@ -945,6 +956,53 @@ func TestCalculateOffsetOutput(t *testing.T) {
 
 	offset = calculateOffsetForOutput(4, 2)
 	assert.Equal(t, uint32(0), offset)
+}
+
+func TestIncrementNrRecords(t *testing.T) {
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	require.NoError(t, err)
+
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	key, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	_, err = client.Delete(nil, key)
+	require.NoError(t, err)
+
+	txMeta, err := db.Create(context.Background(), tx)
+	require.NoError(t, err)
+	assert.NotNil(t, txMeta)
+
+	resp, err := client.Get(nil, key, "nrRecords")
+	require.NoError(t, err)
+	nrRecords, ok := resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 1, nrRecords)
+
+	db.incrementNrRecords(tx.TxIDChainHash(), 1)
+
+	resp, err = client.Get(nil, key, "nrRecords")
+	require.NoError(t, err)
+	nrRecords, ok = resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 2, nrRecords)
+
+	db.incrementNrRecords(tx.TxIDChainHash(), -1)
+
+	resp, err = client.Get(nil, key, "nrRecords")
+	require.NoError(t, err)
+	nrRecords, ok = resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 1, nrRecords)
+
 }
 
 func TestLargeUTXO(t *testing.T) {

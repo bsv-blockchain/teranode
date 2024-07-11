@@ -45,8 +45,7 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
 
     if bytes.size(utxo) == 64 then
         local existingSpendingTxID = bytes.get_bytes(utxo, 33, 32) -- NB - lua arrays are 1-based!!!!
-        warn("existingSpendingTxID: " .. tostring(existingSpendingTxID))
-        warn("size of existingSpendingTxID: " .. bytes.size(existingSpendingTxID))
+        
         if frozen(existingSpendingTxID) then
 			return "FROZEN:UTXO is frozen"
 		elseif bytes_equal(existingSpendingTxID, spendingTxID) then
@@ -75,14 +74,23 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
 
     local signal = ""
 
-    -- check whether all utxos have been spent
-    if rec['spentUtxos'] == rec['nrUtxos'] then
-        record.set_ttl(rec, ttl)
-        signal = ":ALLSPENT"
+    local nrRecords = rec['nrRecords']
+
+    if nrRecords == nil then
+        -- This is a pagination record: check if all the utxos are spent
+        if rec['spentUtxos'] == rec['nrUtxos'] then
+            signal = ":ALLSPENT"
+            record.set_ttl(rec, ttl)
+        else 
+            record.set_ttl(rec, -1)
+        end
     else
-        -- why is this needed? the record should already have a non expiring ttl
-        -- tests showed the ttl being set to some default value
-        record.set_ttl(rec, -1)
+        -- The is the master record: only set_ttl if all the utxos are spent and the nrRecords is 1  
+        if rec['spentUtxos'] == rec['nrUtxos'] and nrRecords == 1 then
+            record.set_ttl(rec, ttl)
+        else
+            record.set_ttl(rec, -1)
+        end
     end
 
     aerospike:update(rec)
@@ -123,4 +131,25 @@ function bytes_to_hex(b)
         hex = hex .. string.format("%02x", b[i])
     end
     return hex
+end
+
+function incrementNrRecords(rec, inc, ttl)
+    local nrRecords = rec['nrRecords']
+    if nrRecords == nil then
+       return 'ERROR: nrRecords not found in record. Possible non-master record?'
+    end
+
+    nrRecords = nrRecords + inc
+
+    if nrRecords == 0 and rec['spentUtxos'] == rec['nrUtxos'] then
+        record.set_ttl(rec, ttl)
+    else
+        record.set_ttl(rec, -1)
+    end
+
+    rec['nrRecords'] = nrRecords
+
+    aerospike:update(rec)
+
+    return 'OK'
 end

@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"math"
 	"strings"
+	"sync"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -40,6 +41,7 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	}()
 
 	spentSpends := make([]*utxo.Spend, 0, len(spends))
+	var mu sync.Mutex
 
 	if s.spendBatcher != nil {
 		g := errgroup.Group{}
@@ -63,7 +65,9 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 					return batchErr
 				}
 
+				mu.Lock()
 				spentSpends = append(spentSpends, spend)
+				mu.Unlock()
 
 				return nil
 			})
@@ -187,6 +191,12 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 					switch responseMsgParts[0] {
 					case "OK":
 						batch[idx].done <- nil
+						if len(responseMsgParts) > 1 && responseMsgParts[1] == "ALLSPENT" {
+							// all utxos in this record are spent so we decrement the nrRecords in the master record
+							// we do this in a separate go routine to avoid blocking the batcher
+							go s.incrementNrRecords(spend.TxID, -1)
+						}
+
 					case "SPENT":
 						// spent by another transaction
 						// TODO - Check if this needs to be reversed
@@ -206,5 +216,24 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 				batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse response", spend.UTXOHash.String())
 			}
 		}
+	}
+}
+
+func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) {
+	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+
+	key, err := aerospike.NewKey(s.namespace, s.setName, txid[:])
+	if err != nil {
+		s.logger.Warnf("[incrementNrRecords][%s] failed to create key for %v: %v", txid, err)
+	}
+
+	if _, err := s.client.Execute(
+		policy,
+		key,
+		luaSpendFunction,
+		"incrementNrRecords",
+		aerospike.NewIntegerValue(increment),
+	); err != nil {
+		s.logger.Errorf("[incrementNrRecords][%s] failed to increment nrRecords: %v", key, err)
 	}
 }
