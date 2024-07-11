@@ -1,0 +1,22 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lustre-cleanup
+spec:
+  schedule: "* * * * *" # to be updated
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: lustre-cleanup 
+            image: busybox:1.28 # to be updated 
+            imagePullPolicy: IfNotPresent
+            env:
+            - name: MGS_IP
+              value: "fs-0b5d19c101fe5a5c9.fsx.eu-central-1.amazonaws.com"
+            - name: FS_NAME
+              value: "44vd3bev"
+            - name: EXPIRY_MINS
+              value: "120"
+          restartPolicy: OnFailure
