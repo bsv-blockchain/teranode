@@ -98,18 +98,22 @@ func (pm *PeerManager) HandleBlockDirect(ctx context.Context, block *bsvutil.Blo
 
 	start := gocore.CurrentTime()
 
-	dbID, err := pm.blockchainStore.StoreBlock(ctx, teranodeBlock, "LEGACY")
+	err = pm.blockchainClient.AddBlock(ctx, teranodeBlock, "LEGACY")
 	if err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) {
 			if pqErr.Code == "23505" { // Duplicate constraint violation
 				pm.logger.Warnf("Block already exists in the database: %s", block.Hash().String())
 			} else {
-				return fmt.Errorf("Failed to store block: %w", err)
+				return fmt.Errorf("failed to store block: %w", err)
 			}
 		} else {
-			return fmt.Errorf("Failed to store block: %w", err)
+			return fmt.Errorf("failed to store block: %w", err)
 		}
+	}
+	blockIDs, err := pm.blockchainClient.GetBlockHeaderIDs(ctx, block.Hash(), 1)
+	if err != nil {
+		return fmt.Errorf("failed to get block header IDs: %w", err)
 	}
 
 	start = stat.NewStat("StoreBlock").AddTime(start)
@@ -188,7 +192,7 @@ func (pm *PeerManager) HandleBlockDirect(ctx context.Context, block *bsvutil.Blo
 		}
 
 		// Store the tx in the store
-		if _, err = pm.utxoStore.Create(ctx, tx, uint32(dbID)); err != nil {
+		if _, err = pm.utxoStore.Create(ctx, tx, blockIDs[0]); err != nil {
 			if !errors.Is(err, errors.ErrTxAlreadyExists) {
 				return fmt.Errorf("Failed to store tx: %w", err)
 			}

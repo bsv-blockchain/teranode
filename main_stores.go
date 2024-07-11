@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/services/validator"
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/stores/blockchain"
+	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -13,11 +15,13 @@ import (
 )
 
 var (
-	txStore         blob.Store
-	subtreeStore    blob.Store
-	blockStore      blob.Store
-	utxoStore       utxostore.Store
-	blockchainStore blockchain.Store
+	txStore          blob.Store
+	subtreeStore     blob.Store
+	blockStore       blob.Store
+	utxoStore        utxostore.Store
+	blockchainStore  blockchainstore.Store
+	blockchainClient blockchain.ClientI
+	validatorClient  validator.Interface
 )
 
 func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Store {
@@ -40,7 +44,7 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Store {
 	return utxoStore
 }
 
-func getBlockchainStore(ctx context.Context, logger ulogger.Logger) blockchain.Store {
+func getBlockchainStore(ctx context.Context, logger ulogger.Logger) blockchainstore.Store {
 	if blockchainStore != nil {
 		return blockchainStore
 	}
@@ -52,12 +56,40 @@ func getBlockchainStore(ctx context.Context, logger ulogger.Logger) blockchain.S
 	if !found {
 		panic("no blockchain setting found")
 	}
-	blockchainStore, err = blockchain.NewStore(logger, blockchainURL)
+	blockchainStore, err = blockchainstore.NewStore(logger, blockchainURL)
 	if err != nil {
 		panic(err)
 	}
 
 	return blockchainStore
+}
+
+func getBlockchainClient(ctx context.Context, logger ulogger.Logger) blockchain.ClientI {
+	if blockchainClient != nil {
+		return blockchainClient
+	}
+
+	var err error
+	blockchainClient, err = blockchain.NewClient(ctx, logger)
+	if err != nil {
+		panic(err)
+	}
+
+	return blockchainClient
+}
+
+func getValidatorClient(ctx context.Context, logger ulogger.Logger) validator.Interface {
+	if validatorClient != nil {
+		return validatorClient
+	}
+
+	var err error
+	validatorClient, err = validator.NewClient(ctx, logger)
+	if err != nil {
+		panic(err)
+	}
+
+	return validatorClient
 }
 
 func getTxStore(logger ulogger.Logger) blob.Store {

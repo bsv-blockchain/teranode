@@ -295,20 +295,12 @@ func main() {
 
 	// subtreeValidation
 	if startSubtreeValidation {
-		validatorClient, err := validator.New(ctx,
-			logger,
-			getUtxoStore(ctx, logger),
-		)
-		if err != nil {
-			logger.Fatalf("could not create validator [%v]", err)
-		}
-
-		if err := sm.AddService("Subtree Validation", subtreevalidation.New(ctx,
+		if err = sm.AddService("Subtree Validation", subtreevalidation.New(ctx,
 			logger.New("stval"),
 			getSubtreeStore(logger),
 			getTxStore(logger),
 			getUtxoStore(ctx, logger),
-			validatorClient,
+			getValidatorClient(ctx, logger),
 		)); err != nil {
 			panic(err)
 		}
@@ -317,21 +309,12 @@ func main() {
 	// blockValidation
 	if startBlockValidation {
 		if _, found := gocore.Config().Get("blockvalidation_grpcListenAddress"); found {
-			// create a local validator client
-			validatorClient, err := validator.New(ctx,
-				logger,
-				getUtxoStore(ctx, logger),
-			)
-			if err != nil {
-				logger.Fatalf("could not create validator [%v]", err)
-			}
-
-			if err := sm.AddService("Block Validation", blockvalidation.New(
+			if err = sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
 				getSubtreeStore(logger),
 				getTxStore(logger),
 				getUtxoStore(ctx, logger),
-				validatorClient,
+				getValidatorClient(ctx, logger),
 			)); err != nil {
 				panic(err)
 			}
@@ -341,7 +324,7 @@ func main() {
 	// validator
 	if startValidator {
 		if _, found := gocore.Config().Get("validator_grpcListenAddress"); found {
-			if err := sm.AddService("Validator", validator.NewServer(
+			if err = sm.AddService("Validator", validator.NewServer(
 				logger.New("valid"),
 				getUtxoStore(ctx, logger),
 			)); err != nil {
@@ -369,11 +352,11 @@ func main() {
 
 	// propagation
 	if startPropagation {
-		var validatorClient validator.Interface
+		var propagationValidatorClient validator.Interface
 		localValidator := gocore.Config().GetBool("useLocalValidator", false)
 		if localValidator {
 			logger.Infof("[Validator] Using local validator")
-			validatorClient, err = validator.New(ctx,
+			propagationValidatorClient, err = validator.New(ctx,
 				logger,
 				getUtxoStore(ctx, logger),
 			)
@@ -382,10 +365,7 @@ func main() {
 			}
 
 		} else {
-			validatorClient, err = validator.NewClient(ctx, logger)
-			if err != nil {
-				logger.Fatalf("error creating validator client: %v", err)
-			}
+			propagationValidatorClient = getValidatorClient(ctx, logger)
 		}
 
 		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcListenAddress")
@@ -398,7 +378,7 @@ func main() {
 				if err = sm.AddService("PropagationServer", propagation.New(
 					logger.New("prop"),
 					getTxStore(logger),
-					validatorClient,
+					propagationValidatorClient,
 				)); err != nil {
 					panic(err)
 				}
@@ -409,7 +389,8 @@ func main() {
 	if startLegacy {
 		if err = sm.AddService("Legacy", legacy.New(
 			logger,
-			getBlockchainStore(ctx, logger),
+			getBlockchainClient(ctx, logger),
+			getValidatorClient(ctx, logger),
 			getSubtreeStore(logger),
 			getUtxoStore(ctx, logger),
 		)); err != nil {
