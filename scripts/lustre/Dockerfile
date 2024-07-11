@@ -1,6 +1,6 @@
 FROM redhat/ubi8:8.9
 
-# Install necessary packages (Lustre client, etc.)
+# Install necessary packages (Lustre client)
 RUN yum update -y \
     && curl https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-rpm-public-key.asc -o /tmp/fsx-rpm-public-key.asc \
     && rpm --import /tmp/fsx-rpm-public-key.asc \
