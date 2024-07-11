@@ -18,7 +18,7 @@ import (
 //go:embed unspend.lua
 var unSpendLUA []byte
 
-var luaUnSpendFunction = "unspend_v2"
+var luaUnSpendFunction = "unspend_v2.1"
 
 func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	return s.unSpend(ctx, spends)

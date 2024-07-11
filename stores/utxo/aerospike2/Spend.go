@@ -21,7 +21,7 @@ import (
 //go:embed spend.lua
 var spendLUA []byte
 
-var luaSpendFunction = "spend_v2"
+var luaSpendFunction = "spend_v2.1"
 
 type batchSpend struct {
 	spend *utxo.Spend
