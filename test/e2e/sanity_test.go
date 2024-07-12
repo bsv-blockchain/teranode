@@ -205,6 +205,55 @@ func TestShouldAllowFairTx(t *testing.T) {
 
 }
 
+func TestBroadcastPoW(t *testing.T) {
+	// Test setup
+	ctx := context.Background()
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
+
+	hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
+	if err != nil {
+		t.Fatalf("Failed to create and send raw txs: %v", err)
+	}
+	fmt.Printf("Hashes in created block: %v\n", hashes)
+
+	baClient := framework.Nodes[0].BlockassemblyClient
+	var block, blockerr = helper.MineBlock(ctx, baClient, logger)
+	if blockerr != nil {
+		t.Fatalf("Failed to mine block: %v", err)
+	}
+
+	time.Sleep(5 * time.Second)
+
+	blockNode0, blockErr0 := framework.Nodes[0].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
+
+	blockNode1, blockErr1 := framework.Nodes[1].BlockChainDB.GetBlockExists(ctx, (*chainhash.Hash)(block))
+
+	blockNode2, blockErr2 := framework.Nodes[2].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
+
+	if blockErr0 != nil {
+		t.Fatalf("Failure on blockchain on Node0: %v", err)
+	}
+
+	if blockErr1 != nil {
+		t.Fatalf("Failure on blockchain on Node1: %v", err)
+	}
+
+	if blockErr2 != nil {
+		t.Fatalf("Failure on blockchain on Node2: %v", err)
+	}
+
+	if !blockNode0 {
+		t.Fatalf("Failed to retrieve new mined block on Node0: %v", blockErr0)
+	}
+	if !blockNode1 {
+		t.Fatalf("Failed to retrieve new mined block on Node1: %v", blockErr1)
+	}
+	if !blockNode2 {
+		t.Fatalf("Failed to retrieve new mined block on Node2: %v", blockErr2)
+	}
+}
+
 func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	ctx := context.Background()
 	url := "http://localhost:18090"

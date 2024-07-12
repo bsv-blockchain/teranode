@@ -300,10 +300,6 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 		return nil, fmt.Errorf("error submitting mining solution: %w", err)
 	}
 
-	err = baClient.SubmitMiningSolution(ctx, solution)
-	if err != nil {
-		return nil, fmt.Errorf("error submitting mining solution: %w", err)
-	}
 	return blockHash, nil
 }
 
