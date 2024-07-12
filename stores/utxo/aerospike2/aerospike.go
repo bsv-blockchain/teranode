@@ -24,6 +24,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+const defaultUxtoBatchSize = 20_000
+
 var (
 	binNames = []string{
 		"spendable",
@@ -205,7 +207,7 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 
 func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
 	if s.utxoBatchSize == 0 {
-		panic("aerospike utxo store initialised without specifying a non-zero utxoBatchSize")
+		s.utxoBatchSize = defaultUxtoBatchSize
 	}
 
 	return vout % uint32(s.utxoBatchSize)

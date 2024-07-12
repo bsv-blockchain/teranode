@@ -126,7 +126,7 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	if s.utxoBatchSize == 0 {
-		panic("aerospike utxo store initialised without specifying a non-zero utxoBatchSize")
+		s.utxoBatchSize = defaultUxtoBatchSize
 	}
 
 	batchId := s.batchId.Add(1)

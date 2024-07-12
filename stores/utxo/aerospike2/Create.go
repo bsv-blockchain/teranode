@@ -65,7 +65,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 
 func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	if s.utxoBatchSize == 0 {
-		panic("aerospike utxo store initialised without specifying a non-zero utxoBatchSize")
+		s.utxoBatchSize = defaultUxtoBatchSize
 	}
 
 	batchPolicy := util.GetAerospikeBatchPolicy()
@@ -179,7 +179,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bin) [][]*aerospike.Bin {
 	if s.utxoBatchSize == 0 {
-		panic("aerospike utxo store initialised without specifying a non-zero utxoBatchSize")
+		s.utxoBatchSize = defaultUxtoBatchSize
 	}
 
 	var batches [][]*aerospike.Bin

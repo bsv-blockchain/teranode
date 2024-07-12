@@ -33,7 +33,7 @@ type batchGetItem struct {
 
 func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	if s.utxoBatchSize == 0 {
-		panic("aerospike utxo store initialised without specifying a non-zero utxoBatchSize")
+		s.utxoBatchSize = defaultUxtoBatchSize
 	}
 
 	prometheusUtxoMapGet.Inc()
