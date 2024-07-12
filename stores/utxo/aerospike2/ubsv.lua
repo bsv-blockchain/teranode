@@ -191,7 +191,6 @@ function incrementNrRecords(rec, inc, ttl)
        return 'ERROR: nrRecords not found in record. Possible non-master record?'
     end
 
-    warn('incrementNrRecords: ' .. tostring(nrRecords) .. ' + ' .. tostring(inc))
     nrRecords = nrRecords + inc
 
     if nrRecords == 1 and rec['spentUtxos'] == rec['nrUtxos'] then

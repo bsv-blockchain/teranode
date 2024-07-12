@@ -814,8 +814,6 @@ func TestBigOPReturn(t *testing.T) {
 }
 
 func TestMultiUTXORecords(t *testing.T) {
-	gocore.Config().Set("utxoBatchSize", "2")
-
 	// For this test, we will assume that aerospike can never store more than 2 utxos in a single record
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
@@ -827,6 +825,8 @@ func TestMultiUTXORecords(t *testing.T) {
 	var db *Store
 	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
+
+	db.utxoBatchSize = 2 // This is only set for testing purposes
 
 	f, err := os.Open("testdata/8f7724e256343cf21dbb1d8ce8fa5caae79da212c90ca6aef3b415c0a9bc003c.bin")
 	require.NoError(t, err)
@@ -948,13 +948,15 @@ func TestCalculateKeySource(t *testing.T) {
 }
 
 func TestCalculateOffsetOutput(t *testing.T) {
-	offset := calculateOffsetForOutput(0, 2)
+	db := &Store{utxoBatchSize: 20_000}
+
+	offset := db.calculateOffsetForOutput(0)
 	assert.Equal(t, uint32(0), offset)
 
-	offset = calculateOffsetForOutput(3, 2)
-	assert.Equal(t, uint32(1), offset)
+	offset = db.calculateOffsetForOutput(30_000)
+	assert.Equal(t, uint32(10_000), offset)
 
-	offset = calculateOffsetForOutput(4, 2)
+	offset = db.calculateOffsetForOutput(40_000)
 	assert.Equal(t, uint32(0), offset)
 }
 

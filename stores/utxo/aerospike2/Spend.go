@@ -13,7 +13,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -136,12 +135,10 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 
-	utxoBatchSize, _ := gocore.Config().GetInt("utxoBatchSize", 20_000)
-
 	var key *aerospike.Key
 	var err error
 	for idx, bItem := range batch {
-		keySource := calculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(utxoBatchSize))
+		keySource := calculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize))
 
 		key, err = aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
@@ -150,7 +147,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			continue
 		}
 
-		offset := calculateOffsetForOutput(bItem.spend.Vout, uint32(utxoBatchSize))
+		offset := s.calculateOffsetForOutput(bItem.spend.Vout)
 
 		batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 		batchRecords[idx] = aerospike.NewBatchUDF(batchUDFPolicy, key, luaPackage, "spend",

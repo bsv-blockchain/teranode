@@ -11,7 +11,6 @@ import (
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/ordishs/gocore"
 )
 
 func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
@@ -27,7 +26,7 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 			}
 			return errors.New(errors.ERR_STORAGE_ERROR, "context cancelled un-spending %d of %d utxos", i, len(spends))
 		default:
-			s.logger.Warnf("unspending utxo %s of tx %s:%d, spending tx: %s", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingTxID.String())
+			s.logger.Warnf("un-spending utxo %s of tx %s:%d, spending tx: %s", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingTxID.String())
 			if err = s.unSpendLua(spend); err != nil {
 				// just return the raw error, should already be wrapped
 				return err
@@ -39,11 +38,9 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 }
 
 func (s *Store) unSpendLua(spend *utxo.Spend) error {
-	utxoBatchSize, _ := gocore.Config().GetInt("utxoBatchSize", 20_000)
-
 	policy := util.GetAerospikeWritePolicy(3, math.MaxUint32)
 
-	keySource := calculateKeySource(spend.TxID, spend.Vout/uint32(utxoBatchSize))
+	keySource := calculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if err != nil {
@@ -51,7 +48,7 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 		return errors.New(errors.ERR_PROCESSING, "error in aerospike NewKey", err)
 	}
 
-	offset := calculateOffsetForOutput(spend.Vout, uint32(utxoBatchSize))
+	offset := s.calculateOffsetForOutput(spend.Vout)
 
 	ret, err := s.client.Execute(policy, key, luaPackage, "unSpend",
 		aerospike.NewIntegerValue(int(offset)), // vout adjusted for utxoBatchSize

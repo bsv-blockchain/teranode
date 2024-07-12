@@ -50,7 +50,8 @@ func setupAerospike(t *testing.T) *aero.Client {
 func TestPreviousOutput(t *testing.T) {
 	t.Skip("Skipping test that requires Aerospike")
 	// Aerospike
-	aeroURL, err := url.Parse("aerospike://localhost:3000/test")
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	store, err := New(ulogger.TestLogger{}, aeroURL)
@@ -108,7 +109,7 @@ func TestPreviousOutput(t *testing.T) {
 func TestCreateWith2Outputs(t *testing.T) {
 	t.Skip("Skipping test that requires Aerospike")
 
-	aeroURL, err := url.Parse("aerospike://localhost:3000/test")
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	store, err := New(ulogger.TestLogger{}, aeroURL)

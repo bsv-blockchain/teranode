@@ -49,6 +49,7 @@ type Store struct {
 	getBatcher    *batcher.Batcher2[batchGetItem]
 	spendBatcher  *batcher.Batcher2[batchSpend]
 	externalStore blob.Store
+	utxoBatchSize int
 }
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
@@ -102,6 +103,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		expiration:    expiration,
 		logger:        logger,
 		externalStore: externalStore,
+		utxoBatchSize: 20_000, // Do not change this value, it is used to calculate the offset for the output
 	}
 
 	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
@@ -201,8 +203,8 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	return 0, details, nil
 }
 
-func calculateOffsetForOutput(vout uint32, utxoBatchSize uint32) uint32 {
-	return vout % utxoBatchSize
+func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
+	return vout % uint32(s.utxoBatchSize)
 }
 
 func calculateKeySource(hash *chainhash.Hash, num uint32) []byte {

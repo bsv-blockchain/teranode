@@ -17,7 +17,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/exp/slices"
 )
 
@@ -35,9 +34,7 @@ type batchGetItem struct {
 func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	prometheusUtxoMapGet.Inc()
 
-	utxoBatchSize, _ := gocore.Config().GetInt("utxoBatchSize", 20_000)
-
-	keySource := calculateKeySource(spend.TxID, spend.Vout/uint32(utxoBatchSize))
+	keySource := calculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
 
 	key, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if aErr != nil {
