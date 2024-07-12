@@ -1191,6 +1191,10 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 		outputs[i] = output.Bytes()
 	}
 
+	if blockIDs == nil {
+		blockIDs = []uint32{}
+	}
+
 	bins := []*aerospike.Bin{
 		aerospike.NewBin("inputs", inputs),
 		aerospike.NewBin("outputs", outputs),
@@ -1201,11 +1205,8 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 		aerospike.NewBin("utxos", aerospike.NewMapValue(utxos)),
 		aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(len(utxos))),
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
+		aerospike.NewBin("blockIDs", blockIDs),
 		aerospike.NewBin("isCoinbase", tx.IsCoinbase()),
-	}
-
-	if blockIDs != nil {
-		bins = append(bins, aerospike.NewBin("blockIDs", blockIDs))
 	}
 
 	return bins, nil
