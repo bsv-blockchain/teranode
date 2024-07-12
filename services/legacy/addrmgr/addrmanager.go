@@ -13,7 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -201,7 +201,7 @@ func (a *AddrManager) updateAddress(netAddr, srcAddr *wire.NetAddress) {
 		// The more entries we have, the less likely we are to add more.
 		// likelihood is 2N.
 		factor := int32(2 * ka.refs)
-		if a.rand.Int31n(factor) != 0 {
+		if a.rand.Int32N(factor) != 0 {
 			return
 		}
 	} else {
@@ -659,7 +659,7 @@ func (a *AddrManager) AddressCache() []*wire.NetAddress {
 	// `numAddresses' since we are throwing the rest.
 	for i := 0; i < numAddresses; i++ {
 		// pick a number between current index and the end
-		j := rand.Intn(addrIndexLen-i) + i
+		j := rand.IntN(addrIndexLen-i) + i
 		allAddr[i], allAddr[j] = allAddr[j], allAddr[i]
 	}
 
@@ -749,13 +749,13 @@ func (a *AddrManager) GetAddress() *KnownAddress {
 	}
 
 	// Use a 50% chance for choosing between tried and new table entries.
-	if a.nTried > 0 && (a.nNew == 0 || a.rand.Intn(2) == 0) {
+	if a.nTried > 0 && (a.nNew == 0 || a.rand.IntN(2) == 0) {
 		// Tried entry.
 		large := 1 << 30
 		factor := 1.0
 		for {
 			// pick a random bucket.
-			bucket := a.rand.Intn(len(a.addrTried))
+			bucket := a.rand.IntN(len(a.addrTried))
 			if a.addrTried[bucket].Len() == 0 {
 				continue
 			}
@@ -763,11 +763,11 @@ func (a *AddrManager) GetAddress() *KnownAddress {
 			// Pick a random entry in the list
 			e := a.addrTried[bucket].Front()
 			for i :=
-				a.rand.Int63n(int64(a.addrTried[bucket].Len())); i > 0; i-- {
+				a.rand.Int64N(int64(a.addrTried[bucket].Len())); i > 0; i-- {
 				e = e.Next()
 			}
 			ka := e.Value.(*KnownAddress)
-			randval := a.rand.Intn(large)
+			randval := a.rand.IntN(large)
 			if float64(randval) < (factor * ka.chance() * float64(large)) {
 				a.logger.Infof("Selected %v from tried bucket",
 					NetAddressKey(ka.na))
@@ -782,20 +782,20 @@ func (a *AddrManager) GetAddress() *KnownAddress {
 		factor := 1.0
 		for {
 			// Pick a random bucket.
-			bucket := a.rand.Intn(len(a.addrNew))
+			bucket := a.rand.IntN(len(a.addrNew))
 			if len(a.addrNew[bucket]) == 0 {
 				continue
 			}
 			// Then, a random entry in it.
 			var ka *KnownAddress
-			nth := a.rand.Intn(len(a.addrNew[bucket]))
+			nth := a.rand.IntN(len(a.addrNew[bucket]))
 			for _, value := range a.addrNew[bucket] {
 				if nth == 0 {
 					ka = value
 				}
 				nth--
 			}
-			randval := a.rand.Intn(large)
+			randval := a.rand.IntN(large)
 			if float64(randval) < (factor * ka.chance() * float64(large)) {
 				a.logger.Infof("Selected %v from new bucket",
 					NetAddressKey(ka.na))
@@ -1102,11 +1102,12 @@ func (a *AddrManager) GetBestLocalAddress(remoteAddr *wire.NetAddress) *wire.Net
 // New returns a new bitcoin address manager.
 // Use Start to begin processing asynchronous address updates.
 func New(logger ulogger.Logger, dataDir string, lookupFunc func(string) ([]net.IP, error)) *AddrManager {
+	randSource := rand.NewPCG(rand.Uint64(), rand.Uint64())
 	am := AddrManager{
 		logger:         logger,
 		peersFile:      filepath.Join(dataDir, "peers.json"),
 		lookupFunc:     lookupFunc,
-		rand:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		rand:           rand.New(randSource),
 		quit:           make(chan struct{}),
 		localAddresses: make(map[string]*localAddress),
 	}

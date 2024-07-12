@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"math"
 	"net"
 	"runtime"
@@ -63,7 +64,7 @@ var (
 var (
 	// userAgentName is the user agent name and is used to help identify
 	// ourselves to other bitcoin peers.
-	userAgentName = "/bsvd"
+	userAgentName = "/teranode-legacy-p2p"
 
 	// userAgentVersion is the user agent version and is used to help
 	// identify ourselves to other bitcoin peers.
@@ -244,6 +245,7 @@ type server struct {
 	logger           ulogger.Logger
 	blockchainClient blockchain.ClientI
 	utxoStore        utxostore.Store
+	subtreeStore     blob.Store
 }
 
 // serverPeer extends the peer to maintain state shared by the server and
@@ -1721,14 +1723,13 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 		// generate and send a headers message instead of an inventory
 		// message.
 		if msg.invVect.Type == wire.InvTypeBlock && sp.WantsHeaders() {
-			blockHeader, ok := msg.data.(wire.BlockHeader)
+			blockHeader, ok := msg.data.(*wire.BlockHeader)
 			if !ok {
-				sp.server.logger.Warnf("Underlying data for headers" +
-					" is not a block header")
+				sp.server.logger.Warnf("Underlying data for headers is not a block header")
 				return
 			}
 			msgHeaders := wire.NewMsgHeaders()
-			if err := msgHeaders.AddBlockHeader(&blockHeader); err != nil {
+			if err := msgHeaders.AddBlockHeader(blockHeader); err != nil {
 				sp.server.logger.Errorf("Failed to add block"+
 					" header: %v", err)
 				return
@@ -2482,27 +2483,27 @@ out:
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
 func newServer(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, validationClient validator.Interface,
-	utxoStore utxostore.Store, listenAddrs []string, chainParams *chaincfg.Params) (*server, error) {
+	utxoStore utxostore.Store, subtreeStore blob.Store, listenAddrs []string, chainParams *chaincfg.Params) (*server, error) {
 
 	// init config
 	c, _, err := loadConfig()
 	if err != nil {
 		return nil, err
 	}
+	//c.Upnp = true // TODO set from settings
 
 	cfg = c
 
+	// TODO overwrite any config options from ubsv settings, if applicable
+
 	services := defaultServices
-	if cfg.NoPeerBloomFilters {
-		services &^= wire.SFNodeBloom
-	}
-	if cfg.NoCFilters {
-		services &^= wire.SFNodeCF
-	}
-	if cfg.Prune {
-		services &^= wire.SFNodeNetwork
-		services |= wire.SFNodeNetworkLimited
-	}
+	// cfg.NoPeerBloomFilters
+	services &^= wire.SFNodeBloom
+	// cfg.NoCFilters
+	services &^= wire.SFNodeCF
+	// cfg.Prune
+	services &^= wire.SFNodeNetwork
+	services |= wire.SFNodeNetworkLimited
 
 	amgr := addrmgr.New(logger, cfg.DataDir, bsvdLookup)
 
@@ -2541,9 +2542,10 @@ func newServer(ctx context.Context, logger ulogger.Logger, blockchainClient bloc
 		logger:               logger,
 		blockchainClient:     blockchainClient,
 		utxoStore:            utxoStore,
+		subtreeStore:         subtreeStore,
 	}
 
-	s.syncManager, err = netsync.New(ctx, logger, blockchainClient, validationClient, utxoStore, &netsync.Config{
+	s.syncManager, err = netsync.New(ctx, logger, blockchainClient, validationClient, utxoStore, subtreeStore, &netsync.Config{
 		PeerNotifier:            &s,
 		ChainParams:             s.chainParams,
 		DisableCheckpoints:      cfg.DisableCheckpoints,
@@ -2662,8 +2664,7 @@ func initListeners(logger ulogger.Logger, amgr *addrmgr.AddrManager, listenAddrs
 	var nat NAT
 	defaultPort, err := strconv.ParseUint(activeNetParams.DefaultPort, 10, 16)
 	if err != nil {
-		logger.Errorf("Can not parse default port %s for active chain: %v",
-			activeNetParams.DefaultPort, err)
+		logger.Errorf("Can not parse default port %s for active chain: %v", activeNetParams.DefaultPort, err)
 		return nil, nil, err
 	}
 	if len(cfg.ExternalIPs) != 0 {

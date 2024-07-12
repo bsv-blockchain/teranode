@@ -12,13 +12,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"net"
 )
 
 type Server struct {
-	logger      ulogger.Logger
-	stats       *gocore.Stat
-	peerManager *PeerManager
-	server      *server
+	logger ulogger.Logger
+	stats  *gocore.Stat
+	server *server
 	//tb        *TeranodeBridge
 	lastHash *chainhash.Hash
 	height   uint32
@@ -42,7 +42,6 @@ func New(logger ulogger.Logger, blockchainClient blockchain.ClientI, validationC
 		validationClient: validationClient,
 		subtreeStore:     subtreeStore,
 		utxoStore:        utxoStore,
-		//peerManager: NewPeerManager(logger, blockchainStore, validationClient, subtreeStore, utxoStore),
 	}
 }
 
@@ -62,10 +61,16 @@ func (s *Server) Init(ctx context.Context) error {
 	//}
 	wire.SetLimits(4000000000)
 
-	connectAddresses, _ := gocore.Config().GetMulti("legacy_connect_peers", "|", []string{"54.169.45.196:8333"})
-	listenAddresses, _ := gocore.Config().GetMulti("legacy_listen_addresses", "|", []string{"127.0.0.1:8333"})
+	// seed.bitcoinsv.io
+	// TODO use testnet-seed.bitcoinsv.io for testnet, stn-seed.bitcoinsv.io for STN
+	connectAddresses, _ := gocore.Config().GetMulti("legacy_connect_peers", "|", []string{"44.213.141.106:8333|13.213.100.250:8333|18.199.12.185:8333"})
 
-	s.server, err = newServer(ctx, s.logger, s.blockchainClient, s.validationClient, s.utxoStore, listenAddresses, &chaincfg.MainNetParams)
+	// get the public IP and listen on it
+	ip := GetOutboundIP()
+	// TODO not setting any listen addresses triggers upnp, which does not seem to work yet
+	listenAddresses, _ := gocore.Config().GetMulti("legacy_listen_addresses", "|", []string{ip.String() + ":8333"})
+
+	s.server, err = newServer(ctx, s.logger, s.blockchainClient, s.validationClient, s.utxoStore, s.subtreeStore, listenAddresses, &chaincfg.MainNetParams)
 	if err != nil {
 		return err
 	}
@@ -85,4 +90,18 @@ func (s *Server) Start(_ context.Context) error {
 
 func (s *Server) Stop(_ context.Context) error {
 	return s.server.Stop()
+}
+
+// GetOutboundIP - Get preferred outbound ip of this machine
+// from https://stackoverflow.com/a/37382208
+func GetOutboundIP() net.IP {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+
+	return localAddr.IP
 }

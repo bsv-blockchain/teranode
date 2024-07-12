@@ -6,7 +6,7 @@ package connmgr
 
 import (
 	"fmt"
-	mrand "math/rand"
+	mrand "math/rand/v2"
 	"net"
 	"strconv"
 	"time"
@@ -42,8 +42,6 @@ func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 		}
 
 		go func(host string) {
-			randSource := mrand.New(mrand.NewSource(time.Now().UnixNano()))
-
 			seedpeers, err := lookupFn(host)
 			if err != nil {
 				//log.Infof("DNS discovery failed on seed %s: %v", host, err)
@@ -60,12 +58,13 @@ func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 			// if this errors then we have *real* problems
 			intPort, _ := strconv.Atoi(chainParams.DefaultPort)
 			for i, peer := range seedpeers {
+				randSource := mrand.NewPCG(uint64(time.Now().UnixNano()), uint64(secondsIn4Days))
+				rand := mrand.New(randSource)
 				addresses[i] = wire.NewNetAddressTimestamp(
 					// bitcoind seeds with addresses from
 					// a time randomly selected between 3
 					// and 7 days ago.
-					time.Now().Add(-1*time.Second*time.Duration(secondsIn3Days+
-						randSource.Int31n(secondsIn4Days))),
+					time.Now().Add(-1*time.Second*time.Duration(secondsIn3Days+int32(rand.Uint64()))),
 					0, peer, uint16(intPort))
 			}
 

@@ -8,7 +8,8 @@ import (
 	"bytes"
 	"container/list"
 	"context"
-	"math/rand"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -223,6 +224,7 @@ type SyncManager struct {
 	blockchainClient blockchain2.ClientI
 	validationClient validator.Interface
 	utxoStore        utxostore.Store
+	subtreeStore     blob.Store
 
 	// These fields should only be accessed from the blockHandler thread.
 	rejectedTxns    map[chainhash.Hash]struct{}
@@ -337,9 +339,9 @@ func (sm *SyncManager) startSync() {
 	// if that is not available, then use a random peer at the same
 	// height and hope they find blocks.
 	if len(bestPeers) > 0 {
-		bestPeer = bestPeers[rand.Intn(len(bestPeers))]
+		bestPeer = bestPeers[rand.IntN(len(bestPeers))]
 	} else if len(okPeers) > 0 {
-		bestPeer = okPeers[rand.Intn(len(okPeers))]
+		bestPeer = okPeers[rand.IntN(len(okPeers))]
 	}
 
 	// Start syncing from the best peer if one was selected.
@@ -741,7 +743,13 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	delete(state.requestedBlocks, *blockHash)
 	delete(sm.requestedBlocks, *blockHash)
 
-	// TODO process block
+	// TODO does this work setting the height?
+	bmsg.block.SetHeight(bmsg.block.Height())
+	err := sm.HandleBlockDirect(context.TODO(), bmsg.block)
+	if err != nil {
+		sm.logger.Errorf("Failed to process block %v: %v", blockHash, err)
+		return
+	}
 
 	// if rejected
 	//		peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
@@ -840,7 +848,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	sm.headerList.Init()
 	sm.logger.Infof("Reached the final checkpoint -- switching to normal mode")
 	locator := blockchain.BlockLocator([]*chainhash.Hash{blockHash})
-	err := peer.PushGetBlocksMsg(locator, &zeroHash)
+	err = peer.PushGetBlocksMsg(locator, &zeroHash)
 	if err != nil {
 		sm.logger.Warnf("Failed to send getblocks message to peer %s: %v",
 			peer.Addr(), err)
@@ -915,8 +923,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	msg := hmsg.headers
 	numHeaders := len(msg.Headers)
 	if !sm.headersFirstMode {
-		sm.logger.Warnf("Got %d unrequested headers from %s -- "+
-			"disconnecting", numHeaders, peer.Addr())
+		sm.logger.Warnf("Got %d unrequested headers from %s -- disconnecting", numHeaders, peer.Addr())
 		peer.Disconnect()
 		return
 	}
@@ -1446,7 +1453,7 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
 func New(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain2.ClientI,
-	validationClient validator.Interface, utxoStore utxostore.Store, config *Config) (*SyncManager, error) {
+	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, config *Config) (*SyncManager, error) {
 
 	sm := SyncManager{
 		peerNotifier: config.PeerNotifier,
@@ -1469,6 +1476,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain
 		blockchainClient: blockchainClient,
 		validationClient: validationClient,
 		utxoStore:        utxoStore,
+		subtreeStore:     subtreeStore,
 	}
 
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())

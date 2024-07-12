@@ -262,9 +262,8 @@ tests:
 
 		pubStr := pubKey.String()
 		if pubStr != test.wantPub {
-			t.Errorf("Neuter #%d (%s): mismatched serialized "+
-				"public extended key -- got: %s, want: %s", i,
-				test.name, pubStr, test.wantPub)
+			t.Errorf("Neuter #%d (%s): mismatched serialized public extended key -- got: %s, want: %s",
+				i, test.name, pubStr, test.wantPub)
 			continue
 		}
 	}

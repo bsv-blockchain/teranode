@@ -7,6 +7,7 @@ package netsync_test
 import (
 	"context"
 	"fmt"
+	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"net/url"
 	"testing"
 	"time"
@@ -64,7 +65,9 @@ func (ctx *testContext) Setup(config *testConfig) error {
 		return fmt.Errorf("failed to create validator client: %v", err)
 	}
 
-	syncMgr, err := netsync.New(context.Background(), ulogger.TestLogger{}, blockchainClient, validatorClient, utxoStore, &netsync.Config{
+	subtreeStore := blob_memory.New()
+
+	syncMgr, err := netsync.New(context.Background(), ulogger.TestLogger{}, blockchainClient, validatorClient, utxoStore, subtreeStore, &netsync.Config{
 		PeerNotifier: peerNotifier,
 		ChainParams:  ctx.cfg.chainParams,
 		MaxPeers:     8,

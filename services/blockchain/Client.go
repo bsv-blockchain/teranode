@@ -618,6 +618,16 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMSta
 // LatestBlockLocator returns a block locator for the latest block.
 // This function will be much faster, when moved to the server side.
 func (c *Client) LatestBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
+	if blockHeaderHash == nil {
+		// return genesis block
+		genesisBlock, err := c.GetBlockByHeight(ctx, 0)
+		if err != nil {
+			return nil, err
+		}
+
+		return []*chainhash.Hash{genesisBlock.Header.Hash()}, nil
+	}
+
 	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
 	// Calculate the max number of entries that will ultimately be in the
 	// block locator. See the description of the algorithm for how these
@@ -633,9 +643,9 @@ func (c *Client) LatestBlockLocator(ctx context.Context, blockHeaderHash *chainh
 	}
 	locator := make([]*chainhash.Hash, 0, maxEntries)
 
-	step := uint32(1)
+	step := int32(1)
 	ancestorBlockHeaderHash := blockHeaderHash
-	ancestorBlockHeight := blockHeaderHeight
+	ancestorBlockHeight := int32(blockHeaderHeight) // this needs to be signed
 	for ancestorBlockHeaderHash != nil {
 		locator = append(locator, ancestorBlockHeaderHash)
 
@@ -646,12 +656,12 @@ func (c *Client) LatestBlockLocator(ctx context.Context, blockHeaderHash *chainh
 
 		// Calculate height of previous node to include ensuring the
 		// final node is the genesis block.
-		height := ancestorBlockHeight - step
+		height := int32(ancestorBlockHeight) - step
 		if height < 0 {
 			height = 0
 		}
 
-		ancestorBlock, err := c.GetBlockByHeight(ctx, height)
+		ancestorBlock, err := c.GetBlockByHeight(ctx, uint32(height))
 		if err != nil {
 			return nil, err
 		}
