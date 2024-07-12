@@ -5,17 +5,29 @@ x-ubsv-base:
   depends_on:
     - postgres
     - kafka-shared
+    - aerospike-1
   networks:
     - ubsv-network
   volumes:
     - ./data:/app/data
+    - ./settings_local.conf:/app/settings_local.conf
+    - ./data/ubsv1/txstore:/app/data/txstore
+    - ./data/ubsv1/subtreestore:/app/data/subtreestore
+    - ./data/ubsv1/blockstore:/app/data/blockstore
   expose:
     - 8081-8093
+  environment:
+    SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
+    logLevel: "DEBUG"
+    utxostore: aerospike://aerospike-1:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+    blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
+    coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
+
 networks:
   ubsv-network:
     name: my-ubsv-network
-services:
 
+services:
   ubsv-builder:
     image: ubsv:latest
     build:
@@ -42,7 +54,6 @@ services:
     expose:
       - 5432
     volumes:
-      # - ./deploy/dev/postgres-update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
       - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
       - ./data/postgres:/var/lib/postgresql/data
     restart: on-failure
@@ -72,26 +83,26 @@ services:
       - 19092:9092
       - 19093:9093
 
-  # kafka-console-shared:
-  #   container_name: kafka-console-shared
-  #   image: docker.redpanda.com/redpandadata/console:latest
-  #   networks:
-  #     - ubsv-network
-  #   restart: on-failure
-  #   entrypoint: /bin/sh
-  #   command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
-  #   environment:
-  #     CONFIG_FILEPATH: /tmp/config.yml
-  #     CONSOLE_CONFIG_FILE: |
-  #       kafka:
-  #         brokers: ["kafka-shared:9092"]
-  #         schemaRegistry:
-  #           enabled: true
-  #           urls: ["http://kafka-shared:8081"]
-  #   ports:
-  #     - "18080:8080"
-  #   depends_on:
-  #     - kafka-shared
+  kafka-console-shared:
+    container_name: kafka-console-shared
+    image: docker.redpanda.com/redpandadata/console:latest
+    networks:
+      - ubsv-network
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["kafka-shared:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://kafka-shared:8081"]
+    ports:
+      - "18080:8080"
+    depends_on:
+      - kafka-shared
 
   aerospike-1:
     container_name: aerospike-1
@@ -103,28 +114,13 @@ services:
       - 3100:3000
     restart: on-failure
     volumes:
-    - ./deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
-    - ./data/aerospike-1/data:/opt/aerospike/data
+      - ./deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
+      - ./data/aerospike-1/data:/opt/aerospike/data
 
   ubsv-miner:
     <<: *ubsv-base
     container_name: ubsv-miner
-    depends_on:
-      - kafka-shared
-      - aerospike-1
-      - postgres
     entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1"]
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
-      logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-1:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/txstore
-      - ./data/ubsv1/subtreestore:/app/data/subtreestore
-      - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18097:8090-8097"
@@ -135,22 +131,7 @@ services:
   ubsv-coinbase:
     <<: *ubsv-base
     container_name: ubsv-coinbase
-    depends_on:
-      - kafka-shared
-      - aerospike-1
-      - postgres
     entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1"]
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
-      logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-1:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/txstore
-      - ./data/ubsv1/subtreestore:/app/data/subtreestore
-      - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18097:8090-8097"
@@ -161,22 +142,7 @@ services:
   ubsv-blockpersister:
     <<: *ubsv-base
     container_name: ubsv-blockpersister
-    depends_on:
-      - kafka-shared
-      - aerospike-1
-      - postgres
     entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockpersister=1"]
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
-      logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-1:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/txstore
-      - ./data/ubsv1/subtreestore:/app/data/subtreestore
-      - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18097:8090-8097"
@@ -187,22 +153,7 @@ services:
   ubsv-rpc:
     <<: *ubsv-base
     container_name: ubsv-rpc
-    depends_on:
-      - kafka-shared
-      - aerospike-1
-      - postgres
     entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-rpc=1"]
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
-      logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-1:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/txstore
-      - ./data/ubsv1/subtreestore:/app/data/subtreestore
-      - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18097:8090-8097"
@@ -213,22 +164,7 @@ services:
   ubsv-asset:
     <<: *ubsv-base
     container_name: ubsv-asset
-    depends_on:
-      - kafka-shared
-      - aerospike-1
-      - postgres
     entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-asset=1"]
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
-      logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-1:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/txstore
-      - ./data/ubsv1/subtreestore:/app/data/subtreestore
-      - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18097:8090-8097"
@@ -239,22 +175,7 @@ services:
   ubsv-subtreevalidation:
     <<: *ubsv-base
     container_name: ubsv-subtreevalidation
-    depends_on:
-      - kafka-shared
-      - aerospike-1
-      - postgres
     entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-subtreevalidation=1"]
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
-      logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-1:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/txstore
-      - ./data/ubsv1/subtreestore:/app/data/subtreestore
-      - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18097:8090-8097"
@@ -265,22 +186,7 @@ services:
   ubsv-blockvalidation:
     <<: *ubsv-base
     container_name: ubsv-blockvalidation
-    depends_on:
-      - kafka-shared
-      - aerospike-1
-      - postgres
     entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockvalidation=1"]
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
-      logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-1:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/txstore
-      - ./data/ubsv1/subtreestore:/app/data/subtreestore
-      - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18097:8090-8097"
@@ -291,22 +197,7 @@ services:
   ubsv-blockassembly:
     <<: *ubsv-base
     container_name: ubsv-blockassembly
-    depends_on:
-      - kafka-shared
-      - aerospike-1
-      - postgres
     entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockassembly=1"]
-    environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
-      logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-1:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-    volumes:
-      - ./settings_local.conf:/app/settings_local.conf
-      - ./data/ubsv1/txstore:/app/data/txstore
-      - ./data/ubsv1/subtreestore:/app/data/subtreestore
-      - ./data/ubsv1/blockstore:/app/data/blockstore
     ports:
       - "18081-18089:8081-8089"
       - "18090-18097:8090-8097"
