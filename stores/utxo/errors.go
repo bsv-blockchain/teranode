@@ -12,60 +12,38 @@ const (
 	isoFormat = "2006-01-02T15:04:05Z"
 )
 
-var (
-	ErrNotFound      = errors.New(errors.ERR_NOT_FOUND, "utxo not found")
-	ErrAlreadyExists = errors.New(0, "utxo already exists")
-	ErrTypeSpent     = &ErrSpent{}
-	ErrTypeLockTime  = &ErrLockTime{}
-	ErrChainHash     = errors.New(0, "utxo chain hash could not be calculated")
-	ErrStore         = errors.New(0, "utxo store error")
-)
-
-type ErrSpent struct {
-	TxID         *chainhash.Hash
-	VOut         uint32
-	UtxoHash     *chainhash.Hash
-	SpendingTxID *chainhash.Hash
-}
-
 func NewErrSpent(txID *chainhash.Hash, vOut uint32, utxoHash, spendingTxID *chainhash.Hash, optionalErrs ...error) error {
-	errSpent := &ErrSpent{
-		TxID:         txID,
-		VOut:         vOut,
-		UtxoHash:     utxoHash,
-		SpendingTxID: spendingTxID,
+	txIDString := "nil"
+	if txID != nil {
+		txIDString = txID.String()
 	}
+	utxoHashString := "nil"
+	if utxoHash != nil {
+		utxoHashString = utxoHash.String()
+	}
+	spendingTxString := "nil"
+	if spendingTxID != nil {
+		spendingTxString = spendingTxID.String()
+	}
+	errorString := fmt.Sprintf("%s:$%d utxo %s already spent by txid %s", txIDString, vOut, utxoHashString, spendingTxString)
 
-	e := errors.New(0, errSpent.Error(), ErrTypeSpent)
-	return e
-}
-
-func (e *ErrSpent) Error() string {
-	return fmt.Sprintf("%s:$%d utxo %s already spent by txid %s", e.TxID.String(), e.VOut, e.UtxoHash.String(), e.SpendingTxID.String())
-}
-
-type ErrLockTime struct {
-	lockTime    uint32
-	blockHeight uint32
+	return errors.New(errors.ERR_SPENT, errorString)
 }
 
 func NewErrLockTime(lockTime uint32, blockHeight uint32, optionalErrs ...error) error {
-	errLockTime := &ErrLockTime{
-		lockTime:    lockTime,
-		blockHeight: blockHeight,
-	}
 
-	return errors.New(0, errLockTime.Error(), ErrTypeLockTime)
-}
-func (e *ErrLockTime) Error() string {
-	if e.lockTime == 0 {
-		return "ErrLockTime"
-	}
+	var errorString string
 
-	if e.lockTime >= 500_000_000 {
+	switch {
+	case lockTime == 0:
+		errorString = "ErrLockTime"
+	case lockTime < 500_000_000:
 		// This is a timestamp based locktime
-		spendableAt := time.Unix(int64(e.lockTime), 0)
-		return fmt.Sprintf("utxo is locked until %s", spendableAt.UTC().Format(isoFormat))
+		spendableAt := time.Unix(int64(lockTime), 0)
+		errorString = fmt.Sprintf("utxo is locked until %s", spendableAt.UTC().Format(isoFormat))
+	default:
+		errorString = fmt.Sprintf("utxo is locked until block %d (height check: %d)", lockTime, blockHeight)
 	}
-	return fmt.Sprintf("utxo is locked until block %d (height check: %d)", e.lockTime, e.blockHeight)
+
+	return errors.New(errors.ERR_LOCKTIME, errorString)
 }

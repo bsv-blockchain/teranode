@@ -26,4 +26,6 @@ var (
 	ErrStorageNotStarted          = New(ERR_STORAGE_NOT_STARTED, "storage not started")
 	ErrStorageError               = New(ERR_STORAGE_ERROR, "storage error")
 	ErrCoinbaseMissingBlockHeight = New(ERR_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script doesn't have the block height")
+	ErrSpent                      = New(ERR_SPENT, "utxo already spent")
+	ErrLockTime                   = New(ERR_LOCKTIME, "Bad lock time")
 )

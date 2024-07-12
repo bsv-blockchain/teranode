@@ -335,7 +335,8 @@ func internalTest(t *testing.T) {
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends2, blockHeight)
-		require.ErrorIs(t, err, errors.NewUtxoSpentErr(*tx.TxIDChainHash(), *utxo.ErrTypeSpent.SpendingTxID, time.Now(), err))
+		require.True(t, errors.Is(err, errors.ErrSpent))
+		// require.ErrorIs(t, err, errors.NewUtxoSpentErr(*tx.TxIDChainHash(), *utxo.ErrTypeSpent.SpendingTxID, time.Now(), err))
 
 		// get the doc to check expiry etc.
 		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -377,7 +378,7 @@ func internalTest(t *testing.T) {
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends2, blockHeight)
-		require.ErrorIs(t, err, utxo.ErrTypeSpent)
+		require.True(t, errors.Is(err, errors.ErrSpent))
 
 		// get the doc to check expiry etc.
 		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -460,7 +461,7 @@ func internalTest(t *testing.T) {
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends3, blockHeight)
 		require.Error(t, err)
-		require.ErrorIs(t, err, utxo.ErrTypeSpent)
+		require.True(t, errors.Is(err, errors.ErrSpent))
 
 		// get the doc to check expiry etc.
 		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -485,7 +486,7 @@ func internalTest(t *testing.T) {
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends3, blockHeight)
 		require.Error(t, err)
-		require.ErrorIs(t, err, utxo.ErrTypeSpent)
+		require.True(t, errors.Is(err, errors.ErrSpent))
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
 		require.NoError(t, err)
@@ -558,7 +559,7 @@ func internalTest(t *testing.T) {
 			SpendingTxID: hash,
 		}}
 		err = db.Spend(context.Background(), spends, blockHeight)
-		require.ErrorIs(t, err, utxo.ErrTypeLockTime)
+		require.True(t, errors.Is(err, errors.ErrLockTime))
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
@@ -604,7 +605,7 @@ func internalTest(t *testing.T) {
 			SpendingTxID: hash,
 		}}
 		err = db.Spend(context.Background(), spends, blockHeight)
-		require.ErrorIs(t, err, utxo.ErrTypeLockTime)
+		require.True(t, errors.Is(err, errors.ErrLockTime))
 
 		value, err = client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
