@@ -12,6 +12,11 @@ It seems like the alpha testing will be done by a selected group of miners. This
 The goal is to start giving them a taster of the software, how to run it, how to work on the ui, settings and get them familiarized with SOP(being written by vicente). **This is a requirement for milestone 3**.
 
 We decided that the two docker compose, single node and three nodes blockchain would satisfy the requirement for this milestone. The goal is to train them on the dependencies, get them familiar with them, how to run them and familiar with the software. They will not be running anything in production as we'll still be collecting feedback from them to make the software robust
+
+
+
+We need to account for different phases of open source of the codebase, the timeline is still unknown as some key stakeholders are nervous of opening up the codebase as MIT or Apache. Which means that for the initial Milestone 3 with TAAL and GP we will need to figure out a way to provide them binaries/images to run without the source code. We will be sharing the pre-built binaries and the docker images associated with them. These are really hard to reverse engineer and given that GP and TAAL are considered friendly parties, we should be fine. Source code would not be released as of milestone 3 as there's still a lot of cleaning that needs to be done before we open source the project.
+
 ## UBSV Binary
 The ubsv repo where the current teranode code resides will be open sourced. This repo will include a runnable version of the teranode code as well as ci/cd to build the executable. 
 - People will have the option to build from source. This will be available at later stages as we will need to have a stable version of the software before we can publish it.
