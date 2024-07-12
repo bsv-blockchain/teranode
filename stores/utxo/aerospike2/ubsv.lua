@@ -9,9 +9,7 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
         return "ERROR:TX not found"
     end
 
-    -- TODO - when we implement the frozen logic in the RPC call, if the number of outputs are more than 20,000, we need to update
-    -- each of the extra records.
-	if rec['frozen'] then
+    if rec['frozen'] then
 		return "FROZEN:TX is frozen"
 	end
 

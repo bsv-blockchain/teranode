@@ -151,6 +151,8 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			continue
 		}
 
+		// TODO check the master record if this is a paginated tx
+
 		offset := s.calculateOffsetForOutput(bItem.spend.Vout)
 
 		batchUDFPolicy := aerospike.NewBatchUDFPolicy()
@@ -197,7 +199,6 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 					case "SPENT":
 						// spent by another transaction
-						// TODO - Check if this needs to be reversed
 						spendingTxID, hashErr := chainhash.NewHashFromStr(responseMsgParts[1])
 						if hashErr != nil {
 							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.TxID.String(), hashErr)

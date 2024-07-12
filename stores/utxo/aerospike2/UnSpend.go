@@ -5,6 +5,7 @@ package aerospike2
 import (
 	"context"
 	"math"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 
@@ -42,7 +43,7 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 		s.utxoBatchSize = defaultUxtoBatchSize
 	}
 
-	policy := util.GetAerospikeWritePolicy(3, math.MaxUint32)
+	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
 	keySource := calculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
 
@@ -59,9 +60,31 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 		aerospike.NewValue(spend.UTXOHash[:]),  // utxo hash
 	)
 
-	if err != nil || ret != "OK" {
+	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", err.Error()).Inc()
 		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike unspend record", err)
+	}
+
+	responseMsg, ok := ret.(string)
+	if !ok {
+		prometheusUtxoMapErrors.WithLabelValues("Reset", "response not string").Inc()
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike unspend record", err)
+	}
+
+	responseMsgParts := strings.Split(responseMsg, ":")
+	switch responseMsgParts[0] {
+	case "OK":
+		if len(responseMsgParts) > 1 && responseMsgParts[1] == "NOTALLSPENT" {
+			go s.incrementNrRecords(spend.TxID, 1)
+		}
+
+	case "ERROR":
+		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike unspend record: %s", responseMsg)
+
+	default:
+		prometheusUtxoMapErrors.WithLabelValues("Reset", "default response").Inc()
+		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike unspend record: %s", responseMsg)
 	}
 
 	prometheusUtxoMapReset.Inc()
