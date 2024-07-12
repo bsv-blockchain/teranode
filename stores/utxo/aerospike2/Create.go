@@ -303,6 +303,10 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, external bool, blockIDs ...ui
 		}
 	}
 
+	if len(blockIDs) == 0 {
+		blockIDs = make([]uint32, 0)
+	}
+
 	commonBins := []*aerospike.Bin{
 		aerospike.NewBin("version", aerospike.NewIntegerValue(int(tx.Version))),
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
