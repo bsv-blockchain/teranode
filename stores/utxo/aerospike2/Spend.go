@@ -4,7 +4,6 @@ package aerospike2
 
 import (
 	"context"
-	_ "embed"
 	"math"
 	"strings"
 	"sync"
@@ -14,14 +13,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
-
-//go:embed spend.lua
-var spendLUA []byte
-
-var luaSpendFunction = "spend_v2.1"
 
 type batchSpend struct {
 	spend *utxo.Spend
@@ -142,24 +135,22 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 
-	utxoBatchSize, _ := gocore.Config().GetInt("utxoBatchSize", 20_000)
-
 	var key *aerospike.Key
 	var err error
 	for idx, bItem := range batch {
-		keySource := calculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(utxoBatchSize))
+		keySource := calculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize))
 
 		key, err = aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
 			// we just return the error on the channel, we cannot process this utxo any further
-			bItem.done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend: %w", bItem.spend.UTXOHash.String(), err)
+			bItem.done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend: %w", bItem.spend.TxID.String(), err)
 			continue
 		}
 
-		offset := calculateOffsetForOutput(bItem.spend.Vout, uint32(utxoBatchSize))
+		offset := s.calculateOffsetForOutput(bItem.spend.Vout)
 
 		batchUDFPolicy := aerospike.NewBatchUDFPolicy()
-		batchRecords[idx] = aerospike.NewBatchUDF(batchUDFPolicy, key, luaSpendFunction, "spend",
+		batchRecords[idx] = aerospike.NewBatchUDF(batchUDFPolicy, key, luaPackage, "spend",
 			aerospike.NewIntegerValue(int(offset)),          // vout adjusted for utxo batch size
 			aerospike.NewValue(bItem.spend.UTXOHash[:]),     // utxo hash
 			aerospike.NewValue(bItem.spend.SpendingTxID[:]), // spending tx id
@@ -172,7 +163,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	if err != nil {
 		s.logger.Errorf("[SPEND_BATCH_LUA][%d] failed to batch spend aerospike map utxos in batchId %d: %v", batchId, len(batch), err)
 		for idx, bItem := range batch {
-			bItem.done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.UTXOHash.String(), batchId, idx, err)
+			bItem.done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.TxID.String(), batchId, idx, err)
 		}
 	}
 
@@ -181,7 +172,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		spend := batch[idx].spend
 		err = batchRecord.BatchRec().Err
 		if err != nil {
-			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %w", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, err)
+			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %w", spend.TxID.String(), s.blockHeight.Load(), batchId, err)
 		} else {
 			response := batchRecord.BatchRec().Record
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
@@ -197,23 +188,26 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 							go s.incrementNrRecords(spend.TxID, -1)
 						}
 
+					case "FROZEN":
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d: %d - %s", spend.TxID.String(), s.blockHeight.Load(), batchId, responseMsg)
+
 					case "SPENT":
 						// spent by another transaction
 						// TODO - Check if this needs to be reversed
 						spendingTxID, hashErr := chainhash.NewHashFromStr(responseMsgParts[1])
 						if hashErr != nil {
-							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.UTXOHash.String(), hashErr)
+							batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.TxID.String(), hashErr)
 						}
 						// TODO we need to be able to send the spending TX ID in the error down the line
 						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxID)
 					case "ERROR":
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
 					default:
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.UTXOHash.String(), s.blockHeight.Load(), batchId, responseMsg)
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), s.blockHeight.Load(), batchId, responseMsg)
 					}
 				}
 			} else {
-				batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse response", spend.UTXOHash.String())
+				batch[idx].done <- errors.New(errors.ERR_PROCESSING, "[SPEND_BATCH_LUA][%s] could not parse response", spend.TxID.String())
 			}
 		}
 	}
@@ -230,7 +224,7 @@ func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) {
 	if _, err := s.client.Execute(
 		policy,
 		key,
-		luaSpendFunction,
+		luaPackage,
 		"incrementNrRecords",
 		aerospike.NewIntegerValue(increment),
 	); err != nil {
