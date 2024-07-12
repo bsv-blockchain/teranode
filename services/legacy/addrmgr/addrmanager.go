@@ -769,8 +769,7 @@ func (a *AddrManager) GetAddress() *KnownAddress {
 			ka := e.Value.(*KnownAddress)
 			randval := a.rand.IntN(large)
 			if float64(randval) < (factor * ka.chance() * float64(large)) {
-				a.logger.Infof("Selected %v from tried bucket",
-					NetAddressKey(ka.na))
+				a.logger.Infof("Selected %v from tried bucket", NetAddressKey(ka.na))
 				return ka
 			}
 			factor *= 1.2

@@ -2482,11 +2482,12 @@ out:
 // newServer returns a new bsvd server configured to listen on addr for the
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
-func newServer(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, validationClient validator.Interface,
-	utxoStore utxostore.Store, subtreeStore blob.Store, listenAddrs []string, chainParams *chaincfg.Params) (*server, error) {
+func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockchainClient blockchain.ClientI,
+	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, listenAddrs []string,
+	chainParams *chaincfg.Params) (*server, error) {
 
 	// init config
-	c, _, err := loadConfig()
+	c, _, err := loadConfig(logger)
 	if err != nil {
 		return nil, err
 	}
@@ -2494,7 +2495,30 @@ func newServer(ctx context.Context, logger ulogger.Logger, blockchainClient bloc
 
 	cfg = c
 
-	// TODO overwrite any config options from ubsv settings, if applicable
+	// UBSV CONFIG
+	// overwrite any config options from ubsv settings, if applicable
+	// TODO this is not working yet
+	//ubsvConfig := config.GetAll()
+	//if ubsvConfig != nil {
+	//	for k, v := range ubsvConfig {
+	//		// check whether the key is of the form "legacy_config_" + configKey
+	//		if strings.HasPrefix(k, "legacy_config_") {
+	//			// remove the prefix
+	//			configKey := k[len("legacy_config_"):]
+	//			// set the value to the configKey of the map cfg, using reflection
+	//			// this is done to avoid having to add a new if statement for each new config key
+	//			reflect.ValueOf(cfg).Elem().FieldByName(configKey).Set(reflect.ValueOf(v).Convert(reflect.ValueOf(cfg).Elem().FieldByName(configKey).Type()))
+	//		}
+	//	}
+	//}
+
+	cfg.DataDir, _ = config.Get("legacy_workingDir", "./data")
+
+	if config.GetBool("legacy_config_Upnp", false) {
+		cfg.Upnp = true
+	}
+
+	// /UBSV CONFIG
 
 	services := defaultServices
 	// cfg.NoPeerBloomFilters
@@ -2761,16 +2785,6 @@ func addrStringToNetAddr(addr string) (net.Addr, error) {
 			IP:   ip,
 			Port: port,
 		}, nil
-	}
-
-	// Tor addresses cannot be resolved to an IP, so just return an onion
-	// address instead.
-	if strings.HasSuffix(host, ".onion") {
-		if cfg.NoOnion {
-			return nil, errors.New("tor has been disabled")
-		}
-
-		return &onionAddr{addr: addr}, nil
 	}
 
 	// Attempt to look up an IP address associated with the parsed host.

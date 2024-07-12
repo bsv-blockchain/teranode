@@ -5,14 +5,14 @@
 package legacy
 
 import (
-	"errors"
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
-	"github.com/bitcoinsv/bsvd/connmgr"
-	"github.com/bitcoinsv/bsvd/mempool"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/btcsuite/go-socks/socks"
+	"math"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,29 +25,19 @@ import (
 )
 
 const (
-	defaultConfigFilename          = "bsvd.conf"
-	defaultDataDirname             = "data"
-	defaultLogLevel                = "info"
-	defaultLogDirname              = "logs"
-	defaultLogFilename             = "bsvd.log"
+	defaultDataDir                 = "data"
 	defaultMaxPeers                = 125
 	defaultMaxPeersPerIP           = 5
 	defaultBanDuration             = time.Hour * 24
 	defaultBanThreshold            = 100
 	defaultConnectTimeout          = time.Second * 30
-	defaultMaxRPCClients           = 10
-	defaultMaxRPCWebsockets        = 25
-	defaultMaxRPCConcurrentReqs    = 20
-	defaultDbType                  = "ffldb"
 	defaultFreeTxRelayLimit        = 15.0
 	defaultTrickleInterval         = peer.DefaultTrickleInterval
-	defaultExcessiveBlockSize      = 128000000
+	defaultExcessiveBlockSize      = math.MaxUint64
 	defaultBlockMinSize            = 0
-	defaultBlockMaxSize            = 750000
+	defaultBlockMaxSize            = defaultExcessiveBlockSize - 1000
 	blockMaxSizeMin                = 1000
 	defaultGenerate                = false
-	defaultMaxOrphanTransactions   = 100
-	defaultMaxOrphanTxSize         = 100000
 	defaultSigCacheMaxSize         = 100000
 	defaultTxIndex                 = false
 	defaultAddrIndex               = false
@@ -59,15 +49,17 @@ const (
 	defaultMinRelayTxFee           = bsvutil.Amount(1)
 )
 
-// TODO
-var (
-	defaultHomeDir     = "./" // bsvutil.AppDataDir("bsvd", false)
-	defaultConfigFile  = filepath.Join(defaultHomeDir, defaultConfigFilename)
-	defaultDataDir     = filepath.Join(defaultHomeDir, defaultDataDirname)
-	defaultRPCKeyFile  = filepath.Join(defaultHomeDir, "rpc.key")
-	defaultRPCCertFile = filepath.Join(defaultHomeDir, "rpc.cert")
-	defaultLogDir      = filepath.Join(defaultHomeDir, defaultLogDirname)
-)
+type Config interface {
+	Set(key string, value string) string
+	Unset(key string) string
+	Get(key string, defaultValue ...string) (string, bool)
+	GetMulti(key string, sep string, defaultValue ...[]string) ([]string, bool)
+	GetInt(key string, defaultValue ...int) (int, bool)
+	GetBool(key string, defaultValue ...bool) bool
+	GetDuration(key string, defaultValue ...time.Duration) (time.Duration, error, bool)
+	GetURL(key string, defaultValue ...string) (*url.URL, error, bool)
+	GetAll() map[string]string
+}
 
 // runServiceCommand is only set to a real function on Windows.  It is used
 // to parse and execute service commands specified via the -s flag.
@@ -76,6 +68,15 @@ var runServiceCommand func(string) error
 // minUint32 is a helper function to return the minimum of two uint32s.
 // This avoids a math import and the need to cast to floats.
 func minUint32(a, b uint32) uint32 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// minUint64 is a helper function to return the minimum of two uint64s.
+// This avoids a math import and the need to cast to floats.
+func minUint64(a, b uint64) uint64 {
 	if a < b {
 		return a
 	}
@@ -91,14 +92,21 @@ func maxUint32(a, b uint32) uint32 {
 	return b
 }
 
+// maxUint64 is a helper function to return the maximum of two uint64s.
+// This avoids a math import and the need to cast to floats.
+func maxUint64(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // config defines the configuration options for bsvd.
 //
 // See loadConfig for details on the configuration load process.
 type config struct {
 	ShowVersion             bool          `short:"V" long:"version" description:"Display version information and exit"`
-	ConfigFile              string        `short:"C" long:"configfile" description:"Path to configuration file"`
 	DataDir                 string        `short:"b" long:"datadir" description:"Directory to store data"`
-	LogDir                  string        `long:"logdir" description:"Directory to log output."`
 	AddPeers                []string      `short:"a" long:"addpeer" description:"Add a peer to connect with at startup"`
 	ConnectPeers            []string      `long:"connect" description:"Connect only to the specified peers at startup"`
 	DisableListen           bool          `long:"nolisten" description:"Disable listening for incoming connections -- NOTE: Listening is automatically disabled if the --connect or --proxy options are used without also specifying listen interfaces via --listen"`
@@ -110,29 +118,12 @@ type config struct {
 	BanDuration             time.Duration `long:"banduration" description:"How long to ban misbehaving peers.  Valid time units are {s, m, h}.  Minimum 1 second"`
 	BanThreshold            uint32        `long:"banthreshold" description:"Maximum allowed ban score before disconnecting and banning misbehaving peers."`
 	Whitelists              []string      `long:"whitelist" description:"Add an IP network or IP that will not be banned. (eg. 192.168.1.0/24 or ::1)"`
-	RPCUser                 string        `short:"u" long:"rpcuser" description:"Username for RPC connections"`
-	RPCPass                 string        `short:"P" long:"rpcpass" default-mask:"-" description:"Password for RPC connections"`
-	RPCLimitUser            string        `long:"rpclimituser" description:"Username for limited RPC connections"`
-	RPCLimitPass            string        `long:"rpclimitpass" default-mask:"-" description:"Password for limited RPC connections"`
-	RPCListeners            []string      `long:"rpclisten" description:"Add an interface/port to listen for RPC connections (default port: 8334, testnet: 18334)"`
-	RPCCert                 string        `long:"rpccert" description:"File containing the certificate file"`
-	RPCKey                  string        `long:"rpckey" description:"File containing the certificate key"`
-	RPCMaxClients           int           `long:"rpcmaxclients" description:"Max number of RPC clients for standard connections"`
-	RPCMaxWebsockets        int           `long:"rpcmaxwebsockets" description:"Max number of RPC websocket connections"`
-	RPCMaxConcurrentReqs    int           `long:"rpcmaxconcurrentreqs" description:"Max number of concurrent RPC requests that may be processed concurrently"`
-	RPCQuirks               bool          `long:"rpcquirks" description:"Mirror some JSON-RPC quirks of Bitcoin Core -- NOTE: Discouraged unless interoperability issues need to be worked around"`
-	DisableRPC              bool          `long:"norpc" description:"Disable built-in RPC server -- NOTE: The RPC server is disabled by default if no rpcuser/rpcpass or rpclimituser/rpclimitpass is specified"`
 	DisableTLS              bool          `long:"notls" description:"Disable TLS for the RPC server -- NOTE: This is only allowed if the RPC server is bound to localhost"`
 	DisableDNSSeed          bool          `long:"nodnsseed" description:"Disable DNS seeding for peers"`
 	ExternalIPs             []string      `long:"externalip" description:"Add an ip to the list of local addresses we claim to listen on to peers"`
 	Proxy                   string        `long:"proxy" description:"Connect via SOCKS5 proxy (eg. 127.0.0.1:9050)"`
 	ProxyUser               string        `long:"proxyuser" description:"Username for proxy server"`
 	ProxyPass               string        `long:"proxypass" default-mask:"-" description:"Password for proxy server"`
-	OnionProxy              string        `long:"onion" description:"Connect to tor hidden services via SOCKS5 proxy (eg. 127.0.0.1:9050)"`
-	OnionProxyUser          string        `long:"onionuser" description:"Username for onion proxy server"`
-	OnionProxyPass          string        `long:"onionpass" default-mask:"-" description:"Password for onion proxy server"`
-	NoOnion                 bool          `long:"noonion" description:"Disable connecting to tor hidden services"`
-	TorIsolation            bool          `long:"torisolation" description:"Enable Tor stream isolation by randomizing user credentials for each connection."`
 	TestNet3                bool          `long:"testnet" description:"Use the test network"`
 	RegressionTest          bool          `long:"regtest" description:"Use the regression test network"`
 	SimNet                  bool          `long:"simnet" description:"Use the simulation test network"`
@@ -142,7 +133,7 @@ type config struct {
 	CPUProfile              string        `long:"cpuprofile" description:"Write CPU profile to the specified file"`
 	DebugLevel              string        `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
 	Upnp                    bool          `long:"upnp" description:"Use UPnP to map our listening port outside of NAT"`
-	ExcessiveBlockSize      uint32        `long:"excessiveblocksize" description:"The maximum size block (in bytes) this node will accept. Cannot be less than 32000000."`
+	ExcessiveBlockSize      uint64        `long:"excessiveblocksize" description:"The maximum size block (in bytes) this node will accept. Cannot be less than 32000000."`
 	MinRelayTxFee           float64       `long:"minrelaytxfee" description:"The minimum transaction fee in BSV/kB to be considered a non-zero fee."`
 	FreeTxRelayLimit        float64       `long:"limitfreerelay" description:"Limit relay of transactions with no transaction fee to the given amount in thousands of bytes per minute"`
 	NoRelayPriority         bool          `long:"norelaypriority" description:"Do not require free or low-fee transactions to have high priority for relaying"`
@@ -150,9 +141,9 @@ type config struct {
 	MaxOrphanTxs            int           `long:"maxorphantx" description:"Max number of orphan transactions to keep in memory"`
 	Generate                bool          `long:"generate" description:"Generate (mine) bitcoins using the CPU"`
 	MiningAddrs             []string      `long:"miningaddr" description:"Add the specified payment address to the list of addresses to use for generated blocks -- At least one address is required if the generate option is set"`
-	BlockMinSize            uint32        `long:"blockminsize" description:"Mininum block size in bytes to be used when creating a block"`
-	BlockMaxSize            uint32        `long:"blockmaxsize" description:"Maximum block size in bytes to be used when creating a block"`
-	BlockPrioritySize       uint32        `long:"blockprioritysize" description:"Size in bytes for high-priority/low-fee transactions when creating a block"`
+	BlockMinSize            uint64        `long:"blockminsize" description:"Mininum block size in bytes to be used when creating a block"`
+	BlockMaxSize            uint64        `long:"blockmaxsize" description:"Maximum block size in bytes to be used when creating a block"`
+	BlockPrioritySize       uint64        `long:"blockprioritysize" description:"Size in bytes for high-priority/low-fee transactions when creating a block"`
 	UserAgentComments       []string      `long:"uacomment" description:"Comment to add to the user agent -- See BIP 14 for more information."`
 	NoPeerBloomFilters      bool          `long:"nopeerbloomfilters" description:"Disable bloom filtering support"`
 	NoCFilters              bool          `long:"nocfilters" description:"Disable committed filtering (CF) support"`
@@ -167,7 +158,6 @@ type config struct {
 	PruneDepth              uint32        `long:"prunedepth" description:"The number of blocks to retain when running in pruned mode. Cannot be less than 288."`
 	TargetOutboundPeers     uint32        `long:"targetoutboundpeers" description:"number of outbound connections to maintain"`
 	lookup                  func(string) ([]net.IP, error)
-	oniondial               func(string, string, time.Duration) (net.Conn, error)
 	dial                    func(string, string, time.Duration) (net.Conn, error)
 	addCheckpoints          []chaincfg.Checkpoint
 	miningAddrs             []bsvutil.Address
@@ -179,39 +169,6 @@ type config struct {
 // Windows.
 type serviceOptions struct {
 	ServiceCommand string `short:"s" long:"service" description:"Service command {install, remove, start, stop}"`
-}
-
-// cleanAndExpandPath expands environment variables and leading ~ in the
-// passed path, cleans the result, and returns it.
-func cleanAndExpandPath(path string) string {
-	// Expand initial ~ to OS specific home directory.
-	if strings.HasPrefix(path, "~") {
-		homeDir := filepath.Dir(defaultHomeDir)
-		path = strings.Replace(path, "~", homeDir, 1)
-	}
-
-	// NOTE: The os.ExpandEnv doesn't work with Windows-style %VARIABLE%,
-	// but they variables can still be expanded via POSIX-style $VARIABLE.
-	return filepath.Clean(os.ExpandEnv(path))
-}
-
-// validLogLevel returns whether or not logLevel is a valid debug log level.
-func validLogLevel(logLevel string) bool {
-	switch logLevel {
-	case "trace":
-		fallthrough
-	case "debug":
-		fallthrough
-	case "info":
-		fallthrough
-	case "warn":
-		fallthrough
-	case "error":
-		fallthrough
-	case "critical":
-		return true
-	}
-	return false
 }
 
 // removeDuplicateAddresses returns a new slice with all duplicate entries in
@@ -296,16 +253,6 @@ func parseCheckpoints(checkpointStrings []string) ([]chaincfg.Checkpoint, error)
 	return checkpoints, nil
 }
 
-// filesExists reports whether the named file or directory exists.
-func fileExists(name string) bool {
-	if _, err := os.Stat(name); err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-	}
-	return true
-}
-
 // newConfigParser returns a new command line flags parser.
 //func newConfigParser(cfg *config, so *serviceOptions, options flags.Options) *flags.Parser {
 //	parser := flags.NewParser(cfg, options)
@@ -327,29 +274,22 @@ func fileExists(name string) bool {
 // The above results in bsvd functioning properly without any config settings
 // while still allowing the user to override settings with config files and
 // command line options.  Command line options always take precedence.
-func loadConfig() (*config, []string, error) {
+func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 	// Default config.
 	cfg := config{
-		ConfigFile:              defaultConfigFile,
-		DebugLevel:              defaultLogLevel,
 		MaxPeers:                defaultMaxPeers,
 		MaxPeersPerIP:           defaultMaxPeersPerIP,
 		MinSyncPeerNetworkSpeed: defaultMinSyncPeerNetworkSpeed,
 		BanDuration:             defaultBanDuration,
 		BanThreshold:            defaultBanThreshold,
-		RPCMaxClients:           defaultMaxRPCClients,
-		RPCMaxWebsockets:        defaultMaxRPCWebsockets,
-		RPCMaxConcurrentReqs:    defaultMaxRPCConcurrentReqs,
 		DataDir:                 defaultDataDir,
-		LogDir:                  defaultLogDir,
 		ExcessiveBlockSize:      defaultExcessiveBlockSize,
 		MinRelayTxFee:           defaultMinRelayTxFee.ToBSV(),
 		FreeTxRelayLimit:        defaultFreeTxRelayLimit,
 		TrickleInterval:         defaultTrickleInterval,
 		BlockMinSize:            defaultBlockMinSize,
 		BlockMaxSize:            defaultBlockMaxSize,
-		BlockPrioritySize:       mempool.DefaultBlockPrioritySize,
-		MaxOrphanTxs:            defaultMaxOrphanTransactions,
+		BlockPrioritySize:       uint64(50000), // TODO change this to something else
 		SigCacheMaxSize:         defaultSigCacheMaxSize,
 		UtxoCacheMaxSizeMiB:     defaultUtxoCacheMaxSizeMiB,
 		Generate:                defaultGenerate,
@@ -368,22 +308,12 @@ func loadConfig() (*config, []string, error) {
 	// the final parse below.
 	preCfg := cfg
 
-	// TODO load config from somewhere
-	//preParser := newConfigParser(&preCfg, &serviceOpts, flags.HelpFlag)
-	//_, err := preParser.Parse()
-	//if err != nil {
-	//	if e, ok := err.(*flags.Error); ok && e.Type == flags.ErrHelp {
-	//		fmt.Fprintln(os.Stderr, err)
-	//		return nil, nil, err
-	//	}
-	//}
-
 	// Show the version and exit if the version flag was specified.
 	appName := filepath.Base(os.Args[0])
 	appName = strings.TrimSuffix(appName, filepath.Ext(appName))
 	usageMessage := fmt.Sprintf("Use %s -h to show usage", appName)
 	if preCfg.ShowVersion {
-		fmt.Println(appName, "version", version.String())
+		logger.Infof("app: %s, version: %s", appName, version.String())
 		os.Exit(0)
 	}
 
@@ -393,7 +323,7 @@ func loadConfig() (*config, []string, error) {
 	if serviceOpts.ServiceCommand != "" && runServiceCommand != nil {
 		err := runServiceCommand(serviceOpts.ServiceCommand)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			logger.Errorf("%v", err)
 		}
 		os.Exit(0)
 	}
@@ -407,7 +337,7 @@ func loadConfig() (*config, []string, error) {
 	//	if err != nil {
 	//		if _, ok := err.(*os.PathError); !ok {
 	//			fmt.Fprintf(os.Stderr, "Error parsing config file: %v\n", err)
-	//			fmt.Fprintln(os.Stderr, usageMessage)
+	//			logger.Errorf("%s", usageMessage)
 	//			return nil, nil, err
 	//		}
 	//	}
@@ -422,30 +352,13 @@ func loadConfig() (*config, []string, error) {
 	//remainingArgs, err := parser.Parse()
 	//if err != nil {
 	//	if e, ok := err.(*flags.Error); !ok || e.Type != flags.ErrHelp {
-	//		fmt.Fprintln(os.Stderr, usageMessage)
+	//		logger.Errorf("%s", usageMessage)
 	//	}
 	//	return nil, nil, err
 	//}
 
 	// Create the home directory if it doesn't already exist.
 	funcName := "loadConfig"
-	err := os.MkdirAll(defaultHomeDir, 0700)
-	if err != nil {
-		// Show a nicer error message if it's because a symlink is
-		// linked to a directory that does not exist (probably because
-		// it's not mounted).
-		if e, ok := err.(*os.PathError); ok && os.IsExist(err) {
-			if link, lerr := os.Readlink(e.Path); lerr == nil {
-				str := "is symlink %s -> %s mounted?"
-				err = fmt.Errorf(str, e.Path, link)
-			}
-		}
-
-		str := "%s: Failed to create home directory: %v"
-		err := fmt.Errorf(str, funcName, err)
-		fmt.Fprintln(os.Stderr, err)
-		return nil, nil, err
-	}
 
 	// Multiple networks can't be selected simultaneously.
 	numNets := 0
@@ -469,8 +382,8 @@ func loadConfig() (*config, []string, error) {
 		str := "%s: The testnet, regtest, segnet, and simnet params " +
 			"can't be used together -- choose one of the four"
 		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
+		logger.Errorf("%v", err)
+		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	}
 
@@ -484,8 +397,8 @@ func loadConfig() (*config, []string, error) {
 		str := "%s: rejectnonstd and relaynonstd cannot be used " +
 			"together -- choose only one"
 		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
+		logger.Errorf("%v", err)
+		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	case cfg.RejectNonStd:
 		relayNonStd = false
@@ -494,23 +407,14 @@ func loadConfig() (*config, []string, error) {
 	}
 	cfg.RelayNonStd = relayNonStd
 
-	// Append the network type to the data directory so it is "namespaced"
-	// per network.  In addition to the block database, there are other
-	// pieces of data that are saved to disk such as address manager state.
-	// All data is specific to a network, so namespacing the data directory
-	// means each individual piece of serialized data does not have to
-	// worry about changing names per network and such.
-	cfg.DataDir = cleanAndExpandPath(cfg.DataDir)
-	cfg.DataDir = filepath.Join(cfg.DataDir, netName(activeNetParams))
-
 	// Validate profile port number
 	if cfg.Profile != "" {
 		profilePort, err := strconv.Atoi(cfg.Profile)
 		if err != nil || profilePort < 1024 || profilePort > 65535 {
 			str := "%s: The profile port must be between 1024 and 65535"
 			err := fmt.Errorf(str, funcName)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
+			logger.Errorf("%v", err)
+			logger.Errorf("%s", usageMessage)
 			return nil, nil, err
 		}
 	}
@@ -519,16 +423,15 @@ func loadConfig() (*config, []string, error) {
 	if cfg.BanDuration < time.Second {
 		str := "%s: The banduration option may not be less than 1s -- parsed [%v]"
 		err := fmt.Errorf(str, funcName, cfg.BanDuration)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
+		logger.Errorf("%v", err)
+		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	}
 
 	if cfg.Prune && cfg.PruneDepth < minPruneDepth {
-		str := "%s: The pruneheight option may not be less than %d -- parsed [%d]"
-		err := fmt.Errorf(str, minPruneDepth, funcName, cfg.PruneDepth)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
+		err := fmt.Errorf("%s: The pruneheight option may not be less than %d -- parsed [%d]", funcName, minPruneDepth, cfg.PruneDepth)
+		logger.Errorf("%v", err)
+		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	}
 
@@ -544,8 +447,8 @@ func loadConfig() (*config, []string, error) {
 				if ip == nil {
 					str := "%s: The whitelist value of '%s' is invalid"
 					err = fmt.Errorf(str, funcName, addr)
-					fmt.Fprintln(os.Stderr, err)
-					fmt.Fprintln(os.Stderr, usageMessage)
+					logger.Errorf("%v", err)
+					logger.Errorf("%s", usageMessage)
 					return nil, nil, err
 				}
 				var bits int
@@ -569,8 +472,8 @@ func loadConfig() (*config, []string, error) {
 		str := "%s: the --addpeer and --connect options can not be " +
 			"mixed"
 		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
+		logger.Errorf("%v", err)
+		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	}
 
@@ -594,13 +497,14 @@ func loadConfig() (*config, []string, error) {
 		}
 	}
 
-	// Validate the the minrelaytxfee.
+	var err error
+	// Validate the minrelaytxfee.
 	cfg.minRelayTxFee, err = bsvutil.NewAmount(cfg.MinRelayTxFee)
 	if err != nil {
 		str := "%s: invalid minrelaytxfee: %v"
 		err := fmt.Errorf(str, funcName, err)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
+		logger.Errorf("%v", err)
+		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	}
 
@@ -609,30 +513,27 @@ func loadConfig() (*config, []string, error) {
 		str := "%s: The maxorphantx option may not be less than 0 " +
 			"-- parsed [%d]"
 		err := fmt.Errorf(str, funcName, cfg.MaxOrphanTxs)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
+		logger.Errorf("%v", err)
+		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	}
 
-	// Excessive blocksize cannot be set less than the default but it can be higher.
-	cfg.ExcessiveBlockSize = maxUint32(cfg.ExcessiveBlockSize, defaultExcessiveBlockSize)
+	// Excessive blocksize cannot be set less than the default, but it can be higher.
+	cfg.ExcessiveBlockSize = maxUint64(cfg.ExcessiveBlockSize, defaultExcessiveBlockSize)
 
 	// Limit the max block size to a sane value.
 	blockMaxSizeMax := cfg.ExcessiveBlockSize - 1000
-	if cfg.BlockMaxSize < blockMaxSizeMin || cfg.BlockMaxSize >
-		blockMaxSizeMax {
-
-		str := "%s: The blockmaxsize option must be in between %d " +
-			"and %d -- parsed [%d]"
-		err := fmt.Errorf(str, funcName, blockMaxSizeMin,
+	if cfg.BlockMaxSize < blockMaxSizeMin || cfg.BlockMaxSize > blockMaxSizeMax {
+		str := "%s: The blockmaxsize option must be in between %d and %d -- parsed [%d]"
+		err = fmt.Errorf(str, funcName, blockMaxSizeMin,
 			blockMaxSizeMax, cfg.BlockMaxSize)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
+		logger.Errorf("%v", err)
+		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	}
 	// Limit the block priority and minimum block sizes to max block size.
-	cfg.BlockPrioritySize = minUint32(cfg.BlockPrioritySize, cfg.BlockMaxSize)
-	cfg.BlockMinSize = minUint32(cfg.BlockMinSize, cfg.BlockMaxSize)
+	cfg.BlockPrioritySize = minUint64(cfg.BlockPrioritySize, cfg.BlockMaxSize)
+	cfg.BlockMinSize = minUint64(cfg.BlockMinSize, cfg.BlockMaxSize)
 
 	// Prepend ExcessiveBlockSize signaling to the UserAgentComments
 	cfg.UserAgentComments = append([]string{fmt.Sprintf("EB%.1f", float64(cfg.ExcessiveBlockSize)/1000000)}, cfg.UserAgentComments...)
@@ -643,8 +544,8 @@ func loadConfig() (*config, []string, error) {
 			err := fmt.Errorf("%s: The following characters must not "+
 				"appear in user agent comments: '/', ':', '(', ')'",
 				funcName)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
+			logger.Errorf("%v", err)
+			logger.Errorf("%s", usageMessage)
 			return nil, nil, err
 		}
 	}
@@ -656,15 +557,15 @@ func loadConfig() (*config, []string, error) {
 		if err != nil {
 			str := "%s: mining address '%s' failed to decode: %v"
 			err := fmt.Errorf(str, funcName, strAddr, err)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
+			logger.Errorf("%v", err)
+			logger.Errorf("%s", usageMessage)
 			return nil, nil, err
 		}
 		if !addr.IsForNet(activeNetParams.Params) {
 			str := "%s: mining address '%s' is on the wrong network"
 			err := fmt.Errorf(str, funcName, strAddr)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
+			logger.Errorf("%v", err)
+			logger.Errorf("%s", usageMessage)
 			return nil, nil, err
 		}
 		cfg.miningAddrs = append(cfg.miningAddrs, addr)
@@ -676,8 +577,8 @@ func loadConfig() (*config, []string, error) {
 		str := "%s: the generate flag is set, but there are no mining " +
 			"addresses specified "
 		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
+		logger.Errorf("%v", err)
+		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	}
 
@@ -686,41 +587,6 @@ func loadConfig() (*config, []string, error) {
 	cfg.Listeners = normalizeAddresses(cfg.Listeners,
 		activeNetParams.DefaultPort)
 
-	// Add default port to all rpc listener addresses if needed and remove
-	// duplicate addresses.
-	cfg.RPCListeners = normalizeAddresses(cfg.RPCListeners,
-		activeNetParams.rpcPort)
-
-	// Only allow TLS to be disabled if the RPC is bound to localhost
-	// addresses.
-	if !cfg.DisableRPC && cfg.DisableTLS {
-		allowedTLSListeners := map[string]struct{}{
-			"localhost": {},
-			"127.0.0.1": {},
-			"::1":       {},
-		}
-		for _, addr := range cfg.RPCListeners {
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				str := "%s: RPC listen interface '%s' is " +
-					"invalid: %v"
-				err := fmt.Errorf(str, funcName, addr, err)
-				fmt.Fprintln(os.Stderr, err)
-				fmt.Fprintln(os.Stderr, usageMessage)
-				return nil, nil, err
-			}
-			if _, ok := allowedTLSListeners[host]; !ok {
-				str := "%s: the --notls option may not be used " +
-					"when binding RPC to non localhost " +
-					"addresses: %s"
-				err := fmt.Errorf(str, funcName, addr)
-				fmt.Fprintln(os.Stderr, err)
-				fmt.Fprintln(os.Stderr, usageMessage)
-				return nil, nil, err
-			}
-		}
-	}
-
 	// Add default port to all added peer addresses if needed and remove
 	// duplicate addresses.
 	cfg.AddPeers = normalizeAddresses(cfg.AddPeers,
@@ -728,32 +594,13 @@ func loadConfig() (*config, []string, error) {
 	cfg.ConnectPeers = normalizeAddresses(cfg.ConnectPeers,
 		activeNetParams.DefaultPort)
 
-	// --noonion and --onion do not mix.
-	if cfg.NoOnion && cfg.OnionProxy != "" {
-		err := fmt.Errorf("%s: the --noonion and --onion options may "+
-			"not be activated at the same time", funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
 	// Check the checkpoints for syntax errors.
 	cfg.addCheckpoints, err = parseCheckpoints(cfg.AddCheckpoints)
 	if err != nil {
 		str := "%s: Error parsing checkpoints: %v"
 		err := fmt.Errorf(str, funcName, err)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
-		return nil, nil, err
-	}
-
-	// Tor stream isolation requires either proxy or onion proxy to be set.
-	if cfg.TorIsolation && cfg.Proxy == "" && cfg.OnionProxy == "" {
-		str := "%s: Tor stream isolation requires either proxy or " +
-			"onionproxy to be set"
-		err := fmt.Errorf(str, funcName)
-		fmt.Fprintln(os.Stderr, err)
-		fmt.Fprintln(os.Stderr, usageMessage)
+		logger.Errorf("%v", err)
+		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	}
 
@@ -770,95 +617,17 @@ func loadConfig() (*config, []string, error) {
 		if err != nil {
 			str := "%s: Proxy address '%s' is invalid: %v"
 			err := fmt.Errorf(str, funcName, cfg.Proxy, err)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
+			logger.Errorf("%v", err)
+			logger.Errorf("%s", usageMessage)
 			return nil, nil, err
-		}
-
-		// Tor isolation flag means proxy credentials will be overridden
-		// unless there is also an onion proxy configured in which case
-		// that one will be overridden.
-		torIsolation := false
-		if cfg.TorIsolation && cfg.OnionProxy == "" &&
-			(cfg.ProxyUser != "" || cfg.ProxyPass != "") {
-
-			torIsolation = true
-			fmt.Fprintln(os.Stderr, "Tor isolation set -- "+
-				"overriding specified proxy user credentials")
 		}
 
 		proxy := &socks.Proxy{
-			Addr:         cfg.Proxy,
-			Username:     cfg.ProxyUser,
-			Password:     cfg.ProxyPass,
-			TorIsolation: torIsolation,
+			Addr:     cfg.Proxy,
+			Username: cfg.ProxyUser,
+			Password: cfg.ProxyPass,
 		}
 		cfg.dial = proxy.DialTimeout
-
-		// Treat the proxy as tor and perform DNS resolution through it
-		// unless the --noonion flag is set or there is an
-		// onion-specific proxy configured.
-		if !cfg.NoOnion && cfg.OnionProxy == "" {
-			cfg.lookup = func(host string) ([]net.IP, error) {
-				return connmgr.TorLookupIP(host, cfg.Proxy)
-			}
-		}
-	}
-
-	// Setup onion address dial function depending on the specified options.
-	// The default is to use the same dial function selected above.  However,
-	// when an onion-specific proxy is specified, the onion address dial
-	// function is set to use the onion-specific proxy while leaving the
-	// normal dial function as selected above.  This allows .onion address
-	// traffic to be routed through a different proxy than normal traffic.
-	if cfg.OnionProxy != "" {
-		_, _, err := net.SplitHostPort(cfg.OnionProxy)
-		if err != nil {
-			str := "%s: Onion proxy address '%s' is invalid: %v"
-			err := fmt.Errorf(str, funcName, cfg.OnionProxy, err)
-			fmt.Fprintln(os.Stderr, err)
-			fmt.Fprintln(os.Stderr, usageMessage)
-			return nil, nil, err
-		}
-
-		// Tor isolation flag means onion proxy credentials will be
-		// overridden.
-		if cfg.TorIsolation &&
-			(cfg.OnionProxyUser != "" || cfg.OnionProxyPass != "") {
-			fmt.Fprintln(os.Stderr, "Tor isolation set -- "+
-				"overriding specified onionproxy user "+
-				"credentials ")
-		}
-
-		cfg.oniondial = func(network, addr string, timeout time.Duration) (net.Conn, error) {
-			proxy := &socks.Proxy{
-				Addr:         cfg.OnionProxy,
-				Username:     cfg.OnionProxyUser,
-				Password:     cfg.OnionProxyPass,
-				TorIsolation: cfg.TorIsolation,
-			}
-			return proxy.DialTimeout(network, addr, timeout)
-		}
-
-		// When configured in bridge mode (both --onion and --proxy are
-		// configured), it means that the proxy configured by --proxy is
-		// not a tor proxy, so override the DNS resolution to use the
-		// onion-specific proxy.
-		if cfg.Proxy != "" {
-			cfg.lookup = func(host string) ([]net.IP, error) {
-				return connmgr.TorLookupIP(host, cfg.OnionProxy)
-			}
-		}
-	} else {
-		cfg.oniondial = cfg.dial
-	}
-
-	// Specifying --noonion means the onion address dial function results in
-	// an error.
-	if cfg.NoOnion {
-		cfg.oniondial = func(a, b string, t time.Duration) (net.Conn, error) {
-			return nil, errors.New("tor has been disabled")
-		}
 	}
 
 	// Warn about missing config file only after all other configuration is

@@ -48,13 +48,12 @@ import (
 // NAT-PMP. It provides methods to query and manipulate this traversal to allow
 // access to services.
 type NAT interface {
-	// Get the external address from outside the NAT.
+	// GetExternalAddress Gets the external address from outside the NAT.
 	GetExternalAddress() (addr net.IP, err error)
-	// Add a port mapping for protocol ("udp" or "tcp") from external port to
+	// AddPortMapping Adds a port mapping for protocol ("udp" or "tcp") from external port to
 	// internal port with description lasting for timeout.
 	AddPortMapping(protocol string, externalPort, internalPort int, description string, timeout int) (mappedExternalPort int, err error)
-	// Remove a previously added port mapping from external port to
-	// internal port.
+	// DeletePortMapping Removes a previously added port mapping from external port to internal port.
 	DeletePortMapping(protocol string, externalPort, internalPort int) (err error)
 }
 
@@ -213,6 +212,11 @@ func getChildService(d *device, serviceType string) *service {
 
 // getOurIP returns a best guess at what the local IP is.
 func getOurIP() (ip string, err error) {
+	netIp := GetOutboundIP()
+	if netIp != nil {
+		return netIp.String(), nil
+	}
+
 	hostname, err := os.Hostname()
 	if err != nil {
 		return
@@ -401,4 +405,18 @@ func (n *upnpNAT) DeletePortMapping(protocol string, externalPort, internalPort 
 	// log.Println(message, response)
 	_ = response
 	return
+}
+
+// GetOutboundIP - Get preferred outbound ip of this machine
+// from https://stackoverflow.com/a/37382208
+func GetOutboundIP() net.IP {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		panic(err)
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+
+	return localAddr.IP
 }

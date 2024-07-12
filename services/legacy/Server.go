@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
-	"net"
 )
 
 type Server struct {
@@ -67,10 +66,18 @@ func (s *Server) Init(ctx context.Context) error {
 
 	// get the public IP and listen on it
 	ip := GetOutboundIP()
+	defaultListenAddresses := []string{ip.String() + ":8333"}
 	// TODO not setting any listen addresses triggers upnp, which does not seem to work yet
-	listenAddresses, _ := gocore.Config().GetMulti("legacy_listen_addresses", "|", []string{ip.String() + ":8333"})
+	listenAddresses, _ := gocore.Config().GetMulti("legacy_listen_addresses", "|", defaultListenAddresses)
 
-	s.server, err = newServer(ctx, s.logger, s.blockchainClient, s.validationClient, s.utxoStore, s.subtreeStore, listenAddresses, &chaincfg.MainNetParams)
+	s.server, err = newServer(ctx, s.logger, gocore.Config(),
+		s.blockchainClient,
+		s.validationClient,
+		s.utxoStore,
+		s.subtreeStore,
+		listenAddresses,
+		&chaincfg.MainNetParams,
+	)
 	if err != nil {
 		return err
 	}
@@ -90,18 +97,4 @@ func (s *Server) Start(_ context.Context) error {
 
 func (s *Server) Stop(_ context.Context) error {
 	return s.server.Stop()
-}
-
-// GetOutboundIP - Get preferred outbound ip of this machine
-// from https://stackoverflow.com/a/37382208
-func GetOutboundIP() net.IP {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		panic(err)
-	}
-	defer conn.Close()
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-
-	return localAddr.IP
 }
