@@ -4,7 +4,6 @@ package aerospike2
 
 import (
 	"context"
-	_ "embed"
 	"math"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -14,11 +13,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/gocore"
 )
-
-//go:embed unspend.lua
-var unSpendLUA []byte
-
-var luaUnSpendFunction = "unspend_v2.1"
 
 func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	return s.unSpend(ctx, spends)
@@ -59,7 +53,7 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 
 	offset := calculateOffsetForOutput(spend.Vout, uint32(utxoBatchSize))
 
-	ret, err := s.client.Execute(policy, key, luaUnSpendFunction, "unSpend",
+	ret, err := s.client.Execute(policy, key, luaPackage, "unSpend",
 		aerospike.NewIntegerValue(int(offset)), // vout adjusted for utxoBatchSize
 		aerospike.NewValue(spend.UTXOHash[:]),  // utxo hash
 	)

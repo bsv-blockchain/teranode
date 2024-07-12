@@ -120,14 +120,10 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		s.getBatcher = batcher.New[batchGetItem](batchSize, duration, s.sendGetBatch, true)
 	}
 
-	// Make sure the spend and unSpend lua scripts are installed in the cluster
+	// Make sure the udf lua scripts are installed in the cluster
 	// update the version of the lua script when a new version is launched, do not re-use the old one
-	if err := registerLuaIfNecessary(client, luaSpendFunction, spendLUA); err != nil {
-		return nil, fmt.Errorf("Failed to register spendLUA: %w", err)
-	}
-
-	if err := registerLuaIfNecessary(client, luaUnSpendFunction, unSpendLUA); err != nil {
-		return nil, fmt.Errorf("Failed to register unSpendLUA: %w", err)
+	if err := registerLuaIfNecessary(client, luaPackage, ubsvLUA); err != nil {
+		return nil, fmt.Errorf("Failed to register udfLUA: %w", err)
 	}
 
 	if batchingEnabled {
@@ -140,36 +136,6 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 
 	return s, nil
-}
-
-func registerLuaIfNecessary(client *uaerospike.Client, funcName string, funcBytes []byte) error {
-	udfs, err := client.ListUDF(nil)
-	if err != nil {
-		return err
-	}
-
-	foundScript := false
-
-	for _, udf := range udfs {
-		if udf.Filename == funcName+".lua" {
-
-			foundScript = true
-			break
-		}
-	}
-
-	if !foundScript {
-		registerSpendLua, err := client.RegisterUDF(nil, funcBytes, funcName+".lua", aerospike.LUA)
-		if err != nil {
-			return err
-		}
-
-		err = <-registerSpendLua.OnComplete()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {

@@ -94,6 +94,62 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     return 'OK' .. signal
 end
 
+-- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
+-- offset number - the offset in the utxos list (vout % utxoBatchSize)-- utxoHash []byte - 32 byte little-endian hash of the UTXO
+-- spendingTxID []byte - 32 byte little-endian hash of the spending transaction
+-- ttl number - the time-to-live for the UTXO record
+function unSpend(rec, offset, utxoHash)
+    if not aerospike:exists(rec) then
+        return "ERROR:TX not found"
+    end
+
+    -- Get the correct output record
+    local utxos = rec['utxos'] 
+    if utxos == nil then
+        return "ERROR:UTXOs list not found"
+    end
+
+    local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
+    if utxo == nil then
+        return "ERROR:UTXO not found"
+    end
+
+    -- The first 32 bytes are the utxoHash
+    local existingUTXOHash = bytes.get_bytes(utxo, 1, 32) -- NB - lua arrays are 1-based!!!!
+    if not bytes_equal(existingUTXOHash, utxoHash) then
+        return "ERROR:Output utxohash mismatch"
+    end
+
+    local signal = ""
+
+    -- If the utxo has been spent, remove the spendingTxID
+    if bytes.size(utxo) == 64 then
+        local newUtxo = bytes(32)
+
+        for i = 1, 32 do
+            newUtxo[i] = utxo[i]
+        end
+
+        local nrUtxos = rec['nrUtxos']
+        local spentUtxos = rec['spentUtxos']
+
+        if nrUtxos == spentUtxos then
+            signal = ":NOTALLSPENT"
+        end
+
+        -- Update the record
+        utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+        rec['utxos'] = utxos
+        rec['spentUtxos'] = spentUtxos - 1
+    end
+
+    record.set_ttl(rec, -1)
+
+    aerospike:update(rec)
+
+    return 'OK' .. signal
+end
+
 function bytes_equal(a, b)
     if bytes.size(a) ~= bytes.size(b) then
         return false
@@ -135,6 +191,7 @@ function incrementNrRecords(rec, inc, ttl)
        return 'ERROR: nrRecords not found in record. Possible non-master record?'
     end
 
+    warn('incrementNrRecords: ' .. tostring(nrRecords) .. ' + ' .. tostring(inc))
     nrRecords = nrRecords + inc
 
     if nrRecords == 1 and rec['spentUtxos'] == rec['nrUtxos'] then

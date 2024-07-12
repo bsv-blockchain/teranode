@@ -341,7 +341,7 @@ func internalTest(t *testing.T) {
 		wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
-		ret, aErr := client.Execute(wPolicy, txKey, luaSpendFunction, "spend",
+		ret, aErr := client.Execute(wPolicy, txKey, luaPackage, "spend",
 			aero.NewIntegerValue(int(spends[0].Vout)),
 			aero.NewValue(spends[0].UTXOHash[:]),
 			aero.NewValue(spends[0].SpendingTxID[:]),
@@ -379,7 +379,7 @@ func internalTest(t *testing.T) {
 		wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
 		for _, s := range spendsAll {
-			ret, aErr := client.Execute(wPolicy, txKey, luaSpendFunction, "spend",
+			ret, aErr := client.Execute(wPolicy, txKey, luaPackage, "spend",
 				aero.NewIntegerValue(int(s.Vout)),
 				aero.NewValue(s.UTXOHash[:]),
 				aero.NewValue(s.SpendingTxID[:]),
@@ -412,7 +412,7 @@ func internalTest(t *testing.T) {
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
 		fakeKey, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, []byte{})
-		ret, aErr := client.Execute(wPolicy, fakeKey, luaSpendFunction, "spend",
+		ret, aErr := client.Execute(wPolicy, fakeKey, luaPackage, "spend",
 			aero.NewIntegerValue(int(spends[0].Vout)),
 			aero.NewValue(spends[0].UTXOHash[:]),
 			aero.NewValue(spends[0].SpendingTxID[:]),
@@ -1066,8 +1066,10 @@ func TestLargeUTXO(t *testing.T) {
 		Vout:         31243,
 	}
 
+	assert.Nil(t, previousOutput.LockingScript)
+
 	err = db.PreviousOutputsDecorate(context.Background(), []*meta.PreviousOutput{previousOutput})
 	require.NoError(t, err)
-
-	t.Log(previousOutput)
+	assert.NotNil(t, previousOutput.LockingScript)
+	// t.Log(previousOutput)
 }
