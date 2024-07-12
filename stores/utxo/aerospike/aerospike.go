@@ -132,6 +132,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	}
 
 	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
+	logger.Infof("batchingEnabled: %v", batchingEnabled)
 
 	if batchingEnabled {
 		batchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
@@ -673,6 +674,9 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 						}
 					}
 				case "blockIDs":
+					if value == nil {
+						continue
+					}
 					temp := value.([]interface{})
 					var blockIDs []uint32
 					for _, val := range temp {
