@@ -20,10 +20,6 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
         return "ERROR:Coinbase UTXO can only be spent after 100 blocks"
     end
 
-    if rec['big'] then
-        return "ERROR:Big TX"
-    end
-
     -- Get the utxos list from the record
     local utxos = rec['utxos'] 
     if utxos == nil then
@@ -46,10 +42,10 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     if bytes.size(utxo) == 64 then
         local existingSpendingTxID = bytes.get_bytes(utxo, 33, 32) -- NB - lua arrays are 1-based!!!!
         
-        if frozen(existingSpendingTxID) then
-			return "FROZEN:UTXO is frozen"
-		elseif bytes_equal(existingSpendingTxID, spendingTxID) then
+        if bytes_equal(existingSpendingTxID, spendingTxID) then
             return 'OK'
+        elseif frozen(existingSpendingTxID) then
+			return "FROZEN:UTXO is frozen"
         else
             return 'SPENT:' .. bytes_to_hex(existingSpendingTxID)
         end
@@ -141,7 +137,7 @@ function incrementNrRecords(rec, inc, ttl)
 
     nrRecords = nrRecords + inc
 
-    if nrRecords == 0 and rec['spentUtxos'] == rec['nrUtxos'] then
+    if nrRecords == 1 and rec['spentUtxos'] == rec['nrUtxos'] then
         record.set_ttl(rec, ttl)
     else
         record.set_ttl(rec, -1)

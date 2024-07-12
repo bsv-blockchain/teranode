@@ -197,6 +197,9 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 							go s.incrementNrRecords(spend.TxID, -1)
 						}
 
+					case "FROZEN":
+						// TODO
+
 					case "SPENT":
 						// spent by another transaction
 						// TODO - Check if this needs to be reversed
