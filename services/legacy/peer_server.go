@@ -2440,8 +2440,7 @@ out:
 			// TODO: if specific listen port doesn't work then ask for wildcard
 			// listen port?
 			// XXX this assumes timeout is in seconds.
-			listenPort, err := s.nat.AddPortMapping("tcp", int(lport), int(lport),
-				"bsvd listen port", 20*60)
+			listenPort, err := s.nat.AddPortMapping("tcp", int(lport), int(lport), "teranode listen port", 20*60)
 			if err != nil {
 				s.logger.Warnf("can't add UPnP port mapping: %v", err)
 			}
