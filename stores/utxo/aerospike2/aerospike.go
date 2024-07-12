@@ -204,6 +204,10 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 }
 
 func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
+	if s.utxoBatchSize == 0 {
+		panic("aerospike utxo store initialised without specifying a non-zero utxoBatchSize")
+	}
+
 	return vout % uint32(s.utxoBatchSize)
 }
 

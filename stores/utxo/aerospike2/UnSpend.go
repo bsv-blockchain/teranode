@@ -38,6 +38,10 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 }
 
 func (s *Store) unSpendLua(spend *utxo.Spend) error {
+	if s.utxoBatchSize == 0 {
+		panic("aerospike utxo store initialised without specifying a non-zero utxoBatchSize")
+	}
+
 	policy := util.GetAerospikeWritePolicy(3, math.MaxUint32)
 
 	keySource := calculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))

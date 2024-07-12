@@ -4,7 +4,6 @@ package aerospike2
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/util"
 	"testing"
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
@@ -20,7 +19,7 @@ import (
 
 func TestAerospikeInContainer(t *testing.T) {
 	// skip
-	util.SkipVeryLongTests(t)
+	// util.SkipVeryLongTests(t)
 	ctx := context.Background()
 
 	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-6.4.0.7_2"))
@@ -41,13 +40,14 @@ func TestAerospikeInContainer(t *testing.T) {
 	aerospikeClient := &uaerospike.Client{Client: client}
 	initPrometheusMetrics()
 
-	t.Run("", func(t *testing.T) {
+	t.Run("Test", func(t *testing.T) {
 		// Aerospike
 		store := &Store{
-			client:    aerospikeClient,
-			namespace: "test",
-			setName:   "test",
-			logger:    ulogger.TestLogger{},
+			client:        aerospikeClient,
+			namespace:     "test",
+			setName:       "test",
+			logger:        ulogger.TestLogger{},
+			utxoBatchSize: 2,
 		}
 		store.storeBatcher = batcher.New[batchStoreItem](100, 2, store.sendStoreBatch, true)
 		store.getBatcher = batcher.New[batchGetItem](100, 2, store.sendGetBatch, true)
@@ -105,10 +105,11 @@ func TestAerospikeInContainer(t *testing.T) {
 	t.Run("TestAerospike2", func(t *testing.T) {
 		// Aerospike
 		store := &Store{
-			client:    aerospikeClient,
-			namespace: "test",
-			setName:   "test",
-			logger:    ulogger.TestLogger{},
+			client:        aerospikeClient,
+			namespace:     "test",
+			setName:       "test",
+			logger:        ulogger.TestLogger{},
+			utxoBatchSize: 2,
 		}
 		store.storeBatcher = batcher.New[batchStoreItem](100, 2, store.sendStoreBatch, true)
 		store.getBatcher = batcher.New[batchGetItem](100, 2, store.sendGetBatch, true)
