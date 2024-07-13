@@ -2,6 +2,8 @@ package legacy
 
 import (
 	"context"
+
+	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -44,6 +46,7 @@ func (s *Server) Init(ctx context.Context) error {
 	//		s.logger.Fatalf("Failed to create Teranode bridge: %v", err)
 	//	}
 	//}
+	wire.SetLimits(4000000000)
 
 	return nil
 }
