@@ -127,6 +127,28 @@ testall:
 	$(MAKE) lint
 	$(MAKE) longtests
 
+.PHONY: nightly-tests
+
+nightly-tests:
+	docker compose -f docker-compose.ci.build.yml build
+	$(MAKE) install-tools
+	$(MAKE) clean-data;
+	cd test/blockassembly && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../blockassembly-ctrf-report.json
+	$(MAKE) clean-data;
+	cd test/resilience && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../resilience-ctrf-report.json
+	$(MAKE) clean-data;
+	cd test/settings && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../settings-ctrf-report.json
+	$(MAKE) clean-data;
+	cd test/state && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../state-ctrf-report.json
+	$(MAKE) clean-data;
+	cd test/fork && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../fork-ctrf-report.json
+
+clean-data:
+	rm -rf data
+	unzip data.zip
+	chmod -R +x data
+	sleep 2
+
 .PHONY: smoketests
 
 # Default target

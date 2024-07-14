@@ -80,12 +80,18 @@ func tearDownBitcoinTestFramework() {
 }
 
 func TestShouldRejectExcessiveBlockSize(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Recovered from panic: %v", r)
+			_ = cluster.Compose.Down(cluster.Context)
+		}
+	}()
 	ctx := context.Background()
 	url := "http://localhost:18090"
 
 	hashes, err := helper.CreateAndSendRawTxs(ctx, cluster.Nodes[0], 100)
 	if err != nil {
-		t.Fatalf("Failed to create and send raw txs: %v", err)
+		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
 	fmt.Printf("Hashes in created block: %v\n", hashes)
 
@@ -94,7 +100,7 @@ func TestShouldRejectExcessiveBlockSize(t *testing.T) {
 	baClient := cluster.Nodes[0].BlockassemblyClient
 	_, err = helper.MineBlock(ctx, baClient, logger)
 	if err != nil {
-		t.Fatalf("Failed to mine block: %v", err)
+		t.Errorf("Failed to mine block: %v", err)
 	}
 
 	for {
