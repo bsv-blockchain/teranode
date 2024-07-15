@@ -8,12 +8,13 @@ import (
 	"bytes"
 	"container/list"
 	"context"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -778,7 +779,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 		}
 
 		// When the block is not an orphan, log information about it and update the chain state.
-		sm.logger.Infof("Accepted block %v", blockHash)
+		sm.logger.Infof("Accepted block %v (%d)", blockHash, bmsg.block.Height())
 
 		// Update this peer's latest block height, for future potential sync node candidacy.
 		bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
