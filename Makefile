@@ -146,7 +146,7 @@ nightly-tests:
 clean-data:
 	rm -rf data
 	unzip data.zip
-	chmod -R +x data
+	chmod -R u+w data
 	sleep 2
 
 .PHONY: smoketests

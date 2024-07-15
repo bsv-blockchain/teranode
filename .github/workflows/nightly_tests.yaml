@@ -2,6 +2,7 @@ name: nightly-test-runs
 on:
   schedule:
     - cron: "0 0 * * *"  # Runs at midnight UTC every day
+  workflow_dispatch:
 
 env:
   REPO: ubsv
@@ -53,4 +54,3 @@ jobs:
         run: npx github-actions-ctrf state-ctrf-report.json
       - name: Publish Fork Test Summary Results
         run: npx github-actions-ctrf fork-ctrf-report.json
-      
