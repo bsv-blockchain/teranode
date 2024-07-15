@@ -1,6 +1,7 @@
 package legacy
 
 import (
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -11,7 +12,7 @@ func TestExcessiveBlockSizeUserAgentComment(t *testing.T) {
 	// Wipe test args.
 	os.Args = []string{"bsvd"}
 
-	cfg, _, err := loadConfig()
+	cfg, _, err := loadConfig(ulogger.TestLogger{})
 	if err != nil {
 		t.Fatal("Failed to load configuration")
 	}
@@ -29,7 +30,7 @@ func TestExcessiveBlockSizeUserAgentComment(t *testing.T) {
 	// Custom excessive block size.
 	os.Args = []string{"bsvd", "--excessiveblocksize=64000000"}
 
-	cfg, _, err = loadConfig()
+	cfg, _, err = loadConfig(ulogger.TestLogger{})
 	if err != nil {
 		t.Fatal("Failed to load configuration")
 	}
