@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -29,7 +30,7 @@ type batchStoreItem struct {
 }
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
-	startTotal, stat, _ := util.StartStatFromContext(ctx, "Create")
+	startTotal, stat, _ := tracing.StartStatFromContext(ctx, "Create")
 
 	defer func() {
 		stat.AddTime(startTotal)

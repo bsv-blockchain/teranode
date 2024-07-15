@@ -2,18 +2,17 @@ package sql
 
 import (
 	"context"
-	"fmt"
-
 	"database/sql"
 	"errors"
+	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*model.SuitableBlock, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetSuitableBlock")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetSuitableBlock")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -24,7 +23,7 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 	var id int
 	var parentId int
 	q := `WITH RECURSIVE block_chain AS (
-		SELECT 
+		SELECT
 			id,
 			hash,
 			parent_id,
@@ -33,14 +32,14 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 			block_time,
 			chain_work,
 			1 as depth
-		FROM 
+		FROM
 			blocks
-		WHERE 
+		WHERE
 			hash = $1
-	
+
 		UNION ALL
-	
-		SELECT 
+
+		SELECT
 			b.id,
 			b.hash,
 			b.parent_id,
@@ -49,14 +48,14 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 			b.block_time,
 			b.chain_work,
 			bc.depth + 1
-		FROM 
+		FROM
 			blocks b
-		INNER JOIN 
+		INNER JOIN
 			block_chain bc ON b.id = bc.parent_id
-		WHERE 
+		WHERE
 			bc.depth < 3
 	)
-	SELECT 
+	SELECT
 		id,
 		hash,
 		parent_id,
@@ -64,7 +63,7 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 		height,
 		block_time,
 		chain_work
-	FROM 
+	FROM
 		block_chain`
 
 	rows, err := s.db.QueryContext(ctx, q, hash[:])

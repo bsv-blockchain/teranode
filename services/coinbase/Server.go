@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -122,7 +123,7 @@ func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFund
 
 	prometheusRequestFunds.Inc()
 
-	ctx1 := util.ContextWithStat(ctx, stat)
+	ctx1 := tracing.ContextWithStat(ctx, stat)
 	fundingTx, err := s.coinbase.RequestFunds(ctx1, req.Address, req.DisableDistribute)
 	if err != nil {
 		return nil, err

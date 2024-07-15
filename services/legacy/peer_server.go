@@ -2584,8 +2584,8 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		validationClient,
 		utxoStore,
 		subtreeStore,
-		nil,
-		nil,
+		subtreeValidation,
+		blockValidation,
 		&netsync.Config{
 			PeerNotifier:            &s,
 			ChainParams:             s.chainParams,

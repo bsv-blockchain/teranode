@@ -43,6 +43,7 @@ message SubtreeFoundRequest {
 // swagger:model ProcessBlockRequest
 message ProcessBlockRequest {
   bytes block = 1;
+  uint32 height = 2;
 }
 
 // swagger:model GetSubtreeRequest

@@ -196,7 +196,7 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 }
 
 func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(cntxt, "ValidateTransaction", v.stats)
+	start, stat, ctx := tracing.NewStatFromContext(cntxt, "ValidateTransaction", v.stats)
 	defer func() {
 		stat.AddTime(start)
 		prometheusProcessedTransactions.Inc()
@@ -235,7 +235,7 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 }
 
 func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(cntxt, "ValidateTransactionBatch", v.stats)
+	start, stat, ctx := tracing.NewStatFromContext(cntxt, "ValidateTransactionBatch", v.stats)
 	defer func() {
 		stat.AddTime(start)
 		prometheusTransactionValidateBatch.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)

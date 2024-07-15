@@ -2,12 +2,13 @@ package sql
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 )
 
 func (s *SQL) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlocksMinedNotSet")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlocksMinedNotSet")
 	defer func() {
 		stat.AddTime(start)
 	}()

@@ -229,7 +229,7 @@ type SyncManager struct {
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
 	subtreeValidation subtreevalidation.Interface
-	blockValidation   *blockvalidation.Client
+	blockValidation   blockvalidation.Interface
 
 	// These fields should only be accessed from the blockHandler thread.
 	rejectedTxns    map[chainhash.Hash]struct{}
@@ -1448,7 +1448,7 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 // block, tx, and inv updates.
 func New(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain2.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
-	subtreeValidation subtreevalidation.Interface, blockValidation *blockvalidation.Client,
+	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	config *Config) (*SyncManager, error) {
 
 	sm := SyncManager{

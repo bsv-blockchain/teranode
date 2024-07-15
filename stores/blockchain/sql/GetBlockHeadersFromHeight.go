@@ -7,12 +7,12 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockHeaders")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockHeaders")
 	defer func() {
 		stat.AddTime(start)
 	}()

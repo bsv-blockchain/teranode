@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
@@ -49,6 +51,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}
 
 	// validate all subtrees and store all subtree data
+	// this also should spend and create all utxos
 	subtrees, err := sm.prepareSubtrees(ctx, block)
 	if err != nil {
 		return err
@@ -63,7 +66,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock); err != nil {
+	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, uint32(block.Height())); err != nil {
 		return errors.New(errors.ERR_PROCESSING, "failed to process block", err)
 	}
 
@@ -113,29 +116,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 				// we need to match the indexes of the subtree and the tx data in subtreeData
 				currentIdx := subtree.Length() - 1
 
-				// Extend the tx with additional information
-				previousOutputs := make([]*meta.PreviousOutput, len(tx.Inputs))
-
-				for i, input := range tx.Inputs {
-					previousOutputs[i] = &meta.PreviousOutput{
-						PreviousTxID: *input.PreviousTxIDChainHash(),
-						Vout:         input.PreviousTxOutIndex,
-					}
-				}
-
-				err = sm.utxoStore.PreviousOutputsDecorate(context.Background(), previousOutputs)
-				if err != nil {
-					return nil, fmt.Errorf("failed to decorate previous outputs for tx %s: %w", txHash, err)
-				}
-
-				// run through the previous outputs and extend the transaction
-				for i, po := range previousOutputs {
-					if po.LockingScript == nil {
-						return nil, fmt.Errorf("previous output script is empty for %s:%d", po.PreviousTxID, po.Vout)
-					}
-
-					tx.Inputs[i].PreviousTxSatoshis = po.Satoshis
-					tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(po.LockingScript)
+				err, hashes, err2 := sm.extendTransaction(tx, err, txHash)
+				if err2 != nil {
+					return hashes, err2
 				}
 
 				// store the extended transaction in our subtree tx data file
@@ -148,7 +131,13 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		if err != nil {
 			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to serialize subtree", err)
 		}
-		if err = sm.subtreeStore.Set(ctx, subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("legacy")); err != nil {
+		if err = sm.subtreeStore.Set(ctx,
+			subtree.RootHash()[:],
+			subtreeBytes,
+			options.WithSubDirectory("legacy"),
+			options.WithFileExtension("subtree"),
+			options.WithTTL(2*time.Minute),
+		); err != nil {
 			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to store subtree", err)
 		}
 
@@ -156,7 +145,13 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		if err != nil {
 			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to serialize subtree data", err)
 		}
-		if err = sm.subtreeStore.Set(ctx, subtreeData.RootHash()[:], subtreeDataBytes, options.WithFileExtension("subtreeData")); err != nil {
+		if err = sm.subtreeStore.Set(ctx,
+			subtreeData.RootHash()[:],
+			subtreeDataBytes,
+			options.WithSubDirectory("legacy"),
+			options.WithFileExtension("subtreeData"),
+			options.WithTTL(2*time.Minute),
+		); err != nil {
 			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to store subtree data", err)
 		}
 
@@ -168,4 +163,32 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	}
 
 	return subtrees, nil
+}
+
+func (sm *SyncManager) extendTransaction(tx *bt.Tx, err error, txHash chainhash.Hash) (error, []*chainhash.Hash, error) {
+	// Extend the tx with additional information
+	previousOutputs := make([]*meta.PreviousOutput, len(tx.Inputs))
+
+	for i, input := range tx.Inputs {
+		previousOutputs[i] = &meta.PreviousOutput{
+			PreviousTxID: *input.PreviousTxIDChainHash(),
+			Vout:         input.PreviousTxOutIndex,
+		}
+	}
+
+	err = sm.utxoStore.PreviousOutputsDecorate(context.Background(), previousOutputs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to decorate previous outputs for tx %s: %w", txHash, err)
+	}
+
+	// run through the previous outputs and extend the transaction
+	for i, po := range previousOutputs {
+		if po.LockingScript == nil {
+			return nil, nil, fmt.Errorf("previous output script is empty for %s:%d", po.PreviousTxID, po.Vout)
+		}
+
+		tx.Inputs[i].PreviousTxSatoshis = po.Satoshis
+		tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(po.LockingScript)
+	}
+	return err, nil, nil
 }

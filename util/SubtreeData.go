@@ -4,11 +4,21 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"io"
 )
+
+var CoinbasePlaceholder [32]byte
+var CoinbasePlaceholderHash *chainhash.Hash
+
+func init() {
+	for i := 0; i < len(CoinbasePlaceholder); i++ {
+		CoinbasePlaceholder[i] = 0xFF
+	}
+	CoinbasePlaceholderHash, _ = chainhash.NewHash(CoinbasePlaceholder[:])
+
+}
 
 type SubtreeData struct {
 	Subtree *Subtree
@@ -68,7 +78,7 @@ func (s *SubtreeData) serializeFromReader(buf io.Reader) error {
 	var err error
 
 	var txIndex int
-	if s.Subtree.Nodes[0].Hash.Equal(*model.CoinbasePlaceholderHash) {
+	if s.Subtree.Nodes[0].Hash.Equal(*CoinbasePlaceholderHash) {
 		txIndex = 1
 	}
 
@@ -103,7 +113,7 @@ func (s *SubtreeData) Serialize() ([]byte, error) {
 	}
 
 	var txStartIndex int
-	if s.Subtree.Nodes[0].Hash.Equal(*model.CoinbasePlaceholderHash) {
+	if s.Subtree.Nodes[0].Hash.Equal(*CoinbasePlaceholderHash) {
 		txStartIndex = 1
 	}
 

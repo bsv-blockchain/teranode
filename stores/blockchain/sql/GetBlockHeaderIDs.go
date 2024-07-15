@@ -6,14 +6,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // GetBlockHeaderIDs returns the block header ids from the given block hash and number of headers
 // this is used internally for setting blocks to mined, where we only save the id of the block header and compare that
 func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockHeaderIDs")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockHeaderIDs")
 	defer func() {
 		stat.AddTime(start)
 	}()

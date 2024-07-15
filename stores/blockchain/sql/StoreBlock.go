@@ -4,19 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/lib/pq"
-	"github.com/mattn/go-sqlite3"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/work"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/mattn/go-sqlite3"
 )
 
 func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "StoreBlock")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "StoreBlock")
 	defer func() {
 		stat.AddTime(start)
 	}()

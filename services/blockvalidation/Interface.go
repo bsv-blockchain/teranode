@@ -12,7 +12,7 @@ import (
 type Interface interface {
 	Health(ctx context.Context) (bool, error)
 	BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseUrl string, waitToComplete bool) error
-	ProcessBlock(ctx context.Context, block *model.Block) error
+	ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32) error
 	SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error
 	Get(ctx context.Context, subtreeHash []byte) ([]byte, error)
 	Exists(ctx context.Context, subtreeHash []byte) (bool, error)

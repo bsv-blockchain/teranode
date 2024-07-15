@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"errors"
 
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockExists")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockExists")
 	defer func() {
 		stat.AddTime(start)
 	}()

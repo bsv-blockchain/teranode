@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -21,7 +22,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 		return 0, fmt.Errorf("txHashes and txMetaSlice must be the same length")
 	}
 
-	start, stat, ctx := util.StartStatFromContext(ctx, "processTxMetaUsingCache")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "processTxMetaUsingCache")
 	defer stat.AddTime(start)
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingCache_BatchSize", 1024)
