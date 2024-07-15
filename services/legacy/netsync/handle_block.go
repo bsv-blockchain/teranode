@@ -1,4 +1,4 @@
-package legacy
+package netsync
 
 import (
 	"bytes"
@@ -8,8 +8,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
-	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -20,36 +18,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-// 0nBlock is invoked when a peer receives a block bitcoin message. We request the block via getBlockMs
-func (pm *PeerManager) onBlock(ctx context.Context) func(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
-	return func(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
-		pm.cond.L.Lock() // Lock the mutex to prevent processing the next block before the signal is received
-
-		pm.height++
-
-		pm.logger.Warnf("Received block   %s with %d txns (Height: %d)\n", msg.BlockHash(), len(msg.Transactions), pm.height)
-
-		block := bsvutil.NewBlock(msg)
-		block.SetHeight(int32(pm.height))
-
-		if gocore.Config().GetBool("legacy_direct", true) {
-			if err := pm.HandleBlockDirect(ctx, block); err != nil {
-				pm.logger.Fatalf("Failed to handle block: %v", err)
-			}
-		} else {
-			//if err := s.tb.HandleBlock(ctx, block); err != nil {
-			//	pm.logger.Fatalf("Failed to handle block: %v", err)
-			//}
-		}
-
-		pm.cond.Signal()
-		pm.cond.L.Unlock()
-
-		// s.wg.Done()
-	}
-}
-
-func (pm *PeerManager) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) error {
+func (sm *SyncManager) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) error {
 	startTotal, stat, ctx := util.StartStatFromContext(ctx, "HandleBlockDirect")
 
 	defer func() {
@@ -98,18 +67,22 @@ func (pm *PeerManager) HandleBlockDirect(ctx context.Context, block *bsvutil.Blo
 
 	start := gocore.CurrentTime()
 
-	dbID, err := pm.blockchainStore.StoreBlock(ctx, teranodeBlock, "LEGACY")
+	err = sm.blockchainClient.AddBlock(ctx, teranodeBlock, "LEGACY")
 	if err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) {
 			if pqErr.Code == "23505" { // Duplicate constraint violation
-				pm.logger.Warnf("Block already exists in the database: %s", block.Hash().String())
+				sm.logger.Warnf("Block already exists in the database: %s", block.Hash().String())
 			} else {
-				return fmt.Errorf("Failed to store block: %w", err)
+				return fmt.Errorf("failed to store block: %w", err)
 			}
 		} else {
-			return fmt.Errorf("Failed to store block: %w", err)
+			return fmt.Errorf("failed to store block: %w", err)
 		}
+	}
+	blockIDs, err := sm.blockchainClient.GetBlockHeaderIDs(ctx, block.Hash(), 1)
+	if err != nil {
+		return fmt.Errorf("failed to get block header IDs: %w", err)
 	}
 
 	start = stat.NewStat("StoreBlock").AddTime(start)
@@ -167,7 +140,7 @@ func (pm *PeerManager) HandleBlockDirect(ctx context.Context, block *bsvutil.Blo
 				}
 			}
 
-			err = pm.utxoStore.PreviousOutputsDecorate(context.Background(), previousOutputs)
+			err = sm.utxoStore.PreviousOutputsDecorate(context.Background(), previousOutputs)
 			if err != nil {
 				return fmt.Errorf("Failed to decorate previous outputs for tx %s: %w", txHash, err)
 			}
@@ -182,13 +155,13 @@ func (pm *PeerManager) HandleBlockDirect(ctx context.Context, block *bsvutil.Blo
 			}
 
 			// Spend the inputs
-			if err = pm.utxoStore.Spend(ctx, spends, uint32(block.Height())); err != nil {
+			if err = sm.utxoStore.Spend(ctx, spends, uint32(block.Height())); err != nil {
 				return fmt.Errorf("Failed to spend utxos: %w", err)
 			}
 		}
 
 		// Store the tx in the store
-		if _, err = pm.utxoStore.Create(ctx, tx, uint32(dbID)); err != nil {
+		if _, err = sm.utxoStore.Create(ctx, tx, blockIDs[0]); err != nil {
 			if !errors.Is(err, errors.ErrTxAlreadyExists) {
 				return fmt.Errorf("Failed to store tx: %w", err)
 			}
@@ -202,7 +175,7 @@ func (pm *PeerManager) HandleBlockDirect(ctx context.Context, block *bsvutil.Blo
 			return fmt.Errorf("Failed to serialize subtree: %w", err)
 		}
 
-		_ = pm.subtreeStore.Set(ctx, subtree.RootHash()[:], subtreeBytes)
+		_ = sm.subtreeStore.Set(ctx, subtree.RootHash()[:], subtreeBytes)
 
 		stat.NewStat("SubtreeStore").AddTimeForRange(start, len(block.Transactions()))
 
@@ -213,7 +186,7 @@ func (pm *PeerManager) HandleBlockDirect(ctx context.Context, block *bsvutil.Blo
 	}
 
 	height := block.Height()
-	_ = pm.utxoStore.SetBlockHeight(uint32(height))
+	_ = sm.utxoStore.SetBlockHeight(uint32(height))
 
 	return nil
 }

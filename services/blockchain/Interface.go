@@ -38,4 +38,9 @@ type ClientI interface {
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 	GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error)
 	SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
+
+	// new legacy endpoints
+	LatestBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error)
+	HeightToHashRange(startHeight uint32, endHash *chainhash.Hash, maxResults int) ([]chainhash.Hash, error)
+	IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error)
 }

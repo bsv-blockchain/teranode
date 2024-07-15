@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"math/rand"
+	"math/rand/v2"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
@@ -1618,7 +1618,7 @@ var sigScriptTests = []tstSigScript{
 func newOutpoint() *wire.OutPoint {
 	return &wire.OutPoint{
 		//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
-		Index: uint32(rand.Int31()),
+		Index: uint32(rand.Int32()),
 	}
 }
 

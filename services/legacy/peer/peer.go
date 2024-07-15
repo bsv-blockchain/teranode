@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"strconv"
 	"sync"
@@ -825,7 +825,7 @@ func (p *Peer) PushAddrMsg(addresses []*wire.NetAddress) ([]*wire.NetAddress, er
 		// Shuffle the address list.
 		for i := 0; i < wire.MaxAddrPerMsg; i++ {
 			//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-			j := i + rand.Intn(addressCount-i)
+			j := i + rand.IntN(addressCount-i)
 			msg.AddrList[i], msg.AddrList[j] = msg.AddrList[j], msg.AddrList[i]
 		}
 
@@ -1963,7 +1963,7 @@ func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 	// recently seen nonces.
 
 	//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-	nonce := uint64(rand.Int63())
+	nonce := uint64(rand.Int64())
 	sentNonces.Add(nonce)
 
 	// Create a wire.NetAddress to use as "addrme" in the

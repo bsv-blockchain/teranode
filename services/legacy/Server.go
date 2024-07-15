@@ -3,9 +3,11 @@ package legacy
 import (
 	"context"
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -13,22 +15,32 @@ import (
 )
 
 type Server struct {
-	logger      ulogger.Logger
-	stats       *gocore.Stat
-	peerManager *PeerManager
-	//tb          *TeranodeBridge
+	logger ulogger.Logger
+	stats  *gocore.Stat
+	server *server
+	//tb        *TeranodeBridge
 	lastHash *chainhash.Hash
 	height   uint32
+
+	// ubsv stores
+	blockchainClient blockchain.ClientI
+	validationClient validator.Interface
+	subtreeStore     blob.Store
+	utxoStore        utxo.Store
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, blockchainStore blockchain.Store, subtreeStore blob.Store, utxoStore utxo.Store) *Server {
+func New(logger ulogger.Logger, blockchainClient blockchain.ClientI, validationClient validator.Interface,
+	subtreeStore blob.Store, utxoStore utxo.Store) *Server {
 	// initPrometheusMetrics()
 
 	return &Server{
-		logger:      logger,
-		stats:       gocore.NewStat("legacy"),
-		peerManager: NewPeerManager(logger, blockchainStore, subtreeStore, utxoStore),
+		logger:           logger,
+		stats:            gocore.NewStat("legacy"),
+		blockchainClient: blockchainClient,
+		validationClient: validationClient,
+		subtreeStore:     subtreeStore,
+		utxoStore:        utxoStore,
 	}
 }
 
@@ -37,7 +49,7 @@ func (s *Server) Health(_ context.Context) (int, string, error) {
 }
 
 func (s *Server) Init(ctx context.Context) error {
-	//var err error
+	var err error
 
 	// Create a new Teranode bridge
 	//if !gocore.Config().GetBool("legacy_direct", true) {
@@ -48,14 +60,41 @@ func (s *Server) Init(ctx context.Context) error {
 	//}
 	wire.SetLimits(4000000000)
 
+	// seed.bitcoinsv.io
+	// TODO use testnet-seed.bitcoinsv.io for testnet, stn-seed.bitcoinsv.io for STN
+	connectAddresses, _ := gocore.Config().GetMulti("legacy_connect_peers", "|", []string{"44.213.141.106:8333|13.213.100.250:8333|18.199.12.185:8333"})
+
+	// get the public IP and listen on it
+	ip := GetOutboundIP()
+	defaultListenAddresses := []string{ip.String() + ":8333"}
+	// TODO not setting any listen addresses triggers upnp, which does not seem to work yet
+	listenAddresses, _ := gocore.Config().GetMulti("legacy_listen_addresses", "|", defaultListenAddresses)
+
+	s.server, err = newServer(ctx, s.logger, gocore.Config(),
+		s.blockchainClient,
+		s.validationClient,
+		s.utxoStore,
+		s.subtreeStore,
+		listenAddresses,
+		&chaincfg.MainNetParams,
+	)
+	if err != nil {
+		return err
+	}
+
+	for _, addr := range connectAddresses {
+		_ = s.server.addrManager.AddAddressByIP(addr)
+	}
+
 	return nil
 }
 
 // Start function
-func (s *Server) Start(ctx context.Context) error {
-	return s.peerManager.Start(ctx)
+func (s *Server) Start(_ context.Context) error {
+	s.server.Start()
+	return nil
 }
 
-func (s *Server) Stop(ctx context.Context) error {
-	return s.peerManager.Stop(ctx)
+func (s *Server) Stop(_ context.Context) error {
+	return s.server.Stop()
 }
