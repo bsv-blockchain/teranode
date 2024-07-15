@@ -12,8 +12,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"math"
 	"net"
 	"runtime"
@@ -23,6 +21,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/ordishs/gocore"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/addrmgr"
@@ -2635,6 +2637,13 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 
 	// Start up persistent peers.
 	permanentPeers := cfg.ConnectPeers
+
+	// Add the peers the are defined in teranode settings...
+	addresses, found := gocore.Config().GetMulti("legacy_connect_peers", "|")
+	if found {
+		permanentPeers = append(permanentPeers, addresses...)
+	}
+
 	if len(permanentPeers) == 0 {
 		permanentPeers = cfg.AddPeers
 	}
