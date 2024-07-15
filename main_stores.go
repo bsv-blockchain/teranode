@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -15,13 +17,15 @@ import (
 )
 
 var (
-	txStore          blob.Store
-	subtreeStore     blob.Store
-	blockStore       blob.Store
-	utxoStore        utxostore.Store
-	blockchainStore  blockchainstore.Store
-	blockchainClient blockchain.ClientI
-	validatorClient  validator.Interface
+	txStore                 blob.Store
+	subtreeStore            blob.Store
+	blockStore              blob.Store
+	utxoStore               utxostore.Store
+	blockchainStore         blockchainstore.Store
+	blockchainClient        blockchain.ClientI
+	validatorClient         validator.Interface
+	subtreeValidationClient subtreevalidation.Interface
+	blockValidationClient   blockvalidation.Interface
 )
 
 func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Store {
@@ -62,6 +66,26 @@ func getBlockchainStore(ctx context.Context, logger ulogger.Logger) blockchainst
 	}
 
 	return blockchainStore
+}
+
+func getSubtreeValidationClient(ctx context.Context, logger ulogger.Logger) subtreevalidation.Interface {
+	if subtreeValidationClient != nil {
+		return subtreeValidationClient
+	}
+
+	subtreeValidationClient = subtreevalidation.NewClient(ctx, logger)
+
+	return subtreeValidationClient
+}
+
+func getBlockValidationClient(ctx context.Context, logger ulogger.Logger) blockvalidation.Interface {
+	if blockValidationClient != nil {
+		return blockValidationClient
+	}
+
+	blockValidationClient = blockvalidation.NewClient(ctx, logger)
+
+	return blockValidationClient
 }
 
 func getBlockchainClient(ctx context.Context, logger ulogger.Logger) blockchain.ClientI {

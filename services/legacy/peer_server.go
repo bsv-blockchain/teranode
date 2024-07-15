@@ -22,11 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/validator"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/ordishs/gocore"
-
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/addrmgr"
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
@@ -38,9 +35,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
+	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 )
 
 const (
@@ -244,10 +245,12 @@ type server struct {
 	cfCheckptCachesMtx sync.RWMutex
 
 	// ubsv additions
-	logger           ulogger.Logger
-	blockchainClient blockchain.ClientI
-	utxoStore        utxostore.Store
-	subtreeStore     blob.Store
+	logger            ulogger.Logger
+	blockchainClient  blockchain.ClientI
+	utxoStore         utxostore.Store
+	subtreeStore      blob.Store
+	subtreeValidation subtreevalidation.Interface
+	blockValidation   blockvalidation.Interface
 }
 
 // serverPeer extends the peer to maintain state shared by the server and
@@ -2485,8 +2488,9 @@ out:
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
 func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockchainClient blockchain.ClientI,
-	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, listenAddrs []string,
-	chainParams *chaincfg.Params) (*server, error) {
+	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
+	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
+	listenAddrs []string, chainParams *chaincfg.Params) (*server, error) {
 
 	// init config
 	c, _, err := loadConfig(logger)
@@ -2569,15 +2573,27 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		blockchainClient:     blockchainClient,
 		utxoStore:            utxoStore,
 		subtreeStore:         subtreeStore,
+		subtreeValidation:    subtreeValidation,
+		blockValidation:      blockValidation,
 	}
 
-	s.syncManager, err = netsync.New(ctx, logger, blockchainClient, validationClient, utxoStore, subtreeStore, &netsync.Config{
-		PeerNotifier:            &s,
-		ChainParams:             s.chainParams,
-		DisableCheckpoints:      cfg.DisableCheckpoints,
-		MaxPeers:                cfg.MaxPeers,
-		MinSyncPeerNetworkSpeed: cfg.MinSyncPeerNetworkSpeed,
-	})
+	s.syncManager, err = netsync.New(
+		ctx,
+		logger,
+		blockchainClient,
+		validationClient,
+		utxoStore,
+		subtreeStore,
+		nil,
+		nil,
+		&netsync.Config{
+			PeerNotifier:            &s,
+			ChainParams:             s.chainParams,
+			DisableCheckpoints:      cfg.DisableCheckpoints,
+			MaxPeers:                cfg.MaxPeers,
+			MinSyncPeerNetworkSpeed: cfg.MinSyncPeerNetworkSpeed,
+		},
+	)
 	if err != nil {
 		return nil, err
 	}

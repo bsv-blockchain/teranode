@@ -247,6 +247,15 @@ func (st *Subtree) RootHashWithReplaceRootNode(node *chainhash.Hash, fee uint64,
 	return &rootHash, nil
 }
 
+func (st *Subtree) GetMap() TxMap {
+	m := NewSwissMapUint64(len(st.Nodes))
+	for idx, node := range st.Nodes {
+		_ = m.Put(node.Hash, uint64(idx))
+	}
+
+	return m
+}
+
 func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {
 	// return all the ids that are in st.Nodes, but not in ids
 	diff := make([]SubtreeNode, 0, 1_000)

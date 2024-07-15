@@ -393,6 +393,8 @@ func main() {
 			getValidatorClient(ctx, logger),
 			getSubtreeStore(logger),
 			getUtxoStore(ctx, logger),
+			getSubtreeValidationClient(ctx, logger),
+			getBlockValidationClient(ctx, logger),
 		)); err != nil {
 			panic(err)
 		}

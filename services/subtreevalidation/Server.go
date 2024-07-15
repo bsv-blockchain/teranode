@@ -3,6 +3,8 @@ package subtreevalidation
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"net/url"
 	"runtime"
 	"strconv"
@@ -238,11 +240,27 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 
 		if gotLock {
 			u.logger.Infof("[CheckSubtree] Processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+
+			var subtree *util.Subtree
+			if request.BaseUrl == "legacy" {
+				// read from legacy store
+				subtreeBytes, err := u.subtreeStore.Get(ctx, hash[:], options.WithFileExtension("legacy"))
+				if err != nil {
+					return nil, errors.Join(fmt.Errorf("[getSubtreeTxHashes][%s] failed to get subtree from store", subtreeHash.String()), err)
+				}
+
+				subtree, err = util.NewSubtreeFromBytes(subtreeBytes)
+				if err != nil {
+					return nil, fmt.Errorf("[CheckSubtree] Failed to create subtree from bytes: %w", err)
+				}
+			}
+
 			v := ValidateSubtree{
 				SubtreeHash:   *hash,
 				BaseUrl:       request.BaseUrl,
 				SubtreeHashes: nil,
 				AllowFailFast: false,
+				Subtree:       subtree,
 			}
 
 			// Call the validateSubtreeInternal method
