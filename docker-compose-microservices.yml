@@ -5,24 +5,25 @@ x-ubsv-base:
   depends_on:
     - postgres
     - kafka-shared
-    - aerospike-1
+    - aerospike
   networks:
     - ubsv-network
   volumes:
     - ./data:/app/data
     - ./settings_local.conf:/app/settings_local.conf
-    - ./data/ubsv1/txstore:/app/data/txstore
-    - ./data/ubsv1/subtreestore:/app/data/subtreestore
-    - ./data/ubsv1/blockstore:/app/data/blockstore
+    - ./data/ubsv/txstore:/app/data/txstore
+    - ./data/ubsv/subtreestore:/app/data/subtreestore
+    - ./data/ubsv/blockstore:/app/data/blockstore
   expose:
     - 8081-8093
   environment:
     SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
     logLevel: "DEBUG"
-    utxostore: aerospike://aerospike-1:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+    utxostore: aerospike://aerospike:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
     blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-    coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-
+    coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase
+    utxoblaster_utxostore_aerospike: aerospike://editor:password1234@aerospike:3000/utxo-store?WarmUp=0&ConnectionQueueSize=640&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=64&expiration=900
+    blockchain_grpcAddress: ubsv-blockchain:8087
 networks:
   ubsv-network:
     name: my-ubsv-network
@@ -79,9 +80,9 @@ services:
       - --pandaproxy-addr 0.0.0.0:9093
       - --advertise-pandaproxy-addr localhost:9093
     ports:
-      - 18181:8081
-      - 19092:9092
-      - 19093:9093
+      - 8081
+      - 9092:9092
+      - 9093:9093
 
   kafka-console-shared:
     container_name: kafka-console-shared
@@ -100,127 +101,155 @@ services:
             enabled: true
             urls: ["http://kafka-shared:8081"]
     ports:
-      - "18080:8080"
+      - 8080
     depends_on:
       - kafka-shared
 
-  aerospike-1:
-    container_name: aerospike-1
+  aerospike:
+    container_name: aerospike
     image: aerospike:ce-6.4.0.7_2
     command: --config-file /etc/aerospike.conf
     networks:
       - ubsv-network
     ports:
-      - 3100:3000
+      - 3000:3000
+    expose:
+      - 3000
     restart: on-failure
     volumes:
-      - ./deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
-      - ./data/aerospike-1/data:/opt/aerospike/data
+      - ./deploy/dev/aerospike/aerospike.conf:/etc/aerospike.conf
+      - ./data/aerospike/data:/opt/aerospike/data
+
+  aerospike-exporter:
+    image: aerospike/aerospike-prometheus-exporter:latest
+    container_name: aerospike-exporter
+    environment:
+      AS_HOST: aerospike
+      AS_PORT: 3000
+      AGENT_BIND_PORT: 10145
+      METRIC_LABELS: "type='development',source='aerospike'"
+    network_mode: bridge
 
   ubsv-miner:
     <<: *ubsv-base
     container_name: ubsv-miner
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-rpc=1"]
     ports:
-      - "18081-18089:8081-8089"
-      - "18090-18097:8090-8097"
-      - "19091:9091"
-      - "19905:9905"
-      - "19292:9292"
+      - 4040
+      - 18089:8089
+      - 18092:8092
+      - 18099:8099
+      - 9091
+    depends_on:
+      - ubsv-blockchain
 
   ubsv-coinbase:
     <<: *ubsv-base
     container_name: ubsv-coinbase
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-rpc=1"]
     ports:
-      - "18081-18089:8081-8089"
-      - "18090-18097:8090-8097"
-      - "19091:9091"
-      - "19905:9905"
-      - "19292:9292"
+      - 4040
+      - 18093:8093
+      - 9091
+    depends_on:
+      - ubsv-blockchain
 
   ubsv-blockpersister:
     <<: *ubsv-base
     container_name: ubsv-blockpersister
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockpersister=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockpersister=1"]
     ports:
-      - "18081-18089:8081-8089"
-      - "18090-18097:8090-8097"
-      - "19091:9091"
-      - "19905:9905"
-      - "19292:9292"
+      - 4040
+    depends_on:
+      - aerospike
 
-  ubsv-rpc:
+  ubsv-p2p:
     <<: *ubsv-base
-    container_name: ubsv-rpc
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-rpc=1"]
+    container_name: ubsv-p2p
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-p2p=1"]
     ports:
-      - "18081-18089:8081-8089"
-      - "18090-18097:8090-8097"
-      - "19091:9091"
-      - "19905:9905"
-      - "19292:9292"
+      - 4040
+      - 9091
+      - 19905:9905
+      - 19906:9906
+    depends_on:
+      - ubsv-blockchain
 
   ubsv-asset:
     <<: *ubsv-base
     container_name: ubsv-asset
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-asset=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-asset=1"]
     ports:
-      - "18081-18089:8081-8089"
-      - "18090-18097:8090-8097"
-      - "19091:9091"
-      - "19905:9905"
-      - "19292:9292"
+      - 4040
+      - 18090:8090
+      - 18091:8091
+      - 9091
+    depends_on:
+      - ubsv-blockchain
 
   ubsv-subtreevalidation:
     <<: *ubsv-base
     container_name: ubsv-subtreevalidation
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-subtreevalidation=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-subtreevalidation=1", "-rpc=1"]
     ports:
-      - "18081-18089:8081-8089"
-      - "18090-18097:8090-8097"
-      - "19091:9091"
-      - "19905:9905"
-      - "19292:9292"
+      - 4040
+      - 18086:8086
+      - 9091
+    depends_on:
+      - aerospike
 
   ubsv-blockvalidation:
     <<: *ubsv-base
     container_name: ubsv-blockvalidation
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockvalidation=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockvalidation=1", "-rpc=1"]
     ports:
-      - "18081-18089:8081-8089"
-      - "18090-18097:8090-8097"
-      - "19091:9091"
-      - "19905:9905"
-      - "19292:9292"
+      - 4040
+      - 18088:8088
+      - 18188:8188
+      - 9091
+    depends_on:
+      - aerospike
 
   ubsv-blockassembly:
     <<: *ubsv-base
     container_name: ubsv-blockassembly
-    entrypoint: ["/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockassembly=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockassembly=1", "-rpc=1"]
     ports:
-      - "18081-18089:8081-8089"
-      - "18090-18097:8090-8097"
-      - "19091:9091"
-      - "19905:9905"
-      - "19292:9292"
+      - 4040
+      - 18085:8085
+      - 18285:8285
+      - 9091
+    depends_on:
+      - aerospike
 
-  prometheus-1:
-    container_name: prometheus-1
+  ubsv-blockchain:
+    <<: *ubsv-base
+    container_name: ubsv-blockchain
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockchain=1", "-rpc=1"]
+    ports:
+      - 4040
+      - 18082:8082
+      - 18087:8087
+      - 9091
+    depends_on:
+      - aerospike
+
+  prometheus:
+    container_name: prometheus
     image: prom/prometheus:v2.44.0
     mem_limit: 64m
     ports:
-      - "19090:9090"
+      - 10090:9090
     networks:
       - ubsv-network
     volumes:
-      - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/dev/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
 
   grafana:
     container_name: grafana
     image: grafana/grafana:latest
     ports:
-      - "3000:3000"
+      - 3005:3000
     networks:
       - ubsv-network
     volumes:
@@ -229,4 +258,4 @@ services:
       - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
       - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
     depends_on:
-      - prometheus-1
+      - prometheus
