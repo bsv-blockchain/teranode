@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -1031,6 +1032,9 @@ func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 		// which means it has been processed completely at our end
 		utxo, err := sm.utxoStore.Get(context.TODO(), &invVect.Hash, []string{"fee"})
 		if err != nil {
+			if errors.Is(err, errors.ErrTxNotFound) {
+				return false, nil
+			}
 			return false, err
 		}
 
