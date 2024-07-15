@@ -778,9 +778,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 			sm.syncPeerState.lastBlockTime = time.Now()
 		}
 
-		// When the block is not an orphan, log information about it and update the chain state.
-		sm.logger.Infof("Accepted block %v (%d)", blockHash, bmsg.block.Height())
-
 		// Update this peer's latest block height, for future potential sync node candidacy.
 		bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
 		if err != nil {
@@ -789,6 +786,9 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 		}
 		heightUpdate = int32(bestBlockHeaderMeta.Height)
 		blkHashUpdate = bestBlockHeader.Hash()
+
+		// When the block is not an orphan, log information about it and update the chain state.
+		sm.logger.Infof("Accepted block %v (best height %d)", blockHash, heightUpdate)
 
 		// Clear the rejected transactions.
 		sm.rejectedTxns = make(map[chainhash.Hash]struct{})
