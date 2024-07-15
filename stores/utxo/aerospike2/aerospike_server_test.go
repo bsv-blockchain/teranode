@@ -607,6 +607,48 @@ func TestLUAScripts(t *testing.T) {
 	assert.Equal(t, 0, spendUtxos)
 }
 
+func TestCreateWithBlockIDs(t *testing.T) {
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	require.NoError(t, err)
+
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	key, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	_, err = client.Delete(nil, key)
+	require.NoError(t, err)
+
+	txMeta, err := db.Create(context.Background(), tx, 1, 2, 3)
+	require.NoError(t, err)
+	assert.NotNil(t, txMeta)
+
+	resp, err := client.Get(nil, key, "blockIDs")
+	require.NoError(t, err)
+	blockIDs, ok := resp.Bins["blockIDs"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, blockIDs, 3)
+
+	id1, ok := blockIDs[0].(int)
+	require.True(t, ok)
+	assert.Equal(t, 1, id1)
+
+	id2, ok := blockIDs[1].(int)
+	require.True(t, ok)
+	assert.Equal(t, 2, id2)
+
+	id3, ok := blockIDs[2].(int)
+	require.True(t, ok)
+	assert.Equal(t, 3, id3)
+}
+
 func TestStoreOPReturn(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
