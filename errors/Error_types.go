@@ -10,6 +10,7 @@ var (
 	ErrError                      = New(ERR_ERROR, "generic error")
 	ErrBlockNotFound              = New(ERR_BLOCK_NOT_FOUND, "block not found")
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
+	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrSubtreeNotFound            = New(ERR_SUBTREE_NOT_FOUND, "subtree not found")
 	ErrSubtreeInvalid             = New(ERR_SUBTREE_INVALID, "subtree invalid")

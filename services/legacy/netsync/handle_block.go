@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/tracing"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -11,78 +14,162 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
-func (sm *SyncManager) HandleBlockDirect(ctx context.Context, block *bsvutil.Block) error {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "HandleBlockDirect")
-
-	defer func() {
-		stat.AddTime(startTotal)
-	}()
+func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, block *bsvutil.Block) error {
+	ctx, stat, deferFn := tracing.StartTracing(ctx, "HandleBlockDirect",
+		tracing.WithLogMessage(sm.logger, "[HandleBlockDirect][%s] processing block found from peer %s",
+			block.Hash().String(), peer.String()),
+	)
+	defer deferFn()
 
 	stat.NewStat("SubtreeStore").AddRanges(0, 1, 10, 100, 1000, 10000, 100000, 1000000)
-
-	subtrees := make([]*chainhash.Hash, 0)
-
-	subtree, err := util.NewIncompleteTreeByLeafCount(len(block.Transactions()))
-	if err != nil {
-		return fmt.Errorf("Failed to create subtree: %w", err)
-	}
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
 	if err := block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
-		return fmt.Errorf("Failed to serialize header: %w", err)
+		return errors.New(errors.ERR_PROCESSING, "failed to serialize header", err)
 	}
 
+	// create the Teranode compatible block header
 	header, err := model.NewBlockHeaderFromBytes(headerBytes.Bytes())
 	if err != nil {
-		return fmt.Errorf("Failed to create block header from bytes: %w", err)
+		return errors.New(errors.ERR_PROCESSING, "failed to create block header from bytes", err)
 	}
 
 	var coinbase bytes.Buffer
-	if err := block.Transactions()[0].MsgTx().Serialize(&coinbase); err != nil {
-		return fmt.Errorf("Failed to serialize coinbase: %w", err)
+	if err = block.Transactions()[0].MsgTx().Serialize(&coinbase); err != nil {
+		return errors.New(errors.ERR_PROCESSING, "failed to serialize coinbase", err)
 	}
 
 	coinbaseTx, err := bt.NewTxFromBytes(coinbase.Bytes())
 	if err != nil {
-		return fmt.Errorf("Failed to create bt.Tx for coinbase: %w", err)
+		return errors.New(errors.ERR_PROCESSING, "failed to create bt.Tx for coinbase", err)
 	}
 
 	blockSize := block.MsgBlock().SerializeSize()
 
-	// We will first store this block with an empty slice of subtrees. If this block has more than just the 1 coinbase tx, we will
-	// update the row to have a subtree after processing all the txs
+	start := gocore.CurrentTime()
 
-	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), uint64(blockSize), uint32(block.Height()))
-	if err != nil {
-		return fmt.Errorf("Failed to create model.NewBlock: %w", err)
+	subtrees := make([]*chainhash.Hash, 0)
+
+	// create 1 subtree + subtree.data
+	// then validate the subtree through the subtreeValidation service
+	if len(block.Transactions()) > 1 {
+		subtree, err := util.NewIncompleteTreeByLeafCount(len(block.Transactions()))
+		if err != nil {
+			return errors.New(errors.ERR_SUBTREE_ERROR, "failed to create subtree", err)
+		}
+
+		subtreeData := util.NewSubtreeData(subtree)
+
+		if err = subtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
+			return fmt.Errorf("failed to add coinbase placeholder: %w", err)
+		}
+
+		var tx *bt.Tx
+		for _, wireTx := range block.Transactions() {
+			txHash := *wireTx.Hash()
+
+			// Serialize the tx
+			var txBytes bytes.Buffer
+			if err = wireTx.MsgTx().Serialize(&txBytes); err != nil {
+				return fmt.Errorf("could not serialize msgTx: %w", err)
+			}
+
+			txSize := uint64(txBytes.Len())
+
+			tx, err = bt.NewTxFromBytes(txBytes.Bytes())
+			if err != nil {
+				return fmt.Errorf("failed to create bt.Tx: %w", err)
+			}
+
+			if !tx.IsCoinbase() {
+				if err = subtree.AddNode(txHash, 0, txSize); err != nil {
+					return fmt.Errorf("failed to add node (%s) to subtree: %w", txHash, err)
+				}
+				// we need to match the indexes of the subtree and the tx data in subtreeData
+				currentIdx := subtree.Length() - 1
+
+				// Extend the tx with additional information
+				previousOutputs := make([]*meta.PreviousOutput, len(tx.Inputs))
+
+				for i, input := range tx.Inputs {
+					previousOutputs[i] = &meta.PreviousOutput{
+						PreviousTxID: *input.PreviousTxIDChainHash(),
+						Vout:         input.PreviousTxOutIndex,
+					}
+				}
+
+				err = sm.utxoStore.PreviousOutputsDecorate(context.Background(), previousOutputs)
+				if err != nil {
+					return fmt.Errorf("failed to decorate previous outputs for tx %s: %w", txHash, err)
+				}
+
+				// run through the previous outputs and extend the transaction
+				for i, po := range previousOutputs {
+					if po.LockingScript == nil {
+						return fmt.Errorf("previous output script is empty for %s:%d", po.PreviousTxID, po.Vout)
+					}
+
+					tx.Inputs[i].PreviousTxSatoshis = po.Satoshis
+					tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(po.LockingScript)
+				}
+
+				// store the extended transaction in our subtree tx data file
+				if err = subtreeData.AddTx(tx, currentIdx); err != nil {
+					return fmt.Errorf("failed to add tx to subtree data: %w", err)
+				}
+			}
+		}
+		subtreeBytes, err := subtree.Serialize()
+		if err != nil {
+			return errors.New(errors.ERR_STORAGE_ERROR, "failed to serialize subtree", err)
+		}
+		if err = sm.subtreeStore.Set(ctx, subtree.RootHash()[:], subtreeBytes); err != nil {
+			return errors.New(errors.ERR_STORAGE_ERROR, "failed to store subtree", err)
+		}
+
+		subtreeDataBytes, err := subtreeData.Serialize()
+		if err != nil {
+			return errors.New(errors.ERR_STORAGE_ERROR, "failed to serialize subtree data", err)
+		}
+		if err = sm.subtreeStore.Set(ctx, subtreeData.RootHash()[:], subtreeDataBytes, options.WithFileExtension("subtreeData")); err != nil {
+			return errors.New(errors.ERR_STORAGE_ERROR, "failed to store subtree data", err)
+		}
+
+		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "", uint32(block.Height())); err != nil {
+			return errors.New(errors.ERR_SUBTREE_ERROR, "failed to check subtree", err)
+		}
+
+		subtrees = append(subtrees, subtree.RootHash())
 	}
 
-	start := gocore.CurrentTime()
+	// create valid teranode block, with the subtree hash
+	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), uint64(blockSize), uint32(block.Height()))
+	if err != nil {
+		return errors.New(errors.ERR_PROCESSING, "failed to create model.NewBlock", err)
+	}
+
+	// send the block to the blockValidation
+	err = sm.blockValidation.BlockFound(ctx, teranodeBlock)
 
 	err = sm.blockchainClient.AddBlock(ctx, teranodeBlock, "LEGACY")
 	if err != nil {
-		var pqErr *pq.Error
-		if errors.As(err, &pqErr) {
-			if pqErr.Code == "23505" { // Duplicate constraint violation
-				sm.logger.Warnf("Block already exists in the database: %s", block.Hash().String())
-			} else {
-				return fmt.Errorf("failed to store block: %w", err)
-			}
+		if errors.Is(err, errors.ErrBlockExists) {
+			sm.logger.Warnf("Block already exists in the database: %s", block.Hash().String())
 		} else {
-			return fmt.Errorf("failed to store block: %w", err)
+			return errors.New(errors.ERR_PROCESSING, "failed to store block", err)
 		}
 	}
+
 	blockIDs, err := sm.blockchainClient.GetBlockHeaderIDs(ctx, block.Hash(), 1)
 	if err != nil {
-		return fmt.Errorf("failed to get block header IDs: %w", err)
+		return errors.New(errors.ERR_PROCESSING, "failed to get block header IDs for %s", block.Hash(), err)
 	}
 
 	start = stat.NewStat("StoreBlock").AddTime(start)

@@ -9,6 +9,7 @@ service BlockValidationAPI {
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
   rpc BlockFound (BlockFoundRequest) returns (EmptyMessage) {}
   rpc SubtreeFound (SubtreeFoundRequest) returns (EmptyMessage) {}
+  rpc ProcessBlock (ProcessBlockRequest) returns (EmptyMessage) {}
   rpc Get (GetSubtreeRequest) returns (GetSubtreeResponse) {}
   rpc Exists (ExistsSubtreeRequest) returns (ExistsSubtreeResponse) {}
   rpc SetTxMeta (SetTxMetaRequest) returns (SetTxMetaResponse) {}
@@ -37,6 +38,11 @@ message BlockFoundRequest {
 message SubtreeFoundRequest {
   bytes hash = 1;
   string base_url = 2;
+}
+
+// swagger:model ProcessBlockRequest
+message ProcessBlockRequest {
+  bytes block = 1;
 }
 
 // swagger:model GetSubtreeRequest

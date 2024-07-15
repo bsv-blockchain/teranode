@@ -510,8 +510,27 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
-func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
-	ctx, deferFn := tracing.StartTracing(ctx, "processBlockFound",
+func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
+	start, stat, ctx := util.NewStatFromContext(ctx, "ProcessBlock", u.stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	block, err := model.NewBlockFromBytes(request.Block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create block from bytes [%w]", err)
+	}
+
+	err = u.processBlockFound(ctx, block.Header.Hash(), "", block)
+	if err != nil {
+		return nil, fmt.Errorf("failed block validation ProcessBlock [%s] [%v]", block.String(), err)
+	}
+
+	return &blockvalidation_api.EmptyMessage{}, nil
+}
+
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string, useBlock ...*model.Block) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "processBlockFound",
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFoundDuration),
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl),
@@ -528,9 +547,14 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 		return nil
 	}
 
-	block, err := u.getBlock(ctx, hash, baseUrl)
-	if err != nil {
-		return err
+	var block *model.Block
+	if len(useBlock) > 0 {
+		block = useBlock[0]
+	} else {
+		block, err = u.getBlock(ctx, hash, baseUrl)
+		if err != nil {
+			return err
+		}
 	}
 
 	delay := 10 * time.Millisecond
@@ -596,14 +620,14 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
 	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)
 	if err != nil {
-		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
+		return fmt.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}
 
 	return nil
 }
 
 func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
-	ctx, deferFn := tracing.StartTracing(ctx, "getBlock",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlock",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
@@ -626,7 +650,7 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl str
 }
 
 func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, baseUrl string) ([]*model.Block, error) {
-	ctx, deferFn := tracing.StartTracing(ctx, "getBlocks",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlocks",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
@@ -655,7 +679,7 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 }
 
 func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
-	ctx, deferFn := tracing.StartTracing(ctx, "getBlockHeaders",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlockHeaders",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
@@ -680,7 +704,7 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 }
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
-	ctx, deferFn := tracing.StartTracing(ctx, "catchup",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "catchup",
 		tracing.WithHistogram(prometheusBlockValidationCatchupDuration),
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL),

@@ -3,9 +3,11 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
+	"github.com/lib/pq"
+	"github.com/mattn/go-sqlite3"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/work"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -209,19 +211,32 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		previousBlockInvalid,
 	)
 	if err != nil {
-		return 0, 0, err
+		// check whether this is a postgres exists constraint error
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" { // Duplicate constraint violation
+			return 0, 0, errors.New(errors.ERR_BLOCK_EXISTS, "block already exists in the database: %s", block.Hash().String(), err)
+		}
+
+		// check whether this is a sqlite exists constraint error
+		var sqliteErr *sqlite3.Error
+		if errors.As(err, &sqliteErr) && errors.Is(sqliteErr.Code, sqlite3.ErrConstraint) {
+			return 0, 0, errors.New(errors.ERR_BLOCK_EXISTS, "block already exists in the database: %s", block.Hash().String(), err)
+		}
+
+		// otherwise, return the generic error
+		return 0, 0, errors.New(errors.ERR_STORAGE_ERROR, "failed to store block", err)
 	}
 
 	defer rows.Close()
 
 	rowFound := rows.Next()
 	if !rowFound {
-		return 0, 0, fmt.Errorf("block already exists: %s", block.Hash())
+		return 0, 0, errors.New(errors.ERR_BLOCK_EXISTS, "block already exists: %s", block.Hash())
 	}
 
 	var newBlockId uint64
 	if err = rows.Scan(&newBlockId); err != nil {
-		return 0, 0, err
+		return 0, 0, errors.New(errors.ERR_STORAGE_ERROR, "failed to scan new block id", err)
 	}
 
 	return newBlockId, height, nil

@@ -22,6 +22,7 @@ const (
 	BlockValidationAPI_HealthGRPC_FullMethodName    = "/blockvalidation_api.BlockValidationAPI/HealthGRPC"
 	BlockValidationAPI_BlockFound_FullMethodName    = "/blockvalidation_api.BlockValidationAPI/BlockFound"
 	BlockValidationAPI_SubtreeFound_FullMethodName  = "/blockvalidation_api.BlockValidationAPI/SubtreeFound"
+	BlockValidationAPI_ProcessBlock_FullMethodName  = "/blockvalidation_api.BlockValidationAPI/ProcessBlock"
 	BlockValidationAPI_Get_FullMethodName           = "/blockvalidation_api.BlockValidationAPI/Get"
 	BlockValidationAPI_Exists_FullMethodName        = "/blockvalidation_api.BlockValidationAPI/Exists"
 	BlockValidationAPI_SetTxMeta_FullMethodName     = "/blockvalidation_api.BlockValidationAPI/SetTxMeta"
@@ -37,6 +38,7 @@ type BlockValidationAPIClient interface {
 	HealthGRPC(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*HealthResponse, error)
 	BlockFound(ctx context.Context, in *BlockFoundRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	SubtreeFound(ctx context.Context, in *SubtreeFoundRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
+	ProcessBlock(ctx context.Context, in *ProcessBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	Get(ctx context.Context, in *GetSubtreeRequest, opts ...grpc.CallOption) (*GetSubtreeResponse, error)
 	Exists(ctx context.Context, in *ExistsSubtreeRequest, opts ...grpc.CallOption) (*ExistsSubtreeResponse, error)
 	SetTxMeta(ctx context.Context, in *SetTxMetaRequest, opts ...grpc.CallOption) (*SetTxMetaResponse, error)
@@ -76,6 +78,16 @@ func (c *blockValidationAPIClient) SubtreeFound(ctx context.Context, in *Subtree
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EmptyMessage)
 	err := c.cc.Invoke(ctx, BlockValidationAPI_SubtreeFound_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockValidationAPIClient) ProcessBlock(ctx context.Context, in *ProcessBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, BlockValidationAPI_ProcessBlock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +152,7 @@ type BlockValidationAPIServer interface {
 	HealthGRPC(context.Context, *EmptyMessage) (*HealthResponse, error)
 	BlockFound(context.Context, *BlockFoundRequest) (*EmptyMessage, error)
 	SubtreeFound(context.Context, *SubtreeFoundRequest) (*EmptyMessage, error)
+	ProcessBlock(context.Context, *ProcessBlockRequest) (*EmptyMessage, error)
 	Get(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error)
 	Exists(context.Context, *ExistsSubtreeRequest) (*ExistsSubtreeResponse, error)
 	SetTxMeta(context.Context, *SetTxMetaRequest) (*SetTxMetaResponse, error)
@@ -160,6 +173,9 @@ func (UnimplementedBlockValidationAPIServer) BlockFound(context.Context, *BlockF
 }
 func (UnimplementedBlockValidationAPIServer) SubtreeFound(context.Context, *SubtreeFoundRequest) (*EmptyMessage, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SubtreeFound not implemented")
+}
+func (UnimplementedBlockValidationAPIServer) ProcessBlock(context.Context, *ProcessBlockRequest) (*EmptyMessage, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProcessBlock not implemented")
 }
 func (UnimplementedBlockValidationAPIServer) Get(context.Context, *GetSubtreeRequest) (*GetSubtreeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Get not implemented")
@@ -239,6 +255,24 @@ func _BlockValidationAPI_SubtreeFound_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockValidationAPIServer).SubtreeFound(ctx, req.(*SubtreeFoundRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockValidationAPI_ProcessBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProcessBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockValidationAPIServer).ProcessBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockValidationAPI_ProcessBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockValidationAPIServer).ProcessBlock(ctx, req.(*ProcessBlockRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -351,6 +385,10 @@ var BlockValidationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SubtreeFound",
 			Handler:    _BlockValidationAPI_SubtreeFound_Handler,
+		},
+		{
+			MethodName: "ProcessBlock",
+			Handler:    _BlockValidationAPI_ProcessBlock_Handler,
 		},
 		{
 			MethodName: "Get",

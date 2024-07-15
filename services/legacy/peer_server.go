@@ -273,7 +273,7 @@ type serverPeer struct {
 	quit           chan struct{}
 	// The following chans are used to sync blockmanager and server.
 	txProcessed    chan struct{}
-	blockProcessed chan struct{}
+	blockProcessed chan error
 }
 
 // newServerPeer returns a new serverPeer instance. The peer needs to be set by
@@ -286,7 +286,7 @@ func newServerPeer(s *server, isPersistent bool) *serverPeer {
 		knownAddresses: make(map[string]struct{}),
 		quit:           make(chan struct{}),
 		txProcessed:    make(chan struct{}, 1),
-		blockProcessed: make(chan struct{}, 1),
+		blockProcessed: make(chan error, 1),
 	}
 }
 
@@ -534,7 +534,7 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 
 // OnBlock is invoked when a peer receives a block bitcoin message. It
 // blocks until the bitcoin block has been fully processed.
-func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
+func (sp *serverPeer) OnBlock(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	// Convert the raw MsgBlock to a bsvutil.Block which provides some
 	// convenience methods and things such as hash caching.
 	block := bsvutil.NewBlockFromBlockAndBytes(msg, buf)
@@ -543,19 +543,31 @@ func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	iv := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
 	sp.AddKnownInventory(iv)
 
-	// Queue the block up to be handled by the block
-	// manager and intentionally block further receives
-	// until the bitcoin block is fully processed and known
-	// good or bad.  This helps prevent a malicious peer
-	// from queuing up a bunch of bad blocks before
-	// disconnecting (or being disconnected) and wasting
-	// memory.  Additionally, this behavior is depended on
-	// by at least the block acceptance test tool as the
-	// reference implementation processes blocks in the same
-	// thread and therefore blocks further messages until
-	// the bitcoin block has been fully processed.
-	sp.server.syncManager.QueueBlock(block, sp.Peer, sp.blockProcessed)
-	<-sp.blockProcessed
+	exists, err := sp.server.blockchainClient.GetBlockExists(context.TODO(), block.Hash())
+	if err != nil {
+		sp.server.logger.Errorf("Block exists check error: %v", err)
+		return
+	}
+
+	if !exists {
+		// Queue the block up to be handled by the block
+		// manager and intentionally block further receives
+		// until the bitcoin block is fully processed and known
+		// good or bad.  This helps prevent a malicious peer
+		// from queuing up a bunch of bad blocks before
+		// disconnecting (or being disconnected) and wasting
+		// memory.  Additionally, this behavior is depended on
+		// by at least the block acceptance test tool as the
+		// reference implementation processes blocks in the same
+		// thread and therefore blocks further messages until
+		// the bitcoin block has been fully processed.
+		sp.server.syncManager.QueueBlock(block, sp.Peer, sp.blockProcessed)
+
+		err = <-sp.blockProcessed
+		if err != nil {
+			sp.server.logger.Debugf("Block processed: %v", err)
+		}
+	}
 }
 
 // OnInv is invoked when a peer receives an inv bitcoin message and is
