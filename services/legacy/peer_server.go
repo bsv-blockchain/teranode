@@ -496,8 +496,12 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 // It creates and sends an inventory message with the contents of the memory
 // pool up to the maximum inventory allowed per message.  When the peer has a
 // bloom filter loaded, the contents are filtered accordingly.
-func (sp *serverPeer) OnMemPool(_ *peer.Peer, msg *wire.MsgMemPool) {
-	// not implemented
+func (sp *serverPeer) OnMemPool(_ *peer.Peer, _ *wire.MsgMemPool) {
+	// we do not support onMempool requests
+	// normally this would only be sent with bloom filtering on, which we do not support
+	sp.server.logger.Warnf("Ignoring mempool request from %v -- bloom filtering is not supported", sp)
+	sp.Disconnect()
+	return
 }
 
 // OnTx is invoked when a peer receives a tx bitcoin message.  It blocks
@@ -526,7 +530,7 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 	<-sp.txProcessed
 }
 
-// OnBlock is invoked when a peer receives a block bitcoin message.  It
+// OnBlock is invoked when a peer receives a block bitcoin message. It
 // blocks until the bitcoin block has been fully processed.
 func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	// Convert the raw MsgBlock to a bsvutil.Block which provides some
@@ -780,7 +784,6 @@ func (sp *serverPeer) OnGetCFilters(_ *peer.Peer, msg *wire.MsgGetCFilters) {
 		hashPtrs[i] = &hashes[i]
 	}
 
-	// TODO
 	//filters, err := sp.server.cfIndex.FiltersByBlockHashes(
 	//	hashPtrs, msg.FilterType,
 	//)
@@ -851,7 +854,6 @@ func (sp *serverPeer) OnGetCFHeaders(_ *peer.Peer, msg *wire.MsgGetCFHeaders) {
 		hashPtrs[i] = &hashList[i]
 	}
 
-	// TODO
 	// Fetch the raw filter hash bytes from the database for all blocks.
 	//filterHashes, err := sp.server.cfIndex.FilterHashesByBlockHashes(
 	//	hashPtrs, msg.FilterType,
@@ -868,7 +870,6 @@ func (sp *serverPeer) OnGetCFHeaders(_ *peer.Peer, msg *wire.MsgGetCFHeaders) {
 
 	// Populate the PrevFilterHeader field.
 	if msg.StartHeight > 0 {
-		// TODO
 		//prevBlockHash := &hashList[0]
 
 		// Fetch the raw committed filter header bytes from the
@@ -1027,7 +1028,6 @@ func (sp *serverPeer) OnGetCFCheckpt(_ *peer.Peer, msg *wire.MsgGetCFCheckpt) {
 		blockHashPtrs = append(blockHashPtrs, &blockHashes[i])
 	}
 
-	// TODO
 	//filterHeaders, err := sp.server.cfIndex.FilterHeadersByBlockHashes(
 	//	blockHashPtrs, msg.FilterType,
 	//)
@@ -1114,16 +1114,11 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 // is used by remote peers to request that no transactions which have a fee rate
 // lower than provided value are inventoried to them.  The peer will be
 // disconnected if an invalid fee filter value is provided.
-func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, msg *wire.MsgFeeFilter) {
-	// Check that the passed minimum fee is a valid amount.
-	if msg.MinFee < 0 || msg.MinFee > bsvutil.MaxSatoshi {
-		sp.server.logger.Debugf("Peer %v sent an invalid feefilter '%v' -- "+
-			"disconnecting", sp, bsvutil.Amount(msg.MinFee))
-		sp.Disconnect()
-		return
-	}
-
-	atomic.StoreInt64(&sp.feeFilter, msg.MinFee)
+func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, _ *wire.MsgFeeFilter) {
+	// don't allow fee filters
+	sp.server.logger.Warnf("Ignoring fee filter request from %s", sp)
+	sp.Disconnect()
+	return
 }
 
 // OnFilterAdd is invoked when a peer receives a filteradd bitcoin
@@ -1138,8 +1133,7 @@ func (sp *serverPeer) OnFilterAdd(_ *peer.Peer, msg *wire.MsgFilterAdd) {
 	}
 
 	if !sp.filter.IsLoaded() {
-		sp.server.logger.Debugf("%s sent a filteradd request with no filter "+
-			"loaded -- disconnecting", sp)
+		sp.server.logger.Debugf("%s sent a filteradd request with no filter loaded -- disconnecting", sp)
 		sp.Disconnect()
 		return
 	}
@@ -1200,16 +1194,14 @@ func (sp *serverPeer) OnGetAddr(_ *peer.Peer, msg *wire.MsgGetAddr) {
 	// Do not accept getaddr requests from outbound peers.  This reduces
 	// fingerprinting attacks.
 	if !sp.Inbound() {
-		sp.server.logger.Debugf("Ignoring getaddr request from outbound peer ",
-			"%v", sp)
+		sp.server.logger.Debugf("Ignoring getaddr request from outbound peer %v", sp)
 		return
 	}
 
 	// Only allow one getaddr request per connection to discourage
 	// address stamping of inv announcements.
 	if sp.sentAddrs {
-		sp.server.logger.Debugf("Ignoring repeated getaddr request from peer ",
-			"%v", sp)
+		sp.server.logger.Debugf("Ignoring repeated getaddr request from peer %v", sp)
 		return
 	}
 	sp.sentAddrs = true
@@ -1252,8 +1244,7 @@ func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
 
 	// A message that has no addresses is invalid.
 	if len(msg.AddrList) == 0 {
-		sp.server.logger.Errorf("Command [%s] from %s does not contain any addresses",
-			msg.Command(), sp.Peer)
+		sp.server.logger.Errorf("Command [%s] from %s does not contain any addresses", msg.Command(), sp.Peer)
 		sp.Disconnect()
 		return
 	}
@@ -1279,7 +1270,7 @@ func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
 	// Add addresses to server address manager.  The address manager handles
 	// the details of things such as preventing duplicate addresses, max
 	// addresses, and last seen updates.
-	// XXX bitcoind gives a 2 hour time penalty here, do we want to do the
+	// XXX bitcoind gives a 2-hour time penalty here, do we want to do the
 	// same?
 	sp.server.addrManager.AddAddresses(msg.AddrList, sp.NA())
 }
@@ -1503,7 +1494,6 @@ func (s *server) pushMerkleBlockMsg(sp *serverPeer, hash *chainhash.Hash,
 	}
 
 	// Fetch the raw block bytes from the database.
-	// TODO
 	//blk, err := sp.server.chain.BlockByHash(hash)
 	//if err != nil {
 	//	sp.server.logger.Infof("Unable to fetch requested block hash %v: %v",
@@ -1745,7 +1735,7 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 				return
 			}
 
-			//txD, ok := msg.data.(*chainhash.Hash)
+			//txD, ok := msg.data.(*mempool.TxDesc)
 			//if !ok {
 			//	sp.server.logger.Warnf("Underlying data for tx inv "+
 			//		"relay is not a *mempool.TxDesc: %T",
@@ -1755,7 +1745,6 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 
 			// Don't relay the transaction if the transaction fee-per-kb
 			// is less than the peer's feefilter.
-			// TODO
 			//feeFilter := atomic.LoadInt64(&sp.feeFilter)
 			//if feeFilter > 0 && txD.FeePerKB < feeFilter {
 			//	return
@@ -1763,7 +1752,6 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 
 			// Don't relay the transaction if there is a bloom
 			// filter loaded and the transaction doesn't match it.
-			// TODO
 			//if sp.filter.IsLoaded() {
 			//	if !sp.filter.MatchTxAndUpdate(txD.Tx) {
 			//		return
@@ -1978,11 +1966,12 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 			OnGetData:    sp.OnGetData,
 			OnGetBlocks:  sp.OnGetBlocks,
 			OnGetHeaders: sp.OnGetHeaders,
+			// TODO log Warnf on these calls
 			//OnGetCFilters:  sp.OnGetCFilters,
 			//OnGetCFHeaders: sp.OnGetCFHeaders,
 			//OnGetCFCheckpt: sp.OnGetCFCheckpt,
 			OnFeeFilter: sp.OnFeeFilter,
-			//OnFilterAdd:    sp.OnFilterAdd,
+			//OnFilterAdd: sp.OnFilterAdd,
 			//OnFilterClear:  sp.OnFilterClear,
 			//OnFilterLoad:   sp.OnFilterLoad,
 			OnGetAddr:  sp.OnGetAddr,
