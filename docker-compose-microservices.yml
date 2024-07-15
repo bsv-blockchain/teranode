@@ -16,6 +16,7 @@ x-ubsv-base:
     - ./data/ubsv/blockstore:/app/data/blockstore
   expose:
     - 8081-8093
+    - 18081-18093
   environment:
     SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
     logLevel: "DEBUG"
