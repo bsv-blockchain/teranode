@@ -143,9 +143,6 @@ nightly-tests:
 	cd test/fork && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../fork-ctrf-report.json
 
 clean-data:
-	chmod -R u+w data
-	chmod -R u+w data/postgres
-	rm -rf data
 	unzip data.zip
 	chmod -R u+w data
 	sleep 2
