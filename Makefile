@@ -132,7 +132,6 @@ testall:
 nightly-tests:
 	docker compose -f docker-compose.ci.build.yml build
 	$(MAKE) install-tools
-	$(MAKE) clean-data;
 	cd test/blockassembly && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../blockassembly-ctrf-report.json
 	$(MAKE) clean-data;
 	cd test/resilience && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../resilience-ctrf-report.json
