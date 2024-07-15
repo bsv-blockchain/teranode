@@ -54,6 +54,8 @@ func tearDownBitcoinTestFramework() {
 	if err := framework.StopNodes(); err != nil {
 		fmt.Printf("Error stopping nodes: %v\n", err)
 	}
+	//delete data
+	_ = os.RemoveAll("../../data")
 }
 
 func TestNodeCatchUpState_WithStartAndStopNodes(t *testing.T) {

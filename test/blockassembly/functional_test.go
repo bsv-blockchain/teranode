@@ -51,6 +51,7 @@ func tearDownBitcoinTestFramework() {
 	if err := framework.StopNodes(); err != nil {
 		fmt.Printf("Error stopping nodes: %v\n", err)
 	}
+	_ = os.RemoveAll("../../data")
 }
 
 func newTx(lockTime uint32) *bt.Tx {
