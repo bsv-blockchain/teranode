@@ -23,6 +23,7 @@ var placeholderKey *aerospike.Key
 
 type batchStoreItem struct {
 	tx       *bt.Tx
+	blockIDs []uint32
 	lockTime uint32
 	done     chan error
 }
@@ -42,7 +43,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 	errCh := make(chan error)
 	defer close(errCh)
 
-	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, done: errCh}
+	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, blockIDs: blockIDs, done: errCh}
 
 	if s.storeBatcher != nil {
 		s.storeBatcher.Put(item)
@@ -101,7 +102,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		// We calculate the bin that we want to store, but we may get back lots of bin batches
 		// because we have had to split the UTXOs into multiple records
 
-		binsToStore, err = s.getBinsToStore(bItem.tx, blockHeight, false) // false is to say this is a normal record, not external.
+		binsToStore, err = s.getBinsToStore(bItem.tx, blockHeight, bItem.blockIDs, false) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.New(errors.ERR_PROCESSING, "could not get bins to store", err))
 			//NOOP for this record
@@ -150,7 +151,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, err = s.getBinsToStore(batch[idx].tx, blockHeight, true) // true is to say this is a big record
+					binsToStore, err = s.getBinsToStore(batch[idx].tx, blockHeight, batch[idx].blockIDs, true) // true is to say this is a big record
 					if err != nil {
 						utils.SafeSend[error](batch[idx].done, errors.New(errors.ERR_PROCESSING, "could not get bins to store", err))
 						continue
@@ -197,7 +198,7 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 	return batches
 }
 
-func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, external bool, blockIDs ...uint32) ([][]*aerospike.Bin, error) {
+func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool) ([][]*aerospike.Bin, error) {
 	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
@@ -247,17 +248,12 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, external bool, blo
 		}
 	}
 
-	if len(blockIDs) == 0 {
-		blockIDs = make([]uint32, 0)
-	}
-
 	commonBins := []*aerospike.Bin{
 		aerospike.NewBin("version", aerospike.NewIntegerValue(int(tx.Version))),
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
 		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(tx.Size())),
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
-		aerospike.NewBin("blockIDs", blockIDs),
 		aerospike.NewBin("isCoinbase", tx.IsCoinbase()),
 	}
 
@@ -269,6 +265,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, external bool, blo
 	batches := s.splitIntoBatches(utxos, commonBins)
 
 	batches[0] = append(batches[0], aerospike.NewBin("nrRecords", aerospike.NewIntegerValue(len(batches))))
+	batches[0] = append(batches[0], aerospike.NewBin("blockIDs", blockIDs))
 
 	if len(batches) > 1 {
 		// if we have more than one batch, we opt to store the transaction externally
