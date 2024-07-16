@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -9,7 +10,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -21,7 +21,6 @@ var (
 	subtreeStore            blob.Store
 	blockStore              blob.Store
 	utxoStore               utxostore.Store
-	blockchainStore         blockchainstore.Store
 	blockchainClient        blockchain.ClientI
 	validatorClient         validator.Interface
 	subtreeValidationClient subtreevalidation.Interface
@@ -46,26 +45,6 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Store {
 	}
 
 	return utxoStore
-}
-
-func getBlockchainStore(ctx context.Context, logger ulogger.Logger) blockchainstore.Store {
-	if blockchainStore != nil {
-		return blockchainStore
-	}
-
-	blockchainURL, err, found := gocore.Config().GetURL("blockchain_store")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no blockchain setting found")
-	}
-	blockchainStore, err = blockchainstore.NewStore(logger, blockchainURL)
-	if err != nil {
-		panic(err)
-	}
-
-	return blockchainStore
 }
 
 func getSubtreeValidationClient(ctx context.Context, logger ulogger.Logger) subtreevalidation.Interface {

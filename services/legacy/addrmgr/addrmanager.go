@@ -659,6 +659,7 @@ func (a *AddrManager) AddressCache() []*wire.NetAddress {
 	// `numAddresses' since we are throwing the rest.
 	for i := 0; i < numAddresses; i++ {
 		// pick a number between current index and the end
+		// #nosec G404
 		j := rand.IntN(addrIndexLen-i) + i
 		allAddr[i], allAddr[j] = allAddr[j], allAddr[i]
 	}
@@ -1101,12 +1102,16 @@ func (a *AddrManager) GetBestLocalAddress(remoteAddr *wire.NetAddress) *wire.Net
 // New returns a new bitcoin address manager.
 // Use Start to begin processing asynchronous address updates.
 func New(logger ulogger.Logger, dataDir string, lookupFunc func(string) ([]net.IP, error)) *AddrManager {
+	// #nosec G404
 	randSource := rand.NewPCG(rand.Uint64(), rand.Uint64())
+	// #nosec G404
+	r := rand.New(randSource)
+
 	am := AddrManager{
 		logger:         logger,
 		peersFile:      filepath.Join(dataDir, "peers.json"),
 		lookupFunc:     lookupFunc,
-		rand:           rand.New(randSource),
+		rand:           r,
 		quit:           make(chan struct{}),
 		localAddresses: make(map[string]*localAddress),
 	}

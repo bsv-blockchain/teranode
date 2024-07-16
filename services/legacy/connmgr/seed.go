@@ -59,6 +59,7 @@ func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 			intPort, _ := strconv.Atoi(chainParams.DefaultPort)
 			for i, peer := range seedpeers {
 				randSource := mrand.NewPCG(uint64(time.Now().UnixNano()), uint64(secondsIn4Days))
+				// #nosec G404
 				rand := mrand.New(randSource)
 				addresses[i] = wire.NewNetAddressTimestamp(
 					// bitcoind seeds with addresses from

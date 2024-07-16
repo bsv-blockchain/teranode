@@ -435,7 +435,7 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// Ignore peers that aren't running Bitcoin
 	if strings.Contains(msg.UserAgent, "ABC") || strings.Contains(msg.UserAgent, "BUCash") {
 		sp.server.logger.Debugf("Rejecting peer %s for not running Bitcoin", sp.Peer)
-		reason := fmt.Sprint("Sorry, you are not running Bitcoin")
+		reason := "Sorry, you are not running Bitcoin"
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}
 
@@ -506,7 +506,6 @@ func (sp *serverPeer) OnMemPool(_ *peer.Peer, _ *wire.MsgMemPool) {
 	// normally this would only be sent with bloom filtering on, which we do not support
 	sp.server.logger.Warnf("Ignoring mempool request from %v -- bloom filtering is not supported", sp)
 	sp.Disconnect()
-	return
 }
 
 // OnTx is invoked when a peer receives a tx bitcoin message.  It blocks
@@ -1135,7 +1134,6 @@ func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, _ *wire.MsgFeeFilter) {
 	// don't allow fee filters
 	sp.server.logger.Warnf("Ignoring fee filter request from %s", sp)
 	sp.Disconnect()
-	return
 }
 
 // OnFilterAdd is invoked when a peer receives a filteradd bitcoin
@@ -1377,7 +1375,6 @@ func (s *server) AnnounceNewTransactions(txns []*chainhash.Hash) {
 // longer needing rebroadcasting.
 func (s *server) TransactionConfirmed(tx *bsvutil.Tx) {
 	// Rebroadcasting is only necessary when the RPC server is active.
-	return
 }
 
 // pushTxMsg sends a tx message for the provided transaction hash to the
@@ -2268,9 +2265,7 @@ out:
 			// When an InvVect has been added to a block, we can
 			// now remove it, if it was present.
 			case broadcastInventoryDel:
-				if _, ok := pendingInvs[*msg]; ok {
-					delete(pendingInvs, *msg)
-				}
+				delete(pendingInvs, *msg)
 			}
 
 		case <-timer.C:
@@ -2904,11 +2899,11 @@ func isWhitelisted(addr net.Addr) (bool, error) {
 
 	host, _, err := net.SplitHostPort(addr.String())
 	if err != nil {
-		return false, errors.New(fmt.Sprintf("Unable to SplitHostPort on '%s': %v", addr, err))
+		return false, fmt.Errorf("Unable to SplitHostPort on '%s': %v", addr, err)
 	}
 	ip := net.ParseIP(host)
 	if ip == nil {
-		return false, errors.New(fmt.Sprintf("Unable to parse IP '%s'", addr))
+		return false, fmt.Errorf("Unable to parse IP '%s'", addr)
 	}
 
 	for _, ipnet := range cfg.whitelists {

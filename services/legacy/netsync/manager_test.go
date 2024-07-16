@@ -7,12 +7,14 @@ package netsync_test
 import (
 	"context"
 	"fmt"
-	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"net/url"
 	"testing"
 	"time"
 
+	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
+
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
@@ -20,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
@@ -67,11 +70,22 @@ func (ctx *testContext) Setup(config *testConfig) error {
 
 	subtreeStore := blob_memory.New()
 
-	syncMgr, err := netsync.New(context.Background(), ulogger.TestLogger{}, blockchainClient, validatorClient, utxoStore, subtreeStore, &netsync.Config{
-		PeerNotifier: peerNotifier,
-		ChainParams:  ctx.cfg.chainParams,
-		MaxPeers:     8,
-	})
+	blockvalidationClient := blockvalidation.NewClient(context.Background(), ulogger.TestLogger{})
+	subtreeValidationClient := subtreevalidation.NewClient(context.Background(), ulogger.TestLogger{})
+
+	syncMgr, err := netsync.New(context.Background(),
+		ulogger.TestLogger{},
+		blockchainClient,
+		validatorClient,
+		utxoStore,
+		subtreeStore,
+		subtreeValidationClient,
+		blockvalidationClient,
+		&netsync.Config{
+			PeerNotifier: peerNotifier,
+			ChainParams:  ctx.cfg.chainParams,
+			MaxPeers:     8,
+		})
 	if err != nil {
 		return fmt.Errorf("failed to create SyncManager: %v", err)
 	}
@@ -312,15 +326,15 @@ func TestBlockchainSync(t *testing.T) {
 		t.Fatal("Timeout waiting for remote node to receive getdata message")
 	}
 	// Remote node sends first 3 blocks
-	syncChan := make(chan struct{})
+	errChan := make(chan error)
 	for _, block := range blocks {
-		syncMgr.QueueBlock(block, localNode, syncChan)
+		syncMgr.QueueBlock(block, localNode, errChan)
 
 		select {
-		case <-syncChan:
+		case err := <-errChan:
+			t.Fatalf("Error in sync manager to process block %d: %v", block.Height(), err)
 		case <-time.After(time.Second):
-			t.Fatalf("Timeout waiting for sync manager to process block %d",
-				block.Height())
+			t.Fatalf("Timeout waiting for sync manager to process block %d", block.Height())
 		}
 	}
 
@@ -373,9 +387,9 @@ func TestBlockchainSync(t *testing.T) {
 	}
 
 	// Remote node sends new block
-	syncMgr.QueueBlock(block, localNode, syncChan)
+	syncMgr.QueueBlock(block, localNode, errChan)
 	select {
-	case <-syncChan:
+	case <-errChan:
 	case <-time.After(time.Second):
 		t.Fatalf("Timeout waiting for sync manager to process block %d",
 			block.Height())
@@ -439,9 +453,9 @@ func TestBlockchainSync(t *testing.T) {
 		t.Fatal("Timeout waiting for remote node to receive getdata message")
 	}
 
-	syncMgr.QueueBlock(block, localNode, syncChan)
+	syncMgr.QueueBlock(block, localNode, errChan)
 	select {
-	case <-syncChan:
+	case <-errChan:
 	case <-time.After(time.Second):
 		t.Fatalf("Timeout waiting for sync manager to process block %d",
 			block.Height())

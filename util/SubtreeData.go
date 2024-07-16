@@ -3,10 +3,11 @@ package util
 import (
 	"bytes"
 	"fmt"
+	"io"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"io"
 )
 
 var CoinbasePlaceholder [32]byte
@@ -23,9 +24,6 @@ func init() {
 type SubtreeData struct {
 	Subtree *Subtree
 	Txs     []*bt.Tx
-
-	// RootHash is the hash of the root node of the subtree
-	rootHash chainhash.Hash
 }
 
 // NewSubtreeData creates a new SubtreeData object

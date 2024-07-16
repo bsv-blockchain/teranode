@@ -227,7 +227,12 @@ func getOurIP() (ip string, err error) {
 // getServiceURL parses the xml description at the given root url to find the
 // url for the WANIPConnection service to be used for port forwarding.
 func getServiceURL(rootURL string) (url string, err error) {
-	r, err := http.Get(rootURL)
+	req, err := http.NewRequest("GET", rootURL, nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{}
+	r, err := client.Do(req)
 	if err != nil {
 		return
 	}
