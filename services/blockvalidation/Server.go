@@ -541,7 +541,8 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = request.Height
 
-	err = u.processBlockFound(ctx, block.Header.Hash(), "", block)
+	// TODO - check if hardcoding "legacy" is OK
+	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)
 	if err != nil {
 		return nil, fmt.Errorf("failed block validation ProcessBlock [%s] [%v]", block.String(), err)
 	}
