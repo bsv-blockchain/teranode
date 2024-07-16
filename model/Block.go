@@ -15,6 +15,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/labstack/gommon/log"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -321,7 +322,12 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 	if block.Header.Version > 1 {
 		block.Height, err = block.ExtractCoinbaseHeight()
 		if err != nil {
-			return nil, errors.New(errors.ERR_BLOCK_INVALID, "error extracting coinbase height", err)
+			if errors.Is(err, errors.ErrCoinbaseMissingBlockHeight) {
+				// TODO - this should only be done when we are loading legacy blocks
+				log.Warnf("Block height not found in coinbase for block %s", block.Hash().String())
+			} else {
+				return nil, errors.New(errors.ERR_BLOCK_INVALID, "error extracting coinbase height for block %s: %v", block.Hash(), err)
+			}
 		}
 	}
 
