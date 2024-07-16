@@ -48,7 +48,7 @@ const (
 
 	// maxKnownInventory is the maximum number of items to keep in the known
 	// inventory cache.
-	maxKnownInventory = 1000
+	maxKnownInventory = 1000 // TODO: find a good value for this or make it a setting
 
 	// pingInterval is the interval of time to wait in between sending ping
 	// messages.
@@ -499,8 +499,7 @@ func (p *Peer) String() string {
 // This function is safe for concurrent access.
 func (p *Peer) UpdateLastBlockHeight(newHeight int32) {
 	p.statsMtx.Lock()
-	log.Debugf("Updating last block height of peer %v from %v to %v",
-		p.addr, p.lastBlock, newHeight)
+	log.Debugf("Updating last block height of peer %v from %v to %v", p.addr, p.lastBlock, newHeight)
 	p.lastBlock = newHeight
 	p.statsMtx.Unlock()
 }

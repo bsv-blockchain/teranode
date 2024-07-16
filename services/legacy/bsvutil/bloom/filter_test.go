@@ -212,6 +212,7 @@ func TestFilterInsertWithTweak(t *testing.T) {
 // TestFilterInsertKey ensures inserting public keys and addresses works as
 // expected.
 func TestFilterInsertKey(t *testing.T) {
+	// #nosec G101
 	secret := "5Kg1gnAjaLfKiwhhPpGS3QfRg2m6awQvaj98JCZBZQ5SuS2F15C"
 
 	wif, err := bsvutil.DecodeWIF(secret)

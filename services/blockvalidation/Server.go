@@ -168,7 +168,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	// process blocks found from channel
 	go func() {
 		for {
-			_, _, ctx1 := util.NewStatFromContext(ctx, "catchupCh", u.stats, false)
+			_, _, ctx1 := tracing.NewStatFromContext(ctx, "catchupCh", u.stats, false)
 			select {
 			case <-ctx.Done():
 				u.logger.Infof("[Init] closing block found channel")
@@ -237,7 +237,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		return nil
 	}
 
-	_, _, ctx1 := util.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
+	_, _, ctx1 := tracing.NewStatFromContext(ctx, "blockFoundCh", u.stats, false)
 
 	// TODO optimize this for the valid chain, not processing everything ???
 	u.logger.Infof("[Init] processing block found on channel [%s]", blockFound.hash.String())
@@ -444,7 +444,7 @@ func (u *Server) Stop(_ context.Context) error {
 }
 
 func (u *Server) HealthGRPC(_ context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
-	start, stat, _ := util.NewStatFromContext(context.Background(), "Health", u.stats)
+	start, stat, _ := tracing.NewStatFromContext(context.Background(), "Health", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -458,7 +458,7 @@ func (u *Server) HealthGRPC(_ context.Context, _ *blockvalidation_api.EmptyMessa
 }
 
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "BlockFound", u.stats)
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "BlockFound", u.stats)
 	defer func() {
 		stat.AddTime(start)
 		prometheusBlockValidationBlockFoundDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
@@ -510,8 +510,47 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
-func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string) error {
-	ctx, deferFn := tracing.StartTracing(ctx, "processBlockFound",
+func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "ProcessBlock", u.stats)
+	defer func() {
+		stat.AddTime(start)
+	}()
+
+	block, err := model.NewBlockFromBytes(request.Block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create block from bytes [%w]", err)
+	}
+
+	// we need the height for the subsidy calculation
+	height := request.Height
+
+	if height <= 0 {
+		// try to get the height from the previous block
+		_, previousBlockMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get previous block header [%w]", err)
+		}
+		if previousBlockMeta != nil {
+			height = previousBlockMeta.Height + 1
+		}
+	}
+
+	if height <= 0 {
+		return nil, fmt.Errorf("invalid height: %d", height)
+	}
+
+	block.Height = request.Height
+
+	err = u.processBlockFound(ctx, block.Header.Hash(), "", block)
+	if err != nil {
+		return nil, fmt.Errorf("failed block validation ProcessBlock [%s] [%v]", block.String(), err)
+	}
+
+	return &blockvalidation_api.EmptyMessage{}, nil
+}
+
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string, useBlock ...*model.Block) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "processBlockFound",
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFoundDuration),
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl),
@@ -528,9 +567,14 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 		return nil
 	}
 
-	block, err := u.getBlock(ctx, hash, baseUrl)
-	if err != nil {
-		return err
+	var block *model.Block
+	if len(useBlock) > 0 {
+		block = useBlock[0]
+	} else {
+		block, err = u.getBlock(ctx, hash, baseUrl)
+		if err != nil {
+			return err
+		}
 	}
 
 	delay := 10 * time.Millisecond
@@ -596,14 +640,14 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
 	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)
 	if err != nil {
-		u.logger.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
+		return fmt.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}
 
 	return nil
 }
 
 func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl string) (*model.Block, error) {
-	ctx, deferFn := tracing.StartTracing(ctx, "getBlock",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlock",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
@@ -626,7 +670,7 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl str
 }
 
 func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, baseUrl string) ([]*model.Block, error) {
-	ctx, deferFn := tracing.StartTracing(ctx, "getBlocks",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlocks",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
@@ -655,7 +699,7 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 }
 
 func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, baseUrl string) ([]*model.BlockHeader, error) {
-	ctx, deferFn := tracing.StartTracing(ctx, "getBlockHeaders",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "getBlockHeaders",
 		tracing.WithParentStat(u.stats),
 	)
 	defer deferFn()
@@ -680,7 +724,7 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 }
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
-	ctx, deferFn := tracing.StartTracing(ctx, "catchup",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "catchup",
 		tracing.WithHistogram(prometheusBlockValidationCatchupDuration),
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL),
@@ -881,7 +925,7 @@ func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.Subtre
 }
 
 func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "Get", u.stats)
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "Get", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -897,7 +941,7 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 }
 
 func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.ExistsSubtreeRequest) (*blockvalidation_api.ExistsSubtreeResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "Exists", u.stats)
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "Exists", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -914,7 +958,7 @@ func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.Exists
 }
 
 func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error) {
-	start, stat, _ := util.NewStatFromContext(ctx, "SetTxMeta", u.stats)
+	start, stat, _ := tracing.NewStatFromContext(ctx, "SetTxMeta", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -933,7 +977,7 @@ func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.Set
 }
 
 func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", u.stats)
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "SetTxMeta", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -954,7 +998,7 @@ func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.Del
 }
 
 func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api.SetMinedMultiRequest) (*blockvalidation_api.SetMinedMultiResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "SetMinedMulti", u.stats)
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "SetMinedMulti", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()

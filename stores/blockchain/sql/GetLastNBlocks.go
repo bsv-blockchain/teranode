@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -14,7 +15,7 @@ import (
 )
 
 func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetLastNBlocks")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetLastNBlocks")
 	defer func() {
 		stat.AddTime(start)
 	}()

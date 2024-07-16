@@ -2,6 +2,8 @@ package legacy
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
@@ -23,24 +25,30 @@ type Server struct {
 	height   uint32
 
 	// ubsv stores
-	blockchainClient blockchain.ClientI
-	validationClient validator.Interface
-	subtreeStore     blob.Store
-	utxoStore        utxo.Store
+	blockchainClient  blockchain.ClientI
+	validationClient  validator.Interface
+	subtreeStore      blob.Store
+	utxoStore         utxo.Store
+	subtreeValidation subtreevalidation.Interface
+	blockValidation   blockvalidation.Interface
 }
 
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, blockchainClient blockchain.ClientI, validationClient validator.Interface,
-	subtreeStore blob.Store, utxoStore utxo.Store) *Server {
+	subtreeStore blob.Store, utxoStore utxo.Store, subtreeValidation subtreevalidation.Interface,
+	blockValidation blockvalidation.Interface) *Server {
+
 	// initPrometheusMetrics()
 
 	return &Server{
-		logger:           logger,
-		stats:            gocore.NewStat("legacy"),
-		blockchainClient: blockchainClient,
-		validationClient: validationClient,
-		subtreeStore:     subtreeStore,
-		utxoStore:        utxoStore,
+		logger:            logger,
+		stats:             gocore.NewStat("legacy"),
+		blockchainClient:  blockchainClient,
+		validationClient:  validationClient,
+		subtreeStore:      subtreeStore,
+		utxoStore:         utxoStore,
+		subtreeValidation: subtreeValidation,
+		blockValidation:   blockValidation,
 	}
 }
 
@@ -75,6 +83,8 @@ func (s *Server) Init(ctx context.Context) error {
 		s.validationClient,
 		s.utxoStore,
 		s.subtreeStore,
+		s.subtreeValidation,
+		s.blockValidation,
 		listenAddresses,
 		&chaincfg.MainNetParams,
 	)

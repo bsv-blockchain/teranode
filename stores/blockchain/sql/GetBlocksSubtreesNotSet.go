@@ -5,14 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func (s *SQL) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlocksSubtreesNotSet")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlocksSubtreesNotSet")
 	defer func() {
 		stat.AddTime(start)
 	}()

@@ -6,12 +6,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockHeight")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockHeight")
 	defer func() {
 		stat.AddTime(start)
 	}()

@@ -15,16 +15,17 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	peerpkg "github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
@@ -77,7 +78,7 @@ type newPeerMsg struct {
 type blockMsg struct {
 	block *bsvutil.Block
 	peer  *peerpkg.Peer
-	reply chan struct{}
+	reply chan error
 }
 
 // invMsg packages a bitcoin inv message and the peer it came from together
@@ -223,10 +224,12 @@ type SyncManager struct {
 	quit    chan struct{}
 
 	// UBSV services
-	blockchainClient blockchain2.ClientI
-	validationClient validator.Interface
-	utxoStore        utxostore.Store
-	subtreeStore     blob.Store
+	blockchainClient  blockchain2.ClientI
+	validationClient  validator.Interface
+	utxoStore         utxostore.Store
+	subtreeStore      blob.Store
+	subtreeValidation subtreevalidation.Interface
+	blockValidation   blockvalidation.Interface
 
 	// These fields should only be accessed from the blockHandler thread.
 	rejectedTxns    map[chainhash.Hash]struct{}
@@ -341,8 +344,10 @@ func (sm *SyncManager) startSync() {
 	// if that is not available, then use a random peer at the same
 	// height and hope they find blocks.
 	if len(bestPeers) > 0 {
+		// #nosec G404
 		bestPeer = bestPeers[rand.IntN(len(bestPeers))]
 	} else if len(okPeers) > 0 {
+		// #nosec G404
 		bestPeer = okPeers[rand.IntN(len(okPeers))]
 	}
 
@@ -692,12 +697,11 @@ func (sm *SyncManager) current() bool {
 }
 
 // handleBlockMsg handles block messages from all peers.
-func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
+func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	peer := bmsg.peer
 	state, exists := sm.peerStates[peer]
 	if !exists {
-		sm.logger.Warnf("Received block message from unknown peer %s", peer)
-		return
+		return errors.New(errors.ERR_SERVICE_ERROR, "Received block message from unknown peer %s", peer)
 	}
 
 	// If we didn't ask for this block then the peer is misbehaving.
@@ -709,9 +713,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 		// mode, in this case, so the chain code is actually fed the
 		// duplicate blocks.
 		if sm.chainParams != &chaincfg.RegressionNetParams {
-			sm.logger.Warnf("Got unrequested block %v from %s -- disconnecting", blockHash, peer.Addr())
 			peer.Disconnect()
-			return
+			return errors.New(errors.ERR_SERVICE_ERROR, "Got unrequested block %v from %s -- disconnected", blockHash, peer)
 		}
 	}
 
@@ -745,17 +748,14 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	delete(state.requestedBlocks, *blockHash)
 	delete(sm.requestedBlocks, *blockHash)
 
-	// TODO does this work setting the height?
-	bmsg.block.SetHeight(bmsg.block.Height())
-	err := sm.HandleBlockDirect(context.TODO(), bmsg.block)
+	err := sm.HandleBlockDirect(context.TODO(), bmsg.peer, bmsg.block)
 	if err != nil {
-		sm.logger.Errorf("Failed to process block %v: %v", blockHash, err)
-		return
+		if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
+			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
+		}
+		// should be an ubsv error
+		return err
 	}
-
-	// if rejected
-	//		peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
-	//		return
 
 	// Meta-data about the new block this peer is reporting. We use this
 	// below to update this peer's latest block height and the heights of
@@ -769,31 +769,23 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	var heightUpdate int32
 	var blkHashUpdate *chainhash.Hash
 
-	// TODO we should be able to figure out whether this block is an orphan
-	isOrphan := false
-	if isOrphan {
-		// we don't really do orphan blocks in UBSV
-	} else {
-		// Only consider non-orphans for the timer.
-		if peer == sm.syncPeer {
-			sm.syncPeerState.lastBlockTime = time.Now()
-		}
-
-		// Update this peer's latest block height, for future potential sync node candidacy.
-		bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
-		if err != nil {
-			sm.logger.Errorf("Failed to get best block header: %v", err)
-			return
-		}
-		heightUpdate = int32(bestBlockHeaderMeta.Height)
-		blkHashUpdate = bestBlockHeader.Hash()
-
-		// When the block is not an orphan, log information about it and update the chain state.
-		sm.logger.Infof("Accepted block %v (best height %d)", blockHash, heightUpdate)
-
-		// Clear the rejected transactions.
-		sm.rejectedTxns = make(map[chainhash.Hash]struct{})
+	if peer == sm.syncPeer {
+		sm.syncPeerState.lastBlockTime = time.Now()
 	}
+
+	// When the block is not an orphan, log information about it and update the chain state.
+	sm.logger.Infof("Accepted block %v", blockHash)
+
+	// Update this peer's latest block height, for future potential sync node candidacy.
+	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
+	if err != nil {
+		return errors.New(errors.ERR_SERVICE_ERROR, "failed to get best block header", err)
+	}
+	heightUpdate = int32(bestBlockHeaderMeta.Height)
+	blkHashUpdate = bestBlockHeader.Hash()
+
+	// Clear the rejected transactions.
+	sm.rejectedTxns = make(map[chainhash.Hash]struct{})
 
 	// Update the block height for this peer. But only send a message to
 	// the server for updating peer heights if this is an orphan or our
@@ -801,7 +793,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	// if we're syncing the chain from scratch.
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
-		if isOrphan || sm.current() {
+		if sm.current() { // used to check for isOrphan || sm.current()
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
 		}
 	}
@@ -814,7 +806,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 			len(state.requestedBlocks) < minInFlightBlocks {
 			sm.fetchHeaderBlocks()
 		}
-		return
+		return nil
 	}
 
 	// This is headers-first mode and the block is a checkpoint.  When
@@ -826,10 +818,9 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	sm.nextCheckpoint = sm.findNextHeaderCheckpoint(prevHeight)
 	if sm.nextCheckpoint != nil {
 		locator := blockchain.BlockLocator([]*chainhash.Hash{prevHash})
-		err := peer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
+		err = peer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
 		if err != nil {
-			sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", peer.Addr(), err)
-			return
+			return errors.New(errors.ERR_SERVICE_ERROR, "failed to send getheaders message to peer %s", peer.Addr(), err)
 		}
 
 		if sm.syncPeer != nil {
@@ -840,7 +831,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 				sm.syncPeer.Addr(),
 			)
 		}
-		return
+		return nil
 	}
 
 	// This is headers-first mode, the block is a checkpoint, and there are
@@ -852,10 +843,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) {
 	locator := blockchain.BlockLocator([]*chainhash.Hash{blockHash})
 	err = peer.PushGetBlocksMsg(locator, &zeroHash)
 	if err != nil {
-		sm.logger.Warnf("Failed to send getblocks message to peer %s: %v",
-			peer.Addr(), err)
-		return
+		return errors.New(errors.ERR_SERVICE_ERROR, "Failed to send getblocks message to peer %s", peer.Addr(), err)
 	}
+
+	return nil
 }
 
 // fetchHeaderBlocks creates and sends a request to the syncPeer for the next
@@ -1244,9 +1235,9 @@ out:
 				}
 
 			case *blockMsg:
-				sm.handleBlockMsg(msg)
+				err := sm.handleBlockMsg(msg)
 				if msg.reply != nil {
-					msg.reply <- struct{}{}
+					msg.reply <- err
 				}
 
 			case *invMsg:
@@ -1350,10 +1341,10 @@ func (sm *SyncManager) QueueTx(tx *bsvutil.Tx, peer *peerpkg.Peer, done chan str
 // QueueBlock adds the passed block message and peer to the block handling
 // queue. Responds to the done channel argument after the block message is
 // processed.
-func (sm *SyncManager) QueueBlock(block *bsvutil.Block, peer *peerpkg.Peer, done chan struct{}) {
+func (sm *SyncManager) QueueBlock(block *bsvutil.Block, peer *peerpkg.Peer, done chan error) {
 	// Don't accept more blocks if we're shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
-		done <- struct{}{}
+		done <- nil
 		return
 	}
 
@@ -1458,7 +1449,9 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
 func New(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain2.ClientI,
-	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store, config *Config) (*SyncManager, error) {
+	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
+	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
+	config *Config) (*SyncManager, error) {
 
 	sm := SyncManager{
 		peerNotifier: config.PeerNotifier,
@@ -1477,11 +1470,13 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain
 		minSyncPeerNetworkSpeed: config.MinSyncPeerNetworkSpeed,
 
 		// ubsv stores etc.
-		logger:           logger,
-		blockchainClient: blockchainClient,
-		validationClient: validationClient,
-		utxoStore:        utxoStore,
-		subtreeStore:     subtreeStore,
+		logger:            logger,
+		blockchainClient:  blockchainClient,
+		validationClient:  validationClient,
+		utxoStore:         utxoStore,
+		subtreeStore:      subtreeStore,
+		subtreeValidation: subtreeValidation,
+		blockValidation:   blockValidation,
 	}
 
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())

@@ -15,6 +15,7 @@ import (
 // This example demonstrates how to create a new bloom filter, add a transaction
 // hash to it, and check if the filter matches the transaction.
 func ExampleNewFilter() {
+	// #nosec G404
 	tweak := rand.Uint32()
 
 	// Create a new bloom filter intended to hold 10 elements with a 0.01%

@@ -9,9 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -19,6 +16,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/deduplicator"
@@ -351,7 +351,7 @@ func (u *BlockValidation) SetSubtreeExists(hash *chainhash.Hash) error {
 }
 
 func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetSubtreeExists")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetSubtreeExists")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -506,7 +506,7 @@ func (u *BlockValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainha
 }
 
 func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string, bloomStats *model.BloomStats) error {
-	timeStart, stat, ctx := util.NewStatFromContext(ctx, "ValidateBlock", u.stats)
+	timeStart, stat, ctx := tracing.NewStatFromContext(ctx, "ValidateBlock", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
 	span.LogKV("block", block.Hash().String())
 	defer func() {
@@ -743,7 +743,7 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block, baseUrl string) {
 func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	ctx := context.Background()
 
-	timeStart, stat, ctx := util.NewStatFromContext(ctx, "reValidateBlock", u.stats)
+	timeStart, stat, ctx := tracing.NewStatFromContext(ctx, "reValidateBlock", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:reValidateBlock")
 	span.LogKV("block", blockData.block.Hash().String())
 	defer func() {
@@ -888,7 +888,7 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 
 func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseUrl string) error {
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateBlockSubtrees")
-	start, stat, spanCtx := util.StartStatFromContext(spanCtx, "ValidateBlockSubtrees")
+	start, stat, spanCtx := tracing.StartStatFromContext(spanCtx, "ValidateBlockSubtrees")
 	defer func() {
 		span.Finish()
 		stat.AddTime(start)

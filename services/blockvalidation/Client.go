@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/model"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -133,6 +134,25 @@ func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, base
 	}
 
 	_, err := s.apiClient.BlockFound(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32) error {
+	blockBytes, err := block.Bytes()
+	if err != nil {
+		return err
+	}
+
+	req := &blockvalidation_api.ProcessBlockRequest{
+		Block:  blockBytes,
+		Height: blockHeight,
+	}
+
+	_, err = s.apiClient.ProcessBlock(ctx, req)
 	if err != nil {
 		return err
 	}

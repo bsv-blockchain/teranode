@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
@@ -171,7 +172,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 
 	// s.logger.Infof("Storing transaction %s", tx.TxIDChainHash())
 
-	start, stat, _ := util.StartStatFromContext(ctx, "Create")
+	start, stat, _ := tracing.StartStatFromContext(ctx, "Create")
 
 	defer func() {
 		stat.AddTime(start)
@@ -775,7 +776,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 	// Update the block_ids
 	q := `
 		INSERT INTO block_ids (
-		 transaction_id	
+		 transaction_id
 		,block_id
 		) VALUES (
 		 (SELECT id FROM transactions WHERE hash = $1)
