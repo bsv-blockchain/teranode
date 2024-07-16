@@ -345,7 +345,7 @@ func (b *Blockchain) GetFullBlock(ctx context.Context, request *blockchain_api.G
 		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
 	}
 
-	bytes, err := b.GetFullBlockBytes(ctx1, *blockHash)
+	bytes, err := GetFullBlockBytes(ctx1, *blockHash, b.store, b.subtreeStore, b.utxoStore)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}

@@ -9,6 +9,8 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -18,9 +20,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func (s *Blockchain) GetFullBlockBytes(ctx context.Context, blockHash chainhash.Hash) ([]byte, error) {
+func GetFullBlockBytes(ctx context.Context, blockHash chainhash.Hash, store blockchain.Store, subtreeStore blob.Store, utxoStore utxo.Store) ([]byte, error) {
 
-	block, _, err := s.store.GetBlock(ctx, &blockHash)
+	block, _, err := store.GetBlock(ctx, &blockHash)
 	if err != nil {
 		return nil, errors.New(errors.ERR_PROCESSING, "[GetFullBlockBytes][%s] error getting block from store", block.Hash().String(), err)
 	}
@@ -37,7 +39,7 @@ func (s *Blockchain) GetFullBlockBytes(ctx context.Context, blockHash chainhash.
 	}
 
 	for _, subtreeHash := range block.Subtrees {
-		if err := s.processSubtree(ctx, block, *subtreeHash, buf); err != nil {
+		if err := processSubtree(ctx, block, *subtreeHash, buf, subtreeStore, utxoStore); err != nil {
 			return nil, err
 		}
 	}
@@ -45,8 +47,8 @@ func (s *Blockchain) GetFullBlockBytes(ctx context.Context, blockHash chainhash.
 	return buf.Bytes(), nil
 }
 
-func (s *Blockchain) processSubtree(ctx context.Context, block *model.Block, subtreeHash chainhash.Hash, buf *bytes.Buffer) error {
-	subtreeReader, err := s.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
+func processSubtree(ctx context.Context, block *model.Block, subtreeHash chainhash.Hash, buf *bytes.Buffer, subtreeStore blob.Store, utxoStore utxo.Store) error {
+	subtreeReader, err := subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
 	if err != nil {
 		return errors.New(errors.ERR_PROCESSING, "[GetFullBlockBytes] error getting subtree %s from store: %w", subtreeHash.String(), err)
 	}
@@ -74,7 +76,7 @@ func (s *Blockchain) processSubtree(ctx context.Context, block *model.Block, sub
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
 	// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-	missed, err := s.processTxMetaUsingStore(ctx, txHashes, txMetaSlice)
+	missed, err := processTxMetaUsingStore(ctx, txHashes, txMetaSlice, utxoStore)
 	if err != nil {
 		return errors.New(errors.ERR_PROCESSING, "[GetFullBlockBytes][%s] failed to get tx meta from store", subtreeHash.String(), err)
 	}
@@ -108,7 +110,7 @@ func (s *Blockchain) processSubtree(ctx context.Context, block *model.Block, sub
 
 }
 
-func (u *Blockchain) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data) (int, error) {
+func processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data, utxoStore utxo.Store) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, errors.New(errors.ERR_PROCESSING, "[GetFullBlockBytes] txHashes and txMetaSlice must be the same length")
 	}
@@ -153,7 +155,7 @@ func (u *Blockchain) processTxMetaUsingStore(ctx context.Context, txHashes []cha
 				}
 			}
 
-			if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, "tx"); err != nil {
+			if err := utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, "tx"); err != nil {
 				return err
 			}
 
