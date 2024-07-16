@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"strconv"
 	"sync"
@@ -48,7 +48,7 @@ const (
 
 	// maxKnownInventory is the maximum number of items to keep in the known
 	// inventory cache.
-	maxKnownInventory = 1000
+	maxKnownInventory = 1000 // TODO: find a good value for this or make it a setting
 
 	// pingInterval is the interval of time to wait in between sending ping
 	// messages.
@@ -151,8 +151,31 @@ type MessageListeners struct {
 	// message.
 	OnGetHeaders func(p *Peer, msg *wire.MsgGetHeaders)
 
+	// OnGetCFilters is invoked when a peer receives a getcfilters bitcoin
+	// message.
+	OnGetCFilters func(p *Peer, msg *wire.MsgGetCFilters)
+
+	// OnGetCFHeaders is invoked when a peer receives a getcfheaders
+	// bitcoin message.
+	OnGetCFHeaders func(p *Peer, msg *wire.MsgGetCFHeaders)
+
+	// OnGetCFCheckpt is invoked when a peer receives a getcfcheckpt
+	// bitcoin message.
+	OnGetCFCheckpt func(p *Peer, msg *wire.MsgGetCFCheckpt)
+
 	// OnFeeFilter is invoked when a peer receives a feefilter bitcoin message.
 	OnFeeFilter func(p *Peer, msg *wire.MsgFeeFilter)
+
+	// OnFilterAdd is invoked when a peer receives a filteradd bitcoin message.
+	OnFilterAdd func(p *Peer, msg *wire.MsgFilterAdd)
+
+	// OnFilterClear is invoked when a peer receives a filterclear bitcoin
+	// message.
+	OnFilterClear func(p *Peer, msg *wire.MsgFilterClear)
+
+	// OnFilterLoad is invoked when a peer receives a filterload bitcoin
+	// message.
+	OnFilterLoad func(p *Peer, msg *wire.MsgFilterLoad)
 
 	// OnMerkleBlock  is invoked when a peer receives a merkleblock bitcoin
 	// message.
@@ -476,8 +499,7 @@ func (p *Peer) String() string {
 // This function is safe for concurrent access.
 func (p *Peer) UpdateLastBlockHeight(newHeight int32) {
 	p.statsMtx.Lock()
-	log.Debugf("Updating last block height of peer %v from %v to %v",
-		p.addr, p.lastBlock, newHeight)
+	log.Debugf("Updating last block height of peer %v from %v to %v", p.addr, p.lastBlock, newHeight)
 	p.lastBlock = newHeight
 	p.statsMtx.Unlock()
 }
@@ -825,7 +847,7 @@ func (p *Peer) PushAddrMsg(addresses []*wire.NetAddress) ([]*wire.NetAddress, er
 		// Shuffle the address list.
 		for i := 0; i < wire.MaxAddrPerMsg; i++ {
 			//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-			j := i + rand.Intn(addressCount-i)
+			j := i + rand.IntN(addressCount-i)
 			msg.AddrList[i], msg.AddrList[j] = msg.AddrList[j], msg.AddrList[i]
 		}
 
@@ -1963,7 +1985,7 @@ func (p *Peer) localVersionMsg() (*wire.MsgVersion, error) {
 	// recently seen nonces.
 
 	//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
-	nonce := uint64(rand.Int63())
+	nonce := uint64(rand.Int64())
 	sentNonces.Add(nonce)
 
 	// Create a wire.NetAddress to use as "addrme" in the

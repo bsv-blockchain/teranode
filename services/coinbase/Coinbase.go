@@ -10,12 +10,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -29,6 +28,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 var coinbaseStat = gocore.NewStat("coinbase")
@@ -447,7 +447,7 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 }
 
 func (c *Coinbase) catchup(cntxt context.Context, fromBlock *model.Block, baseURL string) error {
-	start, stat, ctx := util.NewStatFromContext(cntxt, "catchup", c.stats)
+	start, stat, ctx := tracing.NewStatFromContext(cntxt, "catchup", c.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -510,7 +510,7 @@ LOOP:
 }
 
 func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash, baseUrl string) (*model.Block, error) {
-	start, stat, ctx := util.NewStatFromContext(cntxt, "processBlock", coinbaseStat)
+	start, stat, ctx := tracing.NewStatFromContext(cntxt, "processBlock", coinbaseStat)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -556,7 +556,7 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 }
 
 func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
-	start, stat, ctx := util.StartStatFromContext(ctx, "storeBlock")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "storeBlock")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -590,7 +590,7 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 }
 
 func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
-	start, stat, ctx := util.StartStatFromContext(ctx, "processCoinbase")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "processCoinbase")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -645,7 +645,7 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 		return fmt.Errorf("could not update coinbase_utxos to be processed: %+v", err)
 	}
 
-	_, _, ctx = util.NewStatFromContext(context.Background(), "go routine", stat, false)
+	_, _, ctx = tracing.NewStatFromContext(context.Background(), "go routine", stat, false)
 
 	if err := c.createSpendingUtxos(ctx, timestamp); err != nil {
 		return fmt.Errorf("could not create spending utxos: %w", err)
@@ -655,7 +655,7 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 }
 
 func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) error {
-	start, stat, ctx := util.StartStatFromContext(ctx, "createSpendingUtxos")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "createSpendingUtxos")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -725,7 +725,7 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 }
 
 func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
-	start, stat, ctx := util.StartStatFromContext(cntxt, "splitUtxo")
+	start, stat, ctx := tracing.StartStatFromContext(cntxt, "splitUtxo")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -776,7 +776,7 @@ func (c *Coinbase) RequestFunds(ctx context.Context, address string, disableDist
 	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
 	//defer cancelTimeout()
 
-	start, stat, ctx := util.NewStatFromContext(ctx, "RequestFunds", coinbaseStat)
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "RequestFunds", coinbaseStat)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -934,7 +934,7 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 	//ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
 	//defer cancelTimeout()
 
-	start, stat, ctx := util.StartStatFromContext(ctx, "insertCoinbaseUTXOs")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "insertCoinbaseUTXOs")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -1016,7 +1016,7 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 	//ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
 	//defer cancelTimeout()
 
-	start, stat, ctx := util.StartStatFromContext(ctx, "insertSpendableUTXOs")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "insertSpendableUTXOs")
 	defer func() {
 		stat.AddTime(start)
 	}()

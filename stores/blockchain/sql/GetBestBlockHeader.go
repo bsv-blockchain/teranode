@@ -7,13 +7,14 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBestBlockHeader")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBestBlockHeader")
 	defer func() {
 		stat.AddTime(start)
 	}()

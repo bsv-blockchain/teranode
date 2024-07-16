@@ -3,12 +3,13 @@ package sql
 import (
 	"context"
 	"fmt"
+
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 )
 
 func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockStats")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockStats")
 	defer func() {
 		stat.AddTime(start)
 	}()

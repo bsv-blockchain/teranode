@@ -5,15 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/libsv/go-bt/v2"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint32) ([]*model.Block, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockHeaders")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockHeaders")
 	defer func() {
 		stat.AddTime(start)
 	}()

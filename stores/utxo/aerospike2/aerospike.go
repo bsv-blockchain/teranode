@@ -24,6 +24,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+const defaultUxtoBatchSize = 20_000
+
 var (
 	binNames = []string{
 		"spendable",
@@ -49,6 +51,7 @@ type Store struct {
 	getBatcher    *batcher.Batcher2[batchGetItem]
 	spendBatcher  *batcher.Batcher2[batchSpend]
 	externalStore blob.Store
+	utxoBatchSize int
 }
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
@@ -102,6 +105,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		expiration:    expiration,
 		logger:        logger,
 		externalStore: externalStore,
+		utxoBatchSize: 20_000, // Do not change this value, it is used to calculate the offset for the output
 	}
 
 	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
@@ -120,14 +124,10 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		s.getBatcher = batcher.New[batchGetItem](batchSize, duration, s.sendGetBatch, true)
 	}
 
-	// Make sure the spend and unSpend lua scripts are installed in the cluster
+	// Make sure the udf lua scripts are installed in the cluster
 	// update the version of the lua script when a new version is launched, do not re-use the old one
-	if err := registerLuaIfNecessary(client, luaSpendFunction, spendLUA); err != nil {
-		return nil, fmt.Errorf("Failed to register spendLUA: %w", err)
-	}
-
-	if err := registerLuaIfNecessary(client, luaUnSpendFunction, unSpendLUA); err != nil {
-		return nil, fmt.Errorf("Failed to register unSpendLUA: %w", err)
+	if err := registerLuaIfNecessary(client, luaPackage, ubsvLUA); err != nil {
+		return nil, fmt.Errorf("Failed to register udfLUA: %w", err)
 	}
 
 	if batchingEnabled {
@@ -140,36 +140,6 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 
 	return s, nil
-}
-
-func registerLuaIfNecessary(client *uaerospike.Client, funcName string, funcBytes []byte) error {
-	udfs, err := client.ListUDF(nil)
-	if err != nil {
-		return err
-	}
-
-	foundScript := false
-
-	for _, udf := range udfs {
-		if udf.Filename == funcName+".lua" {
-
-			foundScript = true
-			break
-		}
-	}
-
-	if !foundScript {
-		registerSpendLua, err := client.RegisterUDF(nil, funcBytes, funcName+".lua", aerospike.LUA)
-		if err != nil {
-			return err
-		}
-
-		err = <-registerSpendLua.OnComplete()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
@@ -235,8 +205,12 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	return 0, details, nil
 }
 
-func calculateOffsetForOutput(vout uint32, utxoBatchSize uint32) uint32 {
-	return vout % utxoBatchSize
+func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
+	if s.utxoBatchSize == 0 {
+		s.utxoBatchSize = defaultUxtoBatchSize
+	}
+
+	return vout % uint32(s.utxoBatchSize)
 }
 
 func calculateKeySource(hash *chainhash.Hash, num uint32) []byte {

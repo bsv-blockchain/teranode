@@ -109,7 +109,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 }
 
 func (v *Validator) Health(cntxt context.Context) (int, string, error) {
-	start, stat, _ := util.NewStatFromContext(cntxt, "Health", v.stats)
+	start, stat, _ := tracing.NewStatFromContext(cntxt, "Health", v.stats)
 	defer stat.AddTime(start)
 
 	return 0, "LocalValidator", nil
@@ -121,7 +121,7 @@ func (v *Validator) GetBlockHeight() (height uint32, err error) {
 
 // TODO try to break this
 func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
-	start, stat, ctx := util.NewStatFromContext(cntxt, "Validate", v.stats)
+	start, stat, ctx := tracing.NewStatFromContext(cntxt, "Validate", v.stats)
 	defer func() {
 		stat.AddTime(start)
 		prometheusTransactionValidateTotal.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
@@ -160,7 +160,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 	// decouple the tracing context to not cancel the context when finalize the block assembly
 	callerSpan := opentracing.SpanFromContext(traceSpan.Ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
-	setCtx = util.CopyStatFromContext(traceSpan.Ctx, setCtx)
+	setCtx = tracing.CopyStatFromContext(traceSpan.Ctx, setCtx)
 	setSpan := tracing.Start(setCtx, "Validator:sendToBlockAssembly")
 	defer setSpan.Finish()
 
@@ -185,7 +185,11 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 	if err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			// stop all processing, this transaction has already been validated and passed into the block assembly
+			// buf := make([]byte, 1024)
+			// runtime.Stack(buf, false)
+
 			v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
+			// v.logger.Debugf("[Validate][%s] stack: %s", tx.TxIDChainHash().String(), string(buf))
 			return nil
 		}
 
@@ -251,7 +255,7 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Has
 }
 
 func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx) (*meta.Data, error) {
-	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "registerTxInMetaStore")
+	start, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "registerTxInMetaStore")
 	defer func() {
 		stat.AddTime(start)
 		prometheusValidatorSetTxMeta.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
@@ -275,7 +279,7 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx) (*meta.D
 }
 
 func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) ([]*utxo.Spend, error) {
-	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "spendUtxos")
+	start, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "spendUtxos")
 	defer func() {
 		stat.AddTime(start)
 		prometheusTransactionSpendUtxos.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
@@ -320,16 +324,11 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 
 		// check whether this is a double spend error
 
-		var spentErr *utxo.ErrSpent
-		ok := errors.As(err, &spentErr)
-		if ok {
+		if errors.Is(err, errors.ErrSpent) {
 			// remove the spending tx from the block assembly and freeze it
 			// TODO implement freezing in utxo store
-			if spentErr.SpendingTxID != nil {
-				err = v.blockAssembler.RemoveTx(ctx, spentErr.SpendingTxID)
-				if err != nil {
-					v.logger.Errorf("validator: UTXO Store remove tx failed: %v", err)
-				}
+			if err := v.blockAssembler.RemoveTx(ctx, txIDChainHash); err != nil {
+				v.logger.Errorf("validator: UTXO Store remove tx failed: %v", err)
 			}
 		}
 
@@ -340,7 +339,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 }
 
 func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error {
-	startTime, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "sendToBlockAssembler")
+	startTime, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "sendToBlockAssembler")
 	defer func() {
 		stat.AddTime(startTime)
 		prometheusValidatorSendToBlockAssembly.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
@@ -362,7 +361,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 }
 
 func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spend) error {
-	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "reverseSpends")
+	start, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "reverseSpends")
 	defer stat.AddTime(start)
 
 	reverseUtxoSpan := tracing.Start(ctx, "Validator:Validate:reverseSpends")
@@ -413,7 +412,7 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 }
 
 func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) error {
-	start, stat, ctx := util.StartStatFromContext(traceSpan.Ctx, "validateTransaction")
+	start, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "validateTransaction")
 	defer func() {
 		stat.AddTime(start)
 		prometheusTransactionValidate.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)

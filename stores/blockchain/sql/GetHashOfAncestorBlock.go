@@ -2,18 +2,17 @@ package sql
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
-	"database/sql"
-	"errors"
-
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetHashOfAncestorBlock")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetHashOfAncestorBlock")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -23,37 +22,37 @@ func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, 
 	var pastHash []byte
 
 	q := `WITH RECURSIVE ChainBlocks AS (
-		SELECT 
-			id, 
-			hash, 
-			parent_id, 
+		SELECT
+			id,
+			hash,
+			parent_id,
 			1 AS depth
-		FROM 
+		FROM
 			blocks
-		WHERE 
+		WHERE
 			hash = $1  -- $1 is the placeholder for the starting block hash (h1)
-	
+
 		UNION ALL
-	
-		SELECT 
-			b.id, 
-			b.hash, 
-			b.parent_id, 
+
+		SELECT
+			b.id,
+			b.hash,
+			b.parent_id,
 			cb.depth + 1
-		FROM 
+		FROM
 			blocks b
-		INNER JOIN 
+		INNER JOIN
 			ChainBlocks cb ON b.id = cb.parent_id
-		WHERE 
+		WHERE
 			cb.depth < $2 AND cb.depth < (SELECT COUNT(*) FROM blocks)  -- Ensure depth doesn't exceed the number of blocks
 	)
-	SELECT 
+	SELECT
 	hash
-	FROM 
+	FROM
 		ChainBlocks
-	WHERE 
+	WHERE
 		depth = $2
-	ORDER BY 
+	ORDER BY
 		depth DESC
 	LIMIT 1`
 

@@ -7,14 +7,14 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 )
 
 func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockByHeight")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockByHeight")
 	defer func() {
 		stat.AddTime(start)
 	}()

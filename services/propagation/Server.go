@@ -358,7 +358,7 @@ func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.
 }
 
 func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *propagation_api.ProcessTransactionHexRequest) (*propagation_api.EmptyMessage, error) {
-	start, stat, ctx := util.NewStatFromContext(cntxt, "ProcessTransactionHex", propagationStat)
+	start, stat, ctx := tracing.NewStatFromContext(cntxt, "ProcessTransactionHex", propagationStat)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -410,7 +410,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 }
 
 func (ps *PropagationServer) processTransaction(cntxt context.Context, req *propagation_api.ProcessTransactionRequest) error {
-	start, stat, ctx := util.NewStatFromContext(cntxt, "ProcessTransaction", propagationStat)
+	start, stat, ctx := tracing.NewStatFromContext(cntxt, "ProcessTransaction", propagationStat)
 	defer func() {
 		stat.AddTime(start)
 	}()

@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
@@ -241,7 +242,7 @@ func (b *Blockchain) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*blockchai
 }
 
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "AddBlock", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "AddBlock", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -306,7 +307,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 }
 
 func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlock", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlock", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -339,7 +340,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 }
 
 func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlocksRequest) (*blockchain_api.GetBlocksResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlocks", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlocks", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -371,7 +372,7 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 }
 
 func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_api.GetBlockByHeightRequest) (*blockchain_api.GetBlockResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlock", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlock", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -399,7 +400,7 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 }
 
 func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockStats", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockStats", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -409,7 +410,7 @@ func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*mode
 }
 
 func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.GetBlockGraphDataRequest) (*model.BlockDataPoints, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockGraphData", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockGraphData", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -419,7 +420,7 @@ func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.
 }
 
 func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetLastNBlocks", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetLastNBlocks", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -438,7 +439,7 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 }
 
 func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_api.GetSuitableBlockRequest) (*blockchain_api.GetSuitableBlockResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetSuitableBlock", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetSuitableBlock", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -456,7 +457,7 @@ func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_a
 }
 
 func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchain_api.GetNextWorkRequiredRequest) (*blockchain_api.GetNextWorkRequiredResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetNextWorkRequired", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetNextWorkRequired", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -497,7 +498,7 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 }
 
 func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockchain_api.GetHashOfAncestorBlockRequest) (*blockchain_api.GetHashOfAncestorBlockResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetHashOfAncestorBlock", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetHashOfAncestorBlock", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -515,7 +516,7 @@ func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockc
 }
 
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockExists", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockExists", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -538,7 +539,7 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 }
 
 func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBestBlockHeader", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBestBlockHeader", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -560,7 +561,7 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 }
 
 func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.GetBlockHeaderRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockHeader", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockHeader", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -589,7 +590,7 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 }
 
 func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockHeaders", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockHeaders", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -623,7 +624,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 }
 
 func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersFromHeightRequest) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetBlockHeadersFromHeight", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockHeadersFromHeight", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -650,7 +651,7 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 }
 
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
-	start, stat, _ := util.NewStatFromContext(sub.Context(), "Subscribe", b.stats)
+	start, stat, _ := tracing.NewStatFromContext(sub.Context(), "Subscribe", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -680,7 +681,7 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 }
 
 func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "GetState", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetState", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -698,7 +699,7 @@ func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateR
 }
 
 func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "SetState", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "SetState", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -730,7 +731,7 @@ func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_
 }
 
 func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_api.InvalidateBlockRequest) (*emptypb.Empty, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "InvalidateBlock", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "InvalidateBlock", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -762,7 +763,7 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 }
 
 func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_api.RevalidateBlockRequest) (*emptypb.Empty, error) {
-	start, stat, ctx1 := util.NewStatFromContext(ctx, "RevalidateBlock", b.stats)
+	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "RevalidateBlock", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -784,7 +785,7 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 }
 
 func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
-	start, stat, _ := util.NewStatFromContext(context.Background(), "SendNotification", b.stats)
+	start, stat, _ := tracing.NewStatFromContext(context.Background(), "SendNotification", b.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()

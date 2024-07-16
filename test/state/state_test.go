@@ -51,8 +51,12 @@ func setupBitcoinTestFramework() {
 }
 
 func tearDownBitcoinTestFramework() {
-	if err := framework.StopNodes(); err != nil {
+	if err := framework.StopNodesWithRmVolume(); err != nil {
 		fmt.Printf("Error stopping nodes: %v\n", err)
+	}
+	err := os.RemoveAll("../../data")
+	if err != nil {
+		fmt.Printf("Error removing data directory: %v\n", err)
 	}
 }
 
@@ -73,26 +77,26 @@ func TestNodeCatchUpState_WithStartAndStopNodes(t *testing.T) {
 
 	err := framework.StopNode("ubsv-2")
 	if err != nil {
-		t.Fatalf("Failed to stop node: %v", err)
+		t.Errorf("Failed to stop node: %v", err)
 	}
 
 	for i := 0; i < 5; i++ {
 		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
 		if err != nil {
-			t.Fatalf("Failed to create and send raw txs: %v", err)
+			t.Errorf("Failed to create and send raw txs: %v", err)
 		}
 		fmt.Printf("Hashes: %v\n", hashes)
 
 		baClient := framework.Nodes[0].BlockassemblyClient
 		_, err = helper.MineBlock(ctx, baClient, logger)
 		if err != nil {
-			t.Fatalf("Failed to mine block: %v", err)
+			t.Errorf("Failed to mine block: %v", err)
 		}
 	}
 
 	err = framework.StartNode("ubsv-2")
 	if err != nil {
-		t.Fatalf("Failed to start node: %v", err)
+		t.Errorf("Failed to start node: %v", err)
 	}
 
 	wg.Add(1)
@@ -148,7 +152,7 @@ func TestNodeCatchUpState_WithP2PSwitch(t *testing.T) {
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.tc3"
 	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Fatalf("Failed to restart nodes: %v", err)
+		t.Errorf("Failed to restart nodes: %v", err)
 	}
 	ctx := context.Background()
 
@@ -158,20 +162,20 @@ func TestNodeCatchUpState_WithP2PSwitch(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
 		if err != nil {
-			t.Fatalf("Failed to create and send raw txs: %v", err)
+			t.Errorf("Failed to create and send raw txs: %v", err)
 		}
 		fmt.Printf("Hashes: %v\n", hashes)
 
 		baClient := framework.Nodes[0].BlockassemblyClient
 		_, err = helper.MineBlock(ctx, baClient, logger)
 		if err != nil {
-			t.Fatalf("Failed to mine block: %v", err)
+			t.Errorf("Failed to mine block: %v", err)
 		}
 	}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.tc1"
 	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Fatalf("Failed to restart nodes: %v", err)
+		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
 	wg.Add(1)

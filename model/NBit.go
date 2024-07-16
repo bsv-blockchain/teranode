@@ -52,6 +52,7 @@ func (b NBit) CloneBytes() []byte {
 	return b[:]
 }
 
+// CalculateTarget from nBits returns the target as a big.Int
 func (b NBit) CalculateTarget() *big.Int {
 	nb := binary.LittleEndian.Uint32(b[:])
 
@@ -70,7 +71,7 @@ func (b NBit) CalculateTarget() *big.Int {
 	return target
 }
 
-// Calculate difficulty from nBits
+// CalculateDifficulty from nBits
 func (b NBit) CalculateDifficulty() *big.Float {
 	// Difficulty 1 target
 	difficulty1Target, _ := new(big.Int).SetString("00000000FFFF0000000000000000000000000000000000000000000000000000", 16)
