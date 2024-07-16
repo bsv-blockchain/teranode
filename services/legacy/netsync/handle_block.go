@@ -89,7 +89,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.New(errors.ERR_SUBTREE_ERROR, "failed to create subtree", err)
 		}
 
-		if err = subtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
+		if err := subtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
 			return nil, fmt.Errorf("failed to add coinbase placeholder: %w", err)
 		}
 
@@ -97,37 +97,35 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		// except the coinbase transaction
 		subtreeData := util.NewSubtreeData(subtree)
 
-		var tx *bt.Tx
 		for _, wireTx := range block.Transactions() {
 			txHash := *wireTx.Hash()
 
 			// Serialize the tx
 			var txBytes bytes.Buffer
-			if err = wireTx.MsgTx().Serialize(&txBytes); err != nil {
+			if err := wireTx.MsgTx().Serialize(&txBytes); err != nil {
 				return nil, fmt.Errorf("could not serialize msgTx: %w", err)
 			}
 
 			txSize := uint64(txBytes.Len())
 
-			tx, err = bt.NewTxFromBytes(txBytes.Bytes())
+			tx, err := bt.NewTxFromBytes(txBytes.Bytes())
 			if err != nil {
 				return nil, fmt.Errorf("failed to create bt.Tx: %w", err)
 			}
 
 			if !tx.IsCoinbase() {
-				if err = subtree.AddNode(txHash, 0, txSize); err != nil {
+				if err := subtree.AddNode(txHash, 0, txSize); err != nil {
 					return nil, fmt.Errorf("failed to add node (%s) to subtree: %w", txHash, err)
 				}
 				// we need to match the indexes of the subtree and the tx data in subtreeData
 				currentIdx := subtree.Length() - 1
 
-				err, hashes, err2 := sm.extendTransaction(tx, err, txHash)
-				if err2 != nil {
-					return hashes, err2
+				if err := sm.extendTransaction(tx); err != nil {
+					return nil, err
 				}
 
 				// store the extended transaction in our subtree tx data file
-				if err = subtreeData.AddTx(tx, currentIdx); err != nil {
+				if err := subtreeData.AddTx(tx, currentIdx); err != nil {
 					return nil, fmt.Errorf("failed to add tx to subtree data: %w", err)
 				}
 			}
@@ -170,7 +168,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	return subtrees, nil
 }
 
-func (sm *SyncManager) extendTransaction(tx *bt.Tx, err error, txHash chainhash.Hash) (error, []*chainhash.Hash, error) {
+func (sm *SyncManager) extendTransaction(tx *bt.Tx) error {
 	// Extend the tx with additional information
 	previousOutputs := make([]*meta.PreviousOutput, len(tx.Inputs))
 
@@ -181,19 +179,18 @@ func (sm *SyncManager) extendTransaction(tx *bt.Tx, err error, txHash chainhash.
 		}
 	}
 
-	err = sm.utxoStore.PreviousOutputsDecorate(context.Background(), previousOutputs)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to decorate previous outputs for tx %s: %w", txHash, err)
+	if err := sm.utxoStore.PreviousOutputsDecorate(context.Background(), previousOutputs); err != nil {
+		return fmt.Errorf("failed to decorate previous outputs for tx %s: %w", tx.TxIDChainHash(), err)
 	}
 
 	// run through the previous outputs and extend the transaction
 	for i, po := range previousOutputs {
 		if po.LockingScript == nil {
-			return nil, nil, fmt.Errorf("previous output script is empty for %s:%d", po.PreviousTxID, po.Vout)
+			return fmt.Errorf("previous output script is empty for %s:%d", po.PreviousTxID, po.Vout)
 		}
 
 		tx.Inputs[i].PreviousTxSatoshis = po.Satoshis
 		tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(po.LockingScript)
 	}
-	return err, nil, nil
+	return nil
 }
