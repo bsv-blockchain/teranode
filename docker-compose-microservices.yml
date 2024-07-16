@@ -226,11 +226,24 @@ services:
   ubsv-blockchain:
     <<: *ubsv-base
     container_name: ubsv-blockchain
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockchain=1", "-rpc=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "1", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockchain=1", "-rpc=1"]
     ports:
       - 4040
       - 18082:8082
       - 18087:8087
+      - 9091
+    depends_on:
+      - aerospike
+
+  ubsv-propagation:
+    <<: *ubsv-base
+    container_name: ubsv-propagation
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-propagation=1", "-rpc=1"]
+    ports:
+      - 4040
+      - 18833:8833
+      - 18084:8084
+      - 18384:8384
       - 9091
     depends_on:
       - aerospike
