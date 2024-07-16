@@ -177,7 +177,7 @@ func (u *BlockValidation) start(ctx context.Context) {
 
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 				g.Go(func() error {
-					u.logger.Infof("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
+					u.logger.Debugf("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
 					if err := u.setTxMined(gCtx, blockHash); err != nil {
 						u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
 						u.setMinedChan <- blockHash
