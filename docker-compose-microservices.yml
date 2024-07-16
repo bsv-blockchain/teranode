@@ -22,7 +22,7 @@ x-ubsv-base:
     logLevel: "DEBUG"
     utxostore: aerospike://aerospike:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
     blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-    coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase
+    coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
     utxoblaster_utxostore_aerospike: aerospike://editor:password1234@aerospike:3000/utxo-store?WarmUp=0&ConnectionQueueSize=640&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=64&expiration=900
     blockchain_grpcAddress: ubsv-blockchain:8087
 networks:
