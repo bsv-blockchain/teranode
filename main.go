@@ -42,6 +42,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/rpc"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
@@ -211,8 +212,19 @@ func main() {
 
 	// blockchain service
 	if startBlockchain {
+
 		var err error
-		blockchainService, err = blockchain.New(ctx, logger.New("bchn"))
+		blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
+		if err != nil || !found {
+			panic(err)
+		}
+
+		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
+		if err != nil {
+			panic(err)
+		}
+
+		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, subtreeStore, utxoStore)
 		if err != nil {
 			panic(err)
 		}

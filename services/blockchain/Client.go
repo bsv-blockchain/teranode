@@ -165,6 +165,17 @@ func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*mode
 	return model.NewBlock(header, coinbaseTx, subtreeHashes, resp.TransactionCount, resp.SizeInBytes, resp.Height)
 }
 
+func (c *Client) GetFullBlock(ctx context.Context, blockHash *chainhash.Hash) ([]byte, error) {
+	resp, err := c.client.GetFullBlock(ctx, &blockchain_api.GetBlockRequest{
+		Hash: blockHash[:],
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.FullBlockBytes, nil
+}
+
 func (c *Client) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
 	resp, err := c.client.GetBlocks(ctx, &blockchain_api.GetBlocksRequest{
 		Hash:  blockHash[:],

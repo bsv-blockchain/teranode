@@ -57,7 +57,7 @@ func (ctx *testContext) Setup(config *testConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to create blockchain store: %v", err)
 	}
-	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, blockchainStore)
+	blockchainClient, err := blockchain2.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create blockchain client: %v", err)
 	}

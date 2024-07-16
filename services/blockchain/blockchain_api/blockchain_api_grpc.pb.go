@@ -24,6 +24,7 @@ const (
 	BlockchainAPI_HealthGRPC_FullMethodName                = "/blockchain_api.BlockchainAPI/HealthGRPC"
 	BlockchainAPI_AddBlock_FullMethodName                  = "/blockchain_api.BlockchainAPI/AddBlock"
 	BlockchainAPI_GetBlock_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBlock"
+	BlockchainAPI_GetFullBlock_FullMethodName              = "/blockchain_api.BlockchainAPI/GetFullBlock"
 	BlockchainAPI_GetBlocks_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBlocks"
 	BlockchainAPI_GetBlockByHeight_FullMethodName          = "/blockchain_api.BlockchainAPI/GetBlockByHeight"
 	BlockchainAPI_GetBlockStats_FullMethodName             = "/blockchain_api.BlockchainAPI/GetBlockStats"
@@ -60,6 +61,7 @@ type BlockchainAPIClient interface {
 	// AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
 	AddBlock(ctx context.Context, in *AddBlockRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockResponse, error)
+	GetFullBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetFullBlockResponse, error)
 	GetBlocks(ctx context.Context, in *GetBlocksRequest, opts ...grpc.CallOption) (*GetBlocksResponse, error)
 	GetBlockByHeight(ctx context.Context, in *GetBlockByHeightRequest, opts ...grpc.CallOption) (*GetBlockResponse, error)
 	GetBlockStats(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*model.BlockStats, error)
@@ -119,6 +121,16 @@ func (c *blockchainAPIClient) GetBlock(ctx context.Context, in *GetBlockRequest,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetFullBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetFullBlockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFullBlockResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetFullBlock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -407,6 +419,7 @@ type BlockchainAPIServer interface {
 	// AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
 	AddBlock(context.Context, *AddBlockRequest) (*emptypb.Empty, error)
 	GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error)
+	GetFullBlock(context.Context, *GetBlockRequest) (*GetFullBlockResponse, error)
 	GetBlocks(context.Context, *GetBlocksRequest) (*GetBlocksResponse, error)
 	GetBlockByHeight(context.Context, *GetBlockByHeightRequest) (*GetBlockResponse, error)
 	GetBlockStats(context.Context, *emptypb.Empty) (*model.BlockStats, error)
@@ -447,6 +460,9 @@ func (UnimplementedBlockchainAPIServer) AddBlock(context.Context, *AddBlockReque
 }
 func (UnimplementedBlockchainAPIServer) GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlock not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetFullBlock(context.Context, *GetBlockRequest) (*GetFullBlockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetFullBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlocks(context.Context, *GetBlocksRequest) (*GetBlocksResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlocks not implemented")
@@ -586,6 +602,24 @@ func _BlockchainAPI_GetBlock_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetBlock(ctx, req.(*GetBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetFullBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetFullBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetFullBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetFullBlock(ctx, req.(*GetBlockRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1061,6 +1095,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlock",
 			Handler:    _BlockchainAPI_GetBlock_Handler,
+		},
+		{
+			MethodName: "GetFullBlock",
+			Handler:    _BlockchainAPI_GetFullBlock_Handler,
 		},
 		{
 			MethodName: "GetBlocks",

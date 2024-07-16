@@ -301,7 +301,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
 	require.NoError(t, err)
 
-	items.blockchainClient, err = blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore)
+	items.blockchainClient, err = blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
 	// we cannot rely on the settings to be set in the test environment

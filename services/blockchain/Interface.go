@@ -13,6 +13,7 @@ type ClientI interface {
 	AddBlock(ctx context.Context, block *model.Block, peerID string) error
 	SendNotification(ctx context.Context, notification *model.Notification) error
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error)
+	GetFullBlock(ctx context.Context, blockHash *chainhash.Hash) ([]byte, error)
 	GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error)
 	GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
 	GetBlockStats(ctx context.Context) (*model.BlockStats, error)
