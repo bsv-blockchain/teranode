@@ -18,7 +18,7 @@ x-ubsv-base:
     - 8081-8093
     - 18081-18093
   environment:
-    SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
+    SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.m}
     logLevel: "DEBUG"
     utxostore: aerospike://aerospike:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
     blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
@@ -30,7 +30,7 @@ x-ubsv-base:
     propagation_assetGrpcAddress: ubsv-propagation:8084
     validator_assetGrpcAddress: ubsv-validator:8081
     blockassembly_assetGrpcAddress: ubsv-blockassembly:8085
-    
+
 networks:
   ubsv-network:
     name: my-ubsv-network
