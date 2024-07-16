@@ -243,7 +243,12 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 			var subtree *util.Subtree
 			if request.BaseUrl == "legacy" {
 				// read from legacy store
-				subtreeBytes, err := u.subtreeStore.Get(ctx, hash[:], options.WithFileExtension("legacy"))
+				subtreeBytes, err := u.subtreeStore.Get(
+					ctx,
+					hash[:],
+					options.WithSubDirectory("legacy"),
+					options.WithFileExtension("subtree"),
+				)
 				if err != nil {
 					return nil, errors.Join(fmt.Errorf("[getSubtreeTxHashes][%s] failed to get subtree from store", hash.String()), err)
 				}
