@@ -757,324 +757,17 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 
 // OnGetCFilters is invoked when a peer receives a getcfilters bitcoin message.
 func (sp *serverPeer) OnGetCFilters(_ *peer.Peer, msg *wire.MsgGetCFilters) {
-	// Ignore getcfilters requests if not in sync.
-	if !sp.server.syncManager.IsCurrent() {
-		return
-	}
-
-	// We'll also ensure that the remote party is requesting a set of
-	// filters that we actually currently maintain.
-	switch msg.FilterType {
-	case wire.GCSFilterRegular:
-		break
-
-	default:
-		sp.server.logger.Debugf("Filter request for unknown filter: %v", msg.FilterType)
-		return
-	}
-
-	hashes, err := sp.server.blockchainClient.HeightToHashRange(msg.StartHeight, &msg.StopHash, wire.MaxGetCFiltersReqRange)
-	if err != nil {
-		sp.server.logger.Debugf("Invalid getcfilters request: %v", err)
-		return
-	}
-
-	// Create []*chainhash.Hash from []chainhash.Hash to pass to
-	// FiltersByBlockHashes.
-	hashPtrs := make([]*chainhash.Hash, len(hashes))
-	for i := range hashes {
-		hashPtrs[i] = &hashes[i]
-	}
-
-	//filters, err := sp.server.cfIndex.FiltersByBlockHashes(
-	//	hashPtrs, msg.FilterType,
-	//)
-	//if err != nil {
-	//	sp.server.logger.Errorf("Error retrieving cfilters: %v", err)
-	//	return
-	//}
-	//
-	//for i, filterBytes := range filters {
-	//	if len(filterBytes) == 0 {
-	//		sp.server.logger.Warnf("Could not obtain cfilter for %v", hashes[i])
-	//		return
-	//	}
-	//
-	//	filterMsg := wire.NewMsgCFilter(msg.FilterType, &hashes[i], filterBytes)
-	//	sp.QueueMessage(filterMsg, nil)
-	//}
+	sp.server.logger.Warnf("Ignoring OnGetCFFilters message from %v -- bloom filtering is not supported", sp)
 }
 
 // OnGetCFHeaders is invoked when a peer receives a getcfheader bitcoin message.
 func (sp *serverPeer) OnGetCFHeaders(_ *peer.Peer, msg *wire.MsgGetCFHeaders) {
-	// Ignore getcfilterheader requests if not in sync.
-	if !sp.server.syncManager.IsCurrent() {
-		return
-	}
-
-	// We'll also ensure that the remote party is requesting a set of
-	// headers for filters that we actually currently maintain.
-	switch msg.FilterType {
-	case wire.GCSFilterRegular:
-		break
-
-	default:
-		sp.server.logger.Debugf("Filter request for unknown headers for filter: %v", msg.FilterType)
-		return
-	}
-
-	startHeight := msg.StartHeight
-	maxResults := wire.MaxCFHeadersPerMsg
-
-	// If StartHeight is positive, fetch the predecessor block hash so we
-	// can populate the PrevFilterHeader field.
-	if msg.StartHeight > 0 {
-		startHeight--
-		maxResults++
-	}
-
-	// Fetch the hashes from the block index.
-	hashList, err := sp.server.blockchainClient.HeightToHashRange(
-		startHeight, &msg.StopHash, maxResults,
-	)
-	if err != nil {
-		sp.server.logger.Debugf("Invalid getcfheaders request: %v", err)
-	}
-
-	// This is possible if StartHeight is one greater that the height of
-	// StopHash, and we pull a valid range of hashes including the previous
-	// filter header.
-	if len(hashList) == 0 || (msg.StartHeight > 0 && len(hashList) == 1) {
-		sp.server.logger.Debugf("No results for getcfheaders request")
-		return
-	}
-
-	// Create []*chainhash.Hash from []chainhash.Hash to pass to
-	// FilterHeadersByBlockHashes.
-	hashPtrs := make([]*chainhash.Hash, len(hashList))
-	for i := range hashList {
-		hashPtrs[i] = &hashList[i]
-	}
-
-	// Fetch the raw filter hash bytes from the database for all blocks.
-	//filterHashes, err := sp.server.cfIndex.FilterHashesByBlockHashes(
-	//	hashPtrs, msg.FilterType,
-	//)
-	//if err != nil {
-	//	sp.server.logger.Errorf("Error retrieving cfilter hashes: %v", err)
-	//	return
-	//}
-
-	filterHashes := make([][]byte, len(hashList))
-
-	// Generate cfheaders message and send it.
-	headersMsg := wire.NewMsgCFHeaders()
-
-	// Populate the PrevFilterHeader field.
-	if msg.StartHeight > 0 {
-		//prevBlockHash := &hashList[0]
-
-		// Fetch the raw committed filter header bytes from the
-		// database.
-		//headerBytes, err := sp.server.cfIndex.FilterHeaderByBlockHash(
-		//	prevBlockHash, msg.FilterType)
-		//if err != nil {
-		//	sp.server.logger.Errorf("Error retrieving CF header: %v", err)
-		//	return
-		//}
-		//if len(headerBytes) == 0 {
-		//	sp.server.logger.Warnf("Could not obtain CF header for %v", prevBlockHash)
-		//	return
-		//}
-
-		headerBytes := []byte{}
-
-		// Deserialize the hash into PrevFilterHeader.
-		err = headersMsg.PrevFilterHeader.SetBytes(headerBytes)
-		if err != nil {
-			sp.server.logger.Warnf("Committed filter header deserialize "+
-				"failed: %v", err)
-			return
-		}
-
-		hashList = hashList[1:]
-		filterHashes = filterHashes[1:]
-	}
-
-	// Populate HeaderHashes.
-	for i, hashBytes := range filterHashes {
-		if len(hashBytes) == 0 {
-			sp.server.logger.Warnf("Could not obtain CF hash for %v", hashList[i])
-			return
-		}
-
-		// Deserialize the hash.
-		filterHash, err := chainhash.NewHash(hashBytes)
-		if err != nil {
-			sp.server.logger.Warnf("Committed filter hash deserialize "+
-				"failed: %v", err)
-			return
-		}
-
-		_ = headersMsg.AddCFHash(filterHash)
-	}
-
-	headersMsg.FilterType = msg.FilterType
-	headersMsg.StopHash = msg.StopHash
-
-	sp.QueueMessage(headersMsg, nil)
+	sp.server.logger.Warnf("Ignoring OnGetCFHeaders message from %v -- bloom filtering is not supported", sp)
 }
 
 // OnGetCFCheckpt is invoked when a peer receives a getcfcheckpt bitcoin message.
 func (sp *serverPeer) OnGetCFCheckpt(_ *peer.Peer, msg *wire.MsgGetCFCheckpt) {
-	// Ignore getcfcheckpt requests if not in sync.
-	if !sp.server.syncManager.IsCurrent() {
-		return
-	}
-
-	// We'll also ensure that the remote party is requesting a set of
-	// checkpoints for filters that we actually currently maintain.
-	switch msg.FilterType {
-	case wire.GCSFilterRegular:
-		break
-
-	default:
-		sp.server.logger.Debugf("Filter request for unknown checkpoints for "+
-			"filter: %v", msg.FilterType)
-		return
-	}
-
-	// Now that we know the client is fetching a filter that we know of,
-	// we'll fetch the block hashes et each check point interval, so we can
-	// compare against our cache, and create new check points if necessary.
-	blockHashes, err := sp.server.blockchainClient.IntervalBlockHashes(&msg.StopHash, wire.CFCheckptInterval)
-	if err != nil {
-		sp.server.logger.Debugf("Invalid getcfilters request: %v", err)
-		return
-	}
-
-	checkptMsg := wire.NewMsgCFCheckpt(
-		msg.FilterType, &msg.StopHash, len(blockHashes),
-	)
-
-	// Fetch the current existing cache so we can decide if we need to
-	// extend it or if its adequate as is.
-	sp.server.cfCheckptCachesMtx.RLock()
-	checkptCache := sp.server.cfCheckptCaches[msg.FilterType]
-
-	// If the set of block hashes is beyond the current size of the cache,
-	// then we'll expand the size of the cache and also retain the write
-	// lock.
-	var updateCache bool
-	if len(blockHashes) > len(checkptCache) {
-		// Now that we know we'll need to modify the size of the cache,
-		// we'll release the read lock and grab the write lock to
-		// possibly expand the cache size.
-		sp.server.cfCheckptCachesMtx.RUnlock()
-
-		sp.server.cfCheckptCachesMtx.Lock()
-		defer sp.server.cfCheckptCachesMtx.Unlock()
-
-		// Now that we have the write lock, we'll check again as it's
-		// possible that the cache has already been expanded.
-		checkptCache = sp.server.cfCheckptCaches[msg.FilterType]
-
-		// If we still need to expand the cache, then We'll mark that
-		// we need to update the cache for below and also expand the
-		// size of the cache in place.
-		if len(blockHashes) > len(checkptCache) {
-			updateCache = true
-
-			additionalLength := len(blockHashes) - len(checkptCache)
-			newEntries := make([]cfHeaderKV, additionalLength)
-
-			sp.server.logger.Infof("Growing size of checkpoint cache from %v to %v "+
-				"block hashes", len(checkptCache), len(blockHashes))
-
-			checkptCache = append(
-				sp.server.cfCheckptCaches[msg.FilterType],
-				newEntries...,
-			)
-		}
-	} else {
-		// Otherwise, we'll hold onto the read lock for the remainder
-		// of this method.
-		defer sp.server.cfCheckptCachesMtx.RUnlock()
-
-		sp.server.logger.Infof("Serving stale cache of size %v",
-			len(checkptCache))
-	}
-
-	// Now that we know the cache is of an appropriate size, we'll iterate
-	// backwards until the find the block hash. We do this as it's possible
-	// a re-org has occurred so items in the db are now in the main china
-	// while the cache has been partially invalidated.
-	var forkIdx int
-	for forkIdx = len(blockHashes); forkIdx > 0; forkIdx-- {
-		if checkptCache[forkIdx-1].blockHash == blockHashes[forkIdx-1] {
-			break
-		}
-	}
-
-	// Now that we know the how much of the cache is relevant for this
-	// query, we'll populate our check point message with the cache as is.
-	// Shortly below, we'll populate the new elements of the cache.
-	for i := 0; i < forkIdx; i++ {
-		checkptMsg.AddCFHeader(&checkptCache[i].filterHeader)
-	}
-
-	// We'll now collect the set of hashes that are beyond our cache so we
-	// can look up the filter headers to populate the final cache.
-	blockHashPtrs := make([]*chainhash.Hash, 0, len(blockHashes)-forkIdx)
-	for i := forkIdx; i < len(blockHashes); i++ {
-		blockHashPtrs = append(blockHashPtrs, &blockHashes[i])
-	}
-
-	//filterHeaders, err := sp.server.cfIndex.FilterHeadersByBlockHashes(
-	//	blockHashPtrs, msg.FilterType,
-	//)
-	//if err != nil {
-	//	sp.server.logger.Errorf("Error retrieving cfilter headers: %v", err)
-	//	return
-	//}
-
-	filterHeaders := make([][]byte, len(blockHashPtrs))
-
-	// Now that we have the full set of filter headers, we'll add them to
-	// the checkpoint message, and also update our cache in line.
-	for i, filterHeaderBytes := range filterHeaders {
-		if len(filterHeaderBytes) == 0 {
-			sp.server.logger.Warnf("Could not obtain CF header for %v",
-				blockHashPtrs[i])
-			return
-		}
-
-		filterHeader, err := chainhash.NewHash(filterHeaderBytes)
-		if err != nil {
-			sp.server.logger.Warnf("Committed filter header deserialize "+
-				"failed: %v", err)
-			return
-		}
-
-		_ = checkptMsg.AddCFHeader(filterHeader)
-
-		// If the new main chain is longer than what's in the cache,
-		// then we'll override it beyond the fork point.
-		if updateCache {
-			checkptCache[forkIdx+i] = cfHeaderKV{
-				blockHash:    blockHashes[forkIdx+i],
-				filterHeader: *filterHeader,
-			}
-		}
-	}
-
-	// Finally, we'll update the cache if we need to, and send the final
-	// message back to the requesting peer.
-	if updateCache {
-		sp.server.cfCheckptCaches[msg.FilterType] = checkptCache
-	}
-
-	sp.QueueMessage(checkptMsg, nil)
+	sp.server.logger.Warnf("Ignoring OnGetCFCheckpt message from %v -- bloom filtering is not supported", sp)
 }
 
 // enforceNodeBloomFlag disconnects the peer if the server is not configured to
@@ -1128,19 +821,7 @@ func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, _ *wire.MsgFeeFilter) {
 // filter.  The peer will be disconnected if a filter is not loaded when this
 // message is received or the server is not configured to allow bloom filters.
 func (sp *serverPeer) OnFilterAdd(_ *peer.Peer, msg *wire.MsgFilterAdd) {
-	// Disconnect and/or ban depending on the node bloom services flag and
-	// negotiated protocol version.
-	if !sp.enforceNodeBloomFlag(msg.Command()) {
-		return
-	}
-
-	if !sp.filter.IsLoaded() {
-		sp.server.logger.Debugf("%s sent a filteradd request with no filter loaded -- disconnecting", sp)
-		sp.Disconnect()
-		return
-	}
-
-	sp.filter.Add(msg.Data)
+	sp.server.logger.Warnf("Ignoring OnFlterAdd request from %s -- bloom filtering is not supported", sp)
 }
 
 // OnFilterClear is invoked when a peer receives a filterclear bitcoin
@@ -1148,20 +829,7 @@ func (sp *serverPeer) OnFilterAdd(_ *peer.Peer, msg *wire.MsgFilterAdd) {
 // The peer will be disconnected if a filter is not loaded when this message is
 // received  or the server is not configured to allow bloom filters.
 func (sp *serverPeer) OnFilterClear(_ *peer.Peer, msg *wire.MsgFilterClear) {
-	// Disconnect and/or ban depending on the node bloom services flag and
-	// negotiated protocol version.
-	if !sp.enforceNodeBloomFlag(msg.Command()) {
-		return
-	}
-
-	if !sp.filter.IsLoaded() {
-		sp.server.logger.Debugf("%s sent a filterclear request with no "+
-			"filter loaded -- disconnecting", sp)
-		sp.Disconnect()
-		return
-	}
-
-	sp.filter.Unload()
+	sp.server.logger.Warnf("Ignoring OnFilterClear request from %s -- bloom filtering is not supported", sp)
 }
 
 // OnFilterLoad is invoked when a peer receives a filterload bitcoin
@@ -1170,15 +838,7 @@ func (sp *serverPeer) OnFilterClear(_ *peer.Peer, msg *wire.MsgFilterClear) {
 // The peer will be disconnected if the server is not configured to allow bloom
 // filters.
 func (sp *serverPeer) OnFilterLoad(_ *peer.Peer, msg *wire.MsgFilterLoad) {
-	// Disconnect and/or ban depending on the node bloom services flag and
-	// negotiated protocol version.
-	if !sp.enforceNodeBloomFlag(msg.Command()) {
-		return
-	}
-
-	sp.setDisableRelayTx(false)
-
-	sp.filter.Reload(msg)
+	sp.server.logger.Warnf("Ignoring OnFilterLoad request from %s -- bloom filtering is not supported", sp)
 }
 
 // OnGetAddr is invoked when a peer receives a getaddr bitcoin message
@@ -1958,30 +1618,38 @@ func disconnectPeer(peerList map[int32]*serverPeer, compareFunc func(*serverPeer
 // newPeerConfig returns the configuration for the given serverPeer.
 func newPeerConfig(sp *serverPeer) *peer.Config {
 	return &peer.Config{
+		// This is a complete list including ignored messages.
 		Listeners: peer.MessageListeners{
-			OnVersion:    sp.OnVersion,
-			OnMemPool:    sp.OnMemPool,
-			OnTx:         sp.OnTx,
-			OnBlock:      sp.OnBlock,
-			OnInv:        sp.OnInv,
-			OnHeaders:    sp.OnHeaders,
-			OnGetData:    sp.OnGetData,
-			OnGetBlocks:  sp.OnGetBlocks,
-			OnGetHeaders: sp.OnGetHeaders,
-			// TODO log Warnf on these calls
-			//OnGetCFilters:  sp.OnGetCFilters,
-			//OnGetCFHeaders: sp.OnGetCFHeaders,
-			//OnGetCFCheckpt: sp.OnGetCFCheckpt,
-			OnFeeFilter: sp.OnFeeFilter,
-			//OnFilterAdd: sp.OnFilterAdd,
-			//OnFilterClear:  sp.OnFilterClear,
-			//OnFilterLoad:   sp.OnFilterLoad,
-			OnGetAddr:  sp.OnGetAddr,
-			OnAddr:     sp.OnAddr,
-			OnRead:     sp.OnRead,
-			OnWrite:    sp.OnWrite,
-			OnReject:   sp.OnReject,
-			OnNotFound: sp.OnNotFound,
+			OnGetAddr: sp.OnGetAddr,
+			OnAddr:    sp.OnAddr,
+			// OnPing: handled by peer package
+			// OnPong: handled by peer package
+			OnMemPool: sp.OnMemPool,
+			OnTx:      sp.OnTx,
+			OnBlock:   sp.OnBlock,
+			// OnCFilter
+			// OnCFHeaders
+			// OnCFCheckpt
+			OnInv:          sp.OnInv,
+			OnHeaders:      sp.OnHeaders,
+			OnNotFound:     sp.OnNotFound,
+			OnGetData:      sp.OnGetData,
+			OnGetBlocks:    sp.OnGetBlocks,
+			OnGetHeaders:   sp.OnGetHeaders,
+			OnGetCFilters:  sp.OnGetCFilters,  // Ignored
+			OnGetCFHeaders: sp.OnGetCFHeaders, // Ignored
+			OnGetCFCheckpt: sp.OnGetCFCheckpt, // Ignored
+			OnFeeFilter:    sp.OnFeeFilter,    // Will disconnect peer
+			OnFilterAdd:    sp.OnFilterAdd,    // Ignored
+			OnFilterClear:  sp.OnFilterClear,  // Ignored
+			OnFilterLoad:   sp.OnFilterLoad,   // Ignored
+			// OnMerkleBlock
+			OnVersion: sp.OnVersion,
+			// OnVerAck
+			OnReject: sp.OnReject,
+			// OnSendHeaders:
+			OnRead:  sp.OnRead,
+			OnWrite: sp.OnWrite,
 		},
 		AddrMe:            addrMe,
 		NewestBlock:       sp.newestBlock,
