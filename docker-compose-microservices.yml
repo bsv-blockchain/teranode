@@ -25,6 +25,12 @@ x-ubsv-base:
     coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
     utxoblaster_utxostore_aerospike: aerospike://editor:password1234@aerospike:3000/utxo-store?WarmUp=0&ConnectionQueueSize=640&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=64&expiration=900
     blockchain_grpcAddress: ubsv-blockchain:8087
+    asset_grpcAddress: ubsv-asset:8090
+    coinbase_assetGrpcAddress: ubsv-coinbase:8093
+    propagation_assetGrpcAddress: ubsv-propagation:8084
+    validator_assetGrpcAddress: ubsv-validator:8081
+    blockassembly_assetGrpcAddress: ubsv-blockassembly:8085
+    
 networks:
   ubsv-network:
     name: my-ubsv-network
