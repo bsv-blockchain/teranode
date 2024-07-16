@@ -376,7 +376,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
 	require.Error(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
@@ -458,7 +459,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
 	require.Error(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
