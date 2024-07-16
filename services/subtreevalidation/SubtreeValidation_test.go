@@ -85,7 +85,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		v := ValidateSubtree{
 			SubtreeHash:   *subtree.RootHash(),
 			BaseUrl:       "http://localhost:8000",
-			SubtreeHashes: nil,
+			TxHashes:      nil,
 			AllowFailFast: false,
 		}
 		err = blockValidation.validateSubtreeInternal(context.Background(), v, util.GenesisActivationHeight)
@@ -184,7 +184,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	v := ValidateSubtree{
 		SubtreeHash:   *rootHash,
 		BaseUrl:       "http://localhost:8000",
-		SubtreeHashes: nil,
+		TxHashes:      nil,
 		AllowFailFast: false,
 	}
 	err = blockValidation.validateSubtreeInternal(context.Background(), v, util.GenesisActivationHeight)
@@ -225,7 +225,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	v := ValidateSubtree{
 		SubtreeHash:   *hash1,
 		BaseUrl:       "http://localhost:8000",
-		SubtreeHashes: nil,
+		TxHashes:      nil,
 		AllowFailFast: false,
 	}
 

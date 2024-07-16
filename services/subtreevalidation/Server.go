@@ -259,12 +259,16 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 				}
 			}
 
+			txHashes := make([]chainhash.Hash, subtree.Length())
+			for i := 0; i < subtree.Length(); i++ {
+				txHashes[i] = subtree.Nodes[i].Hash
+			}
+
 			v := ValidateSubtree{
 				SubtreeHash:   *hash,
 				BaseUrl:       request.BaseUrl,
-				SubtreeHashes: nil,
+				TxHashes:      txHashes,
 				AllowFailFast: false,
-				Subtree:       subtree,
 			}
 
 			// Call the validateSubtreeInternal method
