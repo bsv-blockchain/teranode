@@ -626,7 +626,9 @@ func TestCreateWithBlockIDs(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), tx, 1, 2, 3)
+	var blockHeight uint32
+
+	txMeta, err := db.Create(context.Background(), tx, blockHeight, 1, 2, 3)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
