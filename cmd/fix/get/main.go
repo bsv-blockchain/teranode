@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 
@@ -39,15 +40,16 @@ func main() {
 		return
 	}
 
-	for bin := range rec.Bins {
-		log.Printf("Bin: %s", bin)
+	for binName := range rec.Bins {
+		bin := rec.Bins[binName]
+		switch bin.(type) {
+		case []interface{}:
+			b := bin.([]interface{})
+			t := "slice"
+			log.Printf("%-15s [%-6s]: %T", binName, t, len(b))
+		default:
+			t := fmt.Sprintf("%T", bin)
+			log.Printf("%-15s [%-6s]: %v", binName, t, bin)
+		}
 	}
-
-	spendingHeight, ok := rec.Bins["spendingHeight"].(int)
-	if !ok {
-		log.Printf("ERROR: spendingHeight not found")
-		return
-	}
-
-	log.Printf("%+v", spendingHeight)
 }
