@@ -51,14 +51,13 @@ func main() {
 
 	for _, binName := range binNames {
 		bin := rec.Bins[binName]
+		var t string
 
-		switch bin.(type) {
-		case []interface{}:
-			b := bin.([]interface{})
-			t := "slice"
+		if b, ok := bin.([]interface{}); ok {
+			t = "slice"
 			fmt.Printf("%-15s [%-6s]: len(%d)\n", binName, t, len(b))
-		default:
-			t := fmt.Sprintf("%T", bin)
+		} else {
+			t = fmt.Sprintf("%T", bin)
 			fmt.Printf("%-15s [%-6s]: %v\n", binName, t, bin)
 		}
 	}
