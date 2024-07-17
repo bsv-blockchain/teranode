@@ -377,6 +377,7 @@ func main() {
 			logger,
 			getBlockchainClient(ctx, logger),
 			getValidatorClient(ctx, logger),
+			getAssetClient(ctx, logger),
 			getSubtreeStore(logger),
 			getUtxoStore(ctx, logger),
 			getSubtreeValidationClient(ctx, logger),

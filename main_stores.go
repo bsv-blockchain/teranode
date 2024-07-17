@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 
+	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -22,6 +24,7 @@ var (
 	blockStore              blob.Store
 	utxoStore               utxostore.Store
 	blockchainClient        blockchain.ClientI
+	assetClient             *asset.Client
 	validatorClient         validator.Interface
 	subtreeValidationClient subtreevalidation.Interface
 	blockValidationClient   blockvalidation.Interface
@@ -106,6 +109,25 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger) validator.In
 	}
 
 	return validatorClient
+}
+
+func getAssetClient(ctx context.Context, logger ulogger.Logger) *asset.Client {
+	if assetClient != nil {
+		return assetClient
+	}
+
+	assetAddr, ok := gocore.Config().Get("asset_grpcAddress")
+	if !ok {
+		panic(errors.New("no asset_grpcAddress setting found"))
+	}
+
+	var err error
+	assetClient, err = asset.NewClient(ctx, logger, assetAddr)
+	if err != nil {
+		panic(err)
+	}
+
+	return assetClient
 }
 
 func getTxStore(logger ulogger.Logger) blob.Store {

@@ -149,15 +149,15 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 		return fmt.Errorf("failed to create coinbase tables: %s", err)
 	}
 
-	AssetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
+	assetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
 	if !ok {
-		AssetAddr, ok = gocore.Config().Get("asset_grpcAddress")
+		assetAddr, ok = gocore.Config().Get("asset_grpcAddress")
 		if !ok {
 			return errors.New("no asset_grpcAddress setting found")
 		}
 	}
 
-	c.AssetClient, err = asset.NewClient(ctx, c.logger, AssetAddr)
+	c.AssetClient, err = asset.NewClient(ctx, c.logger, assetAddr)
 	if err != nil {
 		return fmt.Errorf("failed to create Asset client: %s", err)
 	}

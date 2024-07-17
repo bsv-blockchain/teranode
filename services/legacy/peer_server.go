@@ -247,7 +247,7 @@ type server struct {
 
 	// ubsv additions
 	logger            ulogger.Logger
-	assetClient       asset.Client
+	assetClient       *asset.Client
 	blockchainClient  blockchain.ClientI
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
@@ -2474,7 +2474,7 @@ out:
 // newServer returns a new bsvd server configured to listen on addr for the
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
-func newServer(ctx context.Context, logger ulogger.Logger, config Config, assetClient asset.Client, blockchainClient blockchain.ClientI,
+func newServer(ctx context.Context, logger ulogger.Logger, config Config, assetClient *asset.Client, blockchainClient blockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	listenAddrs []string, chainParams *chaincfg.Params) (*server, error) {
