@@ -64,14 +64,22 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return errors.New(errors.ERR_PROCESSING, "failed to create model.NewBlock", err)
 	}
 
-	height := block.Height()
-	if height < 0 {
-		height = 0 // block.Height() returns -1 if the height is unknown
+	var blockHeight uint32
+
+	if block.Height() <= 0 {
+		// Lookup block height from blockchain
+		_, meta, err := sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
+		if err != nil {
+			return errors.New(errors.ERR_PROCESSING, "failed to get block header", err)
+		}
+		blockHeight = meta.Height
+	} else {
+		blockHeight = uint32(block.Height())
 	}
 
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, uint32(height)); err != nil {
+	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, blockHeight); err != nil {
 		return errors.New(errors.ERR_PROCESSING, "failed to process block", err)
 	}
 
