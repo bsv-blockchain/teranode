@@ -348,7 +348,7 @@ services:
     networks:
       - ubsv-network
     volumes:
-      - ./deploy/dev/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/dev/prometheus/prometheus-microservices.yml:/etc/prometheus/prometheus.yml
 
   grafana:
     container_name: grafana
@@ -358,7 +358,7 @@ services:
     networks:
       - ubsv-network
     volumes:
-      - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./deploy/dev/grafana/datasources/main-microservices.yaml:/etc/grafana/provisioning/datasources/main.yaml
       - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
       - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
       - ./deploy/dev/grafana/grafana.db:/var/lib/grafana

@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['prometheus:9090']
+
+  - job_name: 'ubsv'
+    static_configs:
+      - targets: ['ubsv-blockchain:9091', 'ubsv-asset:9091', 'ubsv-coinbase:9091', 'ubsv-miner:9091', 'ubsv-rpc:9091', 'ubsv-p2p:9091', 'ubsv-subtreevalidation:9091', 'ubsv-blockvalidation:9091', 'ubsv-blockassembly:9091', 'ubsv-blockpersister:9091', 'ubsv-propagation:9091']
