@@ -28,6 +28,21 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	stat.NewStat("SubtreeStore").AddRanges(0, 1, 10, 100, 1000, 10000, 100000, 1000000)
 
+	// Make sure we have the correct height for this block before continuing
+	var blockHeight uint32
+
+	if block.Height() <= 0 {
+		// Lookup block height from blockchain
+		_, meta, err := sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
+		if err != nil {
+			return errors.New(errors.ERR_PROCESSING, "failed to get block header", err)
+		}
+		blockHeight = meta.Height
+		block.SetHeight(int32(blockHeight))
+	} else {
+		blockHeight = uint32(block.Height())
+	}
+
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
 	if err := block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
@@ -62,19 +77,6 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), uint64(blockSize), uint32(block.Height()))
 	if err != nil {
 		return errors.New(errors.ERR_PROCESSING, "failed to create model.NewBlock", err)
-	}
-
-	var blockHeight uint32
-
-	if block.Height() <= 0 {
-		// Lookup block height from blockchain
-		_, meta, err := sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
-		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "failed to get block header", err)
-		}
-		blockHeight = meta.Height
-	} else {
-		blockHeight = uint32(block.Height())
 	}
 
 	// send the block to the blockValidation for processing and validation
