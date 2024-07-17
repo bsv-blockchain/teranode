@@ -260,7 +260,11 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	}
 
 	if tx.IsCoinbase() {
-		commonBins = append(commonBins, aerospike.NewBin("spendingHeight", aerospike.NewIntegerValue(int(blockHeight+100))))
+		// TODO - verify this is correct.  You cannot spend outputs that were created in a coinbase transaction
+		// until 100 blocks have been mined on top of the block containing the coinbase transaction.
+		// Bitcoin has a 100 block coinbase maturity period and the block in which the coinbase transaction is included is block 0.
+		// counts as the 1st confirmation, so we need to wait for 99 more blocks to be mined before the coinbase outputs can be spent.
+		commonBins = append(commonBins, aerospike.NewBin("spendingHeight", aerospike.NewIntegerValue(int(blockHeight+99))))
 	}
 
 	// Split utxos into batches

@@ -139,6 +139,10 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 
+	// s.blockHeight is the last mined block, but for the LUA script we are telling it to
+	// evaluate this spend in this block height (i.e. 1 greater)
+	thisBlockHeight := s.blockHeight.Load() + 1
+
 	var key *aerospike.Key
 	var err error
 	for idx, bItem := range batch {
@@ -160,8 +164,8 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			aerospike.NewIntegerValue(int(offset)),          // vout adjusted for utxo batch size
 			aerospike.NewValue(bItem.spend.UTXOHash[:]),     // utxo hash
 			aerospike.NewValue(bItem.spend.SpendingTxID[:]), // spending tx id
-			aerospike.NewValue(s.blockHeight.Load()),        // block height
-			aerospike.NewValue(s.expiration),                // ttl
+			aerospike.NewValue(thisBlockHeight),
+			aerospike.NewValue(s.expiration), // ttl
 		)
 	}
 
@@ -178,7 +182,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		spend := batch[idx].spend
 		err = batchRecord.BatchRec().Err
 		if err != nil {
-			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %w", spend.TxID.String(), s.blockHeight.Load(), batchId, err)
+			batch[idx].done <- errors.New(errors.ERR_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %w", spend.TxID.String(), thisBlockHeight, batchId, err)
 		} else {
 			response := batchRecord.BatchRec().Record
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
@@ -195,7 +199,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						}
 
 					case "FROZEN":
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d: %d - %s", spend.TxID.String(), s.blockHeight.Load(), batchId, responseMsg)
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchId, responseMsg)
 
 					case "SPENT":
 						// spent by another transaction
@@ -206,9 +210,9 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						// TODO we need to be able to send the spending TX ID in the error down the line
 						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxID)
 					case "ERROR":
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), s.blockHeight.Load(), batchId, responseMsgParts[1])
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchId, responseMsgParts[1])
 					default:
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), s.blockHeight.Load(), batchId, responseMsg)
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchId, responseMsg)
 					}
 				}
 			} else {
