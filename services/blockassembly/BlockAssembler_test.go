@@ -89,23 +89,23 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 			wg.Done()
 		}()
 
-		_, err := testItems.utxoStore.Create(ctx, tx1)
+		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash1, Fee: 111})
 
-		_, err = testItems.utxoStore.Create(ctx, tx2)
+		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222})
 
-		_, err = testItems.utxoStore.Create(ctx, tx3)
+		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 333})
 
-		_, err = testItems.utxoStore.Create(ctx, tx4)
+		_, err = testItems.utxoStore.Create(ctx, tx4, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444})
 
-		_, err = testItems.utxoStore.Create(ctx, tx5)
+		_, err = testItems.utxoStore.Create(ctx, tx5, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555})
 
@@ -352,23 +352,23 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCBTx(t *testing.T) {
 			wg.Done()
 		}()
 
-		_, err := testItems.utxoStore.Create(ctx, tx1)
+		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *model.CoinbasePlaceholderHash, Fee: 5000000000})
 
-		_, err = testItems.utxoStore.Create(ctx, tx2)
+		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash2, Fee: 222})
 
-		_, err = testItems.utxoStore.Create(ctx, tx3)
+		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash3, Fee: 334})
 
-		_, err = testItems.utxoStore.Create(ctx, tx4)
+		_, err = testItems.utxoStore.Create(ctx, tx4, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash4, Fee: 444})
 
-		_, err = testItems.utxoStore.Create(ctx, tx5)
+		_, err = testItems.utxoStore.Create(ctx, tx5, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash5, Fee: 555})
 

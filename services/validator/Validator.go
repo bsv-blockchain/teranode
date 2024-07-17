@@ -179,7 +179,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 		return errors.New(errors.ERR_PROCESSING, "[Validate][%s] error spending utxos: %v", tx.TxID(), err)
 	}
 
-	txMetaData, err := v.storeTxInUtxoMap(setSpan, tx)
+	txMetaData, err := v.storeTxInUtxoMap(setSpan, tx, blockHeight)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			// stop all processing, this transaction has already been validated and passed into the block assembly
@@ -252,7 +252,7 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Has
 	return err
 }
 
-func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx) (*meta.Data, error) {
+func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) (*meta.Data, error) {
 	start, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "registerTxInMetaStore")
 	defer func() {
 		stat.AddTime(start)
@@ -262,7 +262,7 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx) (*meta.D
 	txMetaSpan := tracing.Start(ctx, "Validator:Validate:StoreTxMeta")
 	defer txMetaSpan.Finish()
 
-	data, err := v.utxoStore.Create(ctx, tx)
+	data, err := v.utxoStore.Create(ctx, tx, blockHeight)
 	if err != nil {
 		return nil, err
 	}

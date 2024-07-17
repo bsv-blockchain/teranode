@@ -113,16 +113,16 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	require.NoError(t, subtree.AddNode(*hash2, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash3, 100, 0))
 
-	_, err = txMetaStore.Create(context.Background(), tx1)
+	_, err = txMetaStore.Create(context.Background(), tx1, 0)
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), tx2)
+	_, err = txMetaStore.Create(context.Background(), tx2, 0)
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), tx3)
+	_, err = txMetaStore.Create(context.Background(), tx3, 0)
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), tx4)
+	_, err = txMetaStore.Create(context.Background(), tx4, 0)
 	require.NoError(t, err)
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -214,7 +214,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 100, 0))
 		fees += 100
-		_, err = txMetaStore.Create(context.Background(), tx)
+		_, err = txMetaStore.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 	}
 
@@ -316,7 +316,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 
 	require.True(t, coinbase.IsCoinbase())
 
-	_, err = txMetaStore.Create(context.Background(), coinbase)
+	_, err = txMetaStore.Create(context.Background(), coinbase, 0)
 	require.NoError(t, err)
 
 	subtree, err := util.NewTreeByLeafCount(4)
@@ -399,7 +399,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 
 	require.True(t, coinbase.IsCoinbase())
 
-	_, err = txMetaStore.Create(context.Background(), coinbase)
+	_, err = txMetaStore.Create(context.Background(), coinbase, 0)
 	require.NoError(t, err)
 
 	subtree, err := util.NewTreeByLeafCount(4)

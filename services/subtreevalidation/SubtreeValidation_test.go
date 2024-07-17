@@ -54,16 +54,16 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 		require.NoError(t, subtree.AddNode(*hash3, 123, 0))
 		require.NoError(t, subtree.AddNode(*hash4, 123, 0))
 
-		_, err = txMetaStore.Create(context.Background(), tx1)
+		_, err = txMetaStore.Create(context.Background(), tx1, 0)
 		require.NoError(t, err)
 
-		_, err = txMetaStore.Create(context.Background(), tx2)
+		_, err = txMetaStore.Create(context.Background(), tx2, 0)
 		require.NoError(t, err)
 
-		_, err = txMetaStore.Create(context.Background(), tx3)
+		_, err = txMetaStore.Create(context.Background(), tx3, 0)
 		require.NoError(t, err)
 
-		_, err = txMetaStore.Create(context.Background(), tx4)
+		_, err = txMetaStore.Create(context.Background(), tx4, 0)
 		require.NoError(t, err)
 
 		t.Log(tx1.TxIDChainHash().String())
@@ -157,7 +157,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
 
-		_, err := blockValidation.utxoStore.Create(context.Background(), tx)
+		_, err := blockValidation.utxoStore.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 	}
 

@@ -849,7 +849,7 @@ func (u *BlockValidation) _(spanCtx context.Context, block *model.Block) (err er
 	}()
 
 	// TODO - we need to consider if we can do this differently
-	if _, err = u.utxoStore.Create(childSpanCtx, block.CoinbaseTx); err != nil {
+	if _, err = u.utxoStore.Create(childSpanCtx, block.CoinbaseTx, block.Height); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			return fmt.Errorf("[ValidateBlock][%s] failed to create coinbase transaction in txMetaStore [%s]", block.Hash().String(), err.Error())
 		}

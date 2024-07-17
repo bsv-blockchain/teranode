@@ -168,7 +168,7 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	return 0, details, nil
 }
 
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
 
 	// s.logger.Infof("Storing transaction %s", tx.TxIDChainHash())
 
@@ -285,12 +285,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 	var coinbaseSpendingHeight uint32
 
 	if tx.IsCoinbase() {
-		currentHeight, err := s.GetBlockHeight()
-		if err != nil {
-			return nil, err
-		}
-
-		coinbaseSpendingHeight = currentHeight + 100
+		coinbaseSpendingHeight = blockHeight + 100
 	}
 
 	for i, output := range tx.Outputs {

@@ -40,9 +40,10 @@ var spendLUA []byte
 var luaSpendFunction = "spend_v1"
 
 type batchStoreItem struct {
-	tx       *bt.Tx
-	lockTime uint32
-	done     chan error
+	tx          *bt.Tx
+	blockHeight uint32
+	lockTime    uint32
+	done        chan error
 }
 
 type batchGetItemData struct {
@@ -746,7 +747,7 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 	return nil
 }
 
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
 	startTotal, stat, _ := tracing.StartStatFromContext(ctx, "Create")
 
 	defer func() {
@@ -759,7 +760,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 	}
 
 	done := make(chan error)
-	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, done: done}
+	item := &batchStoreItem{
+		tx:          tx,
+		blockHeight: blockHeight,
+		lockTime:    tx.LockTime,
+		done:        done,
+	}
 
 	if s.storeBatcher != nil {
 		s.storeBatcher.Put(item)

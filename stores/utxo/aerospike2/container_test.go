@@ -71,10 +71,10 @@ func TestAerospikeInContainer(t *testing.T) {
 		err = store.Delete(ctx, tx.TxIDChainHash())
 		require.NoError(t, err)
 
-		_, err = store.Create(ctx, previousTx)
+		_, err = store.Create(ctx, previousTx, 0)
 		require.NoError(t, err)
 
-		_, err = store.Create(ctx, tx)
+		_, err = store.Create(ctx, tx, 0)
 		require.NoError(t, err)
 
 		// Now we can test the previous output
@@ -120,7 +120,7 @@ func TestAerospikeInContainer(t *testing.T) {
 
 		ctx := context.Background()
 
-		_, err = store.Create(ctx, tx)
+		_, err = store.Create(ctx, tx, 0)
 		require.NoError(t, err)
 	})
 }

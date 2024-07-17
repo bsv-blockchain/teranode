@@ -19,7 +19,6 @@ import (
 	"golang.org/x/term"
 
 	zlogsentry "github.com/archdx/zerolog-sentry"
-	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/aerospiketest"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
@@ -29,7 +28,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
-	"github.com/bitcoin-sv/ubsv/cmd/utxostore_blaster/utxostore_blaster"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -76,10 +74,6 @@ func main() {
 	defer sentry.Flush(2 * time.Second)
 
 	switch path.Base(os.Args[0]) {
-	case "aerospiketest.run":
-		// aerospiketest.Init()
-		aerospiketest.Start()
-		return
 	case "bare.run":
 		// bare.Init()
 		bare.Start()
@@ -107,10 +101,6 @@ func main() {
 	case "blaster.run":
 		// txblaster.Init()
 		txblaster.Start()
-		return
-	case "utxostoreblaster.run":
-		utxostore_blaster.Init()
-		utxostore_blaster.Start()
 		return
 	case "filereader.run":
 		// filereader.Init()

@@ -145,7 +145,7 @@ func internalTest(t *testing.T) {
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 
 		var value *aero.Record
@@ -160,7 +160,7 @@ func internalTest(t *testing.T) {
 		assert.Equal(t, parentTxHash[:], binParentTxHash.CloneBytes())
 		assert.Equal(t, []interface{}{}, value.Bins["blockIDs"])
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(context.Background(), tx, 0)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
@@ -186,7 +186,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike store coinbase", func(t *testing.T) {
 		cleanDB(t, client, key)
-		_, err = db.Create(context.Background(), coinbaseTx)
+		_, err = db.Create(context.Background(), coinbaseTx, 0)
 		require.NoError(t, err)
 
 		var value *aero.Record
@@ -205,7 +205,7 @@ func internalTest(t *testing.T) {
 	t.Run("aerospike get", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 
 		var value *meta.Data
@@ -230,7 +230,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike get", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -255,7 +255,7 @@ func internalTest(t *testing.T) {
 		tx2.LockTime = 123
 		cleanDB(t, client, key, tx2)
 
-		txMeta, err := db.Create(context.Background(), tx2)
+		txMeta, err := db.Create(context.Background(), tx2, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -272,7 +272,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -303,14 +303,14 @@ func internalTest(t *testing.T) {
 		assert.Len(t, blockIDs, 0)
 		require.Equal(t, value.Expiration, uint32(math.MaxUint32))
 
-		txMeta, err = db.Create(context.Background(), tx)
+		txMeta, err = db.Create(context.Background(), tx, 0)
 		assert.Nil(t, txMeta)
 		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
 		err = db.Spend(context.Background(), spends, blockHeight)
 		require.NoError(t, err)
 
-		txMeta, err = db.Create(context.Background(), tx)
+		txMeta, err = db.Create(context.Background(), tx, 0)
 		assert.Nil(t, txMeta)
 		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
@@ -318,7 +318,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -348,7 +348,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend lua", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -390,7 +390,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend all lua", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -419,7 +419,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike lua errors", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -440,7 +440,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend all and expire", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -499,7 +499,7 @@ func internalTest(t *testing.T) {
 		key, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, tx2.TxIDChainHash().CloneBytes())
 		cleanDB(t, client, key, tx2)
 
-		txMeta, err := db.Create(context.Background(), tx2)
+		txMeta, err := db.Create(context.Background(), tx2, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -547,7 +547,7 @@ func internalTest(t *testing.T) {
 		key, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, tx2.TxIDChainHash().CloneBytes())
 		cleanDB(t, client, key, tx, tx2)
 
-		txMeta, err := db.Create(context.Background(), tx2)
+		txMeta, err := db.Create(context.Background(), tx2, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -589,7 +589,7 @@ func internalTest(t *testing.T) {
 		key, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, tx2.TxIDChainHash().CloneBytes())
 		cleanDB(t, client, key, tx2)
 
-		txMeta, err := db.Create(context.Background(), tx2) // valid in 2 seconds
+		txMeta, err := db.Create(context.Background(), tx2, 0) // valid in 2 seconds
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 

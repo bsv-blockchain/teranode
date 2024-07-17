@@ -871,7 +871,7 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes)
 		require.NoError(t, err)
 
-		_, _ = utxosStore.Create(context.Background(), coinbaseTx)
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx, 0)
 
 		stp.SetCurrentBlockHeader(blockHeader)
 
@@ -984,9 +984,9 @@ func TestMoveDownBlocks(t *testing.T) {
 		err = subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeBytes)
 		require.NoError(t, err)
 
-		_, _ = utxosStore.Create(context.Background(), coinbaseTx)
-		_, _ = utxosStore.Create(context.Background(), coinbaseTx2)
-		_, _ = utxosStore.Create(context.Background(), coinbaseTx3)
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx, 0)
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx2, 0)
+		_, _ = utxosStore.Create(context.Background(), coinbaseTx3, 0)
 
 		stp.SetCurrentBlockHeader(nextBlockHeader)
 

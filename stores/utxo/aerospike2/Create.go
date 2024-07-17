@@ -23,13 +23,14 @@ import (
 var placeholderKey *aerospike.Key
 
 type batchStoreItem struct {
-	tx       *bt.Tx
-	blockIDs []uint32
-	lockTime uint32
-	done     chan error
+	tx          *bt.Tx
+	blockHeight uint32
+	blockIDs    []uint32
+	lockTime    uint32
+	done        chan error
 }
 
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
 	startTotal, stat, _ := tracing.StartStatFromContext(ctx, "Create")
 
 	defer func() {
@@ -44,7 +45,13 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 	errCh := make(chan error)
 	defer close(errCh)
 
-	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, blockIDs: blockIDs, done: errCh}
+	item := &batchStoreItem{
+		tx:          tx,
+		blockHeight: blockHeight,
+		lockTime:    tx.LockTime,
+		blockIDs:    blockIDs,
+		done:        errCh,
+	}
 
 	if s.storeBatcher != nil {
 		s.storeBatcher.Put(item)
@@ -84,12 +91,6 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	var binsToStore [][]*aerospike.Bin
 	var err error
 
-	blockHeight, err := s.GetBlockHeight()
-	if err != nil {
-		s.logger.Warnf("Could not get block height, using Genesis activation height")
-		blockHeight = util.GenesisActivationHeight
-	}
-
 	for idx, bItem := range batch {
 		hash = bItem.tx.TxIDChainHash()
 		key, err = aerospike.NewKey(s.namespace, s.setName, hash[:])
@@ -103,7 +104,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		// We calculate the bin that we want to store, but we may get back lots of bin batches
 		// because we have had to split the UTXOs into multiple records
 
-		binsToStore, err = s.getBinsToStore(bItem.tx, blockHeight, bItem.blockIDs, false) // false is to say this is a normal record, not external.
+		binsToStore, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, false) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.New(errors.ERR_PROCESSING, "could not get bins to store", err))
 			//NOOP for this record
@@ -152,7 +153,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, err = s.getBinsToStore(batch[idx].tx, blockHeight, batch[idx].blockIDs, true) // true is to say this is a big record
+					binsToStore, err = s.getBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, true) // true is to say this is a big record
 					if err != nil {
 						utils.SafeSend[error](batch[idx].done, errors.New(errors.ERR_PROCESSING, "could not get bins to store", err))
 						continue

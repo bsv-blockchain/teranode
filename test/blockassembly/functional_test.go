@@ -79,7 +79,7 @@ func TestNode(t *testing.T) {
 		if err != nil {
 			t.Errorf("Error adding tx: %v", err)
 		}
-		_, _ = utxoStoreNode0.Create(framework.Context, newTX)
+		_, _ = utxoStoreNode0.Create(framework.Context, newTX, 0)
 	}
 
 	m, err := blockassemblyNode0.GetMiningCandidate(framework.Context)

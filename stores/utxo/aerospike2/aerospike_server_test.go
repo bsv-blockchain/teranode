@@ -151,7 +151,7 @@ func internalTest(t *testing.T) {
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 
 		var value *aero.Record
@@ -166,7 +166,7 @@ func internalTest(t *testing.T) {
 		assert.Equal(t, parentTxHash[:], binParentTxHash.CloneBytes())
 		assert.Equal(t, []interface{}{}, value.Bins["blockIDs"])
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(context.Background(), tx, 0)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
@@ -192,7 +192,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike store coinbase", func(t *testing.T) {
 		cleanDB(t, client, key)
-		_, err = db.Create(context.Background(), coinbaseTx)
+		_, err = db.Create(context.Background(), coinbaseTx, 0)
 		require.NoError(t, err)
 
 		var value *aero.Record
@@ -211,7 +211,7 @@ func internalTest(t *testing.T) {
 	t.Run("aerospike get", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 
 		var value *meta.Data
@@ -236,7 +236,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike get", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -256,7 +256,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -284,14 +284,14 @@ func internalTest(t *testing.T) {
 		assert.Len(t, blockIDs, 0)
 		require.Equal(t, value.Expiration, uint32(math.MaxUint32))
 
-		txMeta, err = db.Create(context.Background(), tx)
+		txMeta, err = db.Create(context.Background(), tx, 0)
 		assert.Nil(t, txMeta)
 		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
 
-		txMeta, err = db.Create(context.Background(), tx)
+		txMeta, err = db.Create(context.Background(), tx, 0)
 		assert.Nil(t, txMeta)
 		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
@@ -299,7 +299,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -326,7 +326,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend lua", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 		assert.NotNil(t, txMeta)
 
@@ -372,7 +372,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend all lua", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -404,7 +404,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike lua errors", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -424,7 +424,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend all and expire", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -478,7 +478,7 @@ func internalTest(t *testing.T) {
 		key, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, tx2.TxIDChainHash().CloneBytes())
 		cleanDB(t, client, key, tx2)
 
-		txMeta, err := db.Create(context.Background(), tx2)
+		txMeta, err := db.Create(context.Background(), tx2, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -565,7 +565,7 @@ func TestLUAScripts(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), tx)
+	txMeta, err := db.Create(context.Background(), tx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -668,7 +668,7 @@ func TestStoreOPReturn(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), txWithOPReturn)
+	txMeta, err := db.Create(context.Background(), txWithOPReturn, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -705,7 +705,7 @@ func TestFrozenTX(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), tx)
+	txMeta, err := db.Create(context.Background(), tx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -739,7 +739,7 @@ func TestFrozenUTXO(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), tx)
+	txMeta, err := db.Create(context.Background(), tx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -780,7 +780,7 @@ func TestCoinbase(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), coinbaseTx)
+	txMeta, err := db.Create(context.Background(), coinbaseTx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 	assert.True(t, txMeta.IsCoinbase)
@@ -834,7 +834,7 @@ func TestBigOPReturn(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), bigTx)
+	txMeta, err := db.Create(context.Background(), bigTx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -886,7 +886,7 @@ func TestMultiUTXORecords(t *testing.T) {
 	_, err = client.Delete(nil, key0)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), bigTx)
+	txMeta, err := db.Create(context.Background(), bigTx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -1021,7 +1021,7 @@ func TestIncrementNrRecords(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), tx)
+	txMeta, err := db.Create(context.Background(), tx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -1087,7 +1087,7 @@ func TestLargeUTXO(t *testing.T) {
 	_, err = client.Delete(nil, keyParent)
 	require.NoError(t, err)
 
-	parentMeta, err := db.Create(context.Background(), parentTx)
+	parentMeta, err := db.Create(context.Background(), parentTx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, parentMeta)
 
@@ -1098,7 +1098,7 @@ func TestLargeUTXO(t *testing.T) {
 	_, err = client.Delete(nil, keyChild)
 	require.NoError(t, err)
 
-	childMeta, err := db.Create(context.Background(), childTx)
+	childMeta, err := db.Create(context.Background(), childTx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, childMeta)
 

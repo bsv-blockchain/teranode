@@ -193,7 +193,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
 	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
 
-	_, err = ctx.server.utxoStore.Create(context.Background(), tx1)
+	_, err = ctx.server.utxoStore.Create(context.Background(), tx1, 0)
 	require.NoError(t, err)
 
 	nBits := model.NewNBitFromString("2000ffff")

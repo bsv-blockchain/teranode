@@ -41,7 +41,7 @@ func (m *Memory) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
