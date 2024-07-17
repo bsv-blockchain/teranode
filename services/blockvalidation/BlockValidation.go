@@ -9,9 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -19,6 +16,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/deduplicator"
@@ -177,7 +177,7 @@ func (u *BlockValidation) start(ctx context.Context) {
 
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 				g.Go(func() error {
-					u.logger.Infof("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
+					u.logger.Debugf("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
 					if err := u.setTxMined(gCtx, blockHash); err != nil {
 						u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
 						u.setMinedChan <- blockHash
@@ -351,7 +351,7 @@ func (u *BlockValidation) SetSubtreeExists(hash *chainhash.Hash) error {
 }
 
 func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetSubtreeExists")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetSubtreeExists")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -505,8 +505,8 @@ func (u *BlockValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainha
 	return nil
 }
 
-func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string, bloomStats *model.BloomStats) error {
-	timeStart, stat, ctx := util.NewStatFromContext(ctx, "ValidateBlock", u.stats)
+func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error {
+	timeStart, stat, ctx := tracing.NewStatFromContext(ctx, "ValidateBlock", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
 	span.LogKV("block", block.Hash().String())
 	defer func() {
@@ -574,8 +574,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
+	useOptimisticMining := u.optimisticMining
+	if len(disableOptimisticMining) > 0 {
+		// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
+		useOptimisticMining = useOptimisticMining && !disableOptimisticMining[0]
+	}
+
 	var optimisticMiningWg sync.WaitGroup
-	if u.optimisticMining {
+	if useOptimisticMining {
 		// make sure the proof of work is enough
 		headerValid, _, err := block.Header.HasMetTargetDifficulty()
 		if !headerValid {
@@ -606,14 +612,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 			// get all 100 previous block headers on the main chain
 			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
-			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
+			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(validateCtx, block.Header.HashPrevBlock, 100)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 				u.ReValidateBlock(block, baseUrl)
 				return
 			}
 
-			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
+			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(validateCtx, block.Header.HashPrevBlock, 100)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
 				u.ReValidateBlock(block, baseUrl)
@@ -743,7 +749,7 @@ func (u *BlockValidation) ReValidateBlock(block *model.Block, baseUrl string) {
 func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	ctx := context.Background()
 
-	timeStart, stat, ctx := util.NewStatFromContext(ctx, "reValidateBlock", u.stats)
+	timeStart, stat, ctx := tracing.NewStatFromContext(ctx, "reValidateBlock", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:reValidateBlock")
 	span.LogKV("block", blockData.block.Hash().String())
 	defer func() {
@@ -843,7 +849,7 @@ func (u *BlockValidation) _(spanCtx context.Context, block *model.Block) (err er
 	}()
 
 	// TODO - we need to consider if we can do this differently
-	if _, err = u.utxoStore.Create(childSpanCtx, block.CoinbaseTx); err != nil {
+	if _, err = u.utxoStore.Create(childSpanCtx, block.CoinbaseTx, block.Height); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			return fmt.Errorf("[ValidateBlock][%s] failed to create coinbase transaction in txMetaStore [%s]", block.Hash().String(), err.Error())
 		}
@@ -888,7 +894,7 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 
 func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseUrl string) error {
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateBlockSubtrees")
-	start, stat, spanCtx := util.StartStatFromContext(spanCtx, "ValidateBlockSubtrees")
+	start, stat, spanCtx := tracing.StartStatFromContext(spanCtx, "ValidateBlockSubtrees")
 	defer func() {
 		span.Finish()
 		stat.AddTime(start)

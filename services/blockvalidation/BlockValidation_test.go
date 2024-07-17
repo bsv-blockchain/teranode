@@ -113,16 +113,16 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	require.NoError(t, subtree.AddNode(*hash2, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash3, 100, 0))
 
-	_, err = txMetaStore.Create(context.Background(), tx1)
+	_, err = txMetaStore.Create(context.Background(), tx1, 0)
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), tx2)
+	_, err = txMetaStore.Create(context.Background(), tx2, 0)
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), tx3)
+	_, err = txMetaStore.Create(context.Background(), tx3, 0)
 	require.NoError(t, err)
 
-	_, err = txMetaStore.Create(context.Background(), tx4)
+	_, err = txMetaStore.Create(context.Background(), tx4, 0)
 	require.NoError(t, err)
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -186,7 +186,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	}
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
@@ -214,7 +214,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 100, 0))
 		fees += 100
-		_, err = txMetaStore.Create(context.Background(), tx)
+		_, err = txMetaStore.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 	}
 
@@ -288,7 +288,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	}
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
@@ -316,7 +316,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 
 	require.True(t, coinbase.IsCoinbase())
 
-	_, err = txMetaStore.Create(context.Background(), coinbase)
+	_, err = txMetaStore.Create(context.Background(), coinbase, 0)
 	require.NoError(t, err)
 
 	subtree, err := util.NewTreeByLeafCount(4)
@@ -371,12 +371,13 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	}
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
 	require.Error(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
@@ -398,7 +399,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 
 	require.True(t, coinbase.IsCoinbase())
 
-	_, err = txMetaStore.Create(context.Background(), coinbase)
+	_, err = txMetaStore.Create(context.Background(), coinbase, 0)
 	require.NoError(t, err)
 
 	subtree, err := util.NewTreeByLeafCount(4)
@@ -453,12 +454,13 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	}
 	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
 	require.NoError(t, err)
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
 	require.NoError(t, err)
 
 	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
 	start := time.Now()
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
 	require.Error(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }

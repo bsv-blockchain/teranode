@@ -3,11 +3,11 @@ package sql
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 )
 
 func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetState")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetState")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -33,7 +33,7 @@ func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (s *SQL) SetState(ctx context.Context, key string, data []byte) error {
-	start, stat, ctx := util.StartStatFromContext(ctx, "SetState")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "SetState")
 	defer func() {
 		stat.AddTime(start)
 	}()

@@ -108,7 +108,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 		span.Finish()
 	}()
 
-	logger.Infof("[UpdateTxMinedStatus][%s] blockID %d for %d subtrees", block.Hash().String(), blockID, len(block.Subtrees))
+	logger.Debugf("[UpdateTxMinedStatus][%s] blockID %d for %d subtrees", block.Hash().String(), blockID, len(block.Subtrees))
 
 	updateTxMinedStatusEnabled := gocore.Config().GetBool("utxostore_updateTxMinedStatus", true)
 	if !updateTxMinedStatusEnabled {
@@ -197,7 +197,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 		return fmt.Errorf("[UpdateTxMinedStatus][%s] error updating tx mined status: %w", block.Hash().String(), err)
 	}
 
-	logger.Infof("[UpdateTxMinedStatus][%s] blockID %d DONE in %s", block.Hash().String(), blockID, time.Since(timeStart).String())
+	logger.Debugf("[UpdateTxMinedStatus][%s] blockID %d DONE in %s", block.Hash().String(), blockID, time.Since(timeStart).String())
 
 	return nil
 }

@@ -10,19 +10,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
-	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
-	"github.com/google/uuid"
-	"github.com/libsv/go-bt/v2/chainhash"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/google/uuid"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
 
@@ -177,7 +178,7 @@ func (u *Server) Stop(_ context.Context) error {
 }
 
 func (u *Server) HealthGRPC(_ context.Context, _ *subtreevalidation_api.EmptyMessage) (*subtreevalidation_api.HealthResponse, error) {
-	start, stat, _ := util.NewStatFromContext(context.Background(), "Health", u.stats)
+	start, stat, _ := tracing.NewStatFromContext(context.Background(), "Health", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -191,7 +192,7 @@ func (u *Server) HealthGRPC(_ context.Context, _ *subtreevalidation_api.EmptyMes
 }
 
 func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_api.CheckSubtreeRequest) (*subtreevalidation_api.CheckSubtreeResponse, error) {
-	start, stat, ctx, cancel := util.NewStatFromContextWithCancel(ctx, "CheckSubtree", u.stats)
+	start, stat, ctx, cancel := tracing.NewStatFromContextWithCancel(ctx, "CheckSubtree", u.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -238,10 +239,35 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 
 		if gotLock {
 			u.logger.Infof("[CheckSubtree] Processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+
+			var subtree *util.Subtree
+			if request.BaseUrl == "legacy" {
+				// read from legacy store
+				subtreeBytes, err := u.subtreeStore.Get(
+					ctx,
+					hash[:],
+					options.WithSubDirectory("legacy"),
+					options.WithFileExtension("subtree"),
+				)
+				if err != nil {
+					return nil, errors.Join(fmt.Errorf("[getSubtreeTxHashes][%s] failed to get subtree from store", hash.String()), err)
+				}
+
+				subtree, err = util.NewSubtreeFromBytes(subtreeBytes)
+				if err != nil {
+					return nil, fmt.Errorf("[CheckSubtree] Failed to create subtree from bytes: %w", err)
+				}
+			}
+
+			txHashes := make([]chainhash.Hash, subtree.Length())
+			for i := 0; i < subtree.Length(); i++ {
+				txHashes[i] = subtree.Nodes[i].Hash
+			}
+
 			v := ValidateSubtree{
 				SubtreeHash:   *hash,
 				BaseUrl:       request.BaseUrl,
-				SubtreeHashes: nil,
+				TxHashes:      txHashes,
 				AllowFailFast: false,
 			}
 

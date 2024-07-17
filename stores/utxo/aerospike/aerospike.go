@@ -14,16 +14,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-	"golang.org/x/exp/slices"
-
 	"github.com/aerospike/aerospike-client-go/v7"
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
 	"github.com/aerospike/aerospike-client-go/v7/types"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
@@ -31,6 +30,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -40,9 +40,10 @@ var spendLUA []byte
 var luaSpendFunction = "spend_v1"
 
 type batchStoreItem struct {
-	tx       *bt.Tx
-	lockTime uint32
-	done     chan error
+	tx          *bt.Tx
+	blockHeight uint32
+	lockTime    uint32
+	done        chan error
 }
 
 type batchGetItemData struct {
@@ -132,6 +133,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	}
 
 	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
+	logger.Infof("batchingEnabled: %v", batchingEnabled)
 
 	if batchingEnabled {
 		batchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
@@ -673,6 +675,9 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 						}
 					}
 				case "blockIDs":
+					if value == nil {
+						continue
+					}
 					temp := value.([]interface{})
 					var blockIDs []uint32
 					for _, val := range temp {
@@ -742,8 +747,8 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 	return nil
 }
 
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
-	startTotal, stat, _ := util.StartStatFromContext(ctx, "Create")
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
+	startTotal, stat, _ := tracing.StartStatFromContext(ctx, "Create")
 
 	defer func() {
 		stat.AddTime(startTotal)
@@ -755,7 +760,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*met
 	}
 
 	done := make(chan error)
-	item := &batchStoreItem{tx: tx, lockTime: tx.LockTime, done: done}
+	item := &batchStoreItem{
+		tx:          tx,
+		blockHeight: blockHeight,
+		lockTime:    tx.LockTime,
+		done:        done,
+	}
 
 	if s.storeBatcher != nil {
 		s.storeBatcher.Put(item)
@@ -1185,6 +1195,10 @@ func getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) ([]*aeros
 	outputs := make([]interface{}, len(tx.Outputs))
 	for i, output := range tx.Outputs {
 		outputs[i] = output.Bytes()
+	}
+
+	if blockIDs == nil {
+		blockIDs = []uint32{}
 	}
 
 	bins := []*aerospike.Bin{

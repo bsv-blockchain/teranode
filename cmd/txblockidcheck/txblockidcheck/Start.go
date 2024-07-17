@@ -81,7 +81,7 @@ func Start() {
 	txMeta, err := utxoStore.Get(ctx, txHash)
 	if errors.Is(err, errors.ErrTxNotFound) {
 		fmt.Printf("Tx %s not found in utxoStore\n", txHash)
-	} else if err != nil && err != utxo.ErrNotFound {
+	} else if err != nil {
 		usage(err.Error())
 	}
 

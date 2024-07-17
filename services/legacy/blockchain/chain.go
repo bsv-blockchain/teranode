@@ -25,3 +25,30 @@ import (
 // The block locator for block 17a would be the hashes of blocks:
 // [17a 16a 15 14 13 12 11 10 9 8 7 6 4 genesis]
 type BlockLocator []*chainhash.Hash
+
+type BlockChain struct {
+}
+
+// BehaviorFlags is a bitmask defining tweaks to the normal behavior when
+// performing chain processing and consensus rules checks.
+type BehaviorFlags uint32
+
+const (
+	// BFFastAdd may be set to indicate that several checks can be avoided
+	// for the block since it is already known to fit into the chain due to
+	// already proving it correct links into the chain up to a known
+	// checkpoint.  This is primarily used for headers-first mode.
+	BFFastAdd BehaviorFlags = 1 << iota
+
+	// BFNoPoWCheck may be set to indicate the proof of work check which
+	// ensures a block hashes to a value less than the required target will
+	// not be performed.
+	BFNoPoWCheck
+
+	// BFNoDupBlockCheck signals if the block should skip existence
+	// checks.
+	BFNoDupBlockCheck
+
+	// BFNone is a convenience value to specifically indicate no flags.
+	BFNone BehaviorFlags = 0
+)

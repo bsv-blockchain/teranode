@@ -35,7 +35,7 @@ func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight
 		return err
 	}
 
-	if _, err := m.TxMetaStore.Create(context.Background(), tx); err != nil {
+	if _, err := m.TxMetaStore.Create(context.Background(), tx, 0); err != nil {
 		return err
 	}
 

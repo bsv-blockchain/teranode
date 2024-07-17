@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -37,7 +37,7 @@ func (u *Server) SetSubtreeExists(hash *chainhash.Hash) error {
 
 func (u *Server) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	// TODO: implement for local storage
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetSubtreeExists")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetSubtreeExists")
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -228,7 +228,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // }
 
 func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32) (txMeta *meta.Data, err error) {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
+	startTotal, stat, ctx := tracing.StartStatFromContext(ctx, "getMissingTransaction")
 	defer func() {
 		stat.AddTime(startTotal)
 		prometheusSubtreeValidationBlessMissingTransaction.Inc()
@@ -271,12 +271,12 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 type ValidateSubtree struct {
 	SubtreeHash   chainhash.Hash
 	BaseUrl       string
-	SubtreeHashes []chainhash.Hash
+	TxHashes      []chainhash.Hash
 	AllowFailFast bool
 }
 
 func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32) error {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
+	startTotal, stat, ctx := tracing.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", v.SubtreeHash.String())
 	defer func() {
@@ -287,10 +287,11 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	u.logger.Infof("[validateSubtreeInternal][%s] called", v.SubtreeHash.String())
 
+	var err error
 	start := gocore.CurrentTime()
 
 	// Get the subtree hashes if they were passed in (SubtreeFound() passes them in, BlockFound does not)
-	txHashes := v.SubtreeHashes
+	txHashes := v.TxHashes
 
 	if txHashes == nil {
 		subtreeExists, err := u.GetSubtreeExists(spanCtx, &v.SubtreeHash)
@@ -401,7 +402,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 		if missed > 0 {
 			// 3. ...then attempt to load the txMeta from the network
-			start, stat5, ctx5 := util.StartStatFromContext(spanCtx, "5. processMissingTransactions")
+			start, stat5, ctx5 := tracing.StartStatFromContext(spanCtx, "5. processMissingTransactions")
 			// missingTxHashes is a slice if all txHashes in the subtree, but only the missing ones are not nil
 			// this is done to make sure the order is preserved when getting them in parallel
 			// compact the missingTxHashes to only a list of the missing ones
@@ -568,10 +569,29 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 		span.Finish()
 	}()
 
-	u.logger.Infof("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
-	missingTxs, err := u.getMissingTransactions(spanCtx, missingTxHashes, baseUrl)
+	var missingTxs []missingTx
+
+	// first check whether we have the subtreeData file for this subtree and use that for the missing transactions
+	subtreeDataExists, err := u.subtreeStore.Exists(spanCtx,
+		subtreeHash[:],
+		options.WithSubDirectory("legacy"),
+		options.WithFileExtension("subtreeData"),
+	)
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String()), err)
+		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtreeData exists", subtreeHash.String()), err)
+	}
+	if subtreeDataExists {
+		u.logger.Infof("[validateSubtree][%s] fetching %d missing txs from subtreeData file", subtreeHash.String(), len(missingTxHashes))
+		missingTxs, err = u.getMissingTransactionsFromFile(spanCtx, subtreeHash, missingTxHashes)
+		if err != nil {
+			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions from subtreeData", subtreeHash.String()), err)
+		}
+	} else {
+		u.logger.Infof("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
+		missingTxs, err = u.getMissingTransactions(spanCtx, missingTxHashes, baseUrl)
+		if err != nil {
+			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String()), err)
+		}
 	}
 
 	u.logger.Infof("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
@@ -611,7 +631,63 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 	return nil
 }
 
-func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []utxo.UnresolvedMetaData, baseUrl string) (missingTxs []missingTx, err error) {
+func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash *chainhash.Hash,
+	missingTxHashes []utxo.UnresolvedMetaData) (missingTxs []missingTx, err error) {
+
+	// load the subtree
+	subtreeReader, err := u.subtreeStore.GetIoReader(ctx,
+		subtreeHash[:],
+		options.WithSubDirectory("legacy"),
+		options.WithFileExtension("subtree"),
+	)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsFromFile] failed to get subtree from store"), err)
+	}
+	defer subtreeReader.Close()
+
+	subtree := &util.Subtree{}
+	if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
+		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsFromFile] failed to deserialize subtree"), err)
+	}
+
+	// get the subtreeData
+	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx,
+		subtreeHash[:],
+		options.WithSubDirectory("legacy"),
+		options.WithFileExtension("subtreeData"),
+	)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsFromFile] failed to get subtreeData from store"), err)
+	}
+	defer subtreeDataReader.Close()
+
+	subtreeData, err := util.NewSubtreeDataFromReader(subtree, subtreeDataReader)
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsFromFile] failed to get subtreeData from reader"), err)
+	}
+
+	subtreeLookupMap := subtree.GetMap()
+
+	// populate the missingTx slice with the tx data from the subtreeData
+	missingTxs = make([]missingTx, 0, len(missingTxHashes))
+	for _, mTx := range missingTxHashes {
+		txIdx, ok := subtreeLookupMap.Get(mTx.Hash)
+		if !ok {
+			return nil, fmt.Errorf("[getMissingTransactionsFromFile] missing transaction [%s]", mTx.Hash.String())
+		}
+		tx := subtreeData.Txs[txIdx]
+		if tx == nil {
+			return nil, fmt.Errorf("[getMissingTransactionsFromFile] #2 missing transaction is nil [%s]", mTx.Hash.String())
+		}
+		missingTxs = append(missingTxs, missingTx{tx: tx, idx: mTx.Idx})
+	}
+
+	return missingTxs, nil
+}
+
+func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []utxo.UnresolvedMetaData,
+	baseUrl string) (missingTxs []missingTx, err error) {
+
 	// transactions have to be returned in the same order as they were requested
 	missingTxsMap := make(map[chainhash.Hash]*bt.Tx, len(missingTxHashes))
 	missingTxsMu := sync.Mutex{}

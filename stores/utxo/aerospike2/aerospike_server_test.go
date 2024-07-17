@@ -151,7 +151,7 @@ func internalTest(t *testing.T) {
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 
 		var value *aero.Record
@@ -166,7 +166,7 @@ func internalTest(t *testing.T) {
 		assert.Equal(t, parentTxHash[:], binParentTxHash.CloneBytes())
 		assert.Equal(t, []interface{}{}, value.Bins["blockIDs"])
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(context.Background(), tx, 0)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
@@ -192,7 +192,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike store coinbase", func(t *testing.T) {
 		cleanDB(t, client, key)
-		_, err = db.Create(context.Background(), coinbaseTx)
+		_, err = db.Create(context.Background(), coinbaseTx, 0)
 		require.NoError(t, err)
 
 		var value *aero.Record
@@ -211,7 +211,7 @@ func internalTest(t *testing.T) {
 	t.Run("aerospike get", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
 
-		_, err = db.Create(context.Background(), tx)
+		_, err = db.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 
 		var value *meta.Data
@@ -236,7 +236,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike get", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -256,7 +256,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike store", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -284,14 +284,14 @@ func internalTest(t *testing.T) {
 		assert.Len(t, blockIDs, 0)
 		require.Equal(t, value.Expiration, uint32(math.MaxUint32))
 
-		txMeta, err = db.Create(context.Background(), tx)
+		txMeta, err = db.Create(context.Background(), tx, 0)
 		assert.Nil(t, txMeta)
 		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
 
-		txMeta, err = db.Create(context.Background(), tx)
+		txMeta, err = db.Create(context.Background(), tx, 0)
 		assert.Nil(t, txMeta)
 		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 
@@ -299,7 +299,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -326,7 +326,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend lua", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 		assert.NotNil(t, txMeta)
 
@@ -341,7 +341,7 @@ func internalTest(t *testing.T) {
 		wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
-		ret, aErr := client.Execute(wPolicy, txKey, luaSpendFunction, "spend",
+		ret, aErr := client.Execute(wPolicy, txKey, luaPackage, "spend",
 			aero.NewIntegerValue(int(spends[0].Vout)),
 			aero.NewValue(spends[0].UTXOHash[:]),
 			aero.NewValue(spends[0].SpendingTxID[:]),
@@ -372,14 +372,14 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend all lua", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
 		wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
 		for _, s := range spendsAll {
-			ret, aErr := client.Execute(wPolicy, txKey, luaSpendFunction, "spend",
+			ret, aErr := client.Execute(wPolicy, txKey, luaPackage, "spend",
 				aero.NewIntegerValue(int(s.Vout)),
 				aero.NewValue(s.UTXOHash[:]),
 				aero.NewValue(s.SpendingTxID[:]),
@@ -404,7 +404,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike lua errors", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -412,7 +412,7 @@ func internalTest(t *testing.T) {
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
 		fakeKey, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, []byte{})
-		ret, aErr := client.Execute(wPolicy, fakeKey, luaSpendFunction, "spend",
+		ret, aErr := client.Execute(wPolicy, fakeKey, luaPackage, "spend",
 			aero.NewIntegerValue(int(spends[0].Vout)),
 			aero.NewValue(spends[0].UTXOHash[:]),
 			aero.NewValue(spends[0].SpendingTxID[:]),
@@ -424,7 +424,7 @@ func internalTest(t *testing.T) {
 
 	t.Run("aerospike spend all and expire", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
-		txMeta, err := db.Create(context.Background(), tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -478,7 +478,7 @@ func internalTest(t *testing.T) {
 		key, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, tx2.TxIDChainHash().CloneBytes())
 		cleanDB(t, client, key, tx2)
 
-		txMeta, err := db.Create(context.Background(), tx2)
+		txMeta, err := db.Create(context.Background(), tx2, 0)
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
@@ -565,7 +565,7 @@ func TestLUAScripts(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), tx)
+	txMeta, err := db.Create(context.Background(), tx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -607,6 +607,50 @@ func TestLUAScripts(t *testing.T) {
 	assert.Equal(t, 0, spendUtxos)
 }
 
+func TestCreateWithBlockIDs(t *testing.T) {
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	require.NoError(t, err)
+
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	key, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, key)
+
+	_, err = client.Delete(nil, key)
+	require.NoError(t, err)
+
+	var blockHeight uint32
+
+	txMeta, err := db.Create(context.Background(), tx, blockHeight, 1, 2, 3)
+	require.NoError(t, err)
+	assert.NotNil(t, txMeta)
+
+	resp, err := client.Get(nil, key, "blockIDs")
+	require.NoError(t, err)
+	blockIDs, ok := resp.Bins["blockIDs"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, blockIDs, 3)
+
+	id1, ok := blockIDs[0].(int)
+	require.True(t, ok)
+	assert.Equal(t, 1, id1)
+
+	id2, ok := blockIDs[1].(int)
+	require.True(t, ok)
+	assert.Equal(t, 2, id2)
+
+	id3, ok := blockIDs[2].(int)
+	require.True(t, ok)
+	assert.Equal(t, 3, id3)
+}
+
 func TestStoreOPReturn(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
@@ -626,7 +670,7 @@ func TestStoreOPReturn(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), txWithOPReturn)
+	txMeta, err := db.Create(context.Background(), txWithOPReturn, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -663,7 +707,7 @@ func TestFrozenTX(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), tx)
+	txMeta, err := db.Create(context.Background(), tx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -697,7 +741,7 @@ func TestFrozenUTXO(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), tx)
+	txMeta, err := db.Create(context.Background(), tx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -738,7 +782,7 @@ func TestCoinbase(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), coinbaseTx)
+	txMeta, err := db.Create(context.Background(), coinbaseTx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 	assert.True(t, txMeta.IsCoinbase)
@@ -776,7 +820,7 @@ func TestBigOPReturn(t *testing.T) {
 	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
-	f, err := os.Open("d51051ebcd649ab7a02de85f130b55c357c514ee5f911da9a8dc3bd2ead750ac.bin")
+	f, err := os.Open("testdata/d51051ebcd649ab7a02de85f130b55c357c514ee5f911da9a8dc3bd2ead750ac.bin")
 	require.NoError(t, err)
 	defer f.Close()
 
@@ -792,7 +836,7 @@ func TestBigOPReturn(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), bigTx)
+	txMeta, err := db.Create(context.Background(), bigTx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
@@ -814,8 +858,6 @@ func TestBigOPReturn(t *testing.T) {
 }
 
 func TestMultiUTXORecords(t *testing.T) {
-	gocore.Config().Set("utxoBatchSize", "2")
-
 	// For this test, we will assume that aerospike can never store more than 2 utxos in a single record
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
@@ -828,7 +870,9 @@ func TestMultiUTXORecords(t *testing.T) {
 	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
-	f, err := os.Open("8f7724e256343cf21dbb1d8ce8fa5caae79da212c90ca6aef3b415c0a9bc003c.bin")
+	db.utxoBatchSize = 2 // This is only set for testing purposes
+
+	f, err := os.Open("testdata/8f7724e256343cf21dbb1d8ce8fa5caae79da212c90ca6aef3b415c0a9bc003c.bin")
 	require.NoError(t, err)
 	defer f.Close()
 
@@ -844,15 +888,18 @@ func TestMultiUTXORecords(t *testing.T) {
 	_, err = client.Delete(nil, key0)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), bigTx)
+	txMeta, err := db.Create(context.Background(), bigTx, 0)
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 
-	resp, err := client.Get(nil, key0, "utxos")
+	resp, err := client.Get(nil, key0, "utxos", "nrRecords")
 	require.NoError(t, err)
 	utxos, ok := resp.Bins["utxos"].([]interface{})
 	require.True(t, ok)
 	assert.Len(t, utxos, 2)
+	nrRecords, ok := resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 3, nrRecords)
 
 	key1, err := aerospike.NewKey(db.namespace, db.setName, calculateKeySource(bigTx.TxIDChainHash(), 1))
 	require.NoError(t, err)
@@ -888,13 +935,16 @@ func TestMultiUTXORecords(t *testing.T) {
 	err = db.Spend(context.Background(), []*utxo.Spend{spend0}, 0)
 	require.NoError(t, err)
 
-	resp, err = client.Get(nil, key0, "utxos")
+	resp, err = client.Get(nil, key0, "utxos", "nrRecords")
 	require.NoError(t, err)
 	utxos, ok = resp.Bins["utxos"].([]interface{})
 	require.True(t, ok)
 	assert.Len(t, utxos, 2)
 	utxo0 := utxos[0].([]byte)
 	assert.Len(t, utxo0, 64)
+	nrRecords, ok = resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 3, nrRecords)
 
 	// Spend the 5th utxo
 	utxoHash4, err := util.UTXOHashFromOutput(bigTx.TxIDChainHash(), bigTx.Outputs[4], 4)
@@ -917,6 +967,11 @@ func TestMultiUTXORecords(t *testing.T) {
 	utxo4 := utxos[0].([]byte)
 	assert.Len(t, utxo4, 64)
 
+	resp, err = client.Get(nil, key0, "nrRecords")
+	require.NoError(t, err)
+	nrRecords, ok = resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 2, nrRecords)
 }
 
 func TestCalculateKeySource(t *testing.T) {
@@ -937,20 +992,22 @@ func TestCalculateKeySource(t *testing.T) {
 }
 
 func TestCalculateOffsetOutput(t *testing.T) {
-	offset := calculateOffsetForOutput(0, 2)
+	db := &Store{utxoBatchSize: 20_000}
+
+	offset := db.calculateOffsetForOutput(0)
 	assert.Equal(t, uint32(0), offset)
 
-	offset = calculateOffsetForOutput(3, 2)
-	assert.Equal(t, uint32(1), offset)
+	offset = db.calculateOffsetForOutput(30_000)
+	assert.Equal(t, uint32(10_000), offset)
 
-	offset = calculateOffsetForOutput(4, 2)
+	offset = db.calculateOffsetForOutput(40_000)
 	assert.Equal(t, uint32(0), offset)
 }
 
-func TestTTT(t *testing.T) {
-	// raw client to be able to do gets and cleanup
+func TestIncrementNrRecords(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
+
 	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
@@ -966,20 +1023,99 @@ func TestTTT(t *testing.T) {
 	_, err = client.Delete(nil, key)
 	require.NoError(t, err)
 
-	txMeta, err := db.Create(context.Background(), tx)
+	txMeta, err := db.Create(context.Background(), tx, 0)
+	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
+
+	resp, err := client.Get(nil, key, "nrRecords")
+	require.NoError(t, err)
+	nrRecords, ok := resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 1, nrRecords)
+
+	db.incrementNrRecords(tx.TxIDChainHash(), 1)
+
+	resp, err = client.Get(nil, key, "nrRecords")
+	require.NoError(t, err)
+	nrRecords, ok = resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 2, nrRecords)
+
+	db.incrementNrRecords(tx.TxIDChainHash(), -1)
+
+	resp, err = client.Get(nil, key, "nrRecords")
+	require.NoError(t, err)
+	nrRecords, ok = resp.Bins["nrRecords"].(int)
+	require.True(t, ok)
+	assert.Equal(t, 1, nrRecords)
+
+}
+
+func TestLargeUTXO(t *testing.T) {
+	// For this test, we will assume that aerospike can never store more than 2 utxos in a single record
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
-	resp, err := db.GetSpend(context.Background(), spend)
-	require.NoError(t, err)
-	assert.Equal(t, int(utxo.Status_OK), resp.Status)
-	assert.Nil(t, resp.SpendingTxID)
-
-	err = db.Spend(context.Background(), spends, 0)
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
-	resp, err = db.GetSpend(context.Background(), spend)
+	fParent, err := os.Open("testdata/ac4849b3b03e44d5fcba8becfc642a8670049b59436d6c7ab89a4d3873d9a3ef.bin")
 	require.NoError(t, err)
-	assert.Equal(t, int(utxo.Status_SPENT), resp.Status)
-	assert.Equal(t, spendingTxID1, resp.SpendingTxID)
+	defer fParent.Close()
+
+	parentTx := new(bt.Tx)
+	_, err = parentTx.ReadFrom(fParent)
+	require.NoError(t, err)
+	require.Equal(t, "ac4849b3b03e44d5fcba8becfc642a8670049b59436d6c7ab89a4d3873d9a3ef", parentTx.TxIDChainHash().String())
+
+	fChild, err := os.Open("testdata/1bd4f08ffbeefbb67d82a340dd35259a97c5626368f8a6efa056571b293fae52.bin")
+	require.NoError(t, err)
+	defer fChild.Close()
+
+	childTx := new(bt.Tx)
+	_, err = childTx.ReadFrom(fChild)
+	require.NoError(t, err)
+	require.Equal(t, "1bd4f08ffbeefbb67d82a340dd35259a97c5626368f8a6efa056571b293fae52", childTx.TxIDChainHash().String())
+
+	keyParent, err := aero.NewKey(db.namespace, db.setName, parentTx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, keyParent)
+
+	_, err = client.Delete(nil, keyParent)
+	require.NoError(t, err)
+
+	parentMeta, err := db.Create(context.Background(), parentTx, 0)
+	require.NoError(t, err)
+	assert.NotNil(t, parentMeta)
+
+	keyChild, err := aero.NewKey(db.namespace, db.setName, childTx.TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	assert.NotNil(t, keyChild)
+
+	_, err = client.Delete(nil, keyChild)
+	require.NoError(t, err)
+
+	childMeta, err := db.Create(context.Background(), childTx, 0)
+	require.NoError(t, err)
+	assert.NotNil(t, childMeta)
+
+	previousTxID, err := chainhash.NewHashFromStr("ac4849b3b03e44d5fcba8becfc642a8670049b59436d6c7ab89a4d3873d9a3ef")
+	require.NoError(t, err)
+
+	previousOutput := &meta.PreviousOutput{
+		PreviousTxID: *previousTxID,
+		Vout:         31243,
+	}
+
+	assert.Nil(t, previousOutput.LockingScript)
+
+	err = db.PreviousOutputsDecorate(context.Background(), []*meta.PreviousOutput{previousOutput})
+	require.NoError(t, err)
+	assert.NotNil(t, previousOutput.LockingScript)
+	// t.Log(previousOutput)
 }

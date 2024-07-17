@@ -61,6 +61,7 @@ func tearDownBitcoinTestFramework() {
 	if err := framework.StopNodes(); err != nil {
 		fmt.Printf("Error stopping nodes: %v\n", err)
 	}
+	_ = os.RemoveAll("../../data")
 }
 
 func TestShouldAllowFairTx(t *testing.T) {
@@ -83,30 +84,30 @@ func TestShouldAllowFairTx(t *testing.T) {
 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
-		t.Fatalf("Failed to decode Coinbase private key: %v", err)
+		t.Errorf("Failed to decode Coinbase private key: %v", err)
 	}
 
 	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
 
 	privateKey, err := bec.NewPrivateKey(bec.S256())
 	if err != nil {
-		t.Fatalf("Failed to generate private key: %v", err)
+		t.Errorf("Failed to generate private key: %v", err)
 	}
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	if err != nil {
-		t.Fatalf("Failed to create address: %v", err)
+		t.Errorf("Failed to create address: %v", err)
 	}
 
 	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	if err != nil {
-		t.Fatalf("Failed to request funds: %v", err)
+		t.Errorf("Failed to request funds: %v", err)
 	}
 	fmt.Printf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
 	_, err = txDistributor.SendTransaction(ctx, tx)
 	if err != nil {
-		t.Fatalf("Failed to send transaction: %v", err)
+		t.Errorf("Failed to send transaction: %v", err)
 	}
 
 	fmt.Printf("Transaction sent: %s %v\n", tx.TxIDChainHash(), len(tx.Outputs))
@@ -121,22 +122,22 @@ func TestShouldAllowFairTx(t *testing.T) {
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
 	if err != nil {
-		t.Fatalf("Error adding UTXO to transaction: %s\n", err)
+		t.Errorf("Error adding UTXO to transaction: %s\n", err)
 	}
 
 	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
 	if err != nil {
-		t.Fatalf("Error adding output to transaction: %v", err)
+		t.Errorf("Error adding output to transaction: %v", err)
 	}
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		t.Fatalf("Error filling transaction inputs: %v", err)
+		t.Errorf("Error filling transaction inputs: %v", err)
 	}
 
 	_, err = txDistributor.SendTransaction(ctx, newTx)
 	if err != nil {
-		t.Fatalf("Failed to send new transaction: %v", err)
+		t.Errorf("Failed to send new transaction: %v", err)
 	}
 
 	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
@@ -152,7 +153,7 @@ func TestShouldAllowFairTx(t *testing.T) {
 	baClient := framework.Nodes[0].BlockassemblyClient
 	blockHash, err := helper.MineBlock(ctx, baClient, logger)
 	if err != nil {
-		t.Fatalf("Failed to mine block: %v", err)
+		t.Errorf("Failed to mine block: %v", err)
 	}
 
 	fmt.Printf("Block height: %d\n", height)
@@ -165,7 +166,7 @@ func TestShouldAllowFairTx(t *testing.T) {
 		time.Sleep(1 * time.Second)
 	}
 	if newHeight <= height {
-		t.Fatalf("Block height did not increase after mining block")
+		t.Errorf("Block height did not increase after mining block")
 	}
 
 	blockchainStoreURL, _, found := gocore.Config().GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
@@ -205,6 +206,55 @@ func TestShouldAllowFairTx(t *testing.T) {
 
 }
 
+func TestBroadcastPoW(t *testing.T) {
+	// Test setup
+	ctx := context.Background()
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
+
+	hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
+	if err != nil {
+		t.Errorf("Failed to create and send raw txs: %v", err)
+	}
+	fmt.Printf("Hashes in created block: %v\n", hashes)
+
+	baClient := framework.Nodes[0].BlockassemblyClient
+	var block, blockerr = helper.MineBlock(ctx, baClient, logger)
+	if blockerr != nil {
+		t.Errorf("Failed to mine block: %v", err)
+	}
+
+	time.Sleep(5 * time.Second)
+
+	blockNode0, blockErr0 := framework.Nodes[0].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
+
+	blockNode1, blockErr1 := framework.Nodes[1].BlockChainDB.GetBlockExists(ctx, (*chainhash.Hash)(block))
+
+	blockNode2, blockErr2 := framework.Nodes[2].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
+
+	if blockErr0 != nil {
+		t.Errorf("Failure on blockchain on Node0: %v", err)
+	}
+
+	if blockErr1 != nil {
+		t.Errorf("Failure on blockchain on Node1: %v", err)
+	}
+
+	if blockErr2 != nil {
+		t.Errorf("Failure on blockchain on Node2: %v", err)
+	}
+
+	if !blockNode0 {
+		t.Errorf("Failed to retrieve new mined block on Node0: %v", blockErr0)
+	}
+	if !blockNode1 {
+		t.Errorf("Failed to retrieve new mined block on Node1: %v", blockErr1)
+	}
+	if !blockNode2 {
+		t.Errorf("Failed to retrieve new mined block on Node2: %v", blockErr2)
+	}
+}
+
 func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	ctx := context.Background()
 	url := "http://localhost:18090"
@@ -238,7 +288,7 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
-		t.Fatalf("Failed to decode Coinbase private key: %v", err)
+		t.Errorf("Failed to decode Coinbase private key: %v", err)
 	}
 
 	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
@@ -246,22 +296,22 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 
 	privateKey, err := bec.NewPrivateKey(bec.S256())
 	if err != nil {
-		t.Fatalf("Failed to generate private key: %v", err)
+		t.Errorf("Failed to generate private key: %v", err)
 	}
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	if err != nil {
-		t.Fatalf("Failed to create address: %v", err)
+		t.Errorf("Failed to create address: %v", err)
 	}
 
 	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	if err != nil {
-		t.Fatalf("Failed to request funds: %v", err)
+		t.Errorf("Failed to request funds: %v", err)
 	}
 
 	_, err = txDistributor.SendTransaction(ctx, tx)
 	if err != nil {
-		t.Fatalf("Failed to send transaction: %v", err)
+		t.Errorf("Failed to send transaction: %v", err)
 	}
 
 	output := tx.Outputs[0]
@@ -275,46 +325,46 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
 	if err != nil {
-		t.Fatalf("Error adding UTXO to transaction: %s\n", err)
+		t.Errorf("Error adding UTXO to transaction: %s\n", err)
 	}
 	newTx.LockTime = 0
 
 	newTxDouble := bt.NewTx()
 	err = newTxDouble.FromUTXOs(utxo)
 	if err != nil {
-		t.Fatalf("Error adding UTXO to transaction: %s\n", err)
+		t.Errorf("Error adding UTXO to transaction: %s\n", err)
 	}
 
 	newTxDouble.LockTime = 1
 
 	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
 	if err != nil {
-		t.Fatalf("Error adding output to transaction: %v", err)
+		t.Errorf("Error adding output to transaction: %v", err)
 	}
 
 	err = newTxDouble.AddP2PKHOutputFromAddress(coinbaseAddrDouble.AddressString, 10000)
 	if err != nil {
-		t.Fatalf("Error adding output to transaction: %v", err)
+		t.Errorf("Error adding output to transaction: %v", err)
 	}
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		t.Fatalf("Error filling transaction inputs: %v", err)
+		t.Errorf("Error filling transaction inputs: %v", err)
 	}
 
 	err = newTxDouble.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		t.Fatalf("Error filling transaction inputs: %v", err)
+		t.Errorf("Error filling transaction inputs: %v", err)
 	}
 
 	_, err = txNode1Distributor.SendTransaction(ctx, newTx)
 	if err != nil {
-		t.Fatalf("Failed to send new transaction: %v", err)
+		t.Errorf("Failed to send new transaction: %v", err)
 	}
 
 	_, err = txNode2Distributor.SendTransaction(ctx, newTxDouble)
 	if err != nil {
-		t.Fatalf("Failed to send new transaction: %v", err)
+		t.Errorf("Failed to send new transaction: %v", err)
 	}
 
 	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
@@ -333,14 +383,14 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 	baClientNode1 := framework.Nodes[0].BlockassemblyClient
 	miningCandidate, err := baClientNode1.GetMiningCandidate(ctx)
 	if err != nil {
-		t.Fatalf("Failed to get mining candidate: %v", err)
+		t.Errorf("Failed to get mining candidate: %v", err)
 	}
 	fmt.Printf("Mining candidate: %d\n", miningCandidate.SubtreeCount)
 
 	baClientNode2 := framework.Nodes[1].BlockassemblyClient
 	miningCandidate2, err := baClientNode2.GetMiningCandidate(ctx)
 	if err != nil {
-		t.Fatalf("Failed to get mining candidate: %v", err)
+		t.Errorf("Failed to get mining candidate: %v", err)
 	}
 	fmt.Printf("Mining candidate: %d\n", miningCandidate2.SubtreeCount)
 
@@ -366,7 +416,7 @@ func TestShouldNotAllowDoubleSpend(t *testing.T) {
 		time.Sleep(1 * time.Second)
 	}
 	if newHeight <= height {
-		t.Fatalf("Block height did not increase after mining block")
+		t.Errorf("Block height did not increase after mining block")
 	}
 
 	blockStore := framework.Nodes[0].Blockstore

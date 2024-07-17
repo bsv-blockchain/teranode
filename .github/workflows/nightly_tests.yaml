@@ -1,0 +1,56 @@
+name: nightly-test-runs
+on:
+  schedule:
+    - cron: "0 0 * * *"  # Runs at midnight UTC every day
+  workflow_dispatch:
+
+env:
+  REPO: ubsv
+  ECR_REGION: eu-north-1
+
+jobs:
+
+  smoketest:
+    name: smoketest
+    runs-on: ubsv-runner
+    steps:
+      # Setup Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        # with:
+        #   buildkitd-flags: --debug # Debug logs
+
+      # Set up AWS CLI
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      # Authenticate Docker to AWS ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21.0'
+
+      - name: Run Smoke tests
+        run: make nightly-tests
+        continue-on-error: true
+      - name: Publish Blockassembly Test Summary Results
+        run: npx github-actions-ctrf blockassembly-ctrf-report.json
+      - name: Publish Resilience Test Summary Results
+        run: npx github-actions-ctrf resilience-ctrf-report.json
+      - name: Publish Settings Test Summary Results
+        run: npx github-actions-ctrf settings-ctrf-report.json
+      - name: Publish State Test Summary Results
+        run: npx github-actions-ctrf state-ctrf-report.json
+      - name: Publish Fork Test Summary Results
+        run: npx github-actions-ctrf fork-ctrf-report.json

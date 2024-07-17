@@ -41,13 +41,15 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 	}
 
 	var fees uint64
-	utxoHashes := make([]*chainhash.Hash, 0, len(tx.Outputs))
+	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
 
 	if !tx.IsCoinbase() {
 		for _, input := range tx.Inputs {
 			fees += input.PreviousTxSatoshis
 		}
 	}
+
+	txid := tx.TxIDChainHash()
 
 	for i, output := range tx.Outputs {
 		select {
@@ -56,12 +58,12 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 		default:
 			fees -= output.Satoshis
 
-			utxoHash, utxoErr := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
+			utxoHash, utxoErr := util.UTXOHashFromOutput(txid, output, uint32(i))
 			if utxoErr != nil {
 				return 0, nil, fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
 			}
 
-			utxoHashes = append(utxoHashes, utxoHash)
+			utxoHashes[i] = utxoHash
 		}
 	}
 

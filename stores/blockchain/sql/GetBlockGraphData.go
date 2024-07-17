@@ -5,11 +5,11 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 )
 
 func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlockGraphData")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockGraphData")
 	defer func() {
 		stat.AddTime(start)
 	}()

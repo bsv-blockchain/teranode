@@ -57,5 +57,5 @@ vendor
 
 .ipynb_checkpoints/
 unit-tests.xml
-ctrf-report.json
+*ctrf-report.json
 __debug*

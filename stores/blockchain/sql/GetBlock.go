@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -18,7 +18,7 @@ type getBlockCache struct {
 }
 
 func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
-	start, stat, ctx := util.StartStatFromContext(ctx, "GetBlock")
+	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlock")
 	defer func() {
 		stat.AddTime(start)
 	}()

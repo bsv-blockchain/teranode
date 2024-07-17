@@ -6,10 +6,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
-	"go.uber.org/atomic"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
@@ -18,6 +14,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/retry"
@@ -27,6 +25,7 @@ import (
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
@@ -567,7 +566,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassem
 }
 
 func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockSubmissionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(cntxt, "submitMiningSolution", blockAssemblyStat)
+	start, stat, ctx := tracing.NewStatFromContext(cntxt, "submitMiningSolution", blockAssemblyStat)
 	defer func() {
 		stat.AddTime(start)
 		prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)

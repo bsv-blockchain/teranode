@@ -2,10 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 
+	"github.com/bitcoin-sv/ubsv/services/asset"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
+	"github.com/bitcoin-sv/ubsv/services/validator"
+
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -13,11 +19,15 @@ import (
 )
 
 var (
-	txStore         blob.Store
-	subtreeStore    blob.Store
-	blockStore      blob.Store
-	utxoStore       utxostore.Store
-	blockchainStore blockchain.Store
+	txStore                 blob.Store
+	subtreeStore            blob.Store
+	blockStore              blob.Store
+	utxoStore               utxostore.Store
+	blockchainClient        blockchain.ClientI
+	assetClient             *asset.Client
+	validatorClient         validator.Interface
+	subtreeValidationClient subtreevalidation.Interface
+	blockValidationClient   blockvalidation.Interface
 )
 
 func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Store {
@@ -40,24 +50,84 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Store {
 	return utxoStore
 }
 
-func getBlockchainStore(ctx context.Context, logger ulogger.Logger) blockchain.Store {
-	if blockchainStore != nil {
-		return blockchainStore
+func getSubtreeValidationClient(ctx context.Context, logger ulogger.Logger) subtreevalidation.Interface {
+	if subtreeValidationClient != nil {
+		return subtreeValidationClient
 	}
 
-	blockchainURL, err, found := gocore.Config().GetURL("blockchain_store")
+	subtreeValidationClient = subtreevalidation.NewClient(ctx, logger)
+
+	return subtreeValidationClient
+}
+
+func getBlockValidationClient(ctx context.Context, logger ulogger.Logger) blockvalidation.Interface {
+	if blockValidationClient != nil {
+		return blockValidationClient
+	}
+
+	blockValidationClient = blockvalidation.NewClient(ctx, logger)
+
+	return blockValidationClient
+}
+
+func getBlockchainClient(ctx context.Context, logger ulogger.Logger) blockchain.ClientI {
+	if blockchainClient != nil {
+		return blockchainClient
+	}
+
+	var err error
+	blockchainClient, err = blockchain.NewClient(ctx, logger)
 	if err != nil {
 		panic(err)
 	}
-	if !found {
-		panic("no blockchain setting found")
+
+	return blockchainClient
+}
+
+func getValidatorClient(ctx context.Context, logger ulogger.Logger) validator.Interface {
+	if validatorClient != nil {
+		return validatorClient
 	}
-	blockchainStore, err = blockchain.NewStore(logger, blockchainURL)
+
+	var err error
+	localValidator := gocore.Config().GetBool("useLocalValidator", false)
+	if localValidator {
+		logger.Infof("[Validator] Using local validator")
+		validatorClient, err = validator.New(ctx,
+			logger,
+			getUtxoStore(ctx, logger),
+		)
+		if err != nil {
+			logger.Fatalf("could not create validator [%v]", err)
+		}
+
+	} else {
+		validatorClient, err = validator.NewClient(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	return validatorClient
+}
+
+func getAssetClient(ctx context.Context, logger ulogger.Logger) *asset.Client {
+	if assetClient != nil {
+		return assetClient
+	}
+
+	assetAddr, ok := gocore.Config().Get("asset_grpcAddress")
+	if !ok {
+		panic(errors.New("no asset_grpcAddress setting found"))
+	}
+
+	var err error
+	assetClient, err = asset.NewClient(ctx, logger, assetAddr)
 	if err != nil {
 		panic(err)
 	}
 
-	return blockchainStore
+	return assetClient
 }
 
 func getTxStore(logger ulogger.Logger) blob.Store {

@@ -91,6 +91,10 @@ message GetBlockResponse {
   uint64 size_in_bytes = 6;
 }
 
+message GetFullBlockResponse {
+  bytes full_block_bytes = 1;
+}
+
 // swagger:model GetBlockGraphDataRequest
 message GetBlockGraphDataRequest {
   uint64 period_millis = 1;

@@ -203,6 +203,15 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 
 	fileOptions := options.NewSetOptions(nil, opts...)
 
+	if fileOptions.Extension != "" {
+		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
+	}
+
+	if fileOptions.SubDirectory != "" {
+		// TODO: add subdirectory to filename, which could be a full path to the file
+		s.logger.Warnf("SubDirectory set, but is not supported yet: %s", fileOptions.SubDirectory)
+	}
+
 	if fileOptions.TTL > 0 {
 		// write bytes to file
 		ttl := time.Now().Add(fileOptions.TTL)
@@ -213,10 +222,6 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 		s.fileTTLsMu.Lock()
 		s.fileTTLs[fileName] = ttl
 		s.fileTTLsMu.Unlock()
-	}
-
-	if fileOptions.Extension != "" {
-		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
 	}
 
 	return fileName, nil

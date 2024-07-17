@@ -8,12 +8,12 @@ import (
 	"io"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
@@ -21,7 +21,7 @@ import (
 )
 
 func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash, utxoDiff *utxo_model.UTXODiff) error {
-	startTotal, stat, ctx := util.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
+	startTotal, stat, ctx := tracing.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
 	defer func() {

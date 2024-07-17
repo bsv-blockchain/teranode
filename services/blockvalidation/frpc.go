@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -44,7 +44,7 @@ func (f *fRPC_BlockValidation) Exists(ctx context.Context, request *blockvalidat
 }
 
 func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvalidation_api.BlockvalidationApiSetTxMetaRequest) (*blockvalidation_api.BlockvalidationApiSetTxMetaResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "SetTxMeta", f.blockValidation.stats)
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "SetTxMeta", f.blockValidation.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -76,7 +76,7 @@ func (f *fRPC_BlockValidation) SetTxMeta(ctx context.Context, request *blockvali
 }
 
 func (f *fRPC_BlockValidation) DelTxMeta(ctx context.Context, request *blockvalidation_api.BlockvalidationApiDelTxMetaRequest) (*blockvalidation_api.BlockvalidationApiDelTxMetaResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "DelTxMeta", f.blockValidation.stats)
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "DelTxMeta", f.blockValidation.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -98,7 +98,7 @@ func (f *fRPC_BlockValidation) DelTxMeta(ctx context.Context, request *blockvali
 }
 
 func (f *fRPC_BlockValidation) SetMinedMulti(ctx context.Context, request *blockvalidation_api.BlockvalidationApiSetMinedMultiRequest) (*blockvalidation_api.BlockvalidationApiSetMinedMultiResponse, error) {
-	start, stat, ctx := util.NewStatFromContext(ctx, "SetMinedMulti", f.blockValidation.stats)
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "SetMinedMulti", f.blockValidation.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()

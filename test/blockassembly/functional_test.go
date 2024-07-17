@@ -51,6 +51,7 @@ func tearDownBitcoinTestFramework() {
 	if err := framework.StopNodes(); err != nil {
 		fmt.Printf("Error stopping nodes: %v\n", err)
 	}
+	_ = os.RemoveAll("../../data")
 }
 
 func newTx(lockTime uint32) *bt.Tx {
@@ -76,14 +77,14 @@ func TestNode(t *testing.T) {
 		}
 		_, err := blockassemblyNode0.BlockAssemblyAPIClient().AddTx(framework.Context, newTx)
 		if err != nil {
-			t.Fatalf("Error adding tx: %v", err)
+			t.Errorf("Error adding tx: %v", err)
 		}
-		_, _ = utxoStoreNode0.Create(framework.Context, newTX)
+		_, _ = utxoStoreNode0.Create(framework.Context, newTX, 0)
 	}
 
 	m, err := blockassemblyNode0.GetMiningCandidate(framework.Context)
 	if err != nil {
-		t.Fatalf("Error getting mining candidate: %v", err)
+		t.Errorf("Error getting mining candidate: %v", err)
 	}
 	assert.Equal(t, uint(0x3), uint(m.SubtreeCount))
 	_, err = helper.MineBlockWithCandidate(framework.Context, blockassemblyNode0, m, logger)

@@ -56,6 +56,7 @@ func tearDownBitcoinTestFramework() {
 	if err := framework.StopNodes(); err != nil {
 		fmt.Printf("Error stopping nodes: %v\n", err)
 	}
+	_ = os.RemoveAll("../../data")
 }
 
 func TestRejectLongerChainWithDoubleSpend(t *testing.T) {
@@ -72,7 +73,7 @@ func TestRejectLongerChainWithDoubleSpend(t *testing.T) {
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.tc3"
 	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Fatalf("Failed to restart nodes: %v", err)
+		t.Errorf("Failed to restart nodes: %v", err)
 	}
 	ctx := context.Background()
 
@@ -82,14 +83,14 @@ func TestRejectLongerChainWithDoubleSpend(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
 		if err != nil {
-			t.Fatalf("Failed to create and send raw txs: %v", err)
+			t.Errorf("Failed to create and send raw txs: %v", err)
 		}
 		fmt.Printf("Hashes: %v\n", hashes)
 
 		baClient := framework.Nodes[0].BlockassemblyClient
 		_, err = helper.MineBlock(ctx, baClient, logger)
 		if err != nil {
-			t.Fatalf("Failed to mine block: %v", err)
+			t.Errorf("Failed to mine block: %v", err)
 		}
 	}
 
@@ -97,22 +98,22 @@ func TestRejectLongerChainWithDoubleSpend(t *testing.T) {
 	arrayOfNodes := []tf.BitcoinNode{framework.Nodes[0], framework.Nodes[2]}
 	_, err := helper.CreateAndSendDoubleSpendTx(ctx, arrayOfNodes)
 	if err != nil {
-		t.Fatalf("Failed to create and send double spend tx: %v", err)
+		t.Errorf("Failed to create and send double spend tx: %v", err)
 	}
 	baClient := arrayOfNodes[0].BlockassemblyClient
 	_, err = helper.MineBlock(ctx, baClient, logger)
 	if err != nil {
-		t.Fatalf("Failed to mine block: %v", err)
+		t.Errorf("Failed to mine block: %v", err)
 	}
 	baClient = arrayOfNodes[1].BlockassemblyClient
 	_, err = helper.MineBlock(ctx, baClient, logger)
 	if err != nil {
-		t.Fatalf("Failed to mine block: %v", err)
+		t.Errorf("Failed to mine block: %v", err)
 	}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.tc1"
 	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Fatalf("Failed to restart nodes: %v", err)
+		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
 	wg.Add(1)
@@ -168,7 +169,7 @@ func TestRejectChainWithDoubleSpend(t *testing.T) {
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.tc3"
 	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Fatalf("Failed to restart nodes: %v", err)
+		t.Errorf("Failed to restart nodes: %v", err)
 	}
 	ctx := context.Background()
 
@@ -178,14 +179,14 @@ func TestRejectChainWithDoubleSpend(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
 		if err != nil {
-			t.Fatalf("Failed to create and send raw txs: %v", err)
+			t.Errorf("Failed to create and send raw txs: %v", err)
 		}
 		fmt.Printf("Hashes: %v\n", hashes)
 
 		baClient := framework.Nodes[0].BlockassemblyClient
 		_, err = helper.MineBlock(ctx, baClient, logger)
 		if err != nil {
-			t.Fatalf("Failed to mine block: %v", err)
+			t.Errorf("Failed to mine block: %v", err)
 		}
 	}
 
@@ -193,22 +194,22 @@ func TestRejectChainWithDoubleSpend(t *testing.T) {
 	arrayOfNodes := []tf.BitcoinNode{framework.Nodes[0], framework.Nodes[1]}
 	_, err := helper.CreateAndSendDoubleSpendTx(ctx, arrayOfNodes)
 	if err != nil {
-		t.Fatalf("Failed to create and send double spend tx: %v", err)
+		t.Errorf("Failed to create and send double spend tx: %v", err)
 	}
 	baClient := framework.Nodes[0].BlockassemblyClient
 	_, err = helper.MineBlock(ctx, baClient, logger)
 	if err != nil {
-		t.Fatalf("Failed to mine block: %v", err)
+		t.Errorf("Failed to mine block: %v", err)
 	}
 	baClient = framework.Nodes[1].BlockassemblyClient
 	_, err = helper.MineBlock(ctx, baClient, logger)
 	if err != nil {
-		t.Fatalf("Failed to mine block: %v", err)
+		t.Errorf("Failed to mine block: %v", err)
 	}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.tc1"
 	if err := framework.RestartNodes(settingsMap); err != nil {
-		t.Fatalf("Failed to restart nodes: %v", err)
+		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
 	wg.Add(1)
