@@ -78,7 +78,7 @@ func main() {
 		expectedHeight := height + 100
 
 		if spendingHeight != expectedHeight {
-			log.Printf("Height %d: expected %d, actual %d", height, expectedHeight, spendingHeight)
+			log.Printf("Height %d: %v - expected %d, actual %d", height, coinbaseTx.TxIDChainHash(), expectedHeight, spendingHeight)
 
 			newBin := aero.NewBin("spendingHeight", aero.NewIntegerValue(expectedHeight))
 			err := client.PutBins(nil, key, newBin)
