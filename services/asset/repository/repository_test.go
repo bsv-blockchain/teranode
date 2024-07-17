@@ -163,3 +163,60 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 
 	return txns, key, repo
 }
+
+// func Test_GetFullBlock(t *testing.T) {
+// 	// setup
+// 	ctx := Setup(t)
+// 	block := mockBlock(ctx, t)
+// 	_, err := ctx.server.store.StoreBlock(context.Background(), block, "")
+// 	require.NoError(t, err)
+
+// 	// test
+// 	response, err := ctx.server.GetFullBlock(context.Background(), &blockchain_api.GetBlockRequest{Hash: block.Header.Hash().CloneBytes()})
+// 	require.NoError(t, err)
+// 	require.NotNil(t, response)
+
+// 	buf := bytes.NewBuffer(response.FullBlockBytes)
+
+// 	// version, 4 bytes
+// 	version := binary.LittleEndian.Uint32(buf.Next(4))
+// 	assert.Equal(t, block.Header.Version, version)
+
+// 	// hashPrevBlock, 32 bytes
+// 	hashPrevBlock, _ := chainhash.NewHash(buf.Next(32))
+// 	assert.Equal(t, block.Header.HashPrevBlock, hashPrevBlock)
+
+// 	// hashMerkleRoot, 32 bytes
+// 	hashMerkleRoot, _ := chainhash.NewHash(buf.Next(32))
+// 	assert.Equal(t, block.Header.HashMerkleRoot, hashMerkleRoot)
+
+// 	// timestamp, 4 bytes
+// 	timestamp := binary.LittleEndian.Uint32(buf.Next(4))
+// 	assert.Equal(t, block.Header.Timestamp, timestamp)
+
+// 	// difficulty, 4 bytes
+// 	difficulty := model.NewNBitFromSlice(buf.Next(4))
+// 	assert.Equal(t, block.Header.Bits, difficulty)
+
+// 	// nonce, 4 bytes
+// 	nonce := binary.LittleEndian.Uint32(buf.Next(4))
+// 	assert.Equal(t, block.Header.Nonce, nonce)
+
+// 	// transaction count, varint
+// 	transactionCount, _ := binary.ReadUvarint(buf)
+// 	assert.Equal(t, block.TransactionCount, transactionCount)
+
+// 	// check the coinbase transaction
+// 	txBytes := buf.Bytes()
+// 	coinbaseTx, size, err := bt.NewTxFromStream(txBytes)
+// 	require.NoError(t, err)
+// 	require.NotNil(t, coinbaseTx)
+// 	assert.Equal(t, block.CoinbaseTx.Size(), size)
+
+// 	// check the 2nd tx
+// 	tx, size2, err := bt.NewTxFromStream(txBytes[size:])
+// 	require.NoError(t, err)
+// 	require.NotNil(t, tx)
+
+// 	require.Equal(t, size+size2, len(txBytes))
+//}

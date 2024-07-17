@@ -15,7 +15,6 @@ service BlockchainAPI {
   // AddBlock adds a block to the blockchain.  This will be called by BlockValidator.
   rpc AddBlock (AddBlockRequest) returns (google.protobuf.Empty) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
-  rpc GetFullBlock (GetBlockRequest) returns (GetFullBlockResponse) {}
   rpc GetBlocks (GetBlocksRequest) returns (GetBlocksResponse) {}
   rpc GetBlockByHeight (GetBlockByHeightRequest) returns (GetBlockResponse) {}
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}

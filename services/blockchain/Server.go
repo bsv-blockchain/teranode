@@ -332,28 +332,6 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	}, nil
 }
 
-func (b *Blockchain) GetFullBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetFullBlockResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlock", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockchainGetBlock.Inc()
-
-	blockHash, err := chainhash.NewHash(request.Hash)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
-	}
-
-	bytes, err := GetFullBlockBytes(ctx1, *blockHash, b.store, b.subtreeStore, b.utxoStore)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-	return &blockchain_api.GetFullBlockResponse{
-		FullBlockBytes: bytes,
-	}, nil
-}
-
 func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlocksRequest) (*blockchain_api.GetBlocksResponse, error) {
 	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlocks", b.stats)
 	defer func() {

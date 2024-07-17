@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/addrmgr"
@@ -246,6 +247,7 @@ type server struct {
 
 	// ubsv additions
 	logger            ulogger.Logger
+	assetClient       asset.Client
 	blockchainClient  blockchain.ClientI
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
@@ -1422,7 +1424,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
 
 	// Fetch the raw block bytes from the database.
-	blockBytes, err := s.blockchainClient.GetFullBlock(context.TODO(), hash)
+	blockBytes, err := s.assetClient.GetFullBlock(context.TODO(), hash)
 	if err != nil {
 		sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
 
@@ -2472,7 +2474,7 @@ out:
 // newServer returns a new bsvd server configured to listen on addr for the
 // bitcoin network type specified by chainParams.  Use start to begin accepting
 // connections from peers.
-func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockchainClient blockchain.ClientI,
+func newServer(ctx context.Context, logger ulogger.Logger, config Config, assetClient asset.Client, blockchainClient blockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	listenAddrs []string, chainParams *chaincfg.Params) (*server, error) {
@@ -2555,6 +2557,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		hashCache:            txscript.NewHashCache(cfg.SigCacheMaxSize),
 		cfCheckptCaches:      make(map[wire.FilterType][]cfHeaderKV),
 		logger:               logger,
+		assetClient:          assetClient,
 		blockchainClient:     blockchainClient,
 		utxoStore:            utxoStore,
 		subtreeStore:         subtreeStore,

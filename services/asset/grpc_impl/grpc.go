@@ -263,6 +263,29 @@ func (g *GRPC) GetBlock(ctx context.Context, request *asset_api.GetBlockRequest)
 	}, nil
 }
 
+func (g *GRPC) GetFullBlock(ctx context.Context, request *asset_api.GetBlockRequest) (*asset_api.GetFullBlockResponse, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		AssetStat.NewStat("GetFullBlock").AddTime(start)
+	}()
+
+	prometheusAssetGRPCGetBlock.Inc()
+
+	blockHash, err := chainhash.NewHash(request.Hash)
+	if err != nil {
+		return nil, err
+	}
+
+	blockBytes, err := g.repository.GetFullBlockBytes(ctx, *blockHash)
+	if err != nil {
+		return nil, err
+	}
+
+	return &asset_api.GetFullBlockResponse{
+		Block: blockBytes,
+	}, nil
+}
+
 func (g *GRPC) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
 	start := gocore.CurrentTime()
 	defer func() {

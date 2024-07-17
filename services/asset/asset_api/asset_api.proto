@@ -12,6 +12,7 @@ service AssetAPI {
   // Health returns the health of the API.
   rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
   rpc GetBlock (GetBlockRequest) returns (GetBlockResponse) {}
+  rpc GetFullBlock (GetBlockRequest) returns (GetFullBlockResponse) {}
   rpc GetBlockStats (google.protobuf.Empty) returns (model.BlockStats) {}
   rpc GetBlockGraphData (GetBlockGraphDataRequest) returns (model.BlockDataPoints) {}
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
@@ -60,6 +61,10 @@ message GetBlockResponse {
   uint64 transaction_count = 4;
   repeated bytes subtree_hashes = 5;
   uint64 size_in_bytes = 6;
+}
+
+message GetFullBlockResponse {
+  bytes block = 1;
 }
 
 // swagger:model GetBlockHeaderRequest

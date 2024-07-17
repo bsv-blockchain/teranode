@@ -80,6 +80,7 @@ func (s *Server) Init(ctx context.Context) error {
 	listenAddresses, _ := gocore.Config().GetMulti("legacy_listen_addresses", "|", defaultListenAddresses)
 
 	s.server, err = newServer(ctx, s.logger, gocore.Config(),
+		s.server.assetClient,
 		s.blockchainClient,
 		s.validationClient,
 		s.utxoStore,

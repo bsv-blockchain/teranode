@@ -49,10 +49,6 @@ func (c LocalClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*
 	return block, nil
 }
 
-func (c LocalClient) GetFullBlock(ctx context.Context, blockHash *chainhash.Hash) ([]byte, error) {
-	return GetFullBlockBytes(ctx, *blockHash, c.store, c.subtreeStore, c.utxoStore)
-}
-
 func (c LocalClient) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
 	blocks, err := c.store.GetBlocks(ctx, blockHash, numberOfBlocks)
 	if err != nil {
