@@ -505,7 +505,7 @@ func (u *BlockValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainha
 	return nil
 }
 
-func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string, bloomStats *model.BloomStats) error {
+func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error {
 	timeStart, stat, ctx := tracing.NewStatFromContext(ctx, "ValidateBlock", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
 	span.LogKV("block", block.Hash().String())
@@ -574,8 +574,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
+	useOptimisticMining := u.optimisticMining
+	if disableOptimisticMining != nil && len(disableOptimisticMining) > 0 {
+		// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
+		useOptimisticMining = useOptimisticMining && !disableOptimisticMining[0]
+	}
+
 	var optimisticMiningWg sync.WaitGroup
-	if u.optimisticMining {
+	if useOptimisticMining {
 		// make sure the proof of work is enough
 		headerValid, _, err := block.Header.HasMetTargetDifficulty()
 		if !headerValid {
