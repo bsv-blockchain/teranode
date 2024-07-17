@@ -3,9 +3,12 @@ x-ubsv-base:
   &ubsv-base
   image: ubsv:latest
   depends_on:
-    - postgres
-    - kafka-shared
-    - aerospike
+    aerospike:
+      condition: service_started
+    postgres:
+      condition: service_started
+    kafka-shared:
+      condition: service_started
   networks:
     - ubsv-network
   volumes:
@@ -16,20 +19,11 @@ x-ubsv-base:
     - ./data/ubsv/blockstore:/app/data/blockstore
   expose:
     - 8081-8093
-    - 18081-18093
+    - 9095-9096
+    - 3005
   environment:
     SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.m}
     logLevel: "DEBUG"
-    utxostore: aerospike://aerospike:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
-    blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-    coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-    utxoblaster_utxostore_aerospike: aerospike://editor:password1234@aerospike:3000/utxo-store?WarmUp=0&ConnectionQueueSize=640&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=64&expiration=900
-    blockchain_grpcAddress: ubsv-blockchain:8087
-    asset_grpcAddress: ubsv-asset:8090
-    coinbase_assetGrpcAddress: ubsv-coinbase:8093
-    propagation_assetGrpcAddress: ubsv-propagation:8084
-    validator_assetGrpcAddress: ubsv-validator:8081
-    blockassembly_assetGrpcAddress: ubsv-blockassembly:8085
 
 networks:
   ubsv-network:
@@ -137,38 +131,89 @@ services:
       METRIC_LABELS: "type='development',source='aerospike'"
     network_mode: bridge
 
+  ubsv-blockchain:
+    <<: *ubsv-base
+    container_name: ubsv-blockchain
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "1", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockchain=1"]
+    ports:
+      - 4040
+      - 8082
+      - 8087
+      - 9091
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8087"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+
+  ubsv-asset:
+    <<: *ubsv-base
+    container_name: ubsv-asset
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-asset=1"]
+    ports:
+      - 4040
+      - 8090
+      - 8091
+      - 9091
+    depends_on:
+      ubsv-blockchain:
+        condition: service_healthy
+      ubsv-p2p:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8091"]
+      # test: ["CMD-SHELL", "curl", "-f", "http://localhost:8090"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+
   ubsv-miner:
     <<: *ubsv-base
     container_name: ubsv-miner
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-rpc=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1"]
     ports:
       - 4040
-      - 18089:8089
-      - 18092:8092
-      - 18099:8099
+      - 8089
+      - 8092
+      - 8099
       - 9091
     depends_on:
-      - ubsv-blockchain
-
+      ubsv-blockchain:
+        condition: service_healthy
+      ubsv-blockvalidation:
+        condition: service_healthy
+      ubsv-blockassembly:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8092"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+  
   ubsv-coinbase:
     <<: *ubsv-base
     container_name: ubsv-coinbase
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-rpc=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=0"]
     ports:
       - 4040
-      - 18093:8093
+      - 8093
       - 9091
     depends_on:
-      - ubsv-blockchain
-
-  ubsv-blockpersister:
-    <<: *ubsv-base
-    container_name: ubsv-blockpersister
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockpersister=1"]
-    ports:
-      - 4040
-    depends_on:
-      - aerospike
+      ubsv-asset:
+        condition: service_healthy
+      ubsv-miner:
+        condition: service_healthy
+      ubsv-blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8093"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
 
   ubsv-p2p:
     <<: *ubsv-base
@@ -177,89 +222,129 @@ services:
     ports:
       - 4040
       - 9091
-      - 19905:9905
-      - 19906:9906
+      - 9905
+      - 9906
     depends_on:
-      - ubsv-blockchain
+      ubsv-blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "9905"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
 
-  ubsv-asset:
+  ubsv-rpc:
     <<: *ubsv-base
-    container_name: ubsv-asset
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-asset=1"]
+    container_name: ubsv-rpc
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-rpc=1"]
     ports:
       - 4040
-      - 18090:8090
-      - 18091:8091
       - 9091
     depends_on:
-      - ubsv-blockchain
+      ubsv-blockchain:
+        condition: service_healthy
 
   ubsv-subtreevalidation:
     <<: *ubsv-base
     container_name: ubsv-subtreevalidation
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-subtreevalidation=1", "-rpc=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-subtreevalidation=1"]
     ports:
       - 4040
-      - 18086:8086
+      - 8086
       - 9091
     depends_on:
-      - aerospike
+      ubsv-blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8086"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
 
   ubsv-blockvalidation:
     <<: *ubsv-base
     container_name: ubsv-blockvalidation
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockvalidation=1", "-rpc=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockvalidation=1"]
     ports:
       - 4040
-      - 18088:8088
-      - 18188:8188
+      - 8088
+      - 8188
       - 9091
     depends_on:
-      - aerospike
+      ubsv-blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8088"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
 
   ubsv-blockassembly:
     <<: *ubsv-base
     container_name: ubsv-blockassembly
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockassembly=1", "-rpc=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockassembly=1"]
     ports:
       - 4040
-      - 18085:8085
-      - 18285:8285
+      - 8085
+      - 8285
       - 9091
     depends_on:
-      - aerospike
-
-  ubsv-blockchain:
+      ubsv-blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8085"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+  
+  ubsv-blockpersister:
     <<: *ubsv-base
-    container_name: ubsv-blockchain
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "1", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockchain=1", "-rpc=1"]
+    container_name: ubsv-blockpersister
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockpersister=1"]
     ports:
       - 4040
-      - 18082:8082
-      - 18087:8087
-      - 9091
     depends_on:
-      - aerospike
+      ubsv-blockchain:
+        condition: service_healthy
+      ubsv-blockvalidation:
+        condition: service_healthy
+      ubsv-blockassembly:
+        condition: service_healthy
 
   ubsv-propagation:
     <<: *ubsv-base
     container_name: ubsv-propagation
-    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-propagation=1", "-rpc=1"]
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-propagation=1"]
     ports:
       - 4040
-      - 18833:8833
-      - 18084:8084
-      - 18384:8384
+      - 8833
+      - 8084
+      - 8384
       - 9091
     depends_on:
-      - aerospike
+      ubsv-blockchain:
+        condition: service_healthy
+      ubsv-blockvalidation:
+        condition: service_healthy
+      ubsv-blockassembly:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8084"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
 
   prometheus:
     container_name: prometheus
     image: prom/prometheus:v2.44.0
     mem_limit: 64m
     ports:
-      - 10090:9090
+      - 9090
     networks:
       - ubsv-network
     volumes:
