@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -39,8 +40,18 @@ func main() {
 		return
 	}
 
+	binNames := make([]string, 0, len(rec.Bins))
+
 	for binName := range rec.Bins {
+		binNames = append(binNames, binName)
+	}
+
+	// Sort the bin names
+	sort.Strings(binNames)
+
+	for _, binName := range binNames {
 		bin := rec.Bins[binName]
+
 		switch bin.(type) {
 		case []interface{}:
 			b := bin.([]interface{})
