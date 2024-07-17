@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"fmt"
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -13,7 +13,7 @@ import (
 func main() {
 	client, aeroErr := aero.NewClient("localhost", 3000)
 	if aeroErr != nil {
-		log.Printf("ERROR: %v", aeroErr)
+		fmt.Printf("ERROR: %v\n", aeroErr)
 		return
 	}
 
@@ -23,7 +23,7 @@ func main() {
 
 	db, err := usql.Open("postgres", "user=ubsv password=ubsv dbname=ubsv sslmode=disable host=localhost port=5432")
 	if err != nil {
-		log.Printf("ERROR: %v", err)
+		fmt.Printf("ERROR: %v\n", err)
 		return
 	}
 	defer db.Close()
@@ -32,7 +32,7 @@ func main() {
 
 	rows, err := db.Query(q)
 	if err != nil {
-		log.Printf("ERROR: %v", err)
+		fmt.Printf("ERROR: %v\n", err)
 		return
 	}
 
@@ -42,48 +42,48 @@ func main() {
 
 		err = rows.Scan(&height, &b)
 		if err != nil {
-			log.Printf("ERROR: %v", err)
+			fmt.Printf("ERROR: %v\n", err)
 			return
 		}
 
 		if height == 0 {
-			log.Printf("Height %d skipped", height)
+			fmt.Printf("Height %d skipped\n", height)
 			continue
 		}
 
 		coinbaseTx, err := bt.NewTxFromBytes(b)
 		if err != nil {
-			log.Printf("ERROR: %v", err)
+			fmt.Printf("ERROR: %v\n", err)
 			return
 		}
 
 		key, err := aero.NewKey("test", "utxo", coinbaseTx.TxIDChainHash().CloneBytes())
 		if err != nil {
-			log.Printf("ERROR: %v", err)
+			fmt.Printf("ERROR: %v\n", err)
 			return
 		}
 
 		rec, err := client.Get(policy, key, "spendingHeight")
 		if err != nil {
-			log.Printf("ERROR: %v", err)
+			fmt.Printf("ERROR: %v\n", err)
 			return
 		}
 
 		spendingHeight, ok := rec.Bins["spendingHeight"].(int)
 		if !ok {
-			log.Printf("ERROR: %v", err)
+			fmt.Printf("ERROR: %v\n", err)
 			return
 		}
 
 		expectedHeight := height + 100
 
 		if spendingHeight != expectedHeight {
-			log.Printf("Height %d: %v - expected %d, actual %d", height, coinbaseTx.TxIDChainHash(), expectedHeight, spendingHeight)
+			fmt.Printf("Height %d: %v - expected %d, actual %d\n", height, coinbaseTx.TxIDChainHash(), expectedHeight, spendingHeight)
 
 			newBin := aero.NewBin("spendingHeight", aero.NewIntegerValue(expectedHeight))
 			err := client.PutBins(nil, key, newBin)
 			if err != nil {
-				log.Printf("ERROR: %v", err)
+				fmt.Printf("ERROR: %v\n", err)
 				return
 			}
 		}
