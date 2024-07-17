@@ -183,7 +183,7 @@ func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]*bt
 	previousOutputs := make([]*meta.PreviousOutput, 0, len(tx.Inputs))
 
 	for i, input := range tx.Inputs {
-		if prevTx, found := txMap[*input.PreviousTxIDChainHash()]; !found {
+		if prevTx, found := txMap[*input.PreviousTxIDChainHash()]; found {
 			tx.Inputs[i].PreviousTxSatoshis = prevTx.Outputs[input.PreviousTxOutIndex].Satoshis
 			tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTx.Outputs[input.PreviousTxOutIndex].LockingScript)
 		} else {

@@ -1133,7 +1133,8 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, _ *wire.MsgFeeFilter) {
 	// don't allow fee filters
 	sp.server.logger.Warnf("Ignoring fee filter request from %s", sp)
-	sp.Disconnect()
+	// TODO - disconnect as this is not supported
+	// sp.Disconnect()
 }
 
 // OnFilterAdd is invoked when a peer receives a filteradd bitcoin
