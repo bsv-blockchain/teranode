@@ -2,6 +2,7 @@ package legacy
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 
@@ -100,8 +101,14 @@ func (s *Server) Init(ctx context.Context) error {
 }
 
 // Start function
-func (s *Server) Start(_ context.Context) error {
+func (s *Server) Start(ctx context.Context) error {
 	s.server.Start()
+
+	go func() {
+		<-ctx.Done()
+		s.server.Stop()
+	}()
+
 	return nil
 }
 
