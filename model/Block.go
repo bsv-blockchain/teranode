@@ -324,7 +324,7 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 		if err != nil {
 			if errors.Is(err, errors.ErrCoinbaseMissingBlockHeight) {
 				// TODO - this should only be done when we are loading legacy blocks
-				log.Warnf("Block height not found in coinbase for block %s", block.Hash().String())
+				log.Printf("WARN: Block height not found in coinbase for block %s", block.Hash().String())
 			} else {
 				return nil, errors.New(errors.ERR_BLOCK_INVALID, "error extracting coinbase height for block %s: %v", block.Hash(), err)
 			}
