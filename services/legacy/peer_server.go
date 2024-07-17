@@ -1422,7 +1422,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
 
 	// Fetch the raw block bytes from the database.
-	block, err := s.blockchainClient.GetBlock(context.TODO(), hash)
+	blockBytes, err := s.blockchainClient.GetFullBlock(context.TODO(), hash)
 	if err != nil {
 		sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
 
@@ -1433,17 +1433,6 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	}
 
 	// TODO we expect the full block here, not the Teranode block format
-	blockBytes, err := block.Bytes()
-	if err != nil {
-		sp.server.logger.Infof("Unable to serialize requested block %v: %v", hash, err)
-
-		if doneChan != nil {
-			doneChan <- struct{}{}
-		}
-		return err
-
-	}
-
 	// Deserialize the block.
 	var msgBlock wire.MsgBlock
 	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))
