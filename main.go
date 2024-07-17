@@ -364,22 +364,6 @@ func main() {
 
 	// propagation
 	if startPropagation {
-		var propagationValidatorClient validator.Interface
-		localValidator := gocore.Config().GetBool("useLocalValidator", false)
-		if localValidator {
-			logger.Infof("[Validator] Using local validator")
-			propagationValidatorClient, err = validator.New(ctx,
-				logger,
-				getUtxoStore(ctx, logger),
-			)
-			if err != nil {
-				logger.Fatalf("could not create validator [%v]", err)
-			}
-
-		} else {
-			propagationValidatorClient = getValidatorClient(ctx, logger)
-		}
-
 		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcListenAddress")
 		if ok && propagationGrpcAddress != "" {
 			if gocore.Config().GetBool("propagation_use_dumb", false) {
@@ -390,7 +374,7 @@ func main() {
 				if err = sm.AddService("PropagationServer", propagation.New(
 					logger.New("prop"),
 					getTxStore(logger),
-					propagationValidatorClient,
+					getValidatorClient(ctx, logger),
 				)); err != nil {
 					panic(err)
 				}

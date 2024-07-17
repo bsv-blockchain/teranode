@@ -575,7 +575,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
 	useOptimisticMining := u.optimisticMining
-	if disableOptimisticMining != nil && len(disableOptimisticMining) > 0 {
+	if len(disableOptimisticMining) > 0 {
 		// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
 		useOptimisticMining = useOptimisticMining && !disableOptimisticMining[0]
 	}
