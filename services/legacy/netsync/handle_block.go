@@ -90,6 +90,11 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	return nil
 }
 
+type txMapWrapper struct {
+	tx                 *bt.Tx
+	someParentsInBlock bool
+}
+
 func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block) ([]*chainhash.Hash, error) {
 	subtrees := make([]*chainhash.Hash, 0)
 
@@ -110,7 +115,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		subtreeData := util.NewSubtreeData(subtree)
 
 		// Create a map of all transactions in the block
-		txMap := make(map[chainhash.Hash]*bt.Tx)
+		txMap := make(map[chainhash.Hash]txMapWrapper)
 
 		for _, wireTx := range block.Transactions() {
 			txHash := *wireTx.Hash()
@@ -126,7 +131,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 				return nil, fmt.Errorf("failed to create bt.Tx: %w", err)
 			}
 
-			txMap[txHash] = tx
+			txMap[txHash] = txMapWrapper{tx: tx}
 		}
 
 		g, gCtx := errgroup.WithContext(ctx)
@@ -134,7 +139,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		for _, wireTx := range block.Transactions() {
 			txHash := *wireTx.Hash()
 
-			tx := txMap[txHash]
+			tx := txMap[txHash].tx
 
 			txSize := uint64(tx.Size())
 
@@ -165,6 +170,8 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.New(errors.ERR_PROCESSING, "failed to process transactions", err)
 		}
 
+		blockHeight := uint32(block.Height())
+
 		// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
 		// This allows us to process all the transactions that are not referencing transactions from this current block
 		// to be processed in parallel.
@@ -172,13 +179,34 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		g.SetLimit(runtime.NumCPU() * 4)
 		for _, wireTx := range block.Transactions() {
 			txHash := *wireTx.Hash()
-			blockHeight := uint32(block.Height())
 			g.Go(func() error {
-				// send to validation
-				_ = sm.validationClient.Validate(gCtx, txMap[txHash], blockHeight)
+				// send to validation, but only if the parent is not in the same block
+				if !txMap[txHash].someParentsInBlock {
+					if err := sm.validationClient.Validate(gCtx, txMap[txHash].tx, blockHeight); err != nil {
+						sm.logger.Warnf("failed to validate transaction in per-validation: %v", err)
+					}
+				}
 
 				return nil
 			})
+		}
+
+		// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
+		_ = g.Wait()
+
+		// try to pre-validate the transactions that did have a parent in the same block after doing the parents
+		g, gCtx = errgroup.WithContext(ctx)
+		g.SetLimit(runtime.NumCPU() * 4)
+		for _, txWrapper := range txMap {
+			if txWrapper.someParentsInBlock {
+				tx := txWrapper.tx
+				g.Go(func() error {
+					// send to validation, but only if the parent is not in the same block
+					_ = sm.validationClient.Validate(gCtx, tx, blockHeight)
+
+					return nil
+				})
+			}
 		}
 
 		// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
@@ -222,13 +250,14 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	return subtrees, nil
 }
 
-func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]*bt.Tx) error {
+func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]txMapWrapper) error {
 	previousOutputs := make([]*meta.PreviousOutput, 0, len(tx.Inputs))
 
 	for i, input := range tx.Inputs {
-		if prevTx, found := txMap[*input.PreviousTxIDChainHash()]; found {
-			tx.Inputs[i].PreviousTxSatoshis = prevTx.Outputs[input.PreviousTxOutIndex].Satoshis
-			tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTx.Outputs[input.PreviousTxOutIndex].LockingScript)
+		if prevTxWrapper, found := txMap[*input.PreviousTxIDChainHash()]; found {
+			prevTxWrapper.someParentsInBlock = true
+			tx.Inputs[i].PreviousTxSatoshis = prevTxWrapper.tx.Outputs[input.PreviousTxOutIndex].Satoshis
+			tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTxWrapper.tx.Outputs[input.PreviousTxOutIndex].LockingScript)
 		} else {
 			previousOutputs = append(previousOutputs, &meta.PreviousOutput{
 				PreviousTxID: *input.PreviousTxIDChainHash(),
