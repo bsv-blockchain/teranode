@@ -22,14 +22,6 @@ import (
 )
 
 func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, block *bsvutil.Block) error {
-	ctx, stat, deferFn := tracing.StartTracing(ctx, "HandleBlockDirect",
-		tracing.WithLogMessage(sm.logger, "[HandleBlockDirect][%s] processing block found from peer %s",
-			block.Hash().String(), peer.String()),
-	)
-	defer deferFn()
-
-	stat.NewStat("SubtreeStore").AddRanges(0, 1, 10, 100, 1000, 10000, 100000, 1000000)
-
 	// Make sure we have the correct height for this block before continuing
 	var blockHeight uint32
 
@@ -44,6 +36,14 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	} else {
 		blockHeight = uint32(block.Height())
 	}
+
+	ctx, stat, deferFn := tracing.StartTracing(ctx, "HandleBlockDirect",
+		tracing.WithLogMessage(sm.logger, "[HandleBlockDirect][%s %d] processing block found from peer %s",
+			block.Hash().String(), blockHeight, peer.String()),
+	)
+	defer deferFn()
+
+	stat.NewStat("SubtreeStore").AddRanges(0, 1, 10, 100, 1000, 10000, 100000, 1000000)
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
@@ -183,7 +183,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 				// send to validation, but only if the parent is not in the same block
 				if !txMap[txHash].someParentsInBlock {
 					if err := sm.validationClient.Validate(gCtx, txMap[txHash].tx, blockHeight); err != nil {
-						sm.logger.Warnf("failed to validate transaction in per-validation: %v", err)
+						sm.logger.Warnf("failed to validate transaction in pre-validation: %v", err)
 					}
 				}
 
@@ -253,15 +253,21 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]*txMapWrapper) error {
 	previousOutputs := make([]*meta.PreviousOutput, 0, len(tx.Inputs))
 
+	txWrapper, found := txMap[*tx.TxIDChainHash()]
+	if !found {
+		return fmt.Errorf("tx %s not found in txMap", tx.TxIDChainHash())
+	}
+
 	for i, input := range tx.Inputs {
-		txHash := *input.PreviousTxIDChainHash()
-		if prevTxWrapper, found := txMap[txHash]; found {
-			prevTxWrapper.someParentsInBlock = true
+
+		prevTxHash := *input.PreviousTxIDChainHash()
+		if prevTxWrapper, found := txMap[prevTxHash]; found {
+			txWrapper.someParentsInBlock = true
 			tx.Inputs[i].PreviousTxSatoshis = prevTxWrapper.tx.Outputs[input.PreviousTxOutIndex].Satoshis
 			tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTxWrapper.tx.Outputs[input.PreviousTxOutIndex].LockingScript)
 		} else {
 			previousOutputs = append(previousOutputs, &meta.PreviousOutput{
-				PreviousTxID: txHash,
+				PreviousTxID: prevTxHash,
 				Vout:         input.PreviousTxOutIndex,
 				Idx:          i,
 			})
