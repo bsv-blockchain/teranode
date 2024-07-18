@@ -10,7 +10,7 @@ import (
 //go:embed ubsv.lua
 var ubsvLUA []byte
 
-var luaPackage = "ubsv_v6" // N.B. Do not have any "." in this string
+var luaPackage = "ubsv_v7" // N.B. Do not have any "." in this string
 
 func registerLuaIfNecessary(client *uaerospike.Client, funcName string, funcBytes []byte) error {
 	udfs, err := client.ListUDF(nil)
