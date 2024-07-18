@@ -1008,6 +1008,10 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 	stp.logger.Infof("[SubtreeProcessor][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), blockHeight, block.CoinbaseTx.TxIDChainHash().String())
 	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
+			// This will also be called for the 2 coinbase transactions that are duplicated on the network
+			// These transactions were created twice:
+			//   e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb468
+			//   d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599
 			stp.logger.Infof("[SubtreeProcessor] coinbase utxos already exist (assume BlockValidation created them). Skipping")
 		} else {
 			stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)

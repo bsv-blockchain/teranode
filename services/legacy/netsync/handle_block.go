@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -17,6 +18,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"golang.org/x/sync/errgroup"
 )
 
 func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, block *bsvutil.Block) error {
@@ -127,6 +129,8 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			txMap[txHash] = tx
 		}
 
+		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(runtime.NumCPU() * 4)
 		for _, wireTx := range block.Transactions() {
 			txHash := *wireTx.Hash()
 
@@ -141,16 +145,45 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 				// we need to match the indexes of the subtree and the tx data in subtreeData
 				currentIdx := subtree.Length() - 1
 
-				if err := sm.extendTransaction(tx, txMap); err != nil {
-					return nil, err
-				}
+				g.Go(func() error {
+					if err := sm.extendTransaction(tx, txMap); err != nil {
+						return fmt.Errorf("failed to extend transaction: %w", err)
+					}
 
-				// store the extended transaction in our subtree tx data file
-				if err := subtreeData.AddTx(tx, currentIdx); err != nil {
-					return nil, fmt.Errorf("failed to add tx to subtree data: %w", err)
-				}
+					// store the extended transaction in our subtree tx data file
+					if err = subtreeData.AddTx(tx, currentIdx); err != nil {
+						return fmt.Errorf("failed to add tx to subtree data: %w", err)
+					}
+
+					return nil
+				})
 			}
 		}
+
+		// wait for all tx to be processed - we don't need to process errors here
+		if err = g.Wait(); err != nil {
+			return nil, errors.New(errors.ERR_PROCESSING, "failed to process transactions", err)
+		}
+
+		// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
+		// This allows us to process all the transactions that are not referencing transactions from this current block
+		// to be processed in parallel.
+		g, gCtx = errgroup.WithContext(ctx)
+		g.SetLimit(runtime.NumCPU() * 4)
+		for _, wireTx := range block.Transactions() {
+			txHash := *wireTx.Hash()
+			blockHeight := uint32(block.Height())
+			g.Go(func() error {
+				// send to validation
+				_ = sm.validationClient.Validate(gCtx, txMap[txHash], blockHeight)
+
+				return nil
+			})
+		}
+
+		// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
+		_ = g.Wait()
+
 		subtreeBytes, err := subtree.Serialize()
 		if err != nil {
 			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to serialize subtree", err)
