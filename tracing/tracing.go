@@ -59,7 +59,7 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 	}
 
 	if options.Logger != nil && options.LogMessage != "" {
-		options.Logger.Infof(options.LogMessage, options.LogArgs)
+		options.Logger.Infof(options.LogMessage, options.LogArgs...)
 	}
 
 	return ctx, stat, func() {
@@ -71,7 +71,7 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 		}
 
 		if options.Logger != nil && options.LogMessage != "" {
-			options.Logger.Infof(options.LogMessage+" DONE", options.LogArgs)
+			options.Logger.Infof(options.LogMessage+" DONE", options.LogArgs...)
 		}
 	}
 }
