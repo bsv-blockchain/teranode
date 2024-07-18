@@ -35,11 +35,11 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	if block.Height() <= 0 {
 		// Lookup block height from blockchain
-		_, meta, err := sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
+		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
 		if err != nil {
 			return errors.New(errors.ERR_PROCESSING, "failed to get block header", err)
 		}
-		blockHeight = meta.Height
+		blockHeight = blockHeaderMeta.Height
 		block.SetHeight(int32(blockHeight))
 	} else {
 		blockHeight = uint32(block.Height())
@@ -115,7 +115,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		subtreeData := util.NewSubtreeData(subtree)
 
 		// Create a map of all transactions in the block
-		txMap := make(map[chainhash.Hash]txMapWrapper)
+		txMap := make(map[chainhash.Hash]*txMapWrapper)
 
 		for _, wireTx := range block.Transactions() {
 			txHash := *wireTx.Hash()
@@ -131,7 +131,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 				return nil, fmt.Errorf("failed to create bt.Tx: %w", err)
 			}
 
-			txMap[txHash] = txMapWrapper{tx: tx}
+			txMap[txHash] = &txMapWrapper{tx: tx}
 		}
 
 		g, gCtx := errgroup.WithContext(ctx)
@@ -250,17 +250,18 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	return subtrees, nil
 }
 
-func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]txMapWrapper) error {
+func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]*txMapWrapper) error {
 	previousOutputs := make([]*meta.PreviousOutput, 0, len(tx.Inputs))
 
 	for i, input := range tx.Inputs {
-		if prevTxWrapper, found := txMap[*input.PreviousTxIDChainHash()]; found {
+		txHash := *input.PreviousTxIDChainHash()
+		if prevTxWrapper, found := txMap[txHash]; found {
 			prevTxWrapper.someParentsInBlock = true
 			tx.Inputs[i].PreviousTxSatoshis = prevTxWrapper.tx.Outputs[input.PreviousTxOutIndex].Satoshis
 			tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTxWrapper.tx.Outputs[input.PreviousTxOutIndex].LockingScript)
 		} else {
 			previousOutputs = append(previousOutputs, &meta.PreviousOutput{
-				PreviousTxID: *input.PreviousTxIDChainHash(),
+				PreviousTxID: txHash,
 				Vout:         input.PreviousTxOutIndex,
 				Idx:          i,
 			})
