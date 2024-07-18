@@ -39,6 +39,14 @@ func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 		return fmt.Errorf("failed to read data from reader: %w", err)
 	}
 
+	empty, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("failed to read data from reader: %w", err)
+	}
+	if len(empty) > 0 {
+		return fmt.Errorf("reader has more data than expected")
+	}
+
 	return m.Set(ctx, key, b, opts...)
 }
 
@@ -64,7 +72,14 @@ func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 }
 
 func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
-	b, err := m.Get(ctx, key)
+	setOptions := options.NewSetOptions(nil, opts...)
+
+	storeKey := key
+	if setOptions.Extension != "" {
+		storeKey = append(storeKey, []byte(setOptions.Extension)...)
+	}
+
+	b, err := m.Get(ctx, storeKey)
 	if err != nil {
 		return nil, err
 	}

@@ -40,7 +40,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 			if err != nil {
 				// not available via block-store (BlockPersister), maybe this is a timing issue.
 				// try different approach - get the subtree/tx data using the subtree-store and utxo-store
-				err = repo.writeTransactionsViaSubtreeStore(gCtx, block, *subtree, w)
+				err = repo.writeTransactionsViaSubtreeStore(gCtx, block, subtree, w)
 			}
 			if err != nil {
 				_ = w.Close()
@@ -95,7 +95,7 @@ func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, _ *m
 		// skip the subtree tx size
 		_, _ = subtreeReader.Read(make([]byte, 4))
 
-		if _, err = io.Copy(w, subtreeReader); err != nil {
+		if _, err := io.Copy(w, subtreeReader); err != nil {
 			return err
 		}
 
@@ -105,7 +105,7 @@ func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, _ *m
 	return nil
 }
 
-func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, block *model.Block, subtreeHash chainhash.Hash, w *io.PipeWriter) error {
+func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, w *io.PipeWriter) error {
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
 	if err != nil {
 		return errors.New(errors.ERR_PROCESSING, "[writeTransactionsViaSubtreeStore] error getting subtree %s from store: %w", subtreeHash.String(), err)

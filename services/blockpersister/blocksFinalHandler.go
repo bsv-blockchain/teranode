@@ -115,7 +115,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		g.Go(func() error {
 			u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i+1, len(block.Subtrees), subtreeHash.String())
 
-			return u.processSubtree(gCtx, *subtreeHash, utxoDiff)
+			return u.ProcessSubtree(gCtx, *subtreeHash, block.CoinbaseTx, utxoDiff)
 		})
 	}
 

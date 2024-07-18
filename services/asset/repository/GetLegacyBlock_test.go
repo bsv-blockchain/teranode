@@ -7,8 +7,11 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	memory_blob "github.com/bitcoin-sv/ubsv/stores/blob/memory"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	memory_utxo "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"context"
 	"testing"
@@ -21,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetLegacyBlock(t *testing.T) {
+func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 
 	var (
 		coinbase, _ = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
@@ -41,9 +44,142 @@ func TestGetLegacyBlock(t *testing.T) {
 		txs:               []*bt.Tx{coinbase, tx1},
 	}
 
-	block := newBlock(ctx, t, params)
+	block, subtree := newBlock(ctx, t, params)
 	require.NoError(t, ctx.repo.BlockchainClient.AddBlock(context.Background(), block, "test_peerID"))
 
+	metaDatas := make([]*meta.Data, 0, len(params.txs))
+	for _, tx := range params.txs {
+		metaDatas = append(metaDatas, &meta.Data{
+			Tx: tx,
+		})
+	}
+
+	// create the block-store .subtree file
+	reader, writer := io.Pipe()
+	go blockpersister.WriteTxs(ctx.logger, writer, metaDatas, nil)
+	err := ctx.repo.BlockStore.SetFromReader(context.Background(), subtree.RootHash()[:], reader, options.WithFileExtension("subtree"))
+	require.NoError(t, err)
+
+	// should be able to get the block from the block-store (should NOT be looking at subtree-store)
+	r, err := ctx.repo.GetLegacyBlockReader(context.Background(), &chainhash.Hash{})
+	require.NoError(t, err)
+
+	bytes := make([]byte, 4096)
+
+	// magic, 4 bytes
+	n, err := io.ReadFull(r, bytes[:4])
+	assert.NoError(t, err)
+	assert.Equal(t, []byte{0xf9, 0xbe, 0xb4, 0xd9}, bytes[:n])
+
+	// size, 4 bytes
+	n, err = io.ReadFull(r, bytes[:4])
+	require.NoError(t, err)
+	size := binary.LittleEndian.Uint32(bytes[:n])
+	assert.Equal(t, uint32(block.SizeInBytes), size)
+
+	// version, 4 bytes
+	n, err = io.ReadFull(r, bytes[:4])
+	require.NoError(t, err)
+	version := binary.LittleEndian.Uint32(bytes[:n])
+	assert.Equal(t, block.Header.Version, version)
+
+	// hashPrevBlock, 32 bytes
+	n, err = io.ReadFull(r, bytes[:32])
+	require.NoError(t, err)
+	hashPrevBlock, _ := chainhash.NewHash(bytes[:n])
+	assert.Equal(t, block.Header.HashPrevBlock, hashPrevBlock)
+
+	// hashMerkleRoot, 32 bytes
+	n, err = io.ReadFull(r, bytes[:32])
+	require.NoError(t, err)
+	hashMerkleRoot, _ := chainhash.NewHash(bytes[:n])
+	assert.Equal(t, block.Header.HashMerkleRoot, hashMerkleRoot)
+
+	// timestamp, 4 bytes
+	n, err = io.ReadFull(r, bytes[:4])
+	require.NoError(t, err)
+	timestamp := binary.LittleEndian.Uint32(bytes[:n])
+	assert.Equal(t, block.Header.Timestamp, timestamp)
+
+	// difficulty, 4 bytes
+	n, err = io.ReadFull(r, bytes[:4])
+	require.NoError(t, err)
+	difficulty := model.NewNBitFromSlice(bytes[:n])
+	assert.Equal(t, block.Header.Bits, difficulty)
+
+	// nonce, 4 bytes
+	n, err = io.ReadFull(r, bytes[:4])
+	require.NoError(t, err)
+	nonce := binary.LittleEndian.Uint32(bytes[:n])
+	assert.Equal(t, block.Header.Nonce, nonce)
+
+	// transaction count, varint
+	n, err = r.Read(bytes[:1])
+	require.NoError(t, err)
+	transactionCount, _ := bt.NewVarIntFromBytes(bytes[:n])
+	assert.Equal(t, block.TransactionCount, uint64(transactionCount))
+
+	// read all tx data from the stream (we don't know how big each tx is)
+	bytes, err = io.ReadAll(r)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+
+	// check the coinbase transaction
+	coinbaseTx, coinbaseSize, err := bt.NewTxFromStream(bytes)
+	require.NoError(t, err)
+	require.NotNil(t, coinbaseTx)
+	assert.Equal(t, block.CoinbaseTx.Size(), coinbaseSize)
+
+	// check the 2nd tx
+	tx, txSize, err := bt.NewTxFromStream(bytes[coinbaseSize:])
+	require.NoError(t, err)
+	require.NotNil(t, tx)
+	assert.Equal(t, tx1.Size(), txSize)
+
+	// check the end of the stream
+	n, err = r.Read(bytes)
+	assert.Equal(t, io.ErrClosedPipe, err)
+	assert.Equal(t, 0, n)
+
+}
+func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
+
+	var (
+		coinbase, _ = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+		tx1, _      = bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
+	)
+
+	ctx := setup(t)
+	ctx.logger.Debugf("test")
+
+	params := blockInfo{
+		version:           1,
+		bits:              "2000ffff",
+		previousBlockHash: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+		height:            1,
+		nonce:             2083236893,
+		timestamp:         uint32(time.Now().Unix()),
+		txs:               []*bt.Tx{coinbase, tx1},
+	}
+
+	block, subtree := newBlock(ctx, t, params)
+	require.NoError(t, ctx.repo.BlockchainClient.AddBlock(context.Background(), block, "test_peerID"))
+
+	// Create the txs in the utxo store
+	for i, tx := range params.txs {
+		if i != 0 {
+			_, err := ctx.repo.UtxoStore.Create(context.Background(), tx, params.height)
+			require.NoError(t, err)
+		}
+	}
+
+	// Create the subtree in the subtree store
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
+	require.NoError(t, err)
+
+	// go get me a legacy block from the subtree-store and utxo-store
+	// this should NOT find anything in the block-store
 	r, err := ctx.repo.GetLegacyBlockReader(context.Background(), &chainhash.Hash{})
 	require.NoError(t, err)
 
@@ -102,18 +238,17 @@ func TestGetLegacyBlock(t *testing.T) {
 	transactionCount, _ := bt.NewVarIntFromBytes(bytes[:n])
 	assert.Equal(t, block.TransactionCount, uint64(transactionCount))
 
+	bytes, err = io.ReadAll(r)
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+
 	// check the coinbase transaction
-	_, err = r.Read(bytes)
-	require.NoError(t, err)
 	coinbaseTx, coinbaseSize, err := bt.NewTxFromStream(bytes)
 	require.NoError(t, err)
 	require.NotNil(t, coinbaseTx)
 	assert.Equal(t, block.CoinbaseTx.Size(), coinbaseSize)
 
 	// check the 2nd tx
-	_, err = r.Read(bytes)
-	require.NoError(t, err)
-	tx, txSize, err := bt.NewTxFromStream(bytes)
+	tx, txSize, err := bt.NewTxFromStream(bytes[coinbaseSize:])
 	require.NoError(t, err)
 	require.NotNil(t, tx)
 	assert.Equal(t, tx1.Size(), txSize)
@@ -260,7 +395,7 @@ func setup(t *testing.T) *testContext {
 	}
 }
 
-func newBlock(ctx *testContext, t *testing.T, b blockInfo) *model.Block {
+func newBlock(ctx *testContext, t *testing.T, b blockInfo) (*model.Block, *util.Subtree) {
 	if len(b.txs) == 0 {
 		panic("no transactions provided")
 	}
@@ -273,7 +408,6 @@ func newBlock(ctx *testContext, t *testing.T, b blockInfo) *model.Block {
 			require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
 		} else {
 			require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 100, 0))
-			_, err = ctx.repo.UtxoStore.Create(context.Background(), tx, b.height)
 			require.NoError(t, err)
 		}
 	}
@@ -281,10 +415,6 @@ func newBlock(ctx *testContext, t *testing.T, b blockInfo) *model.Block {
 	nBits := model.NewNBitFromString(b.bits)
 	hashPrevBlock, _ := chainhash.NewHashFromStr(b.previousBlockHash)
 
-	subtreeBytes, err := subtree.Serialize()
-	require.NoError(t, err)
-	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
-	require.NoError(t, err)
 	subtreeHashes := make([]*chainhash.Hash, 0)
 	subtreeHashes = append(subtreeHashes, subtree.RootHash())
 
@@ -305,5 +435,5 @@ func newBlock(ctx *testContext, t *testing.T, b blockInfo) *model.Block {
 		Height:           b.height,
 	}
 
-	return block
+	return block, subtree
 }

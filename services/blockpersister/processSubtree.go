@@ -9,18 +9,19 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
 	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 )
 
-func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash, utxoDiff *utxo_model.UTXODiff) error {
+func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxo_model.UTXODiff) error {
 	startTotal, stat, ctx := tracing.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
 	span.LogKV("subtree", subtreeHash.String())
@@ -56,6 +57,9 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 	// txMetaSlice will be populated with the txMeta data for each txHash
 	txMetaSlice := make([]*meta.Data, len(txHashes))
 
+	// The first tx is the coinbase tx
+	txMetaSlice[0] = &meta.Data{Tx: coinbaseTx}
+
 	// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
 	batched := gocore.Config().GetBool("blockvalidation_batchMissingTransactions", true)
@@ -72,59 +76,7 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 
 	reader, writer := io.Pipe()
 
-	bufferedWriter := bufio.NewWriter(writer)
-
-	go func() {
-		defer func() {
-			// Flush the buffer and close the writer with error handling
-			if err := bufferedWriter.Flush(); err != nil {
-				u.logger.Errorf("error flushing writer: %v", err)
-				writer.CloseWithError(err)
-				return
-			}
-
-			if err := writer.CloseWithError(nil); err != nil {
-				u.logger.Errorf("error closing writer: %v", err)
-			}
-		}()
-
-		// Write the number of txs in the subtree
-		//      this makes it impossible to stream directly from S3 to the client
-		if err := binary.Write(bufferedWriter, binary.LittleEndian, uint32(len(txMetaSlice))); err != nil {
-			u.logger.Errorf("error writing number of txs: %v", err)
-			writer.CloseWithError(err)
-			return
-		}
-
-		for i := 0; i < len(txMetaSlice); i++ {
-			if model.CoinbasePlaceholderHash.Equal(txHashes[i]) {
-				// The coinbase tx is not in the txmeta store so we add in a special coinbase placeholder tx
-				if i != 0 {
-					err := fmt.Errorf("[BlockPersister] coinbase tx is not first in subtree (%d)", i)
-					u.logger.Errorf(err.Error())
-					writer.CloseWithError(err)
-					return
-				}
-
-				if _, err := bufferedWriter.Write(model.CoinbasePlaceholderTx.Bytes()); err != nil {
-					u.logger.Errorf("error writing coinbase tx: %v", err)
-					writer.CloseWithError(err)
-					return
-				}
-			} else {
-				if _, err := bufferedWriter.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
-					u.logger.Errorf("error writing tx: %v", err)
-					writer.CloseWithError(err)
-					return
-				}
-
-				if utxoDiff != nil {
-					// Process the utxo diff...
-					utxoDiff.ProcessTx(txMetaSlice[i].Tx)
-				}
-			}
-		}
-	}()
+	go WriteTxs(u.logger, writer, txMetaSlice, utxoDiff)
 
 	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
 	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
@@ -133,4 +85,42 @@ func (u *Server) processSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 	}
 
 	return u.blockStore.SetTTL(ctx, subtreeHash[:], 0, options.WithFileExtension("subtree"))
+}
+
+func WriteTxs(logger ulogger.Logger, writer *io.PipeWriter, txMetaSlice []*meta.Data, utxoDiff *utxo_model.UTXODiff) {
+	bufferedWriter := bufio.NewWriter(writer)
+
+	defer func() {
+		// Flush the buffer and close the writer with error handling
+		if err := bufferedWriter.Flush(); err != nil {
+			logger.Errorf("error flushing writer: %v", err)
+			writer.CloseWithError(err)
+			return
+		}
+
+		if err := writer.Close(); err != nil {
+			logger.Errorf("error closing writer: %v", err)
+		}
+	}()
+
+	// Write the number of txs in the subtree
+	//      this makes it impossible to stream directly from S3 to the client
+	if err := binary.Write(bufferedWriter, binary.LittleEndian, uint32(len(txMetaSlice))); err != nil {
+		logger.Errorf("error writing number of txs: %v", err)
+		writer.CloseWithError(err)
+		return
+	}
+
+	for i := 0; i < len(txMetaSlice); i++ {
+		if _, err := bufferedWriter.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
+			logger.Errorf("error writing tx: %v", err)
+			writer.CloseWithError(err)
+			return
+		}
+
+		if utxoDiff != nil {
+			// Process the utxo diff...
+			utxoDiff.ProcessTx(txMetaSlice[i].Tx)
+		}
+	}
 }
