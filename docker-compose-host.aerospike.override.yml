@@ -29,21 +29,27 @@ services:
       # - aerospike-1
     entrypoint: ["/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     environment:
-      utxostore: aerospike://localhost:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8
+      utxostore: aerospike://localhost:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=file:///data/ubsv1/external
+    volumes:
+      - ./data/ubsv1/external:/app/data/ubsv1/external
 
   ubsv-2:
     depends_on:
       # - aerospike-2
     entrypoint: ["/app/wait.sh", "localhost", "3200", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     environment:
-      utxostore: aerospike://localhost:3200/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8
+      utxostore: aerospike://localhost:3200/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=file:///data/ubsv2/external
+    volumes:
+      - ./data/ubsv2/external:/app/data/ubsv2/external
 
   ubsv-3:
     depends_on:
       # - aerospike-3
     entrypoint: ["/app/wait.sh", "localhost", "3300", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     environment:
-      utxostore: aerospike://localhost:3300/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8
+      utxostore: aerospike://localhost:3300/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=file:///data/ubsv3/external
+    volumes:
+      - ./data/ubsv3/external:/app/data/ubsv3/external
 
 
   aerospike-exporter-1:
