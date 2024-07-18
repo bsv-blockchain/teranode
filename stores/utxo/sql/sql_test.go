@@ -114,7 +114,7 @@ func TestGetBlockIDs(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 1, 2, 3)
+	_, err := store.Create(ctx, tx, 0, 1, 2, 3)
 	require.NoError(t, err)
 
 	meta, err := store.GetMeta(ctx, tx.TxIDChainHash())
