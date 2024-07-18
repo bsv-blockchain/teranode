@@ -181,7 +181,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			txHash := *wireTx.Hash()
 			g.Go(func() error {
 				// send to validation, but only if the parent is not in the same block
-				if !txMap[txHash].someParentsInBlock {
+				if !txMap[txHash].someParentsInBlock && !txMap[txHash].tx.IsCoinbase() {
 					if err := sm.validationClient.Validate(gCtx, txMap[txHash].tx, blockHeight); err != nil {
 						sm.logger.Warnf("failed to validate transaction in pre-validation: %v", err)
 					}
