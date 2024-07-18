@@ -579,7 +579,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 
 			// If this utxo has a coinbase spending height, check it is time to spend it
 			if coinbaseSpendingHeight > 0 && blockHeight < coinbaseSpendingHeight {
-				return fmt.Errorf("[Spend] coinbase utxo not ready to spend for %s:%d", spend.TxID, spend.Vout)
+				return fmt.Errorf("[Spend]coinbase utxo not ready to spend for %s:%d", spend.TxID, spend.Vout)
 			}
 
 			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionId, spend.Vout)
