@@ -67,6 +67,6 @@ func TestTraceing(t *testing.T) {
 
 	deferFn()
 
-	assert.Equal(t, "hello world DONE", logger.lastLog)
+	assert.Contains(t, logger.lastLog, "hello world DONE in")
 
 }

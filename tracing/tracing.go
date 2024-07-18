@@ -2,6 +2,7 @@ package tracing
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -71,7 +72,8 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 		}
 
 		if options.Logger != nil && options.LogMessage != "" {
-			options.Logger.Infof(options.LogMessage+" DONE", options.LogArgs...)
+			done := fmt.Sprintf(" DONE in %s", time.Since(start))
+			options.Logger.Infof(options.LogMessage+done, options.LogArgs...)
 		}
 	}
 }
