@@ -9,10 +9,12 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/work"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	sqlite_errors "github.com/bitcoin-sv/ubsv/util/sqlite"
+
 	"github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/mattn/go-sqlite3"
+	"modernc.org/sqlite"
 )
 
 func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, error) {
@@ -218,8 +220,8 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		}
 
 		// check whether this is a sqlite exists constraint error
-		var sqliteErr *sqlite3.Error
-		if errors.As(err, &sqliteErr) && errors.Is(sqliteErr.Code, sqlite3.ErrConstraint) {
+		var sqliteErr *sqlite.Error
+		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite_errors.SQLITE_CONSTRAINT {
 			return 0, 0, errors.New(errors.ERR_BLOCK_EXISTS, "block already exists in the database: %s", block.Hash().String(), err)
 		}
 
