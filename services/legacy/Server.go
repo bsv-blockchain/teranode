@@ -84,6 +84,11 @@ func (s *Server) Init(ctx context.Context) error {
 	// TODO not setting any listen addresses triggers upnp, which does not seem to work yet
 	listenAddresses, _ := gocore.Config().GetMulti("legacy_listen_addresses", "|", defaultListenAddresses)
 
+	assetHttpAddress, ok := gocore.Config().Get("asset_httpAddress", "")
+	if !ok {
+		panic("missing setting: asset_httpAddress")
+	}
+
 	s.server, err = newServer(ctx, s.logger, gocore.Config(),
 		s.blockchainClient,
 		s.validationClient,
@@ -93,6 +98,7 @@ func (s *Server) Init(ctx context.Context) error {
 		s.blockValidation,
 		listenAddresses,
 		&chaincfg.MainNetParams,
+		assetHttpAddress,
 	)
 	if err != nil {
 		return err

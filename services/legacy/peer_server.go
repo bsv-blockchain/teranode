@@ -40,6 +40,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
@@ -251,6 +252,7 @@ type server struct {
 	subtreeStore      blob.Store
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
+	assetHttpAddress  string
 }
 
 // serverPeer extends the peer to maintain state shared by the server and
@@ -1421,23 +1423,19 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
 
-	// Fetch the raw block bytes from the database.
-	// blockBytes, err := s.assetClient.GetFullBlock(context.TODO(), hash)
-	// if err != nil {
-	// 	sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
-
-	// 	if doneChan != nil {
-	// 		doneChan <- struct{}{}
-	// 	}
-	// 	return err
-	// }
-
-	var blockBytes []byte
-	// TODO we expect the full block here, not the Teranode block format
-	// Deserialize the block.
-	var msgBlock wire.MsgBlock
-	err := msgBlock.Deserialize(bytes.NewReader(blockBytes))
+	url := fmt.Sprintf("%s/block_legacy/%s", s.assetHttpAddress, hash.String())
+	blockBytes, err := util.DoHTTPRequest(context.Background(), url, nil)
 	if err != nil {
+		sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
+
+		if doneChan != nil {
+			doneChan <- struct{}{}
+		}
+		return err
+	}
+
+	var msgBlock wire.MsgBlock
+	if err := msgBlock.Deserialize(bytes.NewReader(blockBytes)); err != nil {
 		sp.server.logger.Infof("Unable to deserialize requested block hash "+
 			"%v: %v", hash, err)
 
@@ -2476,7 +2474,7 @@ out:
 func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockchainClient blockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
-	listenAddrs []string, chainParams *chaincfg.Params) (*server, error) {
+	listenAddrs []string, chainParams *chaincfg.Params, assetHttpAddress string) (*server, error) {
 
 	// init config
 	c, _, err := loadConfig(logger)
@@ -2561,6 +2559,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		subtreeStore:         subtreeStore,
 		subtreeValidation:    subtreeValidation,
 		blockValidation:      blockValidation,
+		assetHttpAddress:     assetHttpAddress,
 	}
 
 	s.syncManager, err = netsync.New(

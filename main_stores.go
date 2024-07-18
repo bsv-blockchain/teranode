@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -23,7 +22,6 @@ var (
 	blockStore              blob.Store
 	utxoStore               utxostore.Store
 	blockchainClient        blockchain.ClientI
-	assetClient             *asset.Client
 	validatorClient         validator.Interface
 	subtreeValidationClient subtreevalidation.Interface
 	blockValidationClient   blockvalidation.Interface
