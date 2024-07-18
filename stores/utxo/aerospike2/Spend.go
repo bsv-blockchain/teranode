@@ -111,6 +111,11 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 					return err
 				}
 
+				if !errors.Is(err, errors.ErrTxNotFound) {
+					// We do not need to unspend, just return this error...
+					return err
+				}
+
 				// another error encountered, reverse all spends and return error
 				if resetErr := s.UnSpend(context.Background(), spends); resetErr != nil {
 					s.logger.Errorf("ERROR in aerospike reset: %v\n", resetErr)
@@ -210,9 +215,13 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						// TODO we need to be able to send the spending TX ID in the error down the line
 						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxID)
 					case "ERROR":
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchId, responseMsgParts[1])
+						if len(responseMsgParts) > 1 && responseMsgParts[1] == "TX not found" {
+							batch[idx].done <- errors.New(errors.ERR_TX_NOT_FOUND, "[SPEND_BATCH_LUA][%s] transaction not found, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchId, responseMsg)
+						} else {
+							batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchId, responseMsgParts[1])
+						}
 					default:
-						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchId, responseMsg)
+						batch[idx].done <- errors.New(errors.ERR_STORAGE_ERROR, "[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchId, responseMsg)
 					}
 				}
 			} else {
