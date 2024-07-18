@@ -195,22 +195,22 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		_ = g.Wait()
 
 		// try to pre-validate the transactions that did have a parent in the same block after doing the parents
-		g, gCtx = errgroup.WithContext(ctx)
-		g.SetLimit(runtime.NumCPU() * 4)
-		for _, txWrapper := range txMap {
-			if txWrapper.someParentsInBlock {
-				tx := txWrapper.tx
-				g.Go(func() error {
-					// send to validation, but only if the parent is not in the same block
-					_ = sm.validationClient.Validate(gCtx, tx, blockHeight)
-
-					return nil
-				})
-			}
-		}
-
-		// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
-		_ = g.Wait()
+		//g, gCtx = errgroup.WithContext(ctx)
+		//g.SetLimit(runtime.NumCPU() * 4)
+		//for _, txWrapper := range txMap {
+		//	if txWrapper.someParentsInBlock {
+		//		tx := txWrapper.tx
+		//		g.Go(func() error {
+		//			// send to validation, but only if the parent is not in the same block
+		//			_ = sm.validationClient.Validate(gCtx, tx, blockHeight)
+		//
+		//			return nil
+		//		})
+		//	}
+		//}
+		//
+		//// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
+		//_ = g.Wait()
 
 		subtreeBytes, err := subtree.Serialize()
 		if err != nil {
