@@ -15,7 +15,7 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
 
     local coinbaseSpendingHeight = rec['spendingHeight']
     if coinbaseSpendingHeight and coinbaseSpendingHeight > 0 and coinbaseSpendingHeight >= currentBlockHeight then
-        return "ERROR:Coinbase UTXO can only be spent after 100 blocks, in block" .. coinbaseSpendingHeight .. "or greater"
+        return "ERROR:Coinbase UTXO can only be spent after 100 blocks, in block " .. coinbaseSpendingHeight .. "or greater. The current block height is " .. currentBlockHeight 
     end
 
     -- Get the utxos list from the record
