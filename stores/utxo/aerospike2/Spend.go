@@ -36,96 +36,45 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	spentSpends := make([]*utxo.Spend, 0, len(spends))
 	var mu sync.Mutex
 
-	if s.spendBatcher != nil {
-		g := errgroup.Group{}
-		for _, spend := range spends {
-			if spend == nil {
-				continue
-			}
-
-			spend := spend
-			g.Go(func() error {
-				done := make(chan error)
-				s.spendBatcher.Put(&batchSpend{
-					spend: spend,
-					done:  done,
-				})
-
-				// this waits for the batch to be sent and the response to be received from the batch operation
-				batchErr := <-done
-				if batchErr != nil {
-					// just return the raw error, should already be wrapped
-					return batchErr
-				}
-
-				mu.Lock()
-				spentSpends = append(spentSpends, spend)
-				mu.Unlock()
-
-				return nil
-			})
+	g := errgroup.Group{}
+	for _, spend := range spends {
+		if spend == nil {
+			continue
 		}
 
-		if err = g.Wait(); err != nil {
-			// revert the successfully spent utxos
-			unspendErr := s.UnSpend(ctx, spentSpends)
-			if unspendErr != nil {
-				err = errors.Join(err, unspendErr)
-			}
-			return errors.New(errors.ERR_ERROR, "error in aerospike spend record", err)
-		}
-
-		prometheusUtxoMapSpend.Add(float64(len(spends)))
-	}
-
-	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
-	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-
-	for i, spend := range spends {
-		select {
-		case <-ctx.Done():
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return errors.New(errors.ERR_PROCESSING, "timeout spending %d of %d utxos", i, len(spends))
-			}
-			return errors.New(errors.ERR_PROCESSING, "context cancelled spending %d of %d utxos", i, len(spends))
-
-		default:
-			if spend == nil {
-				continue
-			}
-
+		spend := spend
+		g.Go(func() error {
 			done := make(chan error)
+			s.spendBatcher.Put(&batchSpend{
+				spend: spend,
+				done:  done,
+			})
 
-			go func() {
-				s.sendSpendBatchLua([]*batchSpend{
-					{
-						spend: spend,
-						done:  done,
-					},
-				})
-			}()
-
-			err = <-done
-			if err != nil {
-				if errors.Is(err, utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spend.SpendingTxID)) {
-					return err
-				}
-
-				if !errors.Is(err, errors.ErrTxNotFound) {
-					// We do not need to unspend, just return this error...
-					return err
-				}
-
-				// another error encountered, reverse all spends and return error
-				if resetErr := s.UnSpend(context.Background(), spends); resetErr != nil {
-					s.logger.Errorf("ERROR in aerospike reset: %v\n", resetErr)
-				}
-
-				return errors.New(errors.ERR_ERROR, "error in aerospike spend record", err)
+			// this waits for the batch to be sent and the response to be received from the batch operation
+			batchErr := <-done
+			if batchErr != nil {
+				// just return the raw error, should already be wrapped
+				return batchErr
 			}
-		}
+
+			mu.Lock()
+			spentSpends = append(spentSpends, spend)
+			mu.Unlock()
+
+			return nil
+		})
 	}
 
+	if err = g.Wait(); err != nil {
+		// revert the successfully spent utxos
+		unspendErr := s.UnSpend(ctx, spentSpends)
+		if unspendErr != nil {
+			err = errors.Join(err, unspendErr)
+		}
+		return errors.New(errors.ERR_ERROR, "error in aerospike spend (batched mode)", err)
+	}
+
+	prometheusUtxoMapSpend.Add(float64(len(spends)))
 	return nil
 }
 

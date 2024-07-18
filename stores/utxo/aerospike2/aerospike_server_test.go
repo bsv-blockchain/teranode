@@ -21,7 +21,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -99,16 +98,6 @@ var (
 )
 
 func TestAerospike(t *testing.T) {
-	gocore.Config().Set("utxostore_batchingEnabled", "false")
-	internalTest(t)
-}
-
-func TestAerospikeBatching(t *testing.T) {
-	gocore.Config().Set("utxostore_batchingEnabled", "true")
-	internalTest(t)
-}
-
-func internalTest(t *testing.T) {
 	// raw client to be able to do gets and cleanup
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)

@@ -108,21 +108,15 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		utxoBatchSize: 20_000, // Do not change this value, it is used to calculate the offset for the output
 	}
 
-	batchingEnabled := gocore.Config().GetBool("utxostore_batchingEnabled", true)
+	storeBatchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
+	storeBatchDurationStr, _ := gocore.Config().GetInt("utxostore_storeBatcherDurationMillis", 10)
+	storeBatchDuration := time.Duration(storeBatchDurationStr) * time.Millisecond
+	s.storeBatcher = batcher.New[batchStoreItem](storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
 
-	if batchingEnabled {
-		batchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
-		batchDuration, _ := gocore.Config().GetInt("utxostore_storeBatcherDurationMillis", 10)
-		duration := time.Duration(batchDuration) * time.Millisecond
-		s.storeBatcher = batcher.New[batchStoreItem](batchSize, duration, s.sendStoreBatch, true)
-	}
-
-	if batchingEnabled {
-		batchSize, _ := gocore.Config().GetInt("utxostore_getBatcherSize", 1024)
-		batchDuration, _ := gocore.Config().GetInt("utxostore_getBatcherDurationMillis", 10)
-		duration := time.Duration(batchDuration) * time.Millisecond
-		s.getBatcher = batcher.New[batchGetItem](batchSize, duration, s.sendGetBatch, true)
-	}
+	getBatchSize, _ := gocore.Config().GetInt("utxostore_getBatcherSize", 1024)
+	getBatchDurationStr, _ := gocore.Config().GetInt("utxostore_getBatcherDurationMillis", 10)
+	getBatchDuration := time.Duration(getBatchDurationStr) * time.Millisecond
+	s.getBatcher = batcher.New[batchGetItem](getBatchSize, getBatchDuration, s.sendGetBatch, true)
 
 	// Make sure the udf lua scripts are installed in the cluster
 	// update the version of the lua script when a new version is launched, do not re-use the old one
@@ -130,12 +124,10 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		return nil, fmt.Errorf("Failed to register udfLUA: %w", err)
 	}
 
-	if batchingEnabled {
-		batchSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 256)
-		batchDuration, _ := gocore.Config().GetInt("utxostore_spendBatcherDurationMillis", 10)
-		duration := time.Duration(batchDuration) * time.Millisecond
-		s.spendBatcher = batcher.New[batchSpend](batchSize, duration, s.sendSpendBatchLua, true)
-	}
+	spendBatchSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 256)
+	spendBatchDurationStr, _ := gocore.Config().GetInt("utxostore_spendBatcherDurationMillis", 10)
+	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
+	s.spendBatcher = batcher.New[batchSpend](spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, true)
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 
