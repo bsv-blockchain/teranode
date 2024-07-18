@@ -1,6 +1,6 @@
 // //go:build aerospike
 
-package aerospike2
+package aerospike
 
 import (
 	"context"

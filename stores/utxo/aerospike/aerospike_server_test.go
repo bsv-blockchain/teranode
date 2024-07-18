@@ -1,6 +1,6 @@
 //go:build aerospike
 
-package aerospike2
+package aerospike
 
 import (
 	"context"
@@ -105,7 +105,7 @@ func TestAerospike(t *testing.T) {
 	// TODO use the container in tests
 	// client := setupAerospike(t)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -539,7 +539,7 @@ func TestLUAScripts(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -600,7 +600,7 @@ func TestCreateWithBlockIDs(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -644,7 +644,7 @@ func TestStoreOPReturn(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -681,7 +681,7 @@ func TestFrozenTX(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -715,7 +715,7 @@ func TestFrozenUTXO(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -756,7 +756,7 @@ func TestCoinbase(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -801,7 +801,7 @@ func TestBigOPReturn(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -851,7 +851,7 @@ func TestMultiUTXORecords(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -997,7 +997,7 @@ func TestIncrementNrRecords(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -1045,7 +1045,7 @@ func TestLargeUTXO(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike2://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file:///data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 	require.NoError(t, err)
 
 	// ubsv db client

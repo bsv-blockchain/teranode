@@ -1,4 +1,4 @@
-package aerospike2
+package aerospike
 
 import (
 	_ "embed"

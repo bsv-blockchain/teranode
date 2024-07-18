@@ -1,6 +1,6 @@
 //go:build aerospike
 
-package aerospike2
+package aerospike
 
 import (
 	"context"
@@ -102,7 +102,7 @@ func TestAerospikeInContainer(t *testing.T) {
 		assert.True(t, tx.Outputs[0].LockingScript.EqualsBytes(outpoints[1].LockingScript))
 	})
 
-	t.Run("TestAerospike2", func(t *testing.T) {
+	t.Run("Testaerospike", func(t *testing.T) {
 		// Aerospike
 		store := &Store{
 			client:        aerospikeClient,
