@@ -20,6 +20,7 @@ x-ubsv-base:
   expose:
     - 8081-8093
     - 9095-9096
+    - 9292
     - 3005
   environment:
     SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.m}
@@ -241,6 +242,7 @@ services:
     ports:
       - 4040
       - 9091
+      - 9292
     depends_on:
       ubsv-blockchain:
         condition: service_healthy
