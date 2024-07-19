@@ -173,7 +173,8 @@ func (c LocalClient) SendFSMEvent(ctx context.Context, state blockchain_api.FSME
 func (c LocalClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
 
-	return nil, nil
+	// TODO do we need to implement this?
+	panic("implement me")
 }
 
 func (c LocalClient) HeightToHashRange(startHeight uint32, endHash *chainhash.Hash, maxResults int) ([]chainhash.Hash, error) {
