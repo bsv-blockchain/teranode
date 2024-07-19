@@ -886,7 +886,7 @@ func (b *Blockchain) GetLatestBlockLocator(ctx context.Context, req *blockchain_
 		// return genesis block
 		genesisBlock, err := b.store.GetBlockByHeight(ctx, 0)
 		if err != nil {
-			return nil, err
+			return nil, errors.WrapGRPC(errors.New(errors.ERR_STORAGE_ERROR, "[Blockchain] error using blockchain store", err))
 		}
 
 		resp := &blockchain_api.GetBlockLocatorResponse{
@@ -930,7 +930,7 @@ func (b *Blockchain) GetLatestBlockLocator(ctx context.Context, req *blockchain_
 
 		ancestorBlock, err := b.store.GetBlockByHeight(ctx, uint32(height))
 		if err != nil {
-			return nil, err
+			return nil, errors.WrapGRPC(errors.New(errors.ERR_STORAGE_ERROR, "[Blockchain] error using blockchain store to get block by height", err))
 		}
 		ancestorBlockHeaderHash = ancestorBlock.Header.Hash().CloneBytes()
 		ancestorBlockHeight = height
