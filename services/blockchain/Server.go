@@ -877,6 +877,74 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	}, nil
 }
 
+// LatestBlockLocator returns a block locator for the latest block.
+func (c *Client) GetLatestBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
+	blockHeaderHash := req.Hash
+	blockHeaderHeight := req.Height
+
+	if blockHeaderHash == nil {
+		// return genesis block
+		genesisBlock, err := c.GetBlockByHeight(ctx, 0)
+		if err != nil {
+			return nil, err
+		}
+
+		resp := &blockchain_api.GetBlockLocatorResponse{
+			Locator: [][]byte{genesisBlock.Header.Hash().CloneBytes()},
+		}
+		return resp, nil
+	}
+
+	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
+	// Calculate the max number of entries that will ultimately be in the
+	// block locator. See the description of the algorithm for how these
+	// numbers are derived.
+	var maxEntries uint8
+	if blockHeaderHeight <= 12 {
+		maxEntries = uint8(blockHeaderHeight) + 1
+	} else {
+		// Requested hash itself + previous 10 entries + genesis block.
+		// Then floor(log2(height-10)) entries for the skip portion.
+		adjustedHeight := uint32(blockHeaderHeight) - 10
+		maxEntries = 12 + fastLog2Floor(adjustedHeight)
+	}
+	locator := make([][]byte, 0, maxEntries)
+
+	step := int32(1)
+	ancestorBlockHeaderHash := blockHeaderHash
+	ancestorBlockHeight := int32(blockHeaderHeight) // this needs to be signed
+	for ancestorBlockHeaderHash != nil {
+		locator = append(locator, ancestorBlockHeaderHash)
+
+		// Nothing more to add once the genesis block has been added.
+		if ancestorBlockHeight == 0 {
+			break
+		}
+
+		// Calculate height of previous node to include ensuring the
+		// final node is the genesis block.
+		height := int32(ancestorBlockHeight) - step
+		if height < 0 {
+			height = 0
+		}
+
+		ancestorBlock, err := c.GetBlockByHeight(ctx, uint32(height))
+		if err != nil {
+			return nil, err
+		}
+		ancestorBlockHeaderHash = ancestorBlock.Header.Hash().CloneBytes()
+		ancestorBlockHeight = height
+
+		// Once 11 entries have been included, start doubling the
+		// distance between included hashes.
+		if len(locator) > 10 {
+			step *= 2
+		}
+	}
+
+	return &blockchain_api.GetBlockLocatorResponse{Locator: locator}, nil
+}
+
 func safeClose[T any](ch chan T) {
 	defer func() {
 		_ = recover()
