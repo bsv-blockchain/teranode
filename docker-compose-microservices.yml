@@ -1,0 +1,366 @@
+# Define a common base configuration for ubsv nodes
+x-ubsv-base:
+  &ubsv-base
+  image: ubsv:latest
+  depends_on:
+    aerospike:
+      condition: service_started
+    postgres:
+      condition: service_started
+    kafka-shared:
+      condition: service_started
+  networks:
+    - ubsv-network
+  volumes:
+    - ./data:/app/data
+    - ./settings_local.conf:/app/settings_local.conf
+    - ./data/ubsv/txstore:/app/data/txstore
+    - ./data/ubsv/subtreestore:/app/data/subtreestore
+    - ./data/ubsv/blockstore:/app/data/blockstore
+  expose:
+    - 8081-8093
+    - 9095-9096
+    - 3005
+  environment:
+    SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.m}
+    logLevel: "DEBUG"
+
+networks:
+  ubsv-network:
+    name: my-ubsv-network
+
+services:
+  ubsv-builder:
+    image: ubsv:latest
+    build:
+      context: .
+      dockerfile: local.Dockerfile
+      args:
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-2db1b0e
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-2db1b0e
+    networks:
+      - ubsv-network
+    entrypoint: ["pwd"]
+
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    networks:
+      - ubsv-network
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_DB: postgres
+    ports:
+      - 5432:5432
+    expose:
+      - 5432
+    volumes:
+      - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./data/postgres:/var/lib/postgresql/data
+    restart: on-failure
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka-shared:
+    container_name: kafka-shared
+    image: vectorized/redpanda:latest
+    mem_limit: 256m
+    networks:
+      - ubsv-network
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:9093
+    ports:
+      - 8081
+      - 9092:9092
+      - 9093:9093
+
+  kafka-console-shared:
+    container_name: kafka-console-shared
+    image: docker.redpanda.com/redpandadata/console:latest
+    networks:
+      - ubsv-network
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["kafka-shared:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://kafka-shared:8081"]
+    ports:
+      - 8080
+    depends_on:
+      - kafka-shared
+
+  aerospike:
+    container_name: aerospike
+    image: aerospike:ce-6.4.0.7_2
+    command: --config-file /etc/aerospike.conf
+    networks:
+      - ubsv-network
+    ports:
+      - 3000:3000
+    expose:
+      - 3000
+    restart: on-failure
+    volumes:
+      - ./deploy/dev/aerospike/aerospike.conf:/etc/aerospike.conf
+      - ./data/aerospike/data:/opt/aerospike/data
+
+  aerospike-exporter:
+    image: aerospike/aerospike-prometheus-exporter:latest
+    container_name: aerospike-exporter
+    environment:
+      AS_HOST: aerospike
+      AS_PORT: 3000
+      AGENT_BIND_PORT: 10145
+      METRIC_LABELS: "type='development',source='aerospike'"
+    network_mode: bridge
+
+  ubsv-blockchain:
+    <<: *ubsv-base
+    container_name: ubsv-blockchain
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "1", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockchain=1"]
+    ports:
+      - 4040
+      - 8082
+      - 8087
+      - 9091
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8087"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+
+  ubsv-asset:
+    <<: *ubsv-base
+    container_name: ubsv-asset
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-asset=1"]
+    ports:
+      - 4040
+      - 8090
+      - 8091
+      - 9091
+    depends_on:
+      ubsv-blockchain:
+        condition: service_healthy
+      ubsv-p2p:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8091"]
+      # test: ["CMD-SHELL", "curl", "-f", "http://localhost:8090"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+
+  ubsv-miner:
+    <<: *ubsv-base
+    container_name: ubsv-miner
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1"]
+    ports:
+      - 4040
+      - 8089
+      - 8092
+      - 8099
+      - 9091
+    depends_on:
+      ubsv-blockchain:
+        condition: service_healthy
+      ubsv-blockvalidation:
+        condition: service_healthy
+      ubsv-blockassembly:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8092"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+  
+  ubsv-coinbase:
+    <<: *ubsv-base
+    container_name: ubsv-coinbase
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-coinbase=1", "-blockpersister=0"]
+    ports:
+      - 4040
+      - 8093
+      - 9091
+    depends_on:
+      ubsv-asset:
+        condition: service_healthy
+      ubsv-miner:
+        condition: service_healthy
+      ubsv-blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8093"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+
+  ubsv-p2p:
+    <<: *ubsv-base
+    container_name: ubsv-p2p
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-p2p=1"]
+    ports:
+      - 4040
+      - 9091
+      - 9905
+      - 9906
+    depends_on:
+      ubsv-blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "9905"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+
+  ubsv-rpc:
+    <<: *ubsv-base
+    container_name: ubsv-rpc
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-rpc=1"]
+    ports:
+      - 4040
+      - 9091
+    depends_on:
+      ubsv-blockchain:
+        condition: service_healthy
+
+  ubsv-subtreevalidation:
+    <<: *ubsv-base
+    container_name: ubsv-subtreevalidation
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-subtreevalidation=1"]
+    ports:
+      - 4040
+      - 8086
+      - 9091
+    depends_on:
+      ubsv-blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8086"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+
+  ubsv-blockvalidation:
+    <<: *ubsv-base
+    container_name: ubsv-blockvalidation
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockvalidation=1"]
+    ports:
+      - 4040
+      - 8088
+      - 8188
+      - 9091
+    depends_on:
+      ubsv-blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8088"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+
+  ubsv-blockassembly:
+    <<: *ubsv-base
+    container_name: ubsv-blockassembly
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockassembly=1"]
+    ports:
+      - 4040
+      - 8085
+      - 8285
+      - 9091
+    depends_on:
+      ubsv-blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8085"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+  
+  ubsv-blockpersister:
+    <<: *ubsv-base
+    container_name: ubsv-blockpersister
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-blockpersister=1"]
+    ports:
+      - 4040
+    depends_on:
+      ubsv-blockchain:
+        condition: service_healthy
+      ubsv-blockvalidation:
+        condition: service_healthy
+      ubsv-blockassembly:
+        condition: service_healthy
+
+  ubsv-propagation:
+    <<: *ubsv-base
+    container_name: ubsv-propagation
+    entrypoint: ["/app/wait.sh", "aerospike", "3000", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-propagation=1"]
+    ports:
+      - 4040
+      - 8833
+      - 8084
+      - 8384
+      - 9091
+    depends_on:
+      ubsv-blockchain:
+        condition: service_healthy
+      ubsv-blockvalidation:
+        condition: service_healthy
+      ubsv-blockassembly:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8084"]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
+
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:v2.44.0
+    mem_limit: 64m
+    ports:
+      - 9090
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/prometheus/prometheus-microservices.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    ports:
+      - 3005:3000
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/grafana/datasources/main-microservices.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
+    depends_on:
+      - prometheus
