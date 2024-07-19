@@ -879,20 +879,41 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 
 // LatestBlockLocator returns a block locator for the latest block.
 func (b *Blockchain) GetLatestBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
-	blockHeaderHash := req.Hash
-	blockHeaderHeight := req.Height
+	blockHeader := chainhash.Hash(req.Hash)
+	blockHeight := req.Height
+
+	locatorHashes, err := getBlockLocator(ctx, b.store, &blockHeader, blockHeight)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.New(errors.ERR_STORAGE_ERROR, "[Blockchain] error using blockchain store", err))
+	}
+
+	locator := make([][]byte, len(locatorHashes))
+	for i, hash := range locatorHashes {
+		locator[i] = hash.CloneBytes()
+	}
+
+	return &blockchain_api.GetBlockLocatorResponse{Locator: locator}, nil
+}
+
+func safeClose[T any](ch chan T) {
+	defer func() {
+		_ = recover()
+	}()
+
+	close(ch)
+}
+
+func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
+	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
 
 	if blockHeaderHash == nil {
 		// return genesis block
-		genesisBlock, err := b.store.GetBlockByHeight(ctx, 0)
+		genesisBlock, err := store.GetBlockByHeight(ctx, 0)
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.New(errors.ERR_STORAGE_ERROR, "[Blockchain] error using blockchain store", err))
+			return nil, err
 		}
 
-		resp := &blockchain_api.GetBlockLocatorResponse{
-			Locator: [][]byte{genesisBlock.Header.Hash().CloneBytes()},
-		}
-		return resp, nil
+		return []*chainhash.Hash{genesisBlock.Header.Hash()}, nil
 	}
 
 	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
@@ -908,7 +929,7 @@ func (b *Blockchain) GetLatestBlockLocator(ctx context.Context, req *blockchain_
 		adjustedHeight := uint32(blockHeaderHeight) - 10
 		maxEntries = 12 + fastLog2Floor(adjustedHeight)
 	}
-	locator := make([][]byte, 0, maxEntries)
+	locator := make([]*chainhash.Hash, 0, maxEntries)
 
 	step := int32(1)
 	ancestorBlockHeaderHash := blockHeaderHash
@@ -928,11 +949,11 @@ func (b *Blockchain) GetLatestBlockLocator(ctx context.Context, req *blockchain_
 			height = 0
 		}
 
-		ancestorBlock, err := b.store.GetBlockByHeight(ctx, uint32(height))
+		ancestorBlock, err := store.GetBlockByHeight(ctx, uint32(height))
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.New(errors.ERR_STORAGE_ERROR, "[Blockchain] error using blockchain store to get block by height", err))
+			return nil, err
 		}
-		ancestorBlockHeaderHash = ancestorBlock.Header.Hash().CloneBytes()
+		ancestorBlockHeaderHash = ancestorBlock.Header.Hash()
 		ancestorBlockHeight = height
 
 		// Once 11 entries have been included, start doubling the
@@ -942,13 +963,5 @@ func (b *Blockchain) GetLatestBlockLocator(ctx context.Context, req *blockchain_
 		}
 	}
 
-	return &blockchain_api.GetBlockLocatorResponse{Locator: locator}, nil
-}
-
-func safeClose[T any](ch chan T) {
-	defer func() {
-		_ = recover()
-	}()
-
-	close(ch)
+	return locator, nil
 }
