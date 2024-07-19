@@ -878,13 +878,13 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 }
 
 // LatestBlockLocator returns a block locator for the latest block.
-func (c *Client) GetLatestBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
+func (b *Blockchain) GetLatestBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
 	blockHeaderHash := req.Hash
 	blockHeaderHeight := req.Height
 
 	if blockHeaderHash == nil {
 		// return genesis block
-		genesisBlock, err := c.GetBlockByHeight(ctx, 0)
+		genesisBlock, err := b.store.GetBlockByHeight(ctx, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -928,7 +928,7 @@ func (c *Client) GetLatestBlockLocator(ctx context.Context, req *blockchain_api.
 			height = 0
 		}
 
-		ancestorBlock, err := c.GetBlockByHeight(ctx, uint32(height))
+		ancestorBlock, err := b.store.GetBlockByHeight(ctx, uint32(height))
 		if err != nil {
 			return nil, err
 		}
