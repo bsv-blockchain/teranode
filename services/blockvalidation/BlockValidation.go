@@ -177,7 +177,7 @@ func (u *BlockValidation) start(ctx context.Context) {
 
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 				g.Go(func() error {
-					u.logger.Infof("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
+					u.logger.Debugf("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
 					if err := u.setTxMined(gCtx, blockHash); err != nil {
 						u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
 						u.setMinedChan <- blockHash
@@ -505,7 +505,7 @@ func (u *BlockValidation) DelTxMetaCacheMulti(ctx context.Context, hash *chainha
 	return nil
 }
 
-func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string, bloomStats *model.BloomStats) error {
+func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseUrl string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error {
 	timeStart, stat, ctx := tracing.NewStatFromContext(ctx, "ValidateBlock", u.stats)
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:ValidateBlock")
 	span.LogKV("block", block.Hash().String())
@@ -565,7 +565,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// don't be tempted to rely on BlockAssembly to do this.
 	// We need to be sure that the coinbase transaction is stored before we try and do setMinedMulti().
 	u.logger.Infof("[ValidateBlock][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), block.Height, block.CoinbaseTx.TxIDChainHash().String())
-	if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height+100); err != nil {
+	if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height); err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 		} else {
@@ -574,8 +574,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	}
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
+	useOptimisticMining := u.optimisticMining
+	if len(disableOptimisticMining) > 0 {
+		// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
+		useOptimisticMining = useOptimisticMining && !disableOptimisticMining[0]
+	}
+
 	var optimisticMiningWg sync.WaitGroup
-	if u.optimisticMining {
+	if useOptimisticMining {
 		// make sure the proof of work is enough
 		headerValid, _, err := block.Header.HasMetTargetDifficulty()
 		if !headerValid {
@@ -606,14 +612,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 			// get all 100 previous block headers on the main chain
 			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
-			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(spanCtx, block.Header.HashPrevBlock, 100)
+			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(validateCtx, block.Header.HashPrevBlock, 100)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 				u.ReValidateBlock(block, baseUrl)
 				return
 			}
 
-			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
+			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(validateCtx, block.Header.HashPrevBlock, 100)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
 				u.ReValidateBlock(block, baseUrl)
@@ -843,7 +849,7 @@ func (u *BlockValidation) _(spanCtx context.Context, block *model.Block) (err er
 	}()
 
 	// TODO - we need to consider if we can do this differently
-	if _, err = u.utxoStore.Create(childSpanCtx, block.CoinbaseTx); err != nil {
+	if _, err = u.utxoStore.Create(childSpanCtx, block.CoinbaseTx, block.Height); err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			return fmt.Errorf("[ValidateBlock][%s] failed to create coinbase transaction in txMetaStore [%s]", block.Hash().String(), err.Error())
 		}

@@ -87,9 +87,22 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger) validator.In
 	}
 
 	var err error
-	validatorClient, err = validator.NewClient(ctx, logger)
-	if err != nil {
-		panic(err)
+	localValidator := gocore.Config().GetBool("useLocalValidator", false)
+	if localValidator {
+		logger.Infof("[Validator] Using local validator")
+		validatorClient, err = validator.New(ctx,
+			logger,
+			getUtxoStore(ctx, logger),
+		)
+		if err != nil {
+			logger.Fatalf("could not create validator [%v]", err)
+		}
+
+	} else {
+		validatorClient, err = validator.NewClient(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	return validatorClient

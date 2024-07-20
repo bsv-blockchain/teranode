@@ -19,7 +19,6 @@ import (
 	"golang.org/x/term"
 
 	zlogsentry "github.com/archdx/zerolog-sentry"
-	"github.com/bitcoin-sv/ubsv/cmd/aerospiketest/aerospiketest"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
@@ -29,7 +28,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
-	"github.com/bitcoin-sv/ubsv/cmd/utxostore_blaster/utxostore_blaster"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -42,6 +40,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/rpc"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
@@ -75,10 +74,6 @@ func main() {
 	defer sentry.Flush(2 * time.Second)
 
 	switch path.Base(os.Args[0]) {
-	case "aerospiketest.run":
-		// aerospiketest.Init()
-		aerospiketest.Start()
-		return
 	case "bare.run":
 		// bare.Init()
 		bare.Start()
@@ -106,10 +101,6 @@ func main() {
 	case "blaster.run":
 		// txblaster.Init()
 		txblaster.Start()
-		return
-	case "utxostoreblaster.run":
-		utxostore_blaster.Init()
-		utxostore_blaster.Start()
 		return
 	case "filereader.run":
 		// filereader.Init()
@@ -211,8 +202,19 @@ func main() {
 
 	// blockchain service
 	if startBlockchain {
+
 		var err error
-		blockchainService, err = blockchain.New(ctx, logger.New("bchn"))
+		blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
+		if err != nil || !found {
+			panic(err)
+		}
+
+		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
+		if err != nil {
+			panic(err)
+		}
+
+		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, subtreeStore, utxoStore)
 		if err != nil {
 			panic(err)
 		}
@@ -352,22 +354,6 @@ func main() {
 
 	// propagation
 	if startPropagation {
-		var propagationValidatorClient validator.Interface
-		localValidator := gocore.Config().GetBool("useLocalValidator", false)
-		if localValidator {
-			logger.Infof("[Validator] Using local validator")
-			propagationValidatorClient, err = validator.New(ctx,
-				logger,
-				getUtxoStore(ctx, logger),
-			)
-			if err != nil {
-				logger.Fatalf("could not create validator [%v]", err)
-			}
-
-		} else {
-			propagationValidatorClient = getValidatorClient(ctx, logger)
-		}
-
 		propagationGrpcAddress, ok := gocore.Config().Get("propagation_grpcListenAddress")
 		if ok && propagationGrpcAddress != "" {
 			if gocore.Config().GetBool("propagation_use_dumb", false) {
@@ -378,7 +364,7 @@ func main() {
 				if err = sm.AddService("PropagationServer", propagation.New(
 					logger.New("prop"),
 					getTxStore(logger),
-					propagationValidatorClient,
+					getValidatorClient(ctx, logger),
 				)); err != nil {
 					panic(err)
 				}

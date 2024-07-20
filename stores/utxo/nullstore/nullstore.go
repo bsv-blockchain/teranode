@@ -54,7 +54,7 @@ func (m *NullStore) PreviousOutputsDecorate(ctx context.Context, outpoints []*me
 	return nil
 }
 
-func (m *NullStore) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+func (m *NullStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
 	return &meta.Data{}, nil
 }
 

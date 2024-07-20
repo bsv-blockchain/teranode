@@ -23,6 +23,7 @@ const _ = grpc.SupportPackageIsVersion8
 const (
 	AssetAPI_HealthGRPC_FullMethodName         = "/asset_api.AssetAPI/HealthGRPC"
 	AssetAPI_GetBlock_FullMethodName           = "/asset_api.AssetAPI/GetBlock"
+	AssetAPI_GetFullBlock_FullMethodName       = "/asset_api.AssetAPI/GetFullBlock"
 	AssetAPI_GetBlockStats_FullMethodName      = "/asset_api.AssetAPI/GetBlockStats"
 	AssetAPI_GetBlockGraphData_FullMethodName  = "/asset_api.AssetAPI/GetBlockGraphData"
 	AssetAPI_GetBlockHeader_FullMethodName     = "/asset_api.AssetAPI/GetBlockHeader"
@@ -43,6 +44,7 @@ type AssetAPIClient interface {
 	// Health returns the health of the API.
 	HealthGRPC(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*HealthResponse, error)
 	GetBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockResponse, error)
+	GetFullBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetFullBlockResponse, error)
 	GetBlockStats(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*model.BlockStats, error)
 	GetBlockGraphData(ctx context.Context, in *GetBlockGraphDataRequest, opts ...grpc.CallOption) (*model.BlockDataPoints, error)
 	GetBlockHeader(ctx context.Context, in *GetBlockHeaderRequest, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
@@ -78,6 +80,16 @@ func (c *assetAPIClient) GetBlock(ctx context.Context, in *GetBlockRequest, opts
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockResponse)
 	err := c.cc.Invoke(ctx, AssetAPI_GetBlock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *assetAPIClient) GetFullBlock(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetFullBlockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFullBlockResponse)
+	err := c.cc.Invoke(ctx, AssetAPI_GetFullBlock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -224,6 +236,7 @@ type AssetAPIServer interface {
 	// Health returns the health of the API.
 	HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error)
 	GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error)
+	GetFullBlock(context.Context, *GetBlockRequest) (*GetFullBlockResponse, error)
 	GetBlockStats(context.Context, *emptypb.Empty) (*model.BlockStats, error)
 	GetBlockGraphData(context.Context, *GetBlockGraphDataRequest) (*model.BlockDataPoints, error)
 	GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error)
@@ -247,6 +260,9 @@ func (UnimplementedAssetAPIServer) HealthGRPC(context.Context, *emptypb.Empty) (
 }
 func (UnimplementedAssetAPIServer) GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlock not implemented")
+}
+func (UnimplementedAssetAPIServer) GetFullBlock(context.Context, *GetBlockRequest) (*GetFullBlockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetFullBlock not implemented")
 }
 func (UnimplementedAssetAPIServer) GetBlockStats(context.Context, *emptypb.Empty) (*model.BlockStats, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockStats not implemented")
@@ -326,6 +342,24 @@ func _AssetAPI_GetBlock_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AssetAPIServer).GetBlock(ctx, req.(*GetBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _AssetAPI_GetFullBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AssetAPIServer).GetFullBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AssetAPI_GetFullBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AssetAPIServer).GetFullBlock(ctx, req.(*GetBlockRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -545,6 +579,10 @@ var AssetAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlock",
 			Handler:    _AssetAPI_GetBlock_Handler,
+		},
+		{
+			MethodName: "GetFullBlock",
+			Handler:    _AssetAPI_GetFullBlock_Handler,
 		},
 		{
 			MethodName: "GetBlockStats",

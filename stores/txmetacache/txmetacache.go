@@ -213,8 +213,8 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	return nil
 }
 
-func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
-	txMeta, err := t.utxoStore.Create(ctx, tx, blockIDs...)
+func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
+	txMeta, err := t.utxoStore.Create(ctx, tx, blockHeight, blockIDs...)
 	if err != nil {
 		return txMeta, err
 	}

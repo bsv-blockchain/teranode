@@ -47,7 +47,7 @@ func TestCreate(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	meta, err := store.Create(ctx, tx)
+	meta, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(259), meta.SizeInBytes)
@@ -59,12 +59,12 @@ func TestCreateDuplicate(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	meta, err := store.Create(ctx, tx)
+	meta, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(259), meta.SizeInBytes)
 
-	_, err = store.Create(ctx, tx)
+	_, err = store.Create(ctx, tx, 0)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
 }
@@ -75,7 +75,7 @@ func TestGet(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	meta, err := store.Get(ctx, tx.TxIDChainHash())
@@ -99,7 +99,7 @@ func TestGetMeta(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	meta, err := store.GetMeta(ctx, tx.TxIDChainHash())
@@ -114,7 +114,7 @@ func TestGetBlockIDs(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx, 1, 2, 3)
+	_, err := store.Create(ctx, tx, 0, 1, 2, 3)
 	require.NoError(t, err)
 
 	meta, err := store.GetMeta(ctx, tx.TxIDChainHash())
@@ -129,7 +129,7 @@ func TestDelete(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	err = store.Delete(ctx, tx.TxIDChainHash())
@@ -142,7 +142,7 @@ func TestSpend(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
@@ -180,7 +180,7 @@ func TestUnSpend(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	utxohash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
@@ -218,7 +218,7 @@ func TestGetSpend(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	spend := &utxo.Spend{
@@ -238,7 +238,7 @@ func TestSetMinedMulti(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	err = store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, 1)
@@ -257,7 +257,7 @@ func TestBatchDecorate(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	unresolved := utxo.UnresolvedMetaData{
@@ -286,7 +286,7 @@ func TestPreviousOutputsDecorate(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	previousOutput := &meta.PreviousOutput{
@@ -314,7 +314,7 @@ func TestCreateCoinbase(t *testing.T) {
 	err = store.Delete(ctx, coinbaseTx.TxIDChainHash())
 	require.NoError(t, err)
 
-	meta, err := store.Create(ctx, coinbaseTx)
+	meta, err := store.Create(ctx, coinbaseTx, 100)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(1253047668), meta.Fee)
@@ -334,7 +334,7 @@ func TestTombstoneAfterSpend(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	utxohash0, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
@@ -380,7 +380,7 @@ func TestTombstoneAfterUnSpend(t *testing.T) {
 
 	store, tx := setup(ctx, t)
 
-	_, err := store.Create(ctx, tx)
+	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	utxohash0, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)

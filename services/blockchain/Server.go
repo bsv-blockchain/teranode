@@ -9,7 +9,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -35,6 +37,8 @@ type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
 	addBlockChan       chan *blockchain_api.AddBlockRequest
 	store              blockchain_store.Store
+	subtreeStore       blob.Store
+	utxoStore          utxo.Store
 	logger             ulogger.Logger
 	newSubscriptions   chan subscriber
 	deadSubscriptions  chan subscriber
@@ -48,31 +52,20 @@ type Blockchain struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger ulogger.Logger) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, subtreeStore blob.Store, utxoStore utxo.Store) (*Blockchain, error) {
 	initPrometheusMetrics()
-
-	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, fmt.Errorf("no blockchain_store setting found")
-	}
-
-	s, err := blockchain_store.NewStore(logger, blockchainStoreURL)
-	if err != nil {
-		return nil, err
-	}
 
 	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
 
-	d, err := NewDifficulty(s, logger, difficultyAdjustmentWindow)
+	d, err := NewDifficulty(store, logger, difficultyAdjustmentWindow)
 	if err != nil {
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}
 
 	return &Blockchain{
-		store:             s,
+		store:             store,
+		subtreeStore:      subtreeStore,
+		utxoStore:         utxoStore,
 		logger:            logger,
 		addBlockChan:      make(chan *blockchain_api.AddBlockRequest, 10),
 		newSubscriptions:  make(chan subscriber, 10),

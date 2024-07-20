@@ -25,6 +25,7 @@ type Data struct {
 type PreviousOutput struct {
 	PreviousTxID  chainhash.Hash
 	Vout          uint32
+	Idx           int
 	LockingScript []byte
 	Satoshis      uint64
 }

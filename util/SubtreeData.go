@@ -80,6 +80,9 @@ func (s *SubtreeData) serializeFromReader(buf io.Reader) error {
 		txIndex = 1
 	}
 
+	// initialize the txs array
+	s.Txs = make([]*bt.Tx, s.Subtree.Length())
+
 	for {
 		tx := &bt.Tx{}
 		_, err = tx.ReadFrom(buf)

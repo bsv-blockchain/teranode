@@ -3,9 +3,10 @@ package txmetacache
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"testing"
 	"unsafe"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -38,7 +39,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 
 		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 
-		meta, err := c.Create(ctx, coinbaseTx)
+		meta, err := c.Create(ctx, coinbaseTx, 100)
 		require.NoError(t, err)
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")

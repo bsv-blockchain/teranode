@@ -541,7 +541,8 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = request.Height
 
-	err = u.processBlockFound(ctx, block.Header.Hash(), "", block)
+	// TODO - check if hardcoding "legacy" is OK
+	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)
 	if err != nil {
 		return nil, fmt.Errorf("failed block validation ProcessBlock [%s] [%v]", block.String(), err)
 	}
@@ -638,7 +639,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
-	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)
+
+	// this is a bit of a hack, but we need to turn off optimistic mining when in legacy mode
+	useOptimisticMining := true
+	if baseUrl == "legacy" {
+		useOptimisticMining = false
+	}
+	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats, useOptimisticMining)
 	if err != nil {
 		return fmt.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
 	}

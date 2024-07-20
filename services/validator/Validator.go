@@ -8,8 +8,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
-	"github.com/TAAL-GmbH/arc/api"
-	"github.com/TAAL-GmbH/arc/validator" // TODO move this to UBSV repo - add recover to validation
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -181,7 +179,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 		return errors.New(errors.ERR_PROCESSING, "[Validate][%s] error spending utxos: %v", tx.TxID(), err)
 	}
 
-	txMetaData, err := v.storeTxInUtxoMap(setSpan, tx)
+	txMetaData, err := v.storeTxInUtxoMap(setSpan, tx, blockHeight)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			// stop all processing, this transaction has already been validated and passed into the block assembly
@@ -254,7 +252,7 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Has
 	return err
 }
 
-func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx) (*meta.Data, error) {
+func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) (*meta.Data, error) {
 	start, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "registerTxInMetaStore")
 	defer func() {
 		stat.AddTime(start)
@@ -264,7 +262,7 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx) (*meta.D
 	txMetaSpan := tracing.Start(ctx, "Validator:Validate:StoreTxMeta")
 	defer txMetaSpan.Finish()
 
-	data, err := v.utxoStore.Create(ctx, tx)
+	data, err := v.utxoStore.Create(ctx, tx, blockHeight)
 	if err != nil {
 		return nil, err
 	}
@@ -492,7 +490,7 @@ func (vb *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 
 	// 10) Reject if the sum of input values is less than sum of output values
 	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
-	if err := vb.checkFees(tx, api.FeesToBtFeeQuote(policy.MinMiningTxFee)); err != nil {
+	if err := vb.checkFees(tx, feesToBtFeeQuote(policy.MinMiningTxFee)); err != nil {
 		return err
 	}
 
@@ -530,15 +528,15 @@ func (v *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 		isData := output.LockingScript.IsData()
 		switch {
 		case !isData && (output.Satoshis > MaxSatoshis || output.Satoshis < minOutput):
-			return validator.NewError(fmt.Errorf("transaction output %d satoshis is invalid", index), api.ErrStatusOutputs)
+			return fmt.Errorf("transaction output %d satoshis is invalid", index)
 		case isData && output.Satoshis != 0 && blockHeight >= util.GenesisActivationHeight:
-			return validator.NewError(fmt.Errorf("transaction output %d has non 0 value op return", index), api.ErrStatusOutputs)
+			return fmt.Errorf("transaction output %d has non 0 value op return (height=%d)", index, blockHeight)
 		}
 		total += output.Satoshis
 	}
 
 	if total > MaxSatoshis {
-		return validator.NewError(fmt.Errorf("transaction output total satoshis is too high"), api.ErrStatusOutputs)
+		return fmt.Errorf("transaction output total satoshis is too high")
 	}
 
 	return nil
@@ -548,27 +546,27 @@ func (v *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
 	for index, input := range tx.Inputs {
 		if hex.EncodeToString(input.PreviousTxID()) == coinbaseTxID {
-			return validator.NewError(fmt.Errorf("transaction input %d is a coinbase input", index), api.ErrStatusInputs)
+			return fmt.Errorf("transaction input %d is a coinbase input", index)
 		}
 		/* lots of our valid test transactions have this sequence number, is this not allowed?
 		if input.SequenceNumber == 0xffffffff {
 			fmt.Printf("input %d has sequence number 0xffffffff, txid = %s", index, tx.TxID())
-			return validator.NewError(fmt.Errorf("transaction input %d sequence number is invalid", index), arc.ErrStatusInputs)
+			return fmt.Errorf("transaction input %d sequence number is invalid", index)
 		}
 		*/
 		// if input.PreviousTxSatoshis == 0 && !input.PreviousTxScript.IsData() {
-		// 	return validator.NewError(fmt.Errorf("transaction input %d satoshis cannot be zero", index), api.ErrStatusInputs)
+		// 	return fmt.Errorf("transaction input %d satoshis cannot be zero", index)
 		// }
 		if input.PreviousTxSatoshis > MaxSatoshis {
-			return validator.NewError(fmt.Errorf("transaction input %d satoshis is too high", index), api.ErrStatusInputs)
+			return fmt.Errorf("transaction input %d satoshis is too high", index)
 		}
 		total += input.PreviousTxSatoshis
 	}
 	if total == 0 && blockHeight >= util.ForkIDActivationHeight {
-		return validator.NewError(fmt.Errorf("transaction input total satoshis cannot be zero"), api.ErrStatusInputs)
+		return fmt.Errorf("transaction input total satoshis cannot be zero")
 	}
 	if total > MaxSatoshis {
-		return validator.NewError(fmt.Errorf("transaction input total satoshis is too high"), api.ErrStatusInputs)
+		return fmt.Errorf("transaction input total satoshis is too high")
 	}
 
 	return nil
@@ -659,4 +657,26 @@ func (v *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) error {
 	}
 
 	return nil
+}
+
+func feesToBtFeeQuote(minMiningFee float64) *bt.FeeQuote {
+
+	satoshisPerKB := int(minMiningFee * 1e8)
+
+	btFeeQuote := bt.NewFeeQuote()
+
+	for _, feeType := range []bt.FeeType{bt.FeeTypeStandard, bt.FeeTypeData} {
+		btFeeQuote.AddQuote(feeType, &bt.Fee{
+			MiningFee: bt.FeeUnit{
+				Satoshis: satoshisPerKB,
+				Bytes:    1000,
+			},
+			RelayFee: bt.FeeUnit{
+				Satoshis: satoshisPerKB,
+				Bytes:    1000,
+			},
+		})
+	}
+
+	return btFeeQuote
 }

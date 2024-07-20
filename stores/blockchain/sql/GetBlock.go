@@ -126,6 +126,9 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		return nil, 0, fmt.Errorf("failed to convert subtrees: %w", err)
 	}
 
+	// set the block height on the block
+	block.Height = height
+
 	s.responseCache.Set(cacheId, &getBlockCache{
 		block:  block,
 		height: height,
