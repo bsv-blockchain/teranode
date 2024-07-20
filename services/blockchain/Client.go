@@ -618,7 +618,7 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMSta
 func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 
 	req := &blockchain_api.GetBlockLocatorRequest{
-		Hash:   nil,
+		Hash:   blockHeaderHash[:],
 		Height: blockHeaderHeight,
 	}
 
