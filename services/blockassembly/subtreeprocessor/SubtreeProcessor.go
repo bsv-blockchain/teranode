@@ -1000,14 +1000,26 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		stp.logger.Debugf("[SubtreeProcessor][coinbase:%s] store utxo: %s", block.CoinbaseTx.TxIDChainHash(), utxo.String())
 	}
 
-	blockHeight, err := stp.utxoStore.GetBlockHeight()
-	if err != nil {
-		return fmt.Errorf("[SubtreeProcessor][coinbase:%s]error extracting coinbase height via utxo store: %v", block.CoinbaseTx.TxIDChainHash(), err)
+	blockHeight := block.Height
+	if blockHeight <= 0 {
+		// lookup the block height for the current block from the blockchain service, we cannot rely on the block height
+		// that is set in the utxo store, since that is the height of the current block in block assembly, which might
+		// not be the same
+		blockHeight, err = stp.utxoStore.GetBlockHeight()
+		if err != nil {
+			return fmt.Errorf("[SubtreeProcessor][coinbase:%s]error extracting coinbase height via utxo store: %v", block.CoinbaseTx.TxIDChainHash(), err)
+		}
 	}
 
 	stp.logger.Infof("[SubtreeProcessor][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), blockHeight, block.CoinbaseTx.TxIDChainHash().String())
-	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight+100); err != nil {
+	// we pass in the block height we are working on here, since the utxo store will recognize the tx as
+	// a coinbase and add the correct spending height, which should be + 99
+	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight); err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
+			// This will also be called for the 2 coinbase transactions that are duplicated on the network
+			// These transactions were created twice:
+			//   e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb468
+			//   d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599
 			stp.logger.Infof("[SubtreeProcessor] coinbase utxos already exist (assume BlockValidation created them). Skipping")
 		} else {
 			stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)

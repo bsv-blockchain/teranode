@@ -87,7 +87,7 @@ func (m *MockStore) Health(ctx context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (m *MockStore) Create(_ context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error) {
+func (m *MockStore) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
 	return nil, nil
 }
 

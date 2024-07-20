@@ -531,9 +531,9 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 	txParent := newTx(1)
 	tx := newTx(2)
 
-	_, err := txMetaStore.Create(context.Background(), txParent, blockID100)
+	_, err := txMetaStore.Create(context.Background(), txParent, blockID100, 100)
 	require.NoError(t, err)
-	_, err = txMetaStore.Create(context.Background(), tx, blockID101)
+	_, err = txMetaStore.Create(context.Background(), tx, blockID101, 101)
 	require.NoError(t, err)
 
 	currentBlockHeaderIDsMap := make(map[uint32]struct{})
@@ -567,7 +567,7 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 
 	t.Run("test parent has no block ID", func(t *testing.T) {
 		txParentWithNoBlockID := newTx(3)
-		_, err = txMetaStore.Create(context.Background(), txParentWithNoBlockID)
+		_, err = txMetaStore.Create(context.Background(), txParentWithNoBlockID, 0)
 		parentTxStruct := missingParentTx{
 			parentTxHash: *txParentWithNoBlockID.TxIDChainHash(),
 			txHash:       *tx.TxIDChainHash(),
@@ -592,7 +592,7 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 
 	t.Run("test parent is in store and block ID is < min BlockID of last 100 blocks", func(t *testing.T) {
 		txMissingParent := newTx(4)
-		_, err = txMetaStore.Create(context.Background(), txMissingParent, blockID1)
+		_, err = txMetaStore.Create(context.Background(), txMissingParent, blockID1, 1)
 		parentTxStruct := missingParentTx{
 			parentTxHash: *txMissingParent.TxIDChainHash(),
 			txHash:       *tx.TxIDChainHash(),

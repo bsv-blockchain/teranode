@@ -2,6 +2,7 @@ package legacy
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 
@@ -34,9 +35,14 @@ type Server struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, blockchainClient blockchain.ClientI, validationClient validator.Interface,
-	subtreeStore blob.Store, utxoStore utxo.Store, subtreeValidation subtreevalidation.Interface,
-	blockValidation blockvalidation.Interface) *Server {
+func New(logger ulogger.Logger,
+	blockchainClient blockchain.ClientI,
+	validationClient validator.Interface,
+	subtreeStore blob.Store,
+	utxoStore utxo.Store,
+	subtreeValidation subtreevalidation.Interface,
+	blockValidation blockvalidation.Interface,
+) *Server {
 
 	// initPrometheusMetrics()
 
@@ -78,6 +84,11 @@ func (s *Server) Init(ctx context.Context) error {
 	// TODO not setting any listen addresses triggers upnp, which does not seem to work yet
 	listenAddresses, _ := gocore.Config().GetMulti("legacy_listen_addresses", "|", defaultListenAddresses)
 
+	assetHttpAddress, ok := gocore.Config().Get("asset_httpAddress", "")
+	if !ok {
+		panic("missing setting: asset_httpAddress")
+	}
+
 	s.server, err = newServer(ctx, s.logger, gocore.Config(),
 		s.blockchainClient,
 		s.validationClient,
@@ -87,6 +98,7 @@ func (s *Server) Init(ctx context.Context) error {
 		s.blockValidation,
 		listenAddresses,
 		&chaincfg.MainNetParams,
+		assetHttpAddress,
 	)
 	if err != nil {
 		return err
@@ -100,8 +112,14 @@ func (s *Server) Init(ctx context.Context) error {
 }
 
 // Start function
-func (s *Server) Start(_ context.Context) error {
+func (s *Server) Start(ctx context.Context) error {
 	s.server.Start()
+
+	go func() {
+		<-ctx.Done()
+		s.server.Stop()
+	}()
+
 	return nil
 }
 

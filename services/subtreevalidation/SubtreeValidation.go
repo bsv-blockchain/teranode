@@ -271,9 +271,8 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 type ValidateSubtree struct {
 	SubtreeHash   chainhash.Hash
 	BaseUrl       string
-	SubtreeHashes []chainhash.Hash
+	TxHashes      []chainhash.Hash
 	AllowFailFast bool
-	Subtree       *util.Subtree
 }
 
 func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32) error {
@@ -292,53 +291,43 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	start := gocore.CurrentTime()
 
 	// Get the subtree hashes if they were passed in (SubtreeFound() passes them in, BlockFound does not)
-	txHashes := v.SubtreeHashes
+	txHashes := v.TxHashes
 
-	// Subtree can be passed in by certain callers
-	subtree := v.Subtree
-	if subtree == nil {
-		if txHashes == nil {
-			subtreeExists, err := u.GetSubtreeExists(spanCtx, &v.SubtreeHash)
-			stat.NewStat("1. subtreeExists").AddTime(start)
-			if err != nil {
-				return errors.New(errors.ERR_STORAGE_ERROR, "[validateSubtreeInternal][%s] failed to check if subtree exists in store", v.SubtreeHash.String(), err)
-			}
-			if subtreeExists {
-				// subtree already exists in store, which means it's valid
-				// TODO is this true?
-				return nil
-			}
-
-			// The function was called by BlockFound, and we had not already blessed the subtree, so we load the subtree from the store to get the hashes
-			// get subtree from network over http using the baseUrl
-			for retries := 0; retries < 3; retries++ {
-				txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, &v.SubtreeHash, v.BaseUrl)
-				if err != nil {
-					if retries < 2 {
-						backoff := time.Duration(2^retries) * time.Second
-						u.logger.Warnf("[validateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
-						time.Sleep(backoff)
-					} else {
-						return errors.New(errors.ERR_SERVICE_ERROR, "[validateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String(), err)
-					}
-				} else {
-					break
-				}
-			}
-		}
-
-		// create the empty subtree
-		height := math.Ceil(math.Log2(float64(len(txHashes))))
-		subtree, err = util.NewTree(int(height))
+	if txHashes == nil {
+		subtreeExists, err := u.GetSubtreeExists(spanCtx, &v.SubtreeHash)
+		stat.NewStat("1. subtreeExists").AddTime(start)
 		if err != nil {
-			return err
+			return errors.New(errors.ERR_STORAGE_ERROR, "[validateSubtreeInternal][%s] failed to check if subtree exists in store", v.SubtreeHash.String(), err)
 		}
-	} else if txHashes == nil {
-		// populate tx Hashes from the subtree, if it has not been set
-		txHashes = make([]chainhash.Hash, subtree.Length())
-		for i := 0; i < subtree.Length(); i++ {
-			txHashes[i] = subtree.Nodes[i].Hash
+		if subtreeExists {
+			// subtree already exists in store, which means it's valid
+			// TODO is this true?
+			return nil
 		}
+
+		// The function was called by BlockFound, and we had not already blessed the subtree, so we load the subtree from the store to get the hashes
+		// get subtree from network over http using the baseUrl
+		for retries := 0; retries < 3; retries++ {
+			txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, &v.SubtreeHash, v.BaseUrl)
+			if err != nil {
+				if retries < 2 {
+					backoff := time.Duration(2^retries) * time.Second
+					u.logger.Warnf("[validateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
+					time.Sleep(backoff)
+				} else {
+					return errors.New(errors.ERR_SERVICE_ERROR, "[validateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String(), err)
+				}
+			} else {
+				break
+			}
+		}
+	}
+
+	// create the empty subtree
+	height := math.Ceil(math.Log2(float64(len(txHashes))))
+	subtree, err := util.NewTree(int(height))
+	if err != nil {
+		return err
 	}
 
 	subtreeMeta := util.NewSubtreeMeta(subtree)

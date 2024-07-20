@@ -358,7 +358,7 @@ func (sm *SyncManager) startSync() {
 		// to send.
 		sm.requestedBlocks = make(map[chainhash.Hash]struct{})
 
-		locator, err := sm.blockchainClient.LatestBlockLocator(context.TODO(), bestBlockHeader.Hash(), bestBlockHeaderMeta.Height)
+		locator, err := sm.blockchainClient.GetBlockLocator(context.TODO(), bestBlockHeader.Hash(), bestBlockHeaderMeta.Height)
 		if err != nil {
 			sm.logger.Errorf("Failed to get block locator for the latest block: %v", err)
 			return
@@ -753,8 +753,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 		if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
 			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
 		}
+		// TODO - find a better way to handle this rather than panic
+		panic(err)
 		// should be an ubsv error
-		return err
+		// return err
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
@@ -1131,7 +1133,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 			// should only happen if we're on a really long side chain.
 			if i == lastBlock {
 				// Request blocks after this one up to the final one the remote peer knows about (zero stop hash).
-				locator, err := sm.blockchainClient.LatestBlockLocator(context.TODO(), &iv.Hash, 0)
+				locator, err := sm.blockchainClient.GetBlockLocator(context.TODO(), &iv.Hash, 0)
 				if err != nil {
 					sm.logger.Errorf("Failed to get block locator for the block hash %s, %v", iv.Hash.String(), err)
 				} else {

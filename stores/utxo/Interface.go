@@ -46,7 +46,7 @@ type Store interface {
 	// CRUD functions
 	Health(ctx context.Context) (int, string, error)
 
-	Create(ctx context.Context, tx *bt.Tx, blockIDs ...uint32) (*meta.Data, error)
+	Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error)
 	Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error)
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 

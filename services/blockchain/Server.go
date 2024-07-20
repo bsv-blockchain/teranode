@@ -9,7 +9,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -35,6 +37,8 @@ type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
 	addBlockChan       chan *blockchain_api.AddBlockRequest
 	store              blockchain_store.Store
+	subtreeStore       blob.Store
+	utxoStore          utxo.Store
 	logger             ulogger.Logger
 	newSubscriptions   chan subscriber
 	deadSubscriptions  chan subscriber
@@ -48,31 +52,20 @@ type Blockchain struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger ulogger.Logger) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, subtreeStore blob.Store, utxoStore utxo.Store) (*Blockchain, error) {
 	initPrometheusMetrics()
-
-	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, fmt.Errorf("no blockchain_store setting found")
-	}
-
-	s, err := blockchain_store.NewStore(logger, blockchainStoreURL)
-	if err != nil {
-		return nil, err
-	}
 
 	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
 
-	d, err := NewDifficulty(s, logger, difficultyAdjustmentWindow)
+	d, err := NewDifficulty(store, logger, difficultyAdjustmentWindow)
 	if err != nil {
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}
 
 	return &Blockchain{
-		store:             s,
+		store:             store,
+		subtreeStore:      subtreeStore,
+		utxoStore:         utxoStore,
 		logger:            logger,
 		addBlockChan:      make(chan *blockchain_api.AddBlockRequest, 10),
 		newSubscriptions:  make(chan subscriber, 10),
@@ -884,10 +877,93 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	}, nil
 }
 
+func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
+	blockHeader, err := chainhash.NewHash(req.Hash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
+	}
+	blockHeight := req.Height
+
+	locatorHashes, err := getBlockLocator(ctx, b.store, blockHeader, blockHeight)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.New(errors.ERR_STORAGE_ERROR, "[Blockchain] error using blockchain store", err))
+	}
+
+	locator := make([][]byte, len(locatorHashes))
+	for i, hash := range locatorHashes {
+		locator[i] = hash.CloneBytes()
+	}
+
+	return &blockchain_api.GetBlockLocatorResponse{Locator: locator}, nil
+}
+
 func safeClose[T any](ch chan T) {
 	defer func() {
 		_ = recover()
 	}()
 
 	close(ch)
+}
+
+func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
+	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
+
+	if blockHeaderHash == nil {
+		// return genesis block
+		genesisBlock, err := store.GetBlockByHeight(ctx, 0)
+		if err != nil {
+			return nil, err
+		}
+
+		return []*chainhash.Hash{genesisBlock.Header.Hash()}, nil
+	}
+
+	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
+	// Calculate the max number of entries that will ultimately be in the
+	// block locator. See the description of the algorithm for how these
+	// numbers are derived.
+	var maxEntries uint8
+	if blockHeaderHeight <= 12 {
+		maxEntries = uint8(blockHeaderHeight) + 1
+	} else {
+		// Requested hash itself + previous 10 entries + genesis block.
+		// Then floor(log2(height-10)) entries for the skip portion.
+		adjustedHeight := uint32(blockHeaderHeight) - 10
+		maxEntries = 12 + fastLog2Floor(adjustedHeight)
+	}
+	locator := make([]*chainhash.Hash, 0, maxEntries)
+
+	step := int32(1)
+	ancestorBlockHeaderHash := blockHeaderHash
+	ancestorBlockHeight := int32(blockHeaderHeight) // this needs to be signed
+	for ancestorBlockHeaderHash != nil {
+		locator = append(locator, ancestorBlockHeaderHash)
+
+		// Nothing more to add once the genesis block has been added.
+		if ancestorBlockHeight == 0 {
+			break
+		}
+
+		// Calculate height of previous node to include ensuring the
+		// final node is the genesis block.
+		height := int32(ancestorBlockHeight) - step
+		if height < 0 {
+			height = 0
+		}
+
+		ancestorBlock, err := store.GetBlockByHeight(ctx, uint32(height))
+		if err != nil {
+			return nil, err
+		}
+		ancestorBlockHeaderHash = ancestorBlock.Header.Hash()
+		ancestorBlockHeight = height
+
+		// Once 11 entries have been included, start doubling the
+		// distance between included hashes.
+		if len(locator) > 10 {
+			step *= 2
+		}
+	}
+
+	return locator, nil
 }

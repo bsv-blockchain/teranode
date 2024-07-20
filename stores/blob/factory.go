@@ -32,11 +32,13 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		store = memory.New()
 
 	case "file":
+		// TODO make this more generic, you should be able to pass in an absolute path
 		store, err = file.New(logger, "."+storeUrl.Path) // relative
 		if err != nil {
 			return nil, fmt.Errorf("error creating file blob store: %v", err)
 		}
 	case "badger":
+		// TODO make this more generic, you should be able to pass in an absolute path
 		store, err = badger.New(logger, "."+storeUrl.Path) // relative
 		if err != nil {
 			return nil, fmt.Errorf("error creating badger blob store: %v", err)

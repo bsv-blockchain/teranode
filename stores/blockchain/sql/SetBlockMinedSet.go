@@ -8,7 +8,7 @@ import (
 )
 
 func (s *SQL) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	s.logger.Infof("SetBlockMinedSet %s", blockHash.String())
+	s.logger.Debugf("SetBlockMinedSet %s", blockHash.String())
 
 	q := `
 		UPDATE blocks
