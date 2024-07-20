@@ -362,7 +362,7 @@ func (s *mockStore) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSM
 func (s *mockStore) SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error {
 	panic("not implemented")
 }
-func (s *mockStore) LatestBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
+func (s *mockStore) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 	panic("not implemented")
 }
 func (s *mockStore) HeightToHashRange(startHeight uint32, endHash *chainhash.Hash, maxResults int) ([]chainhash.Hash, error) {

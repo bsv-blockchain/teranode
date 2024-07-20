@@ -49,6 +49,7 @@ const (
 	BlockchainAPI_SetBlockSubtreesSet_FullMethodName       = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
 	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName   = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
 	BlockchainAPI_GetFSMCurrentState_FullMethodName        = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
+	BlockchainAPI_GetBlockLocator_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlockLocator"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -85,6 +86,7 @@ type BlockchainAPIClient interface {
 	SetBlockSubtreesSet(ctx context.Context, in *SetBlockSubtreesSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetBlocksSubtreesNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksSubtreesNotSetResponse, error)
 	GetFSMCurrentState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
+	GetBlockLocator(ctx context.Context, in *GetBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockLocatorResponse, error)
 }
 
 type blockchainAPIClient struct {
@@ -398,6 +400,16 @@ func (c *blockchainAPIClient) GetFSMCurrentState(ctx context.Context, in *emptyp
 	return out, nil
 }
 
+func (c *blockchainAPIClient) GetBlockLocator(ctx context.Context, in *GetBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockLocatorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlockLocatorResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockLocator_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockchainAPIServer is the server API for BlockchainAPI service.
 // All implementations must embed UnimplementedBlockchainAPIServer
 // for forward compatibility
@@ -432,6 +444,7 @@ type BlockchainAPIServer interface {
 	SetBlockSubtreesSet(context.Context, *SetBlockSubtreesSetRequest) (*emptypb.Empty, error)
 	GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error)
 	GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error)
+	GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error)
 	mustEmbedUnimplementedBlockchainAPIServer()
 }
 
@@ -522,6 +535,9 @@ func (UnimplementedBlockchainAPIServer) GetBlocksSubtreesNotSet(context.Context,
 }
 func (UnimplementedBlockchainAPIServer) GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFSMCurrentState not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockLocator not implemented")
 }
 func (UnimplementedBlockchainAPIServer) mustEmbedUnimplementedBlockchainAPIServer() {}
 
@@ -1043,6 +1059,24 @@ func _BlockchainAPI_GetFSMCurrentState_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_GetBlockLocator_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlockLocatorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetBlockLocator(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetBlockLocator_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetBlockLocator(ctx, req.(*GetBlockLocatorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockchainAPI_ServiceDesc is the grpc.ServiceDesc for BlockchainAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1157,6 +1191,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetFSMCurrentState",
 			Handler:    _BlockchainAPI_GetFSMCurrentState_Handler,
+		},
+		{
+			MethodName: "GetBlockLocator",
+			Handler:    _BlockchainAPI_GetBlockLocator_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
