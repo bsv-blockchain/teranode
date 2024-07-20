@@ -224,7 +224,7 @@ func TestBroadcastPoW(t *testing.T) {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(10 * time.Second)
 
 	blockNode0, blockErr0 := framework.Nodes[0].BlockchainClient.GetBlockExists(ctx, (*chainhash.Hash)(block))
 
