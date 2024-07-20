@@ -615,64 +615,26 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMSta
 	return &state.State, nil
 }
 
-// LatestBlockLocator returns a block locator for the latest block.
-// This function will be much faster, when moved to the server side.
-func (c *Client) LatestBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
-	if blockHeaderHash == nil {
-		// return genesis block
-		genesisBlock, err := c.GetBlockByHeight(ctx, 0)
+func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
+
+	req := &blockchain_api.GetBlockLocatorRequest{
+		Hash:   blockHeaderHash[:],
+		Height: blockHeaderHeight,
+	}
+
+	resp, err := c.client.GetBlockLocator(ctx, req)
+
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	locator := make([]*chainhash.Hash, 0, len(resp.Locator))
+	for _, hash := range resp.Locator {
+		h, err := chainhash.NewHash(hash)
 		if err != nil {
 			return nil, err
 		}
-
-		return []*chainhash.Hash{genesisBlock.Header.Hash()}, nil
-	}
-
-	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
-	// Calculate the max number of entries that will ultimately be in the
-	// block locator. See the description of the algorithm for how these
-	// numbers are derived.
-	var maxEntries uint8
-	if blockHeaderHeight <= 12 {
-		maxEntries = uint8(blockHeaderHeight) + 1
-	} else {
-		// Requested hash itself + previous 10 entries + genesis block.
-		// Then floor(log2(height-10)) entries for the skip portion.
-		adjustedHeight := uint32(blockHeaderHeight) - 10
-		maxEntries = 12 + fastLog2Floor(adjustedHeight)
-	}
-	locator := make([]*chainhash.Hash, 0, maxEntries)
-
-	step := int32(1)
-	ancestorBlockHeaderHash := blockHeaderHash
-	ancestorBlockHeight := int32(blockHeaderHeight) // this needs to be signed
-	for ancestorBlockHeaderHash != nil {
-		locator = append(locator, ancestorBlockHeaderHash)
-
-		// Nothing more to add once the genesis block has been added.
-		if ancestorBlockHeight == 0 {
-			break
-		}
-
-		// Calculate height of previous node to include ensuring the
-		// final node is the genesis block.
-		height := int32(ancestorBlockHeight) - step
-		if height < 0 {
-			height = 0
-		}
-
-		ancestorBlock, err := c.GetBlockByHeight(ctx, uint32(height))
-		if err != nil {
-			return nil, err
-		}
-		ancestorBlockHeaderHash = ancestorBlock.Header.Hash()
-		ancestorBlockHeight = height
-
-		// Once 11 entries have been included, start doubling the
-		// distance between included hashes.
-		if len(locator) > 10 {
-			step *= 2
-		}
+		locator = append(locator, h)
 	}
 
 	return locator, nil
