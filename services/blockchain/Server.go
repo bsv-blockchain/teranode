@@ -878,28 +878,13 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 }
 
 func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
-	blockHeader := chainhash.Hash(req.Hash)
-	blockHeight := req.Height
-
-	locatorHashes, err := getBlockLocator(ctx, b.store, &blockHeader, blockHeight)
+	blockHeader, err := chainhash.NewHash(req.Hash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_STORAGE_ERROR, "[Blockchain] error using blockchain store", err))
+		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
 	}
-
-	locator := make([][]byte, len(locatorHashes))
-	for i, hash := range locatorHashes {
-		locator[i] = hash.CloneBytes()
-	}
-
-	return &blockchain_api.GetBlockLocatorResponse{Locator: locator}, nil
-}
-
-// LatestBlockLocator returns a block locator for the latest block.
-func (b *Blockchain) GetLatestBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
-	blockHeader := chainhash.Hash(req.Hash)
 	blockHeight := req.Height
 
-	locatorHashes, err := getBlockLocator(ctx, b.store, &blockHeader, blockHeight)
+	locatorHashes, err := getBlockLocator(ctx, b.store, blockHeader, blockHeight)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.New(errors.ERR_STORAGE_ERROR, "[Blockchain] error using blockchain store", err))
 	}
