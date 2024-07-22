@@ -58,6 +58,11 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 			blockFilePath:    "../testdata/000000000000000009631dd3dd7357675d8a1f8925be5e7851c68255531ac5fb.bin",
 			expectedTxMapLen: 900,
 		},
+		{
+			name:             "Block4",
+			blockFilePath:    "../testdata/0000000000000000015594853418b4093c4be4ad8b77fec88b5400feb3268fc4.bin",
+			expectedTxMapLen: 484,
+		},
 	}
 
 	for _, tc := range testCases {
