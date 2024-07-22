@@ -1,10 +1,7 @@
 package testdata
 
 import (
-	"encoding/hex"
-	"io"
 	"os"
-	"strings"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 )
@@ -17,19 +14,7 @@ func ReadBlockFromFile(filePath string) (*bsvutil.Block, error) {
 	}
 	defer file.Close()
 
-	hexData, err := io.ReadAll(file)
-	if err != nil {
-		return nil, err
-	}
-
-	cleanHexData := strings.TrimSpace(string(hexData))
-
-	blockBytes, err := hex.DecodeString(cleanHexData)
-	if err != nil {
-		return nil, err
-	}
-
-	block, err := bsvutil.NewBlockFromBytes(blockBytes)
+	block, err := bsvutil.NewBlockFromReader(file)
 	if err != nil {
 		return nil, err
 	}
