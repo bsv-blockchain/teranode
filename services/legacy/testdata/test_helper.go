@@ -1,6 +1,7 @@
 package testdata
 
 import (
+	"bufio"
 	"encoding/hex"
 	"io"
 	"os"
@@ -17,7 +18,7 @@ func (br *binReader) Read(p []byte) (n int, err error) {
 	return br.r.Read(p)
 }
 
-// This function helps reading the test data from the file, returns a BSV block
+// ReadBlockFromFile helps to read the test data from the file, returns a BSV block
 func ReadBlockFromFile(filePath string) (*bsvutil.Block, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -35,7 +36,10 @@ func ReadBlockFromFile(filePath string) (*bsvutil.Block, error) {
 		reader = &binReader{r: file}
 	}
 
-	block, err := bsvutil.NewBlockFromReader(reader)
+	// buffer the reader
+	bufferedReader := bufio.NewReaderSize(reader, 1024*1024*4) // 4MB buffer
+
+	block, err := bsvutil.NewBlockFromReader(bufferedReader)
 	if err != nil {
 		return nil, err
 	}
