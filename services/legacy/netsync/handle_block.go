@@ -149,27 +149,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		// except the coinbase transaction
 		subtreeData := util.NewSubtreeData(subtree)
 
-		// Create a map of all transactions in the block
-		txMap := make(map[chainhash.Hash]*txMapWrapper)
-
-		for _, wireTx := range block.Transactions() {
-			txHash := *wireTx.Hash()
-
-			// Serialize the tx
-			var txBytes bytes.Buffer
-			if err := wireTx.MsgTx().Serialize(&txBytes); err != nil {
-				return nil, fmt.Errorf("could not serialize msgTx: %w", err)
-			}
-
-			tx, err := bt.NewTxFromBytes(txBytes.Bytes())
-			if err != nil {
-				return nil, fmt.Errorf("failed to create bt.Tx: %w", err)
-			}
-
-			// don't add the coinbase to the txMap, we cannot process it anyway
-			if !tx.IsCoinbase() {
-				txMap[txHash] = &txMapWrapper{tx: tx}
-			}
+		txMap, err := sm.createTxMap(block)
+		if err != nil {
+			return nil, err
 		}
 
 		g, gCtx := errgroup.WithContext(ctx)
@@ -266,6 +248,33 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	}
 
 	return subtrees, nil
+}
+
+func (sm *SyncManager) createTxMap(block *bsvutil.Block) (map[chainhash.Hash]*txMapWrapper, error) {
+	// Create a map of all transactions in the block
+	txMap := make(map[chainhash.Hash]*txMapWrapper)
+
+	for _, wireTx := range block.Transactions() {
+		txHash := *wireTx.Hash()
+
+		// Serialize the tx
+		var txBytes bytes.Buffer
+		if err := wireTx.MsgTx().Serialize(&txBytes); err != nil {
+			return nil, fmt.Errorf("could not serialize msgTx: %w", err)
+		}
+
+		tx, err := bt.NewTxFromBytes(txBytes.Bytes())
+		if err != nil {
+			return nil, fmt.Errorf("failed to create bt.Tx: %w", err)
+		}
+
+		// don't add the coinbase to the txMap, we cannot process it anyway
+		if !tx.IsCoinbase() {
+			txMap[txHash] = &txMapWrapper{tx: tx}
+		}
+	}
+
+	return txMap, nil
 }
 
 // prepareTxsPerLevel prepares the transactions per level for processing
