@@ -589,11 +589,9 @@ func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
 	newInv := wire.NewMsgInvSizeHint(uint(len(msg.InvList)))
 	for _, invVect := range msg.InvList {
 		if invVect.Type == wire.InvTypeTx {
-			sp.server.logger.Infof("Ignoring tx %v in inv from %v -- "+
-				"blocksonly enabled", invVect.Hash, sp)
+			sp.server.logger.Infof("Ignoring tx %v in inv from %v -- blocksonly enabled", invVect.Hash, sp)
 			if sp.ProtocolVersion() >= wire.BIP0037Version {
-				sp.server.logger.Infof("Peer %v is announcing "+
-					"transactions -- disconnecting", sp)
+				sp.server.logger.Infof("Peer %v is announcing transactions -- disconnecting", sp)
 				sp.Disconnect()
 				return
 			}

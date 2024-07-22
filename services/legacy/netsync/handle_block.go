@@ -37,13 +37,16 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		blockHeight = uint32(block.Height())
 	}
 
-	ctx, stat, deferFn := tracing.StartTracing(ctx, "HandleBlockDirect",
-		tracing.WithLogMessage(sm.logger, "[HandleBlockDirect][%s %d] processing block found from peer %s",
-			block.Hash().String(), blockHeight, peer.String()),
+	ctx, _, deferFn := tracing.StartTracing(ctx, "HandleBlockDirect",
+		tracing.WithLogMessage(
+			sm.logger,
+			"[HandleBlockDirect][%s %d] processing block found from peer %s",
+			block.Hash().String(),
+			blockHeight,
+			peer.String(),
+		),
 	)
 	defer deferFn()
-
-	stat.NewStat("SubtreeStore").AddRanges(0, 1, 10, 100, 1000, 10000, 100000, 1000000)
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
@@ -76,14 +79,34 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	// create valid teranode block, with the subtree hash
 	blockSize := block.MsgBlock().SerializeSize()
-	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), uint64(blockSize), uint32(block.Height()))
+	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), uint64(blockSize), blockHeight)
 	if err != nil {
 		return errors.New(errors.ERR_PROCESSING, "failed to create model.NewBlock", err)
 	}
 
+	// call the process block wrapper, which will add tracing and logging
+	err = sm.processBlock(ctx, teranodeBlock)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (sm *SyncManager) processBlock(ctx context.Context, teranodeBlock *model.Block) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "processBlock",
+		tracing.WithLogMessage(
+			sm.logger,
+			"[processBlock][%s %d] processing block",
+			teranodeBlock.Hash().String(),
+			teranodeBlock.Height,
+		),
+	)
+	defer deferFn()
+
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, blockHeight); err != nil {
+	if err := sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height); err != nil {
 		return errors.New(errors.ERR_PROCESSING, "failed to process block", err)
 	}
 
@@ -93,10 +116,22 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 type txMapWrapper struct {
 	tx                 *bt.Tx
 	someParentsInBlock bool
+	childLevelInBlock  uint32
 }
 
 func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block) ([]*chainhash.Hash, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "prepareSubtrees",
+		tracing.WithLogMessage(
+			sm.logger,
+			"[prepareSubtrees][%s %d] processing subtree for block",
+			block.Hash().String(),
+			block.Height(),
+		),
+	)
+	defer deferFn()
+
 	subtrees := make([]*chainhash.Hash, 0)
+	blockHeight := uint32(block.Height())
 
 	// create 1 subtree + subtree.subtreeData
 	// then validate the subtree through the subtreeValidation service
@@ -114,24 +149,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		// except the coinbase transaction
 		subtreeData := util.NewSubtreeData(subtree)
 
-		// Create a map of all transactions in the block
-		txMap := make(map[chainhash.Hash]*txMapWrapper)
-
-		for _, wireTx := range block.Transactions() {
-			txHash := *wireTx.Hash()
-
-			// Serialize the tx
-			var txBytes bytes.Buffer
-			if err := wireTx.MsgTx().Serialize(&txBytes); err != nil {
-				return nil, fmt.Errorf("could not serialize msgTx: %w", err)
-			}
-
-			tx, err := bt.NewTxFromBytes(txBytes.Bytes())
-			if err != nil {
-				return nil, fmt.Errorf("failed to create bt.Tx: %w", err)
-			}
-
-			txMap[txHash] = &txMapWrapper{tx: tx}
+		txMap, err := sm.createTxMap(block)
+		if err != nil {
+			return nil, err
 		}
 
 		g, gCtx := errgroup.WithContext(ctx)
@@ -139,12 +159,12 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		for _, wireTx := range block.Transactions() {
 			txHash := *wireTx.Hash()
 
-			tx := txMap[txHash].tx
+			// the coinbase transaction is not part of the txMap
+			if txWrapper, found := txMap[txHash]; found {
+				tx := txWrapper.tx
+				txSize := uint64(tx.Size())
 
-			txSize := uint64(tx.Size())
-
-			if !tx.IsCoinbase() {
-				if err := subtree.AddNode(txHash, 0, txSize); err != nil {
+				if err = subtree.AddNode(txHash, 0, txSize); err != nil {
 					return nil, fmt.Errorf("failed to add node (%s) to subtree: %w", txHash, err)
 				}
 				// we need to match the indexes of the subtree and the tx data in subtreeData
@@ -170,47 +190,27 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.New(errors.ERR_PROCESSING, "failed to process transactions", err)
 		}
 
-		blockHeight := uint32(block.Height())
+		maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
 
 		// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
 		// This allows us to process all the transactions that are not referencing transactions from this current block
 		// to be processed in parallel.
-		g, gCtx = errgroup.WithContext(ctx)
-		g.SetLimit(runtime.NumCPU() * 4)
-		for _, wireTx := range block.Transactions() {
-			txHash := *wireTx.Hash()
-			g.Go(func() error {
-				// send to validation, but only if the parent is not in the same block
-				if !txMap[txHash].someParentsInBlock && !txMap[txHash].tx.IsCoinbase() {
-					if err := sm.validationClient.Validate(gCtx, txMap[txHash].tx, blockHeight); err != nil {
-						sm.logger.Warnf("failed to validate transaction in pre-validation: %v", err)
-					}
-				}
+		for i := uint32(0); i <= maxLevel; i++ {
+			// process all the transactions on a certain level in parallel
+			g, gCtx = errgroup.WithContext(ctx)
+			g.SetLimit(runtime.NumCPU() * 4)
+			for _, tx := range blockTxsPerLevel[i] {
+				g.Go(func() error {
+					// send to validation, but only if the parent is not in the same block
+					_ = sm.validationClient.Validate(gCtx, tx, blockHeight)
 
-				return nil
-			})
+					return nil
+				})
+			}
+
+			// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
+			_ = g.Wait()
 		}
-
-		// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
-		_ = g.Wait()
-
-		// try to pre-validate the transactions that did have a parent in the same block after doing the parents
-		//g, gCtx = errgroup.WithContext(ctx)
-		//g.SetLimit(runtime.NumCPU() * 4)
-		//for _, txWrapper := range txMap {
-		//	if txWrapper.someParentsInBlock {
-		//		tx := txWrapper.tx
-		//		g.Go(func() error {
-		//			// send to validation, but only if the parent is not in the same block
-		//			_ = sm.validationClient.Validate(gCtx, tx, blockHeight)
-		//
-		//			return nil
-		//		})
-		//	}
-		//}
-		//
-		//// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
-		//_ = g.Wait()
 
 		subtreeBytes, err := subtree.Serialize()
 		if err != nil {
@@ -240,7 +240,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to store subtree data", err)
 		}
 
-		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "legacy", uint32(block.Height())); err != nil {
+		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "legacy", blockHeight); err != nil {
 			return nil, errors.New(errors.ERR_SUBTREE_ERROR, "failed to check subtree", err)
 		}
 
@@ -248,6 +248,79 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	}
 
 	return subtrees, nil
+}
+
+func (sm *SyncManager) createTxMap(block *bsvutil.Block) (map[chainhash.Hash]*txMapWrapper, error) {
+	// Create a map of all transactions in the block
+	txMap := make(map[chainhash.Hash]*txMapWrapper)
+
+	for _, wireTx := range block.Transactions() {
+		txHash := *wireTx.Hash()
+
+		// Serialize the tx
+		var txBytes bytes.Buffer
+		if err := wireTx.MsgTx().Serialize(&txBytes); err != nil {
+			return nil, fmt.Errorf("could not serialize msgTx: %w", err)
+		}
+
+		tx, err := bt.NewTxFromBytes(txBytes.Bytes())
+		if err != nil {
+			return nil, fmt.Errorf("failed to create bt.Tx: %w", err)
+		}
+
+		// don't add the coinbase to the txMap, we cannot process it anyway
+		if !tx.IsCoinbase() {
+			txMap[txHash] = &txMapWrapper{tx: tx}
+		}
+	}
+
+	return txMap, nil
+}
+
+// prepareTxsPerLevel prepares the transactions per level for processing
+// levels are determined by the number of parents in the block
+func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block,
+	txMap map[chainhash.Hash]*txMapWrapper) (uint32, map[uint32][]*bt.Tx) {
+
+	ctx, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel")
+	defer deferFn()
+
+	maxLevel := uint32(0)
+	sizePerLevel := make(map[uint32]uint64)
+	blockTxsPerLevel := make(map[uint32][]*bt.Tx)
+	for _, wireTx := range block.Transactions() {
+		txHash := *wireTx.Hash()
+		if _, found := txMap[txHash]; found {
+			if txMap[txHash].someParentsInBlock {
+				for _, input := range txMap[txHash].tx.Inputs {
+					parentTxHash := *input.PreviousTxIDChainHash()
+					if parentTxWrapper, found := txMap[parentTxHash]; found {
+						// if the parent from this input is at the same level or higher,
+						// we need to increase the child level of this transaction
+						if parentTxWrapper.childLevelInBlock >= txMap[txHash].childLevelInBlock {
+							txMap[txHash].childLevelInBlock = parentTxWrapper.childLevelInBlock + 1
+						}
+						if txMap[txHash].childLevelInBlock > maxLevel {
+							maxLevel = txMap[txHash].childLevelInBlock
+						}
+					}
+				}
+			}
+			sizePerLevel[txMap[txHash].childLevelInBlock] += uint64(txMap[txHash].tx.Size())
+		}
+	}
+
+	// pre-allocation of the blockTxsPerLevel map
+	for i := uint32(0); i <= maxLevel; i++ {
+		blockTxsPerLevel[i] = make([]*bt.Tx, 0, sizePerLevel[i])
+	}
+
+	// put all transactions in a map per level for processing
+	for _, txWrapper := range txMap {
+		blockTxsPerLevel[txWrapper.childLevelInBlock] = append(blockTxsPerLevel[txWrapper.childLevelInBlock], txWrapper.tx)
+	}
+
+	return maxLevel, blockTxsPerLevel
 }
 
 func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]*txMapWrapper) error {
@@ -259,7 +332,6 @@ func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]*tx
 	}
 
 	for i, input := range tx.Inputs {
-
 		prevTxHash := *input.PreviousTxIDChainHash()
 		if prevTxWrapper, found := txMap[prevTxHash]; found {
 			txWrapper.someParentsInBlock = true
