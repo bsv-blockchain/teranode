@@ -257,17 +257,33 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 				if err != nil {
 					return nil, fmt.Errorf("[CheckSubtree] Failed to create subtree from bytes: %w", err)
 				}
-			}
+				txHashes := make([]chainhash.Hash, subtree.Length())
+				for i := 0; i < subtree.Length(); i++ {
+					txHashes[i] = subtree.Nodes[i].Hash
+				}
 
-			txHashes := make([]chainhash.Hash, subtree.Length())
-			for i := 0; i < subtree.Length(); i++ {
-				txHashes[i] = subtree.Nodes[i].Hash
+				v := ValidateSubtree{
+					SubtreeHash:   *hash,
+					BaseUrl:       request.BaseUrl,
+					TxHashes:      txHashes,
+					AllowFailFast: false,
+				}
+
+				// Call the validateSubtreeInternal method
+				if err = u.validateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
+					return nil, fmt.Errorf("[CheckSubtree] Failed to validate subtree %s: %w", hash.String(), err)
+				}
+
+				u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+
+				return &subtreevalidation_api.CheckSubtreeResponse{
+					Blessed: true,
+				}, nil
 			}
 
 			v := ValidateSubtree{
 				SubtreeHash:   *hash,
 				BaseUrl:       request.BaseUrl,
-				TxHashes:      txHashes,
 				AllowFailFast: false,
 			}
 
