@@ -45,13 +45,18 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 	}{
 		{
 			name:             "Block1",
-			blockFilePath:    "../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.hex",
+			blockFilePath:    "../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.bin",
 			expectedTxMapLen: 563,
 		},
 		{
 			name:             "Block2",
-			blockFilePath:    "../testdata/00000000000000000488eecd93d6f3767b1ba38668200a6a5349af2e0d4fad3f.hex",
+			blockFilePath:    "../testdata/00000000000000000488eecd93d6f3767b1ba38668200a6a5349af2e0d4fad3f.bin",
 			expectedTxMapLen: 1355,
+		},
+		{
+			name:             "Block3",
+			blockFilePath:    "../testdata/000000000000000009631dd3dd7357675d8a1f8925be5e7851c68255531ac5fb.bin",
+			expectedTxMapLen: 900,
 		},
 	}
 
