@@ -10,38 +10,62 @@ import (
 )
 
 func TestSyncManager_createTxMap(t *testing.T) {
-	// t.Run("TestSyncManager_createTxMap", func(t *testing.T) {
+	// Define test cases with block file paths and expected lengths of the txMap
+	testCases := []struct {
+		name             string
+		blockFilePath    string
+		expectedTxMapLen int
+	}{
+		{
+			name:             "Block1",
+			blockFilePath:    "../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.hex",
+			expectedTxMapLen: 563,
+		},
+	}
 
-	// })
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			block, err := testdata.ReadBlockFromFile(tc.blockFilePath)
+			require.NoError(t, err)
 
-	block, err := testdata.ReadBlockFromFile("../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.hex")
-	require.NoError(t, err)
+			sm := &SyncManager{}
 
-	sm := &SyncManager{}
-
-	txMap, err := sm.createTxMap(block)
-	require.NoError(t, err)
-	require.Len(t, txMap, 563)
+			txMap, err := sm.createTxMap(block)
+			require.NoError(t, err)
+			require.Len(t, txMap, tc.expectedTxMapLen)
+		})
+	}
 }
 
-func TestSyncManager_prepareTxsPerLevel1(t *testing.T) {
-	// t.Run("TestSyncManager_prepareTxsPerLevel1", func(t *testing.T) {
+func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
+	testCases := []struct {
+		name             string
+		blockFilePath    string
+		expectedTxMapLen int
+	}{
+		{
+			name:             "Block1",
+			blockFilePath:    "../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.hex",
+			expectedTxMapLen: 563,
+		},
+	}
 
-	// })
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			block, err := testdata.ReadBlockFromFile(tc.blockFilePath)
+			require.NoError(t, err)
 
-	// Decode the hex string to bytes
-	// Deserialize the bytes into a Block
-	block, err := testdata.ReadBlockFromFile("../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.hex")
-	require.NoError(t, err)
+			sm := &SyncManager{}
 
-	sm := &SyncManager{}
+			txMap, err := sm.createTxMap(block)
+			require.NoError(t, err)
+			require.Len(t, txMap, tc.expectedTxMapLen)
 
-	txMap, err := sm.createTxMap(block)
-	require.NoError(t, err)
-	require.Len(t, txMap, 563)
-
-	maxLevel, blockTXsPerLevel := sm.prepareTxsPerLevel(context.Background(), block, txMap)
-	fmt.Println(maxLevel)
-	fmt.Println(len(blockTXsPerLevel))
-
+			maxLevel, blockTXsPerLevel := sm.prepareTxsPerLevel(context.Background(), block, txMap)
+			fmt.Println("Max Level: ", maxLevel)
+			for level, txs := range blockTXsPerLevel {
+				fmt.Printf("Level %d: %d transactions\n", level, len(txs))
+			}
+		})
+	}
 }
