@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
@@ -13,42 +14,18 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestHandleBlockDirect(t *testing.T) {
+	util.SkipLongTests(t)
 
 	// Load the block
 	block, err := testdata.ReadBlockFromFile("../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.bin")
 	require.NoError(t, err)
 	assert.Equal(t, block.Hash().String(), "00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386")
-
-	// txMap := make(map[chainhash.Hash]struct{}, len(block.Transactions()))
-
-	// var parents int
-
-	// for _, wireTx := range block.Transactions() {
-	// 	txHash := wireTx.Hash()
-
-	// 	// Serialize the tx
-	// 	var txBytes bytes.Buffer
-	// 	err = wireTx.MsgTx().Serialize(&txBytes)
-	// 	require.NoError(t, err)
-
-	// 	tx, err := bt.NewTxFromBytes(txBytes.Bytes())
-	// 	require.NoError(t, err)
-
-	// 	for _, input := range tx.Inputs {
-	// 		if _, found := txMap[*input.PreviousTxIDChainHash()]; found {
-	// 			parents++
-	// 		}
-	// 	}
-
-	// 	txMap[*txHash] = struct{}{}
-	// }
-
-	// t.Log("Parents:", parents)
 
 	var (
 		ctx               context.Context             = context.Background()
@@ -61,6 +38,18 @@ func TestHandleBlockDirect(t *testing.T) {
 		blockValidation   blockvalidation.Interface   = &blockvalidation.MockBlockValidation{}
 		config            *Config                     = &Config{}
 	)
+
+	blockBytes, err := block.Bytes()
+	require.NoError(t, err)
+	assert.Len(t, blockBytes, 335942)
+
+	mBlock, err := model.NewBlockFromBytes(blockBytes)
+	require.NoError(t, err)
+
+	mBlock.Height = 1
+
+	err = blockchainClient.AddBlock(ctx, mBlock, "test")
+	require.NoError(t, err)
 
 	sm, err := New(
 		ctx,
