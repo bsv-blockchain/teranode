@@ -272,6 +272,9 @@ func (sm *SyncManager) createTxMap(block *bsvutil.Block) (map[chainhash.Hash]*tx
 		if !tx.IsCoinbase() {
 			txMap[txHash] = &txMapWrapper{tx: tx}
 		}
+
+		// check if has parents in the block
+
 	}
 
 	return txMap, nil
