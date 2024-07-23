@@ -102,9 +102,13 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 		return nil, err
 	}
 
+	running := atomic.Bool{}
+	running.Store(true)
+
 	return &Client{
-		client: blockchain_api.NewBlockchainAPIClient(baConn),
-		logger: logger,
+		client:  blockchain_api.NewBlockchainAPIClient(baConn),
+		logger:  logger,
+		running: &running,
 	}, nil
 }
 

@@ -1,6 +1,7 @@
 package testdata
 
 import (
+	"bufio"
 	"encoding/hex"
 	"io"
 	"os"
@@ -9,7 +10,15 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 )
 
-// This function helps reading the test data from the file, returns a BSV block
+type binReader struct {
+	r io.Reader
+}
+
+func (br *binReader) Read(p []byte) (n int, err error) {
+	return br.r.Read(p)
+}
+
+// ReadBlockFromFile helps to read the test data from the file, returns a BSV block
 func ReadBlockFromFile(filePath string) (*bsvutil.Block, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -17,21 +26,23 @@ func ReadBlockFromFile(filePath string) (*bsvutil.Block, error) {
 	}
 	defer file.Close()
 
-	hexData, err := io.ReadAll(file)
+	var reader io.Reader
+
+	if strings.HasSuffix(filePath, ".hex") {
+		// Create a hex stream reader
+		reader = hex.NewDecoder(file)
+	} else {
+		// Create a binReader that does nothing to the stream
+		reader = &binReader{r: file}
+	}
+
+	// buffer the reader
+	bufferedReader := bufio.NewReaderSize(reader, 1024*1024*4) // 4MB buffer
+
+	block, err := bsvutil.NewBlockFromReader(bufferedReader)
 	if err != nil {
 		return nil, err
 	}
 
-	cleanHexData := strings.TrimSpace(string(hexData))
-
-	blockBytes, err := hex.DecodeString(cleanHexData)
-	if err != nil {
-		return nil, err
-	}
-
-	block, err := bsvutil.NewBlockFromBytes(blockBytes)
-	if err != nil {
-		return nil, err
-	}
 	return block, nil
 }
