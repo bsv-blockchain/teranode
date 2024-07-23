@@ -422,7 +422,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseUrl, txMetaSlice, blockHeight)
 			if err != nil {
-				return err
+				return errors.New(errors.ERR_PROCESSING, "failed to get missing transactions", err)
 			}
 			stat5.AddTime(start)
 		}
@@ -438,31 +438,31 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		if idx == 0 && txHash.Equal(*model.CoinbasePlaceholderHash) {
 			err = subtree.AddNode(txHash, 0, 0)
 			if err != nil {
-				return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to add coinbase placeholder node to subtree", v.SubtreeHash.String()), err)
+				return errors.New(errors.ERR_PROCESSING, "failed to add coinbase placeholder node to subtree", err)
 			}
 			continue
 		}
 
 		txMeta = txMetaSlice[idx]
 		if txMeta == nil {
-			return fmt.Errorf("[validateSubtreeInternal][%s] tx meta not found in txMetaSlice at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
+			return errors.New(errors.ERR_PROCESSING, "tx meta not found in txMetaSlice", err)
 		}
 
 		if txMeta.IsCoinbase {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] invalid subtree index for coinbase tx %d", v.SubtreeHash.String(), idx), err)
+			return errors.New(errors.ERR_PROCESSING, "invalid subtree index for coinbase tx", err)
 		}
 
 		// finally add the transaction hash and fee to the subtree
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
 		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to add node to subtree / subtreeMeta", v.SubtreeHash.String()), err)
+			return errors.New(errors.ERR_PROCESSING, "failed to add node to subtree", err)
 		}
 
 		// add the txMeta data we need for block validation
 		subtreeIdx := subtree.Length() - 1
 		err = subtreeMeta.SetParentTxHashes(subtreeIdx, txMeta.ParentTxHashes)
 		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to set parent tx hash in subtreeMeta", v.SubtreeHash.String()), err)
+			return errors.New(errors.ERR_PROCESSING, "failed to set parent tx hash in subtreeMeta", err)
 		}
 	}
 	stat.NewStat("6. addAllTxHashFeeSizesToSubtree").AddTime(start)
@@ -470,7 +470,8 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// does the merkle tree give the correct root?
 	merkleRoot := subtree.RootHash()
 	if !merkleRoot.IsEqual(&v.SubtreeHash) {
-		return fmt.Errorf("[validateSubtreeInternal][%s] subtree root hash does not match [%s]", v.SubtreeHash.String(), merkleRoot.String())
+		// ERR_SUBTREE_INVALID is not recovareable. So if this happens, kafka message should be marked as committed.
+		return errors.New(errors.ERR_SUBTREE_INVALID, "subtree root hash does not match", err)
 	}
 
 	//
@@ -479,7 +480,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	u.logger.Infof("[validateSubtreeInternal][%s] serialize subtree meta", v.SubtreeHash.String())
 	completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to serialize subtree meta", v.SubtreeHash.String()), err)
+		return errors.New(errors.ERR_PROCESSING, "failed to serialize subtree meta", err)
 	}
 
 	start = gocore.CurrentTime()
@@ -487,7 +488,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeMetaBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("meta"))
 	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String()), err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "failed to store subtree meta", err)
 	}
 
 	//
@@ -496,7 +497,8 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	u.logger.Infof("[validateSubtreeInternal][%s] serialize subtree", v.SubtreeHash.String())
 	completeSubtreeBytes, err := subtree.Serialize()
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String()), err)
+		errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String()), err)
+		return errors.New(errors.ERR_PROCESSING, "failed to serialize subtree", err)
 	}
 
 	start = gocore.CurrentTime()
@@ -504,7 +506,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL))
 	stat.NewStat("8. storeSubtree").AddTime(start)
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String()), err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "failed to store subtree", err)
 	}
 
 	_ = u.SetSubtreeExists(&v.SubtreeHash)
