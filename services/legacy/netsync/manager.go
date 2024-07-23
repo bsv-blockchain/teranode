@@ -1308,13 +1308,7 @@ func (sm *SyncManager) handleBlockchainNotification(notification *model.Notifica
 
 		// Generate the inventory vector and relay it.
 		iv := wire.NewInvVect(wire.InvTypeBlock, notification.Hash)
-		sm.peerNotifier.RelayInventory(iv, wire.NewBlockHeader(
-			int32(blockHeader.Version),
-			blockHeader.HashPrevBlock,
-			blockHeader.HashMerkleRoot,
-			uint32(blockHeader.Bits.CalculateTarget().Uint64()),
-			blockHeader.Nonce,
-		))
+		sm.peerNotifier.RelayInventory(iv, blockHeader.ToWireBlockHeader())
 	}
 }
 

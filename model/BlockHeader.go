@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bc"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -120,6 +122,20 @@ func (bh *BlockHeader) StringDump() string {
 	sb.WriteString(fmt.Sprintf("Nonce: %d\n", bh.Nonce))
 
 	return sb.String()
+}
+
+func (bh *BlockHeader) ToWireBlockHeader() *wire.BlockHeader {
+	bitsUint32 := binary.LittleEndian.Uint32(bh.Bits.CloneBytes())
+	wireBlockHeader := wire.NewBlockHeader(
+		int32(bh.Version),
+		bh.HashPrevBlock,
+		bh.HashMerkleRoot,
+		bitsUint32,
+		bh.Nonce,
+	)
+	wireBlockHeader.Timestamp = time.Unix(int64(bh.Timestamp), 0)
+
+	return wireBlockHeader
 }
 
 func (bh *BlockHeader) HasMetTargetDifficulty() (bool, *chainhash.Hash, error) {

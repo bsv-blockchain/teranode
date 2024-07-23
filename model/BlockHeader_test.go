@@ -1,7 +1,10 @@
 package model
 
 import (
+	"bytes"
 	"encoding/hex"
+	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -78,5 +81,22 @@ func TestNewBlockHeaderFromBytes(t *testing.T) {
 		}
 
 		assert.Equal(t, "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048", blockHeader.Hash().String())
+	})
+}
+
+func Test_ToWireBlockHeader(t *testing.T) {
+	t.Run("block 1", func(t *testing.T) {
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		// reader to bytes
+		reader := bytes.NewReader(blockHeaderBytes)
+		w := wire.BlockHeader{}
+		err = w.Deserialize(reader)
+		require.NoError(t, err)
+
+		wireBlockHeader := blockHeader.ToWireBlockHeader()
+		assert.Equal(t, blockHeader.Hash().String(), wireBlockHeader.BlockHash().String())
 	})
 }
