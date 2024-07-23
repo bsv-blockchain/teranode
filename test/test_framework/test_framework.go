@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/asset"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	cb "github.com/bitcoin-sv/ubsv/services/coinbase"
@@ -32,6 +33,7 @@ type BitcoinNode struct {
 	BlockchainClient    bc.ClientI
 	BlockassemblyClient ba.Client
 	DistributorClient   distributor.Distributor
+	AssetClient         asset.Client
 	BlockChainDB        blockchain_store.Store
 	Blockstore          blob.Store
 	BlockstoreUrl       *url.URL
@@ -114,6 +116,16 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 			return err
 		}
 		b.Nodes[i].DistributorClient = *distributorClient
+
+		coinbase_assetGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_assetGrpcAddress.%s", node.SETTINGS_CONTEXT))
+		if !ok {
+			return fmt.Errorf("no coinbase_assetGrpcAddress setting found")
+		}
+		assetClient, err := asset.NewClient(b.Context, logger, getHostAddress(coinbase_assetGrpcAddress))
+		if err != nil {
+			return err
+		}
+		b.Nodes[i].AssetClient = *assetClient
 
 		blockchainStoreURL, _, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s", node.SETTINGS_CONTEXT))
 		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)

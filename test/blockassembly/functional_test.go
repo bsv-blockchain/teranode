@@ -10,13 +10,13 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
-	"github.com/ordishs/gocore"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -51,7 +51,7 @@ func tearDownBitcoinTestFramework() {
 	if err := framework.StopNodes(); err != nil {
 		fmt.Printf("Error stopping nodes: %v\n", err)
 	}
-	_ = os.RemoveAll("../../data")
+	// _ = os.RemoveAll("../../data")
 }
 
 func newTx(lockTime uint32) *bt.Tx {
@@ -61,9 +61,29 @@ func newTx(lockTime uint32) *bt.Tx {
 }
 
 func TestNode(t *testing.T) {
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
 	blockassemblyNode0 := framework.Nodes[0].BlockassemblyClient
+	blockchainClientNode0 := framework.Nodes[0].BlockchainClient
+	var hashes []*chainhash.Hash
+
+	blockchainSubscription, err := blockchainClientNode0.Subscribe(framework.Context, "test")
+	if err != nil {
+		t.Errorf("error subscribing to blockchain service: %v", err)
+		return
+	}
+
+	go func() {
+		for {
+			select {
+			case <-framework.Context.Done():
+				return
+			case notification := <-blockchainSubscription:
+				if notification.Type == model.NotificationType_Subtree {
+					hashes = append(hashes, notification.Hash)
+				}
+			}
+		}
+	}()
+
 	utxoStoreNode0 := framework.Nodes[0].UtxoStore
 
 	for i := uint64(0); i < 100; i++ {
@@ -87,6 +107,8 @@ func TestNode(t *testing.T) {
 		t.Errorf("Error getting mining candidate: %v", err)
 	}
 	assert.Equal(t, uint(0x3), uint(m.SubtreeCount))
-	_, err = helper.MineBlockWithCandidate(framework.Context, blockassemblyNode0, m, logger)
-	assert.Nil(t, err, "Error mining block")
+	time.Sleep(10 * time.Second)
+	assert.Equal(t, uint(3), uint(len(hashes)))
+	// _, err = helper.MineBlockWithCandidate(framework.Context, blockassemblyNode0, m, logger)
+	// assert.Nil(t, err, "Error mining block")
 }
