@@ -37,6 +37,12 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	// logger := gocore.Log("b_http")
 
 	e := echo.New()
+	// Check if the ECHO_DEBUG environment variable is set to "true"
+
+	if gocore.Config().GetBool("ECHO_DEBUG", false) {
+		e.Debug = true
+	}
+
 	e.HideBanner = true
 	e.HidePort = true
 
