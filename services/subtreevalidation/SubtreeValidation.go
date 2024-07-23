@@ -327,7 +327,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	height := math.Ceil(math.Log2(float64(len(txHashes))))
 	subtree, err := util.NewTree(int(height))
 	if err != nil {
-		return err
+		return errors.New(errors.ERR_PROCESSING, "failed to create new subtree", err)
 	}
 
 	subtreeMeta := util.NewSubtreeMeta(subtree)
@@ -383,11 +383,13 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 				continue
 			}
-			return errors.New(errors.ERR_ERROR, "[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
+			return errors.New(errors.ERR_PROCESSING, "[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
 		}
 
 		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] [attempt #%d] abandoned - too many missing txmeta entries", v.SubtreeHash.String(), attempt), err)
+			//errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] [attempt #%d] abandoned - too many missing txmeta entries", v.SubtreeHash.String(), attempt), err)
+			u.logger.Warnf("[validateSubtreeInternal][%s] [attempt #%d] abandoned - too many missing txmeta entries", v.SubtreeHash.String(), attempt)
+			return errors.New(errors.ERR_PROCESSING, "abandoned subtreevalidation - too many missing txmeta entries", err)
 		}
 
 		if missed > 0 {

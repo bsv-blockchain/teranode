@@ -121,12 +121,31 @@ func (u *Server) Start(ctx context.Context) error {
 
 		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
 		u.logger.Infof("Starting %d Kafka consumers for subtree messages", consumerCount)
-		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, func(msg util.KafkaMessage) {
-			g.Go(func() error {
-				// TODO is there a way to return an error here and have Kafka mark the message as not done?
-				u.subtreeHandler(msg)
-				return nil
-			})
+		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, func(msg util.KafkaMessage) error {
+			// TODO is there a way to return an error here and have Kafka mark the message as not done?
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- u.subtreeHandler(msg)
+			}()
+
+			select {
+			// error handling
+			case err := <-errCh:
+				// unrecoverable error, should not be tried again, and kafka message should be committed.
+				// return nil
+				if errors.Is(err, errors.ErrSubtreeInvalidFormat) || errors.Is(err, errors.ErrSubtreeError) {
+					return nil
+				}
+
+				// recoveable error, return nil.
+				// currently, the following cases are considered recoverable:
+				// errors.ErrProcessing, errors.ErrServiceError, errors.StorageError
+				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling subtree, marking Kafka message as complete.\n", msg, err)
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
 		})
 	}
 
@@ -165,7 +184,7 @@ func (u *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage)) {
+func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage) error) {
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
 	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, fn); err != nil {

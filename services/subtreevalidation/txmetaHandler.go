@@ -9,7 +9,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func (u *Server) txmetaHandler(msg util.KafkaMessage) {
+func (u *Server) txmetaHandler(msg util.KafkaMessage) error {
 	if msg.Message != nil && len(msg.Message.Value) > chainhash.HashSize {
 		startTime := time.Now()
 

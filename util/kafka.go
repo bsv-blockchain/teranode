@@ -261,11 +261,13 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 }
 
 func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int,
-	consumerClosure ...func(KafkaMessage)) error {
+	consumerClosure ...func(KafkaMessage) error) error {
 
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 
+	// TODO GOKHAN: This needs to be handled, currently only for blocksFinalConfig autocommit is set to 0.
+	// https://github.com/IBM/sarama/issues/1689
 	autoCommit := GetQueryParamInt(kafkaURL, "autocommit", 1)
 	if autoCommit == 0 {
 		config.Consumer.Offsets.AutoCommit.Enable = false
@@ -287,7 +289,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 		cancel()
 	}()
 
-	var consumerClosureFunc func(KafkaMessage)
+	var consumerClosureFunc func(KafkaMessage) error
 
 	if len(consumerClosure) > 0 {
 		consumerClosureFunc = consumerClosure[0]

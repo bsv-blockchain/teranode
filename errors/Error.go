@@ -44,7 +44,6 @@ func (e *Error) Is(target error) bool {
 
 	var ue *Error
 	if errors.As(target, &ue) {
-		//return e.Code == ue.Code
 		if e.Code == ue.Code {
 			return true
 		}
@@ -114,7 +113,6 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	if len(params) > 0 {
 		if err, ok := params[len(params)-1].(*Error); ok {
 			wErr = err
-			//data = err.Data
 			params = params[:len(params)-1]
 		}
 	}
