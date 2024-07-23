@@ -83,8 +83,10 @@ func (u *Server) Start(ctx context.Context) error {
 		groupID := "blockpersister-" + uuid.New().String()
 
 		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the blocksFinal messages.
-		go u.startKafkaListener(ctx, blocksFinalKafkaURL, groupID, 1, func(msg util.KafkaMessage) {
+		go u.startKafkaListener(ctx, blocksFinalKafkaURL, groupID, 1, func(msg util.KafkaMessage) error {
+			// TODO GOKHAN: Implement Error handling
 			u.blocksFinalHandler(msg)
+			return nil
 		})
 	}
 
@@ -130,7 +132,7 @@ func (u *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage)) {
+func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage) error) {
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
 	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, fn); err != nil {

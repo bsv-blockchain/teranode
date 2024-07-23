@@ -128,6 +128,7 @@ func (u *Server) Start(ctx context.Context) error {
 				errCh <- u.subtreeHandler(msg)
 			}()
 
+			// TODO GOKHAN: UPDATE ERROR HANDLING, RECOVERABLE ERRORS
 			select {
 			// error handling
 			case err := <-errCh:
@@ -171,6 +172,8 @@ func (u *Server) Start(ctx context.Context) error {
 		groupID := "subtreevalidation-" + uuid.New().String()
 
 		u.logger.Infof("Starting %d Kafka consumers for tx meta messages", consumerCount)
+
+		// TODO GOKHAN: ADD ERROR HANDLING
 		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, consumerCount, u.txmetaHandler)
 	}
 
