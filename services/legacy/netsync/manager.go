@@ -676,24 +676,25 @@ func (sm *SyncManager) current() bool {
 	//if !sm.chain.IsCurrent() {
 	//	return false
 	//}
+	return false
 
-	// if blockChain thinks we are current, and we have no syncPeer, it is probably right.
-	if sm.syncPeer == nil {
-		return true
-	}
-
-	_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
-	if err != nil {
-		sm.logger.Errorf("Failed to get best block header: %v", err)
-		return false
-	}
-
-	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
-	if int32(bestBlockHeaderMeta.Height) < sm.syncPeer.LastBlock() {
-		return false
-	}
-
-	return true
+	//// if blockChain thinks we are current, and we have no syncPeer, it is probably right.
+	//if sm.syncPeer == nil {
+	//	return true
+	//}
+	//
+	//_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
+	//if err != nil {
+	//	sm.logger.Errorf("Failed to get best block header: %v", err)
+	//	return false
+	//}
+	//
+	//// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
+	//if int32(bestBlockHeaderMeta.Height) < sm.syncPeer.LastBlock() {
+	//	return false
+	//}
+	//
+	//return true
 }
 
 // handleBlockMsg handles block messages from all peers.
