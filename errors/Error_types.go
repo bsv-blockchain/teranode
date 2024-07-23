@@ -31,4 +31,5 @@ var (
 	ErrCoinbaseMissingBlockHeight = New(ERR_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrSpent                      = New(ERR_SPENT, "utxo already spent")
 	ErrLockTime                   = New(ERR_LOCKTIME, "Bad lock time")
+	ErrKafkaDecode                = New(ERR_KAFKA_DECODE_ERROR, "error decoding kafka message")
 )

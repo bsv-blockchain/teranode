@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
@@ -329,13 +330,14 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.U
 		}
 	}()
 
-	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaURL, "blockassembly", nil, consumerCount, func(msg util.KafkaMessage) {
+	// TODO GOKHAN: UPDATE ERROR HANDLING
+	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaURL, "blockassembly", nil, consumerCount, func(msg util.KafkaMessage) error {
 		startTime := time.Now()
 
 		data, err := NewFromBytes(msg.Message.Value)
 		if err != nil {
 			ba.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
-			return
+			return errors.New(errors.ERR_KAFKA_DECODE_ERROR, "Failed to decode kafka message", err)
 		}
 
 		if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
@@ -344,11 +346,14 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.U
 			Size: data.Size,
 		}); err != nil {
 			ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
+			return errors.New(errors.ERR_PROCESSING, "failed to add tx to block assembly", err)
 		}
 
 		prometheusBlockAssemblerSetFromKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+		return nil
 	}); err != nil {
 		ba.logger.Errorf("[BlockAssembly] failed to start Kafka listener: %s", err)
+		// TODO: Should we return an error?
 	}
 }
 
