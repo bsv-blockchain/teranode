@@ -886,10 +886,10 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 				"fetch: %v", err)
 		}
 		if !haveInv {
-			syncPeerState := sm.peerStates[sm.syncPeer]
+			peerState := sm.peerStates[sm.syncPeer]
 
 			sm.requestedBlocks[*node.hash] = struct{}{}
-			syncPeerState.requestedBlocks[*node.hash] = struct{}{}
+			peerState.requestedBlocks[*node.hash] = struct{}{}
 
 			_ = getDataMessage.AddInvVect(iv)
 			numRequested++
@@ -939,8 +939,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		// Ensure there is a previous header to compare against.
 		prevNodeEl := sm.headerList.Back()
 		if prevNodeEl == nil {
-			sm.logger.Warnf("Header list does not contain a previous" +
-				"element as expected -- disconnecting peer")
+			sm.logger.Warnf("Header list does not contain a previous element as expected -- disconnecting peer")
 			peer.Disconnect()
 			return
 		}
@@ -1003,8 +1002,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	locator := blockchain.BlockLocator([]*chainhash.Hash{finalHash})
 	err := peer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
 	if err != nil {
-		sm.logger.Warnf("Failed to send getheaders message to "+
-			"peer %s: %v", peer.Addr(), err)
+		sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", peer.Addr(), err)
 		return
 	}
 }

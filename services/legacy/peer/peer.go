@@ -900,8 +900,7 @@ func (p *Peer) PushGetHeadersMsg(locator blockchain.BlockLocator, stopHash *chai
 	p.prevGetHdrsMtx.Unlock()
 
 	if isDuplicate {
-		log.Debugf("Filtering duplicate [getheaders] with begin hash %v",
-			beginHash)
+		log.Debugf("Filtering duplicate [getheaders] with begin hash %v", beginHash)
 		return nil
 	}
 
