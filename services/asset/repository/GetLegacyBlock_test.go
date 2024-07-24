@@ -274,7 +274,7 @@ type mockStore struct {
 	block *model.Block
 }
 
-func (s *mockStore) LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*chainhash.Hash, error) {
+func (s *mockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	//TODO implement me
 	panic("implement me")
 }

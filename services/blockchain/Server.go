@@ -899,7 +899,7 @@ func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.Ge
 	return &blockchain_api.GetBlockLocatorResponse{Locator: locator}, nil
 }
 
-func (b *Blockchain) LocateBlockHashes(ctx context.Context, request *blockchain_api.LocateBlockHashesRequest) (*blockchain_api.LocateBlockHashesResponse, error) {
+func (b *Blockchain) LocateBlockHeaders(ctx context.Context, request *blockchain_api.LocateBlockHeadersRequest) (*blockchain_api.LocateBlockHeadersResponse, error) {
 	locator := make([]*chainhash.Hash, len(request.Locator))
 	for i, hash := range request.Locator {
 		locator[i], _ = chainhash.NewHash(hash)
@@ -908,18 +908,18 @@ func (b *Blockchain) LocateBlockHashes(ctx context.Context, request *blockchain_
 	hashStop, _ := chainhash.NewHash(request.HashStop)
 
 	// Get the blocks
-	blockHashes, err := b.store.LocateBlockHashes(ctx, locator, hashStop, request.MaxHashes)
+	blockHeaders, err := b.store.LocateBlockHeaders(ctx, locator, hashStop, request.MaxHashes)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
 
-	blockHashesBytes := make([][]byte, len(blockHashes))
-	for i, blockHash := range blockHashes {
-		blockHashesBytes[i] = blockHash.CloneBytes()
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
 	}
 
-	return &blockchain_api.LocateBlockHashesResponse{
-		Hashes: blockHashesBytes,
+	return &blockchain_api.LocateBlockHeadersResponse{
+		BlockHeaders: blockHeaderBytes,
 	}, nil
 }
 

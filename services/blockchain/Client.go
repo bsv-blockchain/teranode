@@ -644,34 +644,33 @@ func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash
 	return locator, nil
 }
 
-func (c *Client) LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*chainhash.Hash, error) {
+func (c *Client) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	locatorBytes := make([][]byte, 0, len(locator))
 	for _, hash := range locator {
 		locatorBytes = append(locatorBytes, hash.CloneBytes())
 	}
 
-	req := &blockchain_api.LocateBlockHashesRequest{
+	req := &blockchain_api.LocateBlockHeadersRequest{
 		Locator:   locatorBytes,
 		HashStop:  hashStop.CloneBytes(),
 		MaxHashes: maxHashes,
 	}
 
-	resp, err := c.client.LocateBlockHashes(ctx, req)
+	resp, err := c.client.LocateBlockHeaders(ctx, req)
 	if err != nil {
 		return nil, errors.UnwrapGRPC(err)
 	}
 
-	hashList := make([]*chainhash.Hash, 0, len(resp.Hashes))
-	var h *chainhash.Hash
-	for _, hash := range resp.Hashes {
-		h, err = chainhash.NewHash(hash)
+	blockHeaders := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+	for _, blockHeaderBytes := range resp.BlockHeaders {
+		blockHeader, err := model.NewBlockHeaderFromBytes(blockHeaderBytes)
 		if err != nil {
 			return nil, err
 		}
-		hashList = append(hashList, h)
+		blockHeaders = append(blockHeaders, blockHeader)
 	}
 
-	return hashList, nil
+	return blockHeaders, nil
 }
 
 // log2FloorMasks defines the masks to use when quickly calculating

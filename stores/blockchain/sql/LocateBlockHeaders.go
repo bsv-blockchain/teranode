@@ -7,7 +7,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-// LocateBlockHashes returns the hashes of the blocks after the first known block in
+// LocateBlockHeaders returns the block headers of the blocks after the first known block in
 // the locator until the provided stop hash is reached, or up to the provided
 // max number of block hashes.
 //
@@ -17,8 +17,8 @@ import (
 //     or nil if it is unknown
 //   - When locators are provided, but none of them are known, hashes starting
 //     after the genesis block will be returned
-func (s *SQL) LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash,
-	maxHashes uint32) ([]*chainhash.Hash, error) {
+func (s *SQL) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash,
+	maxHashes uint32) ([]*model.BlockHeader, error) {
 
 	if maxHashes == 0 {
 		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "maxHashes must be greater than 0")
@@ -48,13 +48,15 @@ func (s *SQL) LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, 
 	if err != nil {
 		return nil, err
 	}
-	hashes := make([]*chainhash.Hash, 0, len(blockHeaders))
+
+	// return the headers up to the stop hash
+	returnBlockHeaders := make([]*model.BlockHeader, 0, len(blockHeaders))
 	for _, header := range blockHeaders {
-		hashes = append(hashes, header.Hash())
+		returnBlockHeaders = append(returnBlockHeaders, header)
 		if hashStop != nil && header.Hash().IsEqual(hashStop) {
 			break
 		}
 	}
 
-	return hashes, nil
+	return returnBlockHeaders, nil
 }

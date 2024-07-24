@@ -702,12 +702,14 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 	// over with the genesis block if unknown block locators are provided.
 	//
 	// This mirrors the behavior in the reference implementation.
-	//hashList := make([]chainhash.Hash, 0) // chain.LocateBlocks(msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
-	hashList, err := sp.server.blockchainClient.LocateBlockHashes(context.TODO(), msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
+	blockHeaders, err := sp.server.blockchainClient.LocateBlockHeaders(context.TODO(), msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
 	if err != nil {
 		sp.server.logger.Errorf("Failed to fetch locator block hashes: %v", err)
-		// set hash list to empty, which will send a not found message to the peer at the bottom of this function
-		hashList = make([]*chainhash.Hash, 0)
+	}
+
+	hashList := make([]*chainhash.Hash, 0, len(blockHeaders))
+	for _, blockHeader := range blockHeaders {
+		hashList = append(hashList, blockHeader.Hash())
 	}
 
 	// Generate inventory message.
@@ -763,15 +765,17 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 	//
 	// This mirrors the behavior in the reference implementation.
 	//chain := sp.server.chain
-	// TODO
-	headers := make([]wire.BlockHeader, 0) // chain.LocateHeaders(msg.BlockLocatorHashes, &msg.HashStop)
+	blockHeaders, err := sp.server.blockchainClient.LocateBlockHeaders(context.TODO(), msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
+	if err != nil {
+		sp.server.logger.Errorf("Failed to fetch locator block hashes: %v", err)
+	}
 
 	// Send found headers to the requesting peer.
-	blockHeaders := make([]*wire.BlockHeader, len(headers))
-	for i := range headers {
-		blockHeaders[i] = &headers[i]
+	wireBlockHeaders := make([]*wire.BlockHeader, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		wireBlockHeaders[i] = blockHeader.ToWireBlockHeader()
 	}
-	sp.QueueMessage(&wire.MsgHeaders{Headers: blockHeaders}, nil)
+	sp.QueueMessage(&wire.MsgHeaders{Headers: wireBlockHeaders}, nil)
 }
 
 // OnGetCFilters is invoked when a peer receives a getcfilters bitcoin message.

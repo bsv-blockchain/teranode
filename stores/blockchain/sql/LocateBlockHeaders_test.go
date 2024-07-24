@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestSQL_LocateBlockHashes(t *testing.T) {
+func TestSQL_LocateBlockHeaders(t *testing.T) {
 	dbUrl, _ := url.Parse("sqlitememory:///")
 
 	type args struct {
@@ -24,7 +24,7 @@ func TestSQL_LocateBlockHashes(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
-		want    []*chainhash.Hash
+		want    []*model.BlockHeader
 		wantErr assert.ErrorAssertionFunc
 	}{
 		{
@@ -46,7 +46,7 @@ func TestSQL_LocateBlockHashes(t *testing.T) {
 				hashStop:  &chainhash.Hash{},
 				maxHashes: 64,
 			},
-			want:    []*chainhash.Hash{},
+			want:    []*model.BlockHeader{},
 			wantErr: assert.NoError,
 		},
 		{
@@ -57,7 +57,7 @@ func TestSQL_LocateBlockHashes(t *testing.T) {
 				hashStop:  model.GenesisBlockHeader.Hash(),
 				maxHashes: 64,
 			},
-			want:    []*chainhash.Hash{model.GenesisBlockHeader.Hash()},
+			want:    []*model.BlockHeader{model.GenesisBlockHeader},
 			wantErr: assert.NoError,
 		},
 	}
@@ -66,7 +66,7 @@ func TestSQL_LocateBlockHashes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s, err := New(ulogger.TestLogger{}, dbUrl)
 			require.NoError(t, err)
-			got, err := s.LocateBlockHashes(tt.args.ctx, tt.args.locator, tt.args.hashStop, tt.args.maxHashes)
+			got, err := s.LocateBlockHeaders(tt.args.ctx, tt.args.locator, tt.args.hashStop, tt.args.maxHashes)
 			if !tt.wantErr(t, err, fmt.Sprintf("LocateBlockHashes(%v, %v, %v, %v)", tt.args.ctx, tt.args.locator, tt.args.hashStop, tt.args.maxHashes)) {
 				return
 			}

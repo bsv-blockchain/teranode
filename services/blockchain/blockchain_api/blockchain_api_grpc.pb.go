@@ -50,7 +50,7 @@ const (
 	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName   = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
 	BlockchainAPI_GetFSMCurrentState_FullMethodName        = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
 	BlockchainAPI_GetBlockLocator_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlockLocator"
-	BlockchainAPI_LocateBlockHashes_FullMethodName         = "/blockchain_api.BlockchainAPI/LocateBlockHashes"
+	BlockchainAPI_LocateBlockHeaders_FullMethodName        = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -88,7 +88,7 @@ type BlockchainAPIClient interface {
 	GetBlocksSubtreesNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksSubtreesNotSetResponse, error)
 	GetFSMCurrentState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	GetBlockLocator(ctx context.Context, in *GetBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockLocatorResponse, error)
-	LocateBlockHashes(ctx context.Context, in *LocateBlockHashesRequest, opts ...grpc.CallOption) (*LocateBlockHashesResponse, error)
+	LocateBlockHeaders(ctx context.Context, in *LocateBlockHeadersRequest, opts ...grpc.CallOption) (*LocateBlockHeadersResponse, error)
 }
 
 type blockchainAPIClient struct {
@@ -412,10 +412,10 @@ func (c *blockchainAPIClient) GetBlockLocator(ctx context.Context, in *GetBlockL
 	return out, nil
 }
 
-func (c *blockchainAPIClient) LocateBlockHashes(ctx context.Context, in *LocateBlockHashesRequest, opts ...grpc.CallOption) (*LocateBlockHashesResponse, error) {
+func (c *blockchainAPIClient) LocateBlockHeaders(ctx context.Context, in *LocateBlockHeadersRequest, opts ...grpc.CallOption) (*LocateBlockHeadersResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(LocateBlockHashesResponse)
-	err := c.cc.Invoke(ctx, BlockchainAPI_LocateBlockHashes_FullMethodName, in, out, cOpts...)
+	out := new(LocateBlockHeadersResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_LocateBlockHeaders_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +457,7 @@ type BlockchainAPIServer interface {
 	GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error)
 	GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error)
 	GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error)
-	LocateBlockHashes(context.Context, *LocateBlockHashesRequest) (*LocateBlockHashesResponse, error)
+	LocateBlockHeaders(context.Context, *LocateBlockHeadersRequest) (*LocateBlockHeadersResponse, error)
 	mustEmbedUnimplementedBlockchainAPIServer()
 }
 
@@ -552,8 +552,8 @@ func (UnimplementedBlockchainAPIServer) GetFSMCurrentState(context.Context, *emp
 func (UnimplementedBlockchainAPIServer) GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockLocator not implemented")
 }
-func (UnimplementedBlockchainAPIServer) LocateBlockHashes(context.Context, *LocateBlockHashesRequest) (*LocateBlockHashesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method LocateBlockHashes not implemented")
+func (UnimplementedBlockchainAPIServer) LocateBlockHeaders(context.Context, *LocateBlockHeadersRequest) (*LocateBlockHeadersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LocateBlockHeaders not implemented")
 }
 func (UnimplementedBlockchainAPIServer) mustEmbedUnimplementedBlockchainAPIServer() {}
 
@@ -1093,20 +1093,20 @@ func _BlockchainAPI_GetBlockLocator_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockchainAPI_LocateBlockHashes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(LocateBlockHashesRequest)
+func _BlockchainAPI_LocateBlockHeaders_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LocateBlockHeadersRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BlockchainAPIServer).LocateBlockHashes(ctx, in)
+		return srv.(BlockchainAPIServer).LocateBlockHeaders(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BlockchainAPI_LocateBlockHashes_FullMethodName,
+		FullMethod: BlockchainAPI_LocateBlockHeaders_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).LocateBlockHashes(ctx, req.(*LocateBlockHashesRequest))
+		return srv.(BlockchainAPIServer).LocateBlockHeaders(ctx, req.(*LocateBlockHeadersRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1231,8 +1231,8 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockchainAPI_GetBlockLocator_Handler,
 		},
 		{
-			MethodName: "LocateBlockHashes",
-			Handler:    _BlockchainAPI_LocateBlockHashes_Handler,
+			MethodName: "LocateBlockHeaders",
+			Handler:    _BlockchainAPI_LocateBlockHeaders_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

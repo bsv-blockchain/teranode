@@ -49,5 +49,5 @@ type Store interface {
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 	GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error)
 	// legacy endpoints
-	LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*chainhash.Hash, error)
+	LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error)
 }
