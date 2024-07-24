@@ -15,10 +15,6 @@ export function connectToP2PServer() {
     const url = new URL(window.location.href)
     url.protocol = url.protocol === 'http:' ? 'ws' : 'wss'
 
-    if (url.hostname.includes('ubsv.dev')) {
-      url.port = url.protocol === 'ws:' ? '9906' : '9904'
-    }
-
     if (url.host.includes('localhost:517') || url.host.includes('localhost:417')) {
       url.protocol = 'ws:'
       url.host = 'localhost'

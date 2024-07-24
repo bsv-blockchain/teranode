@@ -24,82 +24,10 @@ jobs:
       - name: ref
         run: echo "Github Event Ref is ${{ github.event.ref }}"
 
-  eks-deploy-euc-allinone:
+  eks-deploy-eu-testing:
     uses: ./.github/workflows/deploy-to-region.yaml
     secrets: inherit
     if: startsWith(github.event.ref, 'refs/tags/v')
     with:
       region: eu-central-1
-      ubsv_env: allinone
-
-#  eks-deploy-eu-allinone:
-#    uses: ./.github/workflows/deploy-to-region.yaml
-#    secrets: inherit
-#    if: startsWith(github.event.ref, 'refs/tags/v')
-#    with:
-#      region: eu-west-1
-#      ubsv_env: allinone
-
-  eks-deploy-eu-scaling:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
-    with:
-      region: eu-west-1
-      ubsv_env: scaling
-
-#  eks-deploy-us-allinone:
-#    uses: ./.github/workflows/deploy-to-region.yaml
-#    secrets: inherit
-#    if: startsWith(github.event.ref, 'refs/tags/v')
-#    with:
-#      region: us-east-1
-#      ubsv_env: allinone
-
-  eks-deploy-us-scaling:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
-    with:
-      region: us-east-1
-      ubsv_env: scaling
-
-#  eks-deploy-asia-allinone:
-#    uses: ./.github/workflows/deploy-to-region.yaml
-#    secrets: inherit
-#    if: startsWith(github.event.ref, 'refs/tags/v')
-#    with:
-#      region: ap-south-1
-#      ubsv_env: allinone
-
-  eks-deploy-asia-scaling:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
-    with:
-      region: ap-south-1
-      ubsv_env: scaling
-
-  eks-deploy-usw-scaling:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
-    with:
-      region: us-west-2
-      ubsv_env: scaling
-
-  eks-deploy-cc1-scaling:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
-    with:
-      region: ca-central-1
-      ubsv_env: scaling
-
-  eks-deploy-ane-scaling:
-    uses: ./.github/workflows/deploy-to-region.yaml
-    secrets: inherit
-    if: startsWith(github.event.ref, 'refs/tags/scaling-v')
-    with:
-      region: ap-northeast-2
-      ubsv_env: scaling
+      ubsv_env: testing

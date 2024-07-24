@@ -1628,6 +1628,7 @@ func disconnectPeer(peerList map[int32]*serverPeer, compareFunc func(*serverPeer
 // newPeerConfig returns the configuration for the given serverPeer.
 func newPeerConfig(sp *serverPeer) *peer.Config {
 	return &peer.Config{
+		// This is a complete list including ignored messages.
 		Listeners: peer.MessageListeners{
 			OnVersion:      sp.OnVersion,
 			OnMemPool:      sp.OnMemPool,

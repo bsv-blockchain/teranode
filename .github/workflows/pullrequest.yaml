@@ -79,7 +79,6 @@ jobs:
         run: make smoketests
         continue-on-error: false
 
-
   sonarqube:
     name: Sonarqube
     runs-on: ubsv-runner
@@ -111,3 +110,44 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: https://sonarqube.ubsv.dev
+
+  # Get version tag
+  get_tag:
+    runs-on: self-hosted
+    steps:
+      - name: Determine deployment tag
+        id: deployment_tag
+        run: |
+          if [[ '${{ github.ref_type }}' == 'tag' ]]; then
+            export tag=${{ github.ref_name }}
+            echo "version tag is $tag"
+            echo "id=$tag" >> $GITHUB_OUTPUT
+          else
+            export tag=${{ github.sha }}
+            echo "version tag is $tag"
+            echo "id=$tag" >> $GITHUB_OUTPUT
+          fi
+    outputs:
+      deployment_tag: ${{ steps.deployment_tag.outputs.id }}
+
+  # Build for X86 (AMD64)
+  build_amd64:
+    needs: get_tag
+    uses: ./.github/workflows/gke_build.yaml
+    secrets: inherit
+    with:
+      arch: amd64
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      region: eu-north-1
+
+  # Build for ARM64 (Graviton and Darwin)
+  build_arm64:
+    needs: get_tag
+    uses: ./.github/workflows/gke_build.yaml
+    secrets: inherit
+    with:
+      arch: arm64
+      repo: ubsv
+      tag: ${{ needs.get_tag.outputs.deployment_tag }}
+      region: eu-north-1

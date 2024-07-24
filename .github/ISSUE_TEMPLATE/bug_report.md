@@ -41,7 +41,7 @@ SETTINGS
 SERVICE_NAME=validation-service
 advertisingInterval=10s
 advertisingURL=
-asset_clientName=M1
+clientName=M1
 asset_grpcAddress=blob-service.blob-service.svc.cluster.local:8091
 asset_grpcListenAddress=:8091
 asset_httpAddress=https://m1.scaling.ubsv.dev

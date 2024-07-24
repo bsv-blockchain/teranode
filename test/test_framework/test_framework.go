@@ -165,6 +165,16 @@ func (b *BitcoinTestFramework) StopNodes() error {
 	return nil
 }
 
+func (b *BitcoinTestFramework) StopNodesWithRmVolume() error {
+	if b.Compose != nil {
+		// Stop the Docker Compose services
+		if err := b.Compose.Down(b.Context, tc.RemoveVolumes(true)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Restart the nodes with docker-compose down operation.
 func (b *BitcoinTestFramework) RestartNodes(m map[string]string) error {
 	if b.Compose != nil {

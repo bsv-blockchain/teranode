@@ -143,7 +143,6 @@ type config struct {
 	MiningAddrs             []string      `long:"miningaddr" description:"Add the specified payment address to the list of addresses to use for generated blocks -- At least one address is required if the generate option is set"`
 	BlockMinSize            uint64        `long:"blockminsize" description:"Mininum block size in bytes to be used when creating a block"`
 	BlockMaxSize            uint64        `long:"blockmaxsize" description:"Maximum block size in bytes to be used when creating a block"`
-	BlockPrioritySize       uint64        `long:"blockprioritysize" description:"Size in bytes for high-priority/low-fee transactions when creating a block"`
 	UserAgentComments       []string      `long:"uacomment" description:"Comment to add to the user agent -- See BIP 14 for more information."`
 	NoPeerBloomFilters      bool          `long:"nopeerbloomfilters" description:"Disable bloom filtering support"`
 	NoCFilters              bool          `long:"nocfilters" description:"Disable committed filtering (CF) support"`
@@ -289,7 +288,6 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		TrickleInterval:         defaultTrickleInterval,
 		BlockMinSize:            defaultBlockMinSize,
 		BlockMaxSize:            defaultBlockMaxSize,
-		BlockPrioritySize:       uint64(50000), // TODO change this to something else
 		SigCacheMaxSize:         defaultSigCacheMaxSize,
 		UtxoCacheMaxSizeMiB:     defaultUtxoCacheMaxSizeMiB,
 		Generate:                defaultGenerate,
@@ -531,8 +529,7 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		logger.Errorf("%s", usageMessage)
 		return nil, nil, err
 	}
-	// Limit the block priority and minimum block sizes to max block size.
-	cfg.BlockPrioritySize = minUint64(cfg.BlockPrioritySize, cfg.BlockMaxSize)
+	// Limit the minimum block sizes to max block size.
 	cfg.BlockMinSize = minUint64(cfg.BlockMinSize, cfg.BlockMaxSize)
 
 	// Prepend ExcessiveBlockSize signaling to the UserAgentComments

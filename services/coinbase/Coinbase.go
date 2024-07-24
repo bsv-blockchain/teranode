@@ -1155,7 +1155,7 @@ func (c *Coinbase) monitorSpendableUTXOs(threshold uint64) {
 	alreadyNotified := false
 
 	channel, _ := gocore.Config().Get("slack_channel")
-	clientName, _ := gocore.Config().Get("asset_clientName")
+	clientName, _ := gocore.Config().Get("clientName")
 
 	for range ticker.C {
 		func() {

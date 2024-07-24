@@ -1,4 +1,4 @@
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-v2
+FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-2db1b0e
 ARG GITHUB_SHA
 
 
@@ -16,7 +16,7 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 # Build the Go libraries of the project
 RUN go build .
 
-FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-v2
+FROM 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-2db1b0e
 
 RUN adduser --disabled-password --gecos '' appuser
 USER appuser

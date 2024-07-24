@@ -2,7 +2,7 @@ on:
   workflow_dispatch:
     inputs:
       ubsv_env:
-        description: 'Environment that we are deploying to (either scaling or allinone)'
+        description: 'Environment that we are deploying to (either scaling or testing)'
         required: true
         type: string
       logLevel:
@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       ubsv_env:
-        description: 'Environment that we are deploying to (either scaling or allinone)'
+        description: 'Environment that we are deploying to (either scaling or testing)'
         required: true
         type: string
 

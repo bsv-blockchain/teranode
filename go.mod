@@ -10,7 +10,6 @@ require (
 	github.com/IBM/sarama v1.42.2
 	github.com/aerospike/aerospike-client-go/v7 v7.2.0
 	github.com/ajeetdsouza/testcontainers-aerospike-go v0.1.0
-	github.com/archdx/zerolog-sentry v1.8.2
 	github.com/aws/aws-sdk-go-v2 v1.27.0
 	github.com/aws/aws-sdk-go-v2/config v1.27.16
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.16.21
@@ -110,7 +109,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/btcsuite/snappy-go v1.0.0 // indirect
 	github.com/buger/goterm v1.0.4 // indirect
-	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/centrifugal/protocol v0.10.0 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
@@ -369,7 +367,6 @@ require (
 )
 
 require (
-	github.com/getsentry/sentry-go v0.27.0
 	github.com/go-zeromq/zmq4 v0.15.0 // indirect
 	github.com/labstack/echo/v4 v4.10.0
 	github.com/labstack/gommon v0.4.0

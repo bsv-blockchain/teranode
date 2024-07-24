@@ -12,13 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"github.com/bitcoin-sv/ubsv/services/blockpersister"
-	"github.com/bitcoin-sv/ubsv/services/legacy"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
-	"golang.org/x/term"
-
-	zlogsentry "github.com/archdx/zerolog-sentry"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
@@ -31,23 +24,27 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/faucet"
+	"github.com/bitcoin-sv/ubsv/services/legacy"
 	"github.com/bitcoin-sv/ubsv/services/miner"
 	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/rpc"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
-	"github.com/getsentry/sentry-go"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
+	"golang.org/x/term"
 )
 
 // Name used by build script for the binaries. (Please keep on single line)
@@ -70,9 +67,6 @@ func init() {
 }
 
 func main() {
-	// Flush buffered events before the program terminates.
-	defer sentry.Flush(2 * time.Second)
-
 	switch path.Base(os.Args[0]) {
 	case "bare.run":
 		// bare.Init()
@@ -442,29 +436,7 @@ func initLogger(serviceName string) ulogger.Logger {
 		NoColor: !isTerminal, // Disable color if output is not a terminal
 	}
 
-	// sentry
-	if sentryDns, ok := gocore.Config().Get("sentry_dsn"); ok && sentryDns != "" {
-		tracesSampleRateStr, _ := gocore.Config().Get("sentry_traces_sample_rate", "1.0")
-		tracesSampleRate, err := strconv.ParseFloat(tracesSampleRateStr, 64)
-		if err != nil {
-			panic("failed to parse sentry_traces_sample_rate: " + err.Error())
-		}
-
-		w, err := zlogsentry.New(sentryDns,
-			zlogsentry.WithEnvironment("dev"),
-			zlogsentry.WithRelease("1.0.0"),
-			zlogsentry.WithServerName(serviceName),
-			zlogsentry.WithSampleRate(tracesSampleRate),
-		)
-		if err != nil {
-			panic("sentry.Init: " + err.Error())
-		}
-
-		multi := zerolog.MultiLevelWriter(output, w)
-		logOptions = append(logOptions, ulogger.WithWriter(multi))
-	} else {
-		logOptions = append(logOptions, ulogger.WithWriter(output))
-	}
+	logOptions = append(logOptions, ulogger.WithWriter(output))
 
 	useLogger, ok := gocore.Config().Get("logger")
 	if ok && useLogger != "" {

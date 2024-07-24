@@ -42,7 +42,7 @@ For each microservice, we maintain several YAML files that define its behavior w
     volumes:
       - name: lustre-storage
         persistentVolumeClaim:
-          claimName: lustre-pvc
+          claimName: subtree-pvc
     ```
     Here, `lustre-pvc` references a specific PersistentVolumeClaim defined in `lustre-pvc.yaml`, indicating a Lustre filesystem storage configuration.
 
