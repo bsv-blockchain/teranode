@@ -50,6 +50,7 @@ const (
 	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName   = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
 	BlockchainAPI_GetFSMCurrentState_FullMethodName        = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
 	BlockchainAPI_GetBlockLocator_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlockLocator"
+	BlockchainAPI_LocateBlockHashes_FullMethodName         = "/blockchain_api.BlockchainAPI/LocateBlockHashes"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -87,6 +88,7 @@ type BlockchainAPIClient interface {
 	GetBlocksSubtreesNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksSubtreesNotSetResponse, error)
 	GetFSMCurrentState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	GetBlockLocator(ctx context.Context, in *GetBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockLocatorResponse, error)
+	LocateBlockHashes(ctx context.Context, in *LocateBlockHashesRequest, opts ...grpc.CallOption) (*LocateBlockHashesResponse, error)
 }
 
 type blockchainAPIClient struct {
@@ -410,6 +412,16 @@ func (c *blockchainAPIClient) GetBlockLocator(ctx context.Context, in *GetBlockL
 	return out, nil
 }
 
+func (c *blockchainAPIClient) LocateBlockHashes(ctx context.Context, in *LocateBlockHashesRequest, opts ...grpc.CallOption) (*LocateBlockHashesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LocateBlockHashesResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_LocateBlockHashes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockchainAPIServer is the server API for BlockchainAPI service.
 // All implementations must embed UnimplementedBlockchainAPIServer
 // for forward compatibility
@@ -445,6 +457,7 @@ type BlockchainAPIServer interface {
 	GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error)
 	GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error)
 	GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error)
+	LocateBlockHashes(context.Context, *LocateBlockHashesRequest) (*LocateBlockHashesResponse, error)
 	mustEmbedUnimplementedBlockchainAPIServer()
 }
 
@@ -538,6 +551,9 @@ func (UnimplementedBlockchainAPIServer) GetFSMCurrentState(context.Context, *emp
 }
 func (UnimplementedBlockchainAPIServer) GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockLocator not implemented")
+}
+func (UnimplementedBlockchainAPIServer) LocateBlockHashes(context.Context, *LocateBlockHashesRequest) (*LocateBlockHashesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LocateBlockHashes not implemented")
 }
 func (UnimplementedBlockchainAPIServer) mustEmbedUnimplementedBlockchainAPIServer() {}
 
@@ -1077,6 +1093,24 @@ func _BlockchainAPI_GetBlockLocator_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_LocateBlockHashes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LocateBlockHashesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).LocateBlockHashes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_LocateBlockHashes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).LocateBlockHashes(ctx, req.(*LocateBlockHashesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockchainAPI_ServiceDesc is the grpc.ServiceDesc for BlockchainAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1195,6 +1229,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockLocator",
 			Handler:    _BlockchainAPI_GetBlockLocator_Handler,
+		},
+		{
+			MethodName: "LocateBlockHashes",
+			Handler:    _BlockchainAPI_LocateBlockHashes_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

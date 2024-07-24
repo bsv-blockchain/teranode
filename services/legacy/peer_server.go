@@ -702,13 +702,18 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 	// over with the genesis block if unknown block locators are provided.
 	//
 	// This mirrors the behavior in the reference implementation.
-	// TODO implement BlockLocatorHashes in blockchain service
-	hashList := make([]chainhash.Hash, 0) // chain.LocateBlocks(msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
+	//hashList := make([]chainhash.Hash, 0) // chain.LocateBlocks(msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
+	hashList, err := sp.server.blockchainClient.LocateBlockHashes(context.TODO(), msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
+	if err != nil {
+		sp.server.logger.Errorf("Failed to fetch locator block hashes: %v", err)
+		// set hash list to empty, which will send a not found message to the peer at the bottom of this function
+		hashList = make([]*chainhash.Hash, 0)
+	}
 
 	// Generate inventory message.
 	invMsg := wire.NewMsgInv()
 	for i := range hashList {
-		iv := wire.NewInvVect(wire.InvTypeBlock, &hashList[i])
+		iv := wire.NewInvVect(wire.InvTypeBlock, hashList[i])
 		_ = invMsg.AddInvVect(iv)
 	}
 

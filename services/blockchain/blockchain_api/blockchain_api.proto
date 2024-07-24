@@ -41,6 +41,7 @@ service BlockchainAPI {
   rpc GetBlocksSubtreesNotSet(google.protobuf.Empty) returns (GetBlocksSubtreesNotSetResponse) {}
   rpc GetFSMCurrentState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
   rpc GetBlockLocator(GetBlockLocatorRequest) returns (GetBlockLocatorResponse) {}
+  rpc LocateBlockHashes(LocateBlockHashesRequest) returns (LocateBlockHashesResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -297,4 +298,14 @@ message GetBlockLocatorRequest {
 
 message GetBlockLocatorResponse {
   repeated bytes locator = 1;
+}
+
+message LocateBlockHashesRequest {
+  repeated bytes locator = 1;
+  bytes hash_stop = 2;
+  uint32 max_hashes = 3;
+}
+
+message LocateBlockHashesResponse {
+  repeated bytes hashes = 1;
 }

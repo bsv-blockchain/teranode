@@ -274,6 +274,11 @@ type mockStore struct {
 	block *model.Block
 }
 
+func (s *mockStore) LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*chainhash.Hash, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (s *mockStore) Health(ctx context.Context) (*blockchain_api.HealthResponse, error) {
 	panic("not implemented")
 }

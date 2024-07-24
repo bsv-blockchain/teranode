@@ -42,7 +42,28 @@ type ClientI interface {
 
 	// new legacy endpoints
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error)
+	LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*chainhash.Hash, error)
 }
+
+//// LocateBlocks returns the hashes of the blocks after the first known block in
+//// the locator until the provided stop hash is reached, or up to the provided
+//// max number of block hashes.
+////
+//// In addition, there are two special cases:
+////
+////   - When no locators are provided, the stop hash is treated as a request for
+////     that block, so it will either return the stop hash itself if it is known,
+////     or nil if it is unknown
+////   - When locators are provided, but none of them are known, hashes starting
+////     after the genesis block will be returned
+////
+//// This function is safe for concurrent access.
+//func (b *BlockChain) LocateBlocks(locator BlockLocator, hashStop *chainhash.Hash, maxHashes uint32) []chainhash.Hash {
+//	b.chainLock.RLock()
+//	hashes := b.locateBlocks(locator, hashStop, maxHashes)
+//	b.chainLock.RUnlock()
+//	return hashes
+//}
 
 var _ ClientI = &MockBlockchain{}
 
@@ -158,6 +179,9 @@ func (s *MockBlockchain) SendFSMEvent(ctx context.Context, state blockchain_api.
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*chainhash.Hash, error) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) HeightToHashRange(startHeight uint32, endHash *chainhash.Hash, maxResults int) ([]chainhash.Hash, error) {

@@ -277,3 +277,7 @@ func (s *mockStore) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block
 func (s *mockStore) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error) {
 	panic("not implemented")
 }
+func (s *mockStore) LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*chainhash.Hash, error) {
+	//TODO implement me
+	panic("implement me")
+}

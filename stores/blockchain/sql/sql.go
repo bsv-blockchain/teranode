@@ -27,8 +27,6 @@ type SQL struct {
 	blocksCache   blockchainCache
 }
 
-var ()
-
 func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 	logger = logger.New("bcsql")
 

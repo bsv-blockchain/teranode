@@ -173,3 +173,6 @@ func (c LocalClient) SendFSMEvent(ctx context.Context, state blockchain_api.FSME
 func (c LocalClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 	return getBlockLocator(ctx, c.store, blockHeaderHash, blockHeaderHeight)
 }
+func (c LocalClient) LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*chainhash.Hash, error) {
+	return nil, nil
+}

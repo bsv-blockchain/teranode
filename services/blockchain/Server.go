@@ -52,7 +52,9 @@ type Blockchain struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, subtreeStore blob.Store, utxoStore utxo.Store) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, subtreeStore blob.Store,
+	utxoStore utxo.Store) (*Blockchain, error) {
+
 	initPrometheusMetrics()
 
 	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
@@ -895,6 +897,30 @@ func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.Ge
 	}
 
 	return &blockchain_api.GetBlockLocatorResponse{Locator: locator}, nil
+}
+
+func (b *Blockchain) LocateBlockHashes(ctx context.Context, request *blockchain_api.LocateBlockHashesRequest) (*blockchain_api.LocateBlockHashesResponse, error) {
+	locator := make([]*chainhash.Hash, len(request.Locator))
+	for i, hash := range request.Locator {
+		locator[i], _ = chainhash.NewHash(hash)
+	}
+
+	hashStop, _ := chainhash.NewHash(request.HashStop)
+
+	// Get the blocks
+	blockHashes, err := b.store.LocateBlockHashes(ctx, locator, hashStop, request.MaxHashes)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHashesBytes := make([][]byte, len(blockHashes))
+	for i, blockHash := range blockHashes {
+		blockHashesBytes[i] = blockHash.CloneBytes()
+	}
+
+	return &blockchain_api.LocateBlockHashesResponse{
+		Hashes: blockHashesBytes,
+	}, nil
 }
 
 func safeClose[T any](ch chan T) {

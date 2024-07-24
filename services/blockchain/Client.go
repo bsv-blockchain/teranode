@@ -644,6 +644,36 @@ func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash
 	return locator, nil
 }
 
+func (c *Client) LocateBlockHashes(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*chainhash.Hash, error) {
+	locatorBytes := make([][]byte, 0, len(locator))
+	for _, hash := range locator {
+		locatorBytes = append(locatorBytes, hash.CloneBytes())
+	}
+
+	req := &blockchain_api.LocateBlockHashesRequest{
+		Locator:   locatorBytes,
+		HashStop:  hashStop.CloneBytes(),
+		MaxHashes: maxHashes,
+	}
+
+	resp, err := c.client.LocateBlockHashes(ctx, req)
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	hashList := make([]*chainhash.Hash, 0, len(resp.Hashes))
+	var h *chainhash.Hash
+	for _, hash := range resp.Hashes {
+		h, err = chainhash.NewHash(hash)
+		if err != nil {
+			return nil, err
+		}
+		hashList = append(hashList, h)
+	}
+
+	return hashList, nil
+}
+
 // log2FloorMasks defines the masks to use when quickly calculating
 // floor(log2(x)) in a constant log2(32) = 5 steps, where x is a uint32, using
 // shifts.  They are derived from (2^(2^x) - 1) * (2^(2^x)), for x in 4..0.
