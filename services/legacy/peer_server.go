@@ -749,13 +749,13 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 // OnGetHeaders is invoked when a peer receives a getheaders bitcoin
 // message.
 func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
-	// Ignore getheaders requests if not in sync.
+	// Ignore OnGetHeaders requests if not in sync.
 	if !sp.server.syncManager.IsCurrent() {
 		return
 	}
 
 	// Find the most recent known block in the best chain based on the block
-	// locator and fetch all of the headers after it until either
+	// locator and fetch all the headers after it until either
 	// wire.MaxBlockHeadersPerMsg have been fetched or the provided stop
 	// hash is encountered.
 	//
@@ -764,7 +764,6 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 	// over with the genesis block if unknown block locators are provided.
 	//
 	// This mirrors the behavior in the reference implementation.
-	//chain := sp.server.chain
 	blockHeaders, err := sp.server.blockchainClient.LocateBlockHeaders(context.TODO(), msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
 	if err != nil {
 		sp.server.logger.Errorf("Failed to fetch locator block hashes: %v", err)
