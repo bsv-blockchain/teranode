@@ -402,6 +402,8 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			}
 		}
 
+		//
+
 		if missed > 0 {
 			// 3. ...then attempt to load the txMeta from the network
 			start, stat5, ctx5 := tracing.StartStatFromContext(spanCtx, "5. processMissingTransactions")

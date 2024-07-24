@@ -63,7 +63,8 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 						}
 					}
 				}
-
+				// storage error -> file on s3, aerospike.
+				// service error -> if it is using our GRPC of one of our services.
 				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, "fee", "sizeInBytes", "parentTxHashes", "blockIDs"); err != nil {
 					return err
 				}

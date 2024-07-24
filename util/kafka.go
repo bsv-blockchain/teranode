@@ -260,7 +260,11 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 	}()
 }
 
-func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int,
+// txMetaCache : autocommit should be enabled - true, we CAN miss.
+// subtree validation : autocommit should be disabled - false.
+// block persister : autocommit should be disabled - false.
+
+func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int, autoCommitIn bool,
 	consumerClosure ...func(KafkaMessage) error) error {
 
 	config := sarama.NewConfig()

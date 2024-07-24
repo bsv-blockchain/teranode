@@ -329,8 +329,7 @@ func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.U
 			prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
 		}
 	}()
-
-	// TODO GOKHAN: UPDATE ERROR HANDLING
+	// TODO: GET RID OF KAFKA FROM BLOCKASSEMBLY - NOT NEEDED
 	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaURL, "blockassembly", nil, consumerCount, func(msg util.KafkaMessage) error {
 		startTime := time.Now()
 
