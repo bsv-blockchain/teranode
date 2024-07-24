@@ -7,14 +7,23 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/labstack/echo/v4"
+	"github.com/ordishs/gocore"
 )
 
 var (
 	//go:embed all:build/*
 
 	res embed.FS
+
+	logger ulogger.Logger
 )
+
+func init() {
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger = ulogger.New("appHandler", ulogger.WithLevel(logLevelStr))
+}
 
 func AppHandler(c echo.Context) error {
 
@@ -40,6 +49,7 @@ func AppHandler(c echo.Context) error {
 			resource = "build/index.html"
 			b, err = res.ReadFile(resource)
 			if err != nil {
+				logger.Debugf("Resource %q - NOT FOUND", resource)
 				return c.String(http.StatusNotFound, "Not found")
 			}
 		}
@@ -63,6 +73,7 @@ func AppHandler(c echo.Context) error {
 		mimeType = "text/html"
 	}
 
+	logger.Debugf("Resource %q [%s] - OK", resource, mimeType)
 	return c.Blob(http.StatusOK, mimeType, b)
 
 }

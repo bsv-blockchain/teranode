@@ -113,7 +113,7 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 			// 	fmt.Printf("Level %d: %d transactions\n", level, len(txs))
 			// }
 			allParents := 0
-			for i, _ := range blockTXsPerLevel {
+			for i := range blockTXsPerLevel {
 				allParents += len(blockTXsPerLevel[i])
 			}
 			fmt.Println("all Parents: ", allParents)

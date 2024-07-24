@@ -66,3 +66,59 @@ type Store interface {
 	SetBlockHeight(height uint32) error
 	GetBlockHeight() (uint32, error)
 }
+
+var _ Store = &MockUtxostore{}
+
+type MockUtxostore struct{}
+
+func (mu *MockUtxostore) Health(ctx context.Context) (int, string, error) {
+	return 0, "Validator test", nil
+}
+
+func (mu *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
+	return nil, nil
+}
+
+func (mu *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
+	return nil, nil
+
+}
+func (mu *MockUtxostore) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
+
+}
+
+func (mu *MockUtxostore) GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) {
+	return nil, nil
+}
+func (mu *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	return nil, nil
+}
+
+func (mu *MockUtxostore) Spend(ctx context.Context, spends []*Spend, blockHeight uint32) error {
+	return nil
+
+}
+func (mu *MockUtxostore) UnSpend(ctx context.Context, spends []*Spend) error {
+	return nil
+
+}
+func (mu *MockUtxostore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+	return nil
+
+}
+
+func (mu *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...string) error {
+	return nil
+
+}
+func (mu *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+	return nil
+}
+
+func (mu *MockUtxostore) SetBlockHeight(height uint32) error {
+	return nil
+}
+func (mu *MockUtxostore) GetBlockHeight() (uint32, error) {
+	return 0, nil
+}
