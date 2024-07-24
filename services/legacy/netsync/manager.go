@@ -631,11 +631,10 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	buf := bytes.NewBuffer(make([]byte, 0, tmsg.tx.MsgTx().SerializeSize()))
 	_ = tmsg.tx.MsgTx().Serialize(buf)
 	btTx, err := bt.NewTxFromBytes(buf.Bytes())
-	err = sm.validationClient.Validate(context.TODO(), btTx, uint32(sm.topBlock()))
 
-	// Process the transaction to include validation, insertion in the
-	// memory pool, orphan handling, etc.
-	//acceptedTxs, err := sm.txMemPool.ProcessTransaction(tmsg.tx, true, true, mempool.Tag(peer.ID()))
+	// TODO what to do with transactions coming in out of order?
+	// the old node put them into the orphan mempool and accepted them when the parent came in
+	err = sm.validationClient.Validate(context.TODO(), btTx, uint32(sm.topBlock()))
 
 	// Remove transaction from request maps. Either the mempool/chain
 	// already knows about it and as such we shouldn't have any more
@@ -662,7 +661,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 		return
 	}
 
-	// TODO we should be checking whether this transaction was really accepted, or if it was already known
+	// acceptedTxs also should contain any orphan transactions that were accepted when this transaction was processed
 	acceptedTxs := []*chainhash.Hash{btTx.TxIDChainHash()}
 	if len(acceptedTxs) > 0 {
 		sm.peerNotifier.AnnounceNewTransactions(acceptedTxs)
@@ -887,10 +886,10 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 				"fetch: %v", err)
 		}
 		if !haveInv {
-			syncPeerState := sm.peerStates[sm.syncPeer]
+			peerState := sm.peerStates[sm.syncPeer]
 
 			sm.requestedBlocks[*node.hash] = struct{}{}
-			syncPeerState.requestedBlocks[*node.hash] = struct{}{}
+			peerState.requestedBlocks[*node.hash] = struct{}{}
 
 			_ = getDataMessage.AddInvVect(iv)
 			numRequested++
@@ -940,8 +939,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 		// Ensure there is a previous header to compare against.
 		prevNodeEl := sm.headerList.Back()
 		if prevNodeEl == nil {
-			sm.logger.Warnf("Header list does not contain a previous" +
-				"element as expected -- disconnecting peer")
+			sm.logger.Warnf("Header list does not contain a previous element as expected -- disconnecting peer")
 			peer.Disconnect()
 			return
 		}
@@ -1004,8 +1002,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	locator := blockchain.BlockLocator([]*chainhash.Hash{finalHash})
 	err := peer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
 	if err != nil {
-		sm.logger.Warnf("Failed to send getheaders message to "+
-			"peer %s: %v", peer.Addr(), err)
+		sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", peer.Addr(), err)
 		return
 	}
 }
@@ -1081,7 +1078,6 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	if lastBlock != -1 && sm.current() {
 		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(context.TODO(), &invVects[lastBlock].Hash)
 		if err == nil {
-			//blkHeight, err := sm.chain.BlockHeightByHash(&invVects[lastBlock].Hash)
 			peer.UpdateLastBlockHeight(int32(blockHeaderMeta.Height))
 		}
 	}
@@ -1163,7 +1159,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 				sm.limitMap(sm.requestedBlocks, maxRequestedBlocks)
 				state.requestedBlocks[iv.Hash] = struct{}{}
 
-				gdmsg.AddInvVect(iv)
+				_ = gdmsg.AddInvVect(iv)
 				numRequested++
 			}
 
@@ -1175,7 +1171,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 				sm.limitMap(sm.requestedTxns, maxRequestedTxns)
 				state.requestedTxns[iv.Hash] = struct{}{}
 
-				gdmsg.AddInvVect(iv)
+				_ = gdmsg.AddInvVect(iv)
 				numRequested++
 			}
 		}
@@ -1262,9 +1258,6 @@ out:
 					peerID = sm.syncPeer.ID()
 				}
 				msg.reply <- peerID
-
-			case processBlockMsg:
-				// TODO process block message
 
 			case isCurrentMsg:
 				msg.reply <- sm.current()
@@ -1414,15 +1407,6 @@ func (sm *SyncManager) SyncPeerID() int32 {
 	reply := make(chan int32)
 	sm.msgChan <- getSyncPeerMsg{reply: reply}
 	return <-reply
-}
-
-// ProcessBlock makes use of ProcessBlock on an internal instance of a block
-// chain.
-func (sm *SyncManager) ProcessBlock(block *bsvutil.Block, flags blockchain.BehaviorFlags) (bool, error) {
-	reply := make(chan processBlockResponse)
-	sm.msgChan <- processBlockMsg{block: block, flags: flags, reply: reply}
-	response := <-reply
-	return response.isOrphan, response.err
 }
 
 // IsCurrent returns whether the sync manager believes it is synced with

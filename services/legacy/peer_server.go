@@ -771,17 +771,20 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 
 // OnGetCFilters is invoked when a peer receives a getcfilters bitcoin message.
 func (sp *serverPeer) OnGetCFilters(_ *peer.Peer, msg *wire.MsgGetCFilters) {
-	sp.server.logger.Warnf("Ignoring OnGetCFFilters message from %v -- bloom filtering is not supported", sp)
+	sp.server.logger.Warnf("Ignoring getcfilters request from %v", sp)
+	sp.Disconnect()
 }
 
 // OnGetCFHeaders is invoked when a peer receives a getcfheader bitcoin message.
 func (sp *serverPeer) OnGetCFHeaders(_ *peer.Peer, msg *wire.MsgGetCFHeaders) {
-	sp.server.logger.Warnf("Ignoring OnGetCFHeaders message from %v -- bloom filtering is not supported", sp)
+	sp.server.logger.Warnf("Ignoring getcfheaders request from %v", sp)
+	sp.Disconnect()
 }
 
 // OnGetCFCheckpt is invoked when a peer receives a getcfcheckpt bitcoin message.
 func (sp *serverPeer) OnGetCFCheckpt(_ *peer.Peer, msg *wire.MsgGetCFCheckpt) {
-	sp.server.logger.Warnf("Ignoring OnGetCFCheckpt message from %v -- bloom filtering is not supported", sp)
+	sp.server.logger.Warnf("Ignoring getcfcheckpt request from %v", sp)
+	sp.Disconnect()
 }
 
 // enforceNodeBloomFlag disconnects the peer if the server is not configured to
@@ -823,11 +826,16 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 // is used by remote peers to request that no transactions which have a fee rate
 // lower than provided value are inventoried to them.  The peer will be
 // disconnected if an invalid fee filter value is provided.
-func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, _ *wire.MsgFeeFilter) {
-	// don't allow fee filters
-	sp.server.logger.Warnf("Ignoring fee filter request from %s", sp)
-	// TODO - disconnect as this is not supported
-	// sp.Disconnect()
+func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, msg *wire.MsgFeeFilter) {
+	// Check that the passed minimum fee is a valid amount.
+	if msg.MinFee < 0 || msg.MinFee > bsvutil.MaxSatoshi {
+		sp.server.logger.Debugf("Peer %v sent an invalid feefilter '%v' -- "+
+			"disconnecting", sp, bsvutil.Amount(msg.MinFee))
+		sp.Disconnect()
+		return
+	}
+
+	atomic.StoreInt64(&sp.feeFilter, msg.MinFee)
 }
 
 // OnFilterAdd is invoked when a peer receives a filteradd bitcoin
@@ -835,7 +843,8 @@ func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, _ *wire.MsgFeeFilter) {
 // filter.  The peer will be disconnected if a filter is not loaded when this
 // message is received or the server is not configured to allow bloom filters.
 func (sp *serverPeer) OnFilterAdd(_ *peer.Peer, msg *wire.MsgFilterAdd) {
-	sp.server.logger.Warnf("Ignoring OnFlterAdd request from %s -- bloom filtering is not supported", sp)
+	sp.server.logger.Warnf("Ignoring filteradd request from %s", sp)
+	sp.Disconnect()
 }
 
 // OnFilterClear is invoked when a peer receives a filterclear bitcoin
@@ -843,7 +852,8 @@ func (sp *serverPeer) OnFilterAdd(_ *peer.Peer, msg *wire.MsgFilterAdd) {
 // The peer will be disconnected if a filter is not loaded when this message is
 // received  or the server is not configured to allow bloom filters.
 func (sp *serverPeer) OnFilterClear(_ *peer.Peer, msg *wire.MsgFilterClear) {
-	sp.server.logger.Warnf("Ignoring OnFilterClear request from %s -- bloom filtering is not supported", sp)
+	sp.server.logger.Warnf("Ignoring filterclear request from %s", sp)
+	sp.Disconnect()
 }
 
 // OnFilterLoad is invoked when a peer receives a filterload bitcoin
@@ -852,7 +862,8 @@ func (sp *serverPeer) OnFilterClear(_ *peer.Peer, msg *wire.MsgFilterClear) {
 // The peer will be disconnected if the server is not configured to allow bloom
 // filters.
 func (sp *serverPeer) OnFilterLoad(_ *peer.Peer, msg *wire.MsgFilterLoad) {
-	sp.server.logger.Warnf("Ignoring OnFilterLoad request from %s -- bloom filtering is not supported", sp)
+	sp.server.logger.Warnf("Ignoring filterload request from %s", sp)
+	sp.Disconnect()
 }
 
 // OnGetAddr is invoked when a peer receives a getaddr bitcoin message
@@ -1619,36 +1630,28 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 	return &peer.Config{
 		// This is a complete list including ignored messages.
 		Listeners: peer.MessageListeners{
-			OnGetAddr: sp.OnGetAddr,
-			OnAddr:    sp.OnAddr,
-			// OnPing: handled by peer package
-			// OnPong: handled by peer package
-			OnMemPool: sp.OnMemPool,
-			OnTx:      sp.OnTx,
-			OnBlock:   sp.OnBlock,
-			// OnCFilter
-			// OnCFHeaders
-			// OnCFCheckpt
+			OnVersion:      sp.OnVersion,
+			OnMemPool:      sp.OnMemPool,
+			OnTx:           sp.OnTx,
+			OnBlock:        sp.OnBlock,
 			OnInv:          sp.OnInv,
 			OnHeaders:      sp.OnHeaders,
-			OnNotFound:     sp.OnNotFound,
 			OnGetData:      sp.OnGetData,
 			OnGetBlocks:    sp.OnGetBlocks,
 			OnGetHeaders:   sp.OnGetHeaders,
-			OnGetCFilters:  sp.OnGetCFilters,  // Ignored
-			OnGetCFHeaders: sp.OnGetCFHeaders, // Ignored
-			OnGetCFCheckpt: sp.OnGetCFCheckpt, // Ignored
-			OnFeeFilter:    sp.OnFeeFilter,    // Will disconnect peer
-			OnFilterAdd:    sp.OnFilterAdd,    // Ignored
-			OnFilterClear:  sp.OnFilterClear,  // Ignored
-			OnFilterLoad:   sp.OnFilterLoad,   // Ignored
-			// OnMerkleBlock
-			OnVersion: sp.OnVersion,
-			// OnVerAck
-			OnReject: sp.OnReject,
-			// OnSendHeaders:
-			OnRead:  sp.OnRead,
-			OnWrite: sp.OnWrite,
+			OnGetCFilters:  sp.OnGetCFilters,  // not implemented, just logs a warning
+			OnGetCFHeaders: sp.OnGetCFHeaders, // not implemented, just logs a warning
+			OnGetCFCheckpt: sp.OnGetCFCheckpt, // not implemented, just logs a warning
+			OnFeeFilter:    sp.OnFeeFilter,    // being set, but not being enforced, could cause peer to disconnect
+			OnFilterAdd:    sp.OnFilterAdd,    // not implemented, just logs a warning
+			OnFilterClear:  sp.OnFilterClear,  // not implemented, just logs a warning
+			OnFilterLoad:   sp.OnFilterLoad,   // not implemented, just logs a warning
+			OnGetAddr:      sp.OnGetAddr,
+			OnAddr:         sp.OnAddr,
+			OnRead:         sp.OnRead,
+			OnWrite:        sp.OnWrite,
+			OnReject:       sp.OnReject,
+			OnNotFound:     sp.OnNotFound,
 		},
 		AddrMe:            addrMe,
 		NewestBlock:       sp.newestBlock,

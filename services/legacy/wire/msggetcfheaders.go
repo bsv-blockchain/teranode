@@ -59,7 +59,7 @@ func (msg *MsgGetCFHeaders) Command() string {
 
 // MaxPayloadLength returns the maximum length the payload can be for the
 // receiver.  This is part of the Message interface implementation.
-func (msg *MsgGetCFHeaders) MaxPayloadLength(pver uint32) uint32 {
+func (msg *MsgGetCFHeaders) MaxPayloadLength(pver uint32) uint64 {
 	// Filter type + uint32 + block hash
 	return 1 + 4 + chainhash.HashSize
 }

@@ -403,15 +403,15 @@ func TestPeerListeners(t *testing.T) {
 			OnGetHeaders: func(p *peer.Peer, msg *wire.MsgGetHeaders) {
 				ok <- msg
 			},
-			//OnGetCFilters: func(p *peer.Peer, msg *wire.MsgGetCFilters) {
-			//	ok <- msg
-			//},
-			//OnGetCFHeaders: func(p *peer.Peer, msg *wire.MsgGetCFHeaders) {
-			//	ok <- msg
-			//},
-			//OnGetCFCheckpt: func(p *peer.Peer, msg *wire.MsgGetCFCheckpt) {
-			//	ok <- msg
-			//},
+			OnGetCFilters: func(p *peer.Peer, msg *wire.MsgGetCFilters) {
+				ok <- msg
+			},
+			OnGetCFHeaders: func(p *peer.Peer, msg *wire.MsgGetCFHeaders) {
+				ok <- msg
+			},
+			OnGetCFCheckpt: func(p *peer.Peer, msg *wire.MsgGetCFCheckpt) {
+				ok <- msg
+			},
 			OnCFilter: func(p *peer.Peer, msg *wire.MsgCFilter) {
 				ok <- msg
 			},
@@ -421,15 +421,15 @@ func TestPeerListeners(t *testing.T) {
 			OnFeeFilter: func(p *peer.Peer, msg *wire.MsgFeeFilter) {
 				ok <- msg
 			},
-			//OnFilterAdd: func(p *peer.Peer, msg *wire.MsgFilterAdd) {
-			//	ok <- msg
-			//},
-			//OnFilterClear: func(p *peer.Peer, msg *wire.MsgFilterClear) {
-			//	ok <- msg
-			//},
-			//OnFilterLoad: func(p *peer.Peer, msg *wire.MsgFilterLoad) {
-			//	ok <- msg
-			//},
+			OnFilterAdd: func(p *peer.Peer, msg *wire.MsgFilterAdd) {
+				ok <- msg
+			},
+			OnFilterClear: func(p *peer.Peer, msg *wire.MsgFilterClear) {
+				ok <- msg
+			},
+			OnFilterLoad: func(p *peer.Peer, msg *wire.MsgFilterLoad) {
+				ok <- msg
+			},
 			OnMerkleBlock: func(p *peer.Peer, msg *wire.MsgMerkleBlock) {
 				ok <- msg
 			},

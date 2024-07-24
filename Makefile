@@ -49,7 +49,11 @@ dev-dashboard:
 
 .PHONY: build
 # build-blockchainstatus build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
-build: build-dashboard build-ubsv
+build: build-ubsv-with-dashboard
+
+.PHONY: build-ubsv-with-dashboard
+build-ubsv-with-dashboard: set_debug_flags set_race_flag set_txmetacache_flag build-dashboard
+	go build $(RACE_FLAG) -tags aerospike,native,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
 .PHONY: build-ubsv
 build-ubsv: set_debug_flags set_race_flag set_txmetacache_flag
