@@ -644,22 +644,6 @@ func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash
 	return locator, nil
 }
 
-// HeightToHashRange returns a range of block hashes for the given start height
-// and end hash, inclusive on both ends.  The hashes are for all blocks that are
-// ancestors of endHash with height greater than or equal to startHeight.  The
-// end hash must belong to a block that is known to be valid.
-//
-// This function is safe for concurrent access.
-func (c *Client) HeightToHashRange(startHeight uint32, endHash *chainhash.Hash, maxResults int) ([]chainhash.Hash, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (c *Client) IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
 // log2FloorMasks defines the masks to use when quickly calculating
 // floor(log2(x)) in a constant log2(32) = 5 steps, where x is a uint32, using
 // shifts.  They are derived from (2^(2^x) - 1) * (2^(2^x)), for x in 4..0.

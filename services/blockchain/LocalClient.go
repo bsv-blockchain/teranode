@@ -168,17 +168,8 @@ func (c LocalClient) SendFSMEvent(ctx context.Context, state blockchain_api.FSME
 	return nil
 }
 
-// LatestBlockLocator returns a block locator for the latest block.
+// GetBlockLocator returns a block locator for the latest block.
 // This function will be much faster, when moved to the server side.
-func (b LocalClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
-	return getBlockLocator(ctx, b.store, blockHeaderHash, blockHeaderHeight)
-}
-
-func (c LocalClient) HeightToHashRange(startHeight uint32, endHash *chainhash.Hash, maxResults int) ([]chainhash.Hash, error) {
-	return nil, nil
-}
-
-func (c LocalClient) IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error) {
-	//TODO implement me
-	panic("implement me")
+func (c LocalClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
+	return getBlockLocator(ctx, c.store, blockHeaderHash, blockHeaderHeight)
 }
