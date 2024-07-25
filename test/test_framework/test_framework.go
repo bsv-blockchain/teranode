@@ -3,6 +3,7 @@ package test_framework
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"strings"
 	"time"
@@ -83,7 +84,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		coinbaseGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_grpcAddress.%s", node.SETTINGS_CONTEXT))
 		fmt.Println(coinbaseGrpcAddress)
 		if !ok {
-			return fmt.Errorf("no coinbase_grpcAddress setting found")
+			return errors.New(errors.ERR_CONFIGURATION, "no coinbase_grpcAddress setting found")
 		}
 		coinbaseClient, err := cb.NewClientWithAddress(b.Context, logger, getHostAddress(coinbaseGrpcAddress))
 		if err != nil {
@@ -93,7 +94,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 
 		blockchainGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockchain_grpcAddress.%s", node.SETTINGS_CONTEXT))
 		if !ok {
-			return fmt.Errorf("no blockchain_grpcAddress setting found")
+			return errors.New(errors.ERR_CONFIGURATION, "no blockchain_grpcAddress setting found")
 		}
 		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, getHostAddress(blockchainGrpcAddress))
 		if err != nil {
@@ -103,14 +104,14 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 
 		blockassembly_grpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockassembly_grpcAddress.%s", node.SETTINGS_CONTEXT))
 		if !ok {
-			return fmt.Errorf("no blockassembly_grpcAddress setting found")
+			return errors.New(errors.ERR_CONFIGURATION, "no blockassembly_grpcAddress setting found")
 		}
 		blockassemblyClient := ba.NewClientWithAddress(b.Context, logger, getHostAddress(blockassembly_grpcAddress))
 		b.Nodes[i].BlockassemblyClient = *blockassemblyClient
 
 		propagation_grpcAddress, ok := gocore.Config().Get(fmt.Sprintf("propagation_grpcAddress.%s", node.SETTINGS_CONTEXT))
 		if !ok {
-			return fmt.Errorf("no propagation_grpcAddress setting found")
+			return errors.New(errors.ERR_CONFIGURATION, "no propagation_grpcAddress setting found")
 		}
 		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, getHostAddress(propagation_grpcAddress))
 		if err != nil {
@@ -120,7 +121,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 
 		coinbase_assetGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_assetGrpcAddress.%s", node.SETTINGS_CONTEXT))
 		if !ok {
-			return fmt.Errorf("no coinbase_assetGrpcAddress setting found")
+			return errors.New(errors.ERR_CONFIGURATION, "no coinbase_assetGrpcAddress setting found")
 		}
 		assetClient, err := asset.NewClient(b.Context, logger, getHostAddress(coinbase_assetGrpcAddress))
 		if err != nil {
