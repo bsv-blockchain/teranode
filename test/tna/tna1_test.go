@@ -11,10 +11,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 )
 
 var (
@@ -60,9 +58,6 @@ func TestBroadcastNewTxAllNodes(t *testing.T) {
 	// Test setup
 	ctx := context.Background()
 	blockchainClientNode0 := framework.Nodes[0].BlockchainClient
-	baClient0 := framework.Nodes[0].BlockassemblyClient
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
 	var hashes []*chainhash.Hash
 
 	blockchainSubscription, err := blockchainClientNode0.Subscribe(ctx, "test-broadcast-pow")
@@ -95,17 +90,7 @@ func TestBroadcastNewTxAllNodes(t *testing.T) {
 	}
 	fmt.Printf("Hashes in created block: %v\n", hashesTx)
 
-	_, errMining := helper.MineBlock(ctx, baClient0, logger)
-	if errMining != nil {
-		t.Errorf("Failed to create block  %v", errMining)
-	}
-
-	// _, errMiningCandidate := helper.GetMiningCandidate(ctx, baClient0, logger)
-	// if errMiningCandidate != nil {
-	// 	t.Errorf("Failed to create and send raw txs: %v", errMiningCandidate)
-	// }
-
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	if len(hashes) > 0 {
 		fmt.Println("First element of hashes:", hashes[0])
@@ -115,33 +100,26 @@ func TestBroadcastNewTxAllNodes(t *testing.T) {
 
 	fmt.Println("subtree notification received")
 
-	subtreeHash := hashes[0].String()
-
-	// subtree1, err1 := framework.Nodes[1].SubtreeStore.Get(ctx, subtreeHash[:])
-	// if err1 != nil {
-	// 	t.Errorf("Error getting subtree: %v %v", err1, subtree1)
-	// }
-
-	// subtree2, err2 := framework.Nodes[2].SubtreeStore.Get(ctx, subtreeHash[:])
-	// if err2 != nil {
-	// 	t.Errorf("Error getting subtree: %v %v", err2, subtree2)
-	// }
-
 	baseDir := "../../data"
 
-	// Search inside ubsv1, ubsv2 and ubsv3 subfolders
-	for i := 1; i <= 3; i++ {
+	fmt.Println("num of subtrees:", len(hashes))
 
-		subDir := fmt.Sprintf("ubsv%d/subtreestore", i)
-		fmt.Println(subDir)
-		filePath := filepath.Join(baseDir, subDir, subtreeHash)
-		fmt.Println(filePath)
-		if _, err := os.Stat(filePath); err == nil {
-			fmt.Printf("Subtree %s exists.\n", filePath)
-		} else if os.IsNotExist(err) {
-			fmt.Printf("Subtree %s doesn't exists %s.\n", subtreeHash, subDir)
-		} else {
-			fmt.Printf("Error checking the file %s in %s: %v\n", subtreeHash, subDir, err)
+	// Search inside ubsv1, ubsv2 and ubsv3 subfolders
+	for _, subtreeHash := range hashes {
+		fmt.Println("Subtree hash:", subtreeHash)
+		for i := 1; i <= 3; i++ {
+
+			subDir := fmt.Sprintf("ubsv%d/subtreestore", i)
+			fmt.Println(subDir)
+			filePath := filepath.Join(baseDir, subDir, subtreeHash.String())
+			fmt.Println(filePath)
+			if _, err := os.Stat(filePath); err == nil {
+				fmt.Printf("Subtree %s exists.\n", filePath)
+			} else if os.IsNotExist(err) {
+				fmt.Printf("Subtree %s doesn't exists %s.\n", subtreeHash.String(), subDir)
+			} else {
+				fmt.Printf("Error checking the file %s in %s: %v\n", subtreeHash.String(), subDir, err)
+			}
 		}
 	}
 }
