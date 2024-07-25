@@ -11,7 +11,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -19,11 +18,11 @@ var (
 	framework *tf.BitcoinTestFramework
 )
 
-func newTx(lockTime uint32) *bt.Tx {
-	tx := bt.NewTx()
-	tx.LockTime = lockTime
-	return tx
-}
+//func newTx(lockTime uint32) *bt.Tx {
+//	tx := bt.NewTx()
+//	tx.LockTime = lockTime
+//	return tx
+//}
 
 func TestMain(m *testing.M) {
 	setupBitcoinTestFramework()
@@ -47,12 +46,12 @@ func setupBitcoinTestFramework() {
 	}
 }
 
-func tearDownBitcoinTestFramework() {
-	if err := framework.StopNodes(); err != nil {
-		fmt.Printf("Error stopping nodes: %v\n", err)
-	}
-	_ = os.RemoveAll("../../data")
-}
+//func tearDownBitcoinTestFramework() {
+//	if err := framework.StopNodes(); err != nil {
+//		fmt.Printf("Error stopping nodes: %v\n", err)
+//	}
+//	_ = os.RemoveAll("../../data")
+//}
 
 func TestBroadcastNewTxAllNodes(t *testing.T) {
 	// Test setup
