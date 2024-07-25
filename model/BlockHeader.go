@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/libsv/go-bc"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -158,12 +157,21 @@ func (bh *BlockHeader) Bytes() []byte {
 	}
 
 	var blockHeaderBytes []byte
-	blockHeaderBytes = append(blockHeaderBytes, bc.UInt32ToBytes(bh.Version)...)
+	uint32Bytes := make([]byte, 4)
+
+	binary.LittleEndian.PutUint32(uint32Bytes, bh.Version)
+	blockHeaderBytes = append(blockHeaderBytes, uint32Bytes...)
+
 	blockHeaderBytes = append(blockHeaderBytes, bh.HashPrevBlock.CloneBytes()...)
 	blockHeaderBytes = append(blockHeaderBytes, bh.HashMerkleRoot.CloneBytes()...)
-	blockHeaderBytes = append(blockHeaderBytes, bc.UInt32ToBytes(bh.Timestamp)...)
+
+	binary.LittleEndian.PutUint32(uint32Bytes, bh.Timestamp)
+	blockHeaderBytes = append(blockHeaderBytes, uint32Bytes...)
+
 	blockHeaderBytes = append(blockHeaderBytes, bh.Bits.CloneBytes()...)
-	blockHeaderBytes = append(blockHeaderBytes, bc.UInt32ToBytes(bh.Nonce)...)
+
+	binary.LittleEndian.PutUint32(uint32Bytes, bh.Nonce)
+	blockHeaderBytes = append(blockHeaderBytes, uint32Bytes...)
 
 	return blockHeaderBytes
 }
