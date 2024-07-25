@@ -490,6 +490,8 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 		return
 	}
 
+	s.logger.Debugf("got p2p best block notification from %s", bestBlockMessage.PeerId)
+
 	// get best block from blockchain service
 	bh, bhMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
@@ -534,6 +536,8 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		s.logger.Errorf("json unmarshal error: %v", err)
 		return
 	}
+
+	s.logger.Debugf("got p2p block notification for %s from %s", blockMessage.Hash, blockMessage.PeerId)
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp: time.Now().UTC().Format(isoFormat),
@@ -580,6 +584,8 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		return
 	}
 
+	s.logger.Debugf("got p2p subtree notification for %s from %s", subtreeMessage.Hash, subtreeMessage.PeerId)
+
 	s.notificationCh <- &notificationMsg{
 		Timestamp: time.Now().UTC().Format(isoFormat),
 		Type:      "subtree",
@@ -621,6 +627,8 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 		s.logger.Errorf("json unmarshal error: %v", err)
 		return
 	}
+
+	s.logger.Debugf("got p2p mining on notification for %s from %s", miningOnMessage.Hash, miningOnMessage.PeerId)
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp:    time.Now().UTC().Format(isoFormat),
