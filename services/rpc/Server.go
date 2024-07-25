@@ -18,9 +18,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-
+	"github.com/bitcoin-sv/ubsv/services/legacy/btcjson"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoinsv/bsvd/btcjson"
 	"github.com/ordishs/gocore"
 )
 

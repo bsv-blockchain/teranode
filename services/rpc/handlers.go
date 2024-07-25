@@ -9,16 +9,15 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/bitcoinsv/bsvd/btcjson"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
-
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
+	"github.com/bitcoin-sv/ubsv/services/legacy/btcjson"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 )
 
 // handleGetBlock implements the getblock command.

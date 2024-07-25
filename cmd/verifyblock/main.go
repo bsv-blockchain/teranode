@@ -3,8 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/bitcoinsv/bsvutil"
 	"os"
+
+	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 )
 
 func usage(msg string) {
