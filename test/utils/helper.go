@@ -340,23 +340,23 @@ func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Has
 
 	privateKey, err := bec.NewPrivateKey(bec.S256())
 	if err != nil {
-		fmt.Printf("Failed to generate private key", err)
+		fmt.Printf("failed to generate private key: %v", err)
 	}
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	if err != nil {
-		fmt.Printf("Failed to create address", err)
+		fmt.Printf("failed to create address: %v", err)
 	}
 
 	coinbaseClient := node.CoinbaseClient
 
 	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	if err != nil {
-		fmt.Printf("Failed to request funds", err)
+		fmt.Printf("failed to request funds: %v", err)
 	}
 	_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
 	if err != nil {
-		fmt.Printf("Failed to send transaction", err)
+		fmt.Printf("failed to send transaction: %v", err)
 	}
 
 	output := faucetTx.Outputs[0]
@@ -375,17 +375,17 @@ func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Has
 
 	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
 	if err != nil {
-		fmt.Printf("Error adding output to transaction", err)
+		fmt.Printf("error adding output to transaction: %v", err)
 	}
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		fmt.Printf("Error filling transaction inputs", err)
+		fmt.Printf("error filling transaction inputs: %v", err)
 	}
 
 	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
 	if err != nil {
-		fmt.Printf("Failed to send new transaction", err)
+		fmt.Printf("failed to send new transaction: %v", err)
 	}
 
 	return *newTx.TxIDChainHash(), nil
@@ -395,23 +395,23 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (cha
 
 	privateKey, err := bec.NewPrivateKey(bec.S256())
 	if err != nil {
-		fmt.Printf("Failed to generate private key", err)
+		fmt.Printf("failed to generate private key: %v", err)
 	}
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	if err != nil {
-		fmt.Printf("Failed to create address", err)
+		fmt.Printf("failed to create address: %v", err)
 	}
 
 	coinbaseClient := node[0].CoinbaseClient
 
 	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	if err != nil {
-		fmt.Printf("Failed to request funds", err)
+		fmt.Printf("failed to request funds: %v", err)
 	}
 	_, err = node[0].DistributorClient.SendTransaction(ctx, faucetTx)
 	if err != nil {
-		fmt.Printf("Failed to send transaction", err)
+		fmt.Printf("failed to send transaction: %v", err)
 	}
 
 	output := faucetTx.Outputs[0]
@@ -438,29 +438,29 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (cha
 
 	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
 	if err != nil {
-		fmt.Printf("Error adding output to transaction", err)
+		fmt.Printf("error adding output to transaction: %v\n", err)
 	}
 	err = newTxDouble.AddP2PKHOutputFromAddress("14qViLJfdGaP4EeHnDyJbEGQysnCpwk3gd", 10000)
 	if err != nil {
-		fmt.Printf("Error adding output to transaction", err)
+		fmt.Printf("error adding output to transaction: %v\n", err)
 	}
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		fmt.Printf("Error filling transaction inputs", err)
+		fmt.Printf("error filling transaction inputs: %v\n", err)
 	}
 	err = newTxDouble.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		fmt.Printf("Error filling transaction inputs", err)
+		fmt.Printf("error filling transaction inputs: %v\n", err)
 	}
 
 	_, err = node[0].DistributorClient.SendTransaction(ctx, newTx)
 	if err != nil {
-		fmt.Printf("Failed to send new transaction", err)
+		fmt.Printf("failed to send new transaction: %v\n", err)
 	}
 	_, err = node[1].DistributorClient.SendTransaction(ctx, newTxDouble)
 	if err != nil {
-		fmt.Printf("Failed to send new transaction", err)
+		fmt.Printf("failed to send new transaction: %v\n", err)
 	}
 
 	return *newTx.TxIDChainHash(), nil
