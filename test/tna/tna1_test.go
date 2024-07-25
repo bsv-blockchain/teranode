@@ -58,6 +58,7 @@ func TestBroadcastNewTxAllNodes(t *testing.T) {
 	ctx := context.Background()
 	blockchainClientNode0 := framework.Nodes[0].BlockchainClient
 	var hashes []*chainhash.Hash
+	var found int
 
 	blockchainSubscription, err := blockchainClientNode0.Subscribe(ctx, "test-broadcast-pow")
 	if err != nil {
@@ -89,7 +90,7 @@ func TestBroadcastNewTxAllNodes(t *testing.T) {
 	}
 	fmt.Printf("Hashes in created block: %v\n", hashesTx)
 
-	time.Sleep(5 * time.Second)
+	time.Sleep(2 * time.Second)
 
 	if len(hashes) > 0 {
 		fmt.Println("First element of hashes:", hashes[0])
@@ -106,7 +107,7 @@ func TestBroadcastNewTxAllNodes(t *testing.T) {
 	// Search inside ubsv1, ubsv2 and ubsv3 subfolders
 	for _, subtreeHash := range hashes {
 		fmt.Println("Subtree hash:", subtreeHash)
-		for i := 1; i <= 3; i++ {
+		for i := 2; i <= 3; i++ {
 
 			subDir := fmt.Sprintf("ubsv%d/subtreestore", i)
 			fmt.Println(subDir)
@@ -114,11 +115,16 @@ func TestBroadcastNewTxAllNodes(t *testing.T) {
 			fmt.Println(filePath)
 			if _, err := os.Stat(filePath); err == nil {
 				fmt.Printf("Subtree %s exists.\n", filePath)
+				found += 1
 			} else if os.IsNotExist(err) {
 				fmt.Printf("Subtree %s doesn't exists %s.\n", subtreeHash.String(), subDir)
 			} else {
 				fmt.Printf("Error checking the file %s in %s: %v\n", subtreeHash.String(), subDir, err)
 			}
 		}
+	}
+
+	if found == 0 {
+		t.Errorf("Test failed, no subtree found")
 	}
 }
