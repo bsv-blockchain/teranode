@@ -670,32 +670,50 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	}
 }
 
+// isCurrent returns whether the sync manager believes it is synced with the chain.
+// this function is a rewrite of the function in the original bsvd blockchain package
+func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) bool {
+	// Not current if the latest main (best) chain height is before the
+	// latest known good checkpoint (when checkpoints are enabled).
+	checkpoint := &sm.chainParams.Checkpoints[len(sm.chainParams.Checkpoints)-1]
+	if checkpoint != nil && int32(bestBlockHeaderMeta.Height) < checkpoint.Height {
+		return false
+	}
+
+	// Not current if the latest best block has a timestamp before 24 hours
+	// ago.
+	//
+	// The chain appears to be current if none of the checks reported
+	// otherwise.
+	//minus24Hours := b.timeSource.AdjustedTime().Add(-24 * time.Hour).Unix()
+	minus24Hours := time.Now().Add(-24 * time.Hour).Unix()
+	return int64(bestBlockHeaderMeta.Timestamp) >= minus24Hours
+}
+
 // current returns true if we believe we are synced with our peers, false if we
 // still have blocks to check
 func (sm *SyncManager) current() bool {
-	// TODO how does this fit into UBSV?
-	//if !sm.chain.IsCurrent() {
-	//	return false
-	//}
-	return false
+	_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
+	if err != nil {
+		sm.logger.Errorf("failed to get best block header: %v", err)
+		return false
+	}
 
-	//// if blockChain thinks we are current, and we have no syncPeer, it is probably right.
-	//if sm.syncPeer == nil {
-	//	return true
-	//}
-	//
-	//_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
-	//if err != nil {
-	//	sm.logger.Errorf("Failed to get best block header: %v", err)
-	//	return false
-	//}
-	//
-	//// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
-	//if int32(bestBlockHeaderMeta.Height) < sm.syncPeer.LastBlock() {
-	//	return false
-	//}
-	//
-	//return true
+	if !sm.isCurrent(bestBlockHeaderMeta) {
+		return false
+	}
+
+	// if blockChain thinks we are current, and we have no syncPeer, it is probably right.
+	if sm.syncPeer == nil {
+		return true
+	}
+
+	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
+	if int32(bestBlockHeaderMeta.Height) < sm.syncPeer.LastBlock() {
+		return false
+	}
+
+	return true
 }
 
 // handleBlockMsg handles block messages from all peers.
