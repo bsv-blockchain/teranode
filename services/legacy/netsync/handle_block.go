@@ -349,7 +349,7 @@ func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]*tx
 		}
 	}
 
-	if err := sm.utxoStore.PreviousOutputsDecorate(context.Background(), previousOutputs); err != nil {
+	if err := sm.utxoStore.PreviousOutputsDecorate(sm.ctx, previousOutputs); err != nil {
 		return fmt.Errorf("failed to decorate previous outputs for tx %s: %w", tx.TxIDChainHash(), err)
 	}
 

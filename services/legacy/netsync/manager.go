@@ -211,6 +211,7 @@ func (sps *syncPeerState) updateNetwork(syncPeer *peerpkg.Peer) {
 // chain is in sync, the SyncManager handles incoming block and header
 // notifications and relays announcements of new blocks to peers.
 type SyncManager struct {
+	ctx          context.Context
 	logger       ulogger.Logger
 	peerNotifier PeerNotifier
 	started      int32
@@ -307,7 +308,7 @@ func (sm *SyncManager) startSync() {
 		return
 	}
 
-	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
+	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
 		sm.logger.Errorf("Failed to get best block header: %v", err)
 		return
@@ -358,7 +359,7 @@ func (sm *SyncManager) startSync() {
 		// to send.
 		sm.requestedBlocks = make(map[chainhash.Hash]struct{})
 
-		locator, err := sm.blockchainClient.GetBlockLocator(context.TODO(), bestBlockHeader.Hash(), bestBlockHeaderMeta.Height)
+		locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, bestBlockHeader.Hash(), bestBlockHeaderMeta.Height)
 		if err != nil {
 			sm.logger.Errorf("Failed to get block locator for the latest block: %v", err)
 			return
@@ -501,7 +502,7 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	}
 
 	// Don't update sync peers if you have all the available blocks.
-	_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
+	_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
 		sm.logger.Errorf("Failed to get best block header: %v", err)
 		return
@@ -586,7 +587,7 @@ func (sm *SyncManager) updateSyncPeer(state *peerSyncState) {
 	sm.syncPeer = nil
 	sm.syncPeerState = nil
 
-	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
+	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
 		// TODO we should return an error here to the caller
 		sm.logger.Errorf("Failed to get best block header: %v", err)
@@ -634,7 +635,8 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 
 	// TODO what to do with transactions coming in out of order?
 	// the old node put them into the orphan mempool and accepted them when the parent came in
-	err = sm.validationClient.Validate(context.TODO(), btTx, uint32(sm.topBlock()))
+	// TODO should we be sending these transactions to the propagation service (Kafka), instead of Validation?
+	err = sm.validationClient.Validate(sm.ctx, btTx, uint32(sm.topBlock()))
 
 	// Remove transaction from request maps. Either the mempool/chain
 	// already knows about it and as such we shouldn't have any more
@@ -682,7 +684,7 @@ func (sm *SyncManager) current() bool {
 	//	return true
 	//}
 	//
-	//_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
+	//_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	//if err != nil {
 	//	sm.logger.Errorf("Failed to get best block header: %v", err)
 	//	return false
@@ -748,7 +750,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	delete(state.requestedBlocks, *blockHash)
 	delete(sm.requestedBlocks, *blockHash)
 
-	err := sm.HandleBlockDirect(context.TODO(), bmsg.peer, bmsg.block)
+	err := sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block)
 	if err != nil {
 		if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
 			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
@@ -779,7 +781,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	sm.logger.Infof("Accepted block %v", blockHash)
 
 	// Update this peer's latest block height, for future potential sync node candidacy.
-	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
+	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
 		return errors.New(errors.ERR_SERVICE_ERROR, "failed to get best block header", err)
 	}
@@ -1016,12 +1018,12 @@ func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 	switch invVect.Type {
 	case wire.InvTypeBlock:
 		// check whether this block exists in the blockchain service
-		return sm.blockchainClient.GetBlockExists(context.TODO(), &invVect.Hash)
+		return sm.blockchainClient.GetBlockExists(sm.ctx, &invVect.Hash)
 
 	case wire.InvTypeTx:
 		// check whether this transaction exists in the utxo store
 		// which means it has been processed completely at our end
-		utxo, err := sm.utxoStore.Get(context.TODO(), &invVect.Hash, []string{"fee"})
+		utxo, err := sm.utxoStore.Get(sm.ctx, &invVect.Hash, []string{"fee"})
 		if err != nil {
 			if errors.Is(err, errors.ErrTxNotFound) {
 				return false, nil
@@ -1076,7 +1078,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	// If our chain is current and a peer announces a block we already
 	// know of, then update their current block height.
 	if lastBlock != -1 && sm.current() {
-		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(context.TODO(), &invVects[lastBlock].Hash)
+		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(sm.ctx, &invVects[lastBlock].Hash)
 		if err == nil {
 			peer.UpdateLastBlockHeight(int32(blockHeaderMeta.Height))
 		}
@@ -1130,7 +1132,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 			// should only happen if we're on a really long side chain.
 			if i == lastBlock {
 				// Request blocks after this one up to the final one the remote peer knows about (zero stop hash).
-				locator, err := sm.blockchainClient.GetBlockLocator(context.TODO(), &iv.Hash, 0)
+				locator, err := sm.blockchainClient.GetBlockLocator(sm.ctx, &iv.Hash, 0)
 				if err != nil {
 					sm.logger.Errorf("Failed to get block locator for the block hash %s, %v", iv.Hash.String(), err)
 				} else {
@@ -1293,7 +1295,7 @@ func (sm *SyncManager) handleBlockchainNotification(notification *model.Notifica
 			return
 		}
 
-		blockHeader, _, err := sm.blockchainClient.GetBlockHeader(context.TODO(), notification.Hash)
+		blockHeader, _, err := sm.blockchainClient.GetBlockHeader(sm.ctx, notification.Hash)
 		if err != nil {
 			sm.logger.Errorf("Failed to get block %v: %v", notification.Hash, err)
 			return
@@ -1435,6 +1437,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain
 	config *Config) (*SyncManager, error) {
 
 	sm := SyncManager{
+		ctx:          ctx,
 		peerNotifier: config.PeerNotifier,
 		chain:        config.Chain,
 		//txMemPool:               config.TxMemPool,
@@ -1460,7 +1463,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain
 		blockValidation:   blockValidation,
 	}
 
-	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(context.TODO())
+	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1477,7 +1480,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain
 
 	// sm.chain.Subscribe(sm.handleBlockchainNotification)
 	// subscribe to blockchain notifications
-	blockchainSubscriptionCh, err := sm.blockchainClient.Subscribe(context.TODO(), "legacy-sync-manager")
+	blockchainSubscriptionCh, err := sm.blockchainClient.Subscribe(ctx, "legacy-sync-manager")
 	if err != nil {
 		return nil, err
 	}

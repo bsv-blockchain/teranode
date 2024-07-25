@@ -211,6 +211,7 @@ type cfHeaderKV struct {
 // server provides a bitcoin server for handling communications to and from
 // bitcoin peers.
 type server struct {
+	ctx context.Context
 	// The following variables must only be used atomically.
 	// Putting the uint64s first makes them 64-bit aligned for 32-bit systems.
 	bytesReceived uint64 // Total bytes received from all peers since start.
@@ -258,6 +259,7 @@ type server struct {
 // serverPeer extends the peer to maintain state shared by the server and
 // the blockmanager.
 type serverPeer struct {
+	ctx context.Context
 	// The following variables must only be used atomically
 	feeFilter int64
 
@@ -285,6 +287,7 @@ type serverPeer struct {
 // the caller.
 func newServerPeer(s *server, isPersistent bool) *serverPeer {
 	return &serverPeer{
+		ctx:            s.ctx, // set the context to the server, if server dies, all peers die
 		server:         s,
 		persistent:     isPersistent,
 		filter:         bloom.LoadFilter(nil),
@@ -298,7 +301,7 @@ func newServerPeer(s *server, isPersistent bool) *serverPeer {
 // newestBlock returns the current best block hash and height using the format
 // required by the configuration for the peer package.
 func (sp *serverPeer) newestBlock() (*chainhash.Hash, int32, error) {
-	blockHeader, blockHeaderMeta, err := sp.server.blockchainClient.GetBestBlockHeader(context.TODO())
+	blockHeader, blockHeaderMeta, err := sp.server.blockchainClient.GetBestBlockHeader(sp.ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -547,7 +550,7 @@ func (sp *serverPeer) OnBlock(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	iv := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
 	sp.AddKnownInventory(iv)
 
-	exists, err := sp.server.blockchainClient.GetBlockExists(context.TODO(), block.Hash())
+	exists, err := sp.server.blockchainClient.GetBlockExists(sp.ctx, block.Hash())
 	if err != nil {
 		sp.server.logger.Errorf("Block exists check error: %v", err)
 		return
@@ -702,7 +705,7 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 	// over with the genesis block if unknown block locators are provided.
 	//
 	// This mirrors the behavior in the reference implementation.
-	blockHeaders, err := sp.server.blockchainClient.LocateBlockHeaders(context.TODO(), msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
+	blockHeaders, err := sp.server.blockchainClient.LocateBlockHeaders(sp.ctx, msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
 	if err != nil {
 		sp.server.logger.Errorf("Failed to fetch locator block hashes: %v", err)
 	}
@@ -764,7 +767,7 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 	// over with the genesis block if unknown block locators are provided.
 	//
 	// This mirrors the behavior in the reference implementation.
-	blockHeaders, err := sp.server.blockchainClient.LocateBlockHeaders(context.TODO(), msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
+	blockHeaders, err := sp.server.blockchainClient.LocateBlockHeaders(sp.ctx, msg.BlockLocatorHashes, &msg.HashStop, wire.MaxBlocksPerMsg)
 	if err != nil {
 		sp.server.logger.Errorf("Failed to fetch locator block hashes: %v", err)
 	}
@@ -1065,7 +1068,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	// Attempt to fetch the requested transaction from the pool.  A
 	// call could be made to check for existence first, but simply trying
 	// to fetch a missing transaction results in the same behavior.
-	txMeta, err := s.utxoStore.Get(context.TODO(), hash, []string{"tx"})
+	txMeta, err := s.utxoStore.Get(s.ctx, hash, []string{"tx"})
 	if err != nil {
 		sp.server.logger.Infof("Unable to fetch tx %v from transaction pool: %v", hash, err)
 
@@ -1101,7 +1104,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
 
 	url := fmt.Sprintf("%s/block_legacy/%s", s.assetHttpAddress, hash.String())
-	blockBytes, err := util.DoHTTPRequest(context.Background(), url, nil)
+	blockBytes, err := util.DoHTTPRequest(s.ctx, url, nil)
 	if err != nil {
 		sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
 
@@ -1143,9 +1146,9 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 	// to trigger it to issue another getblocks message for the next
 	// batch of inventory.
 	if sendInv {
-		bestBlockHeader, _, err := s.blockchainClient.GetBestBlockHeader(context.Background())
+		bestBlockHeader, _, err := s.blockchainClient.GetBestBlockHeader(s.ctx)
 		if err != nil {
-			sp.server.logger.Infof("unable to fetch best block header: %v", err)
+			s.logger.Infof("unable to fetch best block header: %v", err)
 		} else {
 			invMsg := wire.NewMsgInvSizeHint(1)
 			iv := wire.NewInvVect(wire.InvTypeBlock, bestBlockHeader.Hash())
@@ -2212,6 +2215,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 	}
 
 	s := server{
+		ctx:                  ctx,
 		startupTime:          time.Now().Unix(),
 		chainParams:          chainParams,
 		addrManager:          amgr,
