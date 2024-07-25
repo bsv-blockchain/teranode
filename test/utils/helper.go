@@ -277,6 +277,14 @@ func GetReader(ctx context.Context, file string, dir *url.URL, logger ulogger.Lo
 	// return dir, ext, f, nil
 }
 
+func GetMiningCandidate(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (*block_model.MiningCandidate, error) {
+	miningCandidate, err := baClient.GetMiningCandidate(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting mining candidate: %w", err)
+	}
+	return miningCandidate, nil
+}
+
 func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) ([]byte, error) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	if err != nil {
