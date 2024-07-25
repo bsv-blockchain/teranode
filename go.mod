@@ -61,7 +61,6 @@ require (
 	go.uber.org/atomic v1.11.0
 	golang.org/x/crypto v0.22.0
 	golang.org/x/exp v0.0.0-20240112132812-db7319d0e0e3
-	golang.org/x/net v0.24.0
 	golang.org/x/sync v0.6.0
 	golang.org/x/sys v0.21.0
 	golang.org/x/term v0.20.0
@@ -331,6 +330,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.25.0 // indirect
 	golang.org/x/mod v0.16.0 // indirect
+	golang.org/x/net v0.24.0 // indirect
 	golang.org/x/oauth2 v0.17.0 // indirect
 	golang.org/x/tools v0.19.0 // indirect
 	gonum.org/v1/gonum v0.13.0 // indirect
