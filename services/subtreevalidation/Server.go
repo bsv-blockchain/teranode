@@ -121,7 +121,8 @@ func (u *Server) Start(ctx context.Context) error {
 
 		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
 		u.logger.Infof("Starting %d Kafka consumers for subtree messages", consumerCount)
-		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, func(msg util.KafkaMessage) error {
+		// Autocommit is disabled for subtree messages, so that we can commit the message only after the subtree has been processed.
+		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, false, func(msg util.KafkaMessage) error {
 			// TODO is there a way to return an error here and have Kafka mark the message as not done?
 			errCh := make(chan error, 1)
 			go func() {
@@ -138,7 +139,7 @@ func (u *Server) Start(ctx context.Context) error {
 					return nil
 				}
 
-				// recoveable error, return nil.
+				// recoverable error, return nil.
 				// currently, the following cases are considered recoverable:
 				// errors.ErrProcessing, errors.ErrServiceError, errors.StorageError
 				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling subtree, marking Kafka message as complete.\n", msg, err)
@@ -173,8 +174,10 @@ func (u *Server) Start(ctx context.Context) error {
 
 		u.logger.Infof("Starting %d Kafka consumers for tx meta messages", consumerCount)
 
-		// TODO GOKHAN: ADD ERROR HANDLING
-		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, consumerCount, u.txmetaHandler)
+		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible and iti s okay if some of the messages are not properly processed.
+		// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
+		// Therefore, autocommit is set to true.
+		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, consumerCount, true, u.txmetaHandler)
 	}
 
 	// this will block
@@ -187,11 +190,10 @@ func (u *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage) error) {
+func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, autoCommit bool, fn func(msg util.KafkaMessage) error) {
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
-	// Autocommit is disabled for subtree messages, as we want to ensure that the message is processed before committing the offset.
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, false, fn); err != nil {
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, autoCommit, fn); err != nil {
 		u.logger.Errorf("Failed to start Kafka listener: %v", err)
 	}
 }
