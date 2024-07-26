@@ -8,13 +8,15 @@ import (
 
 // KafkaConsumer represents a Sarama consumer group consumer
 type KafkaConsumer struct {
-	workerCh        chan KafkaMessage
-	consumerClosure func(KafkaMessage) error
+	workerCh          chan KafkaMessage
+	consumerClosure   func(KafkaMessage) error
+	autoCommitEnabled bool
 }
 
-func NewKafkaConsumer(workerCh chan KafkaMessage, consumerClosure ...func(message KafkaMessage) error) *KafkaConsumer {
+func NewKafkaConsumer(workerCh chan KafkaMessage, autoCommitEnabled bool, consumerClosure ...func(message KafkaMessage) error) *KafkaConsumer {
 	consumer := &KafkaConsumer{
-		workerCh: workerCh,
+		workerCh:          workerCh,
+		autoCommitEnabled: autoCommitEnabled,
 	}
 
 	if len(consumerClosure) > 0 {
@@ -40,23 +42,36 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 	// Do not move the code below to a goroutine.
 	// The `ConsumeClaim` itself is called within a goroutine, see:
 	// https://github.com/Shopify/sarama/blob/main/consumer_group.go#L27-L29
+
 	for {
 		select {
 		case message := <-claim.Messages():
-			if err := kc.handleMessageWithManualCommit(session, message); err != nil {
-				// TODO: consider changing logging and/or error handling
-				log.Printf("Error processing message: %v", err)
+			// Handle the first message
+			if kc.autoCommitEnabled {
+				_ = kc.handleMessagesWithAutoCommit(session, message)
+			} else {
+				if err := kc.handleMessageWithManualCommit(session, message); err != nil {
+					// TODO: consider changing logging and/or error handling
+					// The message is not marked as consumed, Log the error and continue processing the next message.
+					log.Printf("Error processing message: %v", err)
+				}
 			}
+			messageCount := 1 // Start with 1 message already received.
 
 			// Handle further messages up to a maximum of 1000.
-			messageCount := 1 // Start with 1 message already received.
 		InnerLoop:
 			for messageCount < 1000 {
 				select {
 				case message := <-claim.Messages():
-					if err := kc.handleMessageWithManualCommit(session, message); err != nil {
-						// TODO: consider changing logging and/or error handling
-						log.Printf("Error processing message: %v", err)
+					if kc.autoCommitEnabled {
+						// No need to check the error here as we are auto committing
+						_ = kc.handleMessagesWithAutoCommit(session, message)
+					} else {
+						if err := kc.handleMessageWithManualCommit(session, message); err != nil {
+							// TODO: consider changing logging and/or error handling
+							// The message is not marked as consumed, Log the error and continue processing the next message.
+							log.Printf("Error processing message: %v", err)
+						}
 					}
 					messageCount++
 				default:
@@ -79,6 +94,7 @@ func (kc *KafkaConsumer) handleMessageWithManualCommit(session sarama.ConsumerGr
 	msg := KafkaMessage{Message: message, Session: session}
 
 	if kc.consumerClosure != nil {
+		// if there is an executing the consumer closure, return it
 		if err := kc.consumerClosure(msg); err != nil {
 			return err
 		}
@@ -88,5 +104,19 @@ func (kc *KafkaConsumer) handleMessageWithManualCommit(session sarama.ConsumerGr
 
 	// Commit the message offset, processing is successful
 	session.MarkMessage(message, "")
+	return nil
+}
+
+func (kc *KafkaConsumer) handleMessagesWithAutoCommit(session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage) error {
+	msg := KafkaMessage{Message: message, Session: session}
+
+	if kc.consumerClosure != nil {
+		// we don't check the error here as we are auto committing
+		_ = kc.consumerClosure(msg)
+	} else {
+		kc.workerCh <- msg
+	}
+
+	// Auto-commit is implied, so we don't need to explicitly mark the message here
 	return nil
 }

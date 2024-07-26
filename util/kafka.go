@@ -272,12 +272,12 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 
-	// TODO GOKHAN: This needs to be handled, currently only for blocksFinalConfig autocommit is set to 0.
 	// https://github.com/IBM/sarama/issues/1689
-	//autoCommit := GetQueryParamInt(kafkaURL, "autocommit", 1)
-	//if autoCommit == 0 {
-	//	config.Consumer.Offsets.AutoCommit.Enable = false
-	//}
+	// https://github.com/IBM/sarama/pull/1699
+	// Default value for config.Consumer.Offsets.AutoCommit.Enable is false
+	if !autoCommitEnabled {
+		config.Consumer.Offsets.AutoCommit.Enable = false
+	}
 
 	replay := GetQueryParamInt(kafkaURL, "replay", 0)
 	if replay == 1 {
@@ -324,7 +324,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 					// Context cancelled, exit goroutine
 					return
 				default:
-					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, consumerClosureFunc)); err != nil {
+					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, autoCommitEnabled, consumerClosureFunc)); err != nil {
 						if errors.Is(err, context.Canceled) {
 							logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, groupID)
 						} else {
