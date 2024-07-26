@@ -4,8 +4,8 @@
 
 
 - [1.1. Purpose of the SOP](#11-purpose-of-the-sop)
-- [1.1.2. Scope and applicability](#112-scope-and-applicability)
-- [1.1.3. The Teranode microservices](#113-the-teranode-microservices)
+- [1.1.2. Scope and Applicability](#112-scope-and-applicability)
+- [1.1.3. The Teranode Microservices](#113-the-teranode-microservices)
 - [2.1. Hardware Requirements](#21-hardware-requirements)
 - [2.2. Software Requirements](#22-software-requirements)
     - [2.2.1. Apache Kafka](#221-apache-kafka)
@@ -19,7 +19,7 @@
         - [How Aerospike is Used in Teranode](#how-aerospike-is-used-in-teranode)
     - [2.2.4. Shared Storage](#224-shared-storage)
     - [2.2.5. Grafana + Prometheus](#225-grafana--prometheus)
-        - [What is Grafana? ](#what-is-grafana-)
+        - [What is Grafana?](#what-is-grafana)
         - [What is Prometheus?](#what-is-prometheus)
         - [Grafana and Prometheus in Teranode](#grafana-and-prometheus-in-teranode)
 - [2.3. Network Considerations](#23-network-considerations)
@@ -28,20 +28,20 @@
     - [3.1.2. Docker Container](#312-docker-container)
     - [3.1.3. Docker Compose (Recommended for Alpha Testing)](#313-docker-compose-recommended-for-alpha-testing)
 - [3.2. Installing Teranode with Docker Compose](#32-installing-teranode-with-docker-compose)
-- [3.3. Verifying software integrity](#33-verifying-software-integrity)
-- [4.2. Configuring config files](#42-configuring-config-files)
-- [4.3. Security settings](#43-security-settings)
-- [5.1. Starting and stopping the node](#51-starting-and-stopping-the-node)
+- [4.1. Configuring Setting Files](#41-configuring-setting-files)
+- [5.1. Starting and Stopping the Node](#51-starting-and-stopping-the-node)
     - [5.1.1. Starting the Node](#511-starting-the-node)
     - [5.1.2. Stopping the Node](#512-stopping-the-node)
-- [5.2. Syncing the blockchain **TODO** - ask Simon](#52-syncing-the-blockchain---todo---ask-simon)
-- [5.3. Monitoring node status](#53-monitoring-node-status)
-- [5.4. How to interact with the current node. APIs, what’s feasible externally and what’s not](#54-how-to-interact-with-the-current-node-apis-whats-feasible-externally-and-whats-not)
-- [6.1. Updating Teranode to a new version](#61-updating-teranode-to-a-new-version)
-- [6.2. Managing disk space](#62-managing-disk-space)
-- [6.3. Backing up data](#63-backing-up-data)
-- [8.1. Firewall configuration](#81-firewall-configuration)
-- [8.2. Regular system updates](#82-regular-system-updates)
+- [5.2. Syncing the Blockchain **TODO** - ask Simon](#52-syncing-the-blockchain---todo---ask-simon)
+- [5.3. Monitoring Node status](#53-monitoring-node-status)
+- [5.4. How to Interact with the Node](#54-how-to-interact-with-the-node)
+    - [5.4.1. Teranode RPC HTTP API](#541-teranode-rpc-http-api)
+    - [5.4.2. Teranode Asset Server HTTP API](#542-teranode-asset-server-http-api)
+- [6.1. Updating Teranode to a New Version](#61-updating-teranode-to-a-new-version)
+- [6.2. Managing Disk Space](#62-managing-disk-space)
+- [6.3. Backing Up Data](#63-backing-up-data)
+- [8.1. Firewall Configuration](#81-firewall-configuration)
+- [8.2. Regular System Updates](#82-regular-system-updates)
 
 ----
 
@@ -67,7 +67,7 @@ This SOP serves as a foundational document to help stakeholders familiarize them
 
 
 
-## 1.1.2. Scope and applicability
+## 1.1.2. Scope and Applicability
 
 
 
@@ -113,7 +113,7 @@ The information and procedures outlined in this document are specific to the alp
 
 
 
-## 1.1.3. The Teranode microservices
+## 1.1.3. The Teranode Microservices
 
 
 
@@ -121,9 +121,9 @@ BSV Teranode is built on a microservices architecture, consisting of several cor
 
 Teranode's architecture includes:
 
-1. Core Teranode Services: These are the primary components that handle the essential functions of a Bitcoin node, such as block, subtree and transaction validation, block assembly, and blockchain management.
-2. Overlay Services: Additional services that provide support for specific functions like legacy network compatibility and node discovery.
-3. External Dependencies: Third-party software components that Teranode relies on for various functionalities, including data storage, message queuing, and monitoring.
+1. **Core Teranode Services**: These are the primary components that handle the essential functions of a Bitcoin node, such as block, subtree and transaction validation, block assembly, and blockchain management.
+2. **Overlay Services**: Additional services that provide support for specific functions like legacy network compatibility and node discovery.
+3. **External Dependencies**: Third-party software components that Teranode relies on for various functionalities, including data storage, message queuing, and monitoring.
 
 
 
@@ -144,7 +144,11 @@ While this document will touch upon these components as needed for setup and ope
 
 ## 2.1. Hardware Requirements
 
-***TODO***
+
+
+- Linear Scalability throughput (3 snapshots - 10K, 100K, 500K) **TODO** <--- To be worked with Joe [19 July]
+
+- Max 17,000 (seen in BSV production - perhaps size it up for 30,000 max?)
 
 
 
@@ -273,6 +277,12 @@ For the purposes of the alpha testing, an initial set of preconfigured dashboard
 
 
 
+**TODO** - https://grafana.com/grafana/dashboards/ we’ll publish a teranode dashboard here - People can download and install an instance from here.  -- To be discussed with Joe, for analysis.
+
+
+
+
+
 ## 2.3. Network Considerations
 
 
@@ -289,7 +299,7 @@ These figures are approximate. In general, any stable internet connection should
 Key network considerations:
 
 1. Ensure your internet connection is reliable and has sufficient bandwidth to handle continuous data transfer.
-2. Be aware that initial blockchain synchronization may require higher bandwidth usage.
+2. Be aware that initial blockchain synchronization may require higher bandwidth usage. **TODO** - clarify how relevant this is given the seed DB conversation with Simon **xx**
 3. Monitor your network usage to ensure it stays within your ISP's limits and adjust your node's configuration if needed.
 
 
@@ -327,6 +337,7 @@ Teranode can be installed and run using three primary methods: pre-built binarie
   - Aerospike
   - Grafana
   - Prometheus
+  - Docker Shared Storage
 - Advantages:
   - Easiest method to get a full Teranode environment running quickly.
   - Automatically manages start order and networking between components.
@@ -335,7 +346,7 @@ Teranode can be installed and run using three primary methods: pre-built binarie
   - This setup uses predefined external dependencies, which may not be customizable.
   - While convenient for development and testing, it is not optimized, nor intended, for production usage.
 
-Note: The Docker Compose method is recommended for alpha testing as it provides a consistent environment that mirrors the development setup. However, for production deployments or specific performance requirements, users may need to consider alternative setups.
+Note: The `Docker Compose` method is recommended for alpha testing as it provides a consistent environment that mirrors the development setup. However, for production deployments or specific performance requirements, users may need to consider alternative setups.
 
 In the following sections, we will focus on the `Docker Compose` installation method, as it is the most suitable for alpha testing purposes. Users interested in directly running the binaries or managing the docker containers with their own custom setups can reach out to the Teranode support team for further discussion.
 
@@ -374,23 +385,59 @@ In the following sections, we will focus on the `Docker Compose` installation me
 **Step 2: Configure Environment**
 
 1. Create a `.env` file in the root directory of the project.
-2. Add the following line to set the context:
+2. While not required (your docker compose file will be preconfigured), the following line can be used to set the context:
    ```
    SETTINGS_CONTEXT_1=docker.m
    ```
-
-*** TODO is this correct? Test with Jeff's final compose***
 
 
 
 **Step 3: Prepare Local Settings**
 
 1. Create a `settings_local.conf` file in the root directory.
-2. Add any local overrides or specific configurations needed for your environment.
+2. Unless instructed otherwise, please put the following content in it.
 
 
 
-***TODO - what overrides we want to suggest / recommend / mention????****
+```
+PROPAGATION_GRPC_PORT=8084
+PROPAGATION_HTTP_PORT=8833
+VALIDATOR_GRPC_PORT=8081
+BLOCK_ASSEMBLY_GRPC_PORT=8085
+SUBTREE_VALIDATION_GRPC_PORT=8086
+BLOCK_VALIDATION_GRPC_PORT=8088
+BLOCK_VALIDATION_HTTP_PORT=8188
+BLOCKCHAIN_GRPC_PORT=8087
+ASSET_GRPC_PORT=8091
+ASSET_HTTP_PORT=8090
+COINBASE_GRPC_PORT=8093
+P2P_HTTP_PORT=9906
+RPC_PORT=9292
+
+propagation_grpcAddresses.docker.m=ubsv-propagation:${PROPAGATION_GRPC_PORT}
+propagation_grpcAddress.docker.m=ubsv-propagation:${PROPAGATION_GRPC_PORT}
+propagation_httpAddresses.docker.m=http://ubsv-propagation:${PROPAGATION_HTTP_PORT}
+validator_grpcAddress.docker.m=localhost:${VALIDATOR_GRPC_PORT}
+blockassembly_grpcAddress.docker.m=ubsv-blockassembly:${BLOCK_ASSEMBLY_GRPC_PORT}
+subtreevalidation_grpcAddress.docker.m=ubsv-subtreevalidation:${SUBTREE_VALIDATION_GRPC_PORT}
+blockvalidation_httpAddress.docker.m=http://ubsv-blockvalidation:${BLOCK_VALIDATION_HTTP_PORT}
+blockvalidation_grpcAddress.docker.m=ubsv-blockvalidation:${BLOCK_VALIDATION_GRPC_PORT}
+utxostore.docker.m=aerospike://aerospike:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+utxoblaster_utxostore_aerospike.docker.m=aerospike://editor:password1234@aerospike:3000/utxo-store?WarmUp=0&ConnectionQueueSize=640&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=64&expiration=900
+blockchain_grpcAddress.docker.m=ubsv-blockchain:${BLOCKCHAIN_GRPC_PORT}
+blockchain_store.docker.m=postgres://miner1:miner1@postgres:5432/ubsv1
+asset_grpcListenAddress.docker.m=:${ASSET_GRPC_PORT}
+asset_grpcAddress.docker.m=ubsv-asset:${ASSET_GRPC_PORT}
+asset_httpAddress.docker.m=http://ubsv-asset:${ASSET_HTTP_PORT}${asset_apiPrefix}
+coinbase_assetGrpcAddress.docker.m=ubsv-asset:${ASSET_GRPC_PORT}
+coinbase_grpcAddress.docker.m=ubsv-coinbase:${COINBASE_GRPC_PORT}
+coinbase_store.docker.m=postgres://coinbase1:coinbase1@postgres:5432/coinbase1
+p2p_httpListenAddress.docker.m=:${P2P_HTTP_PORT}
+p2p_httpAddress.docker.m=ubsv-p2p:${P2P_HTTP_PORT}
+p2p_static_peers.docker.m=
+coinbase_p2p_static_peers.docker.m=
+rpc_listener_url=:${RPC_PORT}
+```
 
 
 
@@ -428,6 +475,8 @@ In the following sections, we will focus on the `Docker Compose` installation me
    docker-compose up -d
    ```
 
+**TODO** - initial bootstrapping of nodes / sync etc ?
+
 
 
 **Step 8: Verify Services**
@@ -443,8 +492,7 @@ In the following sections, we will focus on the `Docker Compose` installation me
 **Step 9: Access Monitoring Tools**
 
 1. **Grafana**: Access the Grafana dashboard at `http://localhost:3005`
-
-   - Default credentials are admin/admin ***TODO - confirm this point with Jeff****
+- Default credentials are `admin/admin`
 
 
 
@@ -463,9 +511,9 @@ In the following sections, we will focus on the `Docker Compose` installation me
   - **Asset service**: Ports 8090, 8091
   - **Miner service**: Ports 8089, 8092, 8099
   - **P2P service**: Ports 9905, 9906
-  - **RPC service**: No external port exposed by default
+  - **RPC service**: 9292
 
-**TODO - what can the user do with those ports? what should we document here?** Include portions of the Asset Server doc in the next sections of the doc?
+**TODO - what can the user do with those ports? Should the Blockchain, Miner and P2P be removed from this list? **
 
 
 
@@ -499,35 +547,77 @@ Additional Notes:
 
 
 
-
-
-## 3.3. Verifying software integrity
-
-**TODO** - is this required for the alpha testing phase of the project?
-
-
-
-
-
 # 4. Configuration
 
 
 
-## 4.1. Configuring config files
-
-- TestNet vs MainNet????
-- Modes (listener vs "full node", pruned vs full) ????
-- Enabling RPC access (if needed) - in scope???
-- Settings per application.
-- ...
+## 4.1. Configuring Setting Files
 
 
 
+The following settings can be configured in the `settings_local.conf`.
 
 
-## 4.2. Security settings
 
-??????? **TODO**
+**Service Ports**
+
+```
+PROPAGATION_GRPC_PORT=8084
+PROPAGATION_HTTP_PORT=8833
+VALIDATOR_GRPC_PORT=8081
+BLOCK_ASSEMBLY_GRPC_PORT=8085
+SUBTREE_VALIDATION_GRPC_PORT=8086
+BLOCK_VALIDATION_GRPC_PORT=8088
+BLOCK_VALIDATION_HTTP_PORT=8188
+BLOCKCHAIN_GRPC_PORT=8087
+ASSET_GRPC_PORT=8091
+ASSET_HTTP_PORT=8090
+COINBASE_GRPC_PORT=8093
+P2P_HTTP_PORT=9906
+```
+
+**Service Addresses**
+
+```
+propagation_grpcAddresses.docker.m=ubsv-propagation:${PROPAGATION_GRPC_PORT}
+propagation_grpcAddress.docker.m=ubsv-propagation:${PROPAGATION_GRPC_PORT}
+propagation_httpAddresses.docker.m=http://ubsv-propagation:${PROPAGATION_HTTP_PORT}
+validator_grpcAddress.docker.m=localhost:${VALIDATOR_GRPC_PORT}
+blockassembly_grpcAddress.docker.m=ubsv-blockassembly:${BLOCK_ASSEMBLY_GRPC_PORT}
+subtreevalidation_grpcAddress.docker.m=ubsv-subtreevalidation:${SUBTREE_VALIDATION_GRPC_PORT}
+blockvalidation_httpAddress.docker.m=http://ubsv-blockvalidation:${BLOCK_VALIDATION_HTTP_PORT}
+blockvalidation_grpcAddress.docker.m=ubsv-blockvalidation:${BLOCK_VALIDATION_GRPC_PORT}
+blockchain_grpcAddress.docker.m=ubsv-blockchain:${BLOCKCHAIN_GRPC_PORT}
+asset_grpcListenAddress.docker.m=:${ASSET_GRPC_PORT}
+asset_grpcAddress.docker.m=ubsv-asset:${ASSET_GRPC_PORT}
+asset_httpAddress.docker.m=http://ubsv-asset:${ASSET_HTTP_PORT}${asset_apiPrefix}
+coinbase_assetGrpcAddress.docker.m=ubsv-asset:${ASSET_GRPC_PORT}
+coinbase_grpcAddress.docker.m=ubsv-coinbase:${COINBASE_GRPC_PORT}
+p2p_httpListenAddress.docker.m=:${P2P_HTTP_PORT}
+p2p_httpAddress.docker.m=ubsv-p2p:${P2P_HTTP_PORT}
+```
+
+**Database Connections**
+
+```
+utxostore.docker.m=aerospike://aerospike:3000/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300
+utxoblaster_utxostore_aerospike.docker.m=aerospike://editor:password1234@aerospike:3000/utxo-store?WarmUp=0&ConnectionQueueSize=640&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=64&expiration=900
+blockchain_store.docker.m=postgres://miner1:miner1@postgres:5432/ubsv1
+coinbase_store.docker.m=postgres://coinbase1:coinbase1@postgres:5432/coinbase1
+```
+
+**P2P Configuration**
+
+```
+p2p_static_peers.docker.m=
+coinbase_p2p_static_peers.docker.m=
+```
+
+
+
+For the purposes of the alpha testing, it is recommended not to modify any settings unless strictly necessary.
+
+
 
 
 
@@ -537,7 +627,7 @@ Additional Notes:
 
 
 
-## 5.1. Starting and stopping the node
+## 5.1. Starting and Stopping the Node
 
 
 
@@ -710,23 +800,243 @@ Remember, <u>always</u> use the <u>graceful shutdown</u> method (`docker-compose
 
 
 
-## 5.2. Syncing the blockchain - **TODO** - ask Simon
+## 5.2. Syncing the Blockchain - **TODO** - ask Simon
 
 
 
-
-
-## 5.3. Monitoring node status
-
-- Grafana + Prometheus + Logs
+**TODO** Get a brain dump from Simon [July 19]
 
 
 
-## 5.4. How to interact with the current node. APIs, what’s feasible externally and what’s not
+## 5.3. Monitoring Node status
 
-- Asset Server
-- RPC
-- Others?
+- Grafana + Prometheus + Logs **TODO**
+
+
+
+## 5.4. How to Interact with the Node
+
+
+
+There are 2 primary ways to interact with the node, using the RPC Server, and using the Asset Server.
+
+
+
+### 5.4.1. Teranode RPC HTTP API
+
+
+
+The Teranode RPC server provides a JSON-RPC interface for interacting with the node. Below is a list of implemented RPC methods:
+
+
+
+**Supported Methods**
+
+1. `createrawtransaction`: Creates a raw transaction.
+2. `generate`: Generates new blocks.
+3. `getbestblockhash`: Returns the hash of the best (tip) block in the longest blockchain.
+4. `getblock`: Retrieves a block by its hash.
+5. `sendrawtransaction`: Submits a raw transaction to the network.
+6. `stop`: Stops the Teranode server.
+7. `version`: Returns version information about the RPC server.
+
+
+
+**Authentication**
+
+The RPC server uses HTTP Basic Authentication. Credentials are configured in the settings (see the section 4.1 for details). There are two levels of access:
+
+1. Admin access: Full access to all RPC methods.
+2. Limited access: Access to a subset of RPC methods defined in `rpcLimited`.
+
+
+
+**Request Format**
+
+Requests should be sent as HTTP POST requests with a JSON-RPC 1.0 or 2.0 formatted body. For example:
+
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "1",
+    "method": "getbestblockhash",
+    "params": []
+}
+```
+
+
+
+**Response Format**
+
+Responses are JSON objects containing the following fields:
+
+- `result`: The result of the method call (if successful).
+- `error`: Error information (if an error occurred).
+- `id`: The id of the request.
+
+
+
+**Error Handling**
+
+Errors are returned as JSON-RPC error objects with a code and message. Common error codes include:
+
+- `-32600`: Invalid Request
+- `-32601`: Method not found
+- `-32602`: Invalid params
+- `-32603`: Internal error
+- `-32700`: Parse error
+
+
+
+For detailed information on each method's parameters and return values, refer to the Bitcoin SV protocol documentation or the specific Teranode implementation details.
+
+
+
+### 5.4.2. Teranode Asset Server HTTP API
+
+
+
+The Teranode Asset Server provides the following HTTP endpoints. Unless otherwise specified, all endpoints are GET requests.
+
+
+
+Base URL: `/api/v1` (configurable)
+
+Port: `8090` (configurable)
+
+
+
+**Health and Status Endpoints**
+
+- GET `/alive`
+  - Returns the service status and uptime
+
+- GET `/health`
+  - Performs a health check on the service
+
+
+
+**Transaction Endpoints**
+
+- GET `/tx/:hash`
+  - Retrieves a transaction in binary stream format
+- GET `/tx/:hash/hex`
+  - Retrieves a transaction in hexadecimal format
+- GET `/tx/:hash/json`
+  - Retrieves a transaction in JSON format
+
+- POST `/txs`
+  - Retrieves multiple transactions (binary stream format)
+
+- GET `/txmeta/:hash/json`
+  - Retrieves transaction metadata in JSON format
+
+- GET `/txmeta_raw/:hash`
+  - Retrieves raw transaction metadata in binary stream format
+- GET `/txmeta_raw/:hash/hex`
+  - Retrieves raw transaction metadata in hexadecimal format
+- GET `/txmeta_raw/:hash/json`
+  - Retrieves raw transaction metadata in JSON format
+
+
+
+**Subtree Endpoints**
+
+- GET `/subtree/:hash`
+  - Retrieves a subtree in binary stream format
+- GET `/subtree/:hash/hex`
+  - Retrieves a subtree in hexadecimal format
+- GET `/subtree/:hash/json`
+  - Retrieves a subtree in JSON format
+
+- GET `/subtree/:hash/txs/json`
+  - Retrieves transactions in a subtree in JSON format
+
+
+
+**Block and Header Endpoints**
+
+- GET `/headers/:hash`
+  - Retrieves block headers in binary stream format
+- GET `/headers/:hash/hex`
+  - Retrieves block headers in hexadecimal format
+- GET `/headers/:hash/json`
+  - Retrieves block headers in JSON format
+
+- GET `/header/:hash`
+  - Retrieves a single block header in binary stream format
+- GET `/header/:hash/hex`
+  - Retrieves a single block header in hexadecimal format
+- GET `/header/:hash/json`
+  - Retrieves a single block header in JSON format
+
+- GET `/blocks`
+  - Retrieves multiple blocks
+
+- GET `/blocks/:hash`
+  - Retrieves N blocks starting from a specific hash in binary stream format
+- GET `/blocks/:hash/hex`
+  - Retrieves N blocks starting from a specific hash in hexadecimal format
+- GET `/blocks/:hash/json`
+  - Retrieves N blocks starting from a specific hash in JSON format
+
+- GET `/block_legacy/:hash`
+  - Retrieves a block in legacy format (binary stream)
+
+- GET `/block/:hash`
+  - Retrieves a block by hash in binary stream format
+- GET `/block/:hash/hex`
+  - Retrieves a block by hash in hexadecimal format
+- GET `/block/:hash/json`
+  - Retrieves a block by hash in JSON format
+
+- GET `/block/:hash/forks`
+  - Retrieves fork information for a specific block
+
+- GET `/block/:hash/subtrees/json`
+  - Retrieves subtrees of a block in JSON format
+
+- GET `/lastblocks`
+  - Retrieves the last N blocks
+
+- GET `/bestblockheader`
+  - Retrieves the best block header in binary stream format
+- GET `/bestblockheader/hex`
+  - Retrieves the best block header in hexadecimal format
+- GET `/bestblockheader/json`
+  - Retrieves the best block header in JSON format
+
+
+
+**UTXO and Balance Endpoints**
+
+- GET `/utxo/:hash`
+  - Retrieves a UTXO in binary stream format
+- GET `/utxo/:hash/hex`
+  - Retrieves a UTXO in hexadecimal format
+- GET `/utxo/:hash/json`
+  - Retrieves a UTXO in JSON format
+
+- GET `/utxos/:hash/json`
+  - Retrieves UTXOs by transaction ID in JSON format
+
+- GET `/balance`
+  - Retrieves balance information
+
+
+
+**Miscellaneous Endpoints**
+
+- GET `/search`
+  - Performs a search (details depend on implementation)
+
+- GET `/blockstats`
+  - Retrieves block statistics
+
+- GET `/blockgraphdata/:period`
+  - Retrieves block graph data for a specified period
+
+
 
 
 
@@ -734,7 +1044,7 @@ Remember, <u>always</u> use the <u>graceful shutdown</u> method (`docker-compose
 
 
 
-## 6.1. Updating Teranode to a new version
+## 6.1. Updating Teranode to a New Version
 
 
 
@@ -785,7 +1095,7 @@ Remember, <u>always</u> use the <u>graceful shutdown</u> method (`docker-compose
 
 - **Data Persistence**: The update process should not affect data stored in volumes (./data directory). However, it's always good practice to backup important data before updating.
 - **Configuration Changes**: Check the release notes or documentation for any required changes to `settings_local.conf` or environment variables.
-- **Database Migrations**: Some updates may require database schema changes.***TODO - is this handled transparently by Docker Compose???? Ask Jeff**
+- **Database Migrations**: Some updates may require database schema changes.***TODO - is this handled transparently by Docker Compose???? [July 19] - not really - clarify this with Jeff**
 - **Downtime**: Be aware that this process involves stopping and restarting all services, which will result in some downtime. Rolling updates are not possible with the `docker compose` setup.
 
 
@@ -809,7 +1119,7 @@ Remember, the exact update process may vary depending on the specific changes in
 
 
 
-## 6.2. Managing disk space
+## 6.2. Managing Disk Space
 
 
 
@@ -837,7 +1147,7 @@ Key considerations and strategies:
 
 
 
-## 6.3. Backing up data
+## 6.3. Backing Up Data
 
 
 
@@ -864,9 +1174,14 @@ Note: During the alpha testing phase, all Teranodes run in listener mode. Should
 # 7. Troubleshooting
 
 - Common issues and solutions
-    - ???? Runbook?
+    - ???? Runbook? **TODO**
 - Log file analysis
-- Escalation path to BSV Teranode official support team?
+-
+
+
+
+Should you encounter a bug, please report it following the instructions in the Bug Reporting section.
+
 
 
 
@@ -874,13 +1189,78 @@ Note: During the alpha testing phase, all Teranodes run in listener mode. Should
 
 
 
-## 8.1. Firewall configuration
-
-- **TODO** - Possibly nothing much? Docker network is self contained, and as long as we do not allow external access to the node, there is not much to worry about.
+## 8.1. Firewall Configuration
 
 
 
-## 8.2. Regular system updates
+
+
+While Docker Compose creates an isolated network for the Teranode services, some ports are exposed to the host system and potentially to the external network. Here are some firewall configuration recommendations:
+
+1. **Publicly Exposed Ports:**
+   Review the ports exposed in the Docker Compose file and ensure your firewall is configured to handle these appropriately:
+
+   - `9292`: RPC Server. Open to receive RPC API requests.
+
+   - `8090,8091`: Asset Server. Open for incoming HTTP and gRPC asset requests.
+
+   - `8090,8091`:  P2P Server. Open for incoming connections to allow peer discovery and communication.
+
+
+
+2. **Host Firewall:**
+
+   - Configure your host's firewall to allow incoming connections only on the necessary ports.
+   - For ports that don't need external access, strictly restrict them to localhost (127.0.0.1) or your internal network.
+
+
+
+3. **External Access:**
+
+   - Only expose ports to the internet that are absolutely necessary for node operation (e.g., P2P, RPC and Asset server ports).
+   - Use strong authentication for any services that require external access. See the section 4.1 of this document for more details.
+
+
+
+4. **Docker's Built-in Firewall:**
+
+   - Docker manages its own iptables rules. Ensure these don't conflict with your host firewall rules.
+
+
+
+5. **Network Segmentation:**
+
+   - If possible, place your Teranode host on a separate network segment with restricted access to other parts of your infrastructure.
+
+
+
+6. **Regular Audits:**
+
+   - Periodically review your firewall rules and exposed ports to ensure they align with your security requirements.
+
+
+
+8. **Service-Specific Recommendations:**
+
+   - **PostgreSQL (5432**): If you want to expose it, restrict to internal network, never publicly.
+   - **Kafka (9092, 9093)**: If you want to expose it, restrict to internal network, never publicly.
+   - **Aerospike (3000)**: If you want to expose it, restrict to internal network, never publicly.
+   - **Grafana (3005)**: Secure with strong authentication if exposed externally.
+
+
+
+9. **P2P Communication:**
+
+   - Ensure ports 9905 and 9906 are open for incoming connections to allow peer discovery and communication.
+
+
+
+Remember, the exact firewall configuration will depend on your specific network setup, security requirements, and how you intend to operate your Teranode. Always follow the principle of least privilege, exposing only what is necessary for operation.
+
+
+
+
+## 8.2. Regular System Updates
 
 
 
@@ -888,19 +1268,113 @@ In order to receive the latest bug fixes and vulnerability patches, please ensur
 
 
 
-# 9. Documentation and Logging
+# 9. Bug Reporting
 
-- Keeping records of changes and updates
-- Incident reporting
 
-  - #### Public  /  bugs
 
-  collect_logs
-  https://aerospike.com/docs/tools/asadm/live_cluster_mode_guide#collectlogs
+When you encounter issues, please follow these guidelines to report bugs to the Teranode support team:
 
-  #### Private - Security / vulnerabilities
+**9.1. Before Reporting**
 
-  Joe's note - this needs to be another private channels to report security flaws and maybe even come up with a bounty program. these cannot go on public channels for security reasons
+1. Check the documentation and FAQ to ensure the behavior is indeed a bug.
+2. Search existing GitHub issues to see if the bug has already been reported.
+
+**9.2. Collecting Information**
+
+Before submitting a bug report, gather the following information:
+
+1. **Environment Details**:
+   - Operating System and version
+   - Docker version
+   - Docker Compose version
+2. **Configuration Files**:
+   - `settings_local.conf`
+   - Docker Compose file
+3. **System Resources**:
+   - CPU usage
+   - Memory usage
+   - Disk space and I/O statistics
+4. **Network Information:**
+   - Firewall configuration
+   - Any relevant network errors
+5. **Steps to Reproduce**:
+   - Detailed, step-by-step description of how to reproduce the issue
+6. **Expected vs Actual Behavior**:
+   - What you expected to happen
+   - What actually happened
+7. **Screenshots or Error Messages**:
+   - Include any relevant visual information
+
+**9.3. Using the Log Collection Tool**
+
+To standardize and simplify the bug reporting process, we provide a log collection tool similar to Aerospike's `collect_logs`:
+
+1. Run the Teranode log collection tool:
+   ```
+   ./teranode_collect_logs.sh
+   ```
+   **TODO - Refine this once the tool really exists!!**
+
+2. This tool will automatically gather:
+   - Current Teranode settings
+   - Recent logs from all services
+   - System information
+   - Configuration files
+
+3. The tool will create a compressed file with all the collected information.
+
+**9.4. Submitting the Bug Report**
+
+1. Go to the Teranode GitHub repository: [**TODO - Insert Teranode GitHub URL**]
+2. Click on "Issues" and then "New Issue"
+3. Select the "Bug Report" template
+4. Fill out the template with the information you've gathered
+5. Attach the compressed file from the log collection tool
+6. Submit the issue
+
+**9.5. Bug Report Template**
+
+When creating a new issue, use the following template:
+
+```markdown
+## Bug Description
+[Provide a clear and concise description of the bug]
+
+## Teranode Version
+[e.g., 1.2.3]
+
+## Environment
+- OS: [e.g., Ubuntu 20.04]
+- Docker Version: [e.g., 20.10.7]
+- Docker Compose Version: [e.g., 1.29.2]
+
+## Steps to Reproduce
+1. [First Step]
+2. [Second Step]
+3. [and so on...]
+
+## Expected Behavior
+[What you expected to happen]
+
+## Actual Behavior
+[What actually happened]
+
+## Additional Context
+[Any other information that might be relevant]
+
+## Logs and Configuration
+[Mention that you've attached the output from teranode_collect_logs.sh]
+```
+
+**9.6. After Submitting**
+
+- Be responsive to any follow-up questions from the development team.
+- If you discover any new information about the bug, update the issue.
+- If the bug is resolved in a newer version, please confirm and close the issue.
+
+
+
+
 
 
 
