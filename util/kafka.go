@@ -184,7 +184,7 @@ func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushB
 StartKafkaListener will start a single consumer
 */
 func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, workers int,
-	service string, groupID string, workerFn func(ctx context.Context, key []byte, data []byte) error) {
+	service string, groupID string, autoCommitEnabled bool, workerFn func(ctx context.Context, key []byte, data []byte) error) {
 
 	// create the workers to process all messages
 	n := atomic.Uint64{}
@@ -253,7 +253,7 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 		}
 		logger.Infof("[Kafka] starting group listener for topic %s on address: %s", topic, kafkaURL.String())
 
-		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1, true)
+		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1, autoCommitEnabled)
 		if err != nil {
 			logger.Errorf("[%s] Kafka listener failed to start: %s", service, err)
 		}
@@ -263,6 +263,7 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 // txMetaCache : autocommit should be enabled - true, we CAN miss.
 // subtree validation : autocommit should be disabled - false.
 // block persister : autocommit should be disabled - false.
+// block assembly: no kafka setup
 
 // StartKafkaGroupListener Autocommit is enabled/disabled according to the parameter fed in the function.
 // We DO NOT read autocommit parameter from the URL.
