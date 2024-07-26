@@ -3,10 +3,8 @@ package blockassembly
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
@@ -284,11 +282,6 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 		return fmt.Errorf("failed to start block assembler [%w]", err)
 	}
 
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_txsConfig")
-	if err == nil && ok {
-		go ba.startKafkaListener(ctx, kafkaURL)
-	}
-
 	// this will block
 	if err = util.StartGRPCServer(ctx, ba.logger, "blockassembly", func(server *grpc.Server) {
 		blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
@@ -297,63 +290,6 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 	}
 
 	return nil
-}
-
-func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
-	workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
-	if workers < 1 {
-		// no workers, nothing to do
-		return
-	}
-
-	consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
-	if consumerRatio < 1 {
-		consumerRatio = 1
-	}
-
-	partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
-
-	consumerCount := partitions / consumerRatio
-	if consumerCount < 0 {
-		consumerCount = 1
-	}
-
-	ba.logger.Infof("[BlockAssembly] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
-
-	// updates the stats every 5 seconds
-	go func() {
-		for {
-			time.Sleep(5 * time.Second)
-			prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-			prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
-			prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
-		}
-	}()
-	// TODO: GET RID OF KAFKA FROM BLOCKASSEMBLY - NOT NEEDED
-	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaURL, "blockassembly", nil, consumerCount, func(msg util.KafkaMessage) error {
-		startTime := time.Now()
-
-		data, err := NewFromBytes(msg.Message.Value)
-		if err != nil {
-			ba.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
-			return errors.New(errors.ERR_KAFKA_DECODE_ERROR, "Failed to decode kafka message", err)
-		}
-
-		if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
-			Txid: data.TxIDChainHash.CloneBytes(),
-			Fee:  data.Fee,
-			Size: data.Size,
-		}); err != nil {
-			ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
-			return errors.New(errors.ERR_PROCESSING, "failed to add tx to block assembly", err)
-		}
-
-		prometheusBlockAssemblerSetFromKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-		return nil
-	}); err != nil {
-		ba.logger.Errorf("[BlockAssembly] failed to start Kafka listener: %s", err)
-		// TODO: Should we return an error?
-	}
 }
 
 func (ba *BlockAssembly) Stop(_ context.Context) error {
