@@ -1,5 +1,10 @@
 package errors
 
+/// Error type usage guidelines:
+/// storage error -> error returned from processing a file on s3, aerospike.
+///	service error -> error when performing an operation with one of the services, i.e. if it is using our GRPC of one of our services, error when
+/// processing error -> error when manipulating data, i.e. when processing a block, a transaction, etc., inside the method/function.
+
 var (
 	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
 	ErrInvalidArgument            = New(ERR_INVALID_ARGUMENT, "invalid argument")
