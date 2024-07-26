@@ -253,7 +253,7 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 		}
 		logger.Infof("[Kafka] starting group listener for topic %s on address: %s", topic, kafkaURL.String())
 
-		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1)
+		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1, true)
 		if err != nil {
 			logger.Errorf("[%s] Kafka listener failed to start: %s", service, err)
 		}
@@ -264,7 +264,9 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 // subtree validation : autocommit should be disabled - false.
 // block persister : autocommit should be disabled - false.
 
-func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int, autoCommitIn bool,
+// StartKafkaGroupListener Autocommit is enabled/disabled according to the parameter fed in the function.
+// We DO NOT read autocommit parameter from the URL.
+func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int, autoCommitEnabled bool,
 	consumerClosure ...func(KafkaMessage) error) error {
 
 	config := sarama.NewConfig()
@@ -272,10 +274,10 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 
 	// TODO GOKHAN: This needs to be handled, currently only for blocksFinalConfig autocommit is set to 0.
 	// https://github.com/IBM/sarama/issues/1689
-	autoCommit := GetQueryParamInt(kafkaURL, "autocommit", 1)
-	if autoCommit == 0 {
-		config.Consumer.Offsets.AutoCommit.Enable = false
-	}
+	//autoCommit := GetQueryParamInt(kafkaURL, "autocommit", 1)
+	//if autoCommit == 0 {
+	//	config.Consumer.Offsets.AutoCommit.Enable = false
+	//}
 
 	replay := GetQueryParamInt(kafkaURL, "replay", 0)
 	if replay == 1 {
