@@ -190,7 +190,8 @@ func (u *Server) Start(ctx context.Context) error {
 func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage) error) {
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, fn); err != nil {
+	// Autocommit is disabled for subtree messages, as we want to ensure that the message is processed before committing the offset.
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, false, fn); err != nil {
 		u.logger.Errorf("Failed to start Kafka listener: %v", err)
 	}
 }

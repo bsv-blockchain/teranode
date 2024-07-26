@@ -84,6 +84,7 @@ func (u *Server) Start(ctx context.Context) error {
 
 		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the blocksFinal messages.
 		go u.startKafkaListener(ctx, blocksFinalKafkaURL, groupID, 1, func(msg util.KafkaMessage) error {
+			// this does manual commit so we need to implement error handling and differentiate between errors
 			// TODO GOKHAN: Implement Error handling
 			u.blocksFinalHandler(msg)
 			return nil
@@ -135,7 +136,8 @@ func (u *Server) Start(ctx context.Context) error {
 func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage) error) {
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, fn); err != nil {
+	// Autocommit is disabled for all Kafka listeners for blockpersister, we want to manually commit.
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, false, fn); err != nil {
 		u.logger.Errorf("Failed to start Kafka listener: %v", err)
 	}
 }

@@ -499,7 +499,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	u.logger.Infof("[validateSubtreeInternal][%s] serialize subtree", v.SubtreeHash.String())
 	completeSubtreeBytes, err := subtree.Serialize()
 	if err != nil {
-		errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String()), err)
+		//errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String()), err)
 		return errors.New(errors.ERR_PROCESSING, "failed to serialize subtree", err)
 	}
 
