@@ -127,7 +127,11 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 
 	var height uint32 = 257727
 
-	v := &Validator{}
+	v := &Validator{
+		txValidator: TxValidator{
+			policy: NewPolicySettings(),
+		},
+	}
 
 	ctx := context.Background()
 
@@ -150,7 +154,11 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 
 	var height uint32 = 249976
 
-	v := &Validator{}
+	v := &Validator{
+		txValidator: TxValidator{
+			policy: NewPolicySettings(),
+		},
+	}
 
 	ctx := context.Background()
 
@@ -173,7 +181,11 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	var height uint32 = 229369
 
-	v := &Validator{}
+	v := &Validator{
+		txValidator: TxValidator{
+			policy: NewPolicySettings(),
+		},
+	}
 
 	ctx := context.Background()
 
