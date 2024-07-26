@@ -162,7 +162,6 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 
 	case "subtree":
 		bl := ReadSubtree(r, logger, true, queryTxId)
-		// fmt.Printf("Number of transactions: %d\n", num)
 		return bl, nil
 
 	case "":
@@ -172,7 +171,6 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 			return false, errors.New(errors.ERR_BLOCK_INVALID, "error reading block header", err)
 		}
 
-		// read the transaction count
 		txCount, err := wire.ReadVarInt(r, 0)
 		if err != nil {
 			return false, errors.New(errors.ERR_BLOCK_INVALID, "error reading transaction count", err)
@@ -192,7 +190,6 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 
 		for _, subtree := range block.Subtrees {
 			if true {
-				// filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
 				filename := fmt.Sprintf("%s.subtree", subtree.String())
 				fmt.Printf("Reading subtree from %s\n", filename)
 				_, _, stReader, err := GetReader(ctx, filename, dir, logger)
@@ -217,7 +214,6 @@ func ReadSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId cha
 		fmt.Printf("error reading transaction count: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Number of transactions: %d\n", num)
 	if verbose {
 		for i := uint32(0); i < num; i++ {
 			var tx bt.Tx
@@ -226,26 +222,16 @@ func ReadSubtree(r io.Reader, logger ulogger.Logger, verbose bool, queryTxId cha
 				fmt.Printf("error reading transaction: %v\n", err)
 				os.Exit(1)
 			}
-
-			// if block_model.IsCoinbasePlaceHolderTx(&tx) {
-			// 	fmt.Printf("%10d: Coinbase Placeholder\n", i)
-			// } else {
-			// 	fmt.Printf("%10d: %v", i, tx.TxIDChainHash())
-			// }
-			fmt.Printf("%10d: %v", i, tx.TxIDChainHash())
 			if *tx.TxIDChainHash() == queryTxId {
 				fmt.Printf(" (test txid) %v found\n", queryTxId)
 				return true
 			}
-
 		}
 	}
 	return false
 }
 
 func GetReader(ctx context.Context, file string, dir *url.URL, logger ulogger.Logger) (*url.URL, string, io.Reader, error) {
-	// dir, file := filepath.Split(path)
-
 	ext := filepath.Ext(file)
 	fileWithoutExtension := strings.TrimSuffix(file, ext)
 
@@ -255,8 +241,6 @@ func GetReader(ctx context.Context, file string, dir *url.URL, logger ulogger.Lo
 
 	hash, _ := chainhash.NewHashFromStr(fileWithoutExtension)
 
-	// if dir == "" && err == nil {
-	// store := GetBlockStore(logger)
 	store, err := blob.NewStore(logger, dir)
 	if err != nil {
 		return nil, "", nil, errors.New(errors.ERR_PROCESSING, "error creating block store: %w", err)
@@ -267,14 +251,6 @@ func GetReader(ctx context.Context, file string, dir *url.URL, logger ulogger.Lo
 	}
 
 	return dir, ext, r, nil
-	// }
-
-	// f, err := os.Open(path)
-	// if err != nil {
-	// 	return "", "", nil, errors.New(errors.ERR_PROCESSING, "error opening file: %v\n", err)
-	// }
-
-	// return dir, ext, f, nil
 }
 
 func GetMiningCandidate(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (*block_model.MiningCandidate, error) {
@@ -338,25 +314,20 @@ func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandi
 
 func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Hash, error) {
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
-	if err != nil {
-		fmt.Printf("failed to generate private key: %v", err)
-	}
+nilHash := chainhash.Hash{}
+privateKey, _ := bec.NewPrivateKey(bec.S256())
 
-	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	if err != nil {
-		fmt.Printf("failed to create address: %v", err)
-	}
+address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
-	coinbaseClient := node.CoinbaseClient
+coinbaseClient := node.CoinbaseClient
 
-	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	if err != nil {
-		fmt.Printf("failed to request funds: %v", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to request funds: %w", err)
 	}
 	_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
 	if err != nil {
-		fmt.Printf("failed to send transaction: %v", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to send transaction: %w", err)
 	}
 
 	output := faucetTx.Outputs[0]
@@ -370,22 +341,22 @@ func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Has
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
 	if err != nil {
-		fmt.Printf("error creating new transaction: %v\n", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "error creating new transaction: %w", err)
 	}
 
 	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
 	if err != nil {
-		fmt.Printf("error adding output to transaction: %v", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Error adding output to transaction: %w", err)
 	}
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		fmt.Printf("error filling transaction inputs: %v", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Error filling transaction inputs: %w", err)
 	}
 
 	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
 	if err != nil {
-		fmt.Printf("failed to send new transaction: %v", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to send new transaction: %w", err)
 	}
 
 	return *newTx.TxIDChainHash(), nil
@@ -393,25 +364,22 @@ func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Has
 
 func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (chainhash.Hash, error) {
 
-	privateKey, err := bec.NewPrivateKey(bec.S256())
-	if err != nil {
-		fmt.Printf("failed to generate private key: %v", err)
-	}
 
-	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
-	if err != nil {
-		fmt.Printf("failed to create address: %v", err)
-	}
+	nilHash := chainhash.Hash{}
+
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
 	coinbaseClient := node[0].CoinbaseClient
 
 	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	if err != nil {
-		fmt.Printf("failed to request funds: %v", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to request funds: %w", err)
 	}
 	_, err = node[0].DistributorClient.SendTransaction(ctx, faucetTx)
 	if err != nil {
-		fmt.Printf("failed to send transaction: %v", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to send transaction: %w", err)
 	}
 
 	output := faucetTx.Outputs[0]
@@ -425,42 +393,42 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (cha
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
 	if err != nil {
-		fmt.Printf("error creating new transaction: %v\n", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "error creating new transaction: %w", err)
 	}
 	newTx.LockTime = 0
 
 	newTxDouble := bt.NewTx()
 	err = newTxDouble.FromUTXOs(utxo)
 	if err != nil {
-		fmt.Printf("error creating new transaction: %v\n", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "error creating new transaction: %w", err)
 	}
 	newTxDouble.LockTime = 1
 
 	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
 	if err != nil {
-		fmt.Printf("error adding output to transaction: %v\n", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Error adding output to transaction: %w", err)
 	}
 	err = newTxDouble.AddP2PKHOutputFromAddress("14qViLJfdGaP4EeHnDyJbEGQysnCpwk3gd", 10000)
 	if err != nil {
-		fmt.Printf("error adding output to transaction: %v\n", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Error adding output to transaction: %w", err)
 	}
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		fmt.Printf("error filling transaction inputs: %v\n", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Error filling transaction inputs: %w", err)
 	}
 	err = newTxDouble.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		fmt.Printf("error filling transaction inputs: %v\n", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Error filling transaction inputs: %w", err)
 	}
 
 	_, err = node[0].DistributorClient.SendTransaction(ctx, newTx)
 	if err != nil {
-		fmt.Printf("failed to send new transaction: %v\n", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to send new transaction: %w", err)
 	}
 	_, err = node[1].DistributorClient.SendTransaction(ctx, newTxDouble)
 	if err != nil {
-		fmt.Printf("failed to send new transaction: %v\n", err)
+		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to send new transaction: %w", err)
 	}
 
 	return *newTx.TxIDChainHash(), nil
@@ -472,7 +440,7 @@ func CreateAndSendRawTxs(ctx context.Context, node tf.BitcoinNode, count int) ([
 	for i := 0; i < count; i++ {
 		tx, err := CreateAndSendRawTx(ctx, node)
 		if err != nil {
-			return nil, errors.New(errors.ERR_PROCESSING, "error creating raw transaction", err)
+			return nil, errors.New(errors.ERR_PROCESSING, "error creating raw transaction : %w", err)
 		}
 		txHashes = append(txHashes, tx)
 		time.Sleep(1 * time.Second) // Wait 10 seconds between transactions

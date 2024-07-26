@@ -3,10 +3,11 @@ package test_framework
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
@@ -26,6 +27,7 @@ type BitcoinTestFramework struct {
 	Context          context.Context
 	Compose          tc.ComposeStack
 	Nodes            []BitcoinNode
+	Logger           ulogger.Logger
 }
 
 type BitcoinNode struct {
@@ -40,12 +42,16 @@ type BitcoinNode struct {
 	SubtreeStore        blob.Store
 	BlockstoreUrl       *url.URL
 	UtxoStore           *utxostore.Store
+	SubtreesKafkaURL    *url.URL
 }
 
 func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 	return &BitcoinTestFramework{
 		ComposeFilePaths: composeFilePaths,
 		Context:          context.Background(),
+		Logger:           logger,
 	}
 }
 
@@ -53,8 +59,7 @@ func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 // The settings map is used to pass the environment variables to the docker-compose services.
 func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 	var testRunMode, _ = gocore.Config().Get("test_run_mode", "ci")
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
+	logger := b.Logger
 
 	if testRunMode == "ci" {
 		// Start the nodes with docker-compose up operation
@@ -88,7 +93,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		}
 		coinbaseClient, err := cb.NewClientWithAddress(b.Context, logger, getHostAddress(coinbaseGrpcAddress))
 		if err != nil {
-			return err
+			return errors.New(errors.ERR_CONFIGURATION, "error creating coinbase client %w", err)
 		}
 		b.Nodes[i].CoinbaseClient = *coinbaseClient
 
@@ -98,7 +103,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		}
 		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, getHostAddress(blockchainGrpcAddress))
 		if err != nil {
-			return err
+			return errors.New(errors.ERR_CONFIGURATION, "error creating blockchain client %w", err)
 		}
 		b.Nodes[i].BlockchainClient = blockchainClient
 
@@ -115,7 +120,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		}
 		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, getHostAddress(propagation_grpcAddress))
 		if err != nil {
-			return err
+			return errors.New(errors.ERR_CONFIGURATION, "error creating distributor client %w", err)
 		}
 		b.Nodes[i].DistributorClient = *distributorClient
 
@@ -125,47 +130,61 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		}
 		assetClient, err := asset.NewClient(b.Context, logger, getHostAddress(coinbase_assetGrpcAddress))
 		if err != nil {
-			return err
+			return errors.New(errors.ERR_CONFIGURATION, "error creating asset client %w", err)
 		}
 		b.Nodes[i].AssetClient = *assetClient
+
+		subtreesKafkaUrl, err, ok := gocore.Config().GetURL(fmt.Sprintf("kafka_subtreesConfig.%s.run", node.SETTINGS_CONTEXT))
+		if err != nil {
+			return errors.New(errors.ERR_CONFIGURATION, "no kafka_subtreesConfig setting found")
+		}
+		if !ok {
+			return errors.New(errors.ERR_CONFIGURATION, "no kafka_subtreesConfig setting found")
+		}
+		kafkaURL, _ := url.Parse(strings.Replace(subtreesKafkaUrl.String(), "kafka-shared", "localhost", 1))
+		kafkaURL, _ = url.Parse(strings.Replace(kafkaURL.String(), "9092", "19093", 1))
+
+		b.Nodes[i].SubtreesKafkaURL = kafkaURL
 
 		blockchainStoreURL, _, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s", node.SETTINGS_CONTEXT))
 		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
 		if err != nil {
-			return err
+			return errors.New(errors.ERR_CONFIGURATION, "error creating blockchain store %w", err)
 		}
 		b.Nodes[i].BlockChainDB = blockchainStore
 
-		//TODO - This should be refactored to use mapped docker volumes
 		blockStoreUrl, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.run", node.SETTINGS_CONTEXT))
 		if err != nil {
-			panic(err)
+			return errors.New(errors.ERR_CONFIGURATION, "error getting blockstore url %w", err)
 		}
 		if !found {
-			panic("blockstore config not found")
+			return errors.New(errors.ERR_CONFIGURATION, "blockstore config not found")
 		}
 		blockStore, err := blob.NewStore(logger, blockStoreUrl)
 		if err != nil {
-			panic(err)
+			return errors.New(errors.ERR_CONFIGURATION, "error creating blockstore %w", err)
 		}
 		b.Nodes[i].Blockstore = blockStore
 		b.Nodes[i].BlockstoreUrl = blockStoreUrl
 
 		subtreeStoreUrl, err, found := gocore.Config().GetURL(fmt.Sprintf("subtreestore.%s.run", node.SETTINGS_CONTEXT))
 		if err != nil {
-			panic(err)
+			return errors.New(errors.ERR_CONFIGURATION, "error getting subtreestore url %w", err)
 		}
 		if !found {
-			panic("subtreestore config not found")
+			return errors.New(errors.ERR_CONFIGURATION, "subtreestore config not found")
 		}
 		subtreeStore, err := blob.NewStore(logger, subtreeStoreUrl)
 		if err != nil {
-			panic(err)
+			return errors.New(errors.ERR_CONFIGURATION, "error creating subtreestore %w", err)
 		}
 		b.Nodes[i].SubtreeStore = subtreeStore
 
-		utxoStoreUrl, _, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SETTINGS_CONTEXT))
+		utxoStoreUrl, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SETTINGS_CONTEXT))
 		b.Nodes[i].UtxoStore, _ = utxostore.New(b.Context, logger, utxoStoreUrl)
+		if err != nil {
+			return errors.New(errors.ERR_CONFIGURATION, "error creating utxostore %w", err)
+		}
 	}
 	return nil
 }

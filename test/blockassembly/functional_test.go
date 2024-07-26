@@ -63,6 +63,7 @@ func newTx(lockTime uint32) *bt.Tx {
 func TestNode(t *testing.T) {
 	blockassemblyNode0 := framework.Nodes[0].BlockassemblyClient
 	blockchainClientNode0 := framework.Nodes[0].BlockchainClient
+
 	var hashes []*chainhash.Hash
 
 	blockchainSubscription, err := blockchainClientNode0.Subscribe(framework.Context, "test")
@@ -107,6 +108,10 @@ func TestNode(t *testing.T) {
 		t.Errorf("Error getting mining candidate: %v", err)
 	}
 	assert.Equal(t, uint(0x3), uint(m.SubtreeCount))
+	time.Sleep(10 * time.Second)
+	assert.Equal(t, uint(3), uint(len(hashes)))
+	// _, err = helper.MineBlockWithCandidate(framework.Context, blockassemblyNode0, m, logger)
+	// assert.Nil(t, err, "Error mining block")
 	time.Sleep(10 * time.Second)
 	assert.Equal(t, uint(3), uint(len(hashes)))
 	// _, err = helper.MineBlockWithCandidate(framework.Context, blockassemblyNode0, m, logger)
