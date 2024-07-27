@@ -412,7 +412,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 		return false, errors.New(errors.ERR_BLOCK_INVALID, "[BLOCK][%s] block coinbase tx is not a valid coinbase tx", b.Hash().String())
 	}
 
-	if b.Header.Version > 1 {
+	if b.Header.Version > 1 && b.Height > 210_000 {
 		// We can only calculate the height from coinbase transactions in block versions 2 and higher
 
 		// https://en.bitcoin.it/wiki/BIP_0034
