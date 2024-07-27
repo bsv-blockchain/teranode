@@ -913,7 +913,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	g.SetLimit(validateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
 
 	blockHeight := block.Height
-	if block.Header.Version > 1 {
+	if blockHeight == 0 && block.Header.Version > 1 {
 		var err error
 		blockHeight, err = block.ExtractCoinbaseHeight()
 		if err != nil {
