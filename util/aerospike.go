@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -72,7 +73,7 @@ func GetAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 
 func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client, error) {
 	if len(url.Path) < 1 {
-		return nil, fmt.Errorf("aerospike namespace not found")
+		return nil, errors.NewConfigurationError("aerospike namespace not found")
 	}
 
 	policy := aerospike.NewClientPolicy()
@@ -168,7 +169,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		if len(hostParts) == 2 {
 			port, err := strconv.ParseInt(hostParts[1], 10, 32)
 			if err != nil {
-				return nil, fmt.Errorf("invalid port %v", hostParts[1])
+				return nil, errors.NewConfigurationError("invalid port %v", hostParts[1])
 			}
 
 			hosts = append(hosts, &aerospike.Host{
@@ -181,7 +182,7 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 				Port: 3000,
 			})
 		} else {
-			return nil, fmt.Errorf("invalid host %v", host)
+			return nil, errors.NewConfigurationError("invalid host %v", host)
 		}
 	}
 

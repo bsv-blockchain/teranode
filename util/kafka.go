@@ -3,8 +3,6 @@ package util
 import (
 	"context"
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"net/url"
 	"os"
 	"os/signal"
@@ -15,6 +13,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
@@ -46,7 +45,7 @@ type AsyncKafkaProducer struct {
 
 func (k *AsyncKafkaProducer) Close() error {
 	if err := k.Producer.Close(); err != nil {
-		return fmt.Errorf("failed to close Kafka producer: %v", err)
+		return errors.New(errors.ERR_SERVICE_ERROR, "failed to close Kafka producer", err)
 	}
 
 	return nil
@@ -77,7 +76,7 @@ type SyncKafkaProducer struct {
 
 func (k *SyncKafkaProducer) Close() error {
 	if err := k.Producer.Close(); err != nil {
-		return fmt.Errorf("failed to close Kafka producer: %v", err)
+		return errors.New(errors.ERR_SERVICE_ERROR, "failed to close Kafka producer", err)
 	}
 
 	return nil
@@ -107,7 +106,7 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 
 	clusterAdmin, err := sarama.NewClusterAdmin(brokersUrl, config)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error while creating cluster admin: %v", err)
+		return nil, nil, errors.New(errors.ERR_SERVICE_ERROR, "error while creating cluster admin", err)
 	}
 
 	partitions := GetQueryParamInt(kafkaURL, "partitions", 1)
@@ -136,7 +135,7 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 
 	producer, err := ConnectProducer(brokersUrl, topic, int32(partitions), flushBytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("unable to connect to kafka: %v", err)
+		return nil, nil, errors.New(errors.ERR_SERVICE_ERROR, "unable to connect to kafka", err)
 	}
 
 	return clusterAdmin, producer, nil
@@ -300,7 +299,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 	client, err := sarama.NewConsumerGroup(brokersUrl, groupID, config)
 	if err != nil {
 		cancel()
-		return fmt.Errorf("error creating consumer group client: %v", err)
+		return errors.New(errors.ERR_SERVICE_ERROR, "error creating consumer group client", err)
 	}
 
 	topics := []string{kafkaURL.Path[1:]}
@@ -364,7 +363,7 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 
 	clusterAdmin, err := sarama.NewClusterAdmin(brokersUrl, config)
 	if err != nil {
-		return fmt.Errorf("error while creating cluster admin: %v", err)
+		return errors.New(errors.ERR_CONFIGURATION, "error while creating cluster admin", err)
 	}
 	defer clusterAdmin.Close()
 
@@ -384,7 +383,7 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 		},
 	}, false); err != nil {
 		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
-			return fmt.Errorf("unable to create topic: %w", err)
+			return errors.New(errors.ERR_PROCESSING, "unable to create topic", err)
 		}
 	}
 

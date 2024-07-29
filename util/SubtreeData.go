@@ -2,7 +2,6 @@ package util
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -41,7 +40,7 @@ func NewSubtreeDataFromBytes(subtree *Subtree, dataBytes []byte) (*SubtreeData, 
 		Subtree: subtree,
 	}
 	if err := s.serializeFromReader(bytes.NewReader(dataBytes)); err != nil {
-		return nil, fmt.Errorf("unable to create subtree meta from bytes: %v", err)
+		return nil, errors.NewProcessingError("unable to create subtree meta from bytes", err)
 	}
 
 	return s, nil
@@ -52,7 +51,7 @@ func NewSubtreeDataFromReader(subtree *Subtree, dataReader io.Reader) (*SubtreeD
 		Subtree: subtree,
 	}
 	if err := s.serializeFromReader(dataReader); err != nil {
-		return nil, fmt.Errorf("unable to create subtree meta from reader: %v", err)
+		return nil, errors.NewProcessingError("unable to create subtree meta from reader", err)
 	}
 
 	return s, nil
@@ -110,7 +109,7 @@ func (s *SubtreeData) Serialize() ([]byte, error) {
 
 	// only serialize when we have the matching subtree
 	if s.Subtree == nil {
-		return nil, fmt.Errorf("cannot serialize, subtree is not set")
+		return nil, errors.NewProcessingError("cannot serialize, subtree is not set")
 	}
 
 	var txStartIndex int
@@ -122,7 +121,7 @@ func (s *SubtreeData) Serialize() ([]byte, error) {
 	subtreeLen := s.Subtree.Length()
 	for i := txStartIndex; i < subtreeLen; i++ {
 		if s.Txs[i] == nil && i != 0 {
-			return nil, fmt.Errorf("subtree length does not match tx data length")
+			return nil, errors.NewProcessingError("subtree length does not match tx data length")
 		}
 	}
 
@@ -133,7 +132,7 @@ func (s *SubtreeData) Serialize() ([]byte, error) {
 		b := s.Txs[i].ExtendedBytes()
 		_, err = buf.Write(b)
 		if err != nil {
-			return nil, fmt.Errorf("error writing tx data: %w", err)
+			return nil, errors.NewProcessingError("error writing tx data", err)
 		}
 	}
 

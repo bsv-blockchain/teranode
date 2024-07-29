@@ -2,7 +2,7 @@ package retry
 
 import (
 	"context"
-	"errors"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"testing"
 	"time"
 
@@ -25,14 +25,14 @@ func TestRetry(t *testing.T) {
 	retryOnceFn := func() (string, error) {
 		if staticCallCount == 0 {
 			staticCallCount++
-			return "", errors.New("error")
+			return "", errors.New(errors.ERR_PROCESSING, "error")
 		}
 		return "success", nil
 	}
 
 	// Function that will always fail
 	alwaysFailFn := func() (string, error) {
-		return "", errors.New("persistent error")
+		return "", errors.New(errors.ERR_PROCESSING, "persistent error")
 	}
 
 	retryOpts := WithRetryCount(3)
@@ -130,7 +130,7 @@ func TestRetryTimer(t *testing.T) {
 			f := func() (string, error) {
 				if errorCount < tc.simulateErrors {
 					errorCount++
-					return "", errors.New("test error")
+					return "", errors.New(errors.ERR_ERROR, "test error")
 				}
 				return "success", nil
 			}

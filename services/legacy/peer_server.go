@@ -2353,6 +2353,14 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		})
 	}
 
+	go func() {
+		// wait for the ctx to be done
+		<-ctx.Done()
+		// stop the servers
+		_ = s.Stop()
+		_ = s.syncManager.Stop()
+	}()
+
 	return &s, nil
 }
 

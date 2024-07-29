@@ -2,7 +2,7 @@ package test
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -50,7 +50,7 @@ func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte) (io.ReadCloser,
 	// read the file
 	subtreeReader, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %s", err)
+		return nil, errors.NewProcessingError("failed to read file: %s", err)
 	}
 
 	return subtreeReader, nil
@@ -62,7 +62,7 @@ func (n *BlobStoreStub) Get(_ context.Context, hash []byte) ([]byte, error) {
 	// read the file
 	subtreeBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %s", err)
+		return nil, errors.NewProcessingError("failed to read file: %s", err)
 	}
 
 	return subtreeBytes, nil

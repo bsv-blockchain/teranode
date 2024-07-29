@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"os"
 	"time"
@@ -29,7 +30,7 @@ func (l TestSubtreeStore) Exists(_ context.Context, key []byte, _ ...options.Opt
 func (l TestSubtreeStore) Get(_ context.Context, key []byte, _ ...options.Options) ([]byte, error) {
 	file, ok := l.Files[chainhash.Hash(key)]
 	if !ok {
-		return nil, fmt.Errorf("file not found")
+		return nil, errors.NewProcessingError("file not found")
 	}
 
 	subtreeBytes, err := os.ReadFile(fmt.Sprintf(FileNameTemplate, file))
@@ -43,7 +44,7 @@ func (l TestSubtreeStore) Get(_ context.Context, key []byte, _ ...options.Option
 func (l TestSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
 	file, ok := l.Files[chainhash.Hash(key)]
 	if !ok {
-		return nil, fmt.Errorf("file not found")
+		return nil, errors.NewProcessingError("file not found")
 	}
 
 	subtreeFile, err := os.Open(fmt.Sprintf(FileNameTemplate, file))

@@ -2,6 +2,7 @@ package util
 
 import (
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"os"
 	"path"
@@ -30,7 +31,7 @@ func InitSQLDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) {
 		return InitSQLiteDB(logger, storeUrl)
 	}
 
-	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
+	return nil, errors.NewConfigurationError("unknown scheme: %s", storeUrl.Scheme)
 }
 
 func InitPostgresDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) {
@@ -49,7 +50,7 @@ func InitPostgresDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) 
 
 	db, err := usql.Open(storeUrl.Scheme, dbInfo)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open postgres DB: %+v", err)
+		return nil, errors.NewServiceError("failed to open postgres DB", err)
 	}
 
 	logger.Infof("Using postgres DB: %s@%s:%d/%s", dbUser, dbHost, dbPort, dbName)
@@ -71,13 +72,13 @@ func InitSQLiteDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) {
 	} else {
 		folder, _ := gocore.Config().Get("dataFolder", "data")
 		if err = os.MkdirAll(folder, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create data folder %s: %+v", folder, err)
+			return nil, errors.NewServiceError("failed to create data folder %s", folder, err)
 		}
 
 		dbName := storeUrl.Path[1:]
 		filename, err = filepath.Abs(path.Join(folder, fmt.Sprintf("%s.db", dbName)))
 		if err != nil {
-			return nil, fmt.Errorf("failed to get absolute path for sqlite DB: %+v", err)
+			return nil, errors.NewServiceError("failed to get absolute path for sqlite DB", err)
 		}
 
 		// filename = fmt.Sprintf("file:%s?cache=shared&mode=rwc", filename)
@@ -92,17 +93,17 @@ func InitSQLiteDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) {
 	var db *usql.DB
 	db, err = usql.Open("sqlite", filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open sqlite DB: %+v", err)
+		return nil, errors.NewServiceError("failed to open sqlite DB", err)
 	}
 
 	if _, err = db.Exec(`PRAGMA foreign_keys = ON;`); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("could not enable foreign keys support: %+v", err)
+		return nil, errors.NewServiceError("could not enable foreign keys support", err)
 	}
 
 	if _, err = db.Exec(`PRAGMA locking_mode = SHARED;`); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("could not enable shared locking mode: %+v", err)
+		return nil, errors.NewServiceError("could not enable shared locking mode", err)
 	}
 
 	/* recommend setting max connection to low number - don't hide a problem by allowing infinite connections.

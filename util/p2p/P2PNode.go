@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"os"
 	"strings"
@@ -194,7 +195,7 @@ func (s *P2PNode) Stop(ctx context.Context) error {
 func (s *P2PNode) SetTopicHandler(ctx context.Context, topicName string, handler Handler) error {
 	_, ok := s.handlerByTopic[topicName]
 	if ok {
-		return fmt.Errorf("[P2PNode][SetTopicHandler] handler already exists for topic: %s", topicName)
+		return errors.NewServiceError("[P2PNode][SetTopicHandler] handler already exists for topic: %s", topicName)
 	}
 
 	topic := s.topics[topicName]
@@ -237,7 +238,7 @@ func (s *P2PNode) GetTopic(topicName string) *pubsub.Topic {
 
 func (s *P2PNode) Publish(ctx context.Context, topicName string, msgBytes []byte) error {
 	if err := s.topics[topicName].Publish(ctx, msgBytes); err != nil {
-		return fmt.Errorf("[P2PNode][Publish] publish error: %v", err)
+		return errors.NewServiceError("[P2PNode][Publish] publish error", err)
 	}
 	return nil
 }
@@ -510,12 +511,12 @@ func (s *P2PNode) initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
 func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
 	bootstrapAddresses, _ := gocore.Config().GetMulti("p2p_bootstrapAddresses", "|")
 	if len(bootstrapAddresses) == 0 {
-		panic(fmt.Errorf("[P2PNode] bootstrapAddresses not set in config"))
+		panic(errors.NewServiceError("[P2PNode] bootstrapAddresses not set in config"))
 	}
 	for _, ba := range bootstrapAddresses {
 		bootstrapAddr, err := multiaddr.NewMultiaddr(ba)
 		if err != nil {
-			panic(fmt.Sprintf("[P2PNode] failed to create bootstrap multiaddress %s: %v", ba, err))
+			panic(errors.NewServiceError("[P2PNode] failed to create bootstrap multiaddress %s: %v", ba, err))
 		}
 
 		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
@@ -532,7 +533,7 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsD
 
 	dhtProtocolIdStr, ok := gocore.Config().Get("p2p_dht_protocol_id")
 	if !ok {
-		panic(fmt.Errorf("[P2PNode] error getting p2p_dht_protocol_id"))
+		panic(errors.NewServiceError("[P2PNode] error getting p2p_dht_protocol_id"))
 	}
 	dhtProtocolID := protocol.ID(dhtProtocolIdStr)
 

@@ -3,7 +3,7 @@ package util
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"net/http"
 	"time"
@@ -27,7 +27,7 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 
 	blockBytes, err := io.ReadAll(bodyReaderCloser)
 	if err != nil {
-		return nil, fmt.Errorf("http request [%s] failed to read body: %w", url, err)
+		return nil, errors.NewServiceError("http request [%s] failed to read body: %w", url, err)
 	}
 
 	return blockBytes, nil
@@ -56,7 +56,7 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, cancelFn, fmt.Errorf("failed to create http request: %w", err)
+		return nil, cancelFn, errors.NewServiceError("failed to create http request", err)
 	}
 
 	// If there is a request body assume we want a POST and write request body
@@ -67,7 +67,7 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, cancelFn, fmt.Errorf("failed to do http request: %w", err)
+		return nil, cancelFn, errors.NewServiceError("failed to do http request", err)
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
@@ -76,14 +76,14 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 
 			b, err := io.ReadAll(resp.Body)
 			if err != nil {
-				return nil, cancelFn, fmt.Errorf("http request [%s] returned status code [%d]: %w", url, resp.StatusCode, err)
+				return nil, cancelFn, errors.NewServiceError("http request [%s] returned status code [%d]", url, resp.StatusCode, err)
 			}
 
 			if b != nil {
-				return nil, cancelFn, fmt.Errorf("http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b))
+				return nil, cancelFn, errors.NewServiceError("http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b))
 			}
 		}
-		return nil, cancelFn, fmt.Errorf("http request [%s] returned status code [%d]", url, resp.StatusCode)
+		return nil, cancelFn, errors.NewServiceError("http request [%s] returned status code [%d]", url, resp.StatusCode)
 	}
 
 	return resp.Body, cancelFn, nil
