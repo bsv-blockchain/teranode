@@ -232,3 +232,37 @@ func TestShutDownP2P(t *testing.T) {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
 	}
 }
+
+func TestShutDownAsset(t *testing.T) {
+	emptyMessage := &blockassembly_api.EmptyMessage{}
+
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc6"
+	if err := framework.RestartNodes(settingsMap); err != nil {
+		t.Errorf("Failed to restart nodes: %v", err)
+	}
+
+	blockchainHealth, err := framework.Nodes[1].BlockchainClient.Health(framework.Context)
+	if err != nil {
+		t.Errorf("Failed to start blockchain: %v", err)
+	}
+
+	blockchainAssemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	if err != nil {
+		t.Errorf("Failure of blockchain assembly: %v", err)
+	}
+
+	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
+	if err != nil {
+		t.Errorf("Failure of coinbase assembly: %v", err)
+	}
+
+	if !blockchainHealth.Ok {
+		t.Errorf("Expected blockchainHealth to be false, but got true")
+	}
+	if !blockchainAssemblyHealth.Ok {
+		t.Errorf("Expected blockchainAssemblyHealth to be true, but got false")
+	}
+	if !coinbaseHealth.Ok {
+		t.Errorf("Expected coinbaseHealth to be true, but got false")
+	}
+}
