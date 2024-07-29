@@ -6,15 +6,17 @@ package errors
 /// processing error -> error when manipulating data, i.e. when processing a block, a transaction, etc., inside the method/function.
 
 var (
-	ErrUnknown                    = New(ERR_UNKNOWN, "unknown error")
-	ErrInvalidArgument            = New(ERR_INVALID_ARGUMENT, "invalid argument")
-	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
-	ErrNotFound                   = New(ERR_NOT_FOUND, "not found")
-	ErrProcessing                 = New(ERR_PROCESSING, "error processing")
-	ErrConfiguration              = New(ERR_CONFIGURATION, "configuration error")
-	ErrError                      = New(ERR_ERROR, "generic error")
-	ErrBlockNotFound              = New(ERR_BLOCK_NOT_FOUND, "block not found")
-	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
+	ErrUnknown            = New(ERR_UNKNOWN, "unknown error")
+	ErrInvalidArgument    = New(ERR_INVALID_ARGUMENT, "invalid argument")
+	ErrThresholdExceeded  = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
+	ErrNotFound           = New(ERR_NOT_FOUND, "not found")
+	ErrProcessing         = New(ERR_PROCESSING, "error processing")
+	ErrConfiguration      = New(ERR_CONFIGURATION, "configuration error")
+	ErrError              = New(ERR_ERROR, "generic error")
+	ErrBlockNotFound      = New(ERR_BLOCK_NOT_FOUND, "block not found")
+	ErrBlockInvalid       = New(ERR_BLOCK_INVALID, "block invalid")
+	ErrBlockInvalidFormat = New(ERR_BLOCK_INVALID_FORMAT, "block format is invalid")
+
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrSubtreeNotFound            = New(ERR_SUBTREE_NOT_FOUND, "subtree not found")

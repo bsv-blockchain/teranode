@@ -3,7 +3,6 @@ package blockpersister
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"path"
@@ -25,15 +24,8 @@ var (
 	once sync.Once
 )
 
-func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
+func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 	var err error
-
-	defer func() {
-		if msg.Message != nil && err == nil {
-			msg.Session.MarkMessage(msg.Message, "")
-			msg.Session.Commit()
-		}
-	}()
 
 	if msg.Message != nil {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -46,7 +38,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 
 		if len(msg.Message.Key) != 32 {
 			u.logger.Errorf("Received blocksFinal message key %d bytes", len(msg.Message.Value))
-			return
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Message.Value))
 		}
 
 		var hash *chainhash.Hash
@@ -54,7 +46,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 		hash, err = chainhash.NewHash(msg.Message.Key[:])
 		if err != nil {
 			u.logger.Errorf("Failed to parse block hash from message: %v", err)
-			return
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
 		}
 
 		var gotLock bool
@@ -62,18 +54,19 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 
 		gotLock, exists, err = tryLockIfNotExists(ctx, u.logger, hash, u.blockStore, options.WithFileExtension("block"))
 		if err != nil {
-			u.logger.Infof("error getting lock for Subtree %s: %v", hash.String(), err)
-			return
+			u.logger.Infof("error getting lock for block %s: %v", hash.String(), err)
+			return errors.New(errors.ERR_PROCESSING, "error getting lock for block %s", hash.String(), err)
 		}
 
 		if exists {
 			u.logger.Infof("Block %s already exists", hash.String())
-			return
+			return errors.New(errors.ERR_BLOCK_EXISTS, "Block %s already exists", hash.String())
 		}
 
 		if !gotLock {
 			u.logger.Infof("Block %s already being persisted", hash.String())
-			return
+			return errors.New(errors.ERR_BLOCK_EXISTS, "Block %s already being persisted", hash.String())
+
 		}
 
 		if err = u.persistBlock(ctx, hash, msg.Message.Value); err != nil {
@@ -81,17 +74,20 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 				u.logger.Warnf("PreviousBlock %s not found, so UTXOSet not processed", hash.String())
 				err = nil
 			} else {
+				// don't wrap the error again, persistBlock should return the error in correct format
 				u.logger.Errorf("Error persisting block %s: %v", hash.String(), err)
 			}
-			return
+			return err
 		}
 	}
+
+	return nil
 }
 
 func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error {
 	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
-		return fmt.Errorf("error creating block from bytes: %w", err)
+		return errors.New(errors.ERR_BLOCK_INVALID_FORMAT, "error creating block from bytes: %v")
 	}
 
 	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
@@ -114,13 +110,14 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 		g.Go(func() error {
 			u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i+1, len(block.Subtrees), subtreeHash.String())
-
+			// don't wrap the error again, ProcessSubtree should return the error in correct format
 			return u.ProcessSubtree(gCtx, *subtreeHash, block.CoinbaseTx, utxoDiff)
 		})
 	}
 
 	if err := g.Wait(); err != nil {
-		return fmt.Errorf("error processing subtrees: %w", err)
+		// don't wrap the error again, ProcessSubtree should return the error in correct format
+		return err
 	}
 
 	utxoDiff.Trim()
@@ -156,18 +153,18 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
 	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
 	if err := u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithTTL(24*time.Hour)); err != nil {
-		return fmt.Errorf("[BlockPersister] error persisting block: %w", err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "error persisting block %s", hash.String(), err)
 	}
 
 	if err := u.blockStore.SetTTL(ctx, hash[:], 0, options.WithFileExtension("block")); err != nil {
-		return fmt.Errorf("[BlockPersister] error persisting block: %w", err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "error persisting block %s", hash.String(), err)
 	}
 
 	u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
 
 	// At this point, we have a complete UTXODiff for this block.
 	if err := utxoDiff.Persist(ctx, u.blockStore); err != nil {
-		return fmt.Errorf("error persisting utxo diff: %w", err)
+		return errors.New(errors.ERR_STORAGE_ERROR, "error persisting utxo diff for block %s", block.Header.Hash().String(), err)
 	}
 
 	if gocore.Config().GetBool("blockPersister_processUTXOSets", false) {
@@ -179,7 +176,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 			// Load the UTXOSet from disk
 			previousUTXOSet, err = utxo_model.LoadUTXOSet(u.blockStore, *block.Header.HashPrevBlock)
 			if err != nil {
-				return fmt.Errorf("LoadUTXOSet %s: %w", *block.Header.HashPrevBlock, err)
+				return errors.New(errors.ERR_STORAGE_ERROR, "error loading UTXOSet for block %s", block.Header.Hash().String(), err)
 			}
 		}
 
@@ -200,7 +197,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		})
 
 		if err := utxoSet.Persist(ctx, u.blockStore); err != nil {
-			return fmt.Errorf("error persisting utxo set: %w", err)
+			return errors.New(errors.ERR_STORAGE_ERROR, "error persisting UTXOSet for block %s", block.Header.Hash().String(), err)
 		}
 
 		utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)

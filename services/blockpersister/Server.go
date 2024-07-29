@@ -2,6 +2,7 @@ package blockpersister
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -85,9 +86,36 @@ func (u *Server) Start(ctx context.Context) error {
 		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the blocksFinal messages.
 		go u.startKafkaListener(ctx, blocksFinalKafkaURL, groupID, 1, func(msg util.KafkaMessage) error {
 			// this does manual commit so we need to implement error handling and differentiate between errors
-			// TODO GOKHAN: Implement Error handling
-			u.blocksFinalHandler(msg)
-			return nil
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- u.blocksFinalHandler(msg)
+			}()
+
+			select {
+			case err := <-errCh:
+				// if err is nil, it means function is successfully executed, return nil.
+				if err == nil {
+					return nil
+				}
+
+				// currently, the following cases are considered recoverable:
+				// ERR_PROCESSING, ERR_STORAGE_ERROR
+				// all other cases, including but not limited to, are considered as unrecoverable:
+				// ERR_BLOCK_EXISTS, ERR_INVALID_ARGUMENT
+
+				// If error is not nil, check if the error is a recoverable error.
+				// If it is a recoverable error, then return the error, so that it kafka message is not marked as committed.
+				// So the message will be consumed again.
+				if errors.Is(err, errors.ErrProcessing) || errors.Is(err, errors.ErrStorageError) {
+					u.logger.Errorf("blocksFinalHandler failed: %v", err)
+					return err
+				}
+
+				// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
+				// kafka message should be committed, so return nil to mark message.
+				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for block persister block handler, marking Kafka message as completed.\n", msg, err)
+				return nil
+			}
 		})
 	}
 

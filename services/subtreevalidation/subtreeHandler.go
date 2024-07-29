@@ -32,7 +32,7 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) error {
 
 		if len(msg.Message.Value) < 32 {
 			u.logger.Errorf("Received subtree message of %d bytes", len(msg.Message.Value))
-			return errors.New(errors.ERR_SUBTREE_INVALID_FORMAT, "Received subtree message of %d bytes", len(msg.Message.Value))
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Message.Value))
 		}
 
 		hash, err := chainhash.NewHash(msg.Message.Value[:32])

@@ -138,7 +138,7 @@ func (u *Server) Start(ctx context.Context) error {
 				}
 
 				// currently, the following cases are considered recoverable:
-				// ERR_PROCESSING, ERR_SERVICE_ERROR, ERR_STORAGE_ERROR, ERR_CONTEXT_ERROR, ERR_THRESHOLD_EXCEEDED`
+				// ERR_PROCESSING, ERR_SERVICE_ERROR, ERR_STORAGE_ERROR, ERR_CONTEXT_ERROR, ERR_THRESHOLD_EXCEEDED
 				// all other cases, including but not limited to, are considered as unrecoverable:
 				// ERR_SUBTREE_INVALID_FORMAT, ERR_INVALID_ARGUMENT, ERR_SUBTREE_EXISTS,
 
@@ -152,7 +152,7 @@ func (u *Server) Start(ctx context.Context) error {
 
 				// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
 				// kafka message should be committed, so return nil to mark message.
-				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling subtree, marking Kafka message as complete.\n", msg, err)
+				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling subtree, marking Kafka message as completed.\n", msg, err)
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
