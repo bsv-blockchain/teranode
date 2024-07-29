@@ -331,20 +331,20 @@ Teranode can be installed and run using three primary methods: pre-built binarie
 - A `Docker Compose` file is provided to alpha testing miners.
 - This method sets up a single-node Teranode instance along with all required external dependencies.
 - Components included:
-  - Teranode Docker image
-  - Kafka
-  - PostgreSQL
-  - Aerospike
-  - Grafana
-  - Prometheus
-  - Docker Shared Storage
+    - Teranode Docker image
+    - Kafka
+    - PostgreSQL
+    - Aerospike
+    - Grafana
+    - Prometheus
+    - Docker Shared Storage
 - Advantages:
-  - Easiest method to get a full Teranode environment running quickly.
-  - Automatically manages start order and networking between components.
-  - Used by developers and QA for testing, ensuring reliability.
+    - Easiest method to get a full Teranode environment running quickly.
+    - Automatically manages start order and networking between components.
+    - Used by developers and QA for testing, ensuring reliability.
 - Considerations:
-  - This setup uses predefined external dependencies, which may not be customizable.
-  - While convenient for development and testing, it is not optimized, nor intended, for production usage.
+    - This setup uses predefined external dependencies, which may not be customizable.
+    - While convenient for development and testing, it is not optimized, nor intended, for production usage.
 
 Note: The `Docker Compose` method is recommended for alpha testing as it provides a consistent environment that mirrors the development setup. However, for production deployments or specific performance requirements, users may need to consider alternative setups.
 
@@ -507,11 +507,11 @@ rpc_listener_url=:${RPC_PORT}
 **Step 10: Interact with Teranode**
 
 - The various UBSV services expose different ports for interaction:
-  - **Blockchain service**: Port 8082
-  - **Asset service**: Ports 8090, 8091
-  - **Miner service**: Ports 8089, 8092, 8099
-  - **P2P service**: Ports 9905, 9906
-  - **RPC service**: 9292
+    - **Blockchain service**: Port 8082
+    - **Asset service**: Ports 8090, 8091
+    - **Miner service**: Ports 8089, 8092, 8099
+    - **P2P service**: Ports 9905, 9906
+    - **RPC service**: 9292
 
 **TODO - what can the user do with those ports? Should the Blockchain, Miner and P2P be removed from this list? **
 
@@ -637,9 +637,9 @@ Starting your Teranode instance involves initializing all the necessary services
 
 1. **Pre-start Checklist:**
 
-   - Ensure all required directories are in place (data, config, etc.).
-   - Verify that `settings_local.conf` is properly configured.
-   - Check that Docker and Docker Compose are installed and up to date.
+    - Ensure all required directories are in place (data, config, etc.).
+    - Verify that `settings_local.conf` is properly configured.
+    - Check that Docker and Docker Compose are installed and up to date.
 
 2. **Navigate to the Teranode Directory:**
 
@@ -909,132 +909,132 @@ Port: `8090` (configurable)
 **Health and Status Endpoints**
 
 - GET `/alive`
-  - Returns the service status and uptime
+    - Returns the service status and uptime
 
 - GET `/health`
-  - Performs a health check on the service
+    - Performs a health check on the service
 
 
 
 **Transaction Endpoints**
 
 - GET `/tx/:hash`
-  - Retrieves a transaction in binary stream format
+    - Retrieves a transaction in binary stream format
 - GET `/tx/:hash/hex`
-  - Retrieves a transaction in hexadecimal format
+    - Retrieves a transaction in hexadecimal format
 - GET `/tx/:hash/json`
-  - Retrieves a transaction in JSON format
+    - Retrieves a transaction in JSON format
 
 - POST `/txs`
-  - Retrieves multiple transactions (binary stream format)
+    - Retrieves multiple transactions (binary stream format)
 
 - GET `/txmeta/:hash/json`
-  - Retrieves transaction metadata in JSON format
+    - Retrieves transaction metadata in JSON format
 
 - GET `/txmeta_raw/:hash`
-  - Retrieves raw transaction metadata in binary stream format
+    - Retrieves raw transaction metadata in binary stream format
 - GET `/txmeta_raw/:hash/hex`
-  - Retrieves raw transaction metadata in hexadecimal format
+    - Retrieves raw transaction metadata in hexadecimal format
 - GET `/txmeta_raw/:hash/json`
-  - Retrieves raw transaction metadata in JSON format
+    - Retrieves raw transaction metadata in JSON format
 
 
 
 **Subtree Endpoints**
 
 - GET `/subtree/:hash`
-  - Retrieves a subtree in binary stream format
+    - Retrieves a subtree in binary stream format
 - GET `/subtree/:hash/hex`
-  - Retrieves a subtree in hexadecimal format
+    - Retrieves a subtree in hexadecimal format
 - GET `/subtree/:hash/json`
-  - Retrieves a subtree in JSON format
+    - Retrieves a subtree in JSON format
 
 - GET `/subtree/:hash/txs/json`
-  - Retrieves transactions in a subtree in JSON format
+    - Retrieves transactions in a subtree in JSON format
 
 
 
 **Block and Header Endpoints**
 
 - GET `/headers/:hash`
-  - Retrieves block headers in binary stream format
+    - Retrieves block headers in binary stream format
 - GET `/headers/:hash/hex`
-  - Retrieves block headers in hexadecimal format
+    - Retrieves block headers in hexadecimal format
 - GET `/headers/:hash/json`
-  - Retrieves block headers in JSON format
+    - Retrieves block headers in JSON format
 
 - GET `/header/:hash`
-  - Retrieves a single block header in binary stream format
+    - Retrieves a single block header in binary stream format
 - GET `/header/:hash/hex`
-  - Retrieves a single block header in hexadecimal format
+    - Retrieves a single block header in hexadecimal format
 - GET `/header/:hash/json`
-  - Retrieves a single block header in JSON format
+    - Retrieves a single block header in JSON format
 
 - GET `/blocks`
-  - Retrieves multiple blocks
+    - Retrieves multiple blocks
 
 - GET `/blocks/:hash`
-  - Retrieves N blocks starting from a specific hash in binary stream format
+    - Retrieves N blocks starting from a specific hash in binary stream format
 - GET `/blocks/:hash/hex`
-  - Retrieves N blocks starting from a specific hash in hexadecimal format
+    - Retrieves N blocks starting from a specific hash in hexadecimal format
 - GET `/blocks/:hash/json`
-  - Retrieves N blocks starting from a specific hash in JSON format
+    - Retrieves N blocks starting from a specific hash in JSON format
 
 - GET `/block_legacy/:hash`
-  - Retrieves a block in legacy format (binary stream)
+    - Retrieves a block in legacy format (binary stream)
 
 - GET `/block/:hash`
-  - Retrieves a block by hash in binary stream format
+    - Retrieves a block by hash in binary stream format
 - GET `/block/:hash/hex`
-  - Retrieves a block by hash in hexadecimal format
+    - Retrieves a block by hash in hexadecimal format
 - GET `/block/:hash/json`
-  - Retrieves a block by hash in JSON format
+    - Retrieves a block by hash in JSON format
 
 - GET `/block/:hash/forks`
-  - Retrieves fork information for a specific block
+    - Retrieves fork information for a specific block
 
 - GET `/block/:hash/subtrees/json`
-  - Retrieves subtrees of a block in JSON format
+    - Retrieves subtrees of a block in JSON format
 
 - GET `/lastblocks`
-  - Retrieves the last N blocks
+    - Retrieves the last N blocks
 
 - GET `/bestblockheader`
-  - Retrieves the best block header in binary stream format
+    - Retrieves the best block header in binary stream format
 - GET `/bestblockheader/hex`
-  - Retrieves the best block header in hexadecimal format
+    - Retrieves the best block header in hexadecimal format
 - GET `/bestblockheader/json`
-  - Retrieves the best block header in JSON format
+    - Retrieves the best block header in JSON format
 
 
 
 **UTXO and Balance Endpoints**
 
 - GET `/utxo/:hash`
-  - Retrieves a UTXO in binary stream format
+    - Retrieves a UTXO in binary stream format
 - GET `/utxo/:hash/hex`
-  - Retrieves a UTXO in hexadecimal format
+    - Retrieves a UTXO in hexadecimal format
 - GET `/utxo/:hash/json`
-  - Retrieves a UTXO in JSON format
+    - Retrieves a UTXO in JSON format
 
 - GET `/utxos/:hash/json`
-  - Retrieves UTXOs by transaction ID in JSON format
+    - Retrieves UTXOs by transaction ID in JSON format
 
 - GET `/balance`
-  - Retrieves balance information
+    - Retrieves balance information
 
 
 
 **Miscellaneous Endpoints**
 
-- GET `/search`
-  - Performs a search (details depend on implementation)
+- GET `/search?q=:hash`
+    - Performs a search
 
 - GET `/blockstats`
-  - Retrieves block statistics
+    - Retrieves block statistics
 
 - GET `/blockgraphdata/:period`
-  - Retrieves block graph data for a specified period
+    - Retrieves block graph data for a specified period
 
 
 
@@ -1128,16 +1128,16 @@ Key considerations and strategies:
 
 
 1. **Monitoring Disk Usage:**
-   - Regularly check available disk space using tools like `df -h` or through the Grafana dashboard.
-   - Set up alerts to notify you when disk usage reaches certain thresholds (e.g., 80% full).
+    - Regularly check available disk space using tools like `df -h` or through the Grafana dashboard.
+    - Set up alerts to notify you when disk usage reaches certain thresholds (e.g., 80% full).
 2. **Understanding Data Growth:**
-   - The blockchain data, transaction store, and subtree store will grow over time as new blocks are added to the network.
-   - Growth rate depends on network activity and can vary significantly.
+    - The blockchain data, transaction store, and subtree store will grow over time as new blocks are added to the network.
+    - Growth rate depends on network activity and can vary significantly.
 3. **Pruning Strategies:**
-   - Teranode implements regular pruning of old data that's no longer needed for immediate operations.
-   - While retention policies for different data types are configurable, this is not documented in this SOP. It is generally not advised to change the defaults for alpha testing purposes.
+    - Teranode implements regular pruning of old data that's no longer needed for immediate operations.
+    - While retention policies for different data types are configurable, this is not documented in this SOP. It is generally not advised to change the defaults for alpha testing purposes.
 7. **Log Management:**
-   - Consider offloading logs to a separate storage system or log management service.
+    - Consider offloading logs to a separate storage system or log management service.
 10. **Backup and Recovery:**
     - Implement a backup strategy that doesn't interfere with disk space management.
     - Ensure backups are stored on separate physical media or cloud storage.
@@ -1156,14 +1156,14 @@ Regular and secure backups are essential for protecting a Teranode installation,
 
 
 1. **Configuration Files:**
-   - Backup all custom configuration files, including `settings_local.conf`.
-   - Store these separately from the blockchain data for easy restoration.
+    - Backup all custom configuration files, including `settings_local.conf`.
+    - Store these separately from the blockchain data for easy restoration.
 2. **Database Backups:**
-   - PostgreSQL: Use `pg_dump` for regular database backups.
-   - Aerospike: Utilize Aerospike's backup tools for consistent snapshots of the UTXO store.
+    - PostgreSQL: Use `pg_dump` for regular database backups.
+    - Aerospike: Utilize Aerospike's backup tools for consistent snapshots of the UTXO store.
 3. **Transaction and Subtree Stores:**
-   - Implement regular backups of the txstore, subtreestore and block persister directories.
-   - Consider incremental backups to save space and time.
+    - Implement regular backups of the txstore, subtreestore and block persister directories.
+    - Consider incremental backups to save space and time.
 
 
 
@@ -1173,10 +1173,261 @@ Note: During the alpha testing phase, all Teranodes run in listener mode. Should
 
 # 7. Troubleshooting
 
-- Common issues and solutions
-    - ???? Runbook? **TODO**
-- Log file analysis
--
+
+
+## 7.1. Sanity Checklist
+
+
+
+This section provides a list of procedures to help you identify the root cause of any Teranode incident.
+
+
+
+#### **7.1.1. Health Checks**
+
+7.1.1.1. Docker Service Status
+
+Docker Compose offers a straightforward way to check the status of all services:
+
+```bash
+docker-compose ps
+```
+
+This command lists all services defined in your docker-compose.yml file, along with their current status (Up, Exit, etc.) and health state if health checks are configured.
+
+7.1.1.2. Detailed Container Health
+
+For more detailed health information on a specific container:
+
+```bash
+docker inspect --format='{{json .State.Health}}' container_name
+```
+
+Replace `container_name` with the name of your specific Teranode service container.
+
+7.1.1.3. Configuring Health Checks in Docker Compose
+
+You can define health checks for each service in your docker-compose.yml file. For example:
+
+```yaml
+services:
+  ubsv-blockchain:
+    ...
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8087/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+```
+
+This configuration tells Docker to periodically check the health of the service using the specified command.
+
+7.1.1.4. Viewing Health Check Logs
+
+To see the results of recent health checks:
+
+```bash
+docker inspect --format='{{json .State.Health}}' container_name | jq
+```
+
+This will show you the results of recent health checks, including timestamps and exit codes.
+
+#### **7.1.2. Monitoring System Resources**
+
+- Use tools like `top`, `htop`, or `docker stats` to monitor CPU, memory, and disk usage.
+- Look for services consuming unusually high resources.
+
+
+
+#### **7.1.3. Check Logs for Errors**
+
+7.1.3.1. Viewing Global Logs
+
+To view logs from all services simultaneously:
+
+```bash
+docker-compose logs
+```
+
+To follow the logs in real-time:
+
+```bash
+docker-compose logs -f
+```
+
+To view only the most recent logs:
+
+```bash
+docker-compose logs --tail=100
+```
+
+7.1.3.2. Viewing Logs for Specific Microservices
+
+```bash
+docker-compose logs [service_name]
+```
+
+For example:
+
+```bash
+docker-compose logs ubsv-blockchain
+```
+
+7.1.3.3. Useful Options for Log Viewing
+
+- Show timestamps:
+  ```bash
+  docker-compose logs -t
+  ```
+
+- Limit output:
+  ```bash
+  docker-compose logs --tail=50 [service_name]
+  ```
+
+- Since time:
+  ```bash
+  docker-compose logs --since 2023-07-01T00:00:00 [service_name]
+  ```
+
+
+
+
+
+7.1.3.4. Checking Logs for Specific Teranode Microservices
+
+* Propagation Service:
+  ```bash
+  docker-compose logs ubsv-propagation
+  ```
+
+* Blockchain Service:
+  ```bash
+  docker-compose logs ubsv-blockchain
+  ```
+
+* Asset Service:
+  ```bash
+  docker-compose logs ubsv-asset
+  ```
+
+* Block Validation Service:
+  ```bash
+  docker-compose logs ubsv-blockvalidation
+  ```
+
+* P2P Service:
+  ```bash
+  docker-compose logs ubsv-p2p
+  ```
+
+* Validator Service:
+  ```bash
+  docker-compose logs ubsv-validator
+  ```
+
+* Block Assembly Service:
+  ```bash
+  docker-compose logs ubsv-blockassembly
+  ```
+
+* Subtree Validation Service:
+  ```bash
+  docker-compose logs ubsv-subtreevalidation
+  ```
+
+* Miner Service:
+  ```bash
+  docker-compose logs ubsv-miner
+  ```
+
+* Coinbase Service:
+  ```bash
+  docker-compose logs ubsv-coinbase
+  ```
+
+* RPC Service:
+  ```bash
+  docker-compose logs ubsv-rpc
+  ```
+
+* Block Persister Service:
+  ```bash
+  docker-compose logs ubsv-blockpersister
+  ```
+
+* Postgres Database:
+  ```bash
+  docker-compose logs postgres
+  ```
+
+* Aerospike Database:
+  ```bash
+  docker-compose logs aerospike
+  ```
+
+* Kafka:
+  ```bash
+  docker-compose logs kafka-shared
+  ```
+
+* Kafka Console:
+  ```bash
+  docker-compose logs kafka-console-shared
+  ```
+
+* Prometheus:
+  ```bash
+  docker-compose logs prometheus
+  ```
+
+* Grafana:
+  ```bash
+  docker-compose logs grafana
+  ```
+
+
+
+7.1.3.5. Redirecting Logs to a File
+
+```bash
+docker-compose logs > teranode_logs.txt
+```
+
+Or for a specific service:
+
+```bash
+docker-compose logs [service_name] > [service_name]_logs.txt
+```
+
+
+
+**7.1.4. Check Services Dashboard**
+
+
+
+Check your Grafana `UBSV Service Overview` dashboard:
+
+
+
+7.1.4.1. Check that there's no blocks in the queue (`Queued Blocks in Block Validation`). We expect little or no queueing, and not creeping up. 3 blocks queued up are already a concern.
+
+
+
+7.1.4.2. Check that the propagation instances are handling around the same load to make sure the load is equally distributed among all the propagation servers. See the `Propagation Processed Transactions per Instance` diagram.
+
+
+
+7.1.4.3. Check that the cache is at a sustainable pattern rather than "exponentially" growing (see both the `Tx Meta Cache in Block Validation` and `Tx Meta Cache Size in Block Validation` diagrams).
+
+
+
+7.1.4.4. Check that go routines (`Goroutines` graph) are not creeping up or reaching excessive levels.
+
+
+
+------
 
 
 
@@ -1200,58 +1451,58 @@ While Docker Compose creates an isolated network for the Teranode services, some
 1. **Publicly Exposed Ports:**
    Review the ports exposed in the Docker Compose file and ensure your firewall is configured to handle these appropriately:
 
-   - `9292`: RPC Server. Open to receive RPC API requests.
+    - `9292`: RPC Server. Open to receive RPC API requests.
 
-   - `8090,8091`: Asset Server. Open for incoming HTTP and gRPC asset requests.
+    - `8090,8091`: Asset Server. Open for incoming HTTP and gRPC asset requests.
 
-   - `8090,8091`:  P2P Server. Open for incoming connections to allow peer discovery and communication.
+    - `8090,8091`:  P2P Server. Open for incoming connections to allow peer discovery and communication.
 
 
 
 2. **Host Firewall:**
 
-   - Configure your host's firewall to allow incoming connections only on the necessary ports.
-   - For ports that don't need external access, strictly restrict them to localhost (127.0.0.1) or your internal network.
+    - Configure your host's firewall to allow incoming connections only on the necessary ports.
+    - For ports that don't need external access, strictly restrict them to localhost (127.0.0.1) or your internal network.
 
 
 
 3. **External Access:**
 
-   - Only expose ports to the internet that are absolutely necessary for node operation (e.g., P2P, RPC and Asset server ports).
-   - Use strong authentication for any services that require external access. See the section 4.1 of this document for more details.
+    - Only expose ports to the internet that are absolutely necessary for node operation (e.g., P2P, RPC and Asset server ports).
+    - Use strong authentication for any services that require external access. See the section 4.1 of this document for more details.
 
 
 
 4. **Docker's Built-in Firewall:**
 
-   - Docker manages its own iptables rules. Ensure these don't conflict with your host firewall rules.
+    - Docker manages its own iptables rules. Ensure these don't conflict with your host firewall rules.
 
 
 
 5. **Network Segmentation:**
 
-   - If possible, place your Teranode host on a separate network segment with restricted access to other parts of your infrastructure.
+    - If possible, place your Teranode host on a separate network segment with restricted access to other parts of your infrastructure.
 
 
 
 6. **Regular Audits:**
 
-   - Periodically review your firewall rules and exposed ports to ensure they align with your security requirements.
+    - Periodically review your firewall rules and exposed ports to ensure they align with your security requirements.
 
 
 
 8. **Service-Specific Recommendations:**
 
-   - **PostgreSQL (5432**): If you want to expose it, restrict to internal network, never publicly.
-   - **Kafka (9092, 9093)**: If you want to expose it, restrict to internal network, never publicly.
-   - **Aerospike (3000)**: If you want to expose it, restrict to internal network, never publicly.
-   - **Grafana (3005)**: Secure with strong authentication if exposed externally.
+    - **PostgreSQL (5432**): If you want to expose it, restrict to internal network, never publicly.
+    - **Kafka (9092, 9093)**: If you want to expose it, restrict to internal network, never publicly.
+    - **Aerospike (3000)**: If you want to expose it, restrict to internal network, never publicly.
+    - **Grafana (3005)**: Secure with strong authentication if exposed externally.
 
 
 
 9. **P2P Communication:**
 
-   - Ensure ports 9905 and 9906 are open for incoming connections to allow peer discovery and communication.
+    - Ensure ports 9905 and 9906 are open for incoming connections to allow peer discovery and communication.
 
 
 
@@ -1284,26 +1535,26 @@ When you encounter issues, please follow these guidelines to report bugs to the 
 Before submitting a bug report, gather the following information:
 
 1. **Environment Details**:
-   - Operating System and version
-   - Docker version
-   - Docker Compose version
+    - Operating System and version
+    - Docker version
+    - Docker Compose version
 2. **Configuration Files**:
-   - `settings_local.conf`
-   - Docker Compose file
+    - `settings_local.conf`
+    - Docker Compose file
 3. **System Resources**:
-   - CPU usage
-   - Memory usage
-   - Disk space and I/O statistics
+    - CPU usage
+    - Memory usage
+    - Disk space and I/O statistics
 4. **Network Information:**
-   - Firewall configuration
-   - Any relevant network errors
+    - Firewall configuration
+    - Any relevant network errors
 5. **Steps to Reproduce**:
-   - Detailed, step-by-step description of how to reproduce the issue
+    - Detailed, step-by-step description of how to reproduce the issue
 6. **Expected vs Actual Behavior**:
-   - What you expected to happen
-   - What actually happened
+    - What you expected to happen
+    - What actually happened
 7. **Screenshots or Error Messages**:
-   - Include any relevant visual information
+    - Include any relevant visual information
 
 **9.3. Using the Log Collection Tool**
 
@@ -1316,10 +1567,10 @@ To standardize and simplify the bug reporting process, we provide a log collecti
    **TODO - Refine this once the tool really exists!!**
 
 2. This tool will automatically gather:
-   - Current Teranode settings
-   - Recent logs from all services
-   - System information
-   - Configuration files
+    - Current Teranode settings
+    - Recent logs from all services
+    - System information
+    - Configuration files
 
 3. The tool will create a compressed file with all the collected information.
 
