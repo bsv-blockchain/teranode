@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"math/big"
 	"strings"
 	"time"
@@ -69,16 +70,16 @@ var (
 
 func NewBlockHeaderFromBytes(headerBytes []byte) (*BlockHeader, error) {
 	if len(headerBytes) != BlockHeaderSize {
-		return nil, fmt.Errorf("block header should be 80 bytes long")
+		return nil, errors.NewProcessingError("block header should be 80 bytes long")
 	}
 
 	hashPrevBlock, err := chainhash.NewHash(headerBytes[4:36])
 	if err != nil {
-		return nil, fmt.Errorf("error creating previous block hash from bytes: %s", err.Error())
+		return nil, errors.NewProcessingError("error creating previous block hash from bytes", err)
 	}
 	hashMerkleRoot, err := chainhash.NewHash(headerBytes[36:68])
 	if err != nil {
-		return nil, fmt.Errorf("error creating merkle root hash from bytes: %s", err.Error())
+		return nil, errors.NewProcessingError("error creating merkle root hash from bytes", err)
 	}
 
 	bh := &BlockHeader{
@@ -96,7 +97,7 @@ func NewBlockHeaderFromBytes(headerBytes []byte) (*BlockHeader, error) {
 func NewBlockHeaderFromString(headerHex string) (*BlockHeader, error) {
 	headerBytes, err := hex.DecodeString(headerHex)
 	if err != nil {
-		return nil, fmt.Errorf("error decoding hex string to bytes: %s", err.Error())
+		return nil, errors.NewProcessingError("error decoding hex string to bytes", err)
 	}
 
 	return NewBlockHeaderFromBytes(headerBytes)
@@ -148,7 +149,7 @@ func (bh *BlockHeader) HasMetTargetDifficulty() (bool, *chainhash.Hash, error) {
 		return true, bh.Hash(), nil
 	}
 
-	return false, nil, fmt.Errorf("block header does not meet target %d: %032x >? %032x", compare, target.Bytes(), bn.Bytes())
+	return false, nil, errors.NewProcessingError("block header does not meet target %d: %032x >? %032x", compare, target.Bytes(), bn.Bytes())
 }
 
 func (bh *BlockHeader) Bytes() []byte {

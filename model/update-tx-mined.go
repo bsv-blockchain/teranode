@@ -2,7 +2,7 @@ package model
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"sync"
 	"time"
 
@@ -154,7 +154,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 					for {
 						if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
 							if retries >= maxRetries {
-								return fmt.Errorf("[UpdateTxMinedStatus][%s] error setting mined tx: %v", block.Hash().String(), err)
+								return errors.NewProcessingError("[UpdateTxMinedStatus][%s] error setting mined tx", block.Hash().String(), err)
 							} else {
 								backoff := time.Duration(1+(2*retries)) * time.Second
 								logger.Warnf("[UpdateTxMinedStatus][%s] error setting mined tx, retrying in %s: %v", block.Hash().String(), backoff.String(), err)
@@ -176,7 +176,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, remainder batch, for subtree %s in block %d", block.Hash().String(), len(hashes), block.Subtrees[subtreeIdx].String(), blockID)
 					if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
 						if retries >= maxRetries {
-							return fmt.Errorf("[UpdateTxMinedStatus][%s] error setting remainder batch mined tx: %v", block.Hash().String(), err)
+							return errors.NewProcessingError("[UpdateTxMinedStatus][%s] error setting remainder batch mined tx", block.Hash().String(), err)
 						} else {
 							backoff := time.Duration(1+(2*retries)) * time.Second
 							logger.Warnf("[UpdateTxMinedStatus][%s] error setting remainder batch mined tx, retrying in %s: %v", block.Hash().String(), backoff.String(), err)
@@ -194,7 +194,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 	}
 
 	if err := g.Wait(); err != nil {
-		return fmt.Errorf("[UpdateTxMinedStatus][%s] error updating tx mined status: %w", block.Hash().String(), err)
+		return errors.NewProcessingError("[UpdateTxMinedStatus][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 
 	logger.Debugf("[UpdateTxMinedStatus][%s] blockID %d DONE in %s", block.Hash().String(), blockID, time.Since(timeStart).String())

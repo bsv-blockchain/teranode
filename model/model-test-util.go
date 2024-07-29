@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -115,7 +114,7 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 			return nil, err
 		}
 		if n != 48 {
-			return nil, fmt.Errorf("expected to write 48 bytes, wrote %d", n)
+			return nil, errors.NewProcessingError("expected to write 48 bytes, wrote %d", n)
 		}
 
 		fees += uint64(i)
@@ -252,7 +251,7 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 	}
 
 	if subtreeCount != len(subtreeHashes) {
-		return nil, fmt.Errorf("subtree count %d does not match subtree hash count %d", subtreeCount, len(subtreeHashes))
+		return nil, errors.NewProcessingError("subtree count %d does not match subtree hash count %d", subtreeCount, len(subtreeHashes))
 	}
 
 	block := &Block{
@@ -438,7 +437,7 @@ func (l localSubtreeStore) Exists(_ context.Context, key []byte, opts ...options
 func (l localSubtreeStore) Get(_ context.Context, key []byte, opts ...options.Options) ([]byte, error) {
 	file, ok := l.files[chainhash.Hash(key)]
 	if !ok {
-		return nil, fmt.Errorf("file not found")
+		return nil, errors.NewProcessingError("file not found")
 	}
 
 	subtreeBytes, err := os.ReadFile(fmt.Sprintf(fileNameTemplate, file))
@@ -452,7 +451,7 @@ func (l localSubtreeStore) Get(_ context.Context, key []byte, opts ...options.Op
 func (l localSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
 	file, ok := l.files[chainhash.Hash(key)]
 	if !ok {
-		return nil, fmt.Errorf("file not found")
+		return nil, errors.NewProcessingError("file not found")
 	}
 
 	subtreeFile, err := os.Open(fmt.Sprintf(fileNameTemplate, file))
@@ -525,7 +524,7 @@ func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte, opts ...options
 	// read the file
 	subtreeReader, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %s", err)
+		return nil, errors.NewProcessingError("failed to read file: %s", err)
 	}
 
 	return subtreeReader, nil
@@ -537,7 +536,7 @@ func (n *BlobStoreStub) Get(_ context.Context, hash []byte, opts ...options.Opti
 	// read the file
 	subtreeBytes, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %s", err)
+		return nil, errors.NewProcessingError("failed to read file: %s", err)
 	}
 
 	return subtreeBytes, nil

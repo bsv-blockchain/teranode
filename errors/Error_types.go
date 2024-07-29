@@ -71,7 +71,7 @@ func NewBlockInvalidError(message string, params ...interface{}) error {
 func NewBlockExistsError(message string, params ...interface{}) error {
 	return New(ERR_BLOCK_EXISTS, message, params...)
 }
-func NewBlockErrorError(message string, params ...interface{}) error {
+func NewBlockError(message string, params ...interface{}) error {
 	return New(ERR_BLOCK_ERROR, message, params...)
 }
 func NewSubtreeNotFoundError(message string, params ...interface{}) error {
@@ -95,7 +95,7 @@ func NewTxInvalidDoubleSpendError(message string, params ...interface{}) error {
 func NewTxAlreadyExistsError(message string, params ...interface{}) error {
 	return New(ERR_TX_ALREADY_EXISTS, message, params...)
 }
-func NewTxErrorError(message string, params ...interface{}) error {
+func NewTxError(message string, params ...interface{}) error {
 	return New(ERR_TX_ERROR, message, params...)
 }
 func NewServiceUnavailableError(message string, params ...interface{}) error {

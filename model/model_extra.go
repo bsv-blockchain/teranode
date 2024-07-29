@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"math"
 	"strings"
 	"time"
@@ -70,7 +71,7 @@ func (bi *BlockInfo) MarshalJSON() ([]byte, error) {
 
 	miner, err := escapeJSON(bi.Miner)
 	if err != nil {
-		return nil, fmt.Errorf("could not parse miner '%s': %v", bi.Miner, err)
+		return nil, errors.NewProcessingError("could not parse miner '%s'", bi.Miner, err)
 	}
 
 	return []byte(fmt.Sprintf(`
