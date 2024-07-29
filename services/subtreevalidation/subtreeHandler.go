@@ -71,7 +71,7 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) error {
 		// Call the validateSubtreeInternal method
 		if err = u.validateSubtreeInternal(ctx, v, util.GenesisActivationHeight); err != nil {
 			u.logger.Errorf("Failed to validate subtree %s: %v", hash.String(), err)
-			// Here we return the error directly without further wrapping, as valdiateSubtreeInternal categorizes the error
+			// Here we return the error directly without further wrapping, as validateSubtreeInternal categorizes the error
 			return err
 		}
 	}

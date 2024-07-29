@@ -129,21 +129,31 @@ func (u *Server) Start(ctx context.Context) error {
 				errCh <- u.subtreeHandler(msg)
 			}()
 
-			// TODO GOKHAN: UPDATE ERROR HANDLING, RECOVERABLE ERRORS
 			select {
 			// error handling
 			case err := <-errCh:
-				// unrecoverable error, should not be tried again, and kafka message should be committed.
-				// return nil
-				if errors.Is(err, errors.ErrSubtreeInvalidFormat) || errors.Is(err, errors.ErrSubtreeError) {
+				// if err is nil, it means function is successfully executed, return nil.
+				if err == nil {
 					return nil
 				}
 
-				// recoverable error, return nil.
 				// currently, the following cases are considered recoverable:
-				// errors.ErrProcessing, errors.ErrServiceError, errors.StorageError
+				// ERR_PROCESSING, ERR_SERVICE_ERROR, ERR_STORAGE_ERROR, ERR_CONTEXT_ERROR, ERR_THRESHOLD_EXCEEDED`
+				// all other cases, including but not limited to, are considered as unrecoverable:
+				// ERR_SUBTREE_INVALID_FORMAT, ERR_INVALID_ARGUMENT, ERR_SUBTREE_EXISTS,
+
+				// if error is not nil, check if the error is a recoverable error.
+				// If the error is a recoverable error, then return the error, so that it kafka message is not marked as committed.
+				// So the message will be consumed again.
+				if errors.Is(err, errors.ErrProcessing) || errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContext) {
+					u.logger.Errorf("Recoverable error (%v) processing kafka message %v for handling subtree, returning error, thus not marking Kafka message as complete.\n", msg, err)
+					return err
+				}
+
+				// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
+				// kafka message should be committed, so return nil to mark message.
 				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling subtree, marking Kafka message as complete.\n", msg, err)
-				return err
+				return nil
 			case <-ctx.Done():
 				return ctx.Err()
 			}

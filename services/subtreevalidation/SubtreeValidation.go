@@ -300,8 +300,8 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			return errors.New(errors.ERR_STORAGE_ERROR, "[validateSubtreeInternal][%s] failed to check if subtree exists in store", v.SubtreeHash.String(), err)
 		}
 		if subtreeExists {
-			// subtree already exists in store, which means it's valid
-			// TODO is this true?
+			// If the subtree is already in the store, it means it is already validated.
+			// Therefore, we finish processing of the subtree.
 			return nil
 		}
 
@@ -310,12 +310,13 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		for retries := 0; retries < 3; retries++ {
 			txHashes, err = u.getSubtreeTxHashes(spanCtx, stat, &v.SubtreeHash, v.BaseUrl)
 			if err != nil {
+				// TODO: Unify retry logic with the helper function
 				if retries < 2 {
 					backoff := time.Duration(2^retries) * time.Second
 					u.logger.Warnf("[validateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
 					time.Sleep(backoff)
 				} else {
-					return errors.New(errors.ERR_SERVICE_ERROR, "[validateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String(), err)
+					return errors.New(errors.ERR_STORAGE_ERROR, "[validateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String(), err)
 				}
 			} else {
 				break
@@ -383,7 +384,8 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 				continue
 			}
-			return errors.New(errors.ERR_PROCESSING, "[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
+			// Don't wrap the error again, processTxMetaUsingCache returns the correctly formated error.
+			return err
 		}
 
 		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
@@ -398,11 +400,10 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 			missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, batched, failFast)
 			if err != nil {
-				return errors.New(errors.ERR_PROCESSING, "[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from store", v.SubtreeHash.String(), attempt, err)
+				// Don't wrap the error again, processTxMetaUsingStore returns the correctly formated error.
+				return err
 			}
 		}
-
-		//
 
 		if missed > 0 {
 			// 3. ...then attempt to load the txMeta from the network
@@ -424,7 +425,8 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseUrl, txMetaSlice, blockHeight)
 			if err != nil {
-				return errors.New(errors.ERR_PROCESSING, "failed to get missing transactions", err)
+				// Don't wrap the error again, processMissingTransactions returns the correctly formated error.
+				return err
 			}
 			stat5.AddTime(start)
 		}
@@ -464,7 +466,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		subtreeIdx := subtree.Length() - 1
 		err = subtreeMeta.SetParentTxHashes(subtreeIdx, txMeta.ParentTxHashes)
 		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "failed to set parent tx hash in subtreeMeta", err)
+			return errors.New(errors.ERR_STORAGE_ERROR, "failed to set parent tx hash in subtreeMeta", err)
 		}
 	}
 	stat.NewStat("6. addAllTxHashFeeSizesToSubtree").AddTime(start)
@@ -472,7 +474,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// does the merkle tree give the correct root?
 	merkleRoot := subtree.RootHash()
 	if !merkleRoot.IsEqual(&v.SubtreeHash) {
-		// ERR_SUBTREE_INVALID is not recovareable. So if this happens, kafka message should be marked as committed.
+		// ERR_SUBTREE_INVALID is not recoverable. So if this happens, kafka message should be marked as committed.
 		return errors.New(errors.ERR_SUBTREE_INVALID, "subtree root hash does not match", err)
 	}
 
@@ -499,7 +501,6 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	u.logger.Infof("[validateSubtreeInternal][%s] serialize subtree", v.SubtreeHash.String())
 	completeSubtreeBytes, err := subtree.Serialize()
 	if err != nil {
-		//errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String()), err)
 		return errors.New(errors.ERR_PROCESSING, "failed to serialize subtree", err)
 	}
 

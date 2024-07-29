@@ -37,4 +37,5 @@ var (
 	ErrSpent                      = New(ERR_SPENT, "utxo already spent")
 	ErrLockTime                   = New(ERR_LOCKTIME, "Bad lock time")
 	ErrKafkaDecode                = New(ERR_KAFKA_DECODE_ERROR, "error decoding kafka message")
+	ErrContext                    = New(ERR_CONTEXT_ERROR, "context cancelled")
 )
