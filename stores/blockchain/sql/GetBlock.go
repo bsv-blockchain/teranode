@@ -3,9 +3,9 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
@@ -25,7 +25,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 
 	// header, meta, er := cache.GetBlock(*blockHash)
 	// if er != nil {
-	// 	return nil, 0, fmt.Errorf("error in GetBlock: %w", er)
+	// 	return nil, 0, errors.NewStorageError("error in GetBlock", er)
 	// }
 	// if header != nil {
 	// 	block := &model.Block{
@@ -98,7 +98,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		&subtreeBytes,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, 0, fmt.Errorf("error in GetBlock: %w", err)
+			return nil, 0, errors.NewStorageError("error in GetBlock", err)
 		}
 		return nil, 0, err
 	}
@@ -107,23 +107,23 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+		return nil, 0, errors.NewStorageError("failed to convert hashPrevBlock", err)
 	}
 	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+		return nil, 0, errors.NewStorageError("failed to convert hashMerkleRoot", err)
 	}
 	block.TransactionCount = transactionCount
 	block.SizeInBytes = sizeInBytes
 
 	block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to convert coinbaseTx: %w", err)
+		return nil, 0, errors.NewStorageError("failed to convert coinbaseTx", err)
 	}
 
 	err = block.SubTreesFromBytes(subtreeBytes)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to convert subtrees: %w", err)
+		return nil, 0, errors.NewStorageError("failed to convert subtrees", err)
 	}
 
 	// set the block height on the block

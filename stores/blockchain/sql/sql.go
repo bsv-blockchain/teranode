@@ -2,7 +2,7 @@ package sql
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"sync"
 	"time"
@@ -32,22 +32,22 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {
-		return nil, fmt.Errorf("failed to init sql db: %+v", err)
+		return nil, errors.NewStorageError("failed to init sql db", err)
 	}
 
 	switch util.SQLEngine(storeUrl.Scheme) {
 	case util.Postgres:
 		if err = createPostgresSchema(db); err != nil {
-			return nil, fmt.Errorf("failed to create postgres schema: %+v", err)
+			return nil, errors.NewStorageError("failed to create postgres schema", err)
 		}
 
 	case util.Sqlite, util.SqliteMemory:
 		if err = createSqliteSchema(db); err != nil {
-			return nil, fmt.Errorf("failed to create sqlite schema: %+v", err)
+			return nil, errors.NewStorageError("failed to create sqlite schema", err)
 		}
 
 	default:
-		return nil, fmt.Errorf("unknown database engine: %s", storeUrl.Scheme)
+		return nil, errors.NewStorageError("unknown database engine: %s", storeUrl.Scheme)
 	}
 
 	s := &SQL{
@@ -61,7 +61,7 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 
 	err = s.insertGenesisTransaction(logger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to insert genesis transaction: %+v", err)
+		return nil, errors.NewStorageError("failed to insert genesis transaction", err)
 	}
 
 	return s, nil
@@ -89,7 +89,7 @@ func createPostgresSchema(db *usql.DB) error {
 	  );
 	`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create state table - [%+v]", err)
+		return errors.NewStorageError("could not create state table", err)
 	}
 
 	if _, err := db.Exec(`
@@ -118,27 +118,27 @@ func createPostgresSchema(db *usql.DB) error {
 	  );
 	`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create blocks table - [%+v]", err)
+		return errors.NewStorageError("could not create blocks table", err)
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create ux_blocks_hash index - [%+v]", err)
+		return errors.NewStorageError("could not create ux_blocks_hash index", err)
 	}
 
 	if _, err := db.Exec(`DROP INDEX IF EXISTS pux_blocks_height;`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not drop pux_blocks_height index - [%+v]", err)
+		return errors.NewStorageError("could not drop pux_blocks_height index", err)
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create idx_chain_work_id index - [%+v]", err)
+		return errors.NewStorageError("could not create idx_chain_work_id index", err)
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create idx_chain_work_peer_id index - [%+v]", err)
+		return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
 	}
 
 	if _, err := db.Exec(`
@@ -157,7 +157,7 @@ func createPostgresSchema(db *usql.DB) error {
 		$$ LANGUAGE SQL IMMUTABLE;
    `); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create block_transactions_map table - [%+v]", err)
+		return errors.NewStorageError("could not create block_transactions_map table", err)
 	}
 
 	if _, err := db.Exec(`
@@ -166,7 +166,7 @@ func createPostgresSchema(db *usql.DB) error {
 		LANGUAGE SQL IMMUTABLE;
 	`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create block_transactions_map table - [%+v]", err)
+		return errors.NewStorageError("could not create block_transactions_map table", err)
 	}
 
 	return nil
@@ -182,7 +182,7 @@ func createSqliteSchema(db *usql.DB) error {
 	  );
 	`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create blocks table - [%+v]", err)
+		return errors.NewStorageError("could not create blocks table", err)
 	}
 
 	if _, err := db.Exec(`
@@ -211,27 +211,27 @@ func createSqliteSchema(db *usql.DB) error {
 	  );
 	`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create blocks table - [%+v]", err)
+		return errors.NewStorageError("could not create blocks table", err)
 	}
 
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_blocks_hash ON blocks (hash);`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create ux_blocks_hash index - [%+v]", err)
+		return errors.NewStorageError("could not create ux_blocks_hash index", err)
 	}
 
 	if _, err := db.Exec(`DROP INDEX IF EXISTS pux_blocks_height;`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not drop pux_blocks_height index - [%+v]", err)
+		return errors.NewStorageError("could not drop pux_blocks_height index", err)
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create idx_chain_work_id index - [%+v]", err)
+		return errors.NewStorageError("could not create idx_chain_work_id index", err)
 	}
 
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
 		_ = db.Close()
-		return fmt.Errorf("could not create idx_chain_work_peer_id index - [%+v]", err)
+		return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
 	}
 
 	return nil
@@ -274,7 +274,7 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 
 		_, err = s.StoreBlock(context.Background(), genesisBlock, "")
 		if err != nil {
-			return fmt.Errorf("failed to insert genesis block: %+v", err)
+			return errors.NewStorageError("failed to insert genesis block", err)
 		}
 
 		logger.Infof("genesis block inserted")
@@ -321,7 +321,7 @@ func (c *blockchainCache) addBlockHeader(blockHeader *model.BlockHeader, blockHe
 
 	// height := block.Height
 	// if len(c.chain) != 0 && height == 0 {
-	// 	return false, fmt.Errorf("block height is 0")
+	// 	return false, errors.NewStorageError("block height is 0")
 	// }
 
 	c.headers[*blockHeader.Hash()] = blockHeader

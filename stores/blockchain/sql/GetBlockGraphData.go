@@ -2,8 +2,7 @@ package sql
 
 import (
 	"context"
-	"fmt"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
 )
@@ -41,7 +40,7 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 
 	rows, err := s.db.QueryContext(ctx, q, periodMillis/1000) // Remember, periodMillis is in milliseconds, but block_time is in seconds
 	if err != nil {
-		return nil, fmt.Errorf("failed to get block data: %w", err)
+		return nil, errors.NewStorageError("failed to get block data", err)
 	}
 
 	defer rows.Close()
@@ -49,12 +48,11 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 	for rows.Next() {
 		dataPoint := &model.DataPoint{}
 
-		err := rows.Scan(
+		if err = rows.Scan(
 			&dataPoint.Timestamp,
 			&dataPoint.TxCount,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read data point: %w", err)
+		); err != nil {
+			return nil, errors.NewStorageError("failed to read data point", err)
 		}
 
 		blockDataPoints.DataPoints = append(blockDataPoints.DataPoints, dataPoint)

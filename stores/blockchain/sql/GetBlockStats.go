@@ -2,7 +2,7 @@ package sql
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -53,7 +53,7 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 		&blockStats.LastBlockTime,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get stats: %w", err)
+		return nil, errors.NewStorageError("failed to get stats", err)
 	}
 
 	// add 1 to the block count to include the genesis block, which is excluded from the query

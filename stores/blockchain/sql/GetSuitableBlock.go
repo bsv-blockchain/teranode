@@ -3,9 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -69,9 +67,9 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 	rows, err := s.db.QueryContext(ctx, q, hash[:])
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
+			return nil, nil // TODO should this be an ErrNotFound error?
 		}
-		return nil, fmt.Errorf("failed to get suitableBlock: %w", err)
+		return nil, errors.NewStorageError("failed to get suitableBlock", err)
 	}
 	defer rows.Close()
 
@@ -89,13 +87,13 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 			&suitableBlock.Time,
 			&suitableBlock.ChainWork,
 		); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
+			return nil, errors.NewStorageError("failed to scan row", err)
 		}
 		suitableBlockCandidates = append(suitableBlockCandidates, suitableBlock)
 	}
 
 	if len(suitableBlockCandidates) != 3 {
-		return nil, fmt.Errorf("not enough candidates for suitable block. have %d, need 3: %e", len(suitableBlockCandidates), err)
+		return nil, errors.NewStorageError("not enough candidates for suitable block. have %d, need 3", len(suitableBlockCandidates), err)
 	}
 	// we have 3 candidates - now sort them by time and choose the median
 	b := getMedianBlock(suitableBlockCandidates)

@@ -3,9 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2"
@@ -83,7 +81,7 @@ func (s *SQL) getBlocksWithQuery(ctx context.Context, q string) ([]*model.Block,
 			&height,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return nil, fmt.Errorf("error in GetBlock: %w", err)
+				return nil, errors.NewStorageError("error in GetBlock", err)
 			}
 			return nil, err
 		}
@@ -92,23 +90,23 @@ func (s *SQL) getBlocksWithQuery(ctx context.Context, q string) ([]*model.Block,
 
 		block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+			return nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
 		}
 		block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+			return nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 		}
 		block.TransactionCount = transactionCount
 		block.SizeInBytes = sizeInBytes
 
 		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert coinbaseTx: %w", err)
+			return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
 		}
 
 		err = block.SubTreesFromBytes(subtreeBytes)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert subtrees: %w", err)
+			return nil, errors.NewProcessingError("failed to convert subtrees", err)
 		}
 
 		blocks = append(blocks, block)

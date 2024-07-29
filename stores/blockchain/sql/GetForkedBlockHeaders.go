@@ -3,9 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -19,7 +17,7 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 
 	headers, metas, err := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error in GetBlockHeaders: %w", err)
+		return nil, nil, errors.NewStorageError("error in GetBlockHeaders", err)
 	}
 	if headers != nil {
 		return headers, metas, nil
@@ -71,7 +69,7 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 		if errors.Is(err, sql.ErrNoRows) {
 			return blockHeaders, blockHeaderMetas, nil
 		}
-		return nil, nil, fmt.Errorf("failed to get headers: %w", err)
+		return nil, nil, errors.NewStorageError("failed to get headers", err)
 	}
 	defer rows.Close()
 
@@ -98,18 +96,18 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 			&blockHeaderMeta.BlockTime,
 			&insertedAt,
 		); err != nil {
-			return nil, nil, fmt.Errorf("failed to scan row: %w", err)
+			return nil, nil, errors.NewStorageError("failed to scan row", err)
 		}
 
 		blockHeader.Bits = model.NewNBitFromSlice(nBits)
 
 		blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+			return nil, nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
 		}
 		blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+			return nil, nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 		}
 
 		blockHeaders = append(blockHeaders, blockHeader)

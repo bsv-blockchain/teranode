@@ -1,7 +1,6 @@
 package blob
 
 import (
-	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -26,7 +25,7 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 	case "null":
 		store, err = null.New(logger)
 		if err != nil {
-			return nil, fmt.Errorf("error creating null blob store: %v", err)
+			return nil, errors.NewStorageError("error creating null blob store", err)
 		}
 	case "memory":
 		store = memory.New()
@@ -35,18 +34,18 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		// TODO make this more generic, you should be able to pass in an absolute path
 		store, err = file.New(logger, "."+storeUrl.Path) // relative
 		if err != nil {
-			return nil, fmt.Errorf("error creating file blob store: %v", err)
+			return nil, errors.NewStorageError("error creating file blob store", err)
 		}
 	case "badger":
 		// TODO make this more generic, you should be able to pass in an absolute path
 		store, err = badger.New(logger, "."+storeUrl.Path) // relative
 		if err != nil {
-			return nil, fmt.Errorf("error creating badger blob store: %v", err)
+			return nil, errors.NewStorageError("error creating badger blob store", err)
 		}
 	case "s3":
 		store, err = s3.New(logger, storeUrl, opts...)
 		if err != nil {
-			return nil, fmt.Errorf("error creating s3 blob store: %v", err)
+			return nil, errors.NewStorageError("error creating s3 blob store", err)
 		}
 	case "lustre":
 		// storeUrl is an s3 url
@@ -55,10 +54,10 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		persistDir := storeUrl.Query().Get("localPersist")
 		store, err = lustre.New(logger, storeUrl, dir, persistDir)
 		if err != nil {
-			return nil, fmt.Errorf("error creating lustre blob store: %v", err)
+			return nil, errors.NewStorageError("error creating lustre blob store", err)
 		}
 	default:
-		return nil, fmt.Errorf("unknown store type: %s", storeUrl.Scheme)
+		return nil, errors.NewStorageError("unknown store type: %s", storeUrl.Scheme)
 	}
 
 	if storeUrl.Query().Get("batch") == "true" {
@@ -67,7 +66,7 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		if sizeString != "" {
 			sizeInBytes, err = strconv.ParseInt(sizeString, 10, 64)
 			if err != nil {
-				return nil, fmt.Errorf("error parsing batch size: %v", err)
+				return nil, errors.NewConfigurationError("error parsing batch size", err)
 			}
 		}
 
@@ -94,23 +93,23 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		var ttlStore Store
 		if ttlStoreType == "badger" {
 			if len(localTTLStorePaths) > 1 {
-				return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "badger store only supports one path")
+				return nil, errors.NewInvalidArgumentError("badger store only supports one path")
 			}
 			ttlStore, err = badger.New(logger, localTTLStorePath)
 			if err != nil {
-				return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to create badger store", err)
+				return nil, errors.NewStorageError("failed to create badger store", err)
 			}
 		} else {
 			// default is file store
 			ttlStore, err = file.New(logger, localTTLStorePath, localTTLStorePaths)
 			if err != nil {
-				return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to create file store", err)
+				return nil, errors.NewStorageError("failed to create file store", err)
 			}
 		}
 
 		store, err = localttl.New(logger.New("localTTL"), ttlStore, store)
 		if err != nil {
-			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to create localTTL store", err)
+			return nil, errors.NewStorageError("failed to create localTTL store", err)
 		}
 	}
 

@@ -125,7 +125,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	_, err := g.uploader.Upload(traceSpan.Ctx, uploadInput)
 	if err != nil {
 		traceSpan.RecordError(err)
-		return fmt.Errorf("failed to set data from reader: %w", err)
+		return errors.NewStorageError("failed to set data from reader", err)
 	}
 
 	return nil
@@ -160,7 +160,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	_, err := g.uploader.Upload(traceSpan.Ctx, uploadInput)
 	if err != nil {
 		traceSpan.RecordError(err)
-		return fmt.Errorf("failed to set data: %w", err)
+		return errors.NewStorageError("failed to set data", err)
 	}
 
 	cache.Set(*objectKey, value)
@@ -203,7 +203,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, errors.ErrNotFound
 		}
-		return nil, fmt.Errorf("failed to get s3 data: %w", err)
+		return nil, errors.NewStorageError("failed to get s3 data", err)
 	}
 
 	return result.Body, nil
@@ -243,7 +243,7 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 			return nil, errors.ErrNotFound
 		}
 		traceSpan.RecordError(err)
-		return nil, fmt.Errorf("failed to get data: %w", err)
+		return nil, errors.NewStorageError("failed to get data", err)
 	}
 
 	return buf.Bytes(), err
@@ -289,7 +289,7 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 			return nil, errors.ErrNotFound
 		}
 		traceSpan.RecordError(err)
-		return nil, fmt.Errorf("failed to get data head: %w", err)
+		return nil, errors.NewStorageError("failed to get data head", err)
 	}
 
 	return buf.Bytes(), err
@@ -330,7 +330,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (b
 		}
 
 		traceSpan.RecordError(err)
-		return false, fmt.Errorf("failed to check whether object exists: %w", err)
+		return false, errors.NewStorageError("failed to check whether object exists", err)
 	}
 
 	return true, nil
@@ -356,7 +356,7 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 	})
 	if err != nil {
 		traceSpan.RecordError(err)
-		return fmt.Errorf("unable to del data: %w", err)
+		return errors.NewStorageError("unable to del data", err)
 	}
 
 	// do we need to wait until we can be sure that the object is deleted?
@@ -366,7 +366,7 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 	// })
 	// if err != nil {
 	// 	traceSpan.RecordError(err)
-	// 	return fmt.Errorf("failed to del data: %w", err)
+	// 	return errors.NewStorageError("failed to del data", err)
 	// }
 
 	return nil

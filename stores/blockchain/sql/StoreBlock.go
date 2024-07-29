@@ -3,8 +3,6 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"fmt"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/work"
@@ -138,7 +136,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 			&previousBlockInvalid,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return 0, 0, fmt.Errorf("error storing block %s as previous block %s not found: %w", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
+				return 0, 0, errors.NewStorageError("error storing block %s as previous block %s not found", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
 			}
 			return 0, 0, err
 		}
@@ -158,23 +156,23 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 			}
 
 			if height >= 227835 && blockHeight != uint32(height) {
-				return 0, 0, fmt.Errorf("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
+				return 0, 0, errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
 			}
 		}
 	}
 
 	subtreeBytes, err := block.SubTreeBytes()
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get subtree bytes: %w", err)
+		return 0, 0, errors.NewStorageError("failed to get subtree bytes", err)
 	}
 
 	chainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(previousChainWork))
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to convert chain work hash: %w", err)
+		return 0, 0, errors.NewProcessingError("failed to convert chain work hash", err)
 	}
 	cumulativeChainWork, err := getCumulativeChainWork(chainWorkHash, block)
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to calculate cumulative chain work: %w", err)
+		return 0, 0, errors.NewProcessingError("failed to calculate cumulative chain work", err)
 	}
 
 	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")

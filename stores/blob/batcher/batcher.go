@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
-	"fmt"
 	"io"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -83,7 +82,7 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 	dataSize := len(batchItem.value)
 	if currentPos+dataSize > b.sizeInBytes && currentPos > 0 {
 		if err := b.writeBatch(b.currentBatch, b.currentBatchKeys); err != nil {
-			return fmt.Errorf("error writing batch: %v", err)
+			return errors.NewStorageError("error writing batch", err)
 		}
 		b.currentBatch = make([]byte, 0, b.sizeInBytes)
 		b.currentBatchKeys = make([]byte, 0, b.sizeInBytes)
@@ -129,7 +128,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 		b.logger.Debugf("flushing batch of %d bytes", len(currentBatch))
 		// we need to reverse the bytes of the key, since this is not a transaction ID
 		if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), currentBatch, options.WithFileExtension("data")); err != nil {
-			return fmt.Errorf("error putting batch: %v", err)
+			return errors.NewStorageError("error putting batch", err)
 		}
 		return nil
 	})
@@ -139,7 +138,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 		g.Go(func() error {
 			// we need to reverse the bytes of the key, since this is not a transaction ID, but a batch ID
 			if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), batchKeys, options.WithFileExtension("keys")); err != nil {
-				return fmt.Errorf("error putting batch keys: %v", err)
+				return errors.NewStorageError("error putting batch keys", err)
 			}
 			return nil
 		})
@@ -189,7 +188,7 @@ func (b *Batcher) SetFromReader(ctx context.Context, key []byte, reader io.ReadC
 
 	bb, err := io.ReadAll(reader)
 	if err != nil {
-		return fmt.Errorf("failed to read data from reader: %w", err)
+		return errors.NewStorageError("failed to read data from reader", err)
 	}
 
 	return b.Set(ctx, key, bb, opts...)
@@ -205,25 +204,25 @@ func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...opti
 }
 
 func (b *Batcher) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.Options) error {
-	return errors.New("TTL is not supported in a batcher store")
+	return errors.NewProcessingError("TTL is not supported in a batcher store")
 }
 
 func (b *Batcher) GetIoReader(_ context.Context, _ []byte, opts ...options.Options) (io.ReadCloser, error) {
-	return nil, fmt.Errorf("getIoReader is not supported in a batcher store")
+	return nil, errors.NewStorageError("getIoReader is not supported in a batcher store")
 }
 
 func (b *Batcher) Get(_ context.Context, _ []byte, opts ...options.Options) ([]byte, error) {
-	return nil, fmt.Errorf("get is not supported in a batcher store")
+	return nil, errors.NewStorageError("get is not supported in a batcher store")
 }
 
 func (b *Batcher) GetHead(_ context.Context, _ []byte, _ int, opts ...options.Options) ([]byte, error) {
-	return nil, fmt.Errorf("get head is not supported in a batcher store")
+	return nil, errors.NewStorageError("get head is not supported in a batcher store")
 }
 
 func (b *Batcher) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
-	return false, fmt.Errorf("exists is not supported in a batcher store")
+	return false, errors.NewStorageError("exists is not supported in a batcher store")
 }
 
 func (b *Batcher) Del(_ context.Context, hash []byte, opts ...options.Options) error {
-	return fmt.Errorf("del is not supported in a batcher store")
+	return errors.NewStorageError("del is not supported in a batcher store")
 }

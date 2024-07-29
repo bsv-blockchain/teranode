@@ -36,7 +36,7 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string) (
 
 	s3Client, err := s3.New(logger, s3Url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create s3 client: %w", err)
+		return nil, errors.NewStorageError("failed to create s3 client", err)
 	}
 
 	lustreStore := &Lustre{
@@ -48,10 +48,10 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string) (
 
 	// create directory if not exists
 	if err = os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory: %w", err)
+		return nil, errors.NewStorageError("failed to create directory", err)
 	}
 	if err = os.MkdirAll(filepath.Clean(dir+"/"+persistDir), 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory: %w", err)
+		return nil, errors.NewStorageError("failed to create directory", err)
 	}
 
 	return lustreStore, nil
@@ -71,23 +71,23 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 
 	fileName, err := s.getFileNameForSet(key, opts...)
 	if err != nil {
-		return fmt.Errorf("[%s] failed to get file name: %w", utils.ReverseAndHexEncodeSlice(key), err)
+		return errors.NewStorageError("[%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
 	}
 
 	// write the bytes from the reader to a file with the filename
 	file, err := os.Create(fileName + ".tmp")
 	if err != nil {
-		return fmt.Errorf("[%s] failed to create file: %w", fileName, err)
+		return errors.NewStorageError("[%s] failed to create file", fileName, err)
 	}
 	defer file.Close()
 
 	if _, err = io.Copy(file, reader); err != nil {
-		return fmt.Errorf("[%s] failed to write data to file: %w", fileName, err)
+		return errors.NewStorageError("[%s] failed to write data to file", fileName, err)
 	}
 
 	// rename the file to the final name
 	if err = os.Rename(fileName+".tmp", fileName); err != nil {
-		return fmt.Errorf("[%s] failed to rename file from tmp: %w", fileName, err)
+		return errors.NewStorageError("[%s] failed to rename file from tmp", fileName, err)
 	}
 
 	return nil
@@ -98,18 +98,18 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 
 	fileName, err := s.getFileNameForSet(hash, opts...)
 	if err != nil {
-		return fmt.Errorf("[%s] failed to get file name: %w", utils.ReverseAndHexEncodeSlice(hash), err)
+		return errors.NewStorageError("[%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
 	}
 
 	// write bytes to file
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err = os.WriteFile(fileName+".tmp", value, 0644); err != nil {
-		return fmt.Errorf("[%s] failed to write data to file: %w", fileName, err)
+		return errors.NewStorageError("[%s] failed to write data to file", fileName, err)
 	}
 
 	// rename the file to the final name
 	if err = os.Rename(fileName+".tmp", fileName); err != nil {
-		return fmt.Errorf("[%s] failed to rename file from tmp: %w", fileName, err)
+		return errors.NewStorageError("[%s] failed to rename file from tmp", fileName, err)
 	}
 
 	return nil
@@ -126,7 +126,7 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 		// check whether the persisted file exists
 		_, err := os.Stat(persistedFilename)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("[%s] unable to stat file, %v", persistedFilename, err)
+			return errors.NewStorageError("[%s] unable to stat file", persistedFilename, err)
 		}
 
 		// the file is already persisted
@@ -137,18 +137,18 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 		// err is ErrNotExist, so the file should be persisted, copy it from the main dir to the persist dir
 		f, err := os.Open(fileName)
 		if err != nil {
-			return fmt.Errorf("[%s] unable to open file: %v", fileName, err)
+			return errors.NewStorageError("[%s] unable to open file", fileName, err)
 		}
 		defer f.Close()
 
 		persistedFile, err := os.Create(persistedFilename)
 		if err != nil {
-			return fmt.Errorf("[%s] unable to create file: %v", persistedFilename, err)
+			return errors.NewStorageError("[%s] unable to create file", persistedFilename, err)
 		}
 		defer persistedFile.Close()
 
 		if _, err = io.Copy(persistedFile, f); err != nil {
-			return fmt.Errorf("[%s] unable to copy file: %v", fileName, err)
+			return errors.NewStorageError("[%s] unable to copy file", fileName, err)
 		}
 
 		return nil
@@ -156,7 +156,7 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 
 	_, err = os.Stat(fileName)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("[%s] unable to stat file, %v", persistedFilename, err)
+		return errors.NewStorageError("[%s] unable to stat file", persistedFilename, err)
 	}
 
 	// the file is already exists in the main dir, remove it from the persist dir
@@ -188,15 +188,15 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.O
 						if errors.Is(err, os.ErrNotExist) {
 							return nil, errors.ErrNotFound
 						}
-						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
+						return nil, errors.NewStorageError("[%s] unable to open file", fileName, err)
 					}
 					return fileReader, nil
 				}
-				return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
+				return nil, errors.NewStorageError("[%s] unable to open file", fileName, err)
 			}
 			return file, nil
 		}
-		return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
+		return nil, errors.NewStorageError("[%s] unable to open file", fileName, err)
 	}
 
 	return file, nil
@@ -223,15 +223,15 @@ func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 						if errors.Is(err, os.ErrNotExist) {
 							return nil, errors.ErrNotFound
 						}
-						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
+						return nil, errors.NewStorageError("[%s] unable to open file", fileName, err)
 					}
 					return bytes, nil
 				}
-				return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
+				return nil, errors.NewStorageError("[%s] failed to read data from file", fileName, err)
 			}
 			return bytes, nil
 		}
-		return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
+		return nil, errors.NewStorageError("[%s] failed to read data from file", fileName, err)
 	}
 
 	return bytes, err
@@ -258,15 +258,15 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts .
 						if errors.Is(err, os.ErrNotExist) {
 							return nil, errors.ErrNotFound
 						}
-						return nil, fmt.Errorf("[%s] unable to open file: %v", fileName, err)
+						return nil, errors.NewStorageError("[%s] unable to open file", fileName, err)
 					}
 					return bytes, nil
 				}
-				return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
+				return nil, errors.NewStorageError("[%s] failed to read data from file", fileName, err)
 			}
 			return bytes, nil
 		}
-		return nil, fmt.Errorf("[%s] failed to read data from file: %w", fileName, err)
+		return nil, errors.NewStorageError("[%s] failed to read data from file", fileName, err)
 	}
 
 	return bytes, err
@@ -291,15 +291,15 @@ func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options)
 						if errors.Is(err, os.ErrNotExist) {
 							return false, nil
 						}
-						return false, fmt.Errorf("failed to read data from file: %w", err)
+						return false, errors.NewStorageError("failed to read data from file", err)
 					}
 					return exists, nil
 				}
-				return false, fmt.Errorf("failed to read data from file: %w", err)
+				return false, errors.NewStorageError("failed to read data from file", err)
 			}
 			return true, nil
 		}
-		return false, fmt.Errorf("failed to read data from file: %w", err)
+		return false, errors.NewStorageError("failed to read data from file", err)
 	}
 
 	return true, nil

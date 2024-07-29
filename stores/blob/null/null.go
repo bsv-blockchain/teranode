@@ -2,7 +2,7 @@ package null
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"time"
 
@@ -44,15 +44,15 @@ func (n *Null) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...opti
 }
 
 func (n *Null) GetIoReader(_ context.Context, _ []byte, opts ...options.Options) (io.ReadCloser, error) {
-	return nil, fmt.Errorf("failed to read data from file: no such file or directory")
+	return nil, errors.NewStorageError("failed to read data from file: no such file or directory")
 }
 
 func (n *Null) Get(_ context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
-	return nil, fmt.Errorf("failed to read data from file: no such file or directory: %x", bt.ReverseBytes(hash))
+	return nil, errors.NewStorageError("failed to read data from file: no such file or directory: %x", bt.ReverseBytes(hash))
 }
 
 func (n *Null) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
-	return nil, fmt.Errorf("failed to read data from file: no such file or directory: %x", bt.ReverseBytes(hash))
+	return nil, errors.NewStorageError("failed to read data from file: no such file or directory: %x", bt.ReverseBytes(hash))
 }
 
 func (n *Null) Exists(_ context.Context, _ []byte, opts ...options.Options) (bool, error) {

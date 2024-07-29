@@ -3,9 +3,8 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -21,7 +20,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 	header, meta, er := s.blocksCache.GetBestBlockHeader()
 	if er != nil {
-		return nil, nil, fmt.Errorf("error in GetBestBlockHeader: %w", er)
+		return nil, nil, errors.NewStorageError("error in GetBestBlockHeader", er)
 	}
 	if header != nil {
 		return header, meta, nil
@@ -72,7 +71,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		&coinbaseBytes,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, fmt.Errorf("error in GetBestBlockHeader: %w", err)
+			return nil, nil, errors.NewStorageError("error in GetBestBlockHeader", err)
 		}
 		return nil, nil, err
 	}
@@ -81,21 +80,21 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+		return nil, nil, errors.NewStorageError("failed to convert hashPrevBlock", err)
 	}
 	blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+		return nil, nil, errors.NewStorageError("failed to convert hashMerkleRoot", err)
 	}
 
 	coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to convert coinbaseTx: %w", err)
+		return nil, nil, errors.NewStorageError("failed to convert coinbaseTx", err)
 	}
 
 	miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to extract miner: %w", err)
+		return nil, nil, errors.NewStorageError("failed to extract miner", err)
 	}
 
 	blockHeaderMeta.Miner = miner
