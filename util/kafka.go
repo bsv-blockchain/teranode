@@ -360,6 +360,8 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
+	fmt.Println("Starting async producer")
+
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
 
@@ -382,6 +384,8 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 	retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000")      // 10 minutes
 	segmentBytes := GetQueryParam(kafkaURL, "segment_bytes", "1073741824") // 1GB default
 
+	fmt.Println("configcs done, creating topic")
+
 	if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
 		NumPartitions:     int32(partitions),
 		ReplicationFactor: int16(replicationFactor),
@@ -397,7 +401,10 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 		}
 	}
 
+	fmt.Println("topic done, creating async producer")
+
 	producer, err := sarama.NewAsyncProducer(brokersUrl, config)
+	fmt.Println("producer created with err: ", err)
 	if err != nil {
 		logger.Fatalf("Failed to start Sarama producer: %v", err)
 	}
@@ -416,7 +423,7 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 			logger.Errorf("Failed to deliver message: %v", err)
 		}
 	}()
-
+	fmt.Println("sending a batch of 50 messages asynchronously")
 	// Sending a batch of 50 messages asynchronously
 	go func() {
 		for msgBytes := range ch {
