@@ -463,10 +463,10 @@ func (stp *SubtreeProcessor) Reorg(moveDownBlocks []*model.Block, modeUpBlocks [
 // TODO handle conflicting transactions
 func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block) error {
 	if moveDownBlocks == nil {
-		return errors.New(errors.ERR_PROCESSING, "you must pass in blocks to move down the chain")
+		return errors.NewProcessingError("you must pass in blocks to move down the chain")
 	}
 	if moveUpBlocks == nil {
-		return errors.New(errors.ERR_PROCESSING, "you must pass in blocks to move up the chain")
+		return errors.NewProcessingError("you must pass in blocks to move up the chain")
 	}
 
 	stp.logger.Infof("reorgBlocks with %d moveDownBlocks and %d moveUpBlocks", len(moveDownBlocks), len(moveUpBlocks))
@@ -510,7 +510,7 @@ func (stp *SubtreeProcessor) setTxCount() {
 // TODO handle conflicting transactions
 func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Block) (err error) {
 	if block == nil {
-		return errors.New(errors.ERR_PROCESSING, "[moveDownBlock] you must pass in a block to moveDownBlock")
+		return errors.NewProcessingError("[moveDownBlock] you must pass in a block to moveDownBlock")
 	}
 
 	startTime := time.Now()
@@ -627,7 +627,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 // moveDownBlocks adds all transactions that are in given blocks to current stp subtrees
 func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model.Block) (err error) {
 	if len(blocks) == 0 || blocks[0] == nil {
-		return errors.New(errors.ERR_PROCESSING, "[moveDownBlocks] you must pass in a block to moveDownBlock")
+		return errors.NewProcessingError("[moveDownBlocks] you must pass in a block to moveDownBlock")
 	}
 
 	startTime := time.Now()
@@ -749,7 +749,7 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 // TODO handle conflicting transactions
 func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block, skipNotification bool) error {
 	if block == nil {
-		return errors.New(errors.ERR_PROCESSING, "[moveUpBlock] you must pass in a block to moveUpBlock")
+		return errors.NewProcessingError("[moveUpBlock] you must pass in a block to moveUpBlock")
 	}
 
 	startTime := time.Now()

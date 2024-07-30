@@ -2,7 +2,6 @@ package blockvalidation
 
 import (
 	"context"
-	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -532,7 +531,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// 0 is unlimited so don't check the size
 	if u.excessiveblocksize > 0 {
 		if block.SizeInBytes > uint64(u.excessiveblocksize) {
-			return errors.New(errors.ERR_BLOCK_INVALID, fmt.Sprintf("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.excessiveblocksize))
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.excessiveblocksize)
 		}
 	}
 
@@ -574,7 +573,7 @@ CheckParentMined:
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 		} else {
-			return errors.New(errors.ERR_TX_ERROR, fmt.Sprintf("[ValidateBlock][%s] error storing utxos: %v", block.Header.Hash().String(), err))
+			return errors.NewTxError("[ValidateBlock][%s] error storing utxos", block.Header.Hash().String(), err)
 		}
 	}
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())

@@ -52,7 +52,7 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, serviceName string, 
 
 	grpcServer, err := getGRPCServer(connectionOptions)
 	if err != nil {
-		return errors.NewConfigurationError("[%s] could not create GRPC server [%w]", serviceName, err)
+		return errors.NewConfigurationError("[%s] could not create GRPC server", serviceName, err)
 	}
 
 	// Register reflection service on gRPC server.

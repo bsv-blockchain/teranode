@@ -56,7 +56,7 @@ func (h *HTTP) GetTransaction(mode ReadMode) func(c echo.Context) error {
 			return c.JSONPretty(200, tx, "  ")
 
 		default:
-			err = errors.New(errors.ERR_UNKNOWN, "bad read mode")
+			err = errors.NewUnknownError("bad read mode")
 			return sendError(c, http.StatusInternalServerError, 52, err)
 		}
 	}

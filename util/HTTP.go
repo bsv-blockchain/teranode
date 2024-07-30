@@ -27,7 +27,7 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 
 	blockBytes, err := io.ReadAll(bodyReaderCloser)
 	if err != nil {
-		return nil, errors.NewServiceError("http request [%s] failed to read body: %w", url, err)
+		return nil, errors.NewServiceError("http request [%s] failed to read body", url, err)
 	}
 
 	return blockBytes, nil

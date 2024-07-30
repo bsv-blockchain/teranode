@@ -183,7 +183,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, block
 
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "failed to get tx meta data", err)
+		return nil, errors.NewProcessingError("failed to get tx meta data", err)
 	}
 
 	// Insert the transaction row...
@@ -219,9 +219,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, block
 	err = txn.QueryRowContext(ctx, q, tx.TxIDChainHash()[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes).Scan(&transactionId)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-			return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
+			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
 		} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-			return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
+			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 		}
 		return nil, errors.NewStorageError("Failed to insert transaction: %v", err)
 	}
@@ -253,9 +253,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, block
 		_, err = txn.ExecContext(ctx, q, transactionId, i, input.PreviousTxIDChainHash()[:], input.PreviousTxOutIndex, input.PreviousTxSatoshis, input.PreviousTxScript, input.UnlockingScript, input.SequenceNumber)
 		if err != nil {
 			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
+				return nil, errors.NewTxAlreadyExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
 			} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
+				return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 			}
 			return nil, errors.NewStorageError("Failed to insert input: %v", err)
 		}
@@ -297,9 +297,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, block
 		_, err = txn.ExecContext(ctx, q, transactionId, i, output.LockingScript, output.Satoshis, coinbaseSpendingHeight, utxoHash[:], nil)
 		if err != nil {
 			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
+				return nil, errors.NewTxAlreadyExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
 			} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-				return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
+				return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 			}
 			return nil, errors.NewStorageError("Failed to insert output: %v", err)
 		}
@@ -321,9 +321,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, block
 			_, err = txn.ExecContext(ctx, q, transactionId, blockID)
 			if err != nil {
 				if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-					return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
+					return nil, errors.NewTxAlreadyExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
 				} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-					return nil, errors.New(errors.ERR_TX_ALREADY_EXISTS, "Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
+					return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 				}
 				return nil, errors.NewStorageError("Failed to insert block_ids: %v", err)
 			}
@@ -378,7 +378,7 @@ func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []string) (*
 	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New(errors.ERR_TX_NOT_FOUND, "transaction %s not found: %v", hash, err)
+			return nil, errors.NewTxNotFoundError("transaction %s not found: %v", hash, err)
 		}
 
 		return nil, err
@@ -562,7 +562,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 			err := txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					return errors.New(errors.ERR_NOT_FOUND, "output %s:%d not found", spend.TxID, spend.Vout)
+					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
 				}
 				return errors.NewStorageError("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d: %v", spend.TxID, spend.Vout, err)
 			}
@@ -660,7 +660,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 			err := txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					return errors.New(errors.ERR_NOT_FOUND, "output %s:%d not found", spend.TxID, spend.Vout)
+					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
 				}
 				return err
 			}
@@ -815,7 +815,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&coinbaseSpendingHeight, &spendingTransactionID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New(errors.ERR_NOT_FOUND, "utxo not found for %s:%d", spend.TxID, spend.Vout)
+			return nil, errors.NewNotFoundError("utxo not found for %s:%d", spend.TxID, spend.Vout)
 		}
 
 		return nil, err

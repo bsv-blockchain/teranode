@@ -82,7 +82,7 @@ func InitGlobalTracer(serviceName string, samplingRate float64) (opentracing.Tra
 
 	cfg, err := config.FromEnv()
 	if err != nil {
-		return nil, nil, errors.New(errors.ERR_CONFIGURATION, "cannot parse jaeger environment variables", err)
+		return nil, nil, errors.NewConfigurationError("cannot parse jaeger environment variables", err)
 	}
 
 	cfg.ServiceName = serviceName
@@ -93,7 +93,7 @@ func InitGlobalTracer(serviceName string, samplingRate float64) (opentracing.Tra
 	var closer io.Closer
 	tracer, closer, err = cfg.NewTracer()
 	if err != nil {
-		return nil, nil, errors.New(errors.ERR_CONFIGURATION, "cannot initialize jaeger tracer", err)
+		return nil, nil, errors.NewConfigurationError("cannot initialize jaeger tracer", err)
 	}
 
 	opentracing.SetGlobalTracer(tracer)
@@ -103,7 +103,7 @@ func InitGlobalTracer(serviceName string, samplingRate float64) (opentracing.Tra
 
 func GetGRPCClient(ctx context.Context, address string, connectionOptions *ConnectionOptions) (*grpc.ClientConn, error) {
 	if address == "" {
-		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "address is required")
+		return nil, errors.NewInvalidArgumentError("address is required")
 	}
 
 	if connectionOptions.MaxMessageSize == 0 {
@@ -146,7 +146,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 			unaryClientInterceptors = append(unaryClientInterceptors, otgrpc.OpenTracingClientInterceptor(tracer))
 			streamClientInterceptors = append(streamClientInterceptors, otgrpc.OpenTracingStreamClientInterceptor(tracer))
 		} else {
-			return nil, errors.New(errors.ERR_CONFIGURATION, "no global tracer set")
+			return nil, errors.NewConfigurationError("no global tracer set")
 		}
 	}
 
@@ -192,7 +192,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 		opts...,
 	)
 	if err != nil {
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "error dialing grpc service at %s", address, err)
+		return nil, errors.NewServiceError("error dialing grpc service at %s", address, err)
 	}
 
 	return conn, nil
@@ -237,7 +237,7 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 			unaryInterceptors = append(unaryInterceptors, otgrpc.OpenTracingServerInterceptor(tracer))
 			streamInterceptors = append(streamInterceptors, otgrpc.OpenTracingStreamServerInterceptor(tracer))
 		} else {
-			return nil, errors.New(errors.ERR_CONFIGURATION, "no global tracer set")
+			return nil, errors.NewConfigurationError("no global tracer set")
 		}
 	}
 
@@ -317,7 +317,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 		if isServer {
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.New(errors.ERR_CONFIGURATION, "failed to read key pair", err)
+				return nil, errors.NewConfigurationError("failed to read key pair", err)
 			}
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
@@ -336,7 +336,7 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 		if isServer {
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.New(errors.ERR_CONFIGURATION, "failed to read key pair", err)
+				return nil, errors.NewConfigurationError("failed to read key pair", err)
 			}
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
@@ -349,14 +349,14 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			// Load the server's CA certificate from disk
 			caCert, err := os.ReadFile(connectionData.CaCertFile)
 			if err != nil {
-				return nil, errors.New(errors.ERR_CONFIGURATION, "failed to read ca cert file", err)
+				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
 			}
 			caCertPool := x509.NewCertPool()
 			caCertPool.AppendCertsFromPEM(caCert)
 
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.New(errors.ERR_CONFIGURATION, "failed to read key pair", err)
+				return nil, errors.NewConfigurationError("failed to read key pair", err)
 			}
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
@@ -373,14 +373,14 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			// Load the server's CA certificate from disk
 			caCert, err := os.ReadFile(connectionData.CaCertFile)
 			if err != nil {
-				return nil, errors.New(errors.ERR_CONFIGURATION, "failed to read ca cert file", err)
+				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
 			}
 			caCertPool := x509.NewCertPool()
 			caCertPool.AppendCertsFromPEM(caCert)
 
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.New(errors.ERR_CONFIGURATION, "failed to read key pair", err)
+				return nil, errors.NewConfigurationError("failed to read key pair", err)
 			}
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
@@ -394,14 +394,14 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 			// Load the server's CA certificate from disk
 			caCert, err := os.ReadFile(connectionData.CaCertFile)
 			if err != nil {
-				return nil, errors.New(errors.ERR_CONFIGURATION, "failed to read ca cert file", err)
+				return nil, errors.NewConfigurationError("failed to read ca cert file", err)
 			}
 			caCertPool := x509.NewCertPool()
 			caCertPool.AppendCertsFromPEM(caCert)
 
 			cert, err := tls.LoadX509KeyPair(connectionData.CertFile, connectionData.KeyFile)
 			if err != nil {
-				return nil, errors.New(errors.ERR_CONFIGURATION, "failed to read key pair", err)
+				return nil, errors.NewConfigurationError("failed to read key pair", err)
 			}
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
@@ -412,5 +412,5 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 		}
 	}
 
-	return nil, errors.New(errors.ERR_CONFIGURATION, "securityLevel must be 0, 1, 2 or 3")
+	return nil, errors.NewConfigurationError("securityLevel must be 0, 1, 2 or 3")
 }

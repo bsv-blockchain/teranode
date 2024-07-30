@@ -10,7 +10,7 @@ import (
 )
 
 func TestErrTxNotFound(t *testing.T) {
-	err := errors.New(errors.ERR_TX_NOT_FOUND, "tx not found")
+	err := errors.NewTxNotFoundError("tx not found")
 	require.Error(t, err)
 
 	assert.True(t, errors.Is(err, errors.ErrTxNotFound))

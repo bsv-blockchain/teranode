@@ -47,13 +47,13 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 		"params": params,
 	})
 	if err != nil {
-		return "", errors.New(errors.ERR_PROCESSING, "failed to marshal request body", err)
+		return "", errors.NewProcessingError("failed to marshal request body", err)
 	}
 
 	// Create the HTTP request
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestBody))
 	if err != nil {
-		return "", errors.New(errors.ERR_PROCESSING, "failed to create request", err)
+		return "", errors.NewProcessingError("failed to create request", err)
 	}
 
 	// Set the appropriate headers
@@ -64,19 +64,19 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", errors.New(errors.ERR_PROCESSING, "failed to perform request", err)
+		return "", errors.NewProcessingError("failed to perform request", err)
 	}
 	defer resp.Body.Close()
 
 	// Check the status code
 	if resp.StatusCode != http.StatusOK {
-		return "", errors.New(errors.ERR_PROCESSING, "expected status code 200, got %v", resp.StatusCode)
+		return "", errors.NewProcessingError("expected status code 200, got %v", resp.StatusCode)
 	}
 
 	// Read the response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", errors.New(errors.ERR_PROCESSING, "failed to read response body", err)
+		return "", errors.NewProcessingError("failed to read response body", err)
 	}
 
 	// Return the response as a string
@@ -102,7 +102,7 @@ func GetBlockHeight(url string) (int, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, errors.New(errors.ERR_PROCESSING, "unexpected status code: %d", resp.StatusCode)
+		return 0, errors.NewProcessingError("unexpected status code: %d", resp.StatusCode)
 	}
 
 	var blocks []struct {
@@ -113,7 +113,7 @@ func GetBlockHeight(url string) (int, error) {
 	}
 
 	if len(blocks) == 0 {
-		return 0, errors.New(errors.ERR_PROCESSING, "no blocks found in response")
+		return 0, errors.NewProcessingError("no blocks found in response")
 	}
 
 	return blocks[0].Height, nil
@@ -141,7 +141,7 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 	case "utxodiff":
 		utxodiff, err := utxom.NewUTXODiffFromReader(logger, r)
 		if err != nil {
-			return false, errors.New(errors.ERR_PROCESSING, "error reading utxodiff: %w\n", err)
+			return false, errors.NewProcessingError("error reading utxodiff: %w\n", err)
 		}
 
 		fmt.Printf("UTXODiff block hash: %v\n", utxodiff.BlockHash)
@@ -153,7 +153,7 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 	case "utxoset":
 		utxoSet, err := utxom.NewUTXOSetFromReader(logger, r)
 		if err != nil {
-			return false, errors.New(errors.ERR_PROCESSING, "error reading utxoSet: %v\n", err)
+			return false, errors.NewProcessingError("error reading utxoSet: %v\n", err)
 		}
 
 		fmt.Printf("UTXOSet block hash: %v\n", utxoSet.BlockHash)
@@ -168,12 +168,12 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 		blockHeaderBytes := make([]byte, 80)
 		// read the first 80 bytes as the block header
 		if _, err := io.ReadFull(r, blockHeaderBytes); err != nil {
-			return false, errors.New(errors.ERR_BLOCK_INVALID, "error reading block header", err)
+			return false, errors.NewBlockInvalidError("error reading block header", err)
 		}
 
 		txCount, err := wire.ReadVarInt(r, 0)
 		if err != nil {
-			return false, errors.New(errors.ERR_BLOCK_INVALID, "error reading transaction count", err)
+			return false, errors.NewBlockInvalidError("error reading transaction count", err)
 		}
 
 		fmt.Printf("\t%d transactions\n", txCount)
@@ -181,7 +181,7 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 	case "block":
 		block, err := block_model.NewBlockFromReader(r)
 		if err != nil {
-			return false, errors.New(errors.ERR_PROCESSING, "error reading block: %v\n", err)
+			return false, errors.NewProcessingError("error reading block: %v\n", err)
 		}
 
 		fmt.Printf("Block hash: %s\n", block.Hash())
@@ -201,7 +201,7 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 		}
 
 	default:
-		return false, errors.New(errors.ERR_PROCESSING, "unknown file type")
+		return false, errors.NewProcessingError("unknown file type")
 	}
 
 	return false, nil
@@ -243,11 +243,11 @@ func GetReader(ctx context.Context, file string, dir *url.URL, logger ulogger.Lo
 
 	store, err := blob.NewStore(logger, dir)
 	if err != nil {
-		return nil, "", nil, errors.New(errors.ERR_PROCESSING, "error creating block store: %w", err)
+		return nil, "", nil, errors.NewProcessingError("error creating block store: %w", err)
 	}
 	r, err := store.GetIoReader(ctx, hash[:], options.WithFileExtension(ext))
 	if err != nil {
-		return nil, "", nil, errors.New(errors.ERR_PROCESSING, "error getting reader from store: %w", err)
+		return nil, "", nil, errors.NewProcessingError("error getting reader from store: %w", err)
 	}
 
 	return dir, ext, r, nil
@@ -256,7 +256,7 @@ func GetReader(ctx context.Context, file string, dir *url.URL, logger ulogger.Lo
 func GetMiningCandidate(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (*block_model.MiningCandidate, error) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error getting mining candidate: %w", err)
+		return nil, errors.NewProcessingError("error getting mining candidate: %w", err)
 	}
 	return miningCandidate, nil
 }
@@ -264,24 +264,24 @@ func GetMiningCandidate(ctx context.Context, baClient ba.Client, logger ulogger.
 func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) ([]byte, error) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error getting mining candidate: %w", err)
+		return nil, errors.NewProcessingError("error getting mining candidate: %w", err)
 	}
 
 	solution, err := cpuminer.Mine(ctx, miningCandidate)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error mining block: %w", err)
+		return nil, errors.NewProcessingError("error mining block: %w", err)
 	}
 
 	blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error building block header: %w", err)
+		return nil, errors.NewProcessingError("error building block header: %w", err)
 	}
 
 	blockHash := util.Sha256d(blockHeader)
 
 	err = baClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error submitting mining solution: %w", err)
+		return nil, errors.NewProcessingError("error submitting mining solution: %w", err)
 	}
 
 	return blockHash, nil
@@ -290,44 +290,44 @@ func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) (
 func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) {
 	solution, err := cpuminer.Mine(ctx, miningCandidate)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error mining block: %w", err)
+		return nil, errors.NewProcessingError("error mining block: %w", err)
 	}
 
 	blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error building block header: %w", err)
+		return nil, errors.NewProcessingError("error building block header: %w", err)
 	}
 
 	blockHash := util.Sha256d(blockHeader)
 
 	err = baClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error submitting mining solution: %w", err)
+		return nil, errors.NewProcessingError("error submitting mining solution: %w", err)
 	}
 
 	err = baClient.SubmitMiningSolution(ctx, solution)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error submitting mining solution: %w", err)
+		return nil, errors.NewProcessingError("error submitting mining solution: %w", err)
 	}
 	return blockHash, nil
 }
 
 func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Hash, error) {
 
-nilHash := chainhash.Hash{}
-privateKey, _ := bec.NewPrivateKey(bec.S256())
+	nilHash := chainhash.Hash{}
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
 
-address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 
-coinbaseClient := node.CoinbaseClient
+	coinbaseClient := node.CoinbaseClient
 
-faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to request funds: %w", err)
+		return nilHash, errors.NewProcessingError("Failed to request funds: %w", err)
 	}
 	_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to send transaction: %w", err)
+		return nilHash, errors.NewProcessingError("Failed to send transaction: %w", err)
 	}
 
 	output := faucetTx.Outputs[0]
@@ -341,29 +341,28 @@ faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "error creating new transaction: %w", err)
+		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
 	}
 
 	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Error adding output to transaction: %w", err)
+		return nilHash, errors.NewProcessingError("Error adding output to transaction: %w", err)
 	}
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Error filling transaction inputs: %w", err)
+		return nilHash, errors.NewProcessingError("Error filling transaction inputs: %w", err)
 	}
 
 	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to send new transaction: %w", err)
+		return nilHash, errors.NewProcessingError("Failed to send new transaction: %w", err)
 	}
 
 	return *newTx.TxIDChainHash(), nil
 }
 
 func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (chainhash.Hash, error) {
-
 
 	nilHash := chainhash.Hash{}
 
@@ -375,11 +374,11 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (cha
 
 	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to request funds: %w", err)
+		return nilHash, errors.NewProcessingError("Failed to request funds: %w", err)
 	}
 	_, err = node[0].DistributorClient.SendTransaction(ctx, faucetTx)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to send transaction: %w", err)
+		return nilHash, errors.NewProcessingError("Failed to send transaction: %w", err)
 	}
 
 	output := faucetTx.Outputs[0]
@@ -393,42 +392,42 @@ func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (cha
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "error creating new transaction: %w", err)
+		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
 	}
 	newTx.LockTime = 0
 
 	newTxDouble := bt.NewTx()
 	err = newTxDouble.FromUTXOs(utxo)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "error creating new transaction: %w", err)
+		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
 	}
 	newTxDouble.LockTime = 1
 
 	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Error adding output to transaction: %w", err)
+		return nilHash, errors.NewProcessingError("Error adding output to transaction: %w", err)
 	}
 	err = newTxDouble.AddP2PKHOutputFromAddress("14qViLJfdGaP4EeHnDyJbEGQysnCpwk3gd", 10000)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Error adding output to transaction: %w", err)
+		return nilHash, errors.NewProcessingError("Error adding output to transaction: %w", err)
 	}
 
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Error filling transaction inputs: %w", err)
+		return nilHash, errors.NewProcessingError("Error filling transaction inputs: %w", err)
 	}
 	err = newTxDouble.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Error filling transaction inputs: %w", err)
+		return nilHash, errors.NewProcessingError("Error filling transaction inputs: %w", err)
 	}
 
 	_, err = node[0].DistributorClient.SendTransaction(ctx, newTx)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to send new transaction: %w", err)
+		return nilHash, errors.NewProcessingError("Failed to send new transaction: %w", err)
 	}
 	_, err = node[1].DistributorClient.SendTransaction(ctx, newTxDouble)
 	if err != nil {
-		return nilHash, errors.New(errors.ERR_PROCESSING, "Failed to send new transaction: %w", err)
+		return nilHash, errors.NewProcessingError("Failed to send new transaction: %w", err)
 	}
 
 	return *newTx.TxIDChainHash(), nil
@@ -440,7 +439,7 @@ func CreateAndSendRawTxs(ctx context.Context, node tf.BitcoinNode, count int) ([
 	for i := 0; i < count; i++ {
 		tx, err := CreateAndSendRawTx(ctx, node)
 		if err != nil {
-			return nil, errors.New(errors.ERR_PROCESSING, "error creating raw transaction : %w", err)
+			return nil, errors.NewProcessingError("error creating raw transaction : %w", err)
 		}
 		txHashes = append(txHashes, tx)
 		time.Sleep(1 * time.Second) // Wait 10 seconds between transactions

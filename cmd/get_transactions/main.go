@@ -72,7 +72,7 @@ func main() {
 	logger.Infof("Block data: %v", block)
 
 	if len(block.Subtrees) == 0 {
-		panic(errors.New(errors.ERR_SUBTREE_ERROR, "no subtrees"))
+		panic(errors.NewSubtreeError("no subtrees"))
 	}
 
 	resp, err = DoHTTPRequest(context.Background(), fmt.Sprintf("%s/subtree/%s/json", baseUrl, block.Subtrees[0]), nil, nil, nil)
@@ -95,7 +95,7 @@ func main() {
 		//g.Go(func() error {
 		missingTxsBatch, err := getMissingTransactionsBatch(context.Background(), missingTxHashesBatch, baseUrl)
 		if err != nil {
-			panic(errors.New(errors.ERR_TX_NOT_FOUND, "[getMissingTransactions] failed to get missing transactions batch", err))
+			panic(errors.NewTxNotFoundError("[getMissingTransactions] failed to get missing transactions batch", err))
 		}
 
 		logger.Infof("[getMissingTransactions] got %d txs from other miner", len(missingTxsBatch))
@@ -119,7 +119,7 @@ func getMissingTransactionsBatch(ctx context.Context, txHashes []subtreeNodes, b
 	for idx, txHash := range txHashes {
 		hash, err := chainhash.NewHashFromStr(txHash.TxID)
 		if err != nil {
-			return nil, errors.New(errors.ERR_PROCESSING, "[getMissingTransactionsBatch] failed to parse tx hash", err)
+			return nil, errors.NewProcessingError("[getMissingTransactionsBatch] failed to parse tx hash", err)
 		}
 		copy(txIDBytes[idx*32:(idx+1)*32], hash[:])
 	}
@@ -131,13 +131,13 @@ func getMissingTransactionsBatch(ctx context.Context, txHashes []subtreeNodes, b
 
 	body, err := DoHTTPRequestBodyReader(ctx, url, txIDBytes)
 	if err != nil {
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "[getMissingTransactionsBatch] failed to do http request", err)
+		return nil, errors.NewServiceError("[getMissingTransactionsBatch] failed to do http request", err)
 	}
 	defer body.Close()
 
 	b, err := io.ReadAll(body)
 	if err != nil {
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "[getMissingTransactionsBatch] failed to read body", err)
+		return nil, errors.NewServiceError("[getMissingTransactionsBatch] failed to read body", err)
 	}
 	//logger.Infof("[getMissingTransactionsBatch] got bytes: %s", string(b))
 	buf := bytes.NewReader(b)
@@ -152,7 +152,7 @@ func getMissingTransactionsBatch(ctx context.Context, txHashes []subtreeNodes, b
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, errors.New(errors.ERR_PROCESSING, "[getMissingTransactionsBatch] failed to read transaction from body", err)
+			return nil, errors.NewProcessingError("[getMissingTransactionsBatch] failed to read transaction from body", err)
 		}
 
 		missingTxs = append(missingTxs, tx)
@@ -168,11 +168,11 @@ func readTxFromReader(body io.Reader) (tx *bt.Tx, err error) {
 		if r := recover(); r != nil {
 			switch x := r.(type) {
 			case string:
-				err = errors.New(errors.ERR_PROCESSING, x)
+				err = errors.NewProcessingError(x)
 			case error:
 				err = x
 			default:
-				err = errors.New(errors.ERR_UNKNOWN, "unknown panic: %v", r)
+				err = errors.NewUnknownError("unknown panic: %v", r)
 			}
 		}
 	}()
@@ -197,7 +197,7 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 	httpClient := &http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "failed to create http request", err)
+		return nil, errors.NewServiceError("failed to create http request", err)
 	}
 
 	// write request body
@@ -207,17 +207,17 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "failed to do http request", err)
+		return nil, errors.NewServiceError("failed to do http request", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "http request [%s] returned status code [%d]", url, resp.StatusCode)
+		return nil, errors.NewServiceError("http request [%s] returned status code [%d]", url, resp.StatusCode)
 	}
 
 	blockBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "failed to read http response body", err)
+		return nil, errors.NewServiceError("failed to read http response body", err)
 	}
 
 	return blockBytes, nil
@@ -227,7 +227,7 @@ func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]b
 	httpClient := &http.Client{}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "failed to create http request", err)
+		return nil, errors.NewServiceError("failed to create http request", err)
 	}
 
 	// write request body
@@ -238,17 +238,17 @@ func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]b
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "failed to do http request", err)
+		return nil, errors.NewServiceError("failed to do http request", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		if resp.Body != nil {
 			b, _ := io.ReadAll(resp.Body)
 			if b != nil {
-				return nil, errors.New(errors.ERR_SERVICE_ERROR, "http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b), err)
+				return nil, errors.NewServiceError("http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b), err)
 			}
 		}
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "http request [%s] returned status code [%d]", url, resp.StatusCode)
+		return nil, errors.NewServiceError("http request [%s] returned status code [%d]", url, resp.StatusCode)
 	}
 
 	return resp.Body, nil

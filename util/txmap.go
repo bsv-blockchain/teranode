@@ -113,7 +113,7 @@ func (s *SwissMapUint64) Put(hash [32]byte, n uint64) error {
 
 	exists := s.m.Has(hash)
 	if exists {
-		return errors.New(errors.ERR_TX_ALREADY_EXISTS, "hash already exists in map: %v", hash)
+		return errors.NewTxAlreadyExistsError("hash already exists in map: %v", hash)
 	}
 
 	s.m.Put(hash, n)

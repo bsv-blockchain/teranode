@@ -23,9 +23,9 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return errors.New(errors.ERR_STORAGE_ERROR, "timeout un-spending %d of %d utxos", i, len(spends))
+				return errors.NewStorageError("timeout un-spending %d of %d utxos", i, len(spends))
 			}
-			return errors.New(errors.ERR_STORAGE_ERROR, "context cancelled un-spending %d of %d utxos", i, len(spends))
+			return errors.NewStorageError("context cancelled un-spending %d of %d utxos", i, len(spends))
 		default:
 			s.logger.Warnf("un-spending utxo %s of tx %s:%d, spending tx: %s", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingTxID.String())
 			if err = s.unSpendLua(spend); err != nil {
@@ -50,7 +50,7 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 	key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", err.Error()).Inc()
-		return errors.New(errors.ERR_PROCESSING, "error in aerospike NewKey", err)
+		return errors.NewProcessingError("error in aerospike NewKey", err)
 	}
 
 	offset := s.calculateOffsetForOutput(spend.Vout)
@@ -62,13 +62,13 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 
 	if err != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", err.Error()).Inc()
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike unspend record", err)
+		return errors.NewStorageError("error in aerospike unspend record", err)
 	}
 
 	responseMsg, ok := ret.(string)
 	if !ok {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "response not string").Inc()
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike unspend record", err)
+		return errors.NewStorageError("error in aerospike unspend record", err)
 	}
 
 	responseMsgParts := strings.Split(responseMsg, ":")
@@ -80,11 +80,11 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 
 	case "ERROR":
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike unspend record: %s", responseMsg)
+		return errors.NewStorageError("error in aerospike unspend record: %s", responseMsg)
 
 	default:
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "default response").Inc()
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike unspend record: %s", responseMsg)
+		return errors.NewStorageError("error in aerospike unspend record: %s", responseMsg)
 	}
 
 	prometheusUtxoMapReset.Inc()

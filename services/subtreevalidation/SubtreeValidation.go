@@ -160,7 +160,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 		if r := recover(); r != nil {
 			switch x := r.(type) {
 			case string:
-				err = errors.New(errors.ERR_UNKNOWN, x)
+				err = errors.NewUnknownError(x)
 			case error:
 				err = x
 			default:
@@ -177,55 +177,6 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 
 	return tx, nil
 }
-
-// func (u *Server) getMissingTransaction(ctx context.Context, txHash *chainhash.Hash, baseUrl string) (*bt.Tx, error) {
-// 	//startTotal, stat, ctx := util.StartStatFromContext(ctx, "getMissingTransaction")
-// 	defer func() {
-// 		//stat.AddTime(startTotal)
-// 	}()
-
-// 	// get transaction from network over http using the baseUrl
-// 	if baseUrl == "" {
-// 		return nil, errors.NewError("[getMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
-// 	}
-
-// 	//start := gocore.CurrentTime()
-// 	alreadyHaveTransaction := true
-// 	txBytes, err := u.txStore.Get(ctx, txHash[:])
-// 	//stat.NewStat("getTxFromStore").AddTime(start)
-// 	if txBytes == nil || err != nil {
-// 		alreadyHaveTransaction = false
-
-// 		// do http request to baseUrl + txHash.String()
-// 		u.logger.Infof("[getMissingTransaction][%s] getting tx from other miner", txHash.String(), baseUrl)
-// 		url := fmt.Sprintf("%s/tx/%s", baseUrl, txHash.String())
-// 		//startM := gocore.CurrentTime()
-// 		//statM := stat.NewStat("http fetch missing tx")
-// 		txBytes, err = util.DoHTTPRequest(ctx, url)
-// 		//statM.AddTime(startM)
-// 		if err != nil {
-// 			return nil, errors.Join(errors.NewError("[getMissingTransaction][%s] failed to do http request", txHash.String()), err)
-// 		}
-// 	}
-
-// 	// validate the transaction by creating a transaction object
-// 	tx, err := bt.NewTxFromBytes(txBytes)
-// 	if err != nil {
-// 		return nil, errors.NewError("[getMissingTransaction][%s] failed to create transaction from bytes [%s]", txHash.String(), err.Error())
-// 	}
-
-// 	if !alreadyHaveTransaction {
-// 		//start = gocore.CurrentTime()
-// 		// store the transaction, we did not get it via propagation
-// 		err = u.txStore.Set(ctx, txHash[:], txBytes)
-// 		//stat.NewStat("storeTx").AddTime(start)
-// 		if err != nil {
-// 			return nil, errors.NewError("[getMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
-// 		}
-// 	}
-
-// 	return tx, nil
-// }
 
 func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32) (txMeta *meta.Data, err error) {
 	startTotal, stat, ctx := tracing.StartStatFromContext(ctx, "getMissingTransaction")
@@ -297,7 +248,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		subtreeExists, err := u.GetSubtreeExists(spanCtx, &v.SubtreeHash)
 		stat.NewStat("1. subtreeExists").AddTime(start)
 		if err != nil {
-			return errors.New(errors.ERR_STORAGE_ERROR, "[validateSubtreeInternal][%s] failed to check if subtree exists in store", v.SubtreeHash.String(), err)
+			return errors.NewStorageError("[validateSubtreeInternal][%s] failed to check if subtree exists in store", v.SubtreeHash.String(), err)
 		}
 		if subtreeExists {
 			// subtree already exists in store, which means it's valid
@@ -315,7 +266,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 					u.logger.Warnf("[validateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
 					time.Sleep(backoff)
 				} else {
-					return errors.New(errors.ERR_SERVICE_ERROR, "[validateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String(), err)
+					return errors.NewServiceError("[validateSubtreeInternal][%s] failed to get subtree from network", v.SubtreeHash.String(), err)
 				}
 			} else {
 				break
@@ -383,7 +334,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 				continue
 			}
-			return errors.New(errors.ERR_ERROR, "[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
+			return errors.NewError("[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
 		}
 
 		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
@@ -396,7 +347,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 			missed, err = u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, batched, failFast)
 			if err != nil {
-				return errors.New(errors.ERR_PROCESSING, "[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from store", v.SubtreeHash.String(), attempt, err)
+				return errors.NewProcessingError("[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from store", v.SubtreeHash.String(), attempt, err)
 			}
 		}
 

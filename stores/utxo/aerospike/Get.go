@@ -72,7 +72,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 			if ok && len(b) == 64 {
 				spendingTxId, err = chainhash.NewHash(b[32:])
 				if err != nil {
-					return nil, errors.New(errors.ERR_PROCESSING, "chain hash error", err)
+					return nil, errors.NewProcessingError("chain hash error", err)
 				}
 			}
 		}
@@ -134,7 +134,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
 			tx.Inputs[i] = &bt.Input{}
 			_, err := tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 			if err != nil {
-				return nil, errors.New(errors.ERR_TX_INVALID, "could not read input: %v", err)
+				return nil, errors.NewTxInvalidError("could not read input: %v", err)
 			}
 		}
 	}
@@ -147,7 +147,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
 			tx.Outputs[i] = &bt.Output{}
 			_, err := tx.Outputs[i].ReadFrom(bytes.NewReader(output))
 			if err != nil {
-				return nil, errors.New(errors.ERR_TX_INVALID, "could not read output: %v", err)
+				return nil, errors.NewTxInvalidError("could not read output: %v", err)
 			}
 		}
 	}
@@ -194,7 +194,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 	for idx, item := range items {
 		key, err := aerospike.NewKey(s.namespace, s.setName, item.Hash[:])
 		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta", err)
+			return errors.NewProcessingError("failed to init new aerospike key for txMeta", err)
 		}
 
 		bins := []string{"tx", "fee", "sizeInBytes", "parentTxHashes", "blockIDs", "isCoinbase"}
@@ -213,7 +213,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records: %w", err)
+		return errors.NewStorageError("error in aerospike map store batch records: %w", err)
 	}
 
 	for idx, batchRecord := range batchRecords {
@@ -222,7 +222,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 			items[idx].Data = nil
 			if !model.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
 				if errors.Is(err, aerospike.ErrKeyNotFound) {
-					items[idx].Err = errors.New(errors.ERR_TX_NOT_FOUND, "%v not found", items[idx].Hash)
+					items[idx].Err = errors.NewTxNotFoundError("%v not found", items[idx].Hash)
 				} else {
 					items[idx].Err = err
 				}
@@ -244,13 +244,13 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 					options.WithFileExtension("tx"),
 				)
 				if err != nil {
-					items[idx].Err = errors.New(errors.ERR_STORAGE_ERROR, "could not get tx from external store", err)
+					items[idx].Err = errors.NewStorageError("could not get tx from external store", err)
 					continue
 				}
 
 				_, err = externalTx.ReadFrom(reader)
 				if err != nil {
-					items[idx].Err = errors.New(errors.ERR_TX_INVALID, "could not read tx from reader", err)
+					items[idx].Err = errors.NewTxInvalidError("could not read tx from reader", err)
 					continue
 				}
 			}
@@ -264,7 +264,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 					} else {
 						tx, txErr := s.getTxFromBins(bins)
 						if txErr != nil {
-							return errors.New(errors.ERR_TX_INVALID, "invalid tx: %v", txErr)
+							return errors.NewTxInvalidError("invalid tx: %v", txErr)
 						}
 						items[idx].Data.Tx = tx
 					}
@@ -330,7 +330,7 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 	for idx, item := range outpoints {
 		key, err := aerospike.NewKey(s.namespace, s.setName, item.PreviousTxID[:])
 		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "failed to init new aerospike key for txMeta: %w", err)
+			return errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err)
 		}
 
 		bins := []string{"version", "locktime", "inputs", "outputs", "external"}
@@ -341,13 +341,13 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike map store batch records: %w", err)
+		return errors.NewStorageError("error in aerospike map store batch records: %w", err)
 	}
 
 	for idx, batchRecordIfc := range batchRecords {
 		batchRecord := batchRecordIfc.BatchRec()
 		if batchRecord.Err != nil {
-			return errors.New(errors.ERR_PROCESSING, "error in aerospike map store batch record: %w", batchRecord.Err)
+			return errors.NewProcessingError("error in aerospike map store batch record: %w", batchRecord.Err)
 		}
 
 		bins := batchRecord.Record.Bins
@@ -364,18 +364,18 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 				options.WithFileExtension("tx"),
 			)
 			if err != nil {
-				return errors.New(errors.ERR_STORAGE_ERROR, "could not get tx from external store", err)
+				return errors.NewStorageError("could not get tx from external store", err)
 			}
 
 			_, err = previousTx.ReadFrom(reader)
 			if err != nil {
-				return errors.New(errors.ERR_TX_INVALID, "could not read tx from reader", err)
+				return errors.NewTxInvalidError("could not read tx from reader", err)
 			}
 
 		} else {
 			previousTx, err = s.getTxFromBins(bins)
 			if err != nil {
-				return errors.New(errors.ERR_TX_INVALID, "invalid tx: %v", err)
+				return errors.NewTxInvalidError("invalid tx: %v", err)
 			}
 		}
 

@@ -214,29 +214,29 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		// check whether this is a postgres exists constraint error
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" { // Duplicate constraint violation
-			return 0, 0, errors.New(errors.ERR_BLOCK_EXISTS, "block already exists in the database: %s", block.Hash().String(), err)
+			return 0, 0, errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
 		}
 
 		// check whether this is a sqlite exists constraint error
 		var sqliteErr *sqlite.Error
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite_errors.SQLITE_CONSTRAINT {
-			return 0, 0, errors.New(errors.ERR_BLOCK_EXISTS, "block already exists in the database: %s", block.Hash().String(), err)
+			return 0, 0, errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
 		}
 
 		// otherwise, return the generic error
-		return 0, 0, errors.New(errors.ERR_STORAGE_ERROR, "failed to store block", err)
+		return 0, 0, errors.NewStorageError("failed to store block", err)
 	}
 
 	defer rows.Close()
 
 	rowFound := rows.Next()
 	if !rowFound {
-		return 0, 0, errors.New(errors.ERR_BLOCK_EXISTS, "block already exists: %s", block.Hash())
+		return 0, 0, errors.NewBlockExistsError("block already exists: %s", block.Hash())
 	}
 
 	var newBlockId uint64
 	if err = rows.Scan(&newBlockId); err != nil {
-		return 0, 0, errors.New(errors.ERR_STORAGE_ERROR, "failed to scan new block id", err)
+		return 0, 0, errors.NewStorageError("failed to scan new block id", err)
 	}
 
 	return newBlockId, height, nil

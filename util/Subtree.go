@@ -96,7 +96,7 @@ func DeserializeNodesFromReader(reader io.Reader) (subtreeBytes []byte, err erro
 	// total read at once = len(st.rootHash[:]) + 8 + 8 + 8
 	byteBuffer := make([]byte, chainhash.HashSize+24)
 	if _, err = io.ReadFull(buf, byteBuffer); err != nil {
-		return nil, errors.NewSubtreeError("unable to read subtree root information : %v", err)
+		return nil, errors.NewSubtreeError("unable to read subtree root information", err)
 	}
 
 	numLeaves := binary.LittleEndian.Uint64(byteBuffer[chainhash.HashSize+16 : chainhash.HashSize+24])
@@ -104,7 +104,7 @@ func DeserializeNodesFromReader(reader io.Reader) (subtreeBytes []byte, err erro
 	byteBuffer = byteBuffer[8:] // reduce read byteBuffer size by 8
 	for i := uint64(0); i < numLeaves; i++ {
 		if _, err = io.ReadFull(buf, byteBuffer); err != nil {
-			return nil, errors.NewSubtreeError("unable to read subtree node information : %v", err)
+			return nil, errors.NewSubtreeError("unable to read subtree node information", err)
 		}
 		copy(subtreeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize], byteBuffer[:chainhash.HashSize])
 	}

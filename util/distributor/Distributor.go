@@ -100,7 +100,7 @@ func getPropagationServers(ctx context.Context, logger ulogger.Logger) (map[stri
 	addresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 
 	if len(addresses) == 0 {
-		return nil, errors.New(errors.ERR_SERVICE_ERROR, "no propagation server addresses found")
+		return nil, errors.NewServiceError("no propagation server addresses found")
 	}
 
 	propagationServers := make(map[string]*propagation.Client)
@@ -351,7 +351,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 		failurePercentage := float32(errorCount) / float32(len(d.propagationServers)) * 100
 		if failurePercentage > float32(d.failureTolerance) {
-			return responses, errors.New(errors.ERR_PROCESSING, "error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs)
+			return responses, errors.NewProcessingError("error sending transaction %s to %.2f%% of the propagation servers: %v", tx.TxIDChainHash().String(), failurePercentage, errs)
 		} else if errorCount > 0 {
 			d.logger.Errorf("error(s) distributing transaction %s: %v", tx.TxIDChainHash().String(), errs)
 		}

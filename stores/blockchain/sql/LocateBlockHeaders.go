@@ -21,7 +21,7 @@ func (s *SQL) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash,
 	maxHashes uint32) ([]*model.BlockHeader, error) {
 
 	if maxHashes == 0 {
-		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "maxHashes must be greater than 0")
+		return nil, errors.NewInvalidArgumentError("maxHashes must be greater than 0")
 	}
 
 	var foundBlock *chainhash.Hash

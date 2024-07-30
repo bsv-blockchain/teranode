@@ -104,30 +104,30 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.ErrBlockNotFound
 		}
-		return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to get block by height", err)
+		return nil, errors.NewStorageError("failed to get block by height", err)
 	}
 
 	block.Header.Bits = model.NewNBitFromSlice(nBits)
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "failed to convert hashPrevBlock: %s", utils.ReverseAndHexEncodeSlice(hashPrevBlock), err)
+		return nil, errors.NewInvalidArgumentError("failed to convert hashPrevBlock: %s", utils.ReverseAndHexEncodeSlice(hashPrevBlock), err)
 	}
 	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "failed to convert hashMerkleRoot: %s", utils.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
+		return nil, errors.NewInvalidArgumentError("failed to convert hashMerkleRoot: %s", utils.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
 	}
 	block.TransactionCount = transactionCount
 	block.SizeInBytes = sizeInBytes
 
 	block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
 	if err != nil {
-		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "failed to convert coinbaseTx", err)
+		return nil, errors.NewInvalidArgumentError("failed to convert coinbaseTx", err)
 	}
 
 	err = block.SubTreesFromBytes(subtreeBytes)
 	if err != nil {
-		return nil, errors.New(errors.ERR_INVALID_ARGUMENT, "failed to convert subtrees", err)
+		return nil, errors.NewInvalidArgumentError("failed to convert subtrees", err)
 	}
 
 	s.responseCache.Set(cacheId, block, s.cacheTTL)

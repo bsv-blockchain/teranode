@@ -108,7 +108,7 @@ func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, _ *m
 func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, w *io.PipeWriter) error {
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "[writeTransactionsViaSubtreeStore] error getting subtree %s from store: %w", subtreeHash.String(), err)
+		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error getting subtree %s from store: %w", subtreeHash.String(), err)
 	}
 	defer func() {
 		_ = subtreeReader.Close()
@@ -117,7 +117,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, bl
 	subtree := util.Subtree{}
 	err = subtree.DeserializeFromReader(subtreeReader)
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "[writeTransactionsViaSubtreeStore] error deserializing subtree: %w", err)
+		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error deserializing subtree: %w", err)
 	}
 
 	// Get the subtree hashes if they were passed in (SubtreeFound() passes them in, BlockFound does not)
@@ -136,30 +136,30 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, bl
 	// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 	missed, err := repo.getTxs(ctx, txHashes, txMetaSlice)
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "[writeTransactionsViaSubtreeStore][%s] failed to get tx meta from store", subtreeHash.String(), err)
+		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore][%s] failed to get tx meta from store", subtreeHash.String(), err)
 	}
 
 	if missed > 0 {
-		return errors.New(errors.ERR_PROCESSING, "[writeTransactionsViaSubtreeStore][%s] missing tx meta", subtreeHash.String())
+		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore][%s] missing tx meta", subtreeHash.String())
 	}
 
 	for i := 0; i < len(txMetaSlice); i++ {
 		if model.CoinbasePlaceholderHash.Equal(txHashes[i]) {
 			// The coinbase tx is not in the txmeta store so we add in a special coinbase placeholder tx
 			if i != 0 {
-				return errors.New(errors.ERR_PROCESSING, "[writeTransactionsViaSubtreeStore] coinbase tx is not first in subtree (%d)", i)
+				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] coinbase tx is not first in subtree (%d)", i)
 			}
 
 			// Write coinbase tx
 			if _, err := w.Write(block.CoinbaseTx.Bytes()); err != nil {
-				return errors.New(errors.ERR_PROCESSING, "[writeTransactionsViaSubtreeStore] error writing coinbase tx: %w", err)
+				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing coinbase tx: %w", err)
 			}
 
 		} else {
 
 			// Write regular tx
 			if _, err := w.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
-				return errors.New(errors.ERR_PROCESSING, "[writeTransactionsViaSubtreeStore] error writing tx[%d]: %v)", i, err)
+				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing tx[%d]: %v)", i, err)
 			}
 		}
 	}
@@ -169,7 +169,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, bl
 
 func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
-		return 0, errors.New(errors.ERR_PROCESSING, "[processTxMetaUsingStore] txHashes and txMetaSlice must be the same length")
+		return 0, errors.NewProcessingError("[processTxMetaUsingStore] txHashes and txMetaSlice must be the same length")
 	}
 
 	start, stat, ctx := tracing.StartStatFromContext(ctx, "processTxMetaUsingStore")

@@ -111,7 +111,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	storeURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil || !found {
-		return errors.NewConfigurationError("could not get utxostore URL: %v", err)
+		return errors.NewConfigurationError("could not get utxostore URL", err)
 	}
 
 	expiration := uint64(0)
@@ -119,7 +119,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	if expirationValue != "" {
 		expiration, err = strconv.ParseUint(expirationValue, 10, 64)
 		if err != nil {
-			return errors.NewConfigurationError("could not parse expiration %s: %v", expirationValue, err)
+			return errors.NewConfigurationError("could not parse expiration %s", expirationValue, err)
 		}
 	}
 

@@ -73,7 +73,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 
 					newMissed := missed.Add(1)
 					if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
-						return errors.New(errors.ERR_THRESHOLD_EXCEEDED, "threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
+						return errors.NewThresholdExceededError("threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
 					}
 				}
 			}

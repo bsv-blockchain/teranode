@@ -93,7 +93,7 @@ func (r *Repository) Health(ctx context.Context) (int, string, error) {
 	}
 
 	if len(errs) > 0 {
-		return -1, sb.String(), errors.New(errors.ERR_UNKNOWN, "Health errors occurred")
+		return -1, sb.String(), errors.NewUnknownError("Health errors occurred")
 	}
 
 	return 0, sb.String(), nil

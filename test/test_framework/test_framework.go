@@ -89,57 +89,57 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		coinbaseGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_grpcAddress.%s", node.SETTINGS_CONTEXT))
 		fmt.Println(coinbaseGrpcAddress)
 		if !ok {
-			return errors.New(errors.ERR_CONFIGURATION, "no coinbase_grpcAddress setting found")
+			return errors.NewConfigurationError("no coinbase_grpcAddress setting found")
 		}
 		coinbaseClient, err := cb.NewClientWithAddress(b.Context, logger, getHostAddress(coinbaseGrpcAddress))
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "error creating coinbase client %w", err)
+			return errors.NewConfigurationError("error creating coinbase client %w", err)
 		}
 		b.Nodes[i].CoinbaseClient = *coinbaseClient
 
 		blockchainGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockchain_grpcAddress.%s", node.SETTINGS_CONTEXT))
 		if !ok {
-			return errors.New(errors.ERR_CONFIGURATION, "no blockchain_grpcAddress setting found")
+			return errors.NewConfigurationError("no blockchain_grpcAddress setting found")
 		}
 		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, getHostAddress(blockchainGrpcAddress))
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "error creating blockchain client %w", err)
+			return errors.NewConfigurationError("error creating blockchain client %w", err)
 		}
 		b.Nodes[i].BlockchainClient = blockchainClient
 
 		blockassembly_grpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockassembly_grpcAddress.%s", node.SETTINGS_CONTEXT))
 		if !ok {
-			return errors.New(errors.ERR_CONFIGURATION, "no blockassembly_grpcAddress setting found")
+			return errors.NewConfigurationError("no blockassembly_grpcAddress setting found")
 		}
 		blockassemblyClient := ba.NewClientWithAddress(b.Context, logger, getHostAddress(blockassembly_grpcAddress))
 		b.Nodes[i].BlockassemblyClient = *blockassemblyClient
 
 		propagation_grpcAddress, ok := gocore.Config().Get(fmt.Sprintf("propagation_grpcAddress.%s", node.SETTINGS_CONTEXT))
 		if !ok {
-			return errors.New(errors.ERR_CONFIGURATION, "no propagation_grpcAddress setting found")
+			return errors.NewConfigurationError("no propagation_grpcAddress setting found")
 		}
 		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, getHostAddress(propagation_grpcAddress))
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "error creating distributor client %w", err)
+			return errors.NewConfigurationError("error creating distributor client %w", err)
 		}
 		b.Nodes[i].DistributorClient = *distributorClient
 
 		coinbase_assetGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_assetGrpcAddress.%s", node.SETTINGS_CONTEXT))
 		if !ok {
-			return errors.New(errors.ERR_CONFIGURATION, "no coinbase_assetGrpcAddress setting found")
+			return errors.NewConfigurationError("no coinbase_assetGrpcAddress setting found")
 		}
 		assetClient, err := asset.NewClient(b.Context, logger, getHostAddress(coinbase_assetGrpcAddress))
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "error creating asset client %w", err)
+			return errors.NewConfigurationError("error creating asset client %w", err)
 		}
 		b.Nodes[i].AssetClient = *assetClient
 
 		subtreesKafkaUrl, err, ok := gocore.Config().GetURL(fmt.Sprintf("kafka_subtreesConfig.%s.run", node.SETTINGS_CONTEXT))
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "no kafka_subtreesConfig setting found")
+			return errors.NewConfigurationError("no kafka_subtreesConfig setting found")
 		}
 		if !ok {
-			return errors.New(errors.ERR_CONFIGURATION, "no kafka_subtreesConfig setting found")
+			return errors.NewConfigurationError("no kafka_subtreesConfig setting found")
 		}
 		kafkaURL, _ := url.Parse(strings.Replace(subtreesKafkaUrl.String(), "kafka-shared", "localhost", 1))
 		kafkaURL, _ = url.Parse(strings.Replace(kafkaURL.String(), "9092", "19093", 1))
@@ -149,41 +149,41 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		blockchainStoreURL, _, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s", node.SETTINGS_CONTEXT))
 		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "error creating blockchain store %w", err)
+			return errors.NewConfigurationError("error creating blockchain store %w", err)
 		}
 		b.Nodes[i].BlockChainDB = blockchainStore
 
 		blockStoreUrl, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.run", node.SETTINGS_CONTEXT))
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "error getting blockstore url %w", err)
+			return errors.NewConfigurationError("error getting blockstore url %w", err)
 		}
 		if !found {
-			return errors.New(errors.ERR_CONFIGURATION, "blockstore config not found")
+			return errors.NewConfigurationError("blockstore config not found")
 		}
 		blockStore, err := blob.NewStore(logger, blockStoreUrl)
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "error creating blockstore %w", err)
+			return errors.NewConfigurationError("error creating blockstore %w", err)
 		}
 		b.Nodes[i].Blockstore = blockStore
 		b.Nodes[i].BlockstoreUrl = blockStoreUrl
 
 		subtreeStoreUrl, err, found := gocore.Config().GetURL(fmt.Sprintf("subtreestore.%s.run", node.SETTINGS_CONTEXT))
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "error getting subtreestore url %w", err)
+			return errors.NewConfigurationError("error getting subtreestore url %w", err)
 		}
 		if !found {
-			return errors.New(errors.ERR_CONFIGURATION, "subtreestore config not found")
+			return errors.NewConfigurationError("subtreestore config not found")
 		}
 		subtreeStore, err := blob.NewStore(logger, subtreeStoreUrl)
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "error creating subtreestore %w", err)
+			return errors.NewConfigurationError("error creating subtreestore %w", err)
 		}
 		b.Nodes[i].SubtreeStore = subtreeStore
 
 		utxoStoreUrl, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SETTINGS_CONTEXT))
 		b.Nodes[i].UtxoStore, _ = utxostore.New(b.Context, logger, utxoStoreUrl)
 		if err != nil {
-			return errors.New(errors.ERR_CONFIGURATION, "error creating utxostore %w", err)
+			return errors.NewConfigurationError("error creating utxostore %w", err)
 		}
 	}
 	return nil

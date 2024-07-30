@@ -3,7 +3,6 @@ package badger
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"time"
 
@@ -225,7 +224,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 		data, err := tx.Get(storeKey)
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return errors.New(errors.ERR_NOT_FOUND, fmt.Sprintf("badger key not found [%s]", utils.ReverseAndHexEncodeSlice(hash)), err)
+				return errors.NewNotFoundError("badger key not found [%s]", utils.ReverseAndHexEncodeSlice(hash), err)
 			}
 			traceSpan.RecordError(err)
 			return err

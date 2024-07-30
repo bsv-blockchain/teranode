@@ -32,7 +32,7 @@ func UTXOHashFromInput(input *bt.Input) (*chainhash.Hash, error) {
 	hash := input.PreviousTxIDChainHash()
 
 	if input.PreviousTxScript == nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "locking script is nil")
+		return nil, errors.NewProcessingError("locking script is nil")
 	}
 
 	return UTXOHash(hash, input.PreviousTxOutIndex, input.PreviousTxScript, input.PreviousTxSatoshis)

@@ -76,7 +76,7 @@ func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
 	for i, output := range tx.Outputs {
 		utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, uint32(i))
 		if utxoErr != nil {
-			return nil, errors.New(errors.ERR_PROCESSING, "error getting output utxo hash: %s", utxoErr)
+			return nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
 		}
 
 		utxoHashes[i] = *utxoHash

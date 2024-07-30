@@ -27,7 +27,7 @@ func (h *HTTP) Search(c echo.Context) error {
 	q := c.QueryParam("q")
 
 	if q == "" {
-		return sendError(c, http.StatusBadRequest, 1, errors.New(errors.ERR_INVALID_ARGUMENT, "missing query parameter"))
+		return sendError(c, http.StatusBadRequest, 1, errors.NewInvalidArgumentError("missing query parameter"))
 	}
 
 	if len(q) == 64 {
@@ -40,7 +40,7 @@ func (h *HTTP) Search(c echo.Context) error {
 		// Check if the hash is a block...
 		header, _, err := h.repository.GetBlockHeader(c.Request().Context(), hash)
 		if err != nil && !errors.Is(err, errors.ErrNotFound) { // We return an error except if it's a not found error
-			return sendError(c, http.StatusBadRequest, 3, errors.NewServiceError("error searching for block: %w", err))
+			return sendError(c, http.StatusBadRequest, 3, errors.NewServiceError("error searching for block", err))
 		}
 
 		if header != nil {
@@ -51,7 +51,7 @@ func (h *HTTP) Search(c echo.Context) error {
 		// Check if it's a transaction
 		tx, err := h.repository.GetTransactionMeta(c.Request().Context(), hash)
 		if err != nil && !errors.Is(err, errors.ErrTxNotFound) {
-			return sendError(c, http.StatusBadRequest, 5, errors.NewServiceError("error searching for tx: %w", err))
+			return sendError(c, http.StatusBadRequest, 5, errors.NewServiceError("error searching for tx", err))
 		}
 
 		if tx != nil {
@@ -63,7 +63,7 @@ func (h *HTTP) Search(c echo.Context) error {
 		subtree, err := h.repository.GetSubtreeBytes(c.Request().Context(), hash)
 		// TODO error handling is still a bit messy, not all implementations are throwing the ErrNotFound correctly
 		if err != nil && !errors.Is(err, errors.ErrNotFound) && !strings.Contains(err.Error(), "not found") {
-			return sendError(c, http.StatusBadRequest, 4, errors.NewServiceError("error searching for subtree: %w", err))
+			return sendError(c, http.StatusBadRequest, 4, errors.NewServiceError("error searching for subtree", err))
 		}
 
 		if subtree != nil {
@@ -76,7 +76,7 @@ func (h *HTTP) Search(c echo.Context) error {
 			UTXOHash: hash,
 		})
 		if err != nil && !errors.Is(err, errors.ErrNotFound) {
-			return sendError(c, http.StatusBadRequest, 6, errors.NewServiceError("error searching for utxo: %w", err))
+			return sendError(c, http.StatusBadRequest, 6, errors.NewServiceError("error searching for utxo", err))
 		}
 
 		if u != nil {
@@ -113,5 +113,5 @@ func (h *HTTP) Search(c echo.Context) error {
 		}
 	}
 
-	return sendError(c, http.StatusBadRequest, 7, errors.New(errors.ERR_UNKNOWN, "query must be a valid hash or block height"))
+	return sendError(c, http.StatusBadRequest, 7, errors.NewUnknownError("query must be a valid hash or block height"))
 }

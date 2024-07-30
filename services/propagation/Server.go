@@ -136,7 +136,7 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 
 	useInterface, err := net.InterfaceByName(ipv6Interface)
 	if err != nil {
-		return errors.NewConfigurationError("error resolving interface: %v", err)
+		return errors.NewConfigurationError("error resolving interface", err)
 	}
 
 	for _, ipv6Address := range strings.Split(ipv6Addresses, ",") {
@@ -439,12 +439,12 @@ func (ps *PropagationServer) processTransaction(cntxt context.Context, req *prop
 
 	// we should store all transactions, if this fails we should not validate the transaction
 	if err = ps.storeTransaction(setCtx, btTx); err != nil {
-		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction: %v", btTx.TxIDChainHash(), err)
+		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
 	// All transactions entering Teranode can be assumed to be after Genesis activation height
 	if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
-		err = errors.NewServiceError("failed validating transaction %v", err)
+		err = errors.NewServiceError("failed validating transaction", err)
 		ps.logger.Debugf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
 
 		prometheusInvalidTransactions.Inc()

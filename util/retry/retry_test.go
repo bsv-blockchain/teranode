@@ -25,14 +25,14 @@ func TestRetry(t *testing.T) {
 	retryOnceFn := func() (string, error) {
 		if staticCallCount == 0 {
 			staticCallCount++
-			return "", errors.New(errors.ERR_PROCESSING, "error")
+			return "", errors.NewProcessingError("error")
 		}
 		return "success", nil
 	}
 
 	// Function that will always fail
 	alwaysFailFn := func() (string, error) {
-		return "", errors.New(errors.ERR_PROCESSING, "persistent error")
+		return "", errors.NewProcessingError("persistent error")
 	}
 
 	retryOpts := WithRetryCount(3)
@@ -130,7 +130,7 @@ func TestRetryTimer(t *testing.T) {
 			f := func() (string, error) {
 				if errorCount < tc.simulateErrors {
 					errorCount++
-					return "", errors.New(errors.ERR_ERROR, "test error")
+					return "", errors.NewError("test error")
 				}
 				return "success", nil
 			}

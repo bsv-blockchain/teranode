@@ -29,7 +29,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		// Lookup block height from blockchain
 		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
 		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "failed to get block header", err)
+			return errors.NewProcessingError("failed to get block header", err)
 		}
 		blockHeight = blockHeaderMeta.Height
 		block.SetHeight(int32(blockHeight))
@@ -51,23 +51,23 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
 	if err := block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
-		return errors.New(errors.ERR_PROCESSING, "failed to serialize header", err)
+		return errors.NewProcessingError("failed to serialize header", err)
 	}
 
 	// create the Teranode compatible block header
 	header, err := model.NewBlockHeaderFromBytes(headerBytes.Bytes())
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "failed to create block header from bytes", err)
+		return errors.NewProcessingError("failed to create block header from bytes", err)
 	}
 
 	var coinbase bytes.Buffer
 	if err = block.Transactions()[0].MsgTx().Serialize(&coinbase); err != nil {
-		return errors.New(errors.ERR_PROCESSING, "failed to serialize coinbase", err)
+		return errors.NewProcessingError("failed to serialize coinbase", err)
 	}
 
 	coinbaseTx, err := bt.NewTxFromBytes(coinbase.Bytes())
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "failed to create bt.Tx for coinbase", err)
+		return errors.NewProcessingError("failed to create bt.Tx for coinbase", err)
 	}
 
 	// validate all subtrees and store all subtree data
@@ -81,7 +81,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	blockSize := block.MsgBlock().SerializeSize()
 	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), uint64(blockSize), blockHeight)
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "failed to create model.NewBlock", err)
+		return errors.NewProcessingError("failed to create model.NewBlock", err)
 	}
 
 	// call the process block wrapper, which will add tracing and logging
@@ -107,7 +107,7 @@ func (sm *SyncManager) processBlock(ctx context.Context, teranodeBlock *model.Bl
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
 	if err := sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height); err != nil {
-		return errors.New(errors.ERR_PROCESSING, "failed to process block", err)
+		return errors.NewProcessingError("failed to process block", err)
 	}
 
 	return nil
@@ -138,7 +138,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	if len(block.Transactions()) > 1 {
 		subtree, err := util.NewIncompleteTreeByLeafCount(len(block.Transactions()))
 		if err != nil {
-			return nil, errors.New(errors.ERR_SUBTREE_ERROR, "failed to create subtree", err)
+			return nil, errors.NewSubtreeError("failed to create subtree", err)
 		}
 
 		if err := subtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
@@ -187,7 +187,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 		// wait for all tx to be processed - we don't need to process errors here
 		if err = g.Wait(); err != nil {
-			return nil, errors.New(errors.ERR_PROCESSING, "failed to process transactions", err)
+			return nil, errors.NewProcessingError("failed to process transactions", err)
 		}
 
 		maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
@@ -214,7 +214,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 		subtreeBytes, err := subtree.Serialize()
 		if err != nil {
-			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to serialize subtree", err)
+			return nil, errors.NewStorageError("failed to serialize subtree", err)
 		}
 		if err = sm.subtreeStore.Set(ctx,
 			subtree.RootHash()[:],
@@ -223,12 +223,12 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			options.WithFileExtension("subtree"),
 			options.WithTTL(2*time.Minute),
 		); err != nil {
-			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to store subtree", err)
+			return nil, errors.NewStorageError("failed to store subtree", err)
 		}
 
 		subtreeDataBytes, err := subtreeData.Serialize()
 		if err != nil {
-			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to serialize subtree data", err)
+			return nil, errors.NewStorageError("failed to serialize subtree data", err)
 		}
 		if err = sm.subtreeStore.Set(ctx,
 			subtreeData.RootHash()[:],
@@ -237,11 +237,11 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			options.WithFileExtension("subtreeData"),
 			options.WithTTL(2*time.Minute),
 		); err != nil {
-			return nil, errors.New(errors.ERR_STORAGE_ERROR, "failed to store subtree data", err)
+			return nil, errors.NewStorageError("failed to store subtree data", err)
 		}
 
 		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "legacy", blockHeight); err != nil {
-			return nil, errors.New(errors.ERR_SUBTREE_ERROR, "failed to check subtree", err)
+			return nil, errors.NewSubtreeError("failed to check subtree", err)
 		}
 
 		subtrees = append(subtrees, subtree.RootHash())

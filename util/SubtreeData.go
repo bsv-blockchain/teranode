@@ -64,7 +64,7 @@ func (s *SubtreeData) RootHash() *chainhash.Hash {
 func (s *SubtreeData) AddTx(tx *bt.Tx, index int) error {
 	// check whether this is set in the main subtree
 	if !s.Subtree.Nodes[index].Hash.Equal(*tx.TxIDChainHash()) {
-		return errors.New(errors.ERR_PROCESSING, "transaction hash does not match subtree node hash")
+		return errors.NewProcessingError("transaction hash does not match subtree node hash")
 	}
 
 	s.Txs[index] = tx
@@ -89,11 +89,11 @@ func (s *SubtreeData) serializeFromReader(buf io.Reader) error {
 			if err == io.EOF {
 				break
 			}
-			return errors.New(errors.ERR_PROCESSING, "error reading transaction", err)
+			return errors.NewProcessingError("error reading transaction", err)
 		}
 
 		if !s.Subtree.Nodes[txIndex].Hash.Equal(*tx.TxIDChainHash()) {
-			return errors.New(errors.ERR_PROCESSING, "transaction hash does not match subtree node hash")
+			return errors.NewProcessingError("transaction hash does not match subtree node hash")
 		}
 
 		s.Txs[txIndex] = tx

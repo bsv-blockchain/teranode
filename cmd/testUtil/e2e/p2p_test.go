@@ -77,7 +77,7 @@ func TestTwoP2PNodes(t *testing.T) {
 
 	sharedKey, ok := gocore.Config().Get("p2p_shared_key")
 	if !ok {
-		panic(errors.New(errors.ERR_PROCESSING, "error getting p2p_shared_key"))
+		panic(errors.NewProcessingError("error getting p2p_shared_key"))
 	}
 	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
 	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
