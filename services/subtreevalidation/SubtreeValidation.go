@@ -131,7 +131,7 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, txHashes []utx
 	url := fmt.Sprintf("%s/txs", baseUrl)
 	body, err := util.DoHTTPRequestBodyReader(ctx, url, txIDBytes)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to do http request"), err)
+		return nil, errors.NewExternalError("[getMissingTransactionsBatch] failed to do http request", err)
 	}
 	defer body.Close()
 
@@ -144,7 +144,7 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, txHashes []utx
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, errors.Join(fmt.Errorf("[getMissingTransactionsBatch] failed to read transaction from body"), err)
+			return nil, errors.NewProcessingError("[getMissingTransactionsBatch] failed to read transaction from body", err)
 		}
 
 		missingTxs = append(missingTxs, tx)
@@ -164,7 +164,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 			case error:
 				err = x
 			default:
-				err = fmt.Errorf("unknown panic: %v", r)
+				err = errors.NewError("unknown panic: %v", r)
 			}
 		}
 	}()
@@ -186,7 +186,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 
 // 	// get transaction from network over http using the baseUrl
 // 	if baseUrl == "" {
-// 		return nil, fmt.Errorf("[getMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
+// 		return nil, errors.NewError("[getMissingTransaction][%s] baseUrl for transaction is empty", txHash.String())
 // 	}
 
 // 	//start := gocore.CurrentTime()
@@ -204,14 +204,14 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // 		txBytes, err = util.DoHTTPRequest(ctx, url)
 // 		//statM.AddTime(startM)
 // 		if err != nil {
-// 			return nil, errors.Join(fmt.Errorf("[getMissingTransaction][%s] failed to do http request", txHash.String()), err)
+// 			return nil, errors.Join(errors.NewError("[getMissingTransaction][%s] failed to do http request", txHash.String()), err)
 // 		}
 // 	}
 
 // 	// validate the transaction by creating a transaction object
 // 	tx, err := bt.NewTxFromBytes(txBytes)
 // 	if err != nil {
-// 		return nil, fmt.Errorf("[getMissingTransaction][%s] failed to create transaction from bytes [%s]", txHash.String(), err.Error())
+// 		return nil, errors.NewError("[getMissingTransaction][%s] failed to create transaction from bytes [%s]", txHash.String(), err.Error())
 // 	}
 
 // 	if !alreadyHaveTransaction {
@@ -220,7 +220,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // 		err = u.txStore.Set(ctx, txHash[:], txBytes)
 // 		//stat.NewStat("storeTx").AddTime(start)
 // 		if err != nil {
-// 			return nil, fmt.Errorf("[getMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
+// 			return nil, errors.NewError("[getMissingTransaction][%s] failed to store transaction [%s]", txHash.String(), err.Error())
 // 		}
 // 	}
 
@@ -236,12 +236,12 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 	}()
 
 	if tx == nil {
-		return nil, fmt.Errorf("[blessMissingTransaction] tx is nil")
+		return nil, errors.NewTxInvalidError("[blessMissingTransaction] tx is nil")
 	}
 	u.logger.Debugf("[blessMissingTransaction][%s] called", tx.TxID())
 
 	if tx.IsCoinbase() {
-		return nil, fmt.Errorf("[blessMissingTransaction][%s] transaction is coinbase", tx.TxID())
+		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s] transaction is coinbase", tx.TxID())
 	}
 
 	// validate the transaction in the validation service
@@ -251,18 +251,18 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 	err = u.validatorClient.Validate(ctx, tx, blockHeight)
 	if err != nil {
 		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
-		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to validate transaction [%s]", tx.TxID(), err.Error())
+		return nil, errors.NewServiceError("[blessMissingTransaction][%s] failed to validate transaction", tx.TxID(), err)
 	}
 
 	start := gocore.CurrentTime()
 	txMeta, err = u.utxoStore.GetMeta(ctx, tx.TxIDChainHash())
 	stat.NewStat("getTxMeta").AddTime(start)
 	if err != nil {
-		return nil, fmt.Errorf("[blessMissingTransaction][%s] failed to get tx meta [%s]", tx.TxID(), err.Error())
+		return nil, errors.NewServiceError("[blessMissingTransaction][%s] failed to get tx meta", tx.TxID(), err)
 	}
 
 	if txMeta == nil {
-		return nil, fmt.Errorf("[blessMissingTransaction][%s] tx meta is nil", tx.TxID())
+		return nil, errors.NewProcessingError("[blessMissingTransaction][%s] tx meta is nil", tx.TxID())
 	}
 
 	return txMeta, nil
@@ -387,7 +387,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		}
 
 		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] [attempt #%d] abandoned - too many missing txmeta entries", v.SubtreeHash.String(), attempt), err)
+			return errors.NewError("[validateSubtreeInternal][%s] [attempt #%d] abandoned - too many missing txmeta entries", v.SubtreeHash.String(), attempt, err)
 		}
 
 		if missed > 0 {
@@ -436,31 +436,31 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		if idx == 0 && txHash.Equal(*model.CoinbasePlaceholderHash) {
 			err = subtree.AddNode(txHash, 0, 0)
 			if err != nil {
-				return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to add coinbase placeholder node to subtree", v.SubtreeHash.String()), err)
+				return errors.NewProcessingError("[validateSubtreeInternal][%s] failed to add coinbase placeholder node to subtree", v.SubtreeHash.String(), err)
 			}
 			continue
 		}
 
 		txMeta = txMetaSlice[idx]
 		if txMeta == nil {
-			return fmt.Errorf("[validateSubtreeInternal][%s] tx meta not found in txMetaSlice at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
+			return errors.NewProcessingError("[validateSubtreeInternal][%s] tx meta not found in txMetaSlice at index %d: %s", v.SubtreeHash.String(), idx, txHash.String())
 		}
 
 		if txMeta.IsCoinbase {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] invalid subtree index for coinbase tx %d", v.SubtreeHash.String(), idx), err)
+			return errors.NewTxInvalidError("[validateSubtreeInternal][%s] invalid subtree index for coinbase tx %d", v.SubtreeHash.String(), idx, err)
 		}
 
 		// finally add the transaction hash and fee to the subtree
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
 		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to add node to subtree / subtreeMeta", v.SubtreeHash.String()), err)
+			return errors.NewProcessingError("[validateSubtreeInternal][%s] failed to add node to subtree / subtreeMeta", v.SubtreeHash.String(), err)
 		}
 
 		// add the txMeta data we need for block validation
 		subtreeIdx := subtree.Length() - 1
 		err = subtreeMeta.SetParentTxHashes(subtreeIdx, txMeta.ParentTxHashes)
 		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to set parent tx hash in subtreeMeta", v.SubtreeHash.String()), err)
+			return errors.NewProcessingError("[validateSubtreeInternal][%s] failed to set parent tx hash in subtreeMeta", v.SubtreeHash.String(), err)
 		}
 	}
 	stat.NewStat("6. addAllTxHashFeeSizesToSubtree").AddTime(start)
@@ -468,7 +468,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// does the merkle tree give the correct root?
 	merkleRoot := subtree.RootHash()
 	if !merkleRoot.IsEqual(&v.SubtreeHash) {
-		return fmt.Errorf("[validateSubtreeInternal][%s] subtree root hash does not match [%s]", v.SubtreeHash.String(), merkleRoot.String())
+		return errors.NewProcessingError("[validateSubtreeInternal][%s] subtree root hash does not match [%s]", v.SubtreeHash.String(), merkleRoot.String())
 	}
 
 	//
@@ -477,7 +477,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	u.logger.Infof("[validateSubtreeInternal][%s] serialize subtree meta", v.SubtreeHash.String())
 	completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to serialize subtree meta", v.SubtreeHash.String()), err)
+		return errors.NewProcessingError("[validateSubtreeInternal][%s] failed to serialize subtree meta", v.SubtreeHash.String(), err)
 	}
 
 	start = gocore.CurrentTime()
@@ -485,7 +485,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeMetaBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("meta"))
 	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String()), err)
+		return errors.NewStorageError("[validateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String(), err)
 	}
 
 	//
@@ -494,7 +494,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	u.logger.Infof("[validateSubtreeInternal][%s] serialize subtree", v.SubtreeHash.String())
 	completeSubtreeBytes, err := subtree.Serialize()
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String()), err)
+		return errors.NewProcessingError("[validateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String(), err)
 	}
 
 	start = gocore.CurrentTime()
@@ -502,7 +502,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	err = u.subtreeStore.Set(spanCtx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL))
 	stat.NewStat("8. storeSubtree").AddTime(start)
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String()), err)
+		return errors.NewStorageError("[validateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String(), err)
 	}
 
 	_ = u.SetSubtreeExists(&v.SubtreeHash)
@@ -515,7 +515,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, subtreeHash *chainhash.Hash, baseUrl string) ([]chainhash.Hash, error) {
 	if baseUrl == "" {
-		return nil, fmt.Errorf("[getSubtreeTxHashes][%s] baseUrl for subtree is empty", subtreeHash.String())
+		return nil, errors.NewInvalidArgumentError("[getSubtreeTxHashes][%s] baseUrl for subtree is empty", subtreeHash.String())
 	}
 
 	start := gocore.CurrentTime()
@@ -525,7 +525,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	// TODO add the metric for how long this takes
 	body, err := util.DoHTTPRequestBodyReader(spanCtx, url)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("[getSubtreeTxHashes][%s] failed to do http request", subtreeHash.String()), err)
+		return nil, errors.NewExternalError("[getSubtreeTxHashes][%s] failed to do http request", subtreeHash.String(), err)
 	}
 	defer body.Close()
 
@@ -548,9 +548,9 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 				break
 			}
 			if errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, fmt.Errorf("[getSubtreeTxHashes][%s] unexpected EOF: partial hash read", subtreeHash.String())
+				return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] unexpected EOF: partial hash read", subtreeHash.String())
 			}
-			return nil, fmt.Errorf("[getSubtreeTxHashes][%s] error reading stream: %v", subtreeHash.String(), err)
+			return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] error reading stream", subtreeHash.String(), err)
 		}
 	}
 
@@ -578,19 +578,19 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 		options.WithFileExtension("subtreeData"),
 	)
 	if err != nil {
-		return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to check if subtreeData exists", subtreeHash.String()), err)
+		return errors.NewProcessingError("[validateSubtree][%s] failed to check if subtreeData exists", subtreeHash.String(), err)
 	}
 	if subtreeDataExists {
 		u.logger.Infof("[validateSubtree][%s] fetching %d missing txs from subtreeData file", subtreeHash.String(), len(missingTxHashes))
 		missingTxs, err = u.getMissingTransactionsFromFile(spanCtx, subtreeHash, missingTxHashes)
 		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions from subtreeData", subtreeHash.String()), err)
+			return errors.NewProcessingError("[validateSubtree][%s] failed to get missing transactions from subtreeData", subtreeHash.String(), err)
 		}
 	} else {
 		u.logger.Infof("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
 		missingTxs, err = u.getMissingTransactions(spanCtx, missingTxHashes, baseUrl)
 		if err != nil {
-			return errors.Join(fmt.Errorf("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String()), err)
+			return errors.NewProcessingError("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String(), err)
 		}
 	}
 
@@ -603,12 +603,12 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 
 	for _, mTx = range missingTxs {
 		if mTx.tx == nil {
-			return fmt.Errorf("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
+			return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
 		}
 
 		txMeta, err = u.blessMissingTransaction(spanCtx, mTx.tx, blockHeight)
 		if err != nil {
-			return fmt.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %w", subtreeHash.String(), mTx.tx.TxIDChainHash().String(), err)
+			return errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String(), err)
 		}
 
 		if txMeta == nil {
@@ -641,13 +641,13 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 		options.WithFileExtension("subtree"),
 	)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsFromFile] failed to get subtree from store"), err)
+		return nil, errors.NewStorageError("[getMissingTransactionsFromFile] failed to get subtree from store", err)
 	}
 	defer subtreeReader.Close()
 
 	subtree := &util.Subtree{}
 	if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
-		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsFromFile] failed to deserialize subtree"), err)
+		return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] failed to deserialize subtree", err)
 	}
 
 	// get the subtreeData
@@ -657,13 +657,13 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 		options.WithFileExtension("subtreeData"),
 	)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsFromFile] failed to get subtreeData from store"), err)
+		return nil, errors.NewStorageError("[getMissingTransactionsFromFile] failed to get subtreeData from store", err)
 	}
 	defer subtreeDataReader.Close()
 
 	subtreeData, err := util.NewSubtreeDataFromReader(subtree, subtreeDataReader)
 	if err != nil {
-		return nil, errors.Join(fmt.Errorf("[getMissingTransactionsFromFile] failed to get subtreeData from reader"), err)
+		return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] failed to get subtreeData from reader", err)
 	}
 
 	subtreeLookupMap := subtree.GetMap()
@@ -673,11 +673,11 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	for _, mTx := range missingTxHashes {
 		txIdx, ok := subtreeLookupMap.Get(mTx.Hash)
 		if !ok {
-			return nil, fmt.Errorf("[getMissingTransactionsFromFile] missing transaction [%s]", mTx.Hash.String())
+			return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] missing transaction [%s]", mTx.Hash.String())
 		}
 		tx := subtreeData.Txs[txIdx]
 		if tx == nil {
-			return nil, fmt.Errorf("[getMissingTransactionsFromFile] #2 missing transaction is nil [%s]", mTx.Hash.String())
+			return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] #2 missing transaction is nil [%s]", mTx.Hash.String())
 		}
 		missingTxs = append(missingTxs, missingTx{tx: tx, idx: mTx.Idx})
 	}
@@ -706,14 +706,14 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []u
 		g.Go(func() error {
 			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, missingTxHashesBatch, baseUrl)
 			if err != nil {
-				return errors.Join(fmt.Errorf("[getMissingTransactions] failed to get missing transactions batch"), err)
+				return errors.NewProcessingError("[getMissingTransactions] failed to get missing transactions batch", err)
 			}
 
 			missingTxsMu.Lock()
 			for _, tx := range missingTxsBatch {
 				if tx == nil {
 					missingTxsMu.Unlock()
-					return fmt.Errorf("[getMissingTransactions] #1 missing transaction is nil")
+					return errors.NewProcessingError("[getMissingTransactions] #1 missing transaction is nil")
 				}
 				missingTxsMap[*tx.TxIDChainHash()] = tx
 			}
@@ -724,7 +724,7 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []u
 	}
 
 	if err = g.Wait(); err != nil {
-		return nil, errors.Join(fmt.Errorf("[blessMissingTransaction] failed to get all transactions"), err)
+		return nil, errors.NewProcessingError("[blessMissingTransaction] failed to get all transactions", err)
 	}
 
 	// populate the missingTx slice with the tx data
@@ -732,10 +732,10 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []u
 	for _, mTx := range missingTxHashes {
 		tx, ok := missingTxsMap[mTx.Hash]
 		if !ok {
-			return nil, fmt.Errorf("[blessMissingTransaction] missing transaction [%s]", mTx.Hash.String())
+			return nil, errors.NewProcessingError("[blessMissingTransaction] missing transaction [%s]", mTx.Hash.String())
 		}
 		if tx == nil {
-			return nil, fmt.Errorf("[blessMissingTransaction] #3 missing transaction is nil [%s]", mTx.Hash.String())
+			return nil, errors.NewProcessingError("[blessMissingTransaction] #3 missing transaction is nil [%s]", mTx.Hash.String())
 		}
 		missingTxs = append(missingTxs, missingTx{tx: tx, idx: mTx.Idx})
 	}

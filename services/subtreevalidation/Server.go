@@ -2,7 +2,6 @@ package subtreevalidation
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"runtime"
 	"strconv"
@@ -201,11 +200,11 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 
 	hash, err := chainhash.NewHash(request.Hash[:])
 	if err != nil {
-		return nil, fmt.Errorf("[CheckSubtree] Failed to parse subtree hash from request: %w", err)
+		return nil, errors.NewProcessingError("[CheckSubtree] Failed to parse subtree hash from request", err)
 	}
 
 	if request.BaseUrl == "" {
-		return nil, fmt.Errorf("[CheckSubtree] Missing base URL in request")
+		return nil, errors.NewInvalidArgumentError("[CheckSubtree] Missing base URL in request")
 	}
 
 	u.logger.Infof("[CheckSubtree] Received priority subtree message for %s from %s", hash.String(), request.BaseUrl)
@@ -225,7 +224,7 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 	for {
 		gotLock, exists, releaseLockFunc, err := tryLockIfNotExists(ctx, u.logger, u.subtreeStore, hash)
 		if err != nil {
-			return nil, fmt.Errorf("[CheckSubtree] error getting lock for Subtree %s: %w", hash.String(), err)
+			return nil, errors.NewError("[CheckSubtree] error getting lock for Subtree %s", hash.String(), err)
 		}
 		defer releaseLockFunc()
 
@@ -250,12 +249,12 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 					options.WithFileExtension("subtree"),
 				)
 				if err != nil {
-					return nil, errors.Join(fmt.Errorf("[getSubtreeTxHashes][%s] failed to get subtree from store", hash.String()), err)
+					return nil, errors.NewStorageError("[getSubtreeTxHashes][%s] failed to get subtree from store", hash.String(), err)
 				}
 
 				subtree, err = util.NewSubtreeFromBytes(subtreeBytes)
 				if err != nil {
-					return nil, fmt.Errorf("[CheckSubtree] Failed to create subtree from bytes: %w", err)
+					return nil, errors.NewProcessingError("[CheckSubtree] Failed to create subtree from bytes", err)
 				}
 				txHashes := make([]chainhash.Hash, subtree.Length())
 				for i := 0; i < subtree.Length(); i++ {
@@ -271,7 +270,7 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 
 				// Call the validateSubtreeInternal method
 				if err = u.validateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
-					return nil, fmt.Errorf("[CheckSubtree] Failed to validate subtree %s: %w", hash.String(), err)
+					return nil, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 				}
 
 				u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
@@ -289,7 +288,7 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 
 			// Call the validateSubtreeInternal method
 			if err = u.validateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
-				return nil, fmt.Errorf("[CheckSubtree] Failed to validate subtree %s: %w", hash.String(), err)
+				return nil, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 			}
 
 			u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
@@ -303,13 +302,13 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 			// Wait for a bit before retrying.
 			select {
 			case <-ctx.Done():
-				return nil, fmt.Errorf("[CheckSubtree] context cancelled")
+				return nil, errors.NewContextCanceledError("[CheckSubtree] context cancelled")
 			case <-time.After(1 * time.Second):
 				retryCount++
 
 				// will retry for 20 seconds
 				if retryCount > 20 {
-					return nil, fmt.Errorf("[CheckSubtree] failed to get lock for subtree %s after 20 retries", hash.String())
+					return nil, errors.NewError("[CheckSubtree] failed to get lock for subtree %s after 20 retries", hash.String())
 				}
 
 				// Automatically retries the loop.

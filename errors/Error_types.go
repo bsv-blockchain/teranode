@@ -9,6 +9,7 @@ var (
 	ErrConfiguration              = New(ERR_CONFIGURATION, "configuration error")
 	ErrContext                    = New(ERR_CONTEXT, "context error")
 	ErrContextCanceled            = New(ERR_CONTEXT_CANCELED, "context canceled")
+	ErrExternal                   = New(ERR_EXTERNAL, "external error")
 	ErrError                      = New(ERR_ERROR, "generic error")
 	ErrBlockNotFound              = New(ERR_BLOCK_NOT_FOUND, "block not found")
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
@@ -60,6 +61,9 @@ func NewContextError(message string, params ...interface{}) error {
 }
 func NewContextCanceledError(message string, params ...interface{}) error {
 	return New(ERR_CONTEXT_CANCELED, message, params...)
+}
+func NewExternalError(message string, params ...interface{}) error {
+	return New(ERR_EXTERNAL, message, params...)
 }
 func NewError(message string, params ...interface{}) error {
 	return New(ERR_ERROR, message, params...)

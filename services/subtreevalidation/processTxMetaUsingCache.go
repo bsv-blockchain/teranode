@@ -2,7 +2,6 @@ package subtreevalidation
 
 import (
 	"context"
-	"fmt"
 	"runtime"
 	"sync/atomic"
 
@@ -19,7 +18,7 @@ import (
 
 func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data, failFast bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
-		return 0, fmt.Errorf("txHashes and txMetaSlice must be the same length")
+		return 0, errors.NewProcessingError("txHashes and txMetaSlice must be the same length")
 	}
 
 	start, stat, ctx := tracing.StartStatFromContext(ctx, "processTxMetaUsingCache")

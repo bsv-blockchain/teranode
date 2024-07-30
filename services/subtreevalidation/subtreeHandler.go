@@ -2,12 +2,12 @@ package subtreevalidation
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path"
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
