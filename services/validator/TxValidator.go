@@ -2,7 +2,7 @@ package validator
 
 import (
 	"encoding/hex"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -20,9 +20,9 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	//
 	txSize := tx.Size()
 
-	// 1) Neither lists of inputs or outputs are empty
+	// 1) Neither lists of inputs nor outputs are empty
 	if len(tx.Inputs) == 0 || len(tx.Outputs) == 0 {
-		return fmt.Errorf("transaction has no inputs or outputs")
+		return errors.NewTxInvalidError("transaction has no inputs or outputs")
 	}
 
 	// 2) The transaction size in bytes is less than maxtxsizepolicy.
@@ -48,7 +48,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	// 7) The transaction size in bytes is greater than or equal to 100
 	// There are many examples in the chain up to height 422559 where this rule was not in place
 	if blockHeight > 422559 && txSize < 100 {
-		return fmt.Errorf("transaction size in bytes is less than 100 bytes")
+		return errors.NewTxInvalidError("transaction size in bytes is less than 100 bytes")
 	}
 
 	// 8) The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
@@ -89,7 +89,7 @@ func (tv *TxValidator) checkTxSize(txSize int, policy *PolicySettings) error {
 		maxTxSizePolicy = MaxBlockSize
 	}
 	if txSize > maxTxSizePolicy {
-		return fmt.Errorf("transaction size in bytes is greater than max tx size policy %d", maxTxSizePolicy)
+		return errors.NewTxInvalidError("transaction size in bytes is greater than max tx size policy %d", maxTxSizePolicy)
 	}
 
 	return nil
@@ -107,15 +107,15 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 		isData := output.LockingScript.IsData()
 		switch {
 		case !isData && (output.Satoshis > MaxSatoshis || output.Satoshis < minOutput):
-			return fmt.Errorf("transaction output %d satoshis is invalid", index)
+			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
 		case isData && output.Satoshis != 0 && blockHeight >= util.GenesisActivationHeight:
-			return fmt.Errorf("transaction output %d has non 0 value op return (height=%d)", index, blockHeight)
+			return errors.NewTxInvalidError("transaction output %d has non 0 value op return (height=%d)", index, blockHeight)
 		}
 		total += output.Satoshis
 	}
 
 	if total > MaxSatoshis {
-		return fmt.Errorf("transaction output total satoshis is too high")
+		return errors.NewTxInvalidError("transaction output total satoshis is too high")
 	}
 
 	return nil
@@ -125,27 +125,27 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
 	for index, input := range tx.Inputs {
 		if hex.EncodeToString(input.PreviousTxID()) == coinbaseTxID {
-			return fmt.Errorf("transaction input %d is a coinbase input", index)
+			return errors.NewTxInvalidError("transaction input %d is a coinbase input", index)
 		}
 		/* lots of our valid test transactions have this sequence number, is this not allowed?
 		if input.SequenceNumber == 0xffffffff {
 			fmt.Printf("input %d has sequence number 0xffffffff, txid = %s", index, tx.TxID())
-			return fmt.Errorf("transaction input %d sequence number is invalid", index)
+			return errors.NewTxInvalidError("transaction input %d sequence number is invalid", index)
 		}
 		*/
 		// if input.PreviousTxSatoshis == 0 && !input.PreviousTxScript.IsData() {
-		// 	return fmt.Errorf("transaction input %d satoshis cannot be zero", index)
+		// 	return errors.NewTxInvalidError("transaction input %d satoshis cannot be zero", index)
 		// }
 		if input.PreviousTxSatoshis > MaxSatoshis {
-			return fmt.Errorf("transaction input %d satoshis is too high", index)
+			return errors.NewTxInvalidError("transaction input %d satoshis is too high", index)
 		}
 		total += input.PreviousTxSatoshis
 	}
 	if total == 0 && blockHeight >= util.ForkIDActivationHeight {
-		return fmt.Errorf("transaction input total satoshis cannot be zero")
+		return errors.NewTxInvalidError("transaction input total satoshis cannot be zero")
 	}
 	if total > MaxSatoshis {
-		return fmt.Errorf("transaction input total satoshis is too high")
+		return errors.NewTxInvalidError("transaction input total satoshis is too high")
 	}
 
 	return nil
@@ -158,7 +158,7 @@ func (tv *TxValidator) checkFees(tx *bt.Tx, feeQuote *bt.FeeQuote) error {
 	}
 
 	if !feesOK {
-		return fmt.Errorf("transaction fee is too low")
+		return errors.NewTxInvalidError("transaction fee is too low")
 	}
 
 	return nil
@@ -183,7 +183,7 @@ func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, policy *PolicySettings) error {
 			if op.Value() == bscript.OpCHECKSIG || op.Value() == bscript.OpCHECKSIGVERIFY {
 				numSigOps++
 				if numSigOps > maxSigOps {
-					return fmt.Errorf("transaction unlocking scripts have too many sigops (%d)", numSigOps)
+					return errors.NewTxInvalidError("transaction unlocking scripts have too many sigops (%d)", numSigOps)
 				}
 			}
 		}
@@ -195,7 +195,7 @@ func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, policy *PolicySettings) error {
 func (tv *TxValidator) pushDataCheck(tx *bt.Tx) error {
 	for index, input := range tx.Inputs {
 		if input.UnlockingScript == nil {
-			return fmt.Errorf("transaction input %d unlocking script is empty", index)
+			return errors.NewTxInvalidError("transaction input %d unlocking script is empty", index)
 		}
 		parser := interpreter.DefaultOpcodeParser{}
 		parsedUnlockingScript, err := parser.Parse(input.UnlockingScript)
@@ -203,7 +203,7 @@ func (tv *TxValidator) pushDataCheck(tx *bt.Tx) error {
 			return err
 		}
 		if !parsedUnlockingScript.IsPushOnly() {
-			return fmt.Errorf("transaction input %d unlocking script is not push only", index)
+			return errors.NewTxInvalidError("transaction input %d unlocking script is not push only", index)
 		}
 	}
 
@@ -231,7 +231,7 @@ func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) error {
 		// opts = append(opts, interpreter.WithDebugger(&LogDebugger{}),
 
 		if err := interpreter.NewEngine().Execute(opts...); err != nil {
-			return fmt.Errorf("script execution failed: %w", err)
+			return errors.NewTxInvalidError("script execution failed: %w", err)
 		}
 	}
 

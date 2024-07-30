@@ -3,7 +3,6 @@ package validator
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -64,7 +64,7 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 func (v *Server) Init(ctx context.Context) (err error) {
 	v.validator, err = New(ctx, v.logger, v.utxoStore)
 	if err != nil {
-		return fmt.Errorf("could not create validator [%w]", err)
+		return errors.NewServiceError("could not create validator", err)
 	}
 
 	return nil
@@ -131,7 +131,7 @@ func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*
 	}
 
 	if blockHeight <= 0 {
-		errs = append(errs, errors.New("blockHeight <= 0"))
+		errs = append(errs, errors.NewProcessingError("blockHeight <= 0"))
 		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d\n", blockHeight))
 	} else {
 		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
