@@ -2,7 +2,7 @@ package propagation
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"net/http"
 	"time"
@@ -49,7 +49,7 @@ func (ps *DumbPropagationServer) Start(ctx context.Context) (err error) {
 	if ok {
 		err = ps.startHTTPServer(ctx, httpAddress)
 		if err != nil {
-			return fmt.Errorf("HTTP server failed [%v]", err)
+			return errors.NewServiceError("HTTP server failed", err)
 		}
 	}
 

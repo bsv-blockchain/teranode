@@ -2,7 +2,7 @@ package propagation
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"time"
 
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
@@ -115,7 +115,7 @@ func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem
 
 	for i, errStr := range response.Error {
 		if errStr != "" {
-			batch[i].done <- fmt.Errorf(errStr)
+			batch[i].done <- errors.NewError(errStr)
 		} else {
 			batch[i].done <- nil
 		}

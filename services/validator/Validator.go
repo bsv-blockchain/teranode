@@ -27,11 +27,6 @@ const (
 	MaxTxSigopsCountPolicyAfterGenesis = ^uint32(0) // UINT32_MAX
 )
 
-var (
-	ErrBadRequest = errors.New(errors.ERR_PROCESSING, "VALIDATOR_BAD_REQUEST")
-	ErrInternal   = errors.New(errors.ERR_PROCESSING, "VALIDATOR_INTERNAL")
-)
-
 type Validator struct {
 	logger                 ulogger.Logger
 	txValidator            TxValidator

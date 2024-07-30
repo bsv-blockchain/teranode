@@ -14,7 +14,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
-	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/bitcoin-sv/ubsv/util/p2p"
@@ -153,7 +152,7 @@ func NewWorker(
 
 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "can't create coinbase address", err)
+		return nil, errors.NewProcessingError("can't create coinbase address", err)
 	}
 
 	var rateLimiter *rate.Limiter
@@ -199,7 +198,7 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 
 	tx, err := w.coinbaseClient.RequestFunds(ctx, w.address.AddressString, true)
 	if err != nil {
-		return errors.New(errors.ERR_SERVICE_ERROR, "error getting utxo from coinbaseTracker %s", w.address.AddressString, err)
+		return errors.NewServiceError("error getting utxo from coinbaseTracker %s", w.address.AddressString, err)
 	}
 
 	//if w.sentTxCache != nil {
@@ -216,19 +215,19 @@ func (w *Worker) Init(ctx context.Context) (err error) {
 			break
 		}
 
-		if errors.Is(err, propagation.ErrBadRequest) {
-			return errors.New(errors.ERR_SERVICE_ERROR, "error sending funding transaction %s", tx.TxIDChainHash().String(), err)
+		if errors.Is(err, errors.ErrServiceError) {
+			return errors.NewServiceError("error sending funding transaction %s", tx.TxIDChainHash().String(), err)
 		}
 
 		// Go through each response and check for ErrBadRequest errors
 		for _, response := range responses {
-			if errors.Is(response.Error, propagation.ErrBadRequest) {
-				return errors.New(errors.ERR_SERVICE_ERROR, "error sending funding transaction %s", tx.TxIDChainHash().String(), response.Error)
+			if errors.Is(response.Error, errors.ErrServiceError) {
+				return errors.NewServiceError("error sending funding transaction %s", tx.TxIDChainHash().String(), response.Error)
 			}
 		}
 
 		if outerRetry == 2 { // Last retry
-			return errors.New(errors.ERR_SERVICE_ERROR, "error sending funding transaction %s", tx.TxIDChainHash().String(), err)
+			return errors.NewServiceError("error sending funding transaction %s", tx.TxIDChainHash().String(), err)
 		}
 
 		// Retry in 5 seconds
@@ -307,7 +306,7 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 		case utxo = <-w.utxoChan:
 			tx, err = w.sendTransactionFromUtxo(ctx, utxo)
 			if err != nil {
-				return errors.New(errors.ERR_TX_ERROR, "error sending transaction from utxo %s:%d", utxo.TxIDHash.String(), utxo.Vout, err)
+				return errors.NewTxError("error sending transaction from utxo %s:%d", utxo.TxIDHash.String(), utxo.Vout, err)
 			}
 
 			counterLoad = counter.Add(1)
@@ -351,18 +350,18 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 	err = tx.FromUTXOs(utxo)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return nil, errors.New(errors.ERR_TX_ERROR, "error adding utxo to tx", err)
+		return nil, errors.NewTxError("error adding utxo to tx", err)
 	}
 
 	err = tx.AddP2PKHOutputFromAddress(w.address.AddressString, utxo.Satoshis)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return nil, errors.New(errors.ERR_TX_ERROR, "error adding output to tx", err)
+		return nil, errors.NewTxError("error adding output to tx", err)
 	}
 
 	if err = tx.FillAllInputs(ctx, w.unlocker); err != nil {
 		prometheusInvalidTransactions.Inc()
-		return nil, errors.New(errors.ERR_TX_ERROR, "error filling tx inputs", err)
+		return nil, errors.NewTxError("error filling tx inputs", err)
 	}
 
 	//if w.sentTxCache != nil {
@@ -373,29 +372,29 @@ func (w *Worker) sendTransactionFromUtxo(ctx context.Context, utxo *bt.UTXO) (tx
 	//nolint:gosec //  G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	d := w.distributors[rand.Intn(len(w.distributors))]
 	if responses, err := d.SendTransaction(ctx, tx); err != nil {
-		if errors.Is(err, propagation.ErrBadRequest) {
+		if errors.Is(err, errors.ErrTxInvalid) {
 			prometheusInvalidTransactions.Inc()
 		} else {
 			// Go through each response and check for ErrBadRequest errors
 			for _, response := range responses {
-				if errors.Is(response.Error, propagation.ErrBadRequest) {
+				if errors.Is(response.Error, errors.ErrTxInvalid) {
 					prometheusInvalidTransactions.Inc()
 				}
 			}
 		}
 
-		if errors.Is(err, propagation.ErrInternal) {
+		if errors.Is(err, errors.ErrServiceError) {
 			prometheusInternalErrors.Inc()
 		} else {
 			// Go through each response and check for ErrBadRequest errors
 			for _, response := range responses {
-				if errors.Is(response.Error, propagation.ErrInternal) {
+				if errors.Is(response.Error, errors.ErrServiceError) {
 					prometheusInternalErrors.Inc()
 				}
 			}
 		}
 
-		return nil, errors.New(errors.ERR_TX_ERROR, "error sending transaction #%d", counter.Load(), err)
+		return nil, errors.NewTxError("error sending transaction #%d", counter.Load(), err)
 	}
 
 	return tx, nil
