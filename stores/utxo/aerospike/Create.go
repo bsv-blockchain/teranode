@@ -17,6 +17,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 )
 
 // Used for NOOP batch operations
@@ -73,6 +74,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, block
 }
 
 func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
+	start := gocore.CurrentTime()
+	stat := gocore.NewStat("sendStoreBatch")
+
 	if s.utxoBatchSize == 0 {
 		s.utxoBatchSize = defaultUxtoBatchSize
 	}
@@ -112,6 +116,8 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			continue
 		}
 
+		start = stat.NewStat("getBinsToStore").AddTime(start)
+
 		if len(binsToStore) > 1 {
 			// Make this batch item a NOOP and persist all of these to be written via a queue
 			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
@@ -139,6 +145,8 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			utils.SafeSend(bItem.done, err)
 		}
 	}
+
+	start = stat.NewStat("BatchOperate").AddTime(start)
 
 	// batchOperate may have no errors, but some of the records may have failed
 	for idx, batchRecord := range batchRecords {
@@ -178,6 +186,8 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			}
 		}
 	}
+
+	stat.NewStat("postBatchOperate").AddTime(start)
 }
 
 func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bin) [][]*aerospike.Bin {
