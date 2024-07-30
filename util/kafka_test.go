@@ -8,6 +8,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
+	"math/rand"
 	"strconv"
 	"sync"
 	"testing"
@@ -117,14 +118,14 @@ func Test_KafkaAsyncProducer(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	numberOfMessages := 10
+	numberOfMessages := 100
 	fmt.Println("starting pushing messages")
 	go produceMessages(kafkaChan, numberOfMessages)
 
-	time.Sleep(2 * time.Second)
+	// time.Sleep(2 * time.Second)
 
 	var wg sync.WaitGroup
-	wg.Add(10)
+	wg.Add(numberOfMessages)
 
 	fmt.Println("starting consumer")
 	go func() {
@@ -140,11 +141,16 @@ func Test_KafkaAsyncProducer(t *testing.T) {
 }
 
 func produceMessages(kafkaChan chan []byte, numberOfMessages int) {
+	r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
 	for i := 0; i < numberOfMessages; i++ {
 		msg := []byte("test" + strconv.Itoa(i))
 		kafkaChan <- msg
 		fmt.Println("pushed message: ", string(msg))
-		//time.Sleep(1 * time.Millisecond)
+		// wait for an arbitrary time to simulate a real world scenario.
+		// pick a random number between 1 and 1000
+
+		randomDelay := time.Duration(r.Intn(1000)+1) * time.Millisecond
+		time.Sleep(randomDelay)
 	}
 
 	fmt.Println("done pushing messages")
