@@ -55,7 +55,7 @@ func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 	}
 }
 
-// StopNodes starts the nodes with docker-compose up operation.
+// SetupNodes starts the nodes with docker-compose up operation.
 // The settings map is used to pass the environment variables to the docker-compose services.
 func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 	var testRunMode, _ = gocore.Config().Get("test_run_mode", "ci")
@@ -230,7 +230,7 @@ func (b *BitcoinTestFramework) RestartNodes(m map[string]string) error {
 	return nil
 }
 
-// StopNodes starts a particular node.
+// StartNode starts a particular node.
 func (b *BitcoinTestFramework) StartNode(nodeName string) error {
 	if b.Compose != nil {
 		// Stop the Docker Compose services
@@ -250,7 +250,7 @@ func (b *BitcoinTestFramework) StartNode(nodeName string) error {
 	return nil
 }
 
-// StopNodes stops a particular node.
+// StopNode stops a particular node.
 func (b *BitcoinTestFramework) StopNode(nodeName string) error {
 	if b.Compose != nil {
 		// Stop the Docker Compose services

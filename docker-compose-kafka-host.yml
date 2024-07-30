@@ -1,0 +1,33 @@
+services:
+  kafka-shared:
+    container_name: kafka-shared
+    image: vectorized/redpanda:latest
+    network_mode: "host"
+    mem_limit: 256m
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://localhost:9092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:9093
+
+  kafka-console-shared:
+    container_name: kafka-console-shared
+    image: docker.redpanda.com/redpandadata/console:latest
+    network_mode: "host"
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["localhost:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://localhost:8081"]
+    depends_on:
+      - kafka-shared
