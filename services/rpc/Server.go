@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/btcjson"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -145,6 +146,9 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"verifymessage":         handleUnimplemented,
 	"verifytxoutproof":      handleUnimplemented,
 	"version":               handleVersion,
+	// BSV mining methods
+	"getminingcandidate":   handleGetMiningCandidate,
+	"submitminingsolution": handleSubmitMiningSolution,
 }
 
 // list of commands that we recognize, but for which bsvd has no support because
@@ -252,6 +256,8 @@ var rpcLimited = map[string]struct{}{
 	"verifymessage":         {},
 	"verifytxoutproof":      {},
 	"version":               {},
+	"getminingcandidate":    {},
+	"submitminingsolution":  {},
 }
 
 // builderScript is a convenience function which is used for hard-coded scripts
@@ -524,6 +530,7 @@ type rpcServer struct {
 	rpcQuirks              bool
 	listeners              []net.Listener
 	blockchainClient       blockchain.ClientI
+	blockAssemblyClient    *blockassembly.Client
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -1051,6 +1058,9 @@ func (s *rpcServer) Init(ctx context.Context) (err error) {
 	if err != nil {
 		return errors.NewServiceError("error creating blockchain client", err)
 	}
+
 	s.blockchainClient = blockchainClient
+	s.blockAssemblyClient = blockassembly.NewClient(ctx, s.logger)
+
 	return nil
 }

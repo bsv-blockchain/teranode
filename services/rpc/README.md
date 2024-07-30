@@ -13,6 +13,7 @@ use postman
 
 `{"method": "sendrawtransaction", "params": ["010000000100000000000000000000000000000000000000000000000000000000000000000000000000ffffffff01807c814a000000001976a9142246f8f846d04b71fbec79815c7ab487b47737a388ac00000000"]}`
 
+`{"method": "submitminingsolution", "params": ["{\"id\": \"aGVsbG9JZA==\",\"nonce\": 1804358173, \"coinbase\": \"aGVsbG9JZA==\",\"time\": 1528925410,\"version\": 536870912}"]}`
 
 
 curl --user bitcoin  -X POST http://localhost:9292 \
@@ -32,3 +33,5 @@ curl --user bitcoin  -X POST http://localhost:19292 \
 curl --user bitcoin  -X POST http://localhost:19292 \
      -H "Content-Type: application/json" \
      -d '{"method": "getblock", "params": ["003e8c9abde82685fdacfd6594d9de14801c4964e1dbe79397afa6299360b521", 1]}'
+
+
