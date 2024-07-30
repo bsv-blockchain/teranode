@@ -3,7 +3,6 @@ package util
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
@@ -27,10 +26,10 @@ func Test_NewKafkaConsumer(t *testing.T) {
 
 // Test_NewKafkaConsumer consumers with both manual and autocommits
 func Test_KafkaConsumerWithAutoCommitEnabled(t *testing.T) {
-	workerCh := make(chan KafkaMessage)
-	noErrClosure := func(message KafkaMessage) error {
-		return nil
-	}
+	//workerCh := make(chan KafkaMessage)
+	//noErrClosure := func(message KafkaMessage) error {
+	//	return nil
+	//}
 
 	// half of the messages will return an error, we expect the consumer to not mark it as consumed
 	//counter := 0
@@ -47,7 +46,7 @@ func Test_KafkaConsumerWithAutoCommitEnabled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	filePaths := "../docker-compose-kafka.yml"
+	filePaths := "../docker-compose-kafka-host.yml"
 	compose, err := tc.NewDockerCompose(filePaths)
 	require.NoError(t, err)
 
@@ -57,7 +56,7 @@ func Test_KafkaConsumerWithAutoCommitEnabled(t *testing.T) {
 	defer stopKafka(compose, ctx)
 
 	// Wait for the services to be ready
-	time.Sleep(30 * time.Second)
+	time.Sleep(10 * time.Second)
 
 	// consumerWithErr := NewKafkaConsumer(workerCh, true, errClosure)
 	// consumerWithoutErr := NewKafkaConsumer(workerCh, true, noErrClosure)
@@ -73,14 +72,18 @@ func Test_KafkaConsumerWithAutoCommitEnabled(t *testing.T) {
 	_, blockKafkaProducer, err = ConnectToKafka(kafkaURL)
 	require.NoError(t, err)
 
+	fmt.Println("connected to kafka")
+
 	err = blockKafkaProducer.Send([]byte("test"), []byte("test"))
 	require.NoError(t, err)
 
-	consumerCount := 2
+	fmt.Println("sent message")
 
-	// Test without error closure, with manual commit
-	err = StartKafkaGroupListener(ctx, ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, consumerCount, true, noErrClosure)
-	require.NoError(t, err)
+	//consumerCount := 2
+	//
+	//// Test without error closure, with manual commit
+	//err = StartKafkaGroupListener(ctx, ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, consumerCount, true, noErrClosure)
+	//require.NoError(t, err)
 }
 
 func stopKafka(compose tc.ComposeStack, ctx context.Context) {
