@@ -1,7 +1,6 @@
 package uaerospike
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -10,7 +9,9 @@ import (
 )
 
 var (
-	stat = gocore.NewStat("Aerospike")
+	stat             = gocore.NewStat("Aerospike")
+	operateStat      = stat.NewStat("Operate").AddRanges(1, 100, 1000, 10000, 100000)
+	batchOperateStat = stat.NewStat("BatchOperate").AddRanges(1, 100, 1000, 10000, 100000)
 )
 
 type Client struct {
@@ -111,7 +112,7 @@ func (c *Client) Get(policy *aerospike.BasePolicy, key *aerospike.Key, binNames 
 func (c *Client) Operate(policy *aerospike.WritePolicy, key *aerospike.Key, operations ...*aerospike.Operation) (*aerospike.Record, aerospike.Error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		stat.NewStat(fmt.Sprintf("Operate: %d items", len(operations))).AddTime(start)
+		operateStat.AddTimeForRange(start, len(operations))
 	}()
 
 	return c.Client.Operate(policy, key, operations...)
@@ -120,7 +121,7 @@ func (c *Client) Operate(policy *aerospike.WritePolicy, key *aerospike.Key, oper
 func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
 	start := gocore.CurrentTime()
 	defer func() {
-		stat.NewStat(fmt.Sprintf("BatchOperate: %d items", len(records))).AddTime(start)
+		batchOperateStat.AddTimeForRange(start, len(records))
 	}()
 
 	return c.Client.BatchOperate(policy, records)
