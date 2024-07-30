@@ -2,11 +2,11 @@ package model
 
 import (
 	"encoding/binary"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 )
 
-// UTXOKey represents a bitcoin transaction outpoint, i.e. the transaction ID and the output index.
+// UTXOMap represents a bitcoin transaction outpoint, i.e. the transaction ID and the output index.
 // It is used as a key in the UTXOMap and is hashable.
 type UTXOMap struct {
 	genericMap[UTXOKey, *UTXOValue]
@@ -22,18 +22,18 @@ func (um *UTXOMap) Read(r io.Reader) error {
 	// Read the number of UTXOs
 	var num uint32
 	if err := binary.Read(r, binary.LittleEndian, &num); err != nil {
-		return fmt.Errorf("error reading number of UTXOs: %w", err)
+		return errors.NewProcessingError("error reading number of UTXOs", err)
 	}
 
 	for i := uint32(0); i < num; i++ {
 		key, err := NewUTXOKeyFromReader(r)
 		if err != nil {
-			return fmt.Errorf("Error reading record key %d: %w", i, err)
+			return errors.NewProcessingError("Error reading record key %d", i, err)
 		}
 
 		val, err := NewUTXOValueFromReader(r)
 		if err != nil {
-			return fmt.Errorf("Error reading a value record %d: : %w", i, err)
+			return errors.NewProcessingError("Error reading a value record %d", i, err)
 		}
 
 		um.Put(*key, val)
@@ -47,7 +47,7 @@ func (um *UTXOMap) Write(w io.Writer) error {
 	num := uint32(um.Length())
 
 	if err := binary.Write(w, binary.LittleEndian, num); err != nil {
-		return fmt.Errorf("error writing number of UTXOs: %w", err)
+		return errors.NewProcessingError("error writing number of UTXOs", err)
 	}
 
 	var err error
@@ -70,11 +70,11 @@ func (um *UTXOMap) Write(w io.Writer) error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("Failed to write UTXO map: %w", err)
+		return errors.NewProcessingError("Failed to write UTXO map", err)
 	}
 
 	if count != um.Length() {
-		return fmt.Errorf("Failed to write all UTXOs: %d != %d", count, um.Length())
+		return errors.NewProcessingError("Failed to write all UTXOs: %d != %d", count, um.Length())
 	}
 
 	return nil

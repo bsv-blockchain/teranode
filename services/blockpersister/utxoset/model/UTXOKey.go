@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -30,12 +31,12 @@ func (k UTXOKey) Hash(mod uint16) uint16 {
 // where the first 32 bytes are the transaction ID (little endian) and the last 4 bytes are the index (little endian).
 func NewUTXOKeyFromBytes(b []byte) (*UTXOKey, error) {
 	if len(b) != 36 {
-		return nil, fmt.Errorf("invalid outpoint length: expected 36 bytes, got %d", len(b))
+		return nil, errors.NewProcessingError("invalid outpoint length: expected 36 bytes, got %d", len(b))
 	}
 
 	txID, err := chainhash.NewHash(b[:32])
 	if err != nil {
-		return nil, fmt.Errorf("failed to create hash from bytes: %v", err)
+		return nil, errors.NewProcessingError("failed to create hash from bytes", err)
 	}
 
 	index := binary.LittleEndian.Uint32(b[32:])
@@ -61,11 +62,11 @@ func NewUTXOKeyFromReader(r io.Reader) (*UTXOKey, error) {
 	o := new(UTXOKey)
 
 	if _, err := io.ReadFull(r, o.TxID[:]); err != nil {
-		return nil, fmt.Errorf("error reading txid: %w", err)
+		return nil, errors.NewProcessingError("error reading txid", err)
 	}
 
 	if err := binary.Read(r, binary.LittleEndian, &o.Index); err != nil {
-		return nil, fmt.Errorf("error reading index: %w", err)
+		return nil, errors.NewProcessingError("error reading index", err)
 	}
 
 	return o, nil
@@ -76,15 +77,15 @@ func (k *UTXOKey) Write(w io.Writer) error {
 	var err error
 
 	if n, err = w.Write(k.TxID[:]); err != nil {
-		return fmt.Errorf("error writing txid: %w", err)
+		return errors.NewProcessingError("error writing txid", err)
 	}
 
 	if n != 32 {
-		return fmt.Errorf("invalid txid length: %d", n)
+		return errors.NewProcessingError("invalid txid length", n)
 	}
 
 	if err := binary.Write(w, binary.LittleEndian, k.Index); err != nil {
-		return fmt.Errorf("error writing index: %w", err)
+		return errors.NewProcessingError("error writing index", err)
 	}
 
 	return nil
