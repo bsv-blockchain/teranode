@@ -3,6 +3,7 @@ package util
 import (
 	"context"
 	"fmt"
+	"github.com/IBM/sarama"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
@@ -46,7 +47,7 @@ func Test_KafkaConsumerWithAutoCommitEnabled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	filePaths := "../docker-compose-kafka-host.yml"
+	filePaths := "../docker-compose-kafka.yml"
 	compose, err := tc.NewDockerCompose(filePaths)
 	require.NoError(t, err)
 
@@ -68,13 +69,13 @@ func Test_KafkaConsumerWithAutoCommitEnabled(t *testing.T) {
 
 	fmt.Println("Kafka URL: ", kafkaURL)
 
-	var blockKafkaProducer KafkaProducerI
-	_, blockKafkaProducer, err = ConnectToKafka(kafkaURL)
+	var producer KafkaProducerI
+	_, producer, err = ConnectToKafka(kafkaURL)
 	require.NoError(t, err)
 
 	fmt.Println("connected to kafka")
 
-	err = blockKafkaProducer.Send([]byte("test"), []byte("test"))
+	err = producer.Send([]byte("test"), []byte("test"))
 	require.NoError(t, err)
 
 	fmt.Println("sent message")
@@ -91,4 +92,57 @@ func stopKafka(compose tc.ComposeStack, ctx context.Context) {
 		panic(err)
 	}
 
+}
+
+func TestKafkaWithCompose(t *testing.T) {
+	ctx := context.Background()
+
+	composeFilePaths := "../docker-compose-kafka.yml"
+
+	compose, err := tc.NewDockerCompose(composeFilePaths)
+	require.NoError(t, err)
+
+	// Setting up Docker Compose
+	//compose := compose.NewDockerCompose(composeFilePaths)
+	err = compose.Up(ctx)
+	require.NoError(t, err, "Failed to start Docker Compose")
+	//defer compose.Down(ctx)
+
+	// Wait for Kafka to be ready
+	time.Sleep(20 * time.Second) // A simple wait for Kafka to start up; adjust as necessary
+
+	// Kafka client configuration
+	config := sarama.NewConfig()
+	config.Producer.Return.Successes = true
+
+	// Kafka address from Docker Compose setup
+	kafkaAddress := "localhost:9092"
+
+	// Test message production
+	producer, err := sarama.NewSyncProducer([]string{kafkaAddress}, config)
+	require.NoError(t, err, "Failed to create Kafka producer")
+
+	topic := "test_topic"
+	message := &sarama.ProducerMessage{
+		Topic: topic,
+		Value: sarama.StringEncoder("Hello Kafka"),
+	}
+	partition, offset, err := producer.SendMessage(message)
+	require.NoError(t, err, "Failed to send message to Kafka")
+	fmt.Printf("Message is stored in topic(%s)/partition(%d)/offset(%d)\n", topic, partition, offset)
+
+	// Test message consumption
+	consumer, err := sarama.NewConsumer([]string{kafkaAddress}, nil)
+	require.NoError(t, err, "Failed to create Kafka consumer")
+
+	partitionConsumer, err := consumer.ConsumePartition(topic, partition, offset)
+	require.NoError(t, err, "Failed to consume message from Kafka")
+	defer partitionConsumer.Close()
+
+	select {
+	case msg := <-partitionConsumer.Messages():
+		fmt.Printf("Received message: %s\n", string(msg.Value))
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timed out waiting for message")
+	}
 }
