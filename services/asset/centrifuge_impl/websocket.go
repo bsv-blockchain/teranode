@@ -415,10 +415,10 @@ func checkSameHost(r *http.Request) error {
 	//}
 	//u, err := url.Parse(origin)
 	//if err != nil {
-	//	return fmt.Errorf("failed to parse Origin header %q: %w", origin, err)
+	//	return errors.NewConfigurationError("failed to parse Origin header %q", origin, err)
 	//}
 	//if strings.EqualFold(r.Host, u.Host) {
 	//	return nil
 	//}
-	//return fmt.Errorf("request Origin %q is not authorized for Host %q", origin, r.Host)
+	//return errors.NewServiceError("request Origin %q is not authorized for Host %q", origin, r.Host)
 }

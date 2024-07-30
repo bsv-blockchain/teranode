@@ -3,6 +3,7 @@ package grpc_impl
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"time"
 
@@ -109,7 +110,7 @@ func (g *GRPC) Init(ctx context.Context) (err error) {
 
 	g.blockchainClient, err = blockchain.NewClient(ctx, g.logger)
 	if err != nil {
-		return fmt.Errorf("could not create blockchain client [%w]", err)
+		return errors.NewServiceError("could not create blockchain client [%w]", err)
 	}
 
 	return nil

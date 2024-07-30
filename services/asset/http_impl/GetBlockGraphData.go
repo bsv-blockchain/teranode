@@ -1,7 +1,7 @@
 package http_impl
 
 import (
-	"errors"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"net/http"
 	"time"
 
@@ -32,7 +32,7 @@ func (h *HTTP) GetBlockGraphData(c echo.Context) error {
 	case "3m":
 		periodMillis = time.Now().Add(-90*24*time.Hour).UnixNano() / int64(time.Millisecond)
 	default:
-		return echo.NewHTTPError(http.StatusBadRequest, errors.New("period is required"))
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("period is required"))
 	}
 
 	dataPoints, err := h.repository.GetBlockGraphData(c.Request().Context(), uint64(periodMillis))

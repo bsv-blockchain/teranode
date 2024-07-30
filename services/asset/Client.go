@@ -2,7 +2,7 @@ package asset
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -48,7 +48,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Cli
 			MaxRetries:  3,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to init blob service connection: %v", err)
+			return nil, errors.NewServiceError("failed to init blob service connection", err)
 		}
 
 		assetClient = asset_api.NewAssetAPIClient(blobConn)
@@ -267,7 +267,7 @@ func (c *Client) Exists(ctx context.Context, subtreeHash []byte) (bool, error) {
 }
 
 func (c *Client) GetNodes(_ context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*asset_api.GetNodesResponse, error) {
-	return nil, fmt.Errorf("not implemented")
+	return nil, errors.NewError("not implemented")
 }
 
 func (c *Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {

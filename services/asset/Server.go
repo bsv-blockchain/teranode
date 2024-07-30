@@ -3,6 +3,7 @@ package asset
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 
@@ -70,17 +71,17 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	v.httpAddr, httpOk = gocore.Config().Get("asset_httpListenAddress")
 
 	if !grpcOk && !httpOk {
-		return fmt.Errorf("no asset_grpcListenAddress or asset_httpListenAddress setting found")
+		return errors.NewConfigurationError("no asset_grpcListenAddress or asset_httpListenAddress setting found")
 	}
 
 	blockchainClient, err := blockchain.NewClient(ctx, v.logger)
 	if err != nil {
-		return fmt.Errorf("error creating blockchain client: %s", err)
+		return errors.NewServiceError("error creating blockchain client", err)
 	}
 
 	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, blockchainClient, v.subtreeStore, v.blockStore)
 	if err != nil {
-		return fmt.Errorf("error creating repository: %s", err)
+		return errors.NewServiceError("error creating repository", err)
 	}
 
 	v.centrifugeAddr, centrifugeOk = gocore.Config().Get("asset_centrifugeListenAddress", ":8101")
@@ -94,36 +95,36 @@ func (v *Server) Init(ctx context.Context) (err error) {
 			return peers
 		})
 		if err != nil {
-			return fmt.Errorf("error creating grpc server: %s", err)
+			return errors.NewServiceError("error creating grpc server", err)
 		}
 
 		err = v.grpcServer.Init(ctx)
 		if err != nil {
-			return fmt.Errorf("error initializing grpc server: %s", err)
+			return errors.NewServiceError("error initializing grpc server", err)
 		}
 	}
 
 	if httpOk {
 		v.httpServer, err = http_impl.New(v.logger, repo, v.notificationCh)
 		if err != nil {
-			return fmt.Errorf("error creating http server: %s", err)
+			return errors.NewServiceError("error creating http server", err)
 		}
 
 		err = v.httpServer.Init(ctx)
 		if err != nil {
-			return fmt.Errorf("error initializing http server: %s", err)
+			return errors.NewServiceError("error initializing http server", err)
 		}
 	}
 
 	if centrifugeOk && v.httpServer != nil {
 		v.centrifugeServer, err = centrifuge_impl.New(v.logger, repo, v.httpServer)
 		if err != nil {
-			return fmt.Errorf("error creating centrifuge server: %s", err)
+			return errors.NewServiceError("error creating centrifuge server: %s", err)
 		}
 
 		err = v.centrifugeServer.Init(ctx)
 		if err != nil {
-			return fmt.Errorf("error initializing centrifuge server: %s", err)
+			return errors.NewServiceError("error initializing centrifuge server: %s", err)
 		}
 	}
 
@@ -252,7 +253,7 @@ func (v *Server) Start(ctx context.Context) error {
 	}
 
 	if err := g.Wait(); err != nil {
-		return fmt.Errorf("the main server has ended with error: %w", err)
+		return errors.NewServiceError("the main server has ended with error: %w", err)
 	}
 
 	return nil

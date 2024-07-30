@@ -1,7 +1,6 @@
 package http_impl
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,13 +34,13 @@ func (h *HTTP) Search(c echo.Context) error {
 		// This is a hash
 		hash, err := chainhash.NewHashFromStr(q)
 		if err != nil {
-			return sendError(c, http.StatusBadRequest, 2, fmt.Errorf("error reading hash: %w", err))
+			return sendError(c, http.StatusBadRequest, 2, errors.NewProcessingError("error reading hash", err))
 		}
 
 		// Check if the hash is a block...
 		header, _, err := h.repository.GetBlockHeader(c.Request().Context(), hash)
 		if err != nil && !errors.Is(err, errors.ErrNotFound) { // We return an error except if it's a not found error
-			return sendError(c, http.StatusBadRequest, 3, fmt.Errorf("error searching for block: %w", err))
+			return sendError(c, http.StatusBadRequest, 3, errors.NewServiceError("error searching for block: %w", err))
 		}
 
 		if header != nil {
@@ -52,7 +51,7 @@ func (h *HTTP) Search(c echo.Context) error {
 		// Check if it's a transaction
 		tx, err := h.repository.GetTransactionMeta(c.Request().Context(), hash)
 		if err != nil && !errors.Is(err, errors.ErrTxNotFound) {
-			return sendError(c, http.StatusBadRequest, 5, fmt.Errorf("error searching for tx: %w", err))
+			return sendError(c, http.StatusBadRequest, 5, errors.NewServiceError("error searching for tx: %w", err))
 		}
 
 		if tx != nil {
@@ -64,7 +63,7 @@ func (h *HTTP) Search(c echo.Context) error {
 		subtree, err := h.repository.GetSubtreeBytes(c.Request().Context(), hash)
 		// TODO error handling is still a bit messy, not all implementations are throwing the ErrNotFound correctly
 		if err != nil && !errors.Is(err, errors.ErrNotFound) && !strings.Contains(err.Error(), "not found") {
-			return sendError(c, http.StatusBadRequest, 4, fmt.Errorf("error searching for subtree: %w", err))
+			return sendError(c, http.StatusBadRequest, 4, errors.NewServiceError("error searching for subtree: %w", err))
 		}
 
 		if subtree != nil {
@@ -77,7 +76,7 @@ func (h *HTTP) Search(c echo.Context) error {
 			UTXOHash: hash,
 		})
 		if err != nil && !errors.Is(err, errors.ErrNotFound) {
-			return sendError(c, http.StatusBadRequest, 6, fmt.Errorf("error searching for utxo: %w", err))
+			return sendError(c, http.StatusBadRequest, 6, errors.NewServiceError("error searching for utxo: %w", err))
 		}
 
 		if u != nil {

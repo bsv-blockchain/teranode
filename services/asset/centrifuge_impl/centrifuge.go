@@ -3,7 +3,7 @@ package centrifuge_impl
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -40,10 +40,10 @@ type messageType struct {
 func New(logger ulogger.Logger, repo *repository.Repository, httpServer *http_impl.HTTP) (*Centrifuge, error) {
 	u, err, found := gocore.Config().GetURL("asset_httpAddress")
 	if err != nil {
-		return nil, fmt.Errorf("asset_httpAddress is not a valid URL: %v", err)
+		return nil, errors.NewConfigurationError("asset_httpAddress is not a valid URL", err)
 	}
 	if !found {
-		return nil, fmt.Errorf("asset_httpAddress not found in config")
+		return nil, errors.NewConfigurationError("asset_httpAddress not found in config")
 	}
 
 	c := &Centrifuge{
