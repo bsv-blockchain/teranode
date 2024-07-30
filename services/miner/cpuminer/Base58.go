@@ -8,8 +8,8 @@ base58 returns encoded text suitable for use with Bitcoin.  Bitcoin compatible b
 */
 
 import (
-	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"math"
 	"math/big"
 	"strings"
@@ -30,9 +30,7 @@ func decode(src []byte) ([]byte, int, error) {
 		tmp := strings.IndexAny(base58table, string(b[i]))
 		if tmp == -1 {
 			fmt.Println(b)
-			return []byte(""), 0,
-				errors.New("encoding/base58: invalid character found: ~" +
-					string(b[i]) + "~")
+			return []byte(""), 0, errors.NewProcessingError("encoding/base58: invalid character found: ~" + string(b[i]) + "~")
 		}
 		idx := big.NewInt(int64(tmp))
 		tmp1 := big.NewInt(0)

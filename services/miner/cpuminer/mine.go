@@ -3,10 +3,9 @@ package cpuminer
 import (
 	"context"
 	"crypto/rand"
-	"errors"
-	"fmt"
 	"log"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bk/wif"
@@ -23,7 +22,7 @@ func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningS
 
 	coinbasePrivKeys, found := gocore.Config().GetMulti("miner_wallet_private_keys", "|")
 	if !found {
-		log.Fatal(errors.New("miner_wallet_private_keys not found in config"))
+		log.Fatal(errors.NewConfigurationError("miner_wallet_private_keys not found in config"))
 	}
 
 	walletAddresses := make([]string, len(coinbasePrivKeys))
@@ -31,12 +30,12 @@ func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningS
 	for i, coinbasePrivKey := range coinbasePrivKeys {
 		privateKey, err := wif.DecodeWIF(coinbasePrivKey)
 		if err != nil {
-			return nil, fmt.Errorf("can't decode coinbase priv key: ^%v", err)
+			return nil, errors.NewProcessingError("can't decode coinbase priv key", err)
 		}
 
 		walletAddress, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
 		if err != nil {
-			return nil, fmt.Errorf("can't create coinbase address: %v", err)
+			return nil, errors.NewProcessingError("can't create coinbase address", err)
 		}
 
 		walletAddresses[i] = walletAddress.AddressString
@@ -44,7 +43,7 @@ func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningS
 
 	a, b, err := GetCoinbaseParts(candidate.Height, candidate.CoinbaseValue, arbitraryText, walletAddresses)
 	if err != nil {
-		return nil, fmt.Errorf("error creating coinbase transaction: %v", err)
+		return nil, errors.NewProcessingError("error creating coinbase transaction", err)
 	}
 
 	// The extranonce length is 12 bytes.  We need to add 12 bytes to the coinbase a part
@@ -55,7 +54,7 @@ func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningS
 
 	coinbaseTx, err := bt.NewTxFromBytes(a)
 	if err != nil {
-		return nil, fmt.Errorf("error decoding coinbase transaction: %v", err)
+		return nil, errors.NewProcessingError("error decoding coinbase transaction", err)
 	}
 
 	merkleRoot := util.BuildMerkleRootFromCoinbase(coinbaseTx.TxIDChainHash().CloneBytes(), candidate.MerkleProof)
