@@ -2,13 +2,13 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	bootstrap_api "github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
