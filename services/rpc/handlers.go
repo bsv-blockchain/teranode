@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -270,7 +271,7 @@ func handleSendRawTransaction(s *rpcServer, cmd interface{}, closeChan <-chan st
 
 	d, err := distributor.NewDistributor(context.Background(), s.logger)
 	if err != nil {
-		return nil, fmt.Errorf("could not create distributor: %v", err)
+		return nil, errors.NewServiceError("could not create distributor", err)
 	}
 
 	res, err := d.SendTransaction(context.Background(), tx)

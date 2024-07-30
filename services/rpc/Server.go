@@ -6,7 +6,6 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/btcjson"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -652,9 +652,8 @@ func (s *rpcServer) checkAuth(r *http.Request, require bool) (bool, bool, error)
 	authhdr := r.Header["Authorization"]
 	if len(authhdr) <= 0 {
 		if require {
-			s.logger.Warnf("RPC authentication failure from %s",
-				r.RemoteAddr)
-			return false, false, errors.New("auth failure")
+			s.logger.Warnf("RPC authentication failure from %s", r.RemoteAddr)
+			return false, false, errors.NewServiceError("auth failure")
 		}
 
 		return false, false, nil
@@ -677,7 +676,7 @@ func (s *rpcServer) checkAuth(r *http.Request, require bool) (bool, bool, error)
 
 	// Request's auth doesn't match either user
 	s.logger.Warnf("RPC authentication failure from %s", r.RemoteAddr)
-	return false, false, errors.New("auth failure")
+	return false, false, errors.NewServiceError("auth failure")
 }
 
 // parsedRPCCmd represents a JSON-RPC request object that has been parsed into
@@ -1050,7 +1049,7 @@ func (s *rpcServer) Init(ctx context.Context) (err error) {
 
 	blockchainClient, err := blockchain.NewClient(ctx, s.logger)
 	if err != nil {
-		return fmt.Errorf("error creating blockchain client: %s", err)
+		return errors.NewServiceError("error creating blockchain client", err)
 	}
 	s.blockchainClient = blockchainClient
 	return nil
