@@ -499,6 +499,8 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 
 	// Add valid peer to the server.
 	sp.server.AddPeer(sp)
+
+	sp.QueueMessage(wire.NewMsgVerAck(), nil)
 	return nil
 }
 
