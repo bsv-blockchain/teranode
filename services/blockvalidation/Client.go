@@ -2,10 +2,8 @@ package blockvalidation
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
@@ -13,19 +11,15 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
 
 type Client struct {
-	apiClient           blockvalidation_api.BlockValidationAPIClient
-	frpcClient          atomic.Pointer[blockvalidation_api.Client]
-	frpcClientConnected bool
-	frpcClientMux       sync.Mutex
-	httpAddress         string
-	logger              ulogger.Logger
+	apiClient   blockvalidation_api.BlockValidationAPIClient
+	httpAddress string
+	logger      ulogger.Logger
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
@@ -43,13 +37,9 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	}
 
 	client := &Client{
-		apiClient:           blockvalidation_api.NewBlockValidationAPIClient(baConn),
-		frpcClientConnected: false,
-		frpcClientMux:       sync.Mutex{},
-		logger:              logger,
+		apiClient: blockvalidation_api.NewBlockValidationAPIClient(baConn),
+		logger:    logger,
 	}
-
-	client.NewFRPCClient()
 
 	httpAddress, ok := gocore.Config().Get("blockvalidation_httpAddress")
 	if ok {
@@ -57,64 +47,6 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	}
 
 	return client
-}
-
-func (s *Client) getFRPCClient(ctx context.Context) *blockvalidation_api.Client {
-	s.frpcClientMux.Lock()
-	defer s.frpcClientMux.Unlock()
-
-	frpcClient := s.frpcClient.Load()
-	if frpcClient != nil {
-		s.connectFRPC(ctx, frpcClient)
-	}
-	return frpcClient
-}
-
-func (s *Client) NewFRPCClient() {
-	_, ok := gocore.Config().Get("blockvalidation_frpcAddress")
-	if !ok {
-		return
-	}
-	frpcClient, err := blockvalidation_api.NewClient(nil, nil)
-	if err != nil {
-		s.logger.Fatalf("Error creating new fRPC client in blockvalidation: %s", err)
-	}
-	s.logger.Infof("fRPC blockvalidation client created")
-	s.frpcClientConnected = false
-	s.frpcClient.Store(frpcClient)
-}
-
-func (s *Client) connectFRPC(ctx context.Context, frpcClient *blockvalidation_api.Client) {
-	if frpcClient.Closed() {
-		s.logger.Errorf("fRPC connection to blockvalidation, closed, will attempt to connect")
-	}
-
-	if s.frpcClientConnected {
-		return
-	}
-
-	blockValidationFRPCAddress, ok := gocore.Config().Get("blockvalidation_frpcAddress")
-	if !ok {
-		return
-	}
-
-	err := frpcClient.Connect(blockValidationFRPCAddress)
-	if err != nil {
-		_, err = retry.Retry(ctx, s.logger, func() (struct{}, error) {
-			return struct{}{}, frpcClient.Connect(blockValidationFRPCAddress)
-		}, retry.WithMessage(fmt.Sprintf("[BlockValidation] error connecting to fRPC server in blockvalidation: %s", err)), retry.WithRetryCount(4))
-		if err != nil {
-			s.logger.Fatalf("failed to connect to blockvalidation fRPC server after 5 attempts")
-		}
-	}
-
-	/* listen for close channel and reconnect */
-	s.logger.Infof("Listening for close channel on fRPC client")
-	go func() {
-		<-frpcClient.CloseChannel()
-		s.logger.Infof("fRPC blockvalidation client closed, reconnecting...")
-		s.NewFRPCClient()
-	}()
 }
 
 func (s *Client) Health(ctx context.Context) (bool, error) {
@@ -210,17 +142,17 @@ func (s *Client) Exists(ctx context.Context, subtreeHash []byte) (bool, error) {
 	return response.Exists, nil
 }
 
-func (s *Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
-	return fmt.Errorf("not implemented")
+func (s *Client) Set(_ context.Context, _ []byte, _ []byte, _ ...options.Options) error {
+	return errors.NewError("not implemented")
 }
 
-func (s *Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) error {
-	return fmt.Errorf("not implemented")
+func (s *Client) SetTTL(_ context.Context, _ []byte, _ time.Duration) error {
+	return errors.NewError("not implemented")
 }
 
 func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*meta.Data) error {
 	func() {
-		// frpc throws a segmentation violation when the blockvalidation service is not available :-(
+		// can throw a segmentation violation when the blockvalidation service is not available :-(
 		err := recover()
 		if err != nil {
 			s.logger.Errorf("Recovered from panic: %v", err)
@@ -242,17 +174,6 @@ func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*meta.Data) error {
 		txMetaDataSlice = append(txMetaDataSlice, b)
 	}
 
-	frpcClient := s.getFRPCClient(ctx)
-	if frpcClient != nil {
-		_, err := frpcClient.BlockValidationAPI.SetTxMeta(ctx, &blockvalidation_api.BlockvalidationApiSetTxMetaRequest{
-			Data: txMetaDataSlice,
-		})
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
 	_, err := s.apiClient.SetTxMeta(ctx, &blockvalidation_api.SetTxMetaRequest{
 		Data: txMetaDataSlice,
 	})
@@ -264,17 +185,6 @@ func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*meta.Data) error {
 }
 
 func (s *Client) DelTxMeta(ctx context.Context, hash *chainhash.Hash) error {
-	frpcClient := s.getFRPCClient(ctx)
-	if frpcClient != nil {
-		_, err := frpcClient.BlockValidationAPI.DelTxMeta(ctx, &blockvalidation_api.BlockvalidationApiDelTxMetaRequest{
-			Hash: hash.CloneBytes(),
-		})
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
 	_, err := s.apiClient.DelTxMeta(ctx, &blockvalidation_api.DelTxMetaRequest{
 		Hash: hash.CloneBytes(),
 	})
@@ -295,15 +205,7 @@ func (s *Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, bl
 		req.Hashes = append(req.Hashes, hash.CloneBytes())
 	}
 
-	frpcClient := s.getFRPCClient(ctx)
-	if frpcClient != nil {
-		_, err = frpcClient.BlockValidationAPI.SetMinedMulti(ctx, &blockvalidation_api.BlockvalidationApiSetMinedMultiRequest{
-			Hashes:  req.Hashes,
-			BlockId: blockID,
-		})
-	} else {
-		_, err = s.apiClient.SetMinedMulti(ctx, req)
-	}
+	_, err = s.apiClient.SetMinedMulti(ctx, req)
 	if err != nil {
 		return err
 	}

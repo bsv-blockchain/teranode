@@ -3,7 +3,6 @@ package blockvalidation
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"runtime"
@@ -13,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -104,14 +104,14 @@ func (u *Server) Health(_ context.Context) (int, string, error) {
 
 func (u *Server) Init(ctx context.Context) (err error) {
 	if u.blockchainClient, err = blockchain.NewClient(ctx, u.logger); err != nil {
-		return fmt.Errorf("[Init] failed to create blockchain client [%w]", err)
+		return errors.NewServiceError("[Init] failed to create blockchain client", err)
 	}
 
 	subtreeValidationClient := subtreevalidation.NewClient(ctx, u.logger)
 
 	storeURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil || !found {
-		return fmt.Errorf("could not get utxostore URL: %v", err)
+		return errors.NewConfigurationError("could not get utxostore URL: %v", err)
 	}
 
 	expiration := uint64(0)
@@ -119,7 +119,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	if expirationValue != "" {
 		expiration, err = strconv.ParseUint(expirationValue, 10, 64)
 		if err != nil {
-			return fmt.Errorf("could not parse expiration %s: %v", expirationValue, err)
+			return errors.NewConfigurationError("could not parse expiration %s: %v", expirationValue, err)
 		}
 	}
 
@@ -226,7 +226,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		for _, pb := range peerBlocks {
 			block, err := u.getBlock(ctx, pb.hash, pb.baseURL)
 			if err != nil {
-				return fmt.Errorf("[Init] failed to get block [%s] [%v]", pb.hash.String(), err)
+				return errors.NewProcessingError("[Init] failed to get block [%s]", pb.hash.String(), err)
 			}
 
 			u.catchupCh <- processBlockCatchup{
@@ -246,7 +246,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		if blockFound.errCh != nil {
 			blockFound.errCh <- err
 		}
-		return fmt.Errorf("[Init] failed to process block [%s] [%v]", blockFound.hash.String(), err)
+		return errors.NewProcessingError("[Init] failed to process block [%s]", blockFound.hash.String(), err)
 	}
 
 	if blockFound.errCh != nil {
@@ -261,14 +261,6 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
-	frpcAddress, ok := gocore.Config().Get("blockvalidation_frpcListenAddress")
-	if ok {
-		err := u.frpcServer(ctx, frpcAddress)
-		if err != nil {
-			u.logger.Errorf("[BlockValidation] failed to start fRPC server: %v", err)
-		}
-	}
-
 	httpAddress, ok := gocore.Config().Get("blockvalidation_httpListenAddress")
 	if ok {
 		err := u.httpServer(ctx, httpAddress)
@@ -342,44 +334,6 @@ func (u *Server) Start(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-func (u *Server) frpcServer(ctx context.Context, frpcAddress string) error {
-	u.logger.Infof("Starting fRPC server on %s", frpcAddress)
-
-	frpcBv := &fRPC_BlockValidation{
-		blockValidation: u.blockValidation,
-		logger:          u.logger,
-	}
-
-	s, err := blockvalidation_api.NewServer(frpcBv, nil, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create fRPC server: %v", err)
-	}
-
-	concurrency, ok := gocore.Config().GetInt("blockvalidation_frpcConcurrency")
-	if ok {
-		u.logger.Infof("[Block Validation] Setting fRPC server concurrency to %d", concurrency)
-		s.SetConcurrency(uint64(concurrency))
-	}
-
-	// run the server
-	go func() {
-		err := s.Start(frpcAddress)
-		if err != nil {
-			u.logger.Errorf("[Block Validation] failed to serve frpc: %v", err)
-		}
-	}()
-
-	go func() {
-		<-ctx.Done()
-		err := s.Shutdown()
-		if err != nil {
-			u.logger.Errorf("[Block Validation] failed to shutdown frpc server: %v", err)
-		}
-	}()
 
 	return nil
 }
@@ -476,7 +430,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	// first check if the block exists, it is very expensive to do all the checks below
 	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
-		return nil, fmt.Errorf("[BlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
+		return nil, errors.NewServiceError("[BlockFound][%s] failed to check if block exists", hash.String(), err)
 	}
 	if exists {
 		u.logger.Infof("[BlockFound][%s] already validated, skipping", utils.ReverseAndHexEncodeSlice(req.Hash))
@@ -518,7 +472,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create block from bytes [%w]", err)
+		return nil, errors.NewProcessingError("failed to create block from bytes", err)
 	}
 
 	// we need the height for the subsidy calculation
@@ -528,7 +482,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		// try to get the height from the previous block
 		_, previousBlockMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get previous block header [%w]", err)
+			return nil, errors.NewServiceError("failed to get previous block header", err)
 		}
 		if previousBlockMeta != nil {
 			height = previousBlockMeta.Height + 1
@@ -536,7 +490,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	}
 
 	if height <= 0 {
-		return nil, fmt.Errorf("invalid height: %d", height)
+		return nil, errors.NewProcessingError("invalid height: %d", height)
 	}
 
 	block.Height = request.Height
@@ -544,7 +498,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	// TODO - check if hardcoding "legacy" is OK
 	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)
 	if err != nil {
-		return nil, fmt.Errorf("failed block validation ProcessBlock [%s] [%v]", block.String(), err)
+		return nil, errors.NewProcessingError("failed block validation ProcessBlock [%s]", block.String(), err)
 	}
 
 	return &blockvalidation_api.EmptyMessage{}, nil
@@ -561,7 +515,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	// first check if the block exists, it might have already been processed
 	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
-		return fmt.Errorf("[processBlockFound][%s] failed to check if block exists [%w]", hash.String(), err)
+		return errors.NewServiceError("[processBlockFound][%s] failed to check if block exists", hash.String(), err)
 	}
 	if exists {
 		u.logger.Warnf("[processBlockFound][%s] not processing block that already was found", hash.String())
@@ -620,7 +574,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	// catchup if we are missing the parent block.
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
-		return fmt.Errorf("[processBlockFound][%s] failed to check if parent block %s exists [%w]", hash.String(), block.Header.HashPrevBlock.String(), err)
+		return errors.NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
 
 	if !parentExists {
@@ -647,7 +601,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	}
 	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats, useOptimisticMining)
 	if err != nil {
-		return fmt.Errorf("failed block validation BlockFound [%s] [%v]", block.String(), err)
+		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
 	}
 
 	return nil
@@ -661,16 +615,16 @@ func (u *Server) getBlock(ctx context.Context, hash *chainhash.Hash, baseUrl str
 
 	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseUrl, hash.String()))
 	if err != nil {
-		return nil, fmt.Errorf("[getBlock][%s] failed to get block from peer [%w]", hash.String(), err)
+		return nil, errors.NewProcessingError("[getBlock][%s] failed to get block from peer", hash.String(), err)
 	}
 
 	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
-		return nil, fmt.Errorf("[getBlock][%s] failed to create block from bytes [%w]", hash.String(), err)
+		return nil, errors.NewProcessingError("[getBlock][%s] failed to create block from bytes", hash.String(), err)
 	}
 
 	if block == nil {
-		return nil, fmt.Errorf("[getBlock][%s] block could not be created from bytes: %v", hash.String(), blockBytes)
+		return nil, errors.NewProcessingError("[getBlock][%s] block could not be created from bytes: %v", hash.String(), blockBytes)
 	}
 
 	return block, nil
@@ -684,7 +638,7 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 
 	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/blocks/%s?n=%d", baseUrl, hash.String(), n))
 	if err != nil {
-		return nil, fmt.Errorf("[getBlocks][%s] failed to get blocks from peer [%w]", hash.String(), err)
+		return nil, errors.NewProcessingError("[getBlocks][%s] failed to get blocks from peer", hash.String(), err)
 	}
 
 	blockReader := bytes.NewReader(blockBytes)
@@ -697,7 +651,7 @@ func (u *Server) getBlocks(ctx context.Context, hash *chainhash.Hash, n uint32, 
 				// if strings.Contains(err.Error(), "EOF") || errors.Is(err, io.ErrUnexpectedEOF) { // doesn't catch the EOF!!!! //TODO
 				break
 			}
-			return nil, fmt.Errorf("[getBlocks][%s] failed to create block from bytes [%w]", hash.String(), err)
+			return nil, errors.NewProcessingError("[getBlocks][%s] failed to create block from bytes", hash.String(), err)
 		}
 		blocks = append(blocks, block)
 	}
@@ -713,7 +667,7 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 
 	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers/%s", baseUrl, hash.String()))
 	if err != nil {
-		return nil, fmt.Errorf("[getBlockHeaders][%s] failed to get block headers from peer [%w]", hash.String(), err)
+		return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to get block headers from peer", hash.String(), err)
 	}
 
 	blockHeaders := make([]*model.BlockHeader, 0, len(blockHeadersBytes)/model.BlockHeaderSize)
@@ -722,7 +676,7 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 	for i := 0; i < len(blockHeadersBytes); i += model.BlockHeaderSize {
 		blockHeader, err = model.NewBlockHeaderFromBytes(blockHeadersBytes[i : i+model.BlockHeaderSize])
 		if err != nil {
-			return nil, fmt.Errorf("[getBlockHeaders][%s] failed to create block header from bytes [%w]", hash.String(), err)
+			return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to create block header from bytes", hash.String(), err)
 		}
 		blockHeaders = append(blockHeaders, blockHeader)
 	}
@@ -743,7 +697,7 @@ func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL st
 	// first check whether this block already exists, which would mean we caught up from another peer
 	exists, err := u.blockValidation.GetBlockExists(ctx, fromBlock.Hash())
 	if err != nil {
-		return fmt.Errorf("[catchup][%s] failed to check if block exists [%w]", fromBlock.Hash().String(), err)
+		return errors.NewServiceError("[catchup][%s] failed to check if block exists", fromBlock.Hash().String(), err)
 	}
 	if exists {
 		return nil
@@ -763,7 +717,7 @@ LOOP:
 		}
 
 		if len(blockHeaders) == 0 {
-			return fmt.Errorf("[catchup][%s] failed to get block headers from [%s]", fromBlock.Hash().String(), fromBlockHeaderHash.String())
+			return errors.NewServiceError("[catchup][%s] failed to get block headers from [%s]", fromBlock.Hash().String(), fromBlockHeaderHash.String())
 		}
 
 		for _, blockHeader := range blockHeaders {
@@ -794,7 +748,7 @@ LOOP:
 
 			exists, err = u.blockValidation.GetBlockExists(ctx, blockHeader.Hash())
 			if err != nil {
-				return fmt.Errorf("[catchup][%s] failed to check if parent block exists [%w]", fromBlock.Hash().String(), err)
+				return errors.NewServiceError("[catchup][%s] failed to check if parent block exists", fromBlock.Hash().String(), err)
 			}
 
 			if exists {
@@ -807,7 +761,7 @@ LOOP:
 			fromBlockHeaderHash = blockHeader.HashPrevBlock
 			// TODO: check if its only useful for a chain with different genesis block?
 			if fromBlockHeaderHash.IsEqual(&chainhash.Hash{}) {
-				return fmt.Errorf("[catchup][%s] failed to find parent block header, last was: %s", fromBlock.Hash().String(), blockHeader.String())
+				return errors.NewProcessingError("[catchup][%s] failed to find parent block header, last was: %s", fromBlock.Hash().String(), blockHeader.String())
 			}
 		}
 	}
@@ -845,7 +799,7 @@ LOOP:
 				// TODO
 				// we aren't waiting for the func to finish so we never catch this error and log it
 				u.logger.Errorf("[catchup][%s] failed to get %d blocks [%s]:%v", fromBlock.Hash().String(), batch.size, batch.hash.String(), err)
-				return errors.Join(fmt.Errorf("[catchup][%s] failed to get %d blocks [%s]", fromBlock.Hash().String(), batch.size, batch.hash.String()), err)
+				return errors.NewProcessingError("[catchup][%s] failed to get %d blocks [%s]", fromBlock.Hash().String(), batch.size, batch.hash.String(), err)
 			}
 			if uint32(len(blocks)) != batch.size {
 				u.logger.Warnf("[catchup][%s] got %d blocks, expected %d", fromBlock.Hash().String(), len(blocks), batch.size)
@@ -876,8 +830,8 @@ LOOP:
 		i++
 		u.logger.Infof("[catchup][%s] validating block %d/%d", block.Hash().String(), i, size.Load())
 
-		if err := u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
-			return errors.Join(fmt.Errorf("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String()), err)
+		if err = u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
+			return errors.NewServiceError("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String(), err)
 		}
 		u.logger.Debugf("[catchup][%s] validated block %d/%d", block.Hash().String(), i, size.Load())
 	}
@@ -920,7 +874,7 @@ func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.Subtre
 
 	// subtreeHash, err := chainhash.NewHash(req.Hash)
 	// if err != nil {
-	// 	return nil, fmt.Errorf("[SubtreeFound][%s] failed to create subtree hash from bytes: %w", utils.ReverseAndHexEncodeSlice(req.Hash), err)
+	// 	return nil, errors.NewError("[SubtreeFound][%s] failed to create subtree hash from bytes", utils.ReverseAndHexEncodeSlice(req.Hash), err)
 	// }
 
 	// u.subtreeFoundQueue.enqueue(&queueItem{
@@ -992,10 +946,10 @@ func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.Del
 	prometheusBlockValidationSetTXMetaCacheDel.Inc()
 	hash, err := chainhash.NewHash(request.Hash[:])
 	if err != nil {
-		return nil, fmt.Errorf("failed to create hash from bytes: %v", err)
+		return nil, errors.NewProcessingError("failed to create hash from bytes", err)
 	}
 
-	if err := u.blockValidation.DelTxMetaCacheMulti(ctx, hash); err != nil {
+	if err = u.blockValidation.DelTxMetaCacheMulti(ctx, hash); err != nil {
 		u.logger.Errorf("failed to delete tx meta data: %v", err)
 	}
 

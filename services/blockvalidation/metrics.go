@@ -28,13 +28,10 @@ var (
 	prometheusBlockValidationReValidateBlockErr    prometheus.Histogram
 
 	// tx meta cache stats
-	prometheusBlockValidationSetTXMetaCache        prometheus.Counter
-	prometheusBlockValidationSetTXMetaCacheFrpc    prometheus.Counter
-	prometheusBlockValidationSetTXMetaCacheDel     prometheus.Counter
-	prometheusBlockValidationSetTXMetaCacheDelFrpc prometheus.Counter
+	prometheusBlockValidationSetTXMetaCache    prometheus.Counter
+	prometheusBlockValidationSetTXMetaCacheDel prometheus.Counter
 	//prometheusBlockValidationSetMinedLocal         prometheus.Counter
-	prometheusBlockValidationSetMinedMulti     prometheus.Counter
-	prometheusBlockValidationSetMinedMultiFrpc prometheus.Counter
+	prometheusBlockValidationSetMinedMulti prometheus.Counter
 
 	// expiring cache metrics
 	prometheusBlockValidationLastValidatedBlocksCache prometheus.Gauge
@@ -187,27 +184,11 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockValidationSetTXMetaCacheFrpc = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
-			Name:      "set_tx_meta_cache_frpc",
-			Help:      "Number of tx meta cache sets with frpc",
-		},
-	)
-
 	prometheusBlockValidationSetTXMetaCacheDel = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "blockvalidation",
 			Name:      "del_tx_meta_cache",
 			Help:      "Number of tx meta cache deletes",
-		},
-	)
-
-	prometheusBlockValidationSetTXMetaCacheDelFrpc = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
-			Name:      "del_tx_meta_cache_frpc",
-			Help:      "Number of tx meta cache deletes with frpc",
 		},
 	)
 
@@ -224,14 +205,6 @@ func _initPrometheusMetrics() {
 			Namespace: "blockvalidation",
 			Name:      "set_tx_mined_multi",
 			Help:      "Number of tx mined multi sets",
-		},
-	)
-
-	prometheusBlockValidationSetMinedMultiFrpc = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
-			Name:      "set_tx_mined_multi_frpc",
-			Help:      "Number of tx mined multi sets with frpc",
 		},
 	)
 
