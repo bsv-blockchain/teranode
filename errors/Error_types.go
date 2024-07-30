@@ -31,6 +31,8 @@ var (
 	ErrCoinbaseMissingBlockHeight = New(ERR_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrSpent                      = New(ERR_SPENT, "utxo already spent")
 	ErrLockTime                   = New(ERR_LOCKTIME, "Bad lock time")
+	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
+	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 )
 
 // errors initialization functions
@@ -124,4 +126,10 @@ func NewSpentError(message string, params ...interface{}) error {
 }
 func NewLockTimeError(message string, params ...interface{}) error {
 	return New(ERR_LOCKTIME, message, params...)
+}
+func NewStateInitializationError(message string, params ...interface{}) error {
+	return New(ERR_STATE_INITIALIZATION, message, params...)
+}
+func NewStateErrorError(message string, params ...interface{}) error {
+	return New(ERR_STATE_ERROR, message, params...)
 }

@@ -83,13 +83,12 @@ func GetCoinbaseParts(height uint32, coinbaseValue uint64, coinbaseText string, 
 // AddressToScript comment
 func AddressToScript(address string) (script []byte, err error) {
 	decoded, err := DecodeString(address)
-
 	if err != nil {
 		return nil, err
 	}
 
 	if len(decoded) != 25 {
-		return nil, errors.NewConfigurationError("invalid address length for '%s'", address)
+		return nil, errors.NewProcessingError("invalid address length for '%s'", address)
 	}
 
 	// A P2SH address always begins with a '3', instead of a '1' as in P2PKH addresses.
@@ -128,7 +127,7 @@ func AddressToScript(address string) (script []byte, err error) {
 		return ret, nil
 
 	default:
-		return nil, errors.NewConfigurationError("address %s is not supported", address)
+		return nil, errors.NewProcessingError("address %s is not supported", address)
 	}
 }
 

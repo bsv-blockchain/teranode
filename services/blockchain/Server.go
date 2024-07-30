@@ -96,7 +96,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	if err == nil && ok {
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
 		if _, b.blockKafkaProducer, err = util.ConnectToKafka(blocksKafkaURL); err != nil {
-			return errors.WrapGRPC(errors.New(errors.ERR_SERVICE_UNAVAILABLE, "[Blockchain] error connecting to kafka", err))
+			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
 		}
 	}
 
@@ -861,7 +861,7 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	var state string
 
 	if b.finiteStateMachine == nil {
-		return nil, fmt.Errorf("FSM is not initialized")
+		return nil, errors.NewStateInitializationError("FSM is not initialized")
 	}
 
 	// Get the current state of the FSM
@@ -871,7 +871,7 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	enumState, ok := blockchain_api.FSMStateType_value[state]
 	if !ok {
 		// Handle the case where the state is not found in the map
-		return nil, errors.New(errors.ERR_PROCESSING, "invalid state: "+state)
+		return nil, errors.NewProcessingError("invalid state: %s", state)
 	}
 
 	return &blockchain_api.GetFSMStateResponse{

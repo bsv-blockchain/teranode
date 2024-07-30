@@ -3,7 +3,7 @@ package blockchain
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"math/big"
 	"math/rand"
 
@@ -105,7 +105,7 @@ func (d *Difficulty) GetNextWorkRequired(ctx context.Context, bestBlockHeader *m
 
 	lastSuitableBlock, err := d.store.GetSuitableBlock(ctx, bestBlockHeader.Hash())
 	if err != nil {
-		return nil, fmt.Errorf("error getting suitable block: %v", err)
+		return nil, errors.NewStorageError("error getting suitable block: %v", err)
 	}
 	ancestorHash, err := d.store.GetHashOfAncestorBlock(ctx, bestBlockHeader.Hash(), d.difficultyAdjustmentWindow)
 	if err != nil {
@@ -115,7 +115,7 @@ func (d *Difficulty) GetNextWorkRequired(ctx context.Context, bestBlockHeader *m
 	}
 	firstSuitableBlock, err := d.store.GetSuitableBlock(ctx, ancestorHash)
 	if err != nil {
-		return nil, fmt.Errorf("error getting suitable block: %v", err)
+		return nil, errors.NewStorageError("error getting suitable block", err)
 	}
 
 	// d.logger.Debugf("firstSuitableBlock: %+v", firstSuitableBlock)
@@ -128,7 +128,7 @@ func (d *Difficulty) GetNextWorkRequired(ctx context.Context, bestBlockHeader *m
 		Timestamp: lastSuitableBlock.Time,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("error calculating next required difficulty: %v", err)
+		return nil, errors.NewProcessingError("error calculating next required difficulty", err)
 	}
 	d.logger.Debugf("nBits: %+v", nBits)
 	return nBits, nil
