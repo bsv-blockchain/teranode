@@ -2,7 +2,7 @@ package coinbase
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
@@ -55,26 +55,26 @@ func (s *Server) Health(_ context.Context) (int, string, error) {
 func (s *Server) Init(ctx context.Context) error {
 	coinbaseStoreURL, err, found := gocore.Config().GetURL("coinbase_store")
 	if err != nil {
-		return fmt.Errorf("failed to get coinbase_store setting: %s", err)
+		return errors.NewConfigurationError("failed to get coinbase_store setting", err)
 	}
 	if !found {
-		return fmt.Errorf("no coinbase_store setting found")
+		return errors.NewConfigurationError("no coinbase_store setting found")
 	}
 
 	// We will reuse the blockchain service here to store the coinbase UTXOs
 	// you could use the same database as the blockchain service, but we will allow for a different one
 	store, err := blockchain.NewStore(s.logger, coinbaseStoreURL)
 	if err != nil {
-		return fmt.Errorf("failed to create coinbase store: %s", err)
+		return errors.NewStorageError("failed to create coinbase store: %s", err)
 	}
 
 	s.coinbase, err = NewCoinbase(s.logger, store)
 	if err != nil {
-		return fmt.Errorf("failed to create new coinbase: %s", err)
+		return errors.NewServiceError("failed to create new coinbase: %s", err)
 	}
 
 	if err = s.coinbase.Init(ctx); err != nil {
-		return fmt.Errorf("failed to init coinbase: %s", err)
+		return errors.NewServiceError("failed to init coinbase: %s", err)
 	}
 
 	return nil
@@ -142,11 +142,11 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 
 	tx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
-		return nil, fmt.Errorf("could not parse transaction bytes: %v", err)
+		return nil, errors.NewProcessingError("could not parse transaction bytes: %v", err)
 	}
 
 	if !tx.IsExtended() {
-		return nil, fmt.Errorf("transaction is not extended")
+		return nil, errors.NewTxInvalidError("transaction is not extended")
 	}
 
 	prometheusDistributeTransaction.Inc()
