@@ -10,8 +10,8 @@ import (
 
 var (
 	stat             = gocore.NewStat("Aerospike")
-	operateStat      = stat.NewStat("Operate").AddRanges(1, 100, 1000, 10000, 100000)
-	batchOperateStat = stat.NewStat("BatchOperate").AddRanges(1, 100, 1000, 10000, 100000)
+	operateStat      = stat.NewStat("Operate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
+	batchOperateStat = stat.NewStat("BatchOperate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
 )
 
 type Client struct {
