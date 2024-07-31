@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/IBM/sarama"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
@@ -117,13 +118,11 @@ func Test_KafkaAsyncProducerConsumerAutoCommit(t *testing.T) {
 	}()
 
 	numberOfMessages := 100
-	fmt.Println("starting pushing messages")
 	go produceMessages(kafkaChan, numberOfMessages)
 
 	var wg sync.WaitGroup
 	wg.Add(numberOfMessages)
 
-	fmt.Println("starting consumer")
 	go func() {
 		err = StartKafkaGroupListener(ctx, ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, 1, true, func(message KafkaMessage) error {
 			msgInt, err := byteArrayToIntFromString(message.Message.Value)
@@ -170,22 +169,29 @@ func Test_KafkaAsyncProducerWithManualCommit(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	numberOfMessages := 100
-	fmt.Println("starting pushing messages")
+	numberOfMessages := 10
 	go produceMessages(kafkaChan, numberOfMessages)
 
 	var wg sync.WaitGroup
 	wg.Add(numberOfMessages)
 
-	fmt.Println("starting consumer")
-	go func() {
-		err = StartKafkaGroupListener(ctx, ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, 1, true, func(message KafkaMessage) error {
-			fmt.Println("received message: ", string(message.Message.Value))
+	counter := 0
+	errClosure := func(message KafkaMessage) error {
+		fmt.Println("Consumer closure received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+		counter++
+		if counter%3 == 0 {
 			wg.Done()
 			return nil
+		}
 
-		})
+		//fmt.Println("returning error for message: ", string(message.Message.Value))
+		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
+	}
+
+	go func() {
+		err = StartKafkaGroupListener(ctx, ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, 1, false, errClosure)
 		require.NoError(t, err)
+
 	}()
 	wg.Wait()
 }

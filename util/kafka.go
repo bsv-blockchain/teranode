@@ -275,7 +275,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 
 	// https://github.com/IBM/sarama/issues/1689
 	// https://github.com/IBM/sarama/pull/1699
-	// Default value for config.Consumer.Offsets.AutoCommit.Enable is false
+	// Default value for config.Consumer.Offsets.AutoCommit.Enable is true.
 	if !autoCommitEnabled {
 		config.Consumer.Offsets.AutoCommit.Enable = false
 	}
@@ -317,7 +317,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 	for i := 0; i < consumerCount; i++ {
 		go func(consumerIndex int) {
 			// defer consumer.Close() // Ensure cleanup, if necessary
-			logger.Infof("[kafka] Starting consumer [%d] for group %s on topic %s", consumerIndex, groupID, topics[0])
+			logger.Infof("[kafka] Starting consumer [%d] for group %s on topic %s \n", consumerIndex, groupID, topics[0])
 
 			for {
 				select {
@@ -327,8 +327,10 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 				default:
 					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, autoCommitEnabled, consumerClosureFunc)); err != nil {
 						if errors.Is(err, context.Canceled) {
+							fmt.Println("context cancelled")
 							logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, groupID)
 						} else {
+							fmt.Println("error from consumer: ", err)
 							logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
 							// Consider delay before retry or exit based on error type
 						}
@@ -354,13 +356,10 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 }
 
 func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte) error {
-	logger.Debugf("Starting async producer")
 	topic := kafkaURL.Path[1:]
 	brokersUrl := strings.Split(kafkaURL.Host, ",")
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-
-	fmt.Println("Starting async producer")
 
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
@@ -384,8 +383,6 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 	retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000")      // 10 minutes
 	segmentBytes := GetQueryParam(kafkaURL, "segment_bytes", "1073741824") // 1GB default
 
-	fmt.Println("configcs done, creating topic")
-
 	if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
 		NumPartitions:     int32(partitions),
 		ReplicationFactor: int16(replicationFactor),
@@ -401,10 +398,7 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 		}
 	}
 
-	fmt.Println("topic done, creating async producer")
-
 	producer, err := sarama.NewAsyncProducer(brokersUrl, config)
-	fmt.Println("producer created with err: ", err)
 	if err != nil {
 		logger.Fatalf("Failed to start Sarama producer: %v", err)
 	}
@@ -423,7 +417,6 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 			logger.Errorf("Failed to deliver message: %v", err)
 		}
 	}()
-	fmt.Println("sending a batch of 50 messages asynchronously")
 	// Sending a batch of 50 messages asynchronously
 	go func() {
 		for msgBytes := range ch {
