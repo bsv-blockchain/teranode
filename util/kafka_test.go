@@ -90,7 +90,7 @@ func Test_KafkaConsumerWithAutoCommitEnabled(t *testing.T) {
 	//require.NoError(t, err)
 }
 
-func Test_KafkaAsyncProducer(t *testing.T) {
+func Test_KafkaAsyncProducerConsumerAutoCommit(t *testing.T) {
 	ctx := context.Background()
 	workerCh := make(chan KafkaMessage)
 
@@ -110,8 +110,6 @@ func Test_KafkaAsyncProducer(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	fmt.Println("Kafka URL: ", kafkaURL)
-
 	kafkaChan := make(chan []byte, 10000)
 	go func() {
 		err = StartAsyncProducer(ulogger.TestLogger{}, kafkaURL, kafkaChan)
@@ -122,7 +120,59 @@ func Test_KafkaAsyncProducer(t *testing.T) {
 	fmt.Println("starting pushing messages")
 	go produceMessages(kafkaChan, numberOfMessages)
 
-	// time.Sleep(2 * time.Second)
+	var wg sync.WaitGroup
+	wg.Add(numberOfMessages)
+
+	fmt.Println("starting consumer")
+	go func() {
+		err = StartKafkaGroupListener(ctx, ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, 1, true, func(message KafkaMessage) error {
+			msgInt, err := byteArrayToIntFromString(message.Message.Value)
+			require.NoError(t, err)
+
+			if message.Message.Offset != int64(msgInt) {
+				return err
+			}
+
+			fmt.Println("received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+			wg.Done()
+			// convert following to int string(message.Message.Value)
+			return nil
+
+		})
+		require.NoError(t, err)
+	}()
+	wg.Wait()
+}
+
+func Test_KafkaAsyncProducerWithManualCommit(t *testing.T) {
+	ctx := context.Background()
+	workerCh := make(chan KafkaMessage)
+
+	filePaths := "../docker-compose-kafka.yml"
+	compose, err := tc.NewDockerCompose(filePaths)
+	require.NoError(t, err)
+
+	err = compose.Up(context.Background())
+	require.NoError(t, err)
+
+	defer stopKafka(compose, ctx)
+
+	// Wait for the services to be ready
+	time.Sleep(10 * time.Second)
+
+	kafkaURL, err, ok := gocore.Config().GetURL("kafka_unitTest")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	kafkaChan := make(chan []byte, 10000)
+	go func() {
+		err = StartAsyncProducer(ulogger.TestLogger{}, kafkaURL, kafkaChan)
+		require.NoError(t, err)
+	}()
+
+	numberOfMessages := 100
+	fmt.Println("starting pushing messages")
+	go produceMessages(kafkaChan, numberOfMessages)
 
 	var wg sync.WaitGroup
 	wg.Add(numberOfMessages)
@@ -138,30 +188,6 @@ func Test_KafkaAsyncProducer(t *testing.T) {
 		require.NoError(t, err)
 	}()
 	wg.Wait()
-}
-
-func produceMessages(kafkaChan chan []byte, numberOfMessages int) {
-	r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
-	for i := 0; i < numberOfMessages; i++ {
-		msg := []byte("test" + strconv.Itoa(i))
-		kafkaChan <- msg
-		fmt.Println("pushed message: ", string(msg))
-		// wait for an arbitrary time to simulate a real world scenario.
-		// pick a random number between 1 and 1000
-
-		randomDelay := time.Duration(r.Intn(1000)+1) * time.Millisecond
-		time.Sleep(randomDelay)
-	}
-
-	fmt.Println("done pushing messages")
-
-}
-
-func stopKafka(compose tc.ComposeStack, ctx context.Context) {
-	if err := compose.Down(ctx); err != nil {
-		panic(err)
-	}
-
 }
 
 func TestKafkaWithCompose(t *testing.T) {
@@ -211,5 +237,32 @@ func TestKafkaWithCompose(t *testing.T) {
 		fmt.Printf("Received message: %s\n", string(msg.Value))
 	case <-time.After(10 * time.Second):
 		t.Fatal("Timed out waiting for message")
+	}
+}
+
+func stopKafka(compose tc.ComposeStack, ctx context.Context) {
+	if err := compose.Down(ctx); err != nil {
+		panic(err)
+	}
+}
+
+func byteArrayToIntFromString(message []byte) (int, error) {
+	strValue := string(message)             // Convert byte array to string
+	intValue, err := strconv.Atoi(strValue) // Parse string as integer
+	if err != nil {
+		return 0, err
+	}
+	return intValue, nil
+}
+
+func produceMessages(kafkaChan chan []byte, numberOfMessages int) {
+	r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
+	for i := 0; i < numberOfMessages; i++ {
+		msg := []byte(strconv.Itoa(i))
+		kafkaChan <- msg
+		fmt.Println("pushed message: ", string(msg))
+
+		randomDelay := time.Duration(r.Intn(200)+1) * time.Millisecond
+		time.Sleep(randomDelay)
 	}
 }
