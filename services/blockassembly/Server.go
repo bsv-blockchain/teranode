@@ -373,7 +373,8 @@ func (ba *BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.AddTxRe
 	}()
 
 	if len(req.Txid) != 32 {
-		return nil, errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid))
+		return nil, errors.WrapGRPC(
+			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid)))
 	}
 
 	if !ba.blockAssemblyDisabled {
@@ -397,14 +398,15 @@ func (ba *BlockAssembly) RemoveTx(_ context.Context, req *blockassembly_api.Remo
 	}()
 
 	if len(req.Txid) != 32 {
-		return nil, errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid))
+		return nil, errors.WrapGRPC(
+			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid)))
 	}
 
 	hash := chainhash.Hash(req.Txid)
 
 	if !ba.blockAssemblyDisabled {
 		if err := ba.blockAssembler.RemoveTx(hash); err != nil {
-			return nil, err
+			return nil, errors.WrapGRPC(err)
 		}
 	}
 
@@ -427,7 +429,7 @@ func (ba *BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_api.
 
 	requests := batch.GetTxRequests()
 	if len(requests) == 0 {
-		return nil, errors.NewInvalidArgumentError("no tx requests in batch")
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("no tx requests in batch"))
 	}
 
 	var batchError error = nil
@@ -447,7 +449,7 @@ func (ba *BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_api.
 
 	return &blockassembly_api.AddTxBatchResponse{
 		Ok: true,
-	}, batchError
+	}, errors.WrapGRPC(batchError)
 }
 
 func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) (*meta.Data, error) {
@@ -461,7 +463,7 @@ func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) 
 
 	txMetadata, err := ba.utxoStore.Get(txMetaSpanCtx, txHash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	currentChainMapIDs := ba.blockAssembler.GetCurrentChainMapIDs()
@@ -472,7 +474,7 @@ func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) 
 		for _, id := range txMetadata.BlockIDs {
 			if _, ok := currentChainMapIDs[id]; ok {
 				// the tx is already in a block on our chain, nothing to do
-				return nil, errors.NewProcessingError("tx already in a block on the active chain: %d", id)
+				return nil, errors.WrapGRPC(errors.NewProcessingError("tx already in a block on the active chain: %d", id))
 			}
 		}
 	}
@@ -490,7 +492,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 
 	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	id, _ := chainhash.NewHash(miningCandidate.Id)
@@ -564,7 +566,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 
 	storeId, err := chainhash.NewHash(req.Id[:])
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	jobItem := ba.jobStore.Get(*storeId)
@@ -575,16 +577,17 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 
 	hashPrevBlock, err := chainhash.NewHash(job.MiningCandidate.PreviousHash)
 	if err != nil {
-		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashPrevBlock", jobID, err)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashPrevBlock", jobID, err))
 	}
 
 	if ba.blockAssembler.bestBlockHeader.Load().HashPrevBlock.IsEqual(hashPrevBlock) {
-		return nil, errors.NewProcessingError("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID)
+		return nil, errors.WrapGRPC(
+			errors.NewProcessingError("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID))
 	}
 
 	coinbaseTx, err := bt.NewTxFromBytes(req.CoinbaseTx)
 	if err != nil {
-		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to convert coinbaseTx", jobID, err)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert coinbaseTx", jobID, err))
 	}
 	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
 
@@ -622,12 +625,12 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 	// Create a new subtree with the subtreeHashes of the subtrees
 	topTree, err := util.NewTreeByLeafCount(util.CeilPowerOfTwo(len(subtreesInJob)))
 	if err != nil {
-		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to create topTree", jobID, err)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to create topTree", jobID, err))
 	}
 	for _, hash := range subtreeHashes {
 		err = topTree.AddNode(hash, 1, 0)
 		if err != nil {
-			return nil, err
+			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to add node to topTree", jobID, err))
 		}
 	}
 
@@ -640,7 +643,8 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 		ba.logger.Infof("[BlockAssembly] calculating merkle proof for job %s", jobID)
 		coinbaseMerkleProof, err = util.GetMerkleProofForCoinbase(subtreesInJob)
 		if err != nil {
-			return nil, errors.NewProcessingError("[BlockAssembly][%s] error getting merkle proof for coinbase", jobID, err)
+			return nil, errors.WrapGRPC(
+				errors.NewProcessingError("[BlockAssembly][%s] error getting merkle proof for coinbase", jobID, err))
 		}
 
 		cmp := make([]string, len(coinbaseMerkleProof))
@@ -653,7 +657,7 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 		calculatedMerkleRoot := topTree.RootHash()
 		hashMerkleRoot, err = chainhash.NewHash(calculatedMerkleRoot[:])
 		if err != nil {
-			return nil, err
+			return nil, errors.WrapGRPC(errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashMerkleRoot", jobID, err))
 		}
 	}
 
@@ -683,7 +687,8 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 	// check fully valid, including whether difficulty in header is low enough
 	if ok, err := block.Valid(ctx, ba.logger, nil, nil, nil, nil, nil, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
-		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", jobID, block.Hash().String(), err)
+		return nil, errors.WrapGRPC(
+			errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", jobID, block.Hash().String(), err))
 	}
 	ba.logger.Infof("[BlockAssembly][%s][%s] validating block DONE in %s", jobID, block.Header.Hash(), time.Since(startTime).String())
 
@@ -702,7 +707,8 @@ func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockS
 	ba.logger.Infof("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
 	// add block to the blockchain
 	if err = ba.blockchainClient.AddBlock(ctx, block, ""); err != nil {
-		return nil, errors.NewServiceError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err)
+		return nil, errors.WrapGRPC(
+			errors.NewServiceError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err))
 	}
 
 	// don't wait for blockchain to notify us of new block.
@@ -796,12 +802,13 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 	}
 
 	if err = g.Wait(); err != nil {
-		return err
+		return errors.WrapGRPC(err)
 	}
 
 	// update block subtrees_set to true
 	if err = ba.blockchainClient.SetBlockSubtreesSet(ctx, block.Hash()); err != nil {
-		return errors.NewServiceError("[ValidateBlock][%s] failed to set block subtrees_set", block.Hash().String(), err)
+		return errors.WrapGRPC(
+			errors.NewServiceError("[ValidateBlock][%s] failed to set block subtrees_set", block.Hash().String(), err))
 	}
 
 	ba.logger.Infof("[removeSubtreesTTL][%s] updating subtree TTLs DONE in %s", block.Hash().String(), time.Since(startTime).String())

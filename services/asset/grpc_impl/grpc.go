@@ -235,12 +235,12 @@ func (g *GRPC) GetBlock(ctx context.Context, request *asset_api.GetBlockRequest)
 
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewProcessingError("could not create chainhash from request hash: %s", utils.ReverseAndHexEncodeSlice(request.Hash)))
 	}
 
 	block, err := g.repository.GetBlockByHash(ctx, blockHash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewProcessingError("could not get block by hash: %s", blockHash.String()))
 	}
 
 	height, _ := util.ExtractCoinbaseHeight(block.CoinbaseTx)
@@ -270,7 +270,12 @@ func (g *GRPC) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.Bloc
 		AssetStat.NewStat("GetBlockStats").AddTime(start)
 	}()
 
-	return g.repository.GetBlockStats(ctx)
+	blockStats, err := g.repository.GetBlockStats(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("could not get block stats: %s", err.Error()))
+	}
+
+	return blockStats, nil
 }
 
 func (g *GRPC) GetBlockGraphData(ctx context.Context, in *asset_api.GetBlockGraphDataRequest) (*model.BlockDataPoints, error) {
@@ -279,7 +284,12 @@ func (g *GRPC) GetBlockGraphData(ctx context.Context, in *asset_api.GetBlockGrap
 		AssetStat.NewStat("GetBlockGraphData").AddTime(start)
 	}()
 
-	return g.repository.GetBlockGraphData(ctx, in.PeriodMillis)
+	blockGraphData, err := g.repository.GetBlockGraphData(ctx, in.PeriodMillis)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewServiceError("could not get block graph data: %s", err.Error()))
+	}
+
+	return blockGraphData, nil
 }
 
 func (g *GRPC) GetBlockHeader(ctx context.Context, req *asset_api.GetBlockHeaderRequest) (*asset_api.GetBlockHeaderResponse, error) {
@@ -290,12 +300,12 @@ func (g *GRPC) GetBlockHeader(ctx context.Context, req *asset_api.GetBlockHeader
 
 	hash, err := chainhash.NewHash(req.BlockHash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewProcessingError("could not create chainhash from request hash: %s", utils.ReverseAndHexEncodeSlice(req.BlockHash)))
 	}
 
 	blockHeader, meta, err := g.repository.GetBlockHeader(ctx, hash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewServiceError("could not get block header: %s", hash.String(), err))
 	}
 
 	prometheusAssetGRPCGetBlockHeader.Inc()
@@ -316,7 +326,7 @@ func (g *GRPC) GetBlockHeaders(ctx context.Context, req *asset_api.GetBlockHeade
 
 	startHash, err := chainhash.NewHash(req.StartHash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewProcessingError("could not create chainhash from request start hash: %s", utils.ReverseAndHexEncodeSlice(req.StartHash)))
 	}
 
 	nrOfHeaders := req.NumberOfHeaders
@@ -329,7 +339,7 @@ func (g *GRPC) GetBlockHeaders(ctx context.Context, req *asset_api.GetBlockHeade
 
 	blockHeaders, blockHeaderMetas, err := g.repository.GetBlockHeaders(ctx, startHash, nrOfHeaders)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewServiceError("could not get block headers", err))
 	}
 
 	blockHeaderBytes := make([][]byte, len(blockHeaders))
@@ -358,7 +368,7 @@ func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*asset
 
 	blockHeader, meta, err := g.repository.GetBestBlockHeader(ctx)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewServiceError("could not get best block header", err))
 	}
 
 	return &asset_api.GetBlockHeaderResponse{
@@ -391,12 +401,12 @@ func (g *GRPC) Get(ctx context.Context, request *asset_api.GetSubtreeRequest) (*
 
 	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewProcessingError("could not create chainhash from request hash: %s", utils.ReverseAndHexEncodeSlice(request.Hash)))
 	}
 
 	subtreeBytes, err := g.repository.SubtreeStore.Get(ctx, hash[:])
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewServiceError("could not get subtree: %s", hash.String(), err))
 	}
 
 	return &asset_api.GetSubtreeResponse{
@@ -412,12 +422,12 @@ func (g *GRPC) Exists(ctx context.Context, request *asset_api.ExistsSubtreeReque
 
 	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewProcessingError("could not create chainhash from request hash: %s", utils.ReverseAndHexEncodeSlice(request.Hash)))
 	}
 
 	exists, err := g.repository.SubtreeStore.Exists(ctx, hash[:])
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewServiceError("could not check if subtree exists: %s", hash.String(), err))
 	}
 
 	return &asset_api.ExistsSubtreeResponse{
@@ -432,7 +442,12 @@ func (g *GRPC) Set(ctx context.Context, request *asset_api.SetSubtreeRequest) (*
 	}()
 
 	ttl := time.Duration(request.Ttl) * time.Second
-	return &emptypb.Empty{}, g.repository.SubtreeStore.Set(ctx, request.Hash, request.Subtree, options.WithTTL(ttl))
+	err := g.repository.SubtreeStore.Set(ctx, request.Hash, request.Subtree, options.WithTTL(ttl))
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewServiceError("could not set subtree", err))
+	}
+
+	return &emptypb.Empty{}, nil
 }
 
 func (g *GRPC) SetTTL(ctx context.Context, request *asset_api.SetSubtreeTTLRequest) (*emptypb.Empty, error) {
@@ -442,7 +457,12 @@ func (g *GRPC) SetTTL(ctx context.Context, request *asset_api.SetSubtreeTTLReque
 	}()
 
 	ttl := time.Duration(request.Ttl) * time.Second
-	return &emptypb.Empty{}, g.repository.SubtreeStore.SetTTL(ctx, request.Hash, ttl)
+	err := g.repository.SubtreeStore.SetTTL(ctx, request.Hash, ttl)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewServiceError("could not set subtree TTL: %s", utils.ReverseAndHexEncodeSlice(request.Hash), err))
+	}
+
+	return &emptypb.Empty{}, nil
 }
 
 func (g *GRPC) AddHttpSubscriber(ch chan *asset_api.Notification) {

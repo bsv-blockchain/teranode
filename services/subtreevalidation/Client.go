@@ -3,6 +3,7 @@ package subtreevalidation
 import (
 	"context"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -55,7 +56,7 @@ func (s *Client) CheckSubtree(ctx context.Context, subtreeHash chainhash.Hash, b
 
 	_, err := s.apiClient.CheckSubtree(ctx, req)
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil

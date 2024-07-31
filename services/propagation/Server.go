@@ -362,7 +362,7 @@ func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *p
 
 	txBytes, err := hex.DecodeString(req.Tx)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	return ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
@@ -371,7 +371,11 @@ func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *p
 }
 
 func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
-	return &propagation_api.EmptyMessage{}, ps.processTransaction(ctx, req)
+	if err := ps.processTransaction(ctx, req); err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &propagation_api.EmptyMessage{}, nil
 }
 
 func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
@@ -400,7 +404,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	return response, nil
@@ -466,16 +470,16 @@ func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.Pro
 	for {
 		req, err := stream.Recv()
 		if err != nil {
-			return err
+			return errors.WrapGRPC(err)
 		}
 
 		resp, err := ps.ProcessTransaction(stream.Context(), req)
 		if err != nil {
-			return err
+			return errors.WrapGRPC(err)
 		}
 
-		if err := stream.Send(resp); err != nil {
-			return err
+		if err = stream.Send(resp); err != nil {
+			return errors.WrapGRPC(err)
 		}
 	}
 }
@@ -488,10 +492,10 @@ func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *p
 
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to parse transaction from bytes", err)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to parse transaction from bytes", err))
 	}
 	if err = ps.storeTransaction(ctx, btTx); err != nil {
-		return nil, errors.NewStorageError("failed to save transaction %s", btTx.TxIDChainHash().String(), err)
+		return nil, errors.WrapGRPC(errors.NewStorageError("failed to save transaction %s", btTx.TxIDChainHash().String(), err))
 	}
 	return &propagation_api.EmptyMessage{}, nil
 }

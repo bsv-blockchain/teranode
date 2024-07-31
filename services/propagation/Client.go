@@ -91,7 +91,7 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 		Tx: tx.ExtendedBytes(),
 	})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil

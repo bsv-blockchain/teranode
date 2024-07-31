@@ -424,13 +424,15 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 
 	hash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(
+			errors.NewProcessingError("[BlockFound][%s] failed to create hash from bytes", utils.ReverseAndHexEncodeSlice(req.Hash), err))
 	}
 
 	// first check if the block exists, it is very expensive to do all the checks below
 	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
-		return nil, errors.NewServiceError("[BlockFound][%s] failed to check if block exists", hash.String(), err)
+		return nil, errors.WrapGRPC(
+			errors.NewServiceError("[BlockFound][%s] failed to check if block exists", hash.String(), err))
 	}
 	if exists {
 		u.logger.Infof("[BlockFound][%s] already validated, skipping", utils.ReverseAndHexEncodeSlice(req.Hash))
@@ -457,7 +459,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	if req.WaitToComplete {
 		err := <-errCh
 		if err != nil {
-			return nil, err
+			return nil, errors.WrapGRPC(err)
 		}
 	}
 
@@ -472,7 +474,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to create block from bytes", err)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to create block from bytes", err))
 	}
 
 	// we need the height for the subsidy calculation
@@ -482,7 +484,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		// try to get the height from the previous block
 		_, previousBlockMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
 		if err != nil {
-			return nil, errors.NewServiceError("failed to get previous block header", err)
+			return nil, errors.WrapGRPC(errors.NewServiceError("failed to get previous block header", err))
 		}
 		if previousBlockMeta != nil {
 			height = previousBlockMeta.Height + 1
@@ -490,7 +492,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	}
 
 	if height <= 0 {
-		return nil, errors.NewProcessingError("invalid height: %d", height)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("invalid height: %d", height))
 	}
 
 	block.Height = request.Height
@@ -498,7 +500,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	// TODO - check if hardcoding "legacy" is OK
 	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed block validation ProcessBlock [%s]", block.String(), err)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("failed block validation ProcessBlock [%s]", block.String(), err))
 	}
 
 	return &blockvalidation_api.EmptyMessage{}, nil
@@ -515,7 +517,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	// first check if the block exists, it might have already been processed
 	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
-		return errors.NewServiceError("[processBlockFound][%s] failed to check if block exists", hash.String(), err)
+		return errors.WrapGRPC(errors.NewServiceError("[processBlockFound][%s] failed to check if block exists", hash.String(), err))
 	}
 	if exists {
 		u.logger.Warnf("[processBlockFound][%s] not processing block that already was found", hash.String())
@@ -528,7 +530,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	} else {
 		block, err = u.getBlock(ctx, hash, baseUrl)
 		if err != nil {
-			return err
+			return errors.WrapGRPC(err)
 		}
 	}
 
@@ -574,7 +576,8 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	// catchup if we are missing the parent block.
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
-		return errors.NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", hash.String(), block.Header.HashPrevBlock.String(), err)
+		return errors.WrapGRPC(
+			errors.NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", hash.String(), block.Header.HashPrevBlock.String(), err))
 	}
 
 	if !parentExists {
@@ -601,7 +604,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	}
 	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats, useOptimisticMining)
 	if err != nil {
-		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
+		return errors.WrapGRPC(errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err))
 	}
 
 	return nil
@@ -893,7 +896,7 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 
 	subtree, err := u.subtreeStore.Get(ctx, request.Hash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewStorageError("failed to get subtree: %s", utils.ReverseAndHexEncodeSlice(request.Hash), err))
 	}
 
 	return &blockvalidation_api.GetSubtreeResponse{
@@ -910,7 +913,7 @@ func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.Exists
 	hash := chainhash.Hash(request.Hash)
 	exists, err := u.blockValidation.GetSubtreeExists(ctx, &hash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewServiceError("failed to check if subtree exists: %s", hash.String(), err))
 	}
 
 	return &blockvalidation_api.ExistsSubtreeResponse{
@@ -946,7 +949,7 @@ func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.Del
 	prometheusBlockValidationSetTXMetaCacheDel.Inc()
 	hash, err := chainhash.NewHash(request.Hash[:])
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to create hash from bytes", err)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to create hash from bytes", err))
 	}
 
 	if err = u.blockValidation.DelTxMetaCacheMulti(ctx, hash); err != nil {
@@ -975,7 +978,7 @@ func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api
 	prometheusBlockValidationSetMinedMulti.Inc()
 	err := u.blockValidation.SetTxMetaCacheMinedMulti(ctx, hashes, request.BlockId)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to set tx meta data: %v", err))
 	}
 
 	return &blockvalidation_api.SetMinedMultiResponse{

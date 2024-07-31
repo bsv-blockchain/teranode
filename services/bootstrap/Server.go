@@ -239,7 +239,7 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 				Type: bootstrap_api.Type_ADD,
 				Info: info,
 			}); err != nil {
-				return err
+				return errors.WrapGRPC(err)
 			}
 		}
 	}
@@ -286,7 +286,7 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 		case notification := <-ch:
 			err := stream.Send(notification)
 			if err != nil {
-				return err
+				return errors.WrapGRPC(err)
 			}
 		}
 	}

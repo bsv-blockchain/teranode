@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -108,7 +109,7 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 
 	if s.batchSize == 0 {
 		if _, err := s.client.AddTx(ctx, req); err != nil {
-			return false, err
+			return false, errors.UnwrapGRPC(err)
 		}
 	} else {
 		/* batch mode */
@@ -131,7 +132,7 @@ func (s *Client) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 		Txid: hash[:],
 	})
 
-	return err
+	return errors.UnwrapGRPC(err)
 }
 
 func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
@@ -139,7 +140,7 @@ func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate
 
 	res, err := s.client.GetMiningCandidate(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, errors.UnwrapGRPC(err)
 	}
 
 	return res, nil
@@ -153,7 +154,8 @@ func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.Minin
 		Time:       solution.Time,
 		Version:    solution.Version,
 	})
-	return err
+
+	return errors.UnwrapGRPC(err)
 }
 
 func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchItem) {
@@ -170,7 +172,7 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 	if err != nil {
 		s.logger.Errorf("%v", err)
 		for _, item := range batch {
-			item.done <- err
+			item.done <- errors.UnwrapGRPC(err)
 		}
 		return
 	}
@@ -182,16 +184,21 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 
 func (s *Client) DeDuplicateBlockAssembly(_ context.Context) error {
 	_, err := s.client.DeDuplicateBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
-	return err
+	return errors.UnwrapGRPC(err)
 }
 
 func (s *Client) ResetBlockAssembly(_ context.Context) error {
 	_, err := s.client.ResetBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
-	return err
+	return errors.UnwrapGRPC(err)
 }
 
 func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {
-	return s.client.GetBlockAssemblyState(ctx, &blockassembly_api.EmptyMessage{})
+	state, err := s.client.GetBlockAssemblyState(ctx, &blockassembly_api.EmptyMessage{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return state, nil
 }
 
 func (s *Client) BlockAssemblyAPIClient() blockassembly_api.BlockAssemblyAPIClient {

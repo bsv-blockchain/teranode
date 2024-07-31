@@ -67,7 +67,7 @@ func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, base
 
 	_, err := s.apiClient.BlockFound(ctx, req)
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -86,7 +86,7 @@ func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeig
 
 	_, err = s.apiClient.ProcessBlock(ctx, req)
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -100,7 +100,7 @@ func (s *Client) SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, 
 
 	_, err := s.apiClient.SubtreeFound(ctx, req)
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -123,7 +123,7 @@ func (s *Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
 
 	response, err := s.apiClient.Get(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, errors.UnwrapGRPC(err)
 	}
 
 	return response.Subtree, nil
@@ -136,7 +136,7 @@ func (s *Client) Exists(ctx context.Context, subtreeHash []byte) (bool, error) {
 
 	response, err := s.apiClient.Exists(ctx, req)
 	if err != nil {
-		return false, err
+		return false, errors.UnwrapGRPC(err)
 	}
 
 	return response.Exists, nil
@@ -178,7 +178,7 @@ func (s *Client) SetTxMeta(ctx context.Context, txMetaData []*meta.Data) error {
 		Data: txMetaDataSlice,
 	})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -189,7 +189,7 @@ func (s *Client) DelTxMeta(ctx context.Context, hash *chainhash.Hash) error {
 		Hash: hash.CloneBytes(),
 	})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -207,7 +207,7 @@ func (s *Client) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, bl
 
 	_, err = s.apiClient.SetMinedMulti(ctx, req)
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil

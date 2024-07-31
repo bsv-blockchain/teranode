@@ -126,7 +126,7 @@ func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFund
 	ctx1 := tracing.ContextWithStat(ctx, stat)
 	fundingTx, err := s.coinbase.RequestFunds(ctx1, req.Address, req.DisableDistribute)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	return &coinbase_api.RequestFundsResponse{
@@ -142,11 +142,11 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 
 	tx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
-		return nil, errors.NewProcessingError("could not parse transaction bytes: %v", err)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("could not parse transaction bytes: %v", err))
 	}
 
 	if !tx.IsExtended() {
-		return nil, errors.NewTxInvalidError("transaction is not extended")
+		return nil, errors.WrapGRPC(errors.NewTxInvalidError("transaction is not extended"))
 	}
 
 	prometheusDistributeTransaction.Inc()
@@ -180,5 +180,10 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 }
 
 func (s *Server) GetBalance(ctx context.Context, _ *emptypb.Empty) (*coinbase_api.GetBalanceResponse, error) {
-	return s.coinbase.getBalance(ctx)
+	balance, err := s.coinbase.getBalance(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return balance, nil
 }
