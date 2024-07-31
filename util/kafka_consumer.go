@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/retry"
-	"log"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -59,29 +58,19 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 			if kc.autoCommitEnabled {
 				_ = kc.handleMessagesWithAutoCommit(session, message)
 			} else {
-				_ = kc.handleMessageWithManualCommit(ctx, session, message) //; err != nil {
-				// TODO: consider changing logging and/or error handling
-				// The message is not marked as consumed, Log the error and continue processing the next message.
-				//kc.logger.Infof("Error processing message: %v", err)
-				//}
+				_ = kc.handleMessageWithManualCommit(ctx, session, message)
 			}
 			messageCount := 1 // Start with 1 message already received.
-			fmt.Println("handling rest of the messages")
 			// Handle further messages up to a maximum of 1000.
 		InnerLoop:
 			for messageCount < 1000 {
 				select {
 				case message := <-claim.Messages():
-					fmt.Println("received message in consume claim: ", message)
 					if kc.autoCommitEnabled {
 						// No need to check the error here as we are auto committing
 						_ = kc.handleMessagesWithAutoCommit(session, message)
 					} else {
-						if err := kc.handleMessageWithManualCommit(ctx, session, message); err != nil {
-							// TODO: consider changing logging and/or error handling
-							// The message is not marked as consumed, Log the error and continue processing the next message.
-							log.Printf("Error processing message: %v", err)
-						}
+						_ = kc.handleMessageWithManualCommit(ctx, session, message)
 					}
 					messageCount++
 				default:

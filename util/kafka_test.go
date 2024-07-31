@@ -16,7 +16,6 @@ import (
 	"time"
 )
 
-// Test_NewKafkaConsumer consumers with both manual and autocommits
 func Test_NewKafkaConsumer(t *testing.T) {
 	workerCh := make(chan KafkaMessage)
 	consumer := NewKafkaConsumer(workerCh, true)
@@ -28,67 +27,6 @@ func Test_NewKafkaConsumer(t *testing.T) {
 		t.Errorf("Expected autoCommitEnabled to be false, got %v", consumer.autoCommitEnabled)
 	}
 
-}
-
-// Test_NewKafkaConsumer consumers with both manual and autocommits
-func Test_KafkaConsumerWithAutoCommitEnabled(t *testing.T) {
-	//workerCh := make(chan KafkaMessage)
-	//noErrClosure := func(message KafkaMessage) error {
-	//	return nil
-	//}
-
-	// half of the messages will return an error, we expect the consumer to not mark it as consumed
-	//counter := 0
-	//errClosure := func(message KafkaMessage) error {
-	//	counter++
-	//	if counter%2 == 0 {
-	//		return nil
-	//	}
-	//	return errors.New(errors.ERR_BLOCK_ERROR, "block error")
-	//}
-
-	//
-
-	ctx := context.Background()
-
-	filePaths := "../docker-compose-kafka.yml"
-	compose, err := tc.NewDockerCompose(filePaths)
-	require.NoError(t, err)
-
-	err = compose.Up(context.Background())
-	require.NoError(t, err)
-
-	defer stopKafka(compose, ctx)
-
-	// Wait for the services to be ready
-	time.Sleep(10 * time.Second)
-
-	// consumerWithErr := NewKafkaConsumer(workerCh, true, errClosure)
-	// consumerWithoutErr := NewKafkaConsumer(workerCh, true, noErrClosure)
-	// Test with closure
-
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_unitTest")
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	fmt.Println("Kafka URL: ", kafkaURL)
-
-	var producer KafkaProducerI
-	_, producer, err = ConnectToKafka(kafkaURL)
-	require.NoError(t, err)
-
-	fmt.Println("connected to kafka")
-
-	err = producer.Send([]byte("test"), []byte("test"))
-	require.NoError(t, err)
-
-	fmt.Println("sent message")
-
-	//consumerCount := 2
-	//
-	//// Test without error closure, with manual commit
-	//err = StartKafkaGroupListener(ctx, ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, consumerCount, true, noErrClosure)
-	//require.NoError(t, err)
 }
 
 func Test_KafkaAsyncProducerConsumerAutoCommit(t *testing.T) {
@@ -143,7 +81,104 @@ func Test_KafkaAsyncProducerConsumerAutoCommit(t *testing.T) {
 	wg.Wait()
 }
 
-func Test_KafkaAsyncProducerWithManualCommit(t *testing.T) {
+func Test_KafkaAsyncProducerWithManualCommitParams(t *testing.T) {
+	ctx := context.Background()
+	workerCh := make(chan KafkaMessage)
+
+	filePaths := "../docker-compose-kafka.yml"
+	compose, err := tc.NewDockerCompose(filePaths)
+	require.NoError(t, err)
+
+	err = compose.Up(ctx)
+	require.NoError(t, err)
+
+	defer stopKafka(compose, ctx)
+
+	// Wait for the services to be ready
+	time.Sleep(10 * time.Second)
+
+	kafkaURL, err, ok := gocore.Config().GetURL("kafka_unitTest")
+	require.NoError(t, err)
+	require.True(t, ok)
+	var wg sync.WaitGroup
+
+	kafkaChan := make(chan []byte, 10000)
+	go func() {
+		err = StartAsyncProducer(ulogger.TestLogger{}, kafkaURL, kafkaChan)
+		require.NoError(t, err)
+	}()
+
+	counter := 0
+
+	// Define test cases
+	testCases := []struct {
+		name             string
+		numberOfMessages int
+		consumerClosure  func(KafkaMessage) error
+	}{
+		{
+			name:             "Process messages with all success",
+			numberOfMessages: 10,
+			consumerClosure: func(message KafkaMessage) error {
+				fmt.Println("Consumer closure received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+				wg.Done()
+				return nil
+			},
+		},
+		//{
+		//	name:             "Process messages with all fail",
+		//	numberOfMessages: 2,
+		//	consumerClosure: func(message KafkaMessage) error {
+		//		fmt.Println("Consumer closure received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+		//		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
+		//	},
+		//},
+		{
+			name:             "Process messages with 2nd time success closure",
+			numberOfMessages: 10,
+			consumerClosure: func(message KafkaMessage) error {
+				fmt.Println("Consumer closure received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+				counter++
+				if counter%2 == 0 {
+					wg.Done()
+					return nil
+				}
+				return errors.New(errors.ERR_BLOCK_ERROR, "block error")
+			},
+		},
+		{
+			name:             "Process messages with 3rd time success closure",
+			numberOfMessages: 10,
+			consumerClosure: func(message KafkaMessage) error {
+				fmt.Println("Consumer closure received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+				counter++
+				if counter%3 == 0 {
+					wg.Done()
+					return nil
+				}
+				return errors.New(errors.ERR_BLOCK_ERROR, "block error")
+			},
+		},
+	}
+
+	// Run test cases
+	for _, tCase := range testCases {
+		t.Run(tCase.name, func(t *testing.T) {
+			fmt.Println("here")
+			wg.Add(tCase.numberOfMessages)
+
+			go produceMessages(kafkaChan, tCase.numberOfMessages)
+
+			go func() {
+				err := StartKafkaGroupListener(ctx, ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, 1, false, tCase.consumerClosure)
+				require.NoError(t, err)
+			}()
+			wg.Wait()
+		})
+	}
+}
+
+func Test_KafkaAsyncProducerWithManualCommitErrorClosure(t *testing.T) {
 	ctx := context.Background()
 	workerCh := make(chan KafkaMessage)
 
@@ -169,22 +204,11 @@ func Test_KafkaAsyncProducerWithManualCommit(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	numberOfMessages := 10
+	numberOfMessages := 2
 	go produceMessages(kafkaChan, numberOfMessages)
 
-	var wg sync.WaitGroup
-	wg.Add(numberOfMessages)
-
-	counter := 0
 	errClosure := func(message KafkaMessage) error {
 		fmt.Println("Consumer closure received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
-		counter++
-		if counter%3 == 0 {
-			wg.Done()
-			return nil
-		}
-
-		//fmt.Println("returning error for message: ", string(message.Message.Value))
 		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
 	}
 
@@ -193,7 +217,35 @@ func Test_KafkaAsyncProducerWithManualCommit(t *testing.T) {
 		require.NoError(t, err)
 
 	}()
-	wg.Wait()
+	// wait to see errors and commits
+	time.Sleep(30 * time.Second)
+}
+
+func stopKafka(compose tc.ComposeStack, ctx context.Context) {
+	if err := compose.Down(ctx); err != nil {
+		panic(err)
+	}
+}
+
+func byteArrayToIntFromString(message []byte) (int, error) {
+	strValue := string(message)             // Convert byte array to string
+	intValue, err := strconv.Atoi(strValue) // Parse string as integer
+	if err != nil {
+		return 0, err
+	}
+	return intValue, nil
+}
+
+func produceMessages(kafkaChan chan []byte, numberOfMessages int) {
+	r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
+	for i := 0; i < numberOfMessages; i++ {
+		msg := []byte(strconv.Itoa(i))
+		kafkaChan <- msg
+		fmt.Println("pushed message: ", string(msg))
+
+		randomDelay := time.Duration(r.Intn(200)+1) * time.Millisecond
+		time.Sleep(randomDelay)
+	}
 }
 
 func TestKafkaWithCompose(t *testing.T) {
@@ -243,32 +295,5 @@ func TestKafkaWithCompose(t *testing.T) {
 		fmt.Printf("Received message: %s\n", string(msg.Value))
 	case <-time.After(10 * time.Second):
 		t.Fatal("Timed out waiting for message")
-	}
-}
-
-func stopKafka(compose tc.ComposeStack, ctx context.Context) {
-	if err := compose.Down(ctx); err != nil {
-		panic(err)
-	}
-}
-
-func byteArrayToIntFromString(message []byte) (int, error) {
-	strValue := string(message)             // Convert byte array to string
-	intValue, err := strconv.Atoi(strValue) // Parse string as integer
-	if err != nil {
-		return 0, err
-	}
-	return intValue, nil
-}
-
-func produceMessages(kafkaChan chan []byte, numberOfMessages int) {
-	r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
-	for i := 0; i < numberOfMessages; i++ {
-		msg := []byte(strconv.Itoa(i))
-		kafkaChan <- msg
-		fmt.Println("pushed message: ", string(msg))
-
-		randomDelay := time.Duration(r.Intn(200)+1) * time.Millisecond
-		time.Sleep(randomDelay)
 	}
 }
