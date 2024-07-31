@@ -220,25 +220,29 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 // }
 
-// func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80(t *testing.T) {
-// 	initPrometheusMetrics()
+func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80(t *testing.T) {
+	initPrometheusMetrics()
 
-// 	// [height 264084] tx ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80 failed validation: script execution failed: false stack entry at end of script execution
-// 	txid := "ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80"
-// 	tx, err := bt.NewTxFromString("010000000000000000ef0140ed240a0a018469a1cdd3656800c23ec796d698d82ea336c4b6fb72b141c9cd000000008b483045022100de3b4c67e8a3eb09f18e8b5834257c0a27812df490365b8ac0e30e1d3dcc01630220426997ee904736647ae2e0b93cb2a11511f7b33e8f8a8ce0c5265cbd5b113ae8504104b1796b0e02f327e1a6f61abdff028374de9c80d6189460b0b7035752a2d00364fb19f16868ba34a4e93350e49e6ff8bfb48d23ab15f14871b01d6562f69b9973ffffffff0065cd1d000000001976a914990a8e1eb7a69c41602bd46fed56b6a38fd9bc1e88ac0300e1f505000000001976a914ac625f248f3be5c1c17767b8b2b93dd03553984788ace0e2cf17000000001976a9142c00769e224ac558cf0e726c8e4d6aa9d34f6e5688ac107a0700000000001976a9144bd0ac767d24acc4c5af736767b7b3acd1a6776188ac00000000")
-// 	require.NoError(t, err)
-// 	assert.Equal(t, txid, tx.TxID())
+	// [height 264084] tx ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80 failed validation: script execution failed: false stack entry at end of script execution
+	txid := "ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80"
+	tx, err := bt.NewTxFromString("010000000000000000ef0140ed240a0a018469a1cdd3656800c23ec796d698d82ea336c4b6fb72b141c9cd000000008b483045022100de3b4c67e8a3eb09f18e8b5834257c0a27812df490365b8ac0e30e1d3dcc01630220426997ee904736647ae2e0b93cb2a11511f7b33e8f8a8ce0c5265cbd5b113ae8504104b1796b0e02f327e1a6f61abdff028374de9c80d6189460b0b7035752a2d00364fb19f16868ba34a4e93350e49e6ff8bfb48d23ab15f14871b01d6562f69b9973ffffffff0065cd1d000000001976a914990a8e1eb7a69c41602bd46fed56b6a38fd9bc1e88ac0300e1f505000000001976a914ac625f248f3be5c1c17767b8b2b93dd03553984788ace0e2cf17000000001976a9142c00769e224ac558cf0e726c8e4d6aa9d34f6e5688ac107a0700000000001976a9144bd0ac767d24acc4c5af736767b7b3acd1a6776188ac00000000")
+	require.NoError(t, err)
+	assert.Equal(t, txid, tx.TxID())
 
-// 	var height uint32 = 264084
+	var height uint32 = 264084
 
-// 	v := &Validator{}
+	v := &Validator{
+		txValidator: TxValidator{
+			policy: NewPolicySettings(),
+		},
+	}
 
-// 	ctx := context.Background()
+	ctx := context.Background()
 
-// 	span := tracing.Start(ctx, "Test")
-// 	defer span.Finish()
+	span := tracing.Start(ctx, "Test")
+	defer span.Finish()
 
-// 	err = v.validateTransaction(span, tx, height)
-// 	require.NoError(t, err)
+	err = v.validateTransaction(span, tx, height)
+	require.NoError(t, err)
 
-// }
+}
