@@ -573,7 +573,7 @@ func (sp *serverPeer) OnBlock(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 
 		err = <-sp.blockProcessed
 		if err != nil {
-			sp.server.logger.Debugf("Block processed: %v", err)
+			sp.server.logger.Errorf("block processing failed: %v", err)
 		}
 	}
 }
