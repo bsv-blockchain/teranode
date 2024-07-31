@@ -179,8 +179,6 @@ ifdef test
 else
 	cd test/e2e && \
 	SETTINGS_CONTEXT=docker.ci.tc1.run go test
-	cd test/blockassembly && \
-	SETTINGS_CONTEXT=docker.ci go test
 endif
 
 

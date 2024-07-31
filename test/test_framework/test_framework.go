@@ -181,6 +181,7 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		b.Nodes[i].SubtreeStore = subtreeStore
 
 		utxoStoreUrl, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SETTINGS_CONTEXT))
+		logger.Infof("utxoStoreUrl", utxoStoreUrl.String())
 		b.Nodes[i].UtxoStore, _ = utxostore.New(b.Context, logger, utxoStoreUrl)
 		if err != nil {
 			return errors.NewConfigurationError("error creating utxostore %w", err)
