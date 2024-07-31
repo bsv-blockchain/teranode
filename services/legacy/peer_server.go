@@ -1643,7 +1643,7 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 	return &peer.Config{
 		// This is a complete list including ignored messages.
 		Listeners: peer.MessageListeners{
-			OnVersion:      sp.OnVersion,
+			// OnVersion:      sp.OnVersion,
 			OnMemPool:      sp.OnMemPool,
 			OnTx:           sp.OnTx,
 			OnBlock:        sp.OnBlock,
