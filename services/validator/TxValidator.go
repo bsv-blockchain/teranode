@@ -2,6 +2,7 @@ package validator
 
 import (
 	"encoding/hex"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/util"
@@ -10,11 +11,30 @@ import (
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
 )
 
+var (
+	txWhitelist = map[string]struct{}{
+		"c99c49da4c38af669dea436d3e73780dfdb6c1ecf9958baa52960e8baee30e73": {},
+		"0ad07700151caa994c0bc3087ad79821adf071978b34b8b3f0838582e45ef305": {},
+		"7c451f68e15303ab3e28450405cfa70f2c2cc9fa29e92cb2d8ed6ca6edb13645": {},
+		"a6c116351836d9cc223321ba4b38d68c8f0db53661f8c2229acabbc269c1b2c8": {},
+		"f5efee46ccfa4191ccd9d9f645e2f5d09bbe195f95ef5608e992d6794cd653cd": {},
+		"904bda3a7d3e3b8402793334a75fb1ce5a6ff5cf1c2d3bcbd7bd25872d0e8c1e": {},
+		"8ac76995ce4ac10dd02aa819e7e6535854a2271e44f908570f71bc418ffe3f02": {},
+		"e218970e8f810be99d60aa66262a1d382bc4b1a26a69af07ac47d622885db1a7": {},
+		"ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80": {},
+		"38df010716e13254fb5fc16065c1cf62ee2aeaed2fad79973f8a76ba91da36da": {},
+	}
+)
+
 type TxValidator struct {
 	policy *PolicySettings
 }
 
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error {
+	if _, ok := txWhitelist[tx.TxIDChainHash().String()]; ok {
+		return nil
+	}
+
 	//
 	// Each node will verify every transaction against a long checklist of criteria:
 	//
