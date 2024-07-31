@@ -770,13 +770,13 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 
 	err := sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block)
 	if err != nil {
-		if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
-			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
-		}
+		panic(err)
+		// if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
+		// 	peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
+		// }
 		// TODO - find a better way to handle this rather than panic
-		// panic(err)
 		// should be an ubsv error
-		return err
+		// return err
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
