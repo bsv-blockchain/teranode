@@ -500,7 +500,6 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// Add valid peer to the server.
 	sp.server.AddPeer(sp)
 
-	sp.QueueMessage(wire.NewMsgVerAck(), nil)
 	return nil
 }
 
@@ -1643,7 +1642,7 @@ func newPeerConfig(sp *serverPeer) *peer.Config {
 	return &peer.Config{
 		// This is a complete list including ignored messages.
 		Listeners: peer.MessageListeners{
-			// OnVersion:      sp.OnVersion,
+			OnVersion:      sp.OnVersion,
 			OnMemPool:      sp.OnMemPool,
 			OnTx:           sp.OnTx,
 			OnBlock:        sp.OnBlock,
