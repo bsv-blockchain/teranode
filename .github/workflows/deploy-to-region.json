@@ -1,4 +1,0 @@
-{
-    "name": "Deploy miner subset to region",
-    "description": "Allows to deploy the subset of miners to a regional cluster"
-}
