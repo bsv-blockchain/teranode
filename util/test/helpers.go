@@ -3,13 +3,12 @@ package test
 import (
 	"bufio"
 	"encoding/binary"
-	"errors"
 	"io"
 	"os"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"

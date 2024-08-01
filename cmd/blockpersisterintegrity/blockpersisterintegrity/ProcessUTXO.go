@@ -60,7 +60,7 @@ func LoadDiff(p *UTXOProcessor, blockHeader *model.BlockHeader) (*p_model.UTXODi
 	var utxoDiff *p_model.UTXODiff
 	r, err := p.store.GetIoReader(context.Background(), blockHeader.Hash()[:], options.WithFileExtension("utxodiff"))
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error getting reader from store", err)
+		return nil, errors.NewProcessingError("error getting reader from store", err)
 	}
 
 	utxoDiff, err = p_model.NewUTXODiffFromReader(p.logger, r)
@@ -99,7 +99,7 @@ func loadSet(p *UTXOProcessor, blockHash chainhash.Hash) (*p_model.UTXOSet, erro
 	var utxoSet *p_model.UTXOSet
 	r, err := p.store.GetIoReader(context.Background(), blockHash[:], options.WithFileExtension("utxoset"))
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "error getting reader from store", err)
+		return nil, errors.NewProcessingError("error getting reader from store", err)
 	}
 
 	utxoSet, err = p_model.NewUTXOSetFromReader(p.logger, r)

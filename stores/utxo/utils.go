@@ -2,8 +2,6 @@ package utxo
 
 import (
 	"context"
-	"fmt"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/util"
@@ -37,7 +35,7 @@ func CalculateUtxoStatus2(spendingTxId *chainhash.Hash) Status {
 // It will return an error if the context is cancelled.
 func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (uint64, []*chainhash.Hash, error) {
 	if !util.IsExtended(tx, blockHeight) && !tx.IsCoinbase() {
-		return 0, nil, fmt.Errorf("tx is not extended")
+		return 0, nil, errors.NewProcessingError("tx is not extended")
 	}
 
 	var fees uint64
@@ -54,13 +52,13 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 	for i, output := range tx.Outputs {
 		select {
 		case <-ctx.Done():
-			return fees, utxoHashes, fmt.Errorf("[GetFeesAndUtxoHashes] timeout - managed to prepare %d of %d", i, len(tx.Outputs))
+			return fees, utxoHashes, errors.NewProcessingError("[GetFeesAndUtxoHashes] timeout - managed to prepare %d of %d", i, len(tx.Outputs))
 		default:
 			fees -= output.Satoshis
 
 			utxoHash, utxoErr := util.UTXOHashFromOutput(txid, output, uint32(i))
 			if utxoErr != nil {
-				return 0, nil, fmt.Errorf("error getting output utxo hash: %s", utxoErr.Error())
+				return 0, nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
 			}
 
 			utxoHashes[i] = utxoHash
@@ -78,7 +76,7 @@ func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
 	for i, output := range tx.Outputs {
 		utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, uint32(i))
 		if utxoErr != nil {
-			return nil, errors.New(errors.ERR_PROCESSING, "error getting output utxo hash: %s", utxoErr)
+			return nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
 		}
 
 		utxoHashes[i] = *utxoHash

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -52,7 +52,7 @@ func (s *SampleService) Start(ctx context.Context) error {
 		case <-time.After(2 * time.Second):
 			// Simulate an error for demonstration
 			if s.name == "SvcB" {
-				return errors.New("SvcB start encountered an error")
+				return errors.NewServiceError("SvcB start encountered an error")
 			}
 		}
 	}

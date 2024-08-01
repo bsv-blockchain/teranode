@@ -2,7 +2,7 @@ package asset
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -48,7 +48,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, address string) (*Cli
 			MaxRetries:  3,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to init blob service connection: %v", err)
+			return nil, errors.NewServiceError("failed to init blob service connection", err)
 		}
 
 		assetClient = asset_api.NewAssetAPIClient(blobConn)
@@ -94,7 +94,7 @@ func (c *Client) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*mode
 		Hash: blockHash[:],
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.UnwrapGRPC(err)
 	}
 
 	header, err := model.NewBlockHeaderFromBytes(resp.Header)
@@ -124,7 +124,7 @@ func (c *Client) GetFullBlock(ctx context.Context, blockHash *chainhash.Hash) ([
 		Hash: blockHash[:],
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.UnwrapGRPC(err)
 	}
 
 	return resp.Block, nil
@@ -133,7 +133,7 @@ func (c *Client) GetFullBlock(ctx context.Context, blockHash *chainhash.Hash) ([
 func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, uint32, error) {
 	resp, err := c.client.GetBestBlockHeader(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, errors.UnwrapGRPC(err)
 	}
 
 	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
@@ -149,7 +149,7 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 		BlockHash: blockHash[:],
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, errors.UnwrapGRPC(err)
 	}
 
 	header, err := model.NewBlockHeaderFromBytes(resp.BlockHeader)
@@ -166,7 +166,7 @@ func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash,
 		NumberOfHeaders: numberOfHeaders,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errors.UnwrapGRPC(err)
 	}
 
 	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
@@ -249,7 +249,7 @@ func (c *Client) Get(ctx context.Context, subtreeHash []byte) ([]byte, error) {
 		Hash: subtreeHash,
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.UnwrapGRPC(err)
 	}
 
 	return response.Subtree, nil
@@ -260,14 +260,14 @@ func (c *Client) Exists(ctx context.Context, subtreeHash []byte) (bool, error) {
 		Hash: subtreeHash,
 	})
 	if err != nil {
-		return false, err
+		return false, errors.UnwrapGRPC(err)
 	}
 
 	return response.Exists, nil
 }
 
 func (c *Client) GetNodes(_ context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*asset_api.GetNodesResponse, error) {
-	return nil, fmt.Errorf("not implemented")
+	return nil, errors.NewError("not implemented")
 }
 
 func (c *Client) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
@@ -279,7 +279,7 @@ func (c *Client) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 		Ttl:     uint32(blobOptions.TTL.Seconds()),
 	})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil
@@ -291,7 +291,7 @@ func (c *Client) SetTTL(ctx context.Context, key []byte, ttl time.Duration) erro
 		Ttl:  uint32(int64(ttl.Seconds())),
 	})
 	if err != nil {
-		return err
+		return errors.UnwrapGRPC(err)
 	}
 
 	return nil

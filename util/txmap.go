@@ -1,7 +1,6 @@
 package util
 
 import (
-	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -114,7 +113,7 @@ func (s *SwissMapUint64) Put(hash [32]byte, n uint64) error {
 
 	exists := s.m.Has(hash)
 	if exists {
-		return errors.New(errors.ERR_TX_ALREADY_EXISTS, "hash already exists in map: %v", hash)
+		return errors.NewTxAlreadyExistsError("hash already exists in map: %v", hash)
 	}
 
 	s.m.Put(hash, n)
@@ -166,7 +165,7 @@ func (s *SwissMapKVUint64) Exists(hash uint64) bool {
 func (s *SwissMapKVUint64) Put(hash uint64, n uint64) error {
 	exists := s.m.Has(hash)
 	if exists {
-		return fmt.Errorf("hash already exists in map")
+		return errors.NewProcessingError("hash already exists in map")
 	}
 
 	s.m.Put(hash, n)

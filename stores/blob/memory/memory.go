@@ -3,7 +3,7 @@ package memory
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"sync"
 	"time"
@@ -36,15 +36,15 @@ func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 
 	b, err := io.ReadAll(reader)
 	if err != nil {
-		return fmt.Errorf("failed to read data from reader: %w", err)
+		return errors.NewStorageError("failed to read data from reader", err)
 	}
 
 	empty, err := io.ReadAll(reader)
 	if err != nil {
-		return fmt.Errorf("failed to read data from reader: %w", err)
+		return errors.NewStorageError("failed to read data from reader", err)
 	}
 	if len(empty) > 0 {
-		return fmt.Errorf("reader has more data than expected")
+		return errors.NewStorageError("reader has more data than expected")
 	}
 
 	return m.Set(ctx, key, b, opts...)
@@ -100,7 +100,7 @@ func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.Options) ([
 
 	bytes, ok := m.blobs[string(storeKey)]
 	if !ok {
-		return nil, fmt.Errorf("not found")
+		return nil, errors.NewStorageError("not found")
 	}
 
 	return bytes, nil

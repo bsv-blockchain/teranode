@@ -237,6 +237,7 @@ func byteArrayToIntFromString(message []byte) (int, error) {
 }
 
 func produceMessages(kafkaChan chan []byte, numberOfMessages int) {
+	// #nosec G404: ignoring the warning
 	r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
 	for i := 0; i < numberOfMessages; i++ {
 		msg := []byte(strconv.Itoa(i))

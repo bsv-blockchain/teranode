@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"net/http"
 	"net/url"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/btcjson"
 	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
@@ -18,6 +20,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"github.com/segmentio/encoding/json"
 )
 
 // handleGetBlock implements the getblock command.
@@ -270,7 +273,7 @@ func handleSendRawTransaction(s *rpcServer, cmd interface{}, closeChan <-chan st
 
 	d, err := distributor.NewDistributor(context.Background(), s.logger)
 	if err != nil {
-		return nil, fmt.Errorf("could not create distributor: %v", err)
+		return nil, errors.NewServiceError("could not create distributor", err)
 	}
 
 	res, err := d.SendTransaction(context.Background(), tx)
@@ -366,6 +369,32 @@ func handleGenerate(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (i
 	// }
 
 	// return reply, nil
+	return nil, nil
+}
+
+func handleGetMiningCandidate(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	mc, err := s.blockAssemblyClient.GetMiningCandidate(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
+	return mc, nil
+}
+
+func handleSubmitMiningSolution(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	c := cmd.(*btcjson.SubmitMiningSolutionCmd)
+
+	ms := &model.MiningSolution{}
+	err := json.Unmarshal([]byte(c.JsonString), ms)
+	if err != nil {
+		return nil, err
+	}
+
+	s.logger.Debugf("in handleSubmitMiningSolution: ms: %+v", ms)
+	err = s.blockAssemblyClient.SubmitMiningSolution(context.Background(), ms)
+	if err != nil {
+		return nil, err
+	}
 	return nil, nil
 }
 

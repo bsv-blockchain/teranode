@@ -4,13 +4,13 @@ import (
 	"context"
 	"embed"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -60,12 +60,12 @@ func (f *Faucet) Init(ctx context.Context) error {
 
 	f.coinbaseClient, err = coinbase.NewClient(ctx, f.logger)
 	if err != nil {
-		return fmt.Errorf("could not create coinbase client: %v", err)
+		return errors.NewProcessingError("could not create coinbase client: %v", err)
 	}
 
 	f.distributor, err = distributor.NewDistributor(ctx, f.logger, distributor.WithBackoffDuration(1*time.Second), distributor.WithRetryAttempts(3), distributor.WithFailureTolerance(0))
 	if err != nil {
-		return fmt.Errorf("could not create distributor: %v", err)
+		return errors.NewServiceError("could not create distributor: %v", err)
 	}
 
 	f.e.POST("/faucet/request", f.faucetHandler)
@@ -80,7 +80,7 @@ func (f *Faucet) Init(ctx context.Context) error {
 func (f *Faucet) Start(ctx context.Context) error {
 	addr, ok := gocore.Config().Get("faucet_httpListenAddress")
 	if !ok {
-		return errors.New("faucet_httpListenAddress is required")
+		return errors.NewConfigurationError("faucet_httpListenAddress is required")
 	}
 
 	mode := "HTTPS"
@@ -109,11 +109,11 @@ func (f *Faucet) Start(ctx context.Context) error {
 
 		certFile, found := gocore.Config().Get("server_certFile")
 		if !found {
-			return errors.New("server_certFile is required for HTTPS")
+			return errors.NewConfigurationError("server_certFile is required for HTTPS")
 		}
 		keyFile, found := gocore.Config().Get("server_keyFile")
 		if !found {
-			return errors.New("server_keyFile is required for HTTPS")
+			return errors.NewConfigurationError("server_keyFile is required for HTTPS")
 		}
 
 		servicemanager.AddListenerInfo(fmt.Sprintf("Faucet HTTPS listening on %s", addr))

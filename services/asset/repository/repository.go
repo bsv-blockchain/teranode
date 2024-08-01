@@ -40,7 +40,7 @@ func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Sto
 	// SAO - Loading the grpc client directly without using the coinbase.NewClient() method as it causes a circular dependency
 	coinbaseGrpcAddress, ok := gocore.Config().Get("coinbase_grpcAddress")
 	if !ok {
-		return nil, fmt.Errorf("no coinbase_grpcAddress setting found")
+		return nil, errors.NewConfigurationError("no coinbase_grpcAddress setting found")
 	}
 	baConn, err := util.GetGRPCClient(context.Background(), coinbaseGrpcAddress, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
@@ -93,7 +93,7 @@ func (r *Repository) Health(ctx context.Context) (int, string, error) {
 	}
 
 	if len(errs) > 0 {
-		return -1, sb.String(), errors.New(errors.ERR_UNKNOWN, "Health errors occurred")
+		return -1, sb.String(), errors.NewUnknownError("Health errors occurred")
 	}
 
 	return 0, sb.String(), nil
@@ -227,12 +227,12 @@ func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*uti
 	r.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
 	if err != nil {
-		return nil, fmt.Errorf("error in GetSubtree Get method: %w", err)
+		return nil, errors.NewServiceError("error in GetSubtree Get method", err)
 	}
 
 	subtree, err := util.NewSubtreeFromBytes(subtreeBytes)
 	if err != nil {
-		return nil, fmt.Errorf("error in NewSubtreeFromBytes: %w", err)
+		return nil, errors.NewProcessingError("error in NewSubtreeFromBytes", err)
 	}
 
 	return subtree, nil
@@ -243,7 +243,7 @@ func (r *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (
 	r.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 	subtreeBytes, err := r.SubtreeStore.GetHead(ctx, hash.CloneBytes(), 56)
 	if err != nil {
-		return nil, 0, fmt.Errorf("error in GetSubtree GetHead method: %w", err)
+		return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method: %w", err)
 	}
 
 	if len(subtreeBytes) != 56 {
@@ -256,7 +256,7 @@ func (r *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (
 	// read root hash
 	_, err = chainhash.NewHash(buf.Next(32))
 	if err != nil {
-		return nil, 0, fmt.Errorf("unable to read root hash: %v", err)
+		return nil, 0, errors.NewProcessingError("unable to read root hash: %v", err)
 	}
 
 	// read fees

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 )
 
@@ -54,7 +55,7 @@ func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
 	}
 
 	// if u.Value != 100 {
-	// 	return nil, fmt.Errorf("invalid value, expected %d, got %d", 100, u.Value)
+	// 	return nil, errors.NewError("invalid value, expected %d, got %d", 100, u.Value)
 	// }
 
 	// Read the locktime
@@ -63,7 +64,7 @@ func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
 	}
 
 	// if u.Locktime != 0 {
-	// 	return nil, fmt.Errorf("invalid locktime, expected %d, got %d", 0, u.Locktime)
+	// 	return nil, errors.NewError("invalid locktime, expected %d, got %d", 0, u.Locktime)
 	// }
 
 	// Read the script length
@@ -73,7 +74,7 @@ func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
 	}
 
 	// if length != 25 {
-	// 	return nil, fmt.Errorf("invalid script length: %d", length)
+	// 	return nil, errors.NewError("invalid script length: %d", length)
 	// }
 
 	u.Script = make([]byte, length)
@@ -83,7 +84,7 @@ func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
 
 	// expected, _ := hex.DecodeString("76a914df2fd021d3db1504cca2d63e082665171bda420288ac")
 	// if !bytes.Equal(u.Script, expected) {
-	// 	return nil, fmt.Errorf("invalid script: %x", u.Script)
+	// 	return nil, errors.NewError("invalid script: %x", u.Script)
 	// }
 
 	return u, nil
@@ -114,33 +115,33 @@ func (u *UTXOValue) Bytes() []byte {
 func (u *UTXOValue) Write(w io.Writer) error {
 	if u == nil {
 		if _, err := w.Write([]byte{0x00}); err != nil {
-			return fmt.Errorf("error writing nil marker: %w", err)
+			return errors.NewProcessingError("error writing nil marker", err)
 		}
 		return nil
 	}
 
 	if _, err := w.Write([]byte{0x01}); err != nil {
-		return fmt.Errorf("error writing not nil marker: %w", err)
+		return errors.NewProcessingError("error writing not nil marker", err)
 	}
 
 	// Write the value
 	if err := binary.Write(w, binary.LittleEndian, u.Value); err != nil {
-		return fmt.Errorf("error writing value: %w", err)
+		return errors.NewProcessingError("error writing value", err)
 	}
 
 	// Write the locktime
 	if err := binary.Write(w, binary.LittleEndian, u.Locktime); err != nil {
-		return fmt.Errorf("error writing locktime: %w", err)
+		return errors.NewProcessingError("error writing locktime", err)
 	}
 
 	// Write the length of the script
 	if err := binary.Write(w, binary.LittleEndian, uint32(len(u.Script))); err != nil {
-		return fmt.Errorf("error writing script length: %w", err)
+		return errors.NewProcessingError("error writing script length", err)
 	}
 
 	// Write the script
 	if _, err := w.Write(u.Script); err != nil {
-		return fmt.Errorf("error writing script: %w", err)
+		return errors.NewProcessingError("error writing script", err)
 	}
 
 	return nil

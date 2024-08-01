@@ -2,8 +2,7 @@ package sql
 
 import (
 	"context"
-	"fmt"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -14,10 +13,10 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 
 	exists, err := s.GetBlockExists(ctx, blockHash)
 	if err != nil {
-		return fmt.Errorf("error checking block exists: %v", err)
+		return errors.NewStorageError("error checking block exists: %v", err)
 	}
 	if !exists {
-		return fmt.Errorf("block %s does not exist", blockHash.String())
+		return errors.NewStorageError("block %s does not exist", blockHash.String())
 	}
 
 	// recursively update all children blocks to invalid in 1 query
@@ -27,11 +26,11 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		WHERE hash = $1
 	`
 	if _, err = s.db.ExecContext(ctx, q, blockHash.CloneBytes()); err != nil {
-		return fmt.Errorf("error updating block to invalid: %v", err)
+		return errors.NewStorageError("error updating block to invalid", err)
 	}
 
 	if err := s.ResetBlocksCache(ctx); err != nil {
-		return fmt.Errorf("error clearing caches: %v", err)
+		return errors.NewStorageError("error clearing caches", err)
 	}
 	s.ResetResponseCache()
 

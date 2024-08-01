@@ -2,7 +2,7 @@ package coinbase
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -23,7 +23,7 @@ type Client struct {
 func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 	coinbaseGrpcAddress, ok := gocore.Config().Get("coinbase_grpcAddress")
 	if !ok {
-		return nil, fmt.Errorf("no coinbase_grpcAddress setting found")
+		return nil, errors.NewConfigurationError("no coinbase_grpcAddress setting found")
 	}
 	baConn, err := util.GetGRPCClient(ctx, coinbaseGrpcAddress, &util.ConnectionOptions{
 		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
@@ -72,7 +72,7 @@ func (c *Client) RequestFunds(ctx context.Context, address string, disableDistri
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, errors.UnwrapGRPC(err)
 	}
 
 	return bt.NewTxFromBytes(res.Tx)
@@ -81,7 +81,7 @@ func (c *Client) RequestFunds(ctx context.Context, address string, disableDistri
 func (c *Client) GetBalance(ctx context.Context) (uint64, uint64, error) {
 	res, err := c.client.GetBalance(ctx, &emptypb.Empty{})
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, errors.UnwrapGRPC(err)
 	}
 
 	return res.NumberOfUtxos, res.TotalSatoshis, nil

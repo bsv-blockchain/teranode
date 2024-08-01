@@ -2,8 +2,8 @@ package sql
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -17,12 +17,12 @@ func (s *SQL) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) e
 	`
 	res, err := s.db.ExecContext(ctx, q, blockHash.CloneBytes())
 	if err != nil {
-		return fmt.Errorf("error updating block mined_set: %v", err)
+		return errors.NewStorageError("error updating block mined_set", err)
 	}
 
 	// check if the block was updated
 	if rows, _ := res.RowsAffected(); rows <= 0 {
-		return fmt.Errorf("block %s mined_set was not updated", blockHash.String())
+		return errors.NewStorageError("block %s mined_set was not updated", blockHash.String())
 	}
 
 	return nil

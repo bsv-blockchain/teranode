@@ -179,8 +179,6 @@ ifdef test
 else
 	cd test/e2e && \
 	SETTINGS_CONTEXT=docker.ci.tc1.run go test
-	cd test/blockassembly && \
-	SETTINGS_CONTEXT=docker.ci go test
 endif
 
 
@@ -284,27 +282,6 @@ gen:
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
 	services/coinbase/coinbase_api/coinbase_api.proto
-
-.PHONY: gen-frpc
-gen-frpc:
-	# go install github.com/loopholelabs/frpc-go/protoc-gen-go-frpc@2efa3315a5871a40672a95c6a143b789a2249512
-	# latest changes have been released, frpc is in alpha stage
-
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-frpc_out=. \
-	--go-frpc_opt=paths=source_relative \
-	services/blockvalidation/blockvalidation_api/blockvalidation_api.proto
-
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-frpc_out=. \
-	--go-frpc_opt=paths=source_relative \
-	services/validator/validator_api/validator_api.proto
 
 .PHONY: clean_gen
 clean_gen:

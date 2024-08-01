@@ -25,7 +25,7 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 	for idx, hash := range hashes {
 		key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "aerospike NewKey error", err)
+			return errors.NewProcessingError("aerospike NewKey error", err)
 		}
 		op := aerospike.ListAppendOp("blockIDs", blockID)
 		record := aerospike.NewBatchWrite(policy, key, op)
@@ -35,7 +35,7 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "aerospike BatchOperate error", err)
+		return errors.NewStorageError("aerospike BatchOperate error", err)
 	}
 
 	prometheusTxMetaAerospikeMapSetMinedBatch.Inc()
@@ -51,7 +51,7 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 				// the tx Meta does not exist anymore, so we do not have to set the mined status
 				continue
 			}
-			errs = errors.Join(errs, errors.New(errors.ERR_STORAGE_ERROR, "aerospike batchRecord error: %s", hashes[idx].String(), err))
+			errs = errors.NewStorageError("aerospike batchRecord error: %s", hashes[idx].String(), errors.Join(errs, err))
 			nrErrors++
 		} else {
 			okUpdates++
@@ -62,7 +62,7 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 
 	if errs != nil || nrErrors > 0 {
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
-		return errors.New(errors.ERR_ERROR, "aerospike batchRecord errors", errs)
+		return errors.NewError("aerospike batchRecord errors", errs)
 	}
 
 	return nil
@@ -74,12 +74,12 @@ func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "aerospike NewKey error", err)
+		return errors.NewProcessingError("aerospike NewKey error", err)
 	}
 
 	_, err = s.client.Operate(policy, key, aerospike.ListAppendOp("blockIDs", blockID))
 	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "aerospike Operate error", err)
+		return errors.NewStorageError("aerospike Operate error", err)
 	}
 
 	prometheusTxMetaAerospikeMapSetMined.Inc()

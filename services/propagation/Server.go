@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,6 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -44,9 +44,6 @@ var (
 	// ipv6 multicast constants
 	maxDatagramSize = 512 //100 * 1024 * 1024
 	ipv6Port        = 9999
-
-	ErrBadRequest = errors.New("PROPAGATION_BAD_REQUEST")
-	ErrInternal   = errors.New("PROPAGATION_INTERNAL")
 )
 
 // PropagationServer type carries the logger within it
@@ -84,7 +81,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	if ok {
 		err = ps.StartUDP6Listeners(ctx, ipv6Addresses)
 		if err != nil {
-			return fmt.Errorf("error starting ipv6 listeners: %v", err)
+			return errors.NewServiceError("error starting ipv6 listeners", err)
 		}
 	}
 
@@ -139,7 +136,7 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 
 	useInterface, err := net.InterfaceByName(ipv6Interface)
 	if err != nil {
-		return fmt.Errorf("error resolving interface: %v", err)
+		return errors.NewConfigurationError("error resolving interface", err)
 	}
 
 	for _, ipv6Address := range strings.Split(ipv6Addresses, ",") {
@@ -302,7 +299,7 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 		}
 
 		if blockHeight <= 0 {
-			errs = append(errs, errors.New("blockHeight <= 0"))
+			errs = append(errs, errors.NewError("blockHeight <= 0"))
 			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d\n", blockHeight))
 		} else {
 			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
@@ -310,7 +307,7 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 	}
 
 	if len(errs) > 0 {
-		return -1, sb.String(), errors.New("Health errors occurred")
+		return -1, sb.String(), errors.NewError("Health errors occurred")
 	}
 
 	return 0, sb.String(), nil
@@ -365,7 +362,7 @@ func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *p
 
 	txBytes, err := hex.DecodeString(req.Tx)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	return ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
@@ -374,7 +371,11 @@ func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *p
 }
 
 func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
-	return &propagation_api.EmptyMessage{}, ps.processTransaction(ctx, req)
+	if err := ps.processTransaction(ctx, req); err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &propagation_api.EmptyMessage{}, nil
 }
 
 func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
@@ -403,7 +404,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	}
 
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	return response, nil
@@ -423,17 +424,17 @@ func (ps *PropagationServer) processTransaction(cntxt context.Context, req *prop
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		return fmt.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %w", err)
+		return errors.NewProcessingError("[ProcessTransaction] failed to parse transaction from bytes", err)
 	}
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {
 		prometheusInvalidTransactions.Inc()
-		return fmt.Errorf("[ProcessTransaction][%s] received coinbase transaction: %w", btTx.TxID(), ErrBadRequest)
+		return errors.NewTxInvalidError("[ProcessTransaction][%s] received coinbase transaction", btTx.TxID())
 	}
 
 	if !btTx.IsExtended() {
-		return fmt.Errorf("[ProcessTransaction][%s] transaction is not extended: %w", btTx.TxID(), ErrBadRequest)
+		return errors.NewTxInvalidError("[ProcessTransaction][%s] transaction is not extended", btTx.TxID())
 	}
 
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
@@ -442,20 +443,13 @@ func (ps *PropagationServer) processTransaction(cntxt context.Context, req *prop
 
 	// we should store all transactions, if this fails we should not validate the transaction
 	if err = ps.storeTransaction(setCtx, btTx); err != nil {
-		return fmt.Errorf("[ProcessTransaction][%s] failed to save transaction: %v: %w", btTx.TxIDChainHash(), err, ErrInternal)
+		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
 	// All transactions entering Teranode can be assumed to be after Genesis activation height
-	// ps.logger.Debugf("[processTransaction][%s] validating transaction (pq:)", btTx.TxID())
 	if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
-		if errors.Is(err, validator.ErrInternal) {
-			err = fmt.Errorf("%v: %w", err, ErrInternal)
-		} else if errors.Is(err, validator.ErrBadRequest) {
-			err = fmt.Errorf("%v: %w", err, ErrBadRequest)
-		}
-
-		// TEMP: Log the error for now
-		ps.logger.Errorf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
+		err = errors.NewServiceError("failed validating transaction", err)
+		ps.logger.Debugf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
 
 		prometheusInvalidTransactions.Inc()
 		return err
@@ -476,16 +470,16 @@ func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.Pro
 	for {
 		req, err := stream.Recv()
 		if err != nil {
-			return err
+			return errors.WrapGRPC(err)
 		}
 
 		resp, err := ps.ProcessTransaction(stream.Context(), req)
 		if err != nil {
-			return err
+			return errors.WrapGRPC(err)
 		}
 
-		if err := stream.Send(resp); err != nil {
-			return err
+		if err = stream.Send(resp); err != nil {
+			return errors.WrapGRPC(err)
 		}
 	}
 }
@@ -498,10 +492,10 @@ func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *p
 
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse transaction from bytes: %s", err.Error())
+		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to parse transaction from bytes", err))
 	}
-	if err := ps.storeTransaction(ctx, btTx); err != nil {
-		return nil, fmt.Errorf("failed to save transaction %s: %s", btTx.TxIDChainHash().String(), err.Error())
+	if err = ps.storeTransaction(ctx, btTx); err != nil {
+		return nil, errors.WrapGRPC(errors.NewStorageError("failed to save transaction %s", btTx.TxIDChainHash().String(), err))
 	}
 	return &propagation_api.EmptyMessage{}, nil
 }

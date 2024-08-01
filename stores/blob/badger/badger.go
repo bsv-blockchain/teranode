@@ -3,7 +3,6 @@ package badger
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"time"
 
@@ -114,7 +113,7 @@ func (s *Badger) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 
 	b, err := io.ReadAll(reader)
 	if err != nil {
-		return fmt.Errorf("failed to read data from reader: %w", err)
+		return errors.NewStorageError("failed to read data from reader", err)
 	}
 
 	return s.Set(ctx, key, b, opts...)
@@ -146,7 +145,7 @@ func (s *Badger) Set(ctx context.Context, key []byte, value []byte, opts ...opti
 		return tx.SetEntry(entry)
 	}); err != nil {
 		traceSpan.RecordError(err)
-		return fmt.Errorf("failed to set data: %w", err)
+		return errors.NewStorageError("failed to set data", err)
 	}
 
 	cache.Set(utils.ReverseAndHexEncodeSlice(storeKey), value)
@@ -175,7 +174,7 @@ func (s *Badger) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts
 	objectBytes, err := s.Get(ctx, storeKey)
 	if err != nil {
 		traceSpan.RecordError(err)
-		return fmt.Errorf("failed to get data: %w", err)
+		return errors.NewStorageError("failed to get data", err)
 	}
 
 	return s.Set(ctx, storeKey, objectBytes, options.WithTTL(ttl))
@@ -225,7 +224,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 		data, err := tx.Get(storeKey)
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return errors.New(errors.ERR_NOT_FOUND, fmt.Sprintf("badger key not found [%s]", utils.ReverseAndHexEncodeSlice(hash)), err)
+				return errors.NewNotFoundError("badger key not found [%s]", utils.ReverseAndHexEncodeSlice(hash), err)
 			}
 			traceSpan.RecordError(err)
 			return err
@@ -236,7 +235,7 @@ func (s *Badger) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 			return nil
 		}); err != nil {
 			traceSpan.RecordError(err)
-			return fmt.Errorf("failed to decode data: %w", err)
+			return errors.NewProcessingError("failed to decode data", err)
 		}
 
 		return nil

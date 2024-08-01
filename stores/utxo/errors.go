@@ -25,9 +25,7 @@ func NewErrSpent(txID *chainhash.Hash, vOut uint32, utxoHash, spendingTxID *chai
 	if spendingTxID != nil {
 		spendingTxString = spendingTxID.String()
 	}
-	errorString := fmt.Sprintf("%s:$%d utxo %s already spent by txid %s", txIDString, vOut, utxoHashString, spendingTxString)
-
-	return errors.New(errors.ERR_SPENT, errorString)
+	return errors.NewSpentError("%s:$%d utxo %s already spent by txid %s", txIDString, vOut, utxoHashString, spendingTxString)
 }
 
 func NewErrLockTime(lockTime uint32, blockHeight uint32, optionalErrs ...error) error {
@@ -45,5 +43,5 @@ func NewErrLockTime(lockTime uint32, blockHeight uint32, optionalErrs ...error) 
 		errorString = fmt.Sprintf("utxo is locked until block %d (height check: %d)", lockTime, blockHeight)
 	}
 
-	return errors.New(errors.ERR_LOCKTIME, errorString)
+	return errors.NewLockTimeError(errorString)
 }

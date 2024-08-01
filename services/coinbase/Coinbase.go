@@ -3,13 +3,13 @@ package coinbase
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
@@ -68,27 +68,27 @@ type Coinbase struct {
 func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, error) {
 	engine := store.GetDBEngine()
 	if engine != util.Postgres && engine != util.Sqlite && engine != util.SqliteMemory {
-		return nil, fmt.Errorf("unsupported database engine: %s", engine)
+		return nil, errors.NewStorageError("unsupported database engine: %s", engine)
 	}
 
 	coinbasePrivKey, found := gocore.Config().Get("coinbase_wallet_private_key")
 	if !found {
-		return nil, errors.New("coinbase_wallet_private_key not found in config")
+		return nil, errors.NewConfigurationError("coinbase_wallet_private_key not found in config")
 	}
 
 	privateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
-		return nil, fmt.Errorf("can't decode coinbase priv key: ^%v", err)
+		return nil, errors.NewConfigurationError("can't decode coinbase priv key: ^%v", err)
 	}
 
 	coinbaseAddr, err := bscript.NewAddressFromPublicKey(privateKey.PrivKey.PubKey(), true)
 	if err != nil {
-		return nil, fmt.Errorf("can't create coinbase address: %v", err)
+		return nil, errors.NewConfigurationError("can't create coinbase address: %v", err)
 	}
 
 	backoffDuration, err, _ := gocore.Config().GetDuration("distributor_backoff_duration", 1*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("could not parse distributor_backoff_duration: %v", err)
+		return nil, errors.NewConfigurationError("could not parse distributor_backoff_duration: %v", err)
 	}
 
 	maxRetries, _ := gocore.Config().GetInt("distributor_max_retries", 3)
@@ -97,7 +97,7 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 
 	d, err := distributor.NewDistributor(context.Background(), logger, distributor.WithBackoffDuration(backoffDuration), distributor.WithRetryAttempts(int32(maxRetries)), distributor.WithFailureTolerance(failureTolerance))
 	if err != nil {
-		return nil, fmt.Errorf("could not create distributor: %v", err)
+		return nil, errors.NewServiceError("could not create distributor", err)
 	}
 
 	dbTimeoutMillis, _ := gocore.Config().GetInt("blockchain_store_dbTimeoutMillis", 5000)
@@ -146,20 +146,20 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 
 func (c *Coinbase) Init(ctx context.Context) (err error) {
 	if err = c.createTables(ctx); err != nil {
-		return fmt.Errorf("failed to create coinbase tables: %s", err)
+		return errors.NewProcessingError("failed to create coinbase tables", err)
 	}
 
 	assetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
 	if !ok {
 		assetAddr, ok = gocore.Config().Get("asset_grpcAddress")
 		if !ok {
-			return errors.New("no asset_grpcAddress setting found")
+			return errors.NewConfigurationError("no asset_grpcAddress setting found")
 		}
 	}
 
 	c.AssetClient, err = asset.NewClient(ctx, c.logger, assetAddr)
 	if err != nil {
-		return fmt.Errorf("failed to create Asset client: %s", err)
+		return errors.NewServiceError("failed to create Asset client", err)
 	}
 
 	// process blocks found from channel
@@ -275,7 +275,7 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 		idType = "INTEGER PRIMARY KEY AUTOINCREMENT"
 		bType = "BLOB"
 	default:
-		return fmt.Errorf("unsupported database engine: %s", c.engine)
+		return errors.NewStorageError("unsupported database engine: %s", c.engine)
 	}
 
 	// Init coinbase tables in db
@@ -430,17 +430,17 @@ func (c *Coinbase) createTables(ctx context.Context) error {
 
 	if _, err := c.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS ux_coinbase_utxos_txid_vout ON coinbase_utxos (txid, vout);`); err != nil {
 		_ = c.db.Close()
-		return fmt.Errorf("could not create ux_coinbase_utxos_txid_vout index - [%+v]", err)
+		return errors.NewStorageError("could not create ux_coinbase_utxos_txid_vout index - [%+v]", err)
 	}
 
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS ux_coinbase_utxos_processed_at ON coinbase_utxos (processed_at ASC);`); err != nil {
 		_ = c.db.Close()
-		return fmt.Errorf("could not create ux_coinbase_utxos_processed_at index - [%+v]", err)
+		return errors.NewStorageError("could not create ux_coinbase_utxos_processed_at index - [%+v]", err)
 	}
 
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS ux_spendable_utxos_inserted_at ON spendable_utxos (inserted_at ASC);`); err != nil {
 		_ = c.db.Close()
-		return fmt.Errorf("could not create ux_spendable_utxos_inserted_at index - [%+v]", err)
+		return errors.NewStorageError("could not create ux_spendable_utxos_inserted_at index - [%+v]", err)
 	}
 
 	return nil
@@ -464,17 +464,17 @@ LOOP:
 		c.logger.Debugf("getting block headers for catchup from [%s]", fromBlockHeaderHash.String())
 		blockHeaders, _, err := c.AssetClient.GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
 		if err != nil {
-			return err
+			return errors.NewServiceError("failed to get block headers from [%s]", fromBlockHeaderHash.String(), err)
 		}
 
 		if len(blockHeaders) == 0 {
-			return fmt.Errorf("failed to get block headers from [%s]", fromBlockHeaderHash.String())
+			return errors.NewServiceError("failed to get block headers from [%s]", fromBlockHeaderHash.String())
 		}
 
 		for _, blockHeader := range blockHeaders {
 			exists, err = c.store.GetBlockExists(ctx, blockHeader.Hash())
 			if err != nil {
-				return fmt.Errorf("failed to check if block exists [%w]", err)
+				return errors.NewServiceError("failed to check if block exists", err)
 			}
 			if exists {
 				break LOOP
@@ -484,7 +484,7 @@ LOOP:
 
 			fromBlockHeaderHash = blockHeader.HashPrevBlock
 			if fromBlockHeaderHash.IsEqual(&chainhash.Hash{}) {
-				return fmt.Errorf("failed to find parent block header, last was: %s", blockHeader.String())
+				return errors.NewProcessingError("failed to find parent block header, last was: %s", blockHeader.String())
 			}
 		}
 	}
@@ -497,11 +497,12 @@ LOOP:
 
 		block, err := c.AssetClient.GetBlock(ctx, blockHeader.Hash())
 		if err != nil {
-			return errors.Join(fmt.Errorf("failed to get block [%s]", blockHeader.String()), err)
+			return errors.NewServiceError("failed to get block [%s]", blockHeader.String(), err)
 		}
 
 		err = c.storeBlock(ctx, block)
 		if err != nil {
+			// storeBlock will have already wrapped the error properly
 			return err
 		}
 	}
@@ -520,7 +521,7 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 	// check whether we already have the block
 	exists, err := c.store.GetBlockExists(ctx, blockHash)
 	if err != nil {
-		return nil, fmt.Errorf("could not check whether block exists %+v", err)
+		return nil, errors.NewStorageError("could not check whether block exists", err)
 	}
 	if exists {
 		c.logger.Debugf("skipping block that already exists: %s", blockHash.String())
@@ -535,7 +536,7 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 	// check whether we already have the parent block
 	exists, err = c.store.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
-		return nil, fmt.Errorf("could not check whether block exists %+v", err)
+		return nil, errors.NewStorageError("could not check whether block exists", err)
 	}
 	if !exists {
 		go func() {
@@ -566,7 +567,7 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 
 	blockId, err := c.store.StoreBlock(ctx, block, "")
 	if err != nil {
-		return fmt.Errorf("could not store block: %+v", err)
+		return errors.NewStorageError("could not store block", err)
 	}
 
 	// _, blobBestBlockHeight, _ := c.AssetClient.GetBestBlockHeader(ctx)
@@ -577,13 +578,13 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 		/* Do this before attempting to distribute the coinbase splitting transactions to all nodes */
 		err = c.peerSync.WaitForAllPeers(ctx, coinbaseBestBlockMeta.Height, true)
 		if err != nil {
-			return fmt.Errorf("peers are not in sync: %s", err)
+			return errors.NewError("peers are not in sync", err)
 		}
 	}
 
 	err = c.processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
 	if err != nil {
-		return fmt.Errorf("could not process coinbase %+v", err)
+		return errors.NewProcessingError("could not process coinbase", err)
 	}
 
 	return nil
@@ -601,7 +602,7 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 	c.logger.Infof("processing coinbase: %s, for block: %s with %d utxos", coinbaseTx.TxID(), blockHash.String(), len(coinbaseTx.Outputs))
 
 	if err := c.insertCoinbaseUTXOs(ctx, blockId, coinbaseTx); err != nil {
-		return fmt.Errorf("could not insert coinbase utxos: %+v", err)
+		return errors.NewProcessingError("could not insert coinbase utxos", err)
 	}
 
 	// Create a timestamp variable to insert into the TIMESTAMPTZ field
@@ -642,13 +643,13 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 		)
 	`
 	if _, err := c.db.ExecContext(ctx, q, timestamp); err != nil {
-		return fmt.Errorf("could not update coinbase_utxos to be processed: %+v", err)
+		return errors.NewStorageError("could not update coinbase_utxos to be processed", err)
 	}
 
 	_, _, ctx = tracing.NewStatFromContext(context.Background(), "go routine", stat, false)
 
 	if err := c.createSpendingUtxos(ctx, timestamp); err != nil {
-		return fmt.Errorf("could not create spending utxos: %w", err)
+		return errors.NewProcessingError("could not create spending utxos", err)
 	}
 
 	return nil
@@ -675,7 +676,7 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 
 	rows, err := c.db.QueryContext(ctx, q, timestamp)
 	if err != nil {
-		return fmt.Errorf("could not get coinbase utxos: %w", err)
+		return errors.NewStorageError("could not get coinbase utxos", err)
 	}
 
 	defer rows.Close()
@@ -687,13 +688,13 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		var lockingScript bscript.Script
 		var satoshis uint64
 
-		if err := rows.Scan(&txid, &vout, &lockingScript, &satoshis); err != nil {
-			return fmt.Errorf("could not scan coinbase utxo: %w", err)
+		if err = rows.Scan(&txid, &vout, &lockingScript, &satoshis); err != nil {
+			return errors.NewProcessingError("could not scan coinbase utxo", err)
 		}
 
 		hash, err := chainhash.NewHash(txid)
 		if err != nil {
-			return fmt.Errorf("could not create hash from txid: %w", err)
+			return errors.NewProcessingError("could not create hash from txid", err)
 		}
 
 		utxos = append(utxos, &bt.UTXO{
@@ -710,12 +711,12 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		// we don't have a method to revert anything that goes wrong anyway
 		c.g.Go(func() error {
 			c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", utxo.TxIDHash, utxo.Vout)
-			if err = c.splitUtxo(c.gCtx, utxo); err != nil {
-				return fmt.Errorf("could not split utxo: %w", err)
+			if err := c.splitUtxo(c.gCtx, utxo); err != nil {
+				return errors.NewProcessingError("could not split utxo", err)
 			}
 			// TODO remove this when we start using postgres cron job to do this periodically
 			if err := c.aggregateBalance(ctx); err != nil {
-				return fmt.Errorf("could not aggregate balance: %w", err)
+				return errors.NewProcessingError("could not aggregate balance", err)
 			}
 			return nil
 		})
@@ -733,7 +734,7 @@ func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
 	tx := bt.NewTx()
 
 	if err := tx.FromUTXOs(utxo); err != nil {
-		return fmt.Errorf("error creating initial transaction: %v", err)
+		return errors.NewProcessingError("error creating initial transaction", err)
 	}
 
 	var splitSatoshis = uint64(10_000_000)
@@ -743,7 +744,7 @@ func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout splitting the satoshis")
+			return errors.NewContextCanceledError("timeout splitting the satoshis")
 		default:
 			tx.AddOutput(&bt.Output{
 				LockingScript: utxo.LockingScript,
@@ -761,11 +762,11 @@ func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
 
 	unlockerGetter := unlocker.Getter{PrivateKey: c.privateKey}
 	if err := tx.FillAllInputs(ctx, &unlockerGetter); err != nil {
-		return fmt.Errorf("error filling splitting inputs: %v", err)
+		return errors.NewProcessingError("error filling splitting inputs", err)
 	}
 
 	if _, err := c.distributor.SendTransaction(ctx, tx); err != nil {
-		return fmt.Errorf("error sending splitting transaction %s: %v", tx.TxIDChainHash().String(), err)
+		return errors.NewServiceError("error sending splitting transaction %s", tx.TxIDChainHash().String(), err)
 	}
 
 	// Insert the spendable utxos....
@@ -790,17 +791,17 @@ func (c *Coinbase) RequestFunds(ctx context.Context, address string, disableDist
 	case util.Sqlite, util.SqliteMemory:
 		utxo, err = c.requestFundsSqlite(ctx, address)
 	default:
-		return nil, fmt.Errorf("unsupported database engine: %s", c.engine)
+		return nil, errors.NewStorageError("unsupported database engine: %s", c.engine)
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("error requesting funds: %v", err)
+		return nil, errors.NewError("error requesting funds", err)
 	}
 
 	tx := bt.NewTx()
 
 	if err = tx.FromUTXOs(utxo); err != nil {
-		return nil, fmt.Errorf("error creating initial transaction: %v", err)
+		return nil, errors.NewProcessingError("error creating initial transaction", err)
 	}
 
 	splits := uint64(100)
@@ -812,24 +813,24 @@ func (c *Coinbase) RequestFunds(ctx context.Context, address string, disableDist
 	for i := 0; i < int(splits); i++ {
 		if i == 0 && remainder > 0 {
 			if err = tx.PayToAddress(address, sats+remainder); err != nil {
-				return nil, fmt.Errorf("error paying to address: %v", err)
+				return nil, errors.NewProcessingError("error paying to address", err)
 			}
 			continue
 		}
 
 		if err = tx.PayToAddress(address, sats); err != nil {
-			return nil, fmt.Errorf("error paying to address: %v", err)
+			return nil, errors.NewProcessingError("error paying to address", err)
 		}
 	}
 
 	unlockerGetter := unlocker.Getter{PrivateKey: c.privateKey}
 	if err = tx.FillAllInputs(ctx, &unlockerGetter); err != nil {
-		return nil, fmt.Errorf("error filling initial inputs: %v", err)
+		return nil, errors.NewProcessingError("error filling initial inputs", err)
 	}
 
 	if !disableDistribute {
 		if _, err = c.distributor.SendTransaction(ctx, tx); err != nil {
-			return nil, fmt.Errorf("error sending initial transaction: %v", err)
+			return nil, errors.NewServiceError("error sending initial transaction", err)
 		}
 
 		c.logger.Debugf("Sent funding transaction %s", tx.TxIDChainHash().String())
@@ -973,7 +974,7 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 		}
 
 	default:
-		return fmt.Errorf("unsupported database engine: %s", c.engine)
+		return errors.NewStorageError("unsupported database engine: %s", c.engine)
 	}
 
 	for vout, output := range tx.Outputs {
@@ -989,7 +990,7 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 
 		if addresses[0] == c.address {
 			if _, err = stmt.ExecContext(ctx, blockId, hash, vout, output.LockingScript, output.Satoshis); err != nil {
-				return fmt.Errorf("could not insert coinbase utxo: %+v", err)
+				return errors.NewStorageError("could not insert coinbase utxo", err)
 			}
 		}
 	}
@@ -1056,12 +1057,12 @@ func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
 		}
 
 	default:
-		return fmt.Errorf("unsupported database engine: %s", c.engine)
+		return errors.NewStorageError("unsupported database engine: %s", c.engine)
 	}
 
 	for vout, output := range tx.Outputs {
-		if _, err := stmt.ExecContext(ctx, hash, vout, output.LockingScript, output.Satoshis); err != nil {
-			return fmt.Errorf("could not insert spendable utxo %s: %+v", tx.TxIDChainHash().String(), err)
+		if _, err = stmt.ExecContext(ctx, hash, vout, output.LockingScript, output.Satoshis); err != nil {
+			return errors.NewStorageError("could not insert spendable utxo %s", tx.TxIDChainHash().String(), err)
 		}
 	}
 

@@ -35,13 +35,13 @@ func New(logger ulogger.Logger, dir string, multiDirs ...[]string) (*File, error
 		// create the directories if they don't exist
 		for _, d := range multiDirs[0] {
 			if err := os.MkdirAll(d, 0755); err != nil {
-				return nil, fmt.Errorf("failed to create directory: %w", err)
+				return nil, errors.NewStorageError("failed to create directory", err)
 			}
 		}
 	} else {
 		// create directory if not exists
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create directory: %w", err)
+			return nil, errors.NewStorageError("failed to create directory", err)
 		}
 	}
 
@@ -54,7 +54,7 @@ func New(logger ulogger.Logger, dir string, multiDirs ...[]string) (*File, error
 
 	err := fileStore.loadTTLs()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load ttls: %w", err)
+		return nil, errors.NewStorageError("failed to load ttls", err)
 	}
 
 	go fileStore.ttlCleaner(fileStore.fileTTLsCtx)
@@ -72,7 +72,7 @@ func (s *File) loadTTLs() error {
 		// get all files in the directory that end with .ttl
 		files, err := findFilesByExtension(path, ".ttl")
 		if err != nil {
-			return fmt.Errorf("failed to find ttl files: %w", err)
+			return errors.NewStorageError("failed to find ttl files", err)
 		}
 
 		var ttlBytes []byte
@@ -85,7 +85,7 @@ func (s *File) loadTTLs() error {
 			// read the ttl
 			ttlBytes, err = os.ReadFile(fileName)
 			if err != nil {
-				return fmt.Errorf("failed to read ttl file: %w", err)
+				return errors.NewStorageError("failed to read ttl file", err)
 			}
 
 			ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
@@ -153,18 +153,18 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 
 	fileName, err := s.getFileNameForSet(key, opts)
 	if err != nil {
-		return fmt.Errorf("failed to get file name: %w", err)
+		return errors.NewStorageError("failed to get file name", err)
 	}
 
 	// write the bytes from the reader to a file with the filename
 	file, err := os.Create(fileName)
 	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
+		return errors.NewStorageError("failed to create file", err)
 	}
 	defer file.Close()
 
 	if _, err = io.Copy(file, reader); err != nil {
-		return fmt.Errorf("failed to write data to file: %w", err)
+		return errors.NewStorageError("failed to write data to file", err)
 	}
 
 	return nil
@@ -175,13 +175,13 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 
 	fileName, err := s.getFileNameForSet(hash, opts)
 	if err != nil {
-		return fmt.Errorf("failed to get file name: %w", err)
+		return errors.NewStorageError("failed to get file name", err)
 	}
 
 	// write bytes to file
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err = os.WriteFile(fileName, value, 0644); err != nil {
-		return fmt.Errorf("failed to write data to file: %w", err)
+		return errors.NewStorageError("failed to write data to file", err)
 	}
 
 	return nil
@@ -217,7 +217,7 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 		ttl := time.Now().Add(fileOptions.TTL)
 		//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 		if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
-			return "", fmt.Errorf("failed to write ttl to file: %w", err)
+			return "", errors.NewStorageError("failed to write ttl to file", err)
 		}
 		s.fileTTLsMu.Lock()
 		s.fileTTLs[fileName] = ttl
@@ -245,7 +245,7 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.Optio
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
-		return nil, fmt.Errorf("unable to open file %q, %v", fileName, err)
+		return nil, errors.NewStorageError("unable to open file %q", fileName, err)
 	}
 
 	return file, nil
@@ -263,7 +263,7 @@ func (s *File) Get(_ context.Context, hash []byte, opts ...options.Options) ([]b
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
-		return nil, fmt.Errorf("failed to read data from file: %w", err)
+		return nil, errors.NewStorageError("failed to read data from file", err)
 	}
 
 	return bytes, err
@@ -281,13 +281,13 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
-		return nil, fmt.Errorf("failed to open file: %w", err)
+		return nil, errors.NewStorageError("failed to open file", err)
 	}
 
 	bytes := make([]byte, nrOfBytes)
 	nRead, err := file.Read(bytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read data from file: %w", err)
+		return nil, errors.NewStorageError("failed to read data from file", err)
 	}
 
 	return bytes[:nRead], err
@@ -305,7 +305,7 @@ func (s *File) Exists(_ context.Context, hash []byte, opts ...options.Options) (
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("failed to read data from file: %w", err)
+		return false, errors.NewStorageError("failed to read data from file", err)
 	}
 
 	return true, nil

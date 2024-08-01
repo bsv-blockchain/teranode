@@ -87,7 +87,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error {
 	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
-		return errors.New(errors.ERR_BLOCK_INVALID_FORMAT, "error creating block from bytes: %v")
+		return errors.NewProcessingError("error creating block from bytes", err)
 	}
 
 	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
@@ -145,26 +145,26 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		_, err := bufferedWriter.Write(blockBytes)
 		if err != nil {
 			u.logger.Errorf("Error writing block: %v", err)
-			writer.CloseWithError(err)
+			_ = writer.CloseWithError(err)
 			return
 		}
 	}()
 
 	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
 	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
-	if err := u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithTTL(24*time.Hour)); err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error persisting block %s", hash.String(), err)
+	if err = u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithTTL(24*time.Hour)); err != nil {
+		return errors.NewStorageError("[BlockPersister] error persisting block", err)
 	}
 
-	if err := u.blockStore.SetTTL(ctx, hash[:], 0, options.WithFileExtension("block")); err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error persisting block %s", hash.String(), err)
+	if err = u.blockStore.SetTTL(ctx, hash[:], 0, options.WithFileExtension("block")); err != nil {
+		return errors.NewStorageError("[BlockPersister] error persisting block", err)
 	}
 
 	u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
 
 	// At this point, we have a complete UTXODiff for this block.
-	if err := utxoDiff.Persist(ctx, u.blockStore); err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error persisting utxo diff for block %s", block.Header.Hash().String(), err)
+	if err = utxoDiff.Persist(ctx, u.blockStore); err != nil {
+		return errors.NewStorageError("error persisting utxo diff for block %s", block.Header.Hash().String(), err)
 	}
 
 	if gocore.Config().GetBool("blockPersister_processUTXOSets", false) {
@@ -176,7 +176,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 			// Load the UTXOSet from disk
 			previousUTXOSet, err = utxo_model.LoadUTXOSet(u.blockStore, *block.Header.HashPrevBlock)
 			if err != nil {
-				return errors.New(errors.ERR_STORAGE_ERROR, "error loading UTXOSet for block %s", block.Header.Hash().String(), err)
+				return errors.NewStorageError("LoadUTXOSet %s", *block.Header.HashPrevBlock, err)
 			}
 		}
 
@@ -196,8 +196,8 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 			return
 		})
 
-		if err := utxoSet.Persist(ctx, u.blockStore); err != nil {
-			return errors.New(errors.ERR_STORAGE_ERROR, "error persisting UTXOSet for block %s", block.Header.Hash().String(), err)
+		if err = utxoSet.Persist(ctx, u.blockStore); err != nil {
+			return errors.NewStorageError("error persisting utxo set for block %s", block.Header.Hash().String(), err)
 		}
 
 		utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)

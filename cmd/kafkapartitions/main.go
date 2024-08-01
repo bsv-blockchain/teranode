@@ -34,11 +34,11 @@ func main() {
 func createPartitions(configName string, partitions int) error {
 	url, err, ok := gocore.Config().GetURL(configName)
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "error getting Kafka URL (%s)", configName, err)
+		return errors.NewProcessingError("error getting Kafka URL (%s)", configName, err)
 	}
 
 	if !ok {
-		return errors.New(errors.ERR_PROCESSING, "kafka URL not found (%s)", configName)
+		return errors.NewProcessingError("kafka URL not found (%s)", configName)
 	}
 
 	hosts := strings.Split(url.Host, ",")
@@ -49,13 +49,13 @@ func createPartitions(configName string, partitions int) error {
 
 	admin, err := sarama.NewClusterAdmin(hosts, config)
 	if err != nil {
-		return errors.New(errors.ERR_SERVICE_ERROR, "error creating cluster admin", err)
+		return errors.NewServiceError("error creating cluster admin", err)
 	}
 	defer admin.Close()
 
 	err = admin.CreatePartitions(topic, int32(partitions), nil, false)
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "error changing partitions", err)
+		return errors.NewServiceError("error changing partitions", err)
 	}
 
 	log.Printf("%q changed successfully with %d partitions", topic, partitions)

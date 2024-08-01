@@ -69,7 +69,7 @@ func Start() {
 func ProcessFile(path string, logger ulogger.Logger) error {
 	dir, ext, r, err := getReader(path, logger)
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "error getting reader", err)
+		return errors.NewProcessingError("error getting reader", err)
 	}
 
 	r = bufio.NewReaderSize(r, 1024*1024)
@@ -77,7 +77,7 @@ func ProcessFile(path string, logger ulogger.Logger) error {
 	logger.Infof("Reading file %s\n", path)
 
 	if err := readFile(ext, logger, r, dir); err != nil {
-		return errors.New(errors.ERR_PROCESSING, "error reading file", err)
+		return errors.NewProcessingError("error reading file", err)
 	}
 
 	return nil
@@ -88,7 +88,7 @@ func verifyChain() error {
 
 	blockchain, err := blockchain.NewClient(context.Background(), logger)
 	if err != nil {
-		return errors.New(errors.ERR_SERVICE_ERROR, "error creating blockchain client", err)
+		return errors.NewServiceError("error creating blockchain client", err)
 	}
 
 	blockStore := getBlockStore(logger)
@@ -107,7 +107,7 @@ func verifyChain() error {
 	// Verify all blocks in reverse order (as it's easier)
 	header, meta, err := blockchain.GetBestBlockHeader(context.Background())
 	if err != nil {
-		return errors.New(errors.ERR_BLOCK_ERROR, "error getting best block header", err)
+		return errors.NewBlockError("error getting best block header", err)
 	}
 
 	p := message.NewPrinter(language.English)
@@ -118,13 +118,13 @@ func verifyChain() error {
 			if errors.Is(err, errors.ErrNotFound) {
 				fmt.Printf("%s (%d): NOT FOUND\n", header.Hash(), meta.Height)
 			} else {
-				return errors.New(errors.ERR_PROCESSING, "error getting block reader", err)
+				return errors.NewProcessingError("error getting block reader", err)
 			}
 		}
 
 		if err == nil {
 			if err := readFile(ext, logger, r, ""); err != nil {
-				return errors.New(errors.ERR_BLOCK_ERROR, "error reading block", err)
+				return errors.NewBlockError("error reading block", err)
 			} else {
 				p.Printf("%s (%d): FOUND with %12d transactions\n", header.Hash(), meta.Height, meta.TxCount)
 			}
@@ -135,7 +135,7 @@ func verifyChain() error {
 			if errors.Is(err, errors.ErrNotFound) {
 				break
 			}
-			return errors.New(errors.ERR_BLOCK_ERROR, "error getting block header", err)
+			return errors.NewBlockError("error getting block header", err)
 		}
 	}
 
@@ -147,7 +147,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 	case "utxodiff":
 		utxodiff, err := model.NewUTXODiffFromReader(logger, r)
 		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "error reading utxodiff", err)
+			return errors.NewProcessingError("error reading utxodiff", err)
 		}
 
 		fmt.Printf("UTXODiff block hash: %v\n", utxodiff.BlockHash)
@@ -177,7 +177,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 	case "utxoset":
 		utxoSet, err := model.NewUTXOSetFromReader(logger, r)
 		if err != nil {
-			return errors.New(errors.ERR_PROCESSING, "error reading utxoSet: %v\n", err)
+			return errors.NewProcessingError("error reading utxoSet: %v\n", err)
 		}
 
 		fmt.Printf("UTXOSet block hash: %v\n", utxoSet.BlockHash)
@@ -201,13 +201,13 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 		blockHeaderBytes := make([]byte, 80)
 		// read the first 80 bytes as the block header
 		if _, err := io.ReadFull(r, blockHeaderBytes); err != nil {
-			return errors.New(errors.ERR_BLOCK_INVALID, "error reading block header", err)
+			return errors.NewBlockInvalidError("error reading block header", err)
 		}
 
 		// read the transaction count
 		txCount, err := wire.ReadVarInt(r, 0)
 		if err != nil {
-			return errors.New(errors.ERR_BLOCK_INVALID, "error reading transaction count", err)
+			return errors.NewBlockInvalidError("error reading transaction count", err)
 		}
 
 		fmt.Printf("\t%d transactions\n", txCount)
@@ -215,7 +215,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 	case "block":
 		block, err := block_model.NewBlockFromReader(r)
 		if err != nil {
-			return errors.New(errors.ERR_BLOCK_ERROR, "error reading block: %v\n", err)
+			return errors.NewBlockError("error reading block: %v\n", err)
 		}
 
 		if verify {
@@ -240,7 +240,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 		}
 
 	default:
-		return errors.New(errors.ERR_PROCESSING, "unknown file type")
+		return errors.NewProcessingError("unknown file type")
 	}
 
 	return nil
@@ -275,7 +275,7 @@ func getReader(path string, logger ulogger.Logger) (string, string, io.Reader, e
 
 		r, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension(ext))
 		if err != nil {
-			return "", "", nil, errors.New(errors.ERR_PROCESSING, "error getting reader from store", err)
+			return "", "", nil, errors.NewProcessingError("error getting reader from store", err)
 		}
 
 		return dir, ext, r, nil
@@ -283,7 +283,7 @@ func getReader(path string, logger ulogger.Logger) (string, string, io.Reader, e
 
 	f, err := os.Open(path)
 	if err != nil {
-		return "", "", nil, errors.New(errors.ERR_PROCESSING, "error opening file", err)
+		return "", "", nil, errors.NewProcessingError("error opening file", err)
 	}
 
 	return dir, ext, f, nil

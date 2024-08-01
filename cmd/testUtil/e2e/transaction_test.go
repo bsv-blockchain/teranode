@@ -124,7 +124,7 @@ func getBlockHeight(url string) (int, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0, errors.New(errors.ERR_PROCESSING, "unexpected status code: %d", resp.StatusCode)
+		return 0, errors.NewProcessingError("unexpected status code: %d", resp.StatusCode)
 	}
 
 	var blocks []struct {
@@ -135,7 +135,7 @@ func getBlockHeight(url string) (int, error) {
 	}
 
 	if len(blocks) == 0 {
-		return 0, errors.New(errors.ERR_PROCESSING, "no blocks found in response")
+		return 0, errors.NewProcessingError("no blocks found in response")
 	}
 
 	return blocks[0].Height, nil

@@ -1,7 +1,7 @@
 package blockchain
 
 import (
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
@@ -18,5 +18,5 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL) (Store, error) {
 		return sql.New(logger, storeUrl)
 	}
 
-	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
+	return nil, errors.NewStorageError("unknown scheme: %s", storeUrl.Scheme)
 }

@@ -33,7 +33,7 @@ func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 	// 1. get the subtree from the subtree store
 	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
 	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error getting subtree %s from store", subtreeHash.String(), err)
+		return errors.NewStorageError("[BlockPersister] error getting subtree %s from store", subtreeHash.String(), err)
 	}
 	defer func() {
 		_ = subtreeReader.Close()
@@ -42,7 +42,7 @@ func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 	subtree := util.Subtree{}
 	err = subtree.DeserializeFromReader(subtreeReader)
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "error deserializing subtree %s", subtreeHash.String(), err)
+		return errors.NewProcessingError("[BlockPersister] error deserializing subtree", err)
 	}
 
 	// Get the subtree hashes if they were passed in (SubtreeFound() passes them in, BlockFound does not)
@@ -66,11 +66,11 @@ func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 	// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 	missed, err := u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, batched)
 	if err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error getting tx meta from store for subtree %s", subtreeHash.String(), err)
+		return errors.NewServiceError("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String(), err)
 	}
 
 	if missed > 0 {
-		return errors.New(errors.ERR_STORAGE_ERROR, "failed to get tx meta from store for subtree %s", subtreeHash.String())
+		return errors.NewServiceError("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String())
 	}
 
 	reader, writer := io.Pipe()
@@ -80,11 +80,11 @@ func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
 	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
 	if err := u.blockStore.SetFromReader(ctx, subtreeHash[:], reader, options.WithFileExtension("subtree"), options.WithTTL(24*time.Hour)); err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error persisting subtree %s", subtreeHash.String(), err)
+		return errors.NewStorageError("[BlockPersister] error persisting subtree", err)
 	}
 
 	if err = u.blockStore.SetTTL(ctx, subtreeHash[:], 0, options.WithFileExtension("subtree")); err != nil {
-		return errors.New(errors.ERR_STORAGE_ERROR, "error persisting subtree %s", subtreeHash.String(), err)
+		return errors.NewStorageError("[BlockPersister]error persisting subtree %s", subtreeHash.String(), err)
 	}
 
 	return nil
@@ -97,7 +97,7 @@ func WriteTxs(logger ulogger.Logger, writer *io.PipeWriter, txMetaSlice []*meta.
 		// Flush the buffer and close the writer with error handling
 		if err := bufferedWriter.Flush(); err != nil {
 			logger.Errorf("error flushing writer: %v", err)
-			writer.CloseWithError(err)
+			_ = writer.CloseWithError(err)
 			return
 		}
 
@@ -110,14 +110,14 @@ func WriteTxs(logger ulogger.Logger, writer *io.PipeWriter, txMetaSlice []*meta.
 	//      this makes it impossible to stream directly from S3 to the client
 	if err := binary.Write(bufferedWriter, binary.LittleEndian, uint32(len(txMetaSlice))); err != nil {
 		logger.Errorf("error writing number of txs: %v", err)
-		writer.CloseWithError(err)
+		_ = writer.CloseWithError(err)
 		return
 	}
 
 	for i := 0; i < len(txMetaSlice); i++ {
 		if _, err := bufferedWriter.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
 			logger.Errorf("error writing tx: %v", err)
-			writer.CloseWithError(err)
+			_ = writer.CloseWithError(err)
 			return
 		}
 

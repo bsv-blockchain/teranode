@@ -3,8 +3,6 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"fmt"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -21,7 +19,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 
 	header, meta, er := s.blocksCache.GetBlockHeader(*blockHash)
 	if er != nil {
-		return nil, nil, fmt.Errorf("error in GetBlockHeader: %w", er)
+		return nil, nil, errors.NewStorageError("error in GetBlockHeader", er)
 	}
 	if header != nil {
 		return header, meta, nil
@@ -68,7 +66,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		&blockHeaderMeta.TxCount,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, fmt.Errorf("error in GetBlockHeader: %w", errors.ErrNotFound)
+			return nil, nil, errors.NewStorageError("error in GetBlockHeader", errors.ErrNotFound)
 		}
 		return nil, nil, err
 	}
@@ -77,21 +75,21 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+		return nil, nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
 	}
 	blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+		return nil, nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 	}
 
 	coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to convert coinbaseTx: %w", err)
+		return nil, nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
 	}
 
 	miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to extract miner: %w", err)
+		return nil, nil, errors.NewProcessingError("failed to extract miner", err)
 	}
 
 	blockHeaderMeta.Miner = miner

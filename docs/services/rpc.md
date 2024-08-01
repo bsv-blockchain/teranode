@@ -49,6 +49,8 @@ The below table summarises the services supported in the current version:
 | sendrawtransaction    | Supported  |
 | stop                  | Supported  |
 | version               | Supported  |
+| getminingcandidate    | Supported  |
+| submitminingsolution  | Supported  |
 
 ### Unimplemented RPC Commands
 

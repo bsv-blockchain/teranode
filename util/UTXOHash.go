@@ -1,8 +1,6 @@
 package util
 
 import (
-	"fmt"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -14,7 +12,7 @@ import (
 // The hash is then hashed using SHA256.
 func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript *bscript.Script, satoshis uint64) (*chainhash.Hash, error) {
 	if lockingScript == nil {
-		return nil, fmt.Errorf("locking script is nil")
+		return nil, errors.NewProcessingError("locking script is nil")
 	}
 
 	utxoHash := make([]byte, 0, 256)
@@ -34,7 +32,7 @@ func UTXOHashFromInput(input *bt.Input) (*chainhash.Hash, error) {
 	hash := input.PreviousTxIDChainHash()
 
 	if input.PreviousTxScript == nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "locking script is nil")
+		return nil, errors.NewProcessingError("locking script is nil")
 	}
 
 	return UTXOHash(hash, input.PreviousTxOutIndex, input.PreviousTxScript, input.PreviousTxSatoshis)

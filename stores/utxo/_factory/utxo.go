@@ -2,7 +2,7 @@ package _factory
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"strconv"
 
@@ -93,7 +93,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 		return utxoStore, nil
 	}
 
-	return nil, fmt.Errorf("unknown scheme: %s", storeUrl.Scheme)
+	return nil, errors.NewProcessingError("unknown scheme: %s", storeUrl.Scheme)
 }
 
 func setBlockHeight(_ context.Context, _ ulogger.Logger, utxoStore utxo.Store, _ string, blockHeight uint32) error {

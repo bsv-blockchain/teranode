@@ -101,7 +101,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 			return c.String(200, hex.EncodeToString(b))
 
 		default:
-			err = errors.New(errors.ERR_UNKNOWN, "bad read mode")
+			err = errors.NewUnknownError("bad read mode")
 			return sendError(c, http.StatusInternalServerError, 52, err)
 		}
 	}

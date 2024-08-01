@@ -499,6 +499,7 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 
 	// Add valid peer to the server.
 	sp.server.AddPeer(sp)
+
 	return nil
 }
 
@@ -572,7 +573,7 @@ func (sp *serverPeer) OnBlock(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 
 		err = <-sp.blockProcessed
 		if err != nil {
-			sp.server.logger.Debugf("Block processed: %v", err)
+			sp.server.logger.Errorf("block processing failed: %v", err)
 		}
 	}
 }
@@ -2352,6 +2353,14 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 			Permanent: true,
 		})
 	}
+
+	go func() {
+		// wait for the ctx to be done
+		<-ctx.Done()
+		// stop the servers
+		_ = s.Stop()
+		_ = s.syncManager.Stop()
+	}()
 
 	return &s, nil
 }

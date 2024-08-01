@@ -62,7 +62,7 @@ func NewMetaDataFromBytes(dataBytes *[]byte, d *Data) {
 // the remainder of the byte slice is the block hashes as 4 byte integers
 func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	if len(dataBytes) < 24 {
-		return nil, errors.New(errors.ERR_PROCESSING, "dataBytes too short, expected at least 24 bytes, got %d", len(dataBytes))
+		return nil, errors.NewProcessingError("dataBytes too short, expected at least 24 bytes, got %d", len(dataBytes))
 	}
 
 	d := &Data{}
@@ -81,7 +81,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	for i := uint64(0); i < parentTxHashesLen; i++ {
 		_, err := io.ReadFull(buf, hashBytes[:])
 		if err != nil {
-			return nil, errors.New(errors.ERR_PROCESSING, "could not read hash bytes", err)
+			return nil, errors.NewProcessingError("could not read hash bytes", err)
 		}
 		d.ParentTxHashes[i] = chainhash.Hash(hashBytes[:])
 	}
@@ -90,7 +90,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 	d.Tx = &bt.Tx{}
 	_, err := d.Tx.ReadFrom(buf)
 	if err != nil {
-		return nil, errors.New(errors.ERR_PROCESSING, "could not read transaction", err)
+		return nil, errors.NewProcessingError("could not read transaction", err)
 	}
 
 	// read the block hashes as the remainder data
@@ -102,7 +102,7 @@ func NewDataFromBytes(dataBytes []byte) (*Data, error) {
 			if err == io.EOF {
 				break
 			}
-			return nil, errors.New(errors.ERR_PROCESSING, "could not read block bytes", err)
+			return nil, errors.NewProcessingError("could not read block bytes", err)
 		}
 		d.BlockIDs = append(d.BlockIDs, binary.LittleEndian.Uint32(blockBytes[:]))
 	}

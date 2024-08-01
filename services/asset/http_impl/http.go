@@ -3,8 +3,8 @@ package http_impl
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"net/http"
 	"time"
@@ -216,11 +216,11 @@ func (h *HTTP) Start(ctx context.Context, addr string) error {
 
 		certFile, found := gocore.Config().Get("server_certFile")
 		if !found {
-			return errors.New("server_certFile is required for HTTPS")
+			return errors.NewConfigurationError("server_certFile is required for HTTPS")
 		}
 		keyFile, found := gocore.Config().Get("server_keyFile")
 		if !found {
-			return errors.New("server_keyFile is required for HTTPS")
+			return errors.NewConfigurationError("server_keyFile is required for HTTPS")
 		}
 
 		servicemanager.AddListenerInfo(fmt.Sprintf("Asset HTTPS listening on %s", addr))

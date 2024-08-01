@@ -3,7 +3,6 @@ package miner
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -85,7 +85,7 @@ func (m *Miner) Init(ctx context.Context) error {
 	m.MineBlocksNImmediatelyCancelChan = make(chan bool, 1)
 	var err error
 	if m.blockchainClient, err = blockchain.NewClient(ctx, m.logger); err != nil {
-		return fmt.Errorf("[Init] failed to create blockchain client [%w]", err)
+		return errors.NewServiceError("[Init] failed to create blockchain client", err)
 	}
 
 	return err
@@ -123,7 +123,7 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
 	if err != nil {
-		return fmt.Errorf("[Main] failed to send MINE notification [%v]", err)
+		return errors.NewServiceError("[Main] failed to send MINE notification", err)
 	}
 
 	var miningCtx context.Context
@@ -232,11 +232,11 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	solution, err := cpuminer.Mine(ctx, candidate)
 	if err != nil {
 		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
-		return fmt.Errorf("error mining block on %s: %w", candidateId, err)
+		return errors.NewProcessingError("error mining block on %s", candidateId, err)
 	}
 
 	if solution == nil {
-		return fmt.Errorf("no solution found for %s", candidateId)
+		return errors.NewProcessingError("no solution found for %s", candidateId)
 	}
 
 	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
@@ -289,7 +289,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 			// After all retries, if there's still an error, wrap and return it using %w
 			// to wrap the error, so the caller can use errors.Is() to check for this specific error
 			// TODO: 3 retries is hardcoded, as it is default in the retry package. This setting should be accessible.
-			return fmt.Errorf("error submitting mining solution after 3 retries for job %s: %w", candidateId, err)
+			return errors.NewServiceError("error submitting mining solution after 3 retries for job %s", candidateId, err)
 		}
 	}
 
@@ -330,10 +330,10 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 
 		solution, err := cpuminer.Mine(ctx, candidate)
 		if err != nil {
-			return fmt.Errorf("error mining block on %s: %v", candidateId, err)
+			return errors.NewProcessingError("error mining block on %s", candidateId, err)
 		}
 		if solution == nil {
-			return fmt.Errorf("no solution found for %s", candidateId)
+			return errors.NewProcessingError("no solution found for %s", candidateId)
 		}
 
 		// Define retry delays
@@ -354,7 +354,7 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 		if err != nil {
 			// After all retries, if there's still an error, wrap and return it using %w
 			// to wrap the error, so the caller can use errors.Is() to check for this specific error
-			return fmt.Errorf("error submitting mining solution after %d retries for job %s: %w", len(retryDelays), candidateId, err)
+			return errors.NewServiceError("error submitting mining solution after %d retries for job %s", len(retryDelays), candidateId, err)
 		}
 	}
 	return nil
@@ -376,14 +376,14 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 		select {
 
 		case <-ctx.Done():
-			return nil, fmt.Errorf("[Miner] canceled mining on job %s", candidate.Id)
+			return nil, errors.NewContextCanceledError("[Miner] canceled mining on job %s", candidate.Id)
 
 		case <-m.MineBlocksNImmediatelyCancelChan:
 			m.logger.Infof("[Miner] Cancelled mining %d blocks immediately", blocks)
 			if candidate == nil {
-				return nil, fmt.Errorf("[Miner] aborting mining on job %s", "unknown")
+				return nil, errors.NewServiceError("[Miner] aborting mining on job %s", "unknown")
 			}
-			return nil, fmt.Errorf("[Miner] aborting mining on job %s", candidate.Id)
+			return nil, errors.NewServiceError("[Miner] aborting mining on job %s", candidate.Id)
 
 		default:
 
@@ -405,11 +405,11 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 			if err != nil {
 				// After all retries, if there's still an error, wrap and return it using %w
 				// to wrap the error, so the caller can use errors.Is() to check for this specific error
-				return nil, fmt.Errorf("error getting mining candidate after %d retries: %w", len(retryDelays), err)
+				return nil, errors.NewServiceError("error getting mining candidate after %d retries: %w", len(retryDelays), err)
 			}
 
 			if candidate == nil {
-				return nil, fmt.Errorf("[Miner] no mining candidate found")
+				return nil, errors.NewServiceError("[Miner] no mining candidate found")
 			}
 
 			if previousHash == nil || !bytes.Equal(previousHash[:], candidate.PreviousHash) {
@@ -429,7 +429,7 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 
 			retryCount++
 			if retryCount > maxRetries {
-				return nil, fmt.Errorf("[Miner] max retries exceeded")
+				return nil, errors.NewProcessingError("[Miner] max retries exceeded")
 			}
 		}
 	}

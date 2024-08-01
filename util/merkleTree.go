@@ -2,7 +2,7 @@ package util
 
 import (
 	sha256 "crypto/sha256"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"math"
 	"sync"
 
@@ -11,12 +11,12 @@ import (
 
 func GetMerkleProofForCoinbase(subtrees []*Subtree) ([]*chainhash.Hash, error) {
 	if len(subtrees) == 0 {
-		return nil, fmt.Errorf("no subtrees available")
+		return nil, errors.NewProcessingError("no subtrees available")
 	}
 
 	merkleProof, err := subtrees[0].GetMerkleProof(0)
 	if err != nil {
-		return nil, fmt.Errorf("failed creating merkle proof for subtree: %v", err)
+		return nil, errors.NewProcessingError("failed creating merkle proof for subtree: %v", err)
 	}
 
 	// Create a new tree with the subtreeHashes of the subtrees
@@ -34,7 +34,7 @@ func GetMerkleProofForCoinbase(subtrees []*Subtree) ([]*chainhash.Hash, error) {
 
 	topMerkleProof, err := topTree.GetMerkleProof(0)
 	if err != nil {
-		return nil, fmt.Errorf("failed creating merkle proofs for toptree: %v", err)
+		return nil, errors.NewProcessingError("failed creating merkle proofs for top tree", err)
 	}
 
 	return append(merkleProof, topMerkleProof...), nil

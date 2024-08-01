@@ -16,7 +16,7 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "error in aerospike NewKey", err)
+		return errors.NewProcessingError("error in aerospike NewKey", err)
 	}
 
 	_, err = s.client.Delete(policy, key)
@@ -27,7 +27,7 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 		}
 
 		prometheusUtxoMapErrors.WithLabelValues("Delete", err.Error()).Inc()
-		return errors.New(errors.ERR_STORAGE_ERROR, "error in aerospike delete key", err)
+		return errors.NewStorageError("error in aerospike delete key", err)
 	}
 
 	prometheusUtxoMapDelete.Inc()

@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
@@ -97,7 +98,7 @@ func (c *Client) Health(ctx context.Context) (int, string, error) {
 func (c *Client) GetBlockHeight() (uint32, error) {
 	resp, err := c.client.GetBlockHeight(context.Background(), &validator_api.EmptyMessage{})
 	if err != nil {
-		return 0, err
+		return 0, errors.UnwrapGRPC(err)
 	}
 
 	return resp.Height, nil
@@ -110,7 +111,7 @@ func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) er
 			TransactionData: tx.ExtendedBytes(),
 			BlockHeight:     blockHeight,
 		}); err != nil {
-			return err
+			return errors.UnwrapGRPC(err)
 		}
 
 	} else {

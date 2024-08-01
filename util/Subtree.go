@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"math"
 
@@ -38,7 +39,7 @@ type Subtree struct {
 // height is the number if levels in a merkle tree of the subtree
 func NewTree(height int) (*Subtree, error) {
 	if height < 0 {
-		return nil, fmt.Errorf("height must be at least 0")
+		return nil, errors.NewProcessingError("height must be at least 0")
 	}
 
 	var treeSize = int(math.Pow(2, float64(height)))
@@ -55,7 +56,7 @@ func NewTree(height int) (*Subtree, error) {
 
 func NewTreeByLeafCount(maxNumberOfLeaves int) (*Subtree, error) {
 	if !IsPowerOfTwo(maxNumberOfLeaves) {
-		return nil, fmt.Errorf("numberOfLeaves must be a power of two")
+		return nil, errors.NewProcessingError("numberOfLeaves must be a power of two")
 	}
 
 	height := math.Ceil(math.Log2(float64(maxNumberOfLeaves)))
@@ -95,7 +96,7 @@ func DeserializeNodesFromReader(reader io.Reader) (subtreeBytes []byte, err erro
 	// total read at once = len(st.rootHash[:]) + 8 + 8 + 8
 	byteBuffer := make([]byte, chainhash.HashSize+24)
 	if _, err = io.ReadFull(buf, byteBuffer); err != nil {
-		return nil, fmt.Errorf("unable to read subtree root information : %v", err)
+		return nil, errors.NewSubtreeError("unable to read subtree root information", err)
 	}
 
 	numLeaves := binary.LittleEndian.Uint64(byteBuffer[chainhash.HashSize+16 : chainhash.HashSize+24])
@@ -103,7 +104,7 @@ func DeserializeNodesFromReader(reader io.Reader) (subtreeBytes []byte, err erro
 	byteBuffer = byteBuffer[8:] // reduce read byteBuffer size by 8
 	for i := uint64(0); i < numLeaves; i++ {
 		if _, err = io.ReadFull(buf, byteBuffer); err != nil {
-			return nil, fmt.Errorf("unable to read subtree node information : %v", err)
+			return nil, errors.NewSubtreeError("unable to read subtree node information", err)
 		}
 		copy(subtreeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize], byteBuffer[:chainhash.HashSize])
 	}
@@ -166,7 +167,7 @@ func (st *Subtree) ReplaceRootNode(node *chainhash.Hash, fee uint64, sizeInBytes
 
 func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
-		return fmt.Errorf("subtree is full")
+		return errors.NewSubtreeError("subtree is full")
 	}
 
 	// AddNode is not concurrency safe, so we can reuse the same byte arrays
@@ -188,7 +189,7 @@ func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 
 func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
-		return fmt.Errorf("subtree is full")
+		return errors.NewSubtreeError("subtree is full")
 	}
 
 	// AddNode is not concurrency safe, so we can reuse the same byte arrays
@@ -281,7 +282,7 @@ func (st *Subtree) Difference(ids TxMap) ([]SubtreeNode, error) {
 // TODO rewrite this to calculate this from the subtree nodes needed, and not the whole tree
 func (st *Subtree) GetMerkleProof(index int) ([]*chainhash.Hash, error) {
 	if index >= len(st.Nodes) {
-		return nil, fmt.Errorf("index out of range")
+		return nil, errors.NewSubtreeError("index out of range")
 	}
 
 	merkleTree, err := BuildMerkleTreeStoreFromBytes(st.Nodes)
@@ -332,7 +333,7 @@ func (st *Subtree) Serialize() ([]byte, error) {
 	// write root hash - this is only for checking the correctness of the data
 	_, err := buf.Write(st.RootHash()[:])
 	if err != nil {
-		return nil, fmt.Errorf("unable to write root hash: %v", err)
+		return nil, errors.NewSubtreeError("unable to write root hash", err)
 	}
 
 	var b [8]byte
@@ -340,19 +341,19 @@ func (st *Subtree) Serialize() ([]byte, error) {
 	// write fees
 	binary.LittleEndian.PutUint64(b[:], st.Fees)
 	if _, err = buf.Write(b[:]); err != nil {
-		return nil, fmt.Errorf("unable to write fees: %v", err)
+		return nil, errors.NewProcessingError("unable to write fees", err)
 	}
 
 	// write size
 	binary.LittleEndian.PutUint64(b[:], st.SizeInBytes)
 	if _, err = buf.Write(b[:]); err != nil {
-		return nil, fmt.Errorf("unable to write sizeInBytes: %v", err)
+		return nil, errors.NewProcessingError("unable to write sizeInBytes", err)
 	}
 
 	// write number of nodes
 	binary.LittleEndian.PutUint64(b[:], uint64(len(st.Nodes)))
 	if _, err = buf.Write(b[:]); err != nil {
-		return nil, fmt.Errorf("unable to write number of nodes: %v", err)
+		return nil, errors.NewProcessingError("unable to write number of nodes", err)
 	}
 
 	// write nodes
@@ -362,26 +363,26 @@ func (st *Subtree) Serialize() ([]byte, error) {
 	for _, node = range st.Nodes {
 		_, err = buf.Write(node.Hash[:])
 		if err != nil {
-			return nil, fmt.Errorf("unable to write node: %v", err)
+			return nil, errors.NewProcessingError("unable to write node", err)
 		}
 
 		binary.LittleEndian.PutUint64(feeBytes, node.Fee)
 		_, err = buf.Write(feeBytes)
 		if err != nil {
-			return nil, fmt.Errorf("unable to write fee: %v", err)
+			return nil, errors.NewProcessingError("unable to write fee", err)
 		}
 
 		binary.LittleEndian.PutUint64(sizeBytes, node.SizeInBytes)
 		_, err = buf.Write(sizeBytes)
 		if err != nil {
-			return nil, fmt.Errorf("unable to write sizeInBytes: %v", err)
+			return nil, errors.NewProcessingError("unable to write sizeInBytes", err)
 		}
 	}
 
 	// write number of conflicting nodes
 	binary.LittleEndian.PutUint64(b[:], uint64(len(st.ConflictingNodes)))
 	if _, err = buf.Write(b[:]); err != nil {
-		return nil, fmt.Errorf("unable to write number of conflicting nodes: %v", err)
+		return nil, errors.NewProcessingError("unable to write number of conflicting nodes", err)
 	}
 
 	// write conflicting nodes
@@ -389,7 +390,7 @@ func (st *Subtree) Serialize() ([]byte, error) {
 	for _, nodeHash = range st.ConflictingNodes {
 		_, err = buf.Write(nodeHash[:])
 		if err != nil {
-			return nil, fmt.Errorf("unable to write conflicting node: %v", err)
+			return nil, errors.NewProcessingError("unable to write conflicting node", err)
 		}
 	}
 
@@ -408,7 +409,7 @@ func (st *Subtree) SerializeNodes() ([]byte, error) {
 	for _, node = range st.Nodes {
 		_, err = buf.Write(node.Hash[:])
 		if err != nil {
-			return nil, fmt.Errorf("unable to write node: %v", err)
+			return nil, errors.NewProcessingError("unable to write node", err)
 		}
 	}
 
@@ -418,7 +419,7 @@ func (st *Subtree) SerializeNodes() ([]byte, error) {
 func (st *Subtree) Deserialize(b []byte) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("recovered in Deserialize: %v", r)
+			err = errors.NewProcessingError("recovered in Deserialize", r)
 		}
 	}()
 
@@ -427,7 +428,7 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 	// read root hash
 	st.rootHash, err = chainhash.NewHash(buf.Next(32))
 	if err != nil {
-		return fmt.Errorf("unable to read root hash: %v", err)
+		return errors.NewProcessingError("unable to read root hash", err)
 	}
 
 	// read fees
@@ -473,7 +474,7 @@ func (st *Subtree) Deserialize(b []byte) (err error) {
 func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("recovered in DeserializeFromReader: %v", r)
+			err = errors.NewProcessingError("recovered in DeserializeFromReader", r)
 		}
 	}()
 
@@ -482,26 +483,26 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 	// read root hash
 	st.rootHash = new(chainhash.Hash)
 	if _, err = io.ReadFull(buf, st.rootHash[:]); err != nil {
-		return fmt.Errorf("unable to read root hash: %v", err)
+		return errors.NewProcessingError("unable to read root hash", err)
 	}
 
 	bytes8 := make([]byte, 8)
 
 	// read fees
 	if _, err = io.ReadFull(buf, bytes8); err != nil {
-		return fmt.Errorf("unable to read fees: %v", err)
+		return errors.NewProcessingError("unable to read fees", err)
 	}
 	st.Fees = binary.LittleEndian.Uint64(bytes8)
 
 	// read sizeInBytes
 	if _, err = io.ReadFull(buf, bytes8); err != nil {
-		return fmt.Errorf("unable to read sizeInBytes: %v", err)
+		return errors.NewProcessingError("unable to read sizeInBytes", err)
 	}
 	st.SizeInBytes = binary.LittleEndian.Uint64(bytes8)
 
 	// read number of leaves
 	if _, err = io.ReadFull(buf, bytes8); err != nil {
-		return fmt.Errorf("unable to read number of leaves: %v", err)
+		return errors.NewProcessingError("unable to read number of leaves", err)
 	}
 	numLeaves := binary.LittleEndian.Uint64(bytes8)
 
@@ -515,7 +516,7 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 	for i := uint64(0); i < numLeaves; i++ {
 		// read all the node data in 1 go
 		if _, err = io.ReadFull(buf, bytes48); err != nil {
-			return fmt.Errorf("unable to read node: %v", err)
+			return errors.NewProcessingError("unable to read node", err)
 		}
 		st.Nodes[i].Hash = chainhash.Hash(bytes48[:32])
 		st.Nodes[i].Fee = binary.LittleEndian.Uint64(bytes48[32:40])
@@ -524,7 +525,7 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 
 	// read number of conflicting nodes
 	if _, err = io.ReadFull(buf, bytes8); err != nil {
-		return fmt.Errorf("unable to read number of conflicting nodes: %v", err)
+		return errors.NewProcessingError("unable to read number of conflicting nodes", err)
 	}
 	numConflictingLeaves := binary.LittleEndian.Uint64(bytes8)
 
@@ -532,7 +533,7 @@ func (st *Subtree) DeserializeFromReader(reader io.Reader) (err error) {
 	st.ConflictingNodes = make([]chainhash.Hash, numConflictingLeaves)
 	for i := uint64(0); i < numConflictingLeaves; i++ {
 		if _, err = io.ReadFull(buf, st.ConflictingNodes[i][:]); err != nil {
-			return fmt.Errorf("unable to read conflicting node: %v", err)
+			return errors.NewProcessingError("unable to read conflicting node", err)
 		}
 	}
 
@@ -546,25 +547,25 @@ func (st *Subtree) DeserializeOld(b []byte) (err error) {
 	var rootHash [32]byte
 	_, err = buf.Read(rootHash[:])
 	if err != nil {
-		return fmt.Errorf("unable to read root hash: %v", err)
+		return errors.NewProcessingError("unable to read root hash", err)
 	}
 
 	// read fees
 	st.Fees, err = wire.ReadVarInt(buf, 0)
 	if err != nil {
-		return fmt.Errorf("unable to read fees: %v", err)
+		return errors.NewProcessingError("unable to read fees", err)
 	}
 
 	// read sizeInBytes
 	st.SizeInBytes, err = wire.ReadVarInt(buf, 0)
 	if err != nil {
-		return fmt.Errorf("unable to read sizeInBytes: %v", err)
+		return errors.NewProcessingError("unable to read sizeInBytes", err)
 	}
 
 	// read number of leaves
 	numLeaves, err := wire.ReadVarInt(buf, 0)
 	if err != nil {
-		return fmt.Errorf("unable to read number of leaves: %v", err)
+		return errors.NewProcessingError("unable to read number of leaves", err)
 	}
 
 	// we must be able to support incomplete subtrees
@@ -582,7 +583,7 @@ func (st *Subtree) DeserializeOld(b []byte) (err error) {
 	for i := uint64(0); i < numLeaves; i++ {
 		hash, err = chainhash.NewHash(buf.Next(32))
 		if err != nil {
-			return fmt.Errorf("unable to read leaves: %v", err)
+			return errors.NewProcessingError("unable to read leaves", err)
 		}
 
 		feeBytes := buf.Next(8)
@@ -601,7 +602,7 @@ func (st *Subtree) DeserializeOld(b []byte) (err error) {
 	// read number of conflicting nodes
 	numConflictingLeaves, err := wire.ReadVarInt(buf, 0)
 	if err != nil {
-		return fmt.Errorf("unable to read number of conflicting nodes: %v", err)
+		return errors.NewProcessingError("unable to read number of conflicting nodes", err)
 	}
 
 	// read conflicting nodes
@@ -610,14 +611,14 @@ func (st *Subtree) DeserializeOld(b []byte) (err error) {
 	for i := uint64(0); i < numConflictingLeaves; i++ {
 		conflictingHash, err = chainhash.NewHash(buf.Next(32))
 		if err != nil {
-			return fmt.Errorf("unable to read conflicting node: %v", err)
+			return errors.NewProcessingError("unable to read conflicting node", err)
 		}
 		st.ConflictingNodes[i] = *conflictingHash
 	}
 
 	// calculate rootHash and compare with given rootHash
 	if !bytes.Equal(st.RootHash()[:], rootHash[:]) {
-		return fmt.Errorf("root hash mismatch")
+		return errors.NewProcessingError("root hash mismatch")
 	}
 
 	// TODO: look up the fee for the last tx and subtract it from the last chainedSubtree and add it to the currentSubtree
@@ -627,7 +628,7 @@ func (st *Subtree) DeserializeOld(b []byte) (err error) {
 func (st *Subtree) DeserializeChan(b []byte) (nodeChan chan SubtreeNode, errChan chan error, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("recovered in DeserializeChan: %v", r)
+			err = errors.NewProcessingError("recovered in DeserializeChan", r)
 		}
 	}()
 

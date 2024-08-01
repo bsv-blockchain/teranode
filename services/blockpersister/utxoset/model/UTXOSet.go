@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"time"
 
@@ -61,7 +61,7 @@ func NewUTXOSetFromReader(logger ulogger.Logger, r io.Reader) (*UTXOSet, error) 
 	blockHash := new(chainhash.Hash)
 
 	if _, err := io.ReadFull(r, blockHash[:]); err != nil {
-		return nil, fmt.Errorf("error reading block hash: %w", err)
+		return nil, errors.NewProcessingError("error reading block hash", err)
 	}
 
 	us := NewUTXOSet(logger, blockHash)
@@ -76,7 +76,7 @@ func NewUTXOSetFromReader(logger ulogger.Logger, r io.Reader) (*UTXOSet, error) 
 func LoadUTXOSet(store blob.Store, hash chainhash.Hash) (*UTXOSet, error) {
 	reader, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension("utxoset"))
 	if err != nil {
-		return nil, fmt.Errorf("error getting reader: %w", err)
+		return nil, errors.NewStorageError("error getting reader", err)
 	}
 
 	return NewUTXOSetFromReader(ulogger.NewZeroLogger("UTXOSet"), reader)
@@ -109,7 +109,7 @@ func (us *UTXOSet) Persist(ctx context.Context, store blob.Store) error {
 	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
 	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
 	if err := store.SetFromReader(ctx, us.BlockHash[:], reader, options.WithFileExtension("utxoset"), options.WithTTL(24*time.Hour)); err != nil {
-		return fmt.Errorf("[BlockPersister] error persisting utxodiff: %w", err)
+		return errors.NewStorageError("[BlockPersister] error persisting utxodiff", err)
 	}
 
 	return store.SetTTL(ctx, us.BlockHash[:], 0, options.WithFileExtension("utxoset"))
@@ -117,12 +117,12 @@ func (us *UTXOSet) Persist(ctx context.Context, store blob.Store) error {
 
 func (us *UTXOSet) Write(w io.Writer) error {
 	if _, err := w.Write(us.BlockHash[:]); err != nil {
-		return fmt.Errorf("error writing block hash: %w", err)
+		return errors.NewProcessingError("error writing block hash", err)
 	}
 
 	// Write the number of UTXOs
 	if err := binary.Write(w, binary.LittleEndian, uint32(us.Current.Length())); err != nil {
-		return fmt.Errorf("error writing number of UTXOs: %w", err)
+		return errors.NewProcessingError("error writing number of UTXOs", err)
 	}
 
 	var err error
@@ -142,7 +142,7 @@ func (us *UTXOSet) Write(w io.Writer) error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("Failed to write UTXO set: %w", err)
+		return errors.NewProcessingError("failed to write UTXO set", err)
 	}
 
 	return nil

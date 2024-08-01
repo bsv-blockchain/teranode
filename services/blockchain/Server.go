@@ -96,7 +96,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	if err == nil && ok {
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
 		if _, b.blockKafkaProducer, err = util.ConnectToKafka(blocksKafkaURL); err != nil {
-			return errors.WrapGRPC(errors.New(errors.ERR_SERVICE_UNAVAILABLE, "[Blockchain] error connecting to kafka", err))
+			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
 		}
 	}
 
@@ -212,7 +212,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	if err := util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
 	}); err != nil {
-		return errors.WrapGRPC(errors.New(errors.ERR_SERVICE_NOT_STARTED, "[Blockchain] can't start GRPC server", err))
+		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain] can't start GRPC server", err))
 	}
 
 	return nil
@@ -253,14 +253,14 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 	btCoinbaseTx, err := bt.NewTxFromBytes(request.CoinbaseTx)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_INVALID_ARGUMENT, "[Blockchain] can't create the coinbase transaction", err))
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain] can't create the coinbase transaction", err))
 	}
 
 	subtreeHashes := make([]*chainhash.Hash, len(request.SubtreeHashes))
 	for i, subtreeHash := range request.SubtreeHashes {
 		subtreeHashes[i], err = chainhash.NewHash(subtreeHash)
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.New(errors.ERR_INVALID_ARGUMENT, "[Blockchain] unable to create subtree hash", err))
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain] unable to create subtree hash", err))
 		}
 	}
 
@@ -311,7 +311,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 
 	block, height, err := b.store.GetBlock(ctx1, blockHash)
@@ -344,7 +344,7 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 
 	startHash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 
 	blocks, err := b.store.GetBlocks(ctx1, startHash, req.Count)
@@ -468,7 +468,7 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 
 		hash, err := chainhash.NewHash(request.BlockHash)
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's block hash is not valid", err))
+			return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's block hash is not valid", err))
 		}
 
 		blockHeader, meta, err := b.store.GetBlockHeader(ctx1, hash)
@@ -520,7 +520,7 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 
 	exists, err := b.store.GetBlockExists(ctx1, blockHash)
@@ -565,7 +565,7 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 
 	hash, err := chainhash.NewHash(req.BlockHash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 
 	blockHeader, meta, err := b.store.GetBlockHeader(ctx1, hash)
@@ -594,7 +594,7 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 
 	startHash, err := chainhash.NewHash(req.StartHash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 
 	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeaders(ctx1, startHash, req.NumberOfHeaders)
@@ -735,7 +735,7 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 
 	blockHash, err := chainhash.NewHash(request.BlockHash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_INVALID, "[Blockchain] request's hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[Blockchain] request's hash is not valid", err))
 	}
 
 	// invalidate block will also invalidate all child blocks
@@ -767,7 +767,7 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 
 	blockHash, err := chainhash.NewHash(request.BlockHash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_INVALID, "[Blockchain] request's hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[Blockchain] request's hash is not valid", err))
 	}
 
 	// invalidate block will also invalidate all child blocks
@@ -814,7 +814,7 @@ func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty)
 	for i, block := range blocks {
 		blockBytes[i], err = block.Bytes()
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.New(errors.ERR_INVALID_ARGUMENT, "[Blockchain] request's hash is not valid", err))
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain] request's hash is not valid", err))
 		}
 	}
 
@@ -848,7 +848,7 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 	for i, block := range blocks {
 		blockBytes[i], err = block.Bytes()
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.New(errors.ERR_INVALID_ARGUMENT, "[Blockchain] request's hash is not valid", err))
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain] request's hash is not valid", err))
 		}
 	}
 
@@ -861,7 +861,7 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	var state string
 
 	if b.finiteStateMachine == nil {
-		return nil, fmt.Errorf("FSM is not initialized")
+		return nil, errors.NewStateInitializationError("FSM is not initialized")
 	}
 
 	// Get the current state of the FSM
@@ -871,7 +871,7 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	enumState, ok := blockchain_api.FSMStateType_value[state]
 	if !ok {
 		// Handle the case where the state is not found in the map
-		return nil, errors.New(errors.ERR_PROCESSING, "invalid state: "+state)
+		return nil, errors.NewProcessingError("invalid state: %s", state)
 	}
 
 	return &blockchain_api.GetFSMStateResponse{
@@ -882,13 +882,13 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
 	blockHeader, err := chainhash.NewHash(req.Hash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 	blockHeight := req.Height
 
 	locatorHashes, err := getBlockLocator(ctx, b.store, blockHeader, blockHeight)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.New(errors.ERR_STORAGE_ERROR, "[Blockchain] error using blockchain store", err))
+		return nil, errors.WrapGRPC(errors.NewStorageError("[Blockchain] error using blockchain store", err))
 	}
 
 	locator := make([][]byte, len(locatorHashes))

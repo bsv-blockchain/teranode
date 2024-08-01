@@ -4,18 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/libsv/go-bt/v2/chainhash"
-)
-
-var (
-	ErrNotFound = errors.New(errors.ERR_NOT_FOUND, "not found")
-
-	// ErrBlockNotFound is returned when a block is not found
-	ErrBlockNotFound = errors.New(errors.ERR_BLOCK_NOT_FOUND, "block not found")
 )
 
 type Store interface {

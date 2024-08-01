@@ -2,7 +2,6 @@ package blockchain
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -41,7 +40,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
 
 	blockchainGrpcAddress, ok := gocore.Config().Get("blockchain_grpcAddress")
 	if !ok {
-		return nil, fmt.Errorf("no blockchain_grpcAddress setting found")
+		return nil, errors.NewConfigurationError("no blockchain_grpcAddress setting found")
 	}
 
 	var err error
@@ -60,7 +59,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
 			MaxRetries:  3,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to init blockchain service connection: %v", err)
+			return nil, errors.NewServiceError("failed to init blockchain service connection", err)
 		}
 
 		baClient = blockchain_api.NewBlockchainAPIClient(baConn)

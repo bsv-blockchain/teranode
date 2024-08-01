@@ -3,9 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -19,7 +17,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 
 	header, _, err := s.blocksCache.GetBlockHeader(*blockHash)
 	if err != nil {
-		return nil, fmt.Errorf("error in GetHeader: %w", err)
+		return nil, errors.NewStorageError("error in GetHeader: %w", err)
 	}
 	if header != nil {
 		return header, nil
@@ -55,18 +53,19 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 		&nBits,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("error in Header: %w", err)
+			// add not found error in error chain
+			return nil, errors.NewStorageError("error in Header", errors.ErrNotFound)
 		}
-		return nil, err
+		return nil, errors.NewStorageError("error in Header", err)
 	}
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+		return nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
 	}
 	blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+		return nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 	}
 
 	blockHeader.Bits = model.NewNBitFromSlice(nBits)

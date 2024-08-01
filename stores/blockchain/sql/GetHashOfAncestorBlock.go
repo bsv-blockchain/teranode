@@ -3,10 +3,9 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -60,13 +59,13 @@ func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, 
 		&pastHash,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("can't get hash %d before block %s: %w", depth, hash.String(), err)
+			return nil, errors.NewStorageError("can't get hash %d before block %s", depth, hash.String(), errors.ErrNotFound)
 		}
-		return nil, err
+		return nil, errors.NewStorageError("can't get hash %d before block %s", depth, hash.String(), err)
 	}
 	ph, err := chainhash.NewHash(pastHash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert pastHash: %w", err)
+		return nil, errors.NewProcessingError("failed to convert pastHash", err)
 	}
 	return ph, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"os"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -63,7 +64,7 @@ func GenerateTestSubtrees(subtreeStore *TestSubtreeStore, config *TestConfig) (*
 			return nil, err
 		}
 		if n != 48 {
-			return nil, fmt.Errorf("expected to write 48 bytes, wrote %d", n)
+			return nil, errors.NewProcessingError("expected to write 48 bytes, wrote %d", n)
 		}
 
 		fees += uint64(i)

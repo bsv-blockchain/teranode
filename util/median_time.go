@@ -1,8 +1,9 @@
 package util
 
 import (
-	"errors"
 	"sort"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 )
 
 // timeSorter implements sort.Interface to allow a slice of timestamps to
@@ -37,7 +38,7 @@ const medianTimeBlocks = 11
 // This function is safe for concurrent access.
 func CalcPastMedianTime(timestamps []int64) (int64, error) {
 	if len(timestamps) > medianTimeBlocks {
-		return 0, errors.New("too many timestamps for median time calculation")
+		return 0, errors.NewProcessingError("too many timestamps for median time calculation")
 	}
 
 	sort.Sort(timeSorter(timestamps))

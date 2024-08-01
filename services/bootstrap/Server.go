@@ -2,13 +2,13 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	bootstrap_api "github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -239,7 +239,7 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 				Type: bootstrap_api.Type_ADD,
 				Info: info,
 			}); err != nil {
-				return err
+				return errors.WrapGRPC(err)
 			}
 		}
 	}
@@ -286,7 +286,7 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 		case notification := <-ch:
 			err := stream.Send(notification)
 			if err != nil {
-				return err
+				return errors.WrapGRPC(err)
 			}
 		}
 	}

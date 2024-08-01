@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -107,7 +108,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 
 	rows, err := s.db.QueryContext(ctx, q, n)
 	if err != nil {
-		return nil, err
+		return nil, errors.NewStorageError("failed to get blocks", err)
 	}
 
 	defer rows.Close()
@@ -137,26 +138,26 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 			&info.Height,
 			&seenAt,
 		); err != nil {
-			return nil, err
+			return nil, errors.NewStorageError("failed to scan row", err)
 		}
 
 		header.Bits = model.NewNBitFromSlice(nBits)
 
 		header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert hashPrevBlock: %w", err)
+			return nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
 		}
 
 		header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert hashMerkleRoot: %w", err)
+			return nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 		}
 
 		info.BlockHeader = header.Bytes()
 
 		coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert coinbaseTx: %w", err)
+			return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
 		}
 
 		// Add up the sum of the coinbase tx outputs.
@@ -167,7 +168,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 
 		info.Miner, err = util.ExtractCoinbaseMiner(coinbaseTx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to extract miner: %w", err)
+			return nil, errors.NewProcessingError("failed to extract miner", err)
 		}
 
 		info.SeenAt = timestamppb.New(seenAt.Time)
@@ -212,7 +213,7 @@ func (ct *CustomTime) Scan(value interface{}) error {
 		ct.Time = t
 		return nil
 	}
-	return fmt.Errorf("unsupported type: %T", value)
+	return errors.NewProcessingError("unsupported type: %T", value)
 }
 
 // Value implements the driver.Valuer interface.

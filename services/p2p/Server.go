@@ -3,25 +3,23 @@ package p2p
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/p2p"
-
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/p2p"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libsv/go-bt/v2/chainhash"
-
 	"github.com/ordishs/gocore"
 )
 
@@ -87,7 +85,7 @@ func NewServer(logger ulogger.Logger) *Server {
 
 	sharedKey, ok := gocore.Config().Get("p2p_shared_key")
 	if !ok {
-		panic(fmt.Errorf("error getting p2p_shared_key"))
+		panic(errors.NewConfigurationError("error getting p2p_shared_key"))
 	}
 	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
 	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
@@ -187,7 +185,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.blockchainClient, err = blockchain.NewClient(ctx, s.logger)
 	if err != nil {
-		return fmt.Errorf("could not create blockchain client [%w]", err)
+		return errors.NewServiceError("could not create blockchain client [%w]", err)
 	}
 
 	s.blockValidationClient = blockvalidation.NewClient(ctx, s.logger)
@@ -196,7 +194,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if !localValidator {
 		s.validatorClient, err = validator.NewClient(ctx, s.logger)
 		if err != nil {
-			return fmt.Errorf("could not create validator client [%w]", err)
+			return errors.NewServiceError("could not create validator client [%w]", err)
 		}
 	}
 	e := echo.New()
@@ -235,7 +233,7 @@ func (s *Server) Start(ctx context.Context) error {
 		rejectedTxTopicName,
 	)
 	if err != nil {
-		return fmt.Errorf("error starting p2p node: %w", err)
+		return errors.NewServiceError("error starting p2p node: %w", err)
 	}
 
 	_ = s.P2PNode.SetTopicHandler(ctx, bestBlockTopicName, s.handleBestBlockTopic)
@@ -442,11 +440,11 @@ func (s *Server) StartHttp(ctx context.Context) error {
 
 		certFile, found := gocore.Config().Get("server_certFile")
 		if !found {
-			return errors.New("server_certFile is required for HTTPS")
+			return errors.NewConfigurationError("server_certFile is required for HTTPS")
 		}
 		keyFile, found := gocore.Config().Get("server_keyFile")
 		if !found {
-			return errors.New("server_keyFile is required for HTTPS")
+			return errors.NewConfigurationError("server_keyFile is required for HTTPS")
 		}
 
 		servicemanager.AddListenerInfo(fmt.Sprintf("p2p HTTPS listening on %s", addr))

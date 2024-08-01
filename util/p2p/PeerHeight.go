@@ -3,8 +3,8 @@ package p2p
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"sync"
 	"time"
 
@@ -32,7 +32,7 @@ func NewPeerHeight(logger ulogger.Logger, processName string, numberOfExpectedPe
 	}
 	sharedKey, ok := gocore.Config().Get("p2p_shared_key")
 	if !ok {
-		panic(fmt.Errorf("[PeerHeight] error getting p2p_shared_key"))
+		panic(errors.NewConfigurationError("[PeerHeight] error getting p2p_shared_key"))
 	}
 	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
 	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
@@ -184,7 +184,7 @@ func (p *PeerHeight) WaitForAllPeers(ctx context.Context, height uint32, testAll
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.New("[PeerHeight] WaitForAllPeers cancelled due to timeout or context cancellation")
+			return errors.NewContextCanceledError("[PeerHeight] WaitForAllPeers cancelled due to timeout or context cancellation")
 		default:
 			if p.HaveAllPeersReachedMinHeight(height, testAllPeers, first) {
 

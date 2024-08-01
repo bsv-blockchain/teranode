@@ -3,8 +3,8 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"errors"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
 )

@@ -2,7 +2,7 @@ package model
 
 import (
 	"encoding/binary"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 )
 
 type BlockHeaderMeta struct {
@@ -45,7 +45,7 @@ func (m *BlockHeaderMeta) Bytes() []byte {
 
 func NewBlockHeaderMetaFromBytes(b []byte) (*BlockHeaderMeta, error) {
 	if len(b) < 4+4+8+8 {
-		return nil, fmt.Errorf("invalid length for BlockHeaderMeta: %d", len(b))
+		return nil, errors.NewProcessingError("invalid length for BlockHeaderMeta: %d", len(b))
 	}
 
 	m := &BlockHeaderMeta{}

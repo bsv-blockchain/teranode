@@ -2,9 +2,7 @@ package blockvalidation
 
 import (
 	"context"
-	"fmt"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -286,18 +284,18 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 
 	block, err := u.blockchainClient.GetBlock(ctx, blockHash)
 	if err != nil {
-		return fmt.Errorf("[BlockValidation:start][%s] failed to get block: %s", blockHash.String(), err)
+		return errors.NewServiceError("[BlockValidation:start][%s] failed to get block", blockHash.String(), err)
 	}
 
 	// get all 100 previous block headers on the main chain
 	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
 	if err != nil {
-		return fmt.Errorf("[BlockValidation:start][%s] failed to get block headers: %s", block.String(), err)
+		return errors.NewServiceError("[BlockValidation:start][%s] failed to get block headers", block.String(), err)
 	}
 
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, 100)
 	if err != nil {
-		return fmt.Errorf("[BlockValidation:start][%s] failed to get block header ids: %s", block.String(), err)
+		return errors.NewServiceError("[BlockValidation:start][%s] failed to get block header ids", block.String(), err)
 	}
 
 	// make a copy of the recent bloom filters, so we don't get race conditions if the bloom filters are updated
@@ -310,7 +308,7 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 		if iErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); err != nil {
 			u.logger.Errorf("[BlockValidation:start][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), iErr)
 		}
-		return fmt.Errorf("[BlockValidation:start][%s] InvalidateBlock block is not valid: %v", block.String(), err)
+		return errors.NewServiceError("[BlockValidation:start][%s] InvalidateBlock block is not valid", block.String(), err)
 	}
 
 	return nil
@@ -385,18 +383,18 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	} else {
 		// get the block from the blockchain
 		if block, err = u.blockchainClient.GetBlock(ctx, blockHash); err != nil {
-			return fmt.Errorf("[setTxMined][%s] failed to get block from blockchain: %v", blockHash.String(), err)
+			return errors.NewServiceError("[setTxMined][%s] failed to get block from blockchain", blockHash.String(), err)
 		}
 	}
 
 	// make sure all the subtrees are loaded in the block
 	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore)
 	if err != nil {
-		return fmt.Errorf("[setTxMined][%s] failed to get subtrees from block [%w]", block.Hash().String(), err)
+		return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
 	}
 
 	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, 1); err != nil || len(ids) != 1 {
-		return fmt.Errorf("[setTxMined][%s] failed to get block header ids: %v", blockHash.String(), err)
+		return errors.NewServiceError("[setTxMined][%s] failed to get block header ids", blockHash.String(), err)
 	}
 
 	blockID := ids[0]
@@ -409,7 +407,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 		block,
 		blockID,
 	); err != nil {
-		return fmt.Errorf("[setTxMined][%s] error updating tx mined status: %w", block.Hash().String(), err)
+		return errors.NewProcessingError("[setTxMined][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 
 	// delete the block from the cache, if it was there
@@ -419,7 +417,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 
 	// update block mined_set to true
 	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
-		return fmt.Errorf("[setTxMined][%s] failed to set block mined: %s", block.Hash().String(), err)
+		return errors.NewServiceError("[setTxMined][%s] failed to set block mined", block.Hash().String(), err)
 	}
 
 	return nil
@@ -430,7 +428,7 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.BlockHeader) (bool, error) {
 	blockNotMined, err := u.blockchainClient.GetBlocksMinedNotSet(ctx)
 	if err != nil {
-		return false, fmt.Errorf("[setTxMined][%s] failed to get blocks mined not set: %s", blockHeader.Hash().String(), err)
+		return false, errors.NewServiceError("[setTxMined][%s] failed to get blocks mined not set", blockHeader.Hash().String(), err)
 	}
 
 	// check whether our parent block is in the list of not mined blocks
@@ -533,7 +531,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// 0 is unlimited so don't check the size
 	if u.excessiveblocksize > 0 {
 		if block.SizeInBytes > uint64(u.excessiveblocksize) {
-			return errors.New(errors.ERR_BLOCK_INVALID, fmt.Sprintf("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.excessiveblocksize))
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.excessiveblocksize)
 		}
 	}
 
@@ -541,7 +539,7 @@ CheckParentMined:
 	for {
 		select {
 		case <-spanCtx.Done():
-			return fmt.Errorf("[ValidateBlock][%s] context cancelled", block.Hash().String())
+			return errors.NewContextCanceledError("[ValidateBlock][%s] context cancelled", block.Hash().String())
 		default:
 			parentBlockMined, err := u.isParentMined(spanCtx, block.Header)
 			if err != nil {
@@ -575,7 +573,7 @@ CheckParentMined:
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 		} else {
-			return errors.New(errors.ERR_TX_ERROR, fmt.Sprintf("[ValidateBlock][%s] error storing utxos: %v", block.Header.Hash().String(), err))
+			return errors.NewTxError("[ValidateBlock][%s] error storing utxos", block.Header.Hash().String(), err)
 		}
 	}
 	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
@@ -591,7 +589,7 @@ CheckParentMined:
 		// make sure the proof of work is enough
 		headerValid, _, err := block.Header.HasMetTargetDifficulty()
 		if !headerValid {
-			return fmt.Errorf("invalid block header: %s - %v", block.Header.Hash().String(), err)
+			return errors.NewBlockInvalidError("invalid block header: %s", block.Header.Hash().String(), err)
 		}
 
 		// set the block in the temporary block cache for 2 minutes, could then be used for SetMined
@@ -600,7 +598,7 @@ CheckParentMined:
 
 		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
 		if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
-			return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
+			return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
 
@@ -662,14 +660,14 @@ CheckParentMined:
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 			u.ReValidateBlock(block, baseUrl)
-			return fmt.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
+			return errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err)
 		}
 
 		blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(spanCtx, block.Header.HashPrevBlock, 100)
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
 			u.ReValidateBlock(block, baseUrl)
-			return fmt.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
+			return errors.NewServiceError("[ValidateBlock][%s] failed to get block header ids", block.String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
 
@@ -682,7 +680,7 @@ CheckParentMined:
 		u.recentBlocksBloomFiltersMu.Unlock()
 
 		if ok, err := block.Valid(spanCtx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
-			return fmt.Errorf("[ValidateBlock][%s] block is not valid: %v", block.String(), err)
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
 		}
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
 
@@ -694,7 +692,7 @@ CheckParentMined:
 		u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
 
 		if err = u.blockchainClient.AddBlock(spanCtx, block, baseUrl); err != nil {
-			return fmt.Errorf("[ValidateBlock][%s] failed to store block [%w]", block.Hash().String(), err)
+			return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
 		}
 
 		if err = u.SetBlockExists(block.Header.Hash()); err != nil {
@@ -847,23 +845,6 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	u.recentBlocksBloomFiltersMu.Unlock()
 }
 
-// storeCoinbaseTx
-func (u *BlockValidation) _(spanCtx context.Context, block *model.Block) (err error) {
-	childSpan, childSpanCtx := opentracing.StartSpanFromContext(spanCtx, "BlockValidation:storeCoinbaseTx")
-	defer func() {
-		childSpan.Finish()
-	}()
-
-	// TODO - we need to consider if we can do this differently
-	if _, err = u.utxoStore.Create(childSpanCtx, block.CoinbaseTx, block.Height); err != nil {
-		if !strings.Contains(err.Error(), "already exists") {
-			return fmt.Errorf("[ValidateBlock][%s] failed to create coinbase transaction in txMetaStore [%s]", block.Hash().String(), err.Error())
-		}
-	}
-
-	return nil
-}
-
 func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:updateSubtreesTTL")
 	defer func() {
@@ -880,19 +861,19 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 		subtreeHash := subtreeHash
 		g.Go(func() error {
 			if err := u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0); err != nil {
-				return errors.Join(errors.New(errors.ERR_STORAGE_ERROR, "failed to update subtree TTL"), err)
+				return errors.NewStorageError("failed to update subtree TTL", err)
 			}
 			return nil
 		})
 	}
 
 	if err = g.Wait(); err != nil {
-		return errors.Join(fmt.Errorf("[ValidateBlock][%s] failed to update subtree TTLs", block.Hash().String()), err)
+		return errors.NewServiceError("[ValidateBlock][%s] failed to update subtree TTLs", block.Hash().String(), err)
 	}
 
 	// update block subtrees_set to true
 	if err = u.blockchainClient.SetBlockSubtreesSet(ctx, block.Hash()); err != nil {
-		return fmt.Errorf("[ValidateBlock][%s] failed to set block subtrees_set: %s", block.Hash().String(), err)
+		return errors.NewServiceError("[ValidateBlock][%s] failed to set block subtrees_set", block.Hash().String(), err)
 	}
 
 	return nil
@@ -917,7 +898,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 		var err error
 		blockHeight, err = block.ExtractCoinbaseHeight()
 		if err != nil {
-			return fmt.Errorf("[validateBlockSubtrees][%s] failed to extract coinbase height: %v", block.Hash().String(), err)
+			return errors.NewProcessingError("[validateBlockSubtrees][%s] failed to extract coinbase height", block.Hash().String(), err)
 		}
 	}
 
@@ -930,7 +911,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 			// get subtree from store
 			subtreeExists, err := u.GetSubtreeExists(gCtx, subtreeHash)
 			if err != nil {
-				return fmt.Errorf("[validateBlockSubtrees][%s] failed to check if subtree exists in store: %w", subtreeHash.String(), err)
+				return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
 			}
 			if !subtreeExists {
 				u.logger.Infof("[validateBlockSubtrees][%s] instructing stv to check missing subtree [%s]", block.Hash().String(), subtreeHash.String())
@@ -943,7 +924,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				}()
 				err = u.subtreeValidationClient.CheckSubtree(checkCtx, *subtreeHash, baseUrl, blockHeight)
 				if err != nil {
-					return fmt.Errorf("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service: %v", subtreeHash.String(), err)
+					return errors.NewServiceError("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service", subtreeHash.String(), err)
 				}
 			}
 
@@ -983,7 +964,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	//			// get subtree from network over http using the baseUrl
 	//			txHashes, err := u.getSubtreeTxHashes(spanCtx, statGet, subtreeHash, baseUrl)
 	//			if err != nil {
-	//				return fmt.Errorf("[validateBlockSubtrees][%s] failed to get subtree from network: %v", subtreeHash.String(), err)
+	//				return errors.NewError("[validateBlockSubtrees][%s] failed to get subtree from network", subtreeHash.String(), err)
 	//			}
 	//
 	//			subtreeBytesMapMu.Lock()
@@ -997,7 +978,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	//statGet.AddTime(startGet)
 	//
 	//if err = g.Wait(); err != nil {
-	//	return fmt.Errorf("[validateBlockSubtrees][%s] failed to get subtrees for block: %v", block.Hash().String(), err)
+	//	return errors.NewError("[validateBlockSubtrees][%s] failed to get subtrees for block", block.Hash().String(), err)
 	//}
 
 	//start2 := gocore.CurrentTime()
@@ -1019,7 +1000,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	//			err = u.validateSubtreeInternal(ctx1, v)
 	//		}
 	//		if err != nil {
-	//			return errors.Join(fmt.Errorf("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String()), err)
+	//			return errors.NewError("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String(), err)
 	//		}
 	//	}
 	//}

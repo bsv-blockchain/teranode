@@ -721,7 +721,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	peer := bmsg.peer
 	state, exists := sm.peerStates[peer]
 	if !exists {
-		return errors.New(errors.ERR_SERVICE_ERROR, "Received block message from unknown peer %s", peer)
+		return errors.NewServiceError("Received block message from unknown peer %s", peer)
 	}
 
 	// If we didn't ask for this block then the peer is misbehaving.
@@ -734,7 +734,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 		// duplicate blocks.
 		if sm.chainParams != &chaincfg.RegressionNetParams {
 			peer.Disconnect()
-			return errors.New(errors.ERR_SERVICE_ERROR, "Got unrequested block %v from %s -- disconnected", blockHash, peer)
+			return errors.NewServiceError("Got unrequested block %v from %s -- disconnected", blockHash, peer)
 		}
 	}
 
@@ -770,11 +770,11 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 
 	err := sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block)
 	if err != nil {
-		if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
-			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
-		}
-		// TODO - find a better way to handle this rather than panic
 		panic(err)
+		// if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
+		// 	peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
+		// }
+		// TODO - find a better way to handle this rather than panic
 		// should be an ubsv error
 		// return err
 	}
@@ -801,7 +801,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// Update this peer's latest block height, for future potential sync node candidacy.
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
-		return errors.New(errors.ERR_SERVICE_ERROR, "failed to get best block header", err)
+		return errors.NewServiceError("failed to get best block header", err)
 	}
 	heightUpdate = int32(bestBlockHeaderMeta.Height)
 	blkHashUpdate = bestBlockHeader.Hash()
@@ -842,7 +842,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 		locator := blockchain.BlockLocator([]*chainhash.Hash{prevHash})
 		err = peer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
 		if err != nil {
-			return errors.New(errors.ERR_SERVICE_ERROR, "failed to send getheaders message to peer %s", peer.Addr(), err)
+			return errors.NewServiceError("failed to send getheaders message to peer %s", peer.Addr(), err)
 		}
 
 		if sm.syncPeer != nil {
@@ -865,7 +865,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	locator := blockchain.BlockLocator([]*chainhash.Hash{blockHash})
 	err = peer.PushGetBlocksMsg(locator, &zeroHash)
 	if err != nil {
-		return errors.New(errors.ERR_SERVICE_ERROR, "Failed to send getblocks message to peer %s", peer.Addr(), err)
+		return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.Addr(), err)
 	}
 
 	return nil

@@ -2,6 +2,7 @@ package txmetacache
 
 import (
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"math"
 	"sync"
 	"unsafe"
@@ -104,7 +105,7 @@ func NewImprovedCache(maxBytes int, bucketType types.BucketType) *ImprovedCache 
 	LogCacheSize() // log whether we are using small or large cache
 
 	if maxBytes <= 0 {
-		panic(fmt.Errorf("maxBytes must be greater than 0; got %d", maxBytes))
+		panic(errors.NewProcessingError("maxBytes must be greater than 0; got %d", maxBytes))
 	}
 	var c ImprovedCache
 
@@ -166,7 +167,7 @@ func (c *ImprovedCache) Set(k, v []byte) error {
 // Value bytes are appended to the end of the previous value bytes.
 func (c *ImprovedCache) SetMultiKeysSingleValueAppended(keys []byte, value []byte, keySize int) error {
 	if len(keys)%keySize != 0 {
-		return fmt.Errorf("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
+		return errors.NewProcessingError("keys length must be a multiple of keySize; got %d; want %d", len(keys), keySize)
 	}
 
 	batchedKeys := make([][][]byte, bucketsCount)
@@ -255,7 +256,7 @@ func (c *ImprovedCache) Get(dst *[]byte, k []byte) error {
 	idx := h % bucketsCount
 
 	if !c.buckets[idx].Get(dst, k, h, true) {
-		return fmt.Errorf("key %v not found in cache", k)
+		return errors.NewProcessingError("key %v not found in cache", k, errors.ErrNotFound)
 	}
 	return nil
 }
@@ -324,10 +325,10 @@ type bucketTrimmed struct {
 
 func (b *bucketTrimmed) Init(maxBytes uint64, _ int) {
 	if maxBytes == 0 {
-		panic(fmt.Errorf("maxBytes cannot be zero"))
+		panic(errors.NewProcessingError("maxBytes cannot be zero"))
 	}
 	if maxBytes >= maxBucketSize {
-		panic(fmt.Errorf("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
+		panic(errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
 	}
 	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
 	b.chunks = make([][]byte, maxChunks)
@@ -419,7 +420,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
-		return fmt.Errorf("too big key or value")
+		return errors.NewProcessingError("too big key or value")
 	}
 	var kvLenBuf [4]byte
 	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
@@ -430,7 +431,7 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return fmt.Errorf("key, value, and k-v length bytes doesn't fit to a chunk")
+		return errors.NewProcessingError("key, value, and k-v length bytes doesn't fit to a chunk")
 	}
 	chunks := b.chunks
 	needClean := false
@@ -573,7 +574,7 @@ func (b *bucketTrimmed) getChunk() []byte {
 		// This should reduce free memory waste.
 		data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 		if err != nil {
-			panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", chunkSize*chunksPerAlloc, err))
+			panic(errors.NewProcessingError("cannot allocate %d bytes via mmap", chunkSize*chunksPerAlloc, err))
 		}
 		for len(data) > 0 {
 			p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
@@ -636,16 +637,16 @@ type bucketPreallocated struct {
 
 func (b *bucketPreallocated) Init(maxBytes uint64, trimRatio int) {
 	if maxBytes == 0 {
-		panic(fmt.Errorf("maxBytes cannot be zero"))
+		panic(errors.NewProcessingError("maxBytes cannot be zero"))
 	}
 	if maxBytes >= maxBucketSize {
-		panic(fmt.Errorf("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
+		panic(errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
 	}
 
 	// allocate memory for all chunks of the bucket
 	data, err := unix.Mmap(-1, 0, int(maxBytes), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 	if err != nil {
-		panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", maxBytes, err))
+		panic(errors.NewProcessingError("cannot allocate %d bytes via mmap", maxBytes, err))
 	}
 	for len(data) > 0 {
 		p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
@@ -733,7 +734,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
-		return fmt.Errorf("too big key or value")
+		return errors.NewProcessingError("too big key or value")
 	}
 	var kvLenBuf [4]byte
 	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
@@ -744,7 +745,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return fmt.Errorf("key, value, and k-v length bytes doesn't fit to a chunk")
+		return errors.NewProcessingError("key, value, and k-v length bytes doesn't fit to a chunk")
 	}
 	chunks := b.chunks
 
@@ -796,7 +797,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 
 	chunk := chunks[chunkIdx]
 	if len(chunk) == 0 {
-		panic(fmt.Errorf("SHOULD NEVER ENTER HERE, chunk is nil or empty"))
+		panic(errors.NewProcessingError("SHOULD NEVER ENTER HERE, chunk is nil or empty"))
 	}
 	data := append(append(kvLenBuf[:], k...), v...)
 	copy(chunk[idx%chunkSize:], data)
@@ -885,10 +886,10 @@ type bucketUnallocated struct {
 
 func (b *bucketUnallocated) Init(maxBytes uint64, _ int) {
 	if maxBytes == 0 {
-		panic(fmt.Errorf("maxBytes cannot be zero"))
+		panic(errors.NewProcessingError("maxBytes cannot be zero"))
 	}
 	if maxBytes >= maxBucketSize {
-		panic(fmt.Errorf("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
+		panic(errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
 	}
 	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
 	b.chunks = make([][]byte, maxChunks)
@@ -972,7 +973,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
 		// Too big key or value - its length cannot be encoded
 		// with 2 bytes (see below). Skip the entry.
-		return fmt.Errorf("too big key or value")
+		return errors.NewProcessingError("too big key or value")
 	}
 	var kvLenBuf [4]byte
 	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // higher order 8 bits of key's length
@@ -983,7 +984,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	if kvLen >= chunkSize {
 		// Do not store too big keys and values, since they do not
 		// fit a chunk.
-		return fmt.Errorf("key, value, and k-v length bytes doesn't fit to a chunk")
+		return errors.NewProcessingError("key, value, and k-v length bytes doesn't fit to a chunk")
 	}
 
 	chunks := b.chunks
@@ -1110,7 +1111,7 @@ func (b *bucketUnallocated) getChunk() []byte {
 		// This should reduce free memory waste.
 		data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 		if err != nil {
-			panic(fmt.Errorf("cannot allocate %d bytes via mmap: %s", chunkSize*chunksPerAlloc, err))
+			panic(errors.NewProcessingError("cannot allocate %d bytes via mmap", chunkSize*chunksPerAlloc, err))
 		}
 		for len(data) > 0 {
 			p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
