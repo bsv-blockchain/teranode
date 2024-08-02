@@ -259,7 +259,7 @@ func main() {
 
 	if startBlockPersister {
 		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
-			logger,
+			logger.New("bp"),
 			getBlockStore(logger),
 			getSubtreeStore(logger),
 			getUtxoStore(ctx, logger),
