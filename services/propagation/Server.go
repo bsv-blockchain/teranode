@@ -379,7 +379,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 }
 
 func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "ProcessTransactionBatch",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessTransactionBatch",
 		tracing.WithParentStat(propagationStat),
 		tracing.WithHistogram(prometheusProcessedTransactionBatch),
 		tracing.WithLogMessage(ps.logger, "[ProcessTransactionBatch] called for %d transactions", len(req.Tx)),

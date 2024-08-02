@@ -18,10 +18,8 @@ type getBlockCache struct {
 }
 
 func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlock")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlock")
+	defer deferFn()
 
 	// header, meta, er := cache.GetBlock(*blockHash)
 	// if er != nil {

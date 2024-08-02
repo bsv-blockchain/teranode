@@ -68,7 +68,7 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 	if options.ParentStat != nil {
 		start, stat, ctx = NewStatFromContext(spanCtx, name, options.ParentStat)
 	} else {
-		start, stat, ctx = StartStatFromContext(spanCtx, name)
+		start, stat, ctx = NewStatFromContext(spanCtx, name, defaultStat)
 	}
 
 	if options.Logger != nil && options.LogMessage != "" {

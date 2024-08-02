@@ -150,7 +150,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 	callerSpan := opentracing.SpanFromContext(traceSpan.Ctx)
 	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
 	setCtx = tracing.CopyStatFromContext(traceSpan.Ctx, setCtx)
-	setSpan := tracing.Start(setCtx, "Validator:sendToBlockAssembly")
+	setSpan := tracing.Start(setCtx, "decoupledSpan")
 	defer setSpan.Finish()
 
 	/*
@@ -246,14 +246,10 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Has
 }
 
 func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) (*meta.Data, error) {
-	start, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "registerTxInMetaStore")
-	defer func() {
-		stat.AddTime(start)
-		prometheusValidatorSetTxMeta.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
-
-	txMetaSpan := tracing.Start(ctx, "Validator:Validate:StoreTxMeta")
-	defer txMetaSpan.Finish()
+	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "storeTxInUtxoMap",
+		tracing.WithHistogram(prometheusValidatorSetTxMeta),
+	)
+	defer deferFn()
 
 	data, err := v.utxoStore.Create(ctx, tx, blockHeight)
 	if err != nil {
@@ -270,13 +266,12 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHei
 }
 
 func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) ([]*utxo.Spend, error) {
-	start, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "spendUtxos")
-	defer func() {
-		stat.AddTime(start)
-		prometheusTransactionSpendUtxos.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "spendUtxos",
+		tracing.WithHistogram(prometheusTransactionSpendUtxos),
+	)
+	defer deferFn()
 
-	utxoSpan := tracing.Start(ctx, "Validator:Validate:SpendUtxos")
+	utxoSpan := tracing.Start(ctx, "SpendUtxos")
 	defer func() {
 		utxoSpan.Finish()
 	}()
@@ -330,11 +325,13 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 }
 
 func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error {
-	startTime, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "sendToBlockAssembler")
-	defer func() {
-		stat.AddTime(startTime)
-		prometheusValidatorSendToBlockAssembly.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "sendToBlockAssembler",
+		tracing.WithHistogram(prometheusValidatorSendToBlockAssembly),
+	)
+	defer deferFn()
+
+	span := tracing.Start(ctx, "sendToBlockAssembler")
+	defer span.Finish()
 
 	if v.blockassemblyKafkaChan != nil {
 		start := time.Now()
@@ -352,10 +349,10 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 }
 
 func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spend) error {
-	start, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "reverseSpends")
-	defer stat.AddTime(start)
+	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "reverseSpends")
+	defer deferFn()
 
-	reverseUtxoSpan := tracing.Start(ctx, "Validator:Validate:reverseSpends")
+	reverseUtxoSpan := tracing.Start(ctx, "reverseSpends")
 	defer reverseUtxoSpan.Finish()
 
 	for retries := 0; retries < 3; retries++ {
@@ -403,13 +400,12 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 }
 
 func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) error {
-	start, stat, ctx := tracing.StartStatFromContext(traceSpan.Ctx, "validateTransaction")
-	defer func() {
-		stat.AddTime(start)
-		prometheusTransactionValidate.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "validateTransaction",
+		tracing.WithHistogram(prometheusTransactionValidate),
+	)
+	defer deferFn()
 
-	basicSpan := tracing.Start(ctx, "Validator:Validate:Basic")
+	basicSpan := tracing.Start(ctx, "BasicValidation")
 	defer func() {
 		basicSpan.Finish()
 	}()

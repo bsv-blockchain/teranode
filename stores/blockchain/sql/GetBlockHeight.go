@@ -9,10 +9,8 @@ import (
 )
 
 func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockHeight")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeight")
+	defer deferFn()
 
 	_, meta, err := s.blocksCache.GetBlockHeader(*blockHash)
 	if err != nil {

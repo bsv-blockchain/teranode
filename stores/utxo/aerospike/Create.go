@@ -32,11 +32,8 @@ type batchStoreItem struct {
 }
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
-	startTotal, stat, _ := tracing.StartStatFromContext(ctx, "Create")
-
-	defer func() {
-		stat.AddTime(startTotal)
-	}()
+	_, _, deferFn := tracing.StartTracing(ctx, "aerospike:Create")
+	defer deferFn()
 
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {

@@ -16,10 +16,8 @@ import (
 )
 
 func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "StoreBlock")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:StoreBlock")
+	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

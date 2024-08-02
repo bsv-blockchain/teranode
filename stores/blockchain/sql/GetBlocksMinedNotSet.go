@@ -8,10 +8,8 @@ import (
 )
 
 func (s *SQL) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlocksMinedNotSet")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlocksMinedNotSet")
+	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

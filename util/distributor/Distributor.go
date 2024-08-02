@@ -16,7 +16,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 	"github.com/quic-go/quic-go/http3"
 )
@@ -224,12 +223,9 @@ func (d *Distributor) GetPropagationGRPCAddresses() []string {
 }
 
 func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*ResponseWrapper, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "Distributor:SendTransaction")
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Distributor:SendTransaction")
-	defer func() {
-		stat.AddTime(start)
-		span.Finish()
-	}()
+	start := time.Now()
+	ctx, stat, deferFn := tracing.StartTracing(ctx, "Distributor:SendTransaction")
+	defer deferFn()
 
 	if d.useQuic {
 		var err error
@@ -274,7 +270,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 			addr := addr
 			go func() {
-				start1, stat1, ctx1 := tracing.NewStatFromContext(spanCtx, addr, stat)
+				start1, stat1, ctx1 := tracing.NewStatFromContext(ctx, addr, stat)
 				defer func() {
 					wg.Done()
 					stat1.AddTime(start1)

@@ -172,8 +172,8 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 		return 0, errors.NewProcessingError("[processTxMetaUsingStore] txHashes and txMetaSlice must be the same length")
 	}
 
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "processTxMetaUsingStore")
-	defer stat.AddTime(start)
+	ctx, _, deferFn := tracing.StartTracing(ctx, "Repository:getTxs")
+	defer deferFn()
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024)
 	processSubtreeConcurrency, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStor_Concurrency", util.Max(4, runtime.NumCPU()/2))

@@ -349,10 +349,8 @@ func (u *BlockValidation) SetSubtreeExists(hash *chainhash.Hash) error {
 }
 
 func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetSubtreeExists")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetSubtreeExists")
+	defer deferFn()
 
 	_, ok := u.subtreeExists.Get(*hash)
 	if ok {
@@ -866,17 +864,13 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 }
 
 func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseUrl string) error {
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateBlockSubtrees")
-	start, stat, spanCtx := tracing.StartStatFromContext(spanCtx, "ValidateBlockSubtrees")
-	defer func() {
-		span.Finish()
-		stat.AddTime(start)
-	}()
+	ctx, stat, deferFn := tracing.StartTracing(ctx, "ValidateBlockSubtrees")
+	defer deferFn()
 
 	validateBlockSubtreesConcurrency, _ := gocore.Config().GetInt("blockvalidation_validateBlockSubtreesConcurrency", util.Max(4, runtime.NumCPU()/2))
 
 	start1 := gocore.CurrentTime()
-	g, gCtx := errgroup.WithContext(spanCtx)
+	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(validateBlockSubtreesConcurrency) // keep 32 cores free for other tasks
 
 	blockHeight := block.Height
@@ -904,7 +898,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				// we don't have the subtree, so we need to process it in the subtree validation service
 				// this will also store the subtree in the store and block while the subtree is being processed
 				// we do this with a timeout of max 2 minutes
-				checkCtx, cancel := context.WithTimeout(spanCtx, 2*time.Minute)
+				checkCtx, cancel := context.WithTimeout(gCtx, 2*time.Minute)
 				defer func() {
 					cancel()
 				}()
