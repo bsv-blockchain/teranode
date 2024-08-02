@@ -9,29 +9,23 @@ import (
 )
 
 var (
-	prometheusBlockValidationHealth                    prometheus.Counter
-	prometheusBlockValidationBlockFoundCh              prometheus.Gauge
-	prometheusBlockValidationBlockFound                prometheus.Counter
-	prometheusBlockValidationBlockFoundDuration        prometheus.Histogram
-	prometheusBlockValidationCatchupCh                 prometheus.Gauge
-	prometheusBlockValidationCatchup                   prometheus.Counter
-	prometheusBlockValidationCatchupDuration           prometheus.Histogram
-	prometheusBlockValidationProcessBlockFoundDuration prometheus.Histogram
-	prometheusBlockValidationSetTxMetaQueueCh          prometheus.Gauge
-	//prometheusBlockValidationSetTxMetaQueueChWaitDuration    prometheus.Histogram
-	//prometheusBlockValidationSetTxMetaQueueDuration          prometheus.Histogram
+	prometheusBlockValidationHealth            prometheus.Counter
+	prometheusBlockValidationBlockFoundCh      prometheus.Gauge
+	prometheusBlockValidationBlockFound        prometheus.Histogram
+	prometheusBlockValidationCatchupCh         prometheus.Gauge
+	prometheusBlockValidationCatchup           prometheus.Histogram
+	prometheusBlockValidationProcessBlockFound prometheus.Histogram
+	prometheusBlockValidationSetTxMetaQueueCh  prometheus.Gauge
 
 	// block validation
-	prometheusBlockValidationValidateBlock         prometheus.Counter
-	prometheusBlockValidationValidateBlockDuration prometheus.Histogram
-	prometheusBlockValidationReValidateBlock       prometheus.Histogram
-	prometheusBlockValidationReValidateBlockErr    prometheus.Histogram
+	prometheusBlockValidationValidateBlock      prometheus.Histogram
+	prometheusBlockValidationReValidateBlock    prometheus.Histogram
+	prometheusBlockValidationReValidateBlockErr prometheus.Histogram
 
 	// tx meta cache stats
 	prometheusBlockValidationSetTXMetaCache    prometheus.Counter
 	prometheusBlockValidationSetTXMetaCacheDel prometheus.Counter
-	//prometheusBlockValidationSetMinedLocal         prometheus.Counter
-	prometheusBlockValidationSetMinedMulti prometheus.Counter
+	prometheusBlockValidationSetMinedMulti     prometheus.Counter
 
 	// expiring cache metrics
 	prometheusBlockValidationLastValidatedBlocksCache prometheus.Gauge
@@ -64,19 +58,11 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockValidationBlockFound = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
-			Name:      "block_found",
-			Help:      "Number of blocks found",
-		},
-	)
-
-	prometheusBlockValidationBlockFoundDuration = promauto.NewHistogram(
+	prometheusBlockValidationBlockFound = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "block_found_duration_seconds",
-			Help:      "Duration of block found",
+			Name:      "block_found",
+			Help:      "Histogram of calls to BlockFound method",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
@@ -89,24 +75,16 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockValidationCatchup = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
-			Name:      "catchup",
-			Help:      "Number of catchups",
-		},
-	)
-
-	prometheusBlockValidationCatchupDuration = promauto.NewHistogram(
+	prometheusBlockValidationCatchup = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "catchup_duration_seconds",
-			Help:      "Duration of catchup",
+			Name:      "catchup",
+			Help:      "Histogram of catchup events",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 
-	prometheusBlockValidationProcessBlockFoundDuration = promauto.NewHistogram(
+	prometheusBlockValidationProcessBlockFound = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
 			Name:      "process_block_found_duration_seconds",
@@ -141,19 +119,11 @@ func _initPrometheusMetrics() {
 	//	},
 	//)
 
-	prometheusBlockValidationValidateBlock = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
-			Name:      "validate_block",
-			Help:      "Number of blocks validated",
-		},
-	)
-
-	prometheusBlockValidationValidateBlockDuration = promauto.NewHistogram(
+	prometheusBlockValidationValidateBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "validate_block_duration_seconds",
-			Help:      "Duration of validate block",
+			Name:      "validate_block",
+			Help:      "Histogram of calls to ValidateBlock method",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)

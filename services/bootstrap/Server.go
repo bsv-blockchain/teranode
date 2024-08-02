@@ -3,13 +3,14 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	bootstrap_api "github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
+	"github.com/bitcoin-sv/ubsv/services/bootstrap/bootstrap_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
@@ -22,6 +23,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+var BootstrapStat = gocore.NewStat("Bootstrap")
 
 // Server type carries the logger within it
 type Server struct {
@@ -292,8 +295,14 @@ func (s *Server) Connect(info *bootstrap_api.Info, stream bootstrap_api.Bootstra
 	}
 }
 
-func (s *Server) GetNodes(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.NodeList, error) {
-	prometheusGetNodes.Inc()
+func (s *Server) GetNodes(ctx context.Context, _ *emptypb.Empty) (*bootstrap_api.NodeList, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "GetNodes",
+		tracing.WithParentStat(BootstrapStat),
+		tracing.WithHistogram(prometheusGetNodes),
+		tracing.WithLogMessage(s.logger, "[GetNodes] called"),
+	)
+	defer deferFn()
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -309,9 +318,14 @@ func (s *Server) GetNodes(_ context.Context, _ *emptypb.Empty) (*bootstrap_api.N
 }
 
 func (s *Server) BroadcastNotification(notification *bootstrap_api.Notification) {
-	prometheusBroadcastNotification.Inc()
+	_, _, deferFn := tracing.StartTracing(context.Background(), "BroadcastNotification",
+		tracing.WithParentStat(BootstrapStat),
+		tracing.WithHistogram(prometheusBroadcastNotification),
+		tracing.WithLogMessage(s.logger, "[BroadcastNotification] called for type %s", notification.Type.String()),
+	)
 	defer func() {
 		_ = recover()
+		deferFn()
 	}()
 
 	s.mu.RLock()

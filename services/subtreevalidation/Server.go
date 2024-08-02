@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"github.com/ordishs/go-utils"
 	"net/url"
 	"runtime"
 	"strconv"
@@ -176,13 +177,13 @@ func (u *Server) Stop(_ context.Context) error {
 	return nil
 }
 
-func (u *Server) HealthGRPC(_ context.Context, _ *subtreevalidation_api.EmptyMessage) (*subtreevalidation_api.HealthResponse, error) {
-	start, stat, _ := tracing.NewStatFromContext(context.Background(), "Health", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	// prometheusSubtreeValidationHealth.Inc()
+func (u *Server) HealthGRPC(ctx context.Context, _ *subtreevalidation_api.EmptyMessage) (*subtreevalidation_api.HealthResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+		tracing.WithParentStat(u.stats),
+		tracing.WithHistogram(prometheusHealth),
+		tracing.WithLogMessage(u.logger, "[HealthGRPC] called"),
+	)
+	defer deferFn()
 
 	return &subtreevalidation_api.HealthResponse{
 		Ok:        true,
@@ -203,12 +204,12 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 
 // checkSubtree is the internal function used to check a subtree
 func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_api.CheckSubtreeRequest) (bool, error) {
-	start, stat, ctx, cancel := tracing.NewStatFromContextWithCancel(ctx, "CheckSubtree", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	defer cancel()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "checkSubtree",
+		tracing.WithParentStat(u.stats),
+		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
+		tracing.WithLogMessage(u.logger, "[checkSubtree] called for subtree %s", utils.ReverseAndHexEncodeSlice(request.Hash)),
+	)
+	defer deferFn()
 
 	hash, err := chainhash.NewHash(request.Hash[:])
 	if err != nil {

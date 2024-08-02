@@ -16,6 +16,7 @@ type Options func(s *TraceOptions)
 type TraceOptions struct {
 	ParentStat *gocore.Stat
 	Histogram  prometheus.Histogram
+	Counter    prometheus.Counter
 	Logger     ulogger.Logger
 	LogMessage string
 	LogArgs    []interface{}
@@ -27,12 +28,23 @@ func WithParentStat(stat *gocore.Stat) Options {
 	}
 }
 
+// WithHistogram sets the prometheus histogram to be observed when the span is finished.
 func WithHistogram(histogram prometheus.Histogram) Options {
 	return func(s *TraceOptions) {
 		s.Histogram = histogram
 	}
 }
 
+// WithCounter sets the prometheus counter to be incremented when the span is finished.
+func WithCounter(counter prometheus.Counter) Options {
+	return func(s *TraceOptions) {
+		s.Counter = counter
+	}
+}
+
+// WithLogMessage sets the logger and log message to be used when starting the span and when the span is finished.
+// The log message is formatted with fmt.Sprintf and all arguments are passed to the logger.
+// The log message is logged at the INFO level. This should only be used in grpc / http calls and not internal functions.
 func WithLogMessage(logger ulogger.Logger, format string, args ...interface{}) Options {
 	return func(s *TraceOptions) {
 		s.Logger = logger
@@ -69,6 +81,10 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 
 		if options.Histogram != nil {
 			options.Histogram.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
+		}
+
+		if options.Counter != nil {
+			options.Counter.Inc()
 		}
 
 		if options.Logger != nil && options.LogMessage != "" {

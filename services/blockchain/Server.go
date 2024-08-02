@@ -3,6 +3,7 @@ package blockchain
 import (
 	"context"
 	"fmt"
+	"github.com/ordishs/go-utils"
 	"net/http"
 	"time"
 
@@ -237,12 +238,12 @@ func (b *Blockchain) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*blockchai
 }
 
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "AddBlock", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockchainAddBlock.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "AddBlock",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainAddBlock),
+		tracing.WithLogMessage(b.logger, "[AddBlock] called from %s", request.PeerId),
+	)
+	defer deferFn()
 
 	header, err := model.NewBlockHeaderFromBytes(request.Header)
 	if err != nil {
@@ -272,7 +273,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		SizeInBytes:      request.SizeInBytes,
 	}
 
-	_, err = b.store.StoreBlock(ctx1, block, request.PeerId)
+	_, err = b.store.StoreBlock(ctx, block, request.PeerId)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -293,7 +294,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		}(block)
 	}
 
-	_, _ = b.SendNotification(ctx1, &blockchain_api.Notification{
+	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
 		Type: model.NotificationType_Block,
 		Hash: block.Hash().CloneBytes(),
 	})
@@ -302,19 +303,19 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 }
 
 func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlock", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockchainGetBlock.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlock",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlock),
+		tracing.WithLogMessage(b.logger, "[GetBlock] called for %s", utils.ReverseAndHexEncodeSlice(request.Hash)),
+	)
+	defer deferFn()
 
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 
-	block, height, err := b.store.GetBlock(ctx1, blockHash)
+	block, height, err := b.store.GetBlock(ctx, blockHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -335,19 +336,19 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 }
 
 func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlocksRequest) (*blockchain_api.GetBlocksResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlocks", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockchainGetBlockHeaders.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlocks",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
+		tracing.WithLogMessage(b.logger, "[GetBlocks] called for %s", utils.ReverseAndHexEncodeSlice(req.Hash)),
+	)
+	defer deferFn()
 
 	startHash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 
-	blocks, err := b.store.GetBlocks(ctx1, startHash, req.Count)
+	blocks, err := b.store.GetBlocks(ctx, startHash, req.Count)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -367,14 +368,14 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 }
 
 func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_api.GetBlockByHeightRequest) (*blockchain_api.GetBlockResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlock", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockByHeight",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlock),
+		tracing.WithLogMessage(b.logger, "[GetBlockByHeight] called for %d", request.Height),
+	)
+	defer deferFn()
 
-	prometheusBlockchainGetBlock.Inc()
-
-	block, err := b.store.GetBlockByHeight(ctx1, request.Height)
+	block, err := b.store.GetBlockByHeight(ctx, request.Height)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -395,34 +396,35 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 }
 
 func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockStats", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockStats",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockStats),
+	)
+	defer deferFn()
 
-	resp, err := b.store.GetBlockStats(ctx1)
+	resp, err := b.store.GetBlockStats(ctx)
 	return resp, errors.WrapGRPC(err)
 }
 
 func (b *Blockchain) GetBlockGraphData(ctx context.Context, req *blockchain_api.GetBlockGraphDataRequest) (*model.BlockDataPoints, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockGraphData", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockGraphData",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockGraphData),
+	)
+	defer deferFn()
 
-	resp, err := b.store.GetBlockGraphData(ctx1, req.PeriodMillis)
+	resp, err := b.store.GetBlockGraphData(ctx, req.PeriodMillis)
 	return resp, errors.WrapGRPC(err)
 }
 
 func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api.GetLastNBlocksRequest) (*blockchain_api.GetLastNBlocksResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetLastNBlocks", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetLastNBlocks",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetLastNBlocks),
+	)
+	defer deferFn()
 
-	prometheusBlockchainGetLastNBlocks.Inc()
-
-	blockInfo, err := b.store.GetLastNBlocks(ctx1, request.NumberOfBlocks, request.IncludeOrphans, request.FromHeight)
+	blockInfo, err := b.store.GetLastNBlocks(ctx, request.NumberOfBlocks, request.IncludeOrphans, request.FromHeight)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 
@@ -434,14 +436,13 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 }
 
 func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_api.GetSuitableBlockRequest) (*blockchain_api.GetSuitableBlockResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetSuitableBlock", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetSuitableBlock",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetSuitableBlock),
+	)
+	defer deferFn()
 
-	prometheusBlockchainGetSuitableBlock.Inc()
-
-	blockInfo, err := b.store.GetSuitableBlock(ctx1, (*chainhash.Hash)(request.Hash))
+	blockInfo, err := b.store.GetSuitableBlock(ctx, (*chainhash.Hash)(request.Hash))
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -452,13 +453,13 @@ func (b *Blockchain) GetSuitableBlock(ctx context.Context, request *blockchain_a
 }
 
 func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchain_api.GetNextWorkRequiredRequest) (*blockchain_api.GetNextWorkRequiredResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetNextWorkRequired", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-	var nBits model.NBit
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetNextWorkRequired",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetNextWorkRequired),
+	)
+	defer deferFn()
 
-	prometheusBlockchainGetNextWorkRequired.Inc()
+	var nBits model.NBit
 	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
 
 	if b.difficulty == nil {
@@ -471,12 +472,12 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 			return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's block hash is not valid", err))
 		}
 
-		blockHeader, meta, err := b.store.GetBlockHeader(ctx1, hash)
+		blockHeader, meta, err := b.store.GetBlockHeader(ctx, hash)
 		if err != nil {
 			return nil, errors.WrapGRPC(err)
 		}
 
-		nBitsp, err := b.difficulty.GetNextWorkRequired(ctx1, blockHeader, meta.Height)
+		nBitsp, err := b.difficulty.GetNextWorkRequired(ctx, blockHeader, meta.Height)
 		if err == nil {
 			nBits = *nBitsp
 		} else {
@@ -493,14 +494,13 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 }
 
 func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockchain_api.GetHashOfAncestorBlockRequest) (*blockchain_api.GetHashOfAncestorBlockResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetHashOfAncestorBlock", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetHashOfAncestorBlock",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetHashOfAncestorBlock),
+	)
+	defer deferFn()
 
-	prometheusBlockchainGetHashOfAncestorBlock.Inc()
-
-	hash, err := b.store.GetHashOfAncestorBlock(ctx1, (*chainhash.Hash)(request.Hash), int(request.Depth))
+	hash, err := b.store.GetHashOfAncestorBlock(ctx, (*chainhash.Hash)(request.Hash), int(request.Depth))
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -511,19 +511,18 @@ func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockc
 }
 
 func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api.GetBlockRequest) (*blockchain_api.GetBlockExistsResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockExists", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockchainGetBlockExists.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockExists",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockExists),
+	)
+	defer deferFn()
 
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 
-	exists, err := b.store.GetBlockExists(ctx1, blockHash)
+	exists, err := b.store.GetBlockExists(ctx, blockHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -534,14 +533,13 @@ func (b *Blockchain) GetBlockExists(ctx context.Context, request *blockchain_api
 }
 
 func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empty) (*blockchain_api.GetBlockHeaderResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBestBlockHeader", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBestBlockHeader",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBestBlockHeader),
+	)
+	defer deferFn()
 
-	prometheusBlockchainGetBestBlockHeader.Inc()
-
-	chainTip, meta, err := b.store.GetBestBlockHeader(ctx1)
+	chainTip, meta, err := b.store.GetBestBlockHeader(ctx)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -556,19 +554,18 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 }
 
 func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.GetBlockHeaderRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockHeader", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockchainGetBlockHeader.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBestBlockHeader",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeader),
+	)
+	defer deferFn()
 
 	hash, err := chainhash.NewHash(req.BlockHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 
-	blockHeader, meta, err := b.store.GetBlockHeader(ctx1, hash)
+	blockHeader, meta, err := b.store.GetBlockHeader(ctx, hash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -585,19 +582,18 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 }
 
 func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockHeaders", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockchainGetBlockHeaders.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeaders",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
+	)
+	defer deferFn()
 
 	startHash, err := chainhash.NewHash(req.StartHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
 	}
 
-	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeaders(ctx1, startHash, req.NumberOfHeaders)
+	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeaders(ctx, startHash, req.NumberOfHeaders)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -619,12 +615,13 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 }
 
 func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersFromHeightRequest) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetBlockHeadersFromHeight", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersFromHeight",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeadersFromHeight),
+	)
+	defer deferFn()
 
-	blockHeaders, metas, err := b.store.GetBlockHeadersFromHeight(ctx1, req.StartHeight, req.Limit)
+	blockHeaders, metas, err := b.store.GetBlockHeadersFromHeight(ctx, req.StartHeight, req.Limit)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -646,12 +643,11 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 }
 
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
-	start, stat, _ := tracing.NewStatFromContext(sub.Context(), "Subscribe", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockchainSubscribe.Inc()
+	ctx, _, deferFn := tracing.StartTracing(sub.Context(), "Subscribe",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainSubscribe),
+	)
+	defer deferFn()
 
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})
@@ -664,7 +660,7 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 
 	for {
 		select {
-		case <-sub.Context().Done():
+		case <-ctx.Done():
 			// Client disconnected.
 			b.logger.Infof("[Blockchain] GRPC client disconnected: %s", req.Source)
 			return nil
@@ -676,14 +672,13 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 }
 
 func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateRequest) (*blockchain_api.StateResponse, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "GetState", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetState",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetState),
+	)
+	defer deferFn()
 
-	prometheusBlockchainGetState.Inc()
-
-	data, err := b.store.GetState(ctx1, req.Key)
+	data, err := b.store.GetState(ctx, req.Key)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -694,14 +689,13 @@ func (b *Blockchain) GetState(ctx context.Context, req *blockchain_api.GetStateR
 }
 
 func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateRequest) (*emptypb.Empty, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "SetState", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "SetState",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainSetState),
+	)
+	defer deferFn()
 
-	prometheusBlockchainSetState.Inc()
-
-	err := b.store.SetState(ctx1, req.Key, req.Data)
+	err := b.store.SetState(ctx, req.Key, req.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -710,6 +704,12 @@ func (b *Blockchain) SetState(ctx context.Context, req *blockchain_api.SetStateR
 }
 
 func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_api.GetBlockHeadersRequest) (*blockchain_api.GetBlockHeaderIDsResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeaderIDs",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeaderIDs),
+	)
+	defer deferFn()
+
 	startHash, err := chainhash.NewHash(request.StartHash)
 	if err != nil {
 		return nil, err
@@ -726,12 +726,11 @@ func (b *Blockchain) GetBlockHeaderIDs(ctx context.Context, request *blockchain_
 }
 
 func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_api.InvalidateBlockRequest) (*emptypb.Empty, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "InvalidateBlock", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockchainSetState.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "InvalidateBlock",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainInvalidateBlock),
+	)
+	defer deferFn()
 
 	blockHash, err := chainhash.NewHash(request.BlockHash)
 	if err != nil {
@@ -739,16 +738,16 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	}
 
 	// invalidate block will also invalidate all child blocks
-	err = b.store.InvalidateBlock(ctx1, blockHash)
+	err = b.store.InvalidateBlock(ctx, blockHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
 
-	bestBlock, _, err := b.store.GetBestBlockHeader(ctx1)
+	bestBlock, _, err := b.store.GetBestBlockHeader(ctx)
 	if err != nil {
 		b.logger.Errorf("[Blockchain] Error getting best block header: %v", err)
 	} else {
-		_, _ = b.SendNotification(ctx1, &blockchain_api.Notification{
+		_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
 			Type: model.NotificationType_Block,
 			Hash: bestBlock.Hash().CloneBytes(),
 		})
@@ -758,12 +757,11 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 }
 
 func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_api.RevalidateBlockRequest) (*emptypb.Empty, error) {
-	start, stat, ctx1 := tracing.NewStatFromContext(ctx, "RevalidateBlock", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockchainSetState.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "RevalidateBlock",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainRevalidateBlock),
+	)
+	defer deferFn()
 
 	blockHash, err := chainhash.NewHash(request.BlockHash)
 	if err != nil {
@@ -771,7 +769,7 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 	}
 
 	// invalidate block will also invalidate all child blocks
-	err = b.store.RevalidateBlock(ctx1, blockHash)
+	err = b.store.RevalidateBlock(ctx, blockHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -779,32 +777,45 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 	return &emptypb.Empty{}, nil
 }
 
-func (b *Blockchain) SendNotification(_ context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
-	start, stat, _ := tracing.NewStatFromContext(context.Background(), "SendNotification", b.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.Notification) (*emptypb.Empty, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "RevalidateBlock",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainSendNotification),
+	)
+	defer deferFn()
+
 	if req.Type == model.NotificationType_FSMEvent {
 		b.logger.Infof("[Blockchain Server] SendNotification FSMevent called: %s", req.GetMetadata())
 	}
 
-	prometheusBlockchainSendNotification.Inc()
 	b.notifications <- req
 
 	return &emptypb.Empty{}, nil
 }
 
 func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.SetBlockMinedSetRequest) (*emptypb.Empty, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "SetBlockMinedSet",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainSetBlockMinedSet),
+	)
+	defer deferFn()
+
 	blockHash := chainhash.Hash(req.BlockHash)
 	err := b.store.SetBlockMinedSet(ctx, &blockHash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	return &emptypb.Empty{}, nil
 }
 
 func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksMinedNotSetResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlocksMinedNotSet",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlocksMinedNotSet),
+	)
+	defer deferFn()
+
 	blocks, err := b.store.GetBlocksMinedNotSet(ctx)
 	if err != nil {
 		return nil, err
@@ -824,10 +835,16 @@ func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty)
 }
 
 func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_api.SetBlockSubtreesSetRequest) (*emptypb.Empty, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "SetBlockSubtreesSet",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainSetBlockSubtreesSet),
+	)
+	defer deferFn()
+
 	blockHash := chainhash.Hash(req.BlockHash)
 	err := b.store.SetBlockSubtreesSet(ctx, &blockHash)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
@@ -839,6 +856,12 @@ func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_ap
 }
 
 func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksSubtreesNotSetResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlocksSubtreesNotSet",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlocksSubtreesNotSet),
+	)
+	defer deferFn()
+
 	blocks, err := b.store.GetBlocksSubtreesNotSet(ctx)
 	if err != nil {
 		return nil, err
@@ -858,10 +881,16 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 }
 
 func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "GetFSMCurrentState",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetFSMCurrentState),
+	)
+	defer deferFn()
+
 	var state string
 
 	if b.finiteStateMachine == nil {
-		return nil, errors.NewStateInitializationError("FSM is not initialized")
+		return nil, errors.WrapGRPC(errors.NewStateInitializationError("FSM is not initialized"))
 	}
 
 	// Get the current state of the FSM
@@ -871,7 +900,7 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	enumState, ok := blockchain_api.FSMStateType_value[state]
 	if !ok {
 		// Handle the case where the state is not found in the map
-		return nil, errors.NewProcessingError("invalid state: %s", state)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("invalid state: %s", state))
 	}
 
 	return &blockchain_api.GetFSMStateResponse{
@@ -880,6 +909,12 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 }
 
 func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockLocator",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockLocator),
+	)
+	defer deferFn()
+
 	blockHeader, err := chainhash.NewHash(req.Hash)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's hash is not valid", err))
@@ -900,6 +935,12 @@ func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.Ge
 }
 
 func (b *Blockchain) LocateBlockHeaders(ctx context.Context, request *blockchain_api.LocateBlockHeadersRequest) (*blockchain_api.LocateBlockHeadersResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "LocateBlockHeaders",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainLocateBlockHeaders),
+	)
+	defer deferFn()
+
 	locator := make([]*chainhash.Hash, len(request.Locator))
 	for i, hash := range request.Locator {
 		locator[i], _ = chainhash.NewHash(hash)

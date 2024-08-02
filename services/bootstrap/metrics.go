@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"sync"
@@ -9,8 +10,8 @@ import (
 var (
 	prometheusHealth                prometheus.Counter
 	prometheusConnect               prometheus.Counter
-	prometheusGetNodes              prometheus.Counter
-	prometheusBroadcastNotification prometheus.Counter
+	prometheusGetNodes              prometheus.Histogram
+	prometheusBroadcastNotification prometheus.Histogram
 )
 
 var (
@@ -38,19 +39,21 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusGetNodes = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusGetNodes = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "bootstrap",
 			Name:      "get_nodes",
-			Help:      "Number of calls to the GetNodes endpoint",
+			Help:      "Histogram of calls to the GetNodes endpoint",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBroadcastNotification = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBroadcastNotification = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "bootstrap",
 			Name:      "broadcast_notification",
-			Help:      "Number of calls to the BroadcastNotification endpoint",
+			Help:      "Histogram of calls to the BroadcastNotification endpoint",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 }

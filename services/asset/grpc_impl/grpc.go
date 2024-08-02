@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"net/url"
 	"time"
 
@@ -226,12 +227,12 @@ func (g *GRPC) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*asset_api.Healt
 }
 
 func (g *GRPC) GetBlock(ctx context.Context, request *asset_api.GetBlockRequest) (*asset_api.GetBlockResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("GetBlock").AddTime(start)
-	}()
-
-	prometheusAssetGRPCGetBlock.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlock",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCGetBlock),
+		tracing.WithLogMessage(g.logger, "[GetBlock][%s] get block called", utils.ReverseAndHexEncodeSlice(request.Hash)),
+	)
+	defer deferFn()
 
 	blockHash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
@@ -265,10 +266,12 @@ func (g *GRPC) GetBlock(ctx context.Context, request *asset_api.GetBlockRequest)
 }
 
 func (g *GRPC) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.BlockStats, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("GetBlockStats").AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockStats",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCGetBlockStats),
+		tracing.WithLogMessage(g.logger, "[GetBlockStats] get block stats called"),
+	)
+	defer deferFn()
 
 	blockStats, err := g.repository.GetBlockStats(ctx)
 	if err != nil {
@@ -279,10 +282,12 @@ func (g *GRPC) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*model.Bloc
 }
 
 func (g *GRPC) GetBlockGraphData(ctx context.Context, in *asset_api.GetBlockGraphDataRequest) (*model.BlockDataPoints, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("GetBlockGraphData").AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockGraphData",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCGetBlockGraphData),
+		tracing.WithLogMessage(g.logger, "[GetBlockGraphData] get block graph data called"),
+	)
+	defer deferFn()
 
 	blockGraphData, err := g.repository.GetBlockGraphData(ctx, in.PeriodMillis)
 	if err != nil {
@@ -293,10 +298,12 @@ func (g *GRPC) GetBlockGraphData(ctx context.Context, in *asset_api.GetBlockGrap
 }
 
 func (g *GRPC) GetBlockHeader(ctx context.Context, req *asset_api.GetBlockHeaderRequest) (*asset_api.GetBlockHeaderResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("GetBlockHeader").AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeader",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCGetBlockHeader),
+		tracing.WithLogMessage(g.logger, "[GetBlockHeader] get block header called"),
+	)
+	defer deferFn()
 
 	hash, err := chainhash.NewHash(req.BlockHash)
 	if err != nil {
@@ -308,8 +315,6 @@ func (g *GRPC) GetBlockHeader(ctx context.Context, req *asset_api.GetBlockHeader
 		return nil, errors.WrapGRPC(errors.NewServiceError("could not get block header: %s", hash.String(), err))
 	}
 
-	prometheusAssetGRPCGetBlockHeader.Inc()
-
 	return &asset_api.GetBlockHeaderResponse{
 		BlockHeader: blockHeader.Bytes(),
 		Height:      meta.Height,
@@ -317,12 +322,12 @@ func (g *GRPC) GetBlockHeader(ctx context.Context, req *asset_api.GetBlockHeader
 }
 
 func (g *GRPC) GetBlockHeaders(ctx context.Context, req *asset_api.GetBlockHeadersRequest) (*asset_api.GetBlockHeadersResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("GetBlockHeaders").AddTime(start)
-	}()
-
-	prometheusAssetGRPCGetBlockHeaders.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeaders",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCGetBlockHeaders),
+		tracing.WithLogMessage(g.logger, "[GetBlockHeaders] get block headers called"),
+	)
+	defer deferFn()
 
 	startHash, err := chainhash.NewHash(req.StartHash)
 	if err != nil {
@@ -359,12 +364,12 @@ func (g *GRPC) GetBlockHeaders(ctx context.Context, req *asset_api.GetBlockHeade
 }
 
 func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*asset_api.GetBlockHeaderResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("GetBestBlockHeader").AddTime(start)
-	}()
-
-	prometheusAssetGRPCGetBestBlockHeader.Inc()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBestBlockHeader",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCGetBestBlockHeader),
+		tracing.WithLogMessage(g.logger, "[GetBestBlockHeader] get best block header called"),
+	)
+	defer deferFn()
 
 	blockHeader, meta, err := g.repository.GetBestBlockHeader(ctx)
 	if err != nil {
@@ -380,13 +385,13 @@ func (g *GRPC) GetBestBlockHeader(ctx context.Context, _ *emptypb.Empty) (*asset
 	}, nil
 }
 
-func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*asset_api.GetNodesResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("GetNodes").AddTime(start)
-	}()
-
-	prometheusAssetGRPCGetNodes.Inc()
+func (g *GRPC) GetNodes(ctx context.Context, _ *emptypb.Empty) (*asset_api.GetNodesResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "GetNodes",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCGetNodes),
+		tracing.WithLogMessage(g.logger, "[GetNodes] get nodes called"),
+	)
+	defer deferFn()
 
 	return &asset_api.GetNodesResponse{
 		Nodes: g.getPeers(),
@@ -394,10 +399,12 @@ func (g *GRPC) GetNodes(_ context.Context, _ *emptypb.Empty) (*asset_api.GetNode
 }
 
 func (g *GRPC) Get(ctx context.Context, request *asset_api.GetSubtreeRequest) (*asset_api.GetSubtreeResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("Get").AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "Get",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCGet),
+		tracing.WithLogMessage(g.logger, "[Get] get subtree called"),
+	)
+	defer deferFn()
 
 	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
@@ -415,10 +422,12 @@ func (g *GRPC) Get(ctx context.Context, request *asset_api.GetSubtreeRequest) (*
 }
 
 func (g *GRPC) Exists(ctx context.Context, request *asset_api.ExistsSubtreeRequest) (*asset_api.ExistsSubtreeResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("Exists").AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "Exists",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCExists),
+		tracing.WithLogMessage(g.logger, "[Exists] get subtree exists called"),
+	)
+	defer deferFn()
 
 	hash, err := chainhash.NewHash(request.Hash)
 	if err != nil {
@@ -436,10 +445,12 @@ func (g *GRPC) Exists(ctx context.Context, request *asset_api.ExistsSubtreeReque
 }
 
 func (g *GRPC) Set(ctx context.Context, request *asset_api.SetSubtreeRequest) (*emptypb.Empty, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("Set").AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "Set",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCSet),
+		tracing.WithLogMessage(g.logger, "[Set] set subtree called"),
+	)
+	defer deferFn()
 
 	ttl := time.Duration(request.Ttl) * time.Second
 	err := g.repository.SubtreeStore.Set(ctx, request.Hash, request.Subtree, options.WithTTL(ttl))
@@ -451,10 +462,12 @@ func (g *GRPC) Set(ctx context.Context, request *asset_api.SetSubtreeRequest) (*
 }
 
 func (g *GRPC) SetTTL(ctx context.Context, request *asset_api.SetSubtreeTTLRequest) (*emptypb.Empty, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("SetTTL").AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "SetTTL",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCSetTTL),
+		tracing.WithLogMessage(g.logger, "[SetTTL] set subtree TTL called"),
+	)
+	defer deferFn()
 
 	ttl := time.Duration(request.Ttl) * time.Second
 	err := g.repository.SubtreeStore.SetTTL(ctx, request.Hash, ttl)
@@ -466,22 +479,23 @@ func (g *GRPC) SetTTL(ctx context.Context, request *asset_api.SetSubtreeTTLReque
 }
 
 func (g *GRPC) AddHttpSubscriber(ch chan *asset_api.Notification) {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("AddHttpSubscriber").AddTime(start)
-	}()
+	_, _, deferFn := tracing.StartTracing(context.Background(), "AddHttpSubscriber",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCAddHttpSubscriber),
+		tracing.WithLogMessage(g.logger, "[AddHttpSubscriber] add http subscriber called"),
+	)
+	defer deferFn()
 
 	g.newHttpSubscriptions <- ch
 }
 
 func (g *GRPC) Subscribe(req *asset_api.SubscribeRequest, sub asset_api.AssetAPI_SubscribeServer) error {
-	start := gocore.CurrentTime()
-	defer func() {
-		AssetStat.NewStat("Subscribe").AddTime(start)
-	}()
-
-	prometheusAssetGRPCSubscribe.Inc()
-	g.logger.Debugf("[Asset_grpc] Subscribe: %s", req.Source)
+	_, _, deferFn := tracing.StartTracing(sub.Context(), "Subscribe",
+		tracing.WithParentStat(AssetStat),
+		tracing.WithCounter(prometheusAssetGRPCSubscribe),
+		tracing.WithLogMessage(g.logger, "[Subscribe] subscribe called"),
+	)
+	defer deferFn()
 
 	// Keep this subscription alive without endless loop - use a channel that blocks forever.
 	ch := make(chan struct{})
