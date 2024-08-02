@@ -11,10 +11,8 @@ import (
 // GetBlockHeaderIDs returns the block header ids from the given block hash and number of headers
 // this is used internally for setting blocks to mined, where we only save the id of the block header and compare that
 func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockHeaderIDs")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeaderIDs")
+	defer deferFn()
 
 	_, metas, err := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
 	if err != nil {

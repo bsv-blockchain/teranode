@@ -8,10 +8,8 @@ import (
 )
 
 func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockGraphData")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockGraphData")
+	defer deferFn()
 
 	q := `
 		WITH RECURSIVE ChainBlocks AS (

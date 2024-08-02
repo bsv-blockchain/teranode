@@ -10,7 +10,7 @@ import (
 var (
 	prometheusHealth                                     prometheus.Histogram
 	prometheusSubtreeValidationCheckSubtree              prometheus.Histogram
-	prometheusSubtreeValidationValidateSubtree           prometheus.Counter
+	prometheusSubtreeValidationValidateSubtree           prometheus.Histogram
 	prometheusSubtreeValidationValidateSubtreeRetry      prometheus.Counter
 	prometheusSubtreeValidationValidateSubtreeHandler    prometheus.Histogram
 	prometheusSubtreeValidationValidateSubtreeDuration   prometheus.Histogram
@@ -47,11 +47,12 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusSubtreeValidationValidateSubtree = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusSubtreeValidationValidateSubtree = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "subtreevalidation",
 			Name:      "validate_subtree",
-			Help:      "Number of subtrees validated",
+			Help:      "Histogram of subtrees validated",
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
 		},
 	)
 

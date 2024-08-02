@@ -10,10 +10,8 @@ import (
 )
 
 func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockHeaders")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeadersFromHeight")
+	defer deferFn()
 
 	headers, metas, err := s.blocksCache.GetBlockHeadersFromHeight(height, int(limit))
 	if err != nil {

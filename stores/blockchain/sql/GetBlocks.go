@@ -11,10 +11,8 @@ import (
 )
 
 func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint32) ([]*model.Block, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockHeaders")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlocks")
+	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

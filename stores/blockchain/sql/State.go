@@ -7,10 +7,8 @@ import (
 )
 
 func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetState")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetState")
+	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -33,10 +31,8 @@ func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (s *SQL) SetState(ctx context.Context, key string, data []byte) error {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "SetState")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:SetState")
+	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

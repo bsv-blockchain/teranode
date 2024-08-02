@@ -21,7 +21,6 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"go.uber.org/atomic"
@@ -505,12 +504,12 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	}, jobTTL) // create a new job with a TTL, will be cleaned up automatically
 
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
-	callerSpan := opentracing.SpanFromContext(ctx)
-	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	callerSpan := tracing.DecoupleTracingSpan(ctx, "decouple")
+	defer callerSpan.Finish()
 
 	go func() {
 		previousHash, _ := chainhash.NewHash(miningCandidate.PreviousHash)
-		if err := ba.blockchainClient.SendNotification(setCtx, &model.Notification{
+		if err := ba.blockchainClient.SendNotification(callerSpan.Ctx, &model.Notification{
 			Type: model.NotificationType_MiningOn,
 			Hash: previousHash,
 		}); err != nil {
@@ -724,12 +723,12 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	//}
 
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
-	callerSpan := opentracing.SpanFromContext(ctx)
-	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleSubtreeTTL")
+	defer callerSpan.Finish()
 
 	go func() {
 		// TODO what do we do if this fails, the subtrees TTL and tx meta status still needs to be updated
-		g, gCtx := errgroup.WithContext(setCtx)
+		g, gCtx := errgroup.WithContext(callerSpan.Ctx)
 
 		g.Go(func() error {
 			timeStart := time.Now()
@@ -748,7 +747,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		if err = g.Wait(); err != nil {
 			ba.logger.Errorf("[BlockAssembly][%s][InvalidateBlock] block is not valid: %v", block.String(), err)
 
-			if err = ba.blockchainClient.InvalidateBlock(setCtx, block.Header.Hash()); err != nil {
+			if err = ba.blockchainClient.InvalidateBlock(callerSpan.Ctx, block.Header.Hash()); err != nil {
 				ba.logger.Errorf("[BlockAssembly][%s][InvalidateBlock] failed to invalidate block: %s", block.Header.Hash(), err)
 			}
 		}
@@ -764,22 +763,18 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 }
 
 func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Block) (err error) {
-	// start, stat, ctx := util.NewStatFromContext(cntxt, "removeSubtreesTTL", blockAssemblyStat)
-	start := time.Now()
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:removeSubtreesTTL")
-	defer func() {
-		span.Finish()
-		// stat.AddTime(start)
-		prometheusBlockAssemblyUpdateSubtreesTTL.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockAssembly:removeSubtreesTTL",
+		tracing.WithHistogram(prometheusBlockAssemblyUpdateSubtreesTTL),
+	)
+	defer deferFn()
 
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
-	callerSpan := opentracing.SpanFromContext(spanCtx)
-	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleSubtreeTTL")
+	defer callerSpan.Finish()
 
 	subtreeTTLConcurrency, _ := gocore.Config().GetInt("blockassembly_subtreeTTLConcurrency", 32)
 
-	g, gCtx := errgroup.WithContext(setCtx)
+	g, gCtx := errgroup.WithContext(callerSpan.Ctx)
 	g.SetLimit(subtreeTTLConcurrency)
 
 	startTime := time.Now()

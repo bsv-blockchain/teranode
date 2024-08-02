@@ -14,10 +14,8 @@ import (
 )
 
 func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockByHeight")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockByHeight")
+	defer deferFn()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
 	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetBlockByHeight-%d", height)))

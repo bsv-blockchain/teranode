@@ -9,10 +9,8 @@ import (
 )
 
 func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockStats")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockStats")
+	defer deferFn()
 
 	q := `
 		WITH RECURSIVE ChainBlocks AS (

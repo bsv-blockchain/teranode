@@ -557,10 +557,8 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 }
 
 func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "storeBlock")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "storeBlock")
+	defer deferFn()
 
 	//ctxTimeout, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
 	//defer cancelTimeout()
@@ -591,10 +589,8 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 }
 
 func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHash *chainhash.Hash, coinbaseTx *bt.Tx) error {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "processCoinbase")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, stat, deferFn := tracing.StartTracing(ctx, "processCoinbase")
+	defer deferFn()
 
 	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
 	//defer cancelTimeout()
@@ -656,10 +652,8 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 }
 
 func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time) error {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "createSpendingUtxos")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "createSpendingUtxos")
+	defer deferFn()
 
 	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
 	//defer cancelTimeout()
@@ -725,11 +719,9 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 	return nil
 }
 
-func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
-	start, stat, ctx := tracing.StartStatFromContext(cntxt, "splitUtxo")
-	defer func() {
-		stat.AddTime(start)
-	}()
+func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "splitUtxo")
+	defer deferFn()
 
 	tx := bt.NewTx()
 
@@ -924,13 +916,8 @@ func (c *Coinbase) requestFundsSqlite(ctx context.Context, address string) (*bt.
 }
 
 func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *bt.Tx) error {
-	//ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
-	//defer cancelTimeout()
-
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "insertCoinbaseUTXOs")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "insertCoinbaseUTXOs")
+	defer deferFn()
 
 	var txn *sql.Tx
 	var stmt *sql.Stmt
@@ -1006,13 +993,8 @@ func (c *Coinbase) insertCoinbaseUTXOs(ctx context.Context, blockId uint64, tx *
 }
 
 func (c *Coinbase) insertSpendableUTXOs(ctx context.Context, tx *bt.Tx) error {
-	//ctx, cancelTimeout := context.WithTimeout(cntxt, c.dbTimeout)
-	//defer cancelTimeout()
-
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "insertSpendableUTXOs")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "insertSpendableUTXOs")
+	defer deferFn()
 
 	var txn *sql.Tx
 	var stmt *sql.Stmt
@@ -1090,6 +1072,8 @@ but this means installing the cron extension and I don't want to hassle devops
 until this is a proven solution.
 */
 func (c *Coinbase) aggregateBalance(ctx context.Context) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "aggregateBalance")
+	defer deferFn()
 
 	switch c.engine {
 	case util.Postgres:
@@ -1121,6 +1105,9 @@ func (c *Coinbase) aggregateBalance(ctx context.Context) error {
 }
 
 func (c *Coinbase) getBalance(ctx context.Context) (*coinbase_api.GetBalanceResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "getBalance")
+	defer deferFn()
+
 	res := &coinbase_api.GetBalanceResponse{}
 
 	switch c.engine {

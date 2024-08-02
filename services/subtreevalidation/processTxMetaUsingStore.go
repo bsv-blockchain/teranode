@@ -21,8 +21,8 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		return 0, errors.NewInvalidArgumentError("txHashes and txMetaSlice must be the same length")
 	}
 
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "processTxMetaUsingStore")
-	defer stat.AddTime(start)
+	ctx, _, deferFn := tracing.StartTracing(ctx, "processTxMetaUsingStore")
+	defer deferFn()
 
 	batchSize, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024)
 	validateSubtreeInternalConcurrency, _ := gocore.Config().GetInt("blockvalidation_processTxMetaUsingStor_Concurrency", util.Max(4, runtime.NumCPU()/2))

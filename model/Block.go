@@ -14,21 +14,20 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/greatroar/blobloom"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -357,12 +356,11 @@ func (b *Block) String() string {
 }
 
 func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
-	startTime := time.Now()
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:Valid")
-	defer func() {
-		span.Finish()
-		prometheusBlockValid.Observe(time.Since(startTime).Seconds())
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "Block:Valid",
+		tracing.WithHistogram(prometheusBlockValid),
+		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
+	)
+	defer deferFn()
 
 	// 1. Check that the block header hash is less than the target difficulty.
 	headerValid, _, err := b.Header.HasMetTargetDifficulty()
@@ -434,7 +432,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// missing the subtreeStore should only happen when we are validating an internal block
 	if subtreeStore != nil && len(b.Subtrees) > 0 {
 		// 6. Get and validate any missing subtrees.
-		if err = b.GetAndValidateSubtrees(spanCtx, logger, subtreeStore); err != nil {
+		if err = b.GetAndValidateSubtrees(ctx, logger, subtreeStore); err != nil {
 			return false, err
 		}
 
@@ -445,7 +443,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 
 		//8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
 		//    making sure to replace the coinbase placeholder with the coinbase tx hash in the first subtree
-		if err = b.CheckMerkleRoot(spanCtx); err != nil {
+		if err = b.CheckMerkleRoot(ctx); err != nil {
 			return false, err
 		}
 	}
@@ -463,7 +461,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// we only check when we have a subtree store passed in, otherwise this check cannot / should not be done
 	if subtreeStore != nil {
 		// this creates the txMap for the block that is also used in the validOrderAndBlessed check
-		err = b.checkDuplicateTransactions(spanCtx)
+		err = b.checkDuplicateTransactions(ctx)
 		if err != nil {
 			return false, err
 		}
@@ -475,7 +473,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// TODO - Re-enable order checking in all cases
 	if !gocore.Config().GetBool("startLegacy", false) {
 		if txMetaStore != nil {
-			err = b.validOrderAndBlessed(spanCtx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats)
+			err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats)
 			if err != nil {
 				return false, err
 			}
@@ -528,8 +526,8 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 }
 
 func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
-	span, _ := opentracing.StartSpanFromContext(ctx, "Block:checkDuplicateTransactions")
-	defer span.Finish()
+	_, _, deferFn := tracing.StartTracing(ctx, "Block:checkDuplicateTransactions")
+	defer deferFn()
 
 	concurrency, _ := gocore.Config().GetInt("block_checkDuplicateTransactionsConcurrency", -1)
 	if concurrency <= 0 {
@@ -892,12 +890,10 @@ func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeS
 }
 
 func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store) error {
-	startTime := time.Now()
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "Block:GetAndValidateSubtrees")
-	defer func() {
-		span.Finish()
-		prometheusBlockGetAndValidateSubtrees.Observe(time.Since(startTime).Seconds())
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "Block:GetAndValidateSubtrees",
+		tracing.WithHistogram(prometheusBlockGetAndValidateSubtrees),
+	)
+	defer deferFn()
 
 	b.subtreeSlicesMu.Lock()
 	defer func() {
@@ -919,7 +915,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		concurrency = util.Max(4, runtime.NumCPU()/2)
 	}
 
-	g, gCtx := errgroup.WithContext(spanCtx)
+	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(concurrency)
 	// we have the hashes. Get the actual subtrees from the subtree store
 	for i, subtreeHash := range b.Subtrees {
@@ -1019,12 +1015,10 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 		return errors.NewStorageError("[BLOCK][%s] number of subtrees does not match number of subtree slices", b.Hash().String())
 	}
 
-	startTime := time.Now()
-	span, _ := opentracing.StartSpanFromContext(ctx, "Block:CheckMerkleRoot")
-	defer func() {
-		span.Finish()
-		prometheusBlockCheckMerkleRoot.Observe(time.Since(startTime).Seconds())
-	}()
+	_, _, deferFn := tracing.StartTracing(ctx, "Block:CheckMerkleRoot",
+		tracing.WithHistogram(prometheusBlockCheckMerkleRoot),
+	)
+	defer deferFn()
 
 	hashes := make([]chainhash.Hash, len(b.Subtrees))
 	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {

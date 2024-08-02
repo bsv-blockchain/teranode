@@ -10,10 +10,8 @@ import (
 )
 
 func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockExists")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockExists")
+	defer deferFn()
 
 	exists, ok := s.blocksCache.GetExists(*blockHash) // resets whenever a new block is added
 	if ok {
