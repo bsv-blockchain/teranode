@@ -1,4 +1,4 @@
-//// go:build fullTest
+//go:build fullTest
 
 package blockassembly
 
