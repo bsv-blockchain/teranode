@@ -68,7 +68,7 @@ func (ps *DumbPropagationServer) Stop(_ context.Context) error {
 }
 
 func (ps *DumbPropagationServer) HealthGRPC(_ context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
-	prometheusHealth.Inc()
+	prometheusHealth.Observe(0)
 	return &propagation_api.HealthResponse{
 		Ok:        true,
 		Timestamp: uint32(time.Now().Unix()),
@@ -76,13 +76,15 @@ func (ps *DumbPropagationServer) HealthGRPC(_ context.Context, _ *propagation_ap
 }
 
 func (ps *DumbPropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
-	prometheusProcessedTransactions.Inc()
+	prometheusProcessedTransactions.Observe(0)
 
 	return &propagation_api.EmptyMessage{}, nil
 }
 
 func (ps *DumbPropagationServer) ProcessTransactionStream(srv propagation_api.PropagationAPI_ProcessTransactionStreamServer) error {
 	for {
+		start := time.Now()
+
 		_, err := srv.Recv()
 		if err != nil {
 			return err
@@ -92,7 +94,7 @@ func (ps *DumbPropagationServer) ProcessTransactionStream(srv propagation_api.Pr
 			return err
 		}
 
-		prometheusProcessedTransactions.Inc()
+		prometheusProcessedTransactions.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	}
 }
 

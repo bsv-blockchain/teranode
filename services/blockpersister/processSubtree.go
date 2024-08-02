@@ -16,19 +16,15 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 )
 
 func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxo_model.UTXODiff) error {
-	startTotal, stat, ctx := tracing.StartStatFromContext(ctx, "validateSubtreeBlobInternal")
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "BlockValidation:validateSubtree")
-	span.LogKV("subtree", subtreeHash.String())
-	defer func() {
-		span.Finish()
-		stat.AddTime(startTotal)
-		prometheusBlockPersisterValidateSubtree.Inc()
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessSubtree",
+		tracing.WithHistogram(prometheusBlockPersisterValidateSubtree),
+		tracing.WithLogMessage(u.logger, "[ProcessSubtree] called for subtree %s", subtreeHash.String()),
+	)
+	defer deferFn()
 
 	// 1. get the subtree from the subtree store
 	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
@@ -64,7 +60,7 @@ func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 	batched := gocore.Config().GetBool("blockvalidation_batchMissingTransactions", true)
 
 	// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
-	missed, err := u.processTxMetaUsingStore(spanCtx, txHashes, txMetaSlice, batched)
+	missed, err := u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, batched)
 	if err != nil {
 		return errors.NewServiceError("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String(), err)
 	}

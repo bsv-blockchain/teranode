@@ -2,10 +2,10 @@ package blockassembly
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
@@ -358,8 +358,13 @@ func (ba *BlockAssembly) HealthGRPC(_ context.Context, _ *blockassembly_api.Empt
 
 var txsProcessed = atomic.Uint64{}
 
-func (ba *BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
-	startTime := time.Now()
+func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTxRequest) (resp *blockassembly_api.AddTxResponse, err error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "AddTx",
+		tracing.WithParentStat(blockAssemblyStat),
+		tracing.WithHistogram(prometheusBlockAssemblyAddTx),
+		tracing.WithLogMessage(ba.logger, "[AddTx][%s] add tx called", utils.ReverseAndHexEncodeSlice(req.Txid)),
+	)
+
 	defer func() {
 		if txsProcessed.Load()%1000 == 0 {
 			// we should NOT be setting this on every call, it's a waste of resources
@@ -367,9 +372,8 @@ func (ba *BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.AddTxRe
 			prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
 			prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
 		}
-
-		prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 		txsProcessed.Inc()
+		deferFn()
 	}()
 
 	if len(req.Txid) != 32 {
@@ -390,12 +394,13 @@ func (ba *BlockAssembly) AddTx(_ context.Context, req *blockassembly_api.AddTxRe
 	}, nil
 }
 
-func (ba *BlockAssembly) RemoveTx(_ context.Context, req *blockassembly_api.RemoveTxRequest) (*blockassembly_api.EmptyMessage, error) {
-	startTime := time.Now()
-	prometheusBlockAssemblyRemoveTx.Inc()
-	defer func() {
-		prometheusBlockAssemblyRemoveTxDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-	}()
+func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.RemoveTxRequest) (*blockassembly_api.EmptyMessage, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "RemoveTx",
+		tracing.WithParentStat(blockAssemblyStat),
+		tracing.WithHistogram(prometheusBlockAssemblyRemoveTx),
+		tracing.WithLogMessage(ba.logger, "[RemoveTx][%s] called", utils.ReverseAndHexEncodeSlice(req.Txid)),
+	)
+	defer deferFn()
 
 	if len(req.Txid) != 32 {
 		return nil, errors.WrapGRPC(
@@ -413,18 +418,16 @@ func (ba *BlockAssembly) RemoveTx(_ context.Context, req *blockassembly_api.Remo
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
-func (ba *BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
-	// start := gocore.CurrentTime()
-	// defer func() {
-	// 	addTxBatchGrpc.AddTime(start)
-	// }()
-
+func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "AddTxBatch",
+		tracing.WithParentStat(blockAssemblyStat),
+		tracing.WithLogMessage(ba.logger, "[AddTxBatch] called with %d transactions", len(batch.GetTxRequests())),
+	)
 	defer func() {
-		//traceSpan.Finish()
-		// stat.AddTime(startTime)
 		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
 		prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
 		prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+		deferFn()
 	}()
 
 	requests := batch.GetTxRequests()
@@ -443,7 +446,7 @@ func (ba *BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_api.
 				SizeInBytes: req.Size,
 			})
 
-			prometheusBlockAssemblyAddTxDuration.Observe(float64(time.Since(startTxTime).Microseconds()) / 1_000_000)
+			prometheusBlockAssemblyAddTx.Observe(float64(time.Since(startTxTime).Microseconds()) / 1_000_000)
 		}
 	}
 
@@ -453,15 +456,14 @@ func (ba *BlockAssembly) AddTxBatch(_ context.Context, batch *blockassembly_api.
 }
 
 func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) (*meta.Data, error) {
-	startMetaTime := time.Now()
-	txMetaSpan, txMetaSpanCtx := opentracing.StartSpanFromContext(ctx, "BlockAssembly:AddTx:txMeta")
-	defer func() {
-		txMetaSpan.Finish()
-		// blockAssemblyStat.NewStat("GetTxMeta_grpc", true).AddTime(startMetaTime)
-		prometheusBlockAssemblerTxMetaGetDuration.Observe(float64(time.Since(startMetaTime).Microseconds()) / 1_000_000)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetTxMeta",
+		tracing.WithParentStat(blockAssemblyStat),
+		tracing.WithHistogram(prometheusBlockAssemblerTxMetaGetDuration),
+		tracing.WithLogMessage(ba.logger, "[GetTxMeta][%s] called", txHash.String()),
+	)
+	defer deferFn()
 
-	txMetadata, err := ba.utxoStore.Get(txMetaSpanCtx, txHash)
+	txMetadata, err := ba.utxoStore.Get(ctx, txHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -483,12 +485,12 @@ func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) 
 }
 
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*model.MiningCandidate, error) {
-	startTime := time.Now()
-	prometheusBlockAssemblyGetMiningCandidate.Inc()
-	defer func() {
-		// blockAssemblyStat.NewStat("GetMiningCandidate_grpc", true).AddTime(startTime)
-		prometheusBlockAssemblyGetMiningCandidateDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetMiningCandidate",
+		tracing.WithParentStat(blockAssemblyStat),
+		tracing.WithHistogram(prometheusBlockAssemblyGetMiningCandidateDuration),
+		tracing.WithLogMessage(ba.logger, "[GetMiningCandidate] called"),
+	)
+	defer deferFn()
 
 	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
 	if err != nil {
@@ -519,9 +521,12 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	return miningCandidate, nil
 }
 
-func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
-	start := gocore.CurrentTime()
-	defer blockAssemblyStat.NewStat("SubmitMiningSolution_grpc", true).AddTime(start)
+func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockassembly_api.SubmitMiningSolutionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "SubmitMiningSolution",
+		tracing.WithParentStat(blockAssemblyStat),
+		tracing.WithLogMessage(ba.logger, "[SubmitMiningSolution] called"),
+	)
+	defer deferFn()
 
 	waitForResponse := gocore.Config().GetBool("blockassembly_SubmitMiningSolution_waitForResponse", true)
 	var responseChan chan bool
@@ -542,27 +547,21 @@ func (ba *BlockAssembly) SubmitMiningSolution(_ context.Context, req *blockassem
 
 	if waitForResponse {
 		ok = <-request.responseChan
-		ba.logger.Infof("block submission success=%v - finished in %s", ok, time.Since(start).String())
 	}
-
-	prometheusBlockAssemblySubmitMiningSolutionCh.Set(float64(len(ba.blockSubmissionChan)))
 
 	return &blockassembly_api.SubmitMiningSolutionResponse{
 		Ok: ok,
 	}, nil
 }
 
-func (ba *BlockAssembly) submitMiningSolution(cntxt context.Context, req *BlockSubmissionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
-	start, stat, ctx := tracing.NewStatFromContext(cntxt, "submitMiningSolution", blockAssemblyStat)
-	defer func() {
-		stat.AddTime(start)
-		prometheusBlockAssemblySubmitMiningSolutionDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
-
+func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSubmissionRequest) (*blockassembly_api.SubmitMiningSolutionResponse, error) {
 	jobID := utils.ReverseAndHexEncodeSlice(req.Id)
-
-	prometheusBlockAssemblySubmitMiningSolution.Inc()
-	ba.logger.Infof("[BlockAssembly][%s] SubmitMiningSolution", jobID)
+	ctx, _, deferFn := tracing.StartTracing(ctx, "submitMiningSolution",
+		tracing.WithParentStat(blockAssemblyStat),
+		tracing.WithHistogram(prometheusBlockAssemblySubmitMiningSolution),
+		tracing.WithLogMessage(ba.logger, "[submitMiningSolution] called for job id %s", jobID),
+	)
+	defer deferFn()
 
 	storeId, err := chainhash.NewHash(req.Id[:])
 	if err != nil {
@@ -816,17 +815,35 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 	return nil
 }
 
-func (ba *BlockAssembly) DeDuplicateBlockAssembly(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
+func (ba *BlockAssembly) DeDuplicateBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "DeDuplicateBlockAssembly",
+		tracing.WithParentStat(blockAssemblyStat),
+		tracing.WithLogMessage(ba.logger, "[DeDuplicateBlockAssembly] called"),
+	)
+	defer deferFn()
+
 	ba.blockAssembler.DeDuplicateTransactions()
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
-func (ba *BlockAssembly) ResetBlockAssembly(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
+func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "ResetBlockAssembly",
+		tracing.WithParentStat(blockAssemblyStat),
+		tracing.WithLogMessage(ba.logger, "[ResetBlockAssembly] called"),
+	)
+	defer deferFn()
+
 	ba.blockAssembler.Reset()
 	return &blockassembly_api.EmptyMessage{}, nil
 }
 
-func (ba *BlockAssembly) GetBlockAssemblyState(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.StateMessage, error) {
+func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.StateMessage, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "GetBlockAssemblyState",
+		tracing.WithParentStat(blockAssemblyStat),
+		tracing.WithLogMessage(ba.logger, "[GetBlockAssemblyState] called"),
+	)
+	defer deferFn()
+
 	return &blockassembly_api.StateMessage{
 		BlockAssemblyState:    ba.blockAssembler.GetCurrentRunningState(),
 		SubtreeProcessorState: ba.blockAssembler.subtreeProcessor.GetCurrentRunningState(),

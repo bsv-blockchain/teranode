@@ -10,18 +10,17 @@ import (
 
 //nolint:unused //TODO: enable these later
 var (
-	prometheusBlockPersisterValidateSubtree                 prometheus.Counter
-	prometheusBlockPersisterValidateSubtreeRetry            prometheus.Counter
-	prometheusBlockPersisterValidateSubtreeHandler          prometheus.Histogram
-	prometheusBlockPersisterValidateSubtreeDuration         prometheus.Histogram
-	prometheusBlockPersisterBlessMissingTransaction         prometheus.Counter
-	prometheusBlockPersisterBlessMissingTransactionDuration prometheus.Histogram
-	prometheusBlockPersisterSetTXMetaCacheKafka             prometheus.Histogram
-	prometheusBlockPersisterDelTXMetaCacheKafka             prometheus.Histogram
-	prometheusBlockPersisterSetTXMetaCacheKafkaErrors       prometheus.Counter
-	prometheusBlockPersisterBlocks                          prometheus.Histogram
-	prometheusBlockPersisterSubtrees                        prometheus.Histogram
-	prometheusBlockPersisterSubtreeBatch                    prometheus.Histogram
+	prometheusBlockPersisterValidateSubtree           prometheus.Histogram
+	prometheusBlockPersisterValidateSubtreeRetry      prometheus.Counter
+	prometheusBlockPersisterValidateSubtreeHandler    prometheus.Histogram
+	prometheusBlockPersisterPersistBlock              prometheus.Histogram
+	prometheusBlockPersisterBlessMissingTransaction   prometheus.Histogram
+	prometheusBlockPersisterSetTXMetaCacheKafka       prometheus.Histogram
+	prometheusBlockPersisterDelTXMetaCacheKafka       prometheus.Histogram
+	prometheusBlockPersisterSetTXMetaCacheKafkaErrors prometheus.Counter
+	prometheusBlockPersisterBlocks                    prometheus.Histogram
+	prometheusBlockPersisterSubtrees                  prometheus.Histogram
+	prometheusBlockPersisterSubtreeBatch              prometheus.Histogram
 )
 
 var (
@@ -33,11 +32,12 @@ func initPrometheusMetrics() {
 }
 
 func _initPrometheusMetrics() {
-	prometheusBlockPersisterValidateSubtree = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockPersisterValidateSubtree = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockpersister",
 			Name:      "validate_subtree",
-			Help:      "Number of subtrees validated",
+			Help:      "Histogram of subtree validation",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -52,34 +52,26 @@ func _initPrometheusMetrics() {
 	prometheusBlockPersisterValidateSubtreeHandler = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockpersister",
-			Name:      "validate_subtree_handler_millis",
-			Help:      "Duration of subtree handler",
+			Name:      "validate_subtree_handler",
+			Help:      "Histogram of subtree handler",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
 		},
 	)
 
-	prometheusBlockPersisterValidateSubtreeDuration = promauto.NewHistogram(
+	prometheusBlockPersisterPersistBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockpersister",
-			Name:      "validate_subtree_duration_millis",
-			Help:      "Duration of validate subtree",
+			Name:      "persist_block",
+			Help:      "Histogram of PersistBlock in the blockpersister service",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
 		},
 	)
 
-	prometheusBlockPersisterBlessMissingTransaction = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockPersisterBlessMissingTransaction = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockpersister",
 			Name:      "bless_missing_transaction",
-			Help:      "Number of missing transactions blessed",
-		},
-	)
-
-	prometheusBlockPersisterBlessMissingTransactionDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockpersister",
-			Name:      "bless_missing_transaction_duration_millis",
-			Help:      "Duration of bless missing transaction",
+			Help:      "Histogram of bless missing transaction",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
@@ -87,8 +79,8 @@ func _initPrometheusMetrics() {
 	prometheusBlockPersisterSetTXMetaCacheKafka = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockpersister",
-			Name:      "set_tx_meta_cache_kafka_micros",
-			Help:      "Duration of setting tx meta cache from kafka",
+			Name:      "set_tx_meta_cache_kafka",
+			Help:      "Histogram of setting tx meta cache from kafka",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)

@@ -182,8 +182,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 	startTotal, stat, ctx := tracing.StartStatFromContext(ctx, "getMissingTransaction")
 	defer func() {
 		stat.AddTime(startTotal)
-		prometheusSubtreeValidationBlessMissingTransaction.Inc()
-		prometheusSubtreeValidationBlessMissingTransactionDuration.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
+		prometheusSubtreeValidationBlessMissingTransaction.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
 	}()
 
 	if tx == nil {

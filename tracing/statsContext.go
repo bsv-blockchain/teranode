@@ -25,7 +25,11 @@ func NewStatFromContext(ctx context.Context, key string, defaultParent *gocore.S
 	parentStat, ok := ctx.Value(statsKey{}).(*gocore.Stat)
 	if !ok {
 		// panic("No stat in context")
-		parentStat = defaultParent
+		if defaultParent != nil {
+			parentStat = defaultParent
+		} else {
+			parentStat = gocore.NewStat("no root", true)
+		}
 	}
 	ignoreChildren := true
 	if len(options) > 0 {

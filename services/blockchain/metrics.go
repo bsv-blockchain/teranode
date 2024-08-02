@@ -1,27 +1,41 @@
 package blockchain
 
 import (
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"sync"
 )
 
 var (
-	prometheusBlockchainHealth                 prometheus.Counter
-	prometheusBlockchainAddBlock               prometheus.Counter
-	prometheusBlockchainGetBlock               prometheus.Counter
-	prometheusBlockchainGetLastNBlocks         prometheus.Counter
-	prometheusBlockchainGetSuitableBlock       prometheus.Counter
-	prometheusBlockchainGetHashOfAncestorBlock prometheus.Counter
-	prometheusBlockchainGetNextWorkRequired    prometheus.Counter
-	prometheusBlockchainGetBlockExists         prometheus.Counter
-	prometheusBlockchainGetBestBlockHeader     prometheus.Counter
-	prometheusBlockchainGetBlockHeader         prometheus.Counter
-	prometheusBlockchainGetBlockHeaders        prometheus.Counter
-	prometheusBlockchainSubscribe              prometheus.Counter
-	prometheusBlockchainGetState               prometheus.Counter
-	prometheusBlockchainSetState               prometheus.Counter
-	prometheusBlockchainSendNotification       prometheus.Counter
+	prometheusBlockchainHealth                    prometheus.Counter
+	prometheusBlockchainAddBlock                  prometheus.Histogram
+	prometheusBlockchainGetBlock                  prometheus.Histogram
+	prometheusBlockchainGetBlockStats             prometheus.Histogram
+	prometheusBlockchainGetBlockGraphData         prometheus.Histogram
+	prometheusBlockchainGetLastNBlocks            prometheus.Histogram
+	prometheusBlockchainGetSuitableBlock          prometheus.Histogram
+	prometheusBlockchainGetHashOfAncestorBlock    prometheus.Histogram
+	prometheusBlockchainGetNextWorkRequired       prometheus.Histogram
+	prometheusBlockchainGetBlockExists            prometheus.Histogram
+	prometheusBlockchainGetBestBlockHeader        prometheus.Histogram
+	prometheusBlockchainGetBlockHeader            prometheus.Histogram
+	prometheusBlockchainGetBlockHeaders           prometheus.Histogram
+	prometheusBlockchainGetBlockHeadersFromHeight prometheus.Histogram
+	prometheusBlockchainSubscribe                 prometheus.Histogram
+	prometheusBlockchainGetState                  prometheus.Histogram
+	prometheusBlockchainSetState                  prometheus.Histogram
+	prometheusBlockchainGetBlockHeaderIDs         prometheus.Histogram
+	prometheusBlockchainInvalidateBlock           prometheus.Histogram
+	prometheusBlockchainRevalidateBlock           prometheus.Histogram
+	prometheusBlockchainSendNotification          prometheus.Histogram
+	prometheusBlockchainSetBlockMinedSet          prometheus.Histogram
+	prometheusBlockchainGetBlocksMinedNotSet      prometheus.Histogram
+	prometheusBlockchainSetBlockSubtreesSet       prometheus.Histogram
+	prometheusBlockchainGetBlocksSubtreesNotSet   prometheus.Histogram
+	prometheusBlockchainGetFSMCurrentState        prometheus.Histogram
+	prometheusBlockchainGetBlockLocator           prometheus.Histogram
+	prometheusBlockchainLocateBlockHeaders        prometheus.Histogram
 )
 
 var (
@@ -37,117 +51,248 @@ func _initPrometheusMetrics() {
 		prometheus.CounterOpts{
 			Namespace: "blockchain",
 			Name:      "health",
-			Help:      "Number of calls to the health endpoint of the blockchain service",
+			Help:      "Histogram of calls to the health endpoint of the blockchain service",
 		},
 	)
 
-	prometheusBlockchainAddBlock = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainAddBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "add_block",
-			Help:      "Number of blocks added to the blockchain service",
+			Help:      "Histogram of block added to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainGetBlock = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "get_block",
-			Help:      "Number of Get block calls to the blockchain service",
+			Help:      "Histogram of Get block calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainGetLastNBlocks = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetBlockStats = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "get_block_stats",
+			Help:      "Histogram of Get block stats calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainGetBlockGraphData = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "get_block_graph_data",
+			Help:      "Histogram of Get block graph data calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainGetLastNBlocks = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "get_last_n_block",
-			Help:      "Number of GetLastNBlocks calls to the blockchain service",
+			Help:      "Histogram of GetLastNBlocks calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainGetSuitableBlock = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetSuitableBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "get_suitable_block",
-			Help:      "Number of GetSuitableBlock calls to the blockchain service",
+			Help:      "Histogram of GetSuitableBlock calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
-	prometheusBlockchainGetHashOfAncestorBlock = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetHashOfAncestorBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "get_hash_of_ancestor_block",
-			Help:      "Number of GetHashOfAncestorBlock calls to the blockchain service",
+			Help:      "Histogram of GetHashOfAncestorBlock calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
-	prometheusBlockchainGetNextWorkRequired = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetNextWorkRequired = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "get_next_work_required",
-			Help:      "Number of GetNextWorkRequired calls to the blockchain service",
+			Help:      "Histogram of GetNextWorkRequired calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainGetBlockExists = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetBlockExists = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "get_block_exists",
-			Help:      "Number of GetBlockExists calls to the blockchain service",
+			Help:      "Histogram of GetBlockExists calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainGetBestBlockHeader = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetBestBlockHeader = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "get_get_best_block_header",
-			Help:      "Number of GetBestBlockHeader calls to the blockchain service",
+			Help:      "Histogram of GetBestBlockHeader calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainGetBlockHeader = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetBlockHeader = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "get_get_block_header",
-			Help:      "Number of GetBlockHeader calls to the blockchain service",
+			Help:      "Histogram of GetBlockHeader calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainGetBlockHeaders = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetBlockHeaders = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "get_get_block_headers",
-			Help:      "Number of GetBlockHeaders calls to the blockchain service",
+			Help:      "Histogram of GetBlockHeaders calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainSubscribe = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetBlockHeadersFromHeight = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "get_get_block_headers_from_height",
+			Help:      "Histogram of GetBlockHeadersFromHeight calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainSubscribe = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "subscribe",
-			Help:      "Number of Subscribe calls to the blockchain service",
+			Help:      "Histogram of Subscribe calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainGetState = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetState = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "get_state",
-			Help:      "Number of GetState calls to the blockchain service",
+			Help:      "Histogram of GetState calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainSetState = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainSetState = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "set_state",
-			Help:      "Number of SetState calls to the blockchain service",
+			Help:      "Histogram of SetState calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusBlockchainSendNotification = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockchainGetBlockHeaderIDs = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "get_block_header_ids",
+			Help:      "Histogram of GetBlockHeaderIDs calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainInvalidateBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "invalidate_block",
+			Help:      "Histogram of InvalidateBlock calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainRevalidateBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "revalidate_block",
+			Help:      "Histogram of RevalidateBlock calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainSendNotification = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "blockchain",
 			Name:      "send_notification",
-			Help:      "Number of SendNotification calls to the blockchain service",
+			Help:      "Histogram of SendNotification calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainSetBlockMinedSet = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "set_block_mined_set",
+			Help:      "Histogram of SetBlockMinedSet calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainGetBlocksMinedNotSet = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "get_blocks_mined_not_set",
+			Help:      "Histogram of GetBlocksMinedNotSet calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainSetBlockSubtreesSet = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "set_block_subtrees_set",
+			Help:      "Histogram of SetBlockSubtreesSet calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainGetBlocksSubtreesNotSet = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "get_blocks_subtrees_not_set",
+			Help:      "Histogram of GetBlocksSubtreesNotSet calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainGetFSMCurrentState = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "get_fsm_current_state",
+			Help:      "Histogram of GetFSMCurrentState calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainGetBlockLocator = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "get_block_locator",
+			Help:      "Histogram of GetBlockLocator calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainLocateBlockHeaders = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "locate_block_headers",
+			Help:      "Histogram of LocateBlockHeaders calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 }

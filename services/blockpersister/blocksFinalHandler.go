@@ -13,9 +13,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -38,10 +40,11 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		startTime := time.Now()
-		defer func() {
-			prometheusBlockPersisterValidateSubtreeHandler.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-		}()
+		ctx, _, deferFn := tracing.StartTracing(ctx, "blocksFinalHandler",
+			tracing.WithHistogram(prometheusBlockPersisterValidateSubtreeHandler),
+			tracing.WithLogMessage(u.logger, "[blocksFinalHandler] called for block %s", utils.ReverseAndHexEncodeSlice(msg.Message.Key)),
+		)
+		defer deferFn()
 
 		if len(msg.Message.Key) != 32 {
 			u.logger.Errorf("Received blocksFinal message key %d bytes", len(msg.Message.Value))
@@ -88,6 +91,12 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 }
 
 func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "persistBlock",
+		tracing.WithHistogram(prometheusBlockPersisterPersistBlock),
+		tracing.WithLogMessage(u.logger, "[persistBlock] called for block %s", hash.String()),
+	)
+	defer deferFn()
+
 	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
 		return errors.NewProcessingError("error creating block from bytes", err)

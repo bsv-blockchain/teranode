@@ -774,14 +774,6 @@ func (c *Coinbase) splitUtxo(cntxt context.Context, utxo *bt.UTXO) error {
 }
 
 func (c *Coinbase) RequestFunds(ctx context.Context, address string, disableDistribute bool) (*bt.Tx, error) {
-	//ctx, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
-	//defer cancelTimeout()
-
-	start, stat, ctx := tracing.NewStatFromContext(ctx, "RequestFunds", coinbaseStat)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
 	var utxo *bt.UTXO
 	var err error
 
