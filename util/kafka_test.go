@@ -125,14 +125,6 @@ func Test_KafkaAsyncProducerWithManualCommitParams(t *testing.T) {
 				return nil
 			},
 		},
-		//{
-		//	name:             "Process messages with all fail",
-		//	numberOfMessages: 2,
-		//	consumerClosure: func(message KafkaMessage) error {
-		//		fmt.Println("Consumer closure received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
-		//		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
-		//	},
-		//},
 		{
 			name:             "Process messages with 2nd time success closure",
 			numberOfMessages: 10,
@@ -164,7 +156,6 @@ func Test_KafkaAsyncProducerWithManualCommitParams(t *testing.T) {
 	// Run test cases
 	for _, tCase := range testCases {
 		t.Run(tCase.name, func(t *testing.T) {
-			fmt.Println("here")
 			wg.Add(tCase.numberOfMessages)
 
 			go produceMessages(kafkaChan, tCase.numberOfMessages)

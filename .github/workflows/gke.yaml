@@ -65,10 +65,3 @@ jobs:
       region: eu-north-1
       repo: ubsv
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
-  deploy:
-    needs: [create_manifest, get_tag]
-    uses: ./.github/workflows/gke_deploy.yaml
-    secrets: inherit
-    with:
-      repo: ubsv
-      tag: ${{ needs.get_tag.outputs.deployment_tag }}

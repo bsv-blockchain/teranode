@@ -3,7 +3,6 @@ package util
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"net/url"
 	"os"
 	"os/signal"
@@ -327,10 +326,8 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 				default:
 					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, autoCommitEnabled, consumerClosureFunc)); err != nil {
 						if errors.Is(err, context.Canceled) {
-							fmt.Println("context cancelled")
 							logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, groupID)
 						} else {
-							fmt.Println("error from consumer: ", err)
 							logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
 							// Consider delay before retry or exit based on error type
 						}
@@ -376,7 +373,9 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 	if err != nil {
 		return errors.NewConfigurationError("error while creating cluster admin", err)
 	}
-	defer clusterAdmin.Close()
+	defer func(clusterAdmin sarama.ClusterAdmin) {
+		_ = clusterAdmin.Close()
+	}(clusterAdmin)
 
 	partitions := GetQueryParamInt(kafkaURL, "partitions", 1)
 	replicationFactor := GetQueryParamInt(kafkaURL, "replication", 1)
