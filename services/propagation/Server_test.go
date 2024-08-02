@@ -2,6 +2,7 @@ package propagation
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"testing"
 
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -16,6 +17,7 @@ import (
 )
 
 func TestValidatorErrors(t *testing.T) {
+	tracing.SetGlobalMockTracer()
 	tx := bt.NewTx()
 
 	v, err := validator.New(context.Background(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))

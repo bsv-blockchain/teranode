@@ -83,6 +83,8 @@ func BenchmarkValidator(b *testing.B) {
 }
 
 func TestValidate_CoinbaseTransaction(t *testing.T) {
+	tracing.SetGlobalMockTracer()
+
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
 	require.NoError(t, err)
