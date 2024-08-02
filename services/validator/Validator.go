@@ -15,7 +15,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 )
 
@@ -147,10 +146,7 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 	}
 
 	// decouple the tracing context to not cancel the context when finalize the block assembly
-	callerSpan := opentracing.SpanFromContext(traceSpan.Ctx)
-	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
-	setCtx = tracing.CopyStatFromContext(traceSpan.Ctx, setCtx)
-	setSpan := tracing.Start(setCtx, "decoupledSpan")
+	setSpan := tracing.DecoupleTracingSpan(traceSpan.Ctx, "decoupledSpan")
 	defer setSpan.Finish()
 
 	/*

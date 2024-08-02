@@ -3,13 +3,13 @@ package model
 import (
 	"context"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
@@ -102,13 +102,11 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 }
 
 func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore txMinedStatus, block *Block, blockID uint32) error {
-	timeStart := time.Now()
-	span, spanCtx := opentracing.StartSpanFromContext(ctx, "UpdateTxMinedStatus")
-	defer func() {
-		span.Finish()
-	}()
-
-	logger.Debugf("[UpdateTxMinedStatus][%s] blockID %d for %d subtrees", block.Hash().String(), blockID, len(block.Subtrees))
+	ctx, _, deferFn := tracing.StartTracing(ctx, "UpdateTxMinedStatus",
+		tracing.WithHistogram(prometheusBlockValid),
+		tracing.WithDebugLogMessage(logger, "[UpdateTxMinedStatus] [%s] blockID %d for %d subtrees", block.Hash().String(), blockID, len(block.Subtrees)),
+	)
+	defer deferFn()
 
 	updateTxMinedStatusEnabled := gocore.Config().GetBool("utxostore_updateTxMinedStatus", true)
 	if !updateTxMinedStatusEnabled {
@@ -129,7 +127,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 	maxMinedRoutines, _ := gocore.Config().GetInt("utxostore_maxMinedRoutines", 128)
 	maxMinedBatchSize, _ := gocore.Config().GetInt("utxostore_maxMinedBatchSize", 1024)
 
-	g, gCtx := errgroup.WithContext(spanCtx)
+	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(maxMinedRoutines)
 
 	maxRetries := 10
@@ -196,8 +194,6 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 	if err := g.Wait(); err != nil {
 		return errors.NewProcessingError("[UpdateTxMinedStatus][%s] error updating tx mined status", block.Hash().String(), err)
 	}
-
-	logger.Debugf("[UpdateTxMinedStatus][%s] blockID %d DONE in %s", block.Hash().String(), blockID, time.Since(timeStart).String())
 
 	return nil
 }
