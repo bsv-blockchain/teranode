@@ -51,10 +51,10 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 	timeout := time.Duration(getQueryParamInt(s3URL, "TimeoutSeconds", 30)) * time.Second
 	keepAlive := time.Duration(getQueryParamInt(s3URL, "KeepAliveSeconds", 300)) * time.Second
 	region := s3URL.Query().Get("region")
-	folder := s3URL.Query().Get("folder")
+	subDirectory := s3URL.Query().Get("subDirectory")
 
-	if folder != "" {
-		opts = append(opts, options.WithSubDirectory(folder))
+	if subDirectory != "" {
+		opts = append(opts, options.WithSubDirectory(subDirectory))
 	}
 
 	config, _ := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
