@@ -301,7 +301,6 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 		context.TODO(),
 		bItem.tx.TxIDChainHash()[:],
 		bItem.tx.Bytes(),
-		options.WithSubDirectory("legacy"),
 		options.WithFileExtension("tx"),
 	); err != nil {
 		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.tx.TxIDChainHash().String(), err))

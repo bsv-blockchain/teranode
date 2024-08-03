@@ -501,7 +501,6 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 	// first check whether we have the subtreeData file for this subtree and use that for the missing transactions
 	subtreeDataExists, err := u.subtreeStore.Exists(ctx,
 		subtreeHash[:],
-		options.WithSubDirectory("legacy"),
 		options.WithFileExtension("subtreeData"),
 	)
 	if err != nil {
@@ -564,7 +563,6 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	// load the subtree
 	subtreeReader, err := u.subtreeStore.GetIoReader(ctx,
 		subtreeHash[:],
-		options.WithSubDirectory("legacy"),
 		options.WithFileExtension("subtree"),
 	)
 	if err != nil {
@@ -580,7 +578,6 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	// get the subtreeData
 	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx,
 		subtreeHash[:],
-		options.WithSubDirectory("legacy"),
 		options.WithFileExtension("subtreeData"),
 	)
 	if err != nil {

@@ -256,7 +256,6 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 				subtreeBytes, err := u.subtreeStore.Get(
 					ctx,
 					hash[:],
-					options.WithSubDirectory("legacy"),
 					options.WithFileExtension("subtree"),
 				)
 				if err != nil {
