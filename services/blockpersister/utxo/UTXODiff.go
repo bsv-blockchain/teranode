@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -113,21 +114,34 @@ func (ud *UTXODiff) delete(utxoDeletion *UTXODeletion) error {
 }
 
 func (ud *UTXODiff) Close() error {
-	if err := ud.additionsWriter.Close(); err != nil {
-		ud.deletionsWriter.CloseWithError(err) // Close the other writer with the same error
-		return errors.NewStorageError("Error closing additions writer:", err)
-	}
+	g, _ := errgroup.WithContext(ud.ctx)
 
-	if err := ud.deletionsWriter.Close(); err != nil {
-		return errors.NewStorageError("Error closing deletions writer: %v", err)
-	}
+	g.Go(func() error {
+		if err := ud.additionsWriter.Close(); err != nil {
+			return errors.NewStorageError("Error closing additions writer:", err)
+		}
 
-	if err := ud.store.SetTTL(ud.ctx, ud.blockHash[:], 0, options.WithFileExtension(additionsExtension)); err != nil {
-		return errors.NewStorageError("Error setting ttl on additions file", err)
-	}
+		if err := ud.store.SetTTL(ud.ctx, ud.blockHash[:], 0, options.WithFileExtension(additionsExtension)); err != nil {
+			return errors.NewStorageError("Error setting ttl on additions file", err)
+		}
 
-	if err := ud.store.SetTTL(ud.ctx, ud.blockHash[:], 0, options.WithFileExtension(deletionsExtension)); err != nil {
-		return errors.NewStorageError("Error setting ttl on deletions file", err)
+		return nil
+	})
+
+	g.Go(func() error {
+		if err := ud.deletionsWriter.Close(); err != nil {
+			return errors.NewStorageError("Error closing deletions writer: %v", err)
+		}
+
+		if err := ud.store.SetTTL(ud.ctx, ud.blockHash[:], 0, options.WithFileExtension(deletionsExtension)); err != nil {
+			return errors.NewStorageError("Error setting ttl on deletions file", err)
+		}
+
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		return err
 	}
 
 	ud.logger.Infof("[BlockPersister] Persisting utxo additions and deletions for block %s - DONE", ud.blockHash.String())

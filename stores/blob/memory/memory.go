@@ -14,7 +14,7 @@ import (
 )
 
 type Memory struct {
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	blobs map[[32]byte][]byte
 }
 
@@ -29,6 +29,10 @@ func (m *Memory) Health(ctx context.Context) (int, string, error) {
 }
 
 func (m *Memory) Close(_ context.Context) error {
+	// The lock is to ensure that no other operations are happening while we close the store
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// noop
 	return nil
 }
@@ -83,8 +87,8 @@ func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.Options) ([
 
 	storeKey := hashKey(hash, setOptions.Extension)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	bytes, ok := m.blobs[storeKey]
 	if !ok {
@@ -112,8 +116,8 @@ func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.Options)
 
 	storeKey := hashKey(hash, setOptions.Extension)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
 	_, ok := m.blobs[storeKey]
 	return ok, nil

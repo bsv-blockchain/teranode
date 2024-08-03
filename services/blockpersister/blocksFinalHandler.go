@@ -117,7 +117,9 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	}
 
 	// Add coinbase utxos to the utxo diff
-	utxoDiff.ProcessTx(block.CoinbaseTx)
+	if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
+		return errors.NewProcessingError("error processing coinbase tx", err)
+	}
 
 	for i, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
