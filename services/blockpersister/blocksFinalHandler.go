@@ -11,7 +11,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
+	"github.com/bitcoin-sv/ubsv/services/blockpersister/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -111,7 +111,10 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	g.SetLimit(concurrency)
 
 	// Create a new UTXO diff
-	utxoDiff := utxo_model.NewUTXODiff(u.logger, block.Header.Hash())
+	utxoDiff, err := utxo.NewUTXODiff(ctx, u.logger, u.blockStore, block.Header.Hash())
+	if err != nil {
+		return errors.NewProcessingError("error creating utxo diff", err)
+	}
 
 	// Add coinbase utxos to the utxo diff
 	utxoDiff.ProcessTx(block.CoinbaseTx)
@@ -127,11 +130,16 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		})
 	}
 
+	u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
+
 	if err = g.Wait(); err != nil {
 		return errors.NewProcessingError("error processing subtrees", err)
 	}
 
-	utxoDiff.Trim()
+	// At this point, we have a complete UTXODiff for this block.
+	if err = utxoDiff.Close(); err != nil {
+		return errors.NewStorageError("error closing utxo diff", err)
+	}
 
 	// Now, write the block file
 	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())
@@ -171,47 +179,16 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return errors.NewStorageError("[BlockPersister] error persisting block", err)
 	}
 
-	u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
-
-	// At this point, we have a complete UTXODiff for this block.
-	if err = utxoDiff.Persist(ctx, u.blockStore); err != nil {
-		return errors.NewStorageError("error persisting utxo diff", err)
-	}
-
 	if gocore.Config().GetBool("blockPersister_processUTXOSets", false) {
 		u.logger.Infof("[BlockPersister] Processing UTXOSet for block %s", block.Header.Hash().String())
 
-		// Now we need to apply this UTXODiff to the UTXOSet for the previous block
-		previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
-		if !found {
-			// Load the UTXOSet from disk
-			previousUTXOSet, err = utxo_model.LoadUTXOSet(u.blockStore, *block.Header.HashPrevBlock)
-			if err != nil {
-				return errors.NewStorageError("LoadUTXOSet %s", *block.Header.HashPrevBlock, err)
-			}
-		}
+		// 1. Load the deletions file for this block in to a set
+		// 2. Open the previous UTXOSet for the previous block
+		// 3. Open a new UTXOSet for this block
+		// 4. Stream each record and write to new UTXOSet if not in the deletions set
+		// 5. Open the additions file for this block and stream each record to the new UTXOSet if not in the deletions set
+		// 6. Close the new UTXOSet and write to disk
 
-		// Create a new UTXOSet for this block from the previous UTXOSet
-		utxoSet := utxo_model.NewUTXOSetFromPrevious(block.Header.Hash(), previousUTXOSet)
-
-		// Remove all spent UTXOs
-		utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-			utxoSet.Delete(uk)
-			return
-		})
-
-		// Add all new UTXOs
-		utxoDiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-			utxoSet.Add(uk, uv)
-
-			return
-		})
-
-		if err = utxoSet.Persist(ctx, u.blockStore); err != nil {
-			return errors.NewStorageError("error persisting utxo set", err)
-		}
-
-		utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)
 	}
 
 	return nil
