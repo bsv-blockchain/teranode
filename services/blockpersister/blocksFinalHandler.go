@@ -184,7 +184,12 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	if gocore.Config().GetBool("blockPersister_processUTXOSets", false) {
 		u.logger.Infof("[BlockPersister] Processing UTXOSet for block %s", block.Header.Hash().String())
 
-		if err := utxoDiff.CreateUTXOSet(ctx, block.Header.HashPrevBlock); err != nil {
+		pBlock := block.Header.HashPrevBlock
+		if pBlock.String() == "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f" {
+			// Genesis block
+			pBlock = nil
+		}
+		if err := utxoDiff.CreateUTXOSet(ctx, pBlock); err != nil {
 			u.logger.Errorf("[BlockPersister] Error processing UTXOSet for block %s: %v", block.Header.Hash().String(), err)
 		}
 	}

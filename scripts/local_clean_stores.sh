@@ -16,7 +16,7 @@ redis-cli FLUSHALL
 asinfo -h localhost -v "truncate-namespace:namespace=ubsv-store"
 asinfo -h localhost -v "truncate-namespace:namespace=test"
 
-docker exec kafka-kafka-1 /bin/bash -c '
+docker exec scripts-kafka-1 /bin/bash -c '
 TOPICS=$(/opt/bitnami/kafka/bin/kafka-topics.sh --list --bootstrap-server localhost:9092)
 for topic in $TOPICS; do
   echo "Deleting topic $topic"
