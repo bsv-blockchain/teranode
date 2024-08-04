@@ -3,6 +3,7 @@ package utxo
 import (
 	"context"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -19,6 +20,7 @@ import (
 const (
 	additionsExtension = "utxo-additions"
 	deletionsExtension = "utxo-deletions"
+	utxosetExtension   = "utxo-set"
 )
 
 // UTXODiff is a map of UTXOs.
@@ -39,6 +41,8 @@ func NewUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, b
 	additionsReader, additionsWriter := io.Pipe()
 
 	go func() {
+		defer additionsReader.Close()
+
 		if err := store.SetFromReader(ctx, blockHash[:], additionsReader, options.WithFileExtension(additionsExtension), options.WithTTL(24*time.Hour)); err != nil {
 			logger.Errorf("%s", errors.NewStorageError("[BlockPersister] error setting additions reader", err))
 		}
@@ -47,6 +51,8 @@ func NewUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, b
 	deletionsReader, deletionsWriter := io.Pipe()
 
 	go func() {
+		defer deletionsReader.Close()
+
 		if err := store.SetFromReader(ctx, blockHash[:], deletionsReader, options.WithFileExtension(deletionsExtension), options.WithTTL(24*time.Hour)); err != nil {
 			logger.Errorf("%s", errors.NewStorageError("[BlockPersister] error setting deletions reader", err))
 		}
@@ -206,4 +212,115 @@ func (ud *UTXODiff) GetUTXODeletionsSet() (map[[36]byte]struct{}, error) {
 	}
 
 	return m, nil
+}
+
+func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainhash.Hash) (err error) {
+	// Load the deletions file for this block in to a set
+	deletions, err := ud.GetUTXODeletionsSet()
+	if err != nil {
+		return errors.NewStorageError("error getting utxo-deletions set", err)
+	}
+
+	reader, writer := io.Pipe()
+
+	// Use a channel to communicate errors from the goroutine
+	errChan := make(chan error, 1)
+
+	// Use WaitGroup to ensure the goroutine finishes before returning
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer reader.Close()
+		defer wg.Done()
+
+		if err := ud.store.SetFromReader(ctx, ud.blockHash[:], reader, options.WithFileExtension(utxosetExtension), options.WithTTL(24*time.Hour)); err != nil {
+			// Send the error to the channel
+			errChan <- errors.NewStorageError("[BlockPersister] error setting utxo-set reader", err)
+		}
+		close(errChan) // Close the channel when done
+	}()
+
+	if previousBlockHash != nil {
+		// Open the previous UTXOSet for the previous block
+		previousUTXOSetReader, err := ud.store.GetIoReader(ctx, previousBlockHash[:], options.WithFileExtension(utxosetExtension))
+		if err != nil {
+			return errors.NewStorageError("error getting utxoset reader for previous block %s", previousBlockHash, err)
+		}
+		defer previousUTXOSetReader.Close()
+
+		for {
+			// Read the next 36 bytes...
+			utxo, err := NewUTXOFromReader(previousUTXOSetReader)
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return errors.NewStorageError("error reading utxo-set", err)
+			}
+
+			// Stream each record and write to new UTXOSet if not in the deletions set
+			if _, deleted := deletions[utxo.DeletionBytes()]; !deleted {
+				_, err := writer.Write(utxo.Bytes())
+				if err != nil {
+					return errors.NewStorageError("error writing utxo", err)
+				}
+			}
+		}
+	}
+
+	// Open the additions file for this block and stream each record to the new UTXOSet if not in the deletions set
+	additionsReader, err := ud.GetUTXOAdditionsReader()
+	if err != nil {
+		return errors.NewStorageError("error getting utxo-additions reader", err)
+	}
+
+	defer additionsReader.Close()
+
+	for {
+		// Read the next 36 bytes...
+		utxo, err := NewUTXOFromReader(additionsReader)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return errors.NewStorageError("error reading utxo-additions", err)
+		}
+
+		// Stream each record and write to new UTXOSet if not in the deletions set
+		if _, deleted := deletions[utxo.DeletionBytes()]; !deleted {
+			_, err := writer.Write(utxo.Bytes())
+			if err != nil {
+				return errors.NewStorageError("error writing utxo", err)
+			}
+		}
+	}
+
+	err = writer.Close()
+	if err != nil {
+		return errors.NewStorageError("error closing utxoset writer", err)
+	}
+
+	// Wait for the goroutine to finish
+	wg.Wait()
+
+	// Check if the goroutine returned an error
+	if goroutineErr := <-errChan; goroutineErr != nil {
+		return goroutineErr
+	}
+
+	if err := ud.store.SetTTL(ctx, ud.blockHash[:], 0, options.WithFileExtension(utxosetExtension)); err != nil {
+		return errors.NewStorageError("error setting ttl on utxoset file", err)
+	}
+
+	return nil
+}
+
+func (ud *UTXODiff) GetUTXOSetReader(optionalBlockHash ...chainhash.Hash) (io.ReadCloser, error) {
+	blockHash := ud.blockHash
+	if len(optionalBlockHash) > 0 {
+		blockHash = optionalBlockHash[0]
+	}
+
+	return ud.store.GetIoReader(ud.ctx, blockHash[:], options.WithFileExtension(utxosetExtension))
 }

@@ -59,7 +59,9 @@ func TestNewUTXODiff(t *testing.T) {
 
 	defer r.Close()
 
-	for i := uint32(0); i < 5; i++ {
+	var i uint32
+
+	for {
 		// Read the txID
 		utxo, err := NewUTXOFromReader(r)
 		if err == io.EOF {
@@ -72,58 +74,9 @@ func TestNewUTXODiff(t *testing.T) {
 		assert.Equal(t, uint64(1000+i), utxo.Value)
 		assert.Equal(t, uint32(10+i), utxo.SpendingHeight)
 		assert.Equal(t, script, utxo.Script)
+
+		i++
 	}
+
+	assert.Equal(t, uint32(5), i)
 }
-
-// func TestNewUTXODiffFromReaderWithProcessTx(t *testing.T) {
-// 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
-
-// 	var err error
-
-// 	tx := bt.NewTx()
-
-// 	numberOfInputs := 0
-
-// 	for i := 0; i < numberOfInputs; i++ {
-// 		err := tx.From(hash.String(), uint32(i), "0011", 1024)
-// 		require.NoError(t, err)
-// 	}
-
-// 	numberOfOutputs := 60
-
-// 	for i := 0; i < numberOfOutputs; i++ {
-// 		err = tx.PayToAddress("1MM6xtKRdUAHQ4hZkqwVGf8wnDuYu1dHPA", 100)
-// 		require.NoError(t, err)
-// 	}
-
-// 	err = tx.AddOpReturnOutput([]byte("hello world"))
-// 	require.NoError(t, err)
-
-// 	// Create a new UTXODiff
-// 	ud1 := NewUTXODiff(ulogger.TestLogger{}, &hash)
-
-// 	ud1.ProcessTx(tx)
-
-// 	assert.Equal(t, numberOfInputs, ud1.Removed.Length())
-// 	assert.Equal(t, numberOfOutputs, ud1.Added.Length())
-
-// 	buf := new(bytes.Buffer)
-// 	w := bufio.NewWriter(buf)
-
-// 	err = ud1.Write(w)
-// 	require.NoError(t, err)
-
-// 	// Flush the buffer
-// 	err = w.Flush()
-// 	require.NoError(t, err)
-
-// 	// Read the UTXOMap from the buffer
-// 	r := bufio.NewReader(buf)
-// 	ud2, err := NewUTXODiffFromReader(ulogger.TestLogger{}, r)
-// 	require.NoError(t, err)
-
-// 	// Check the UTXOMap is the same
-// 	assert.Equal(t, ud1.BlockHash, ud2.BlockHash)
-// 	assert.Equal(t, ud1.Added.Length(), ud2.Added.Length())
-// 	assert.Equal(t, ud1.Removed.Length(), ud2.Removed.Length())
-// }

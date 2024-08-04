@@ -184,13 +184,6 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	if gocore.Config().GetBool("blockPersister_processUTXOSets", false) {
 		u.logger.Infof("[BlockPersister] Processing UTXOSet for block %s", block.Header.Hash().String())
 
-		// 1. Load the deletions file for this block in to a set
-		// 2. Open the previous UTXOSet for the previous block
-		// 3. Open a new UTXOSet for this block
-		// 4. Stream each record and write to new UTXOSet if not in the deletions set
-		// 5. Open the additions file for this block and stream each record to the new UTXOSet if not in the deletions set
-		// 6. Close the new UTXOSet and write to disk
-
 	}
 
 	return nil

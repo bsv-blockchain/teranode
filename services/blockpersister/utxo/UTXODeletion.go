@@ -16,7 +16,7 @@ type UTXODeletion struct {
 4 bytes - index
 */
 
-func NewUTXODeletionFromReader(r io.Reader) (*UTXO, error) {
+func NewUTXODeletionFromReader(r io.Reader) (*UTXODeletion, error) {
 	// Read all the fixed size fields
 	b := make([]byte, 32+4)
 
@@ -34,7 +34,7 @@ func NewUTXODeletionFromReader(r io.Reader) (*UTXO, error) {
 		return nil, err
 	}
 
-	u := &UTXO{
+	u := &UTXODeletion{
 		TxID:  txID,
 		Index: uint32(b[32]) | uint32(b[33])<<8 | uint32(b[34])<<16 | uint32(b[35])<<24,
 	}

@@ -1,6 +1,7 @@
 package utxo
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -25,14 +26,14 @@ type UTXO struct {
 
 func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 	// Read all the fixed size fields
-	b := make([]byte, 32+4+8+4+4)
+	b := make([]byte, 52)
 
 	n, err := io.ReadFull(r, b)
 	if err != nil {
 		return nil, err
 	}
 
-	if n != 32+4+8+4+4 {
+	if n != 52 {
 		return nil, io.ErrUnexpectedEOF
 	}
 
@@ -80,4 +81,20 @@ func (u *UTXO) Bytes() []byte {
 	b = append(b, u.Script...)
 
 	return b
+}
+
+func (u *UTXO) DeletionBytes() [36]byte {
+	var b [36]byte
+
+	copy(b[:], u.TxID[:])
+	b[32] = byte(u.Index)
+	b[33] = byte(u.Index >> 8)
+	b[34] = byte(u.Index >> 16)
+	b[35] = byte(u.Index >> 24)
+
+	return b
+}
+
+func (u *UTXO) String() string {
+	return fmt.Sprintf("%s:%d - %d (%d) - %x", u.TxID.String(), u.Index, u.Value, u.SpendingHeight, u.Script)
 }
