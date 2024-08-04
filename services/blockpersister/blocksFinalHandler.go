@@ -184,6 +184,9 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	if gocore.Config().GetBool("blockPersister_processUTXOSets", false) {
 		u.logger.Infof("[BlockPersister] Processing UTXOSet for block %s", block.Header.Hash().String())
 
+		if err := utxoDiff.CreateUTXOSet(ctx, block.Header.HashPrevBlock); err != nil {
+			u.logger.Errorf("[BlockPersister] Error processing UTXOSet for block %s: %v", block.Header.Hash().String(), err)
+		}
 	}
 
 	return nil
