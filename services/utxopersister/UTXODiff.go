@@ -179,11 +179,11 @@ func (ud *UTXODiff) Close() error {
 	}
 
 	if err := ud.waitUntilFileIsAvailable(additionsExtension); err != nil {
-		return err
+		ud.logger.Warnf("Error waiting for additions file to be available: %v", err)
 	}
 
 	if err := ud.waitUntilFileIsAvailable(deletionsExtension); err != nil {
-		return err
+		ud.logger.Warnf("Error waiting for deletions file to be available: %v", err)
 	}
 
 	ud.logger.Infof("[BlockPersister] Persisting utxo additions and deletions for block %s - DONE", ud.blockHash.String())
@@ -348,7 +348,7 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 	wg.Wait()
 
 	if err = ud.waitUntilFileIsAvailable(utxosetExtension); err != nil {
-		return err
+		ud.logger.Warnf("Error waiting for utxo-set file to be available: %v", err)
 	}
 
 	// Check if the goroutine returned an error
@@ -373,8 +373,8 @@ func (ud *UTXODiff) GetUTXOSetReader(optionalBlockHash ...chainhash.Hash) (io.Re
 }
 
 func (ud *UTXODiff) waitUntilFileIsAvailable(extension string) error {
-	maxRetries := 3
-	retryInterval := 10 * time.Millisecond
+	maxRetries := 10
+	retryInterval := 100 * time.Millisecond
 
 	for i := 0; i < maxRetries; i++ {
 		exists, err := ud.store.Exists(ud.ctx, ud.blockHash[:], options.WithFileExtension(extension))

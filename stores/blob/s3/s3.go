@@ -116,7 +116,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 
 	objectKey := g.getObjectKey(key, o)
 
-	g.logger.Warnf("[S3][%s] Setting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
+	// g.logger.Warnf("[S3][%s] Setting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(g.bucket),
