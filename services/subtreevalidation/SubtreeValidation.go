@@ -144,6 +144,7 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, txHashes []utx
 			if errors.Is(err, io.EOF) {
 				break
 			}
+			// Not recoverable, returning processing error
 			return nil, errors.NewProcessingError("[getMissingTransactionsBatch] failed to read transaction from body", err)
 		}
 
@@ -212,6 +213,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 		return nil, errors.NewServiceError("[blessMissingTransaction][%s] failed to get tx meta", tx.TxID(), err)
 	}
 
+	// Not recoverable, returning processing error
 	if txMeta == nil {
 		return nil, errors.NewProcessingError("[blessMissingTransaction][%s] tx meta is nil", tx.TxID())
 	}
@@ -279,7 +281,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	height := math.Ceil(math.Log2(float64(len(txHashes))))
 	subtree, err := util.NewTree(int(height))
 	if err != nil {
-		return errors.New(errors.ERR_PROCESSING, "failed to create new subtree", err)
+		return errors.NewProcessingError("failed to create new subtree", err)
 	}
 
 	subtreeMeta := util.NewSubtreeMeta(subtree)
@@ -341,6 +343,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		}
 
 		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
+			// Not recoverable, returning processing error
 			return errors.NewProcessingError("[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
 		}
 
@@ -403,8 +406,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		}
 
 		if txMeta.IsCoinbase {
-			// TODO (GOKHAN): Should we handle this in error handling for kafka?
-			// YES
+			// Not recoverable, returning TxInvalid error
 			return errors.NewTxInvalidError("[validateSubtreeInternal][%s] invalid subtree index for coinbase tx %d", v.SubtreeHash.String(), idx, err)
 		}
 
@@ -426,10 +428,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// does the merkle tree give the correct root?
 	merkleRoot := subtree.RootHash()
 	if !merkleRoot.IsEqual(&v.SubtreeHash) {
-		// TODO (GOKHAN): This should not be considered as recoverable. This is a critical error.
-		// ERR_SUBTREE_INVALID is not recoverable. So if this happens, kafka message should be marked as committed.
 		return errors.NewSubtreeInvalidError("subtree root hash does not match", err)
-		// return errors.NewProcessingError("[validateSubtreeInternal][%s] subtree root hash does not match [%s]", v.SubtreeHash.String(), merkleRoot.String())
 	}
 
 	//
@@ -508,6 +507,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 			if err == io.EOF {
 				break
 			}
+			// Not recoverable, returning processing error
 			if errors.Is(err, io.ErrUnexpectedEOF) {
 				return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] unexpected EOF: partial hash read", subtreeHash.String())
 			}
@@ -608,7 +608,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 
 	subtree := &util.Subtree{}
 	if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
-		return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] failed to deserialize subtree", err)
+		return nil, err
 	}
 
 	// get the subtreeData
@@ -624,7 +624,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 
 	subtreeData, err := util.NewSubtreeDataFromReader(subtree, subtreeDataReader)
 	if err != nil {
-		return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] failed to get subtreeData from reader", err)
+		return nil, err
 	}
 
 	subtreeLookupMap := subtree.GetMap()

@@ -52,7 +52,7 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) error {
 		gotLock, _, releaseLockFunc, err := tryLockIfNotExists(ctx, u.logger, u.subtreeStore, hash)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
-			return errors.New(errors.ERR_PROCESSING, "error getting lock for Subtree %s", hash.String(), err)
+			return errors.NewProcessingError("error getting lock for Subtree %s", hash.String(), err)
 		}
 		defer releaseLockFunc()
 
