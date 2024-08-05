@@ -97,8 +97,8 @@ func (g *S3) Close(_ context.Context) error {
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Close").AddTime(start)
 	}()
-	// traceSpan := tracing.Start(context.Background(), "s3:Close")
-	// defer traceSpan.Finish()
+	traceSpan := tracing.Start(context.Background(), "s3:Close")
+	defer traceSpan.Finish()
 
 	return nil
 }
@@ -109,14 +109,14 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 		_ = reader.Close()
 		gocore.NewStat("prop_store_s3", true).NewStat("SetFromReader").AddTime(start)
 	}()
-	// traceSpan := tracing.Start(ctx, "s3:SetFromReader")
-	// defer traceSpan.Finish()
+	traceSpan := tracing.Start(ctx, "s3:SetFromReader")
+	defer traceSpan.Finish()
 
 	o := options.NewSetOptions(g.options, opts...)
 
 	objectKey := g.getObjectKey(key, o)
 
-	// g.logger.Warnf("[S3][%s] Setting object reader from S3: %s:%s", g.bucket, utils.ReverseAndHexEncodeSlice(key), *objectKey)
+	g.logger.Warnf("[S3][%s] Setting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(g.bucket),
@@ -129,10 +129,10 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 		uploadInput.Expires = &expires
 	}
 
-	_, err := g.uploader.Upload(context.Background(), uploadInput)
+	_, err := g.uploader.Upload(traceSpan.Ctx, uploadInput)
 	if err != nil {
-		// traceSpan.RecordError(err)
-		return errors.NewStorageError("failed to set data from reader [%s:%s]", g.bucket, *objectKey, err)
+		traceSpan.RecordError(err)
+		return errors.NewStorageError("failed to set data from reader", err)
 	}
 
 	return nil
@@ -143,8 +143,8 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Set").AddTime(start)
 	}()
-	// traceSpan := tracing.Start(ctx, "s3:Set")
-	// defer traceSpan.Finish()
+	traceSpan := tracing.Start(ctx, "s3:Set")
+	defer traceSpan.Finish()
 
 	o := options.NewSetOptions(g.options, opts...)
 
@@ -164,9 +164,9 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 		uploadInput.Expires = &expires
 	}
 
-	_, err := g.uploader.Upload(context.Background(), uploadInput)
+	_, err := g.uploader.Upload(traceSpan.Ctx, uploadInput)
 	if err != nil {
-		// traceSpan.RecordError(err)
+		traceSpan.RecordError(err)
 		return errors.NewStorageError("failed to set data", err)
 	}
 
@@ -180,8 +180,8 @@ func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("SetTTL").AddTime(start)
 	}()
-	// traceSpan := tracing.Start(ctx, "s3:SetTTL")
-	// defer traceSpan.Finish()
+	traceSpan := tracing.Start(ctx, "s3:SetTTL")
+	defer traceSpan.Finish()
 
 	// TODO implement
 	return nil
@@ -192,8 +192,8 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetIoReader").AddTime(start)
 	}()
-	// traceSpan := tracing.Start(ctx, "s3:Get")
-	// defer traceSpan.Finish()
+	traceSpan := tracing.Start(ctx, "s3:Get")
+	defer traceSpan.Finish()
 
 	o := options.NewSetOptions(g.options, opts...)
 
@@ -202,7 +202,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
 	g.logger.Warnf("[S3][%s] Getting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
-	result, err := g.client.GetObject(context.Background(), &s3.GetObjectInput{
+	result, err := g.client.GetObject(traceSpan.Ctx, &s3.GetObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
@@ -222,8 +222,8 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
 		g.logger.Warnf("[S3][%s] Getting object from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
 	}()
-	// traceSpan := tracing.Start(ctx, "s3:Get")
-	// defer traceSpan.Finish()
+	traceSpan := tracing.Start(ctx, "s3:Get")
+	defer traceSpan.Finish()
 
 	o := options.NewSetOptions(g.options, opts...)
 
@@ -240,7 +240,7 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 	}
 
 	buf := manager.NewWriteAtBuffer([]byte{})
-	_, err := g.downloader.Download(context.Background(), buf,
+	_, err := g.downloader.Download(traceSpan.Ctx, buf,
 		&s3.GetObjectInput{
 			Bucket: aws.String(g.bucket),
 			Key:    objectKey,
@@ -249,7 +249,7 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, errors.ErrNotFound
 		}
-		// traceSpan.RecordError(err)
+		traceSpan.RecordError(err)
 		return nil, errors.NewStorageError("failed to get data", err)
 	}
 
@@ -262,8 +262,8 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 		gocore.NewStat("prop_store_s3", true).NewStat("GetHead").AddTime(start)
 		g.logger.Warnf("[S3][%s] Getting object head from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
 	}()
-	// traceSpan := tracing.Start(ctx, "s3:GetHead")
-	// defer traceSpan.Finish()
+	traceSpan := tracing.Start(ctx, "s3:GetHead")
+	defer traceSpan.Finish()
 
 	o := options.NewSetOptions(g.options, opts...)
 
@@ -285,7 +285,7 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 	}
 
 	buf := manager.NewWriteAtBuffer([]byte{})
-	_, err := g.downloader.Download(context.Background(), buf,
+	_, err := g.downloader.Download(traceSpan.Ctx, buf,
 		&s3.GetObjectInput{
 			Bucket: aws.String(g.bucket),
 			Key:    objectKey,
@@ -295,7 +295,7 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, errors.ErrNotFound
 		}
-		// traceSpan.RecordError(err)
+		traceSpan.RecordError(err)
 		return nil, errors.NewStorageError("failed to get data head", err)
 	}
 
@@ -320,7 +320,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (b
 		return true, nil
 	}
 
-	_, err := g.client.HeadObject(context.Background(), &s3.HeadObjectInput{
+	_, err := g.client.HeadObject(traceSpan.Ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
@@ -336,7 +336,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (b
 			return false, nil
 		}
 
-		// traceSpan.RecordError(err)
+		traceSpan.RecordError(err)
 		return false, errors.NewStorageError("failed to check whether object exists", err)
 	}
 
@@ -357,17 +357,17 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 
 	cache.Delete(*objectKey)
 
-	_, err := g.client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
+	_, err := g.client.DeleteObject(traceSpan.Ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
 	})
 	if err != nil {
-		// traceSpan.RecordError(err)
+		traceSpan.RecordError(err)
 		return errors.NewStorageError("unable to del data", err)
 	}
 
 	// do we need to wait until we can be sure that the object is deleted?
-	// err = g.client.WaitUntilObjectNotExists(context.Background(), &s3.HeadObjectInput{
+	// err = g.client.WaitUntilObjectNotExists(traceSpan.Ctx, &s3.HeadObjectInput{
 	// 	Bucket: aws.String(g.bucket),
 	// 	Key:    objectKey,
 	// })
