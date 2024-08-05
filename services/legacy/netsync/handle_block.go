@@ -27,11 +27,11 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	if block.Height() <= 0 {
 		// Lookup block height from blockchain
-		_, blockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
+		_, previousBlockHeaderMeta, err := sm.blockchainClient.GetBlockHeader(ctx, &block.MsgBlock().Header.PrevBlock)
 		if err != nil {
-			return errors.NewProcessingError("failed to get block header", err)
+			return errors.NewProcessingError("failed to get block header for previous block %s", block.MsgBlock().Header.PrevBlock, err)
 		}
-		blockHeight = blockHeaderMeta.Height
+		blockHeight = previousBlockHeaderMeta.Height + 1
 		block.SetHeight(int32(blockHeight))
 	} else {
 		blockHeight = uint32(block.Height())
