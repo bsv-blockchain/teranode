@@ -200,7 +200,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	objectKey := g.getObjectKey(key, o)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
-	g.logger.Warnf("[S3][%s] Getting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
+	// g.logger.Warnf("[S3][%s] Getting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	result, err := g.client.GetObject(traceSpan.Ctx, &s3.GetObjectInput{
 		Bucket: aws.String(g.bucket),
@@ -220,7 +220,7 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
-		g.logger.Warnf("[S3][%s] Getting object from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
+		// g.logger.Warnf("[S3][%s] Getting object from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
 	}()
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
@@ -230,7 +230,7 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 	objectKey := g.getObjectKey(key, o)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
-	g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
+	// g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	// check cache
 	cached, ok := cache.Get(*objectKey)
@@ -260,7 +260,7 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetHead").AddTime(start)
-		g.logger.Warnf("[S3][%s] Getting object head from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
+		// g.logger.Warnf("[S3][%s] Getting object head from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
 	}()
 	traceSpan := tracing.Start(ctx, "s3:GetHead")
 	defer traceSpan.Finish()
@@ -270,7 +270,7 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 	objectKey := g.getObjectKey(key, o)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
-	g.logger.Warnf("[S3][%s] Getting object head from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
+	// g.logger.Warnf("[S3][%s] Getting object head from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	// check cache
 	cached, ok := cache.Get(*objectKey)
