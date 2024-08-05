@@ -59,7 +59,7 @@ func NewUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, b
 	}()
 
 	return &UTXODiff{
-		ctx:             context.Background(), // TODO - ctx
+		ctx:             ctx,
 		logger:          logger,
 		blockHash:       *blockHash,
 		additionsWriter: additionsWriter,

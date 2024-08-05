@@ -37,10 +37,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 	}()
 
 	if msg.Message != nil {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		ctx, _, deferFn := tracing.StartTracing(ctx, "blocksFinalHandler",
+		ctx, _, deferFn := tracing.StartTracing(u.ctx, "blocksFinalHandler",
 			tracing.WithHistogram(prometheusBlockPersisterValidateSubtreeHandler),
 			tracing.WithLogMessage(u.logger, "[blocksFinalHandler] called for block %s", utils.ReverseAndHexEncodeSlice(msg.Message.Key)),
 		)
@@ -107,9 +104,6 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	concurrency, _ := gocore.Config().GetInt("blockpersister_concurrency", 8)
 	u.logger.Infof("[BlockPersister] Processing subtrees with concurrency %d", concurrency)
 
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(concurrency)
-
 	// Create a new UTXO diff
 	utxoDiff, err := utxopersister.NewUTXODiff(ctx, u.logger, u.blockStore, block.Header.Hash())
 	if err != nil {
@@ -120,6 +114,9 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
 		return errors.NewProcessingError("error processing coinbase tx", err)
 	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(concurrency)
 
 	for i, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash

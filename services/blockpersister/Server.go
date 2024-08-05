@@ -14,6 +14,7 @@ import (
 
 // Server type carries the logger within it
 type Server struct {
+	ctx          context.Context
 	logger       ulogger.Logger
 	blockStore   blob.Store
 	subtreeStore blob.Store
@@ -30,6 +31,7 @@ func New(
 ) *Server {
 
 	u := &Server{
+		ctx:          ctx,
 		logger:       logger,
 		blockStore:   blockStore,
 		subtreeStore: subtreeStore,
