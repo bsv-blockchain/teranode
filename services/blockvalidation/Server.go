@@ -20,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -365,7 +366,7 @@ func (u *Server) httpServer(ctx context.Context, httpAddress string) error {
 		if err != nil {
 			return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
 		}
-		subtreeBytes, err := u.subtreeStore.Get(c.Request().Context(), hash[:])
+		subtreeBytes, err := u.subtreeStore.Get(c.Request().Context(), hash[:], options.WithFileExtension("subtree"))
 		if err != nil {
 			return c.String(http.StatusInternalServerError, fmt.Sprintf("failed to get subtree: %v", err))
 		}
@@ -910,7 +911,7 @@ func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtre
 		stat.AddTime(start)
 	}()
 
-	subtree, err := u.subtreeStore.Get(ctx, request.Hash)
+	subtree, err := u.subtreeStore.Get(ctx, request.Hash, options.WithFileExtension("subtree"))
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewStorageError("failed to get subtree: %s", utils.ReverseAndHexEncodeSlice(request.Hash), err))
 	}

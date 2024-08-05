@@ -9,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -106,7 +107,7 @@ func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, _ *m
 }
 
 func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, w *io.PipeWriter) error {
-	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
+	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
 	if err != nil {
 		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error getting subtree %s from store: %w", subtreeHash.String(), err)
 	}

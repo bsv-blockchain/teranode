@@ -128,6 +128,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					subtreeRetry.subtreeHash[:],
 					subtreeRetry.subtreeBytes,
 					options.WithTTL(ba.subtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
+					options.WithFileExtension("subtree"),
 				); err != nil {
 					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to retry store subtree: %s", subtreeRetry.subtreeHash.String(), err)
 
@@ -233,6 +234,7 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 		subtree.RootHash()[:],
 		subtreeBytes,
 		options.WithTTL(ba.subtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
+		options.WithFileExtension("subtree"),
 	); err != nil {
 		ba.logger.Errorf("[BlockAssembly:Init][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
 
@@ -727,7 +729,7 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 		subtreeHash := subtreeHash
 		g.Go(func() error {
 			// TODO this would be better as a batch operation
-			if err := ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0); err != nil {
+			if err := ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0, options.WithFileExtension("subtree")); err != nil {
 				// TODO should this retry? We are in a bad state when this happens
 				ba.logger.Errorf("[removeSubtreesTTL][%s][%s] failed to update subtree TTL: %v", block.Hash().String(), subtreeHash.String(), err)
 			}

@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxo_memory "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -146,7 +147,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = ctx.server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
+	err = ctx.server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 	require.NoError(t, err)
 
 	subtreeHashes := make([]*chainhash.Hash, 0)

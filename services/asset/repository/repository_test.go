@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -154,7 +155,7 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	value, err := subtree.Serialize()
 	require.NoError(t, err)
 
-	err = subtreeStore.Set(context.Background(), key.CloneBytes(), value)
+	err = subtreeStore.Set(context.Background(), key.CloneBytes(), value, options.WithFileExtension("subtree"))
 	require.NoError(t, err)
 
 	// Create a new repository

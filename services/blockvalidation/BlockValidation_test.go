@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -145,7 +146,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 	require.NoError(t, err)
 
 	subtreeHashes := make([]*chainhash.Hash, 0)
@@ -238,7 +239,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 	require.NoError(t, err)
 
 	// require.NoError(t, err)

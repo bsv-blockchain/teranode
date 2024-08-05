@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
@@ -832,7 +833,7 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
 		g.Go(func() error {
-			if err := u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0); err != nil {
+			if err := u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0, options.WithFileExtension("subtree")); err != nil {
 				return errors.NewStorageError("failed to update subtree TTL", err)
 			}
 			return nil

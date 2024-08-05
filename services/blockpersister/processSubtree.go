@@ -27,7 +27,7 @@ func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 	defer deferFn()
 
 	// 1. get the subtree from the subtree store
-	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes())
+	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
 	if err != nil {
 		return errors.NewStorageError("[BlockPersister] error getting subtree %s from store", subtreeHash.String(), err)
 	}

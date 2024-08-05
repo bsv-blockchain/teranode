@@ -3,10 +3,11 @@ package grpc_impl
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/tracing"
 	"net/url"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/tracing"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
@@ -411,7 +412,7 @@ func (g *GRPC) Get(ctx context.Context, request *asset_api.GetSubtreeRequest) (*
 		return nil, errors.WrapGRPC(errors.NewProcessingError("could not create chainhash from request hash: %s", utils.ReverseAndHexEncodeSlice(request.Hash)))
 	}
 
-	subtreeBytes, err := g.repository.SubtreeStore.Get(ctx, hash[:])
+	subtreeBytes, err := g.repository.SubtreeStore.Get(ctx, hash[:], options.WithFileExtension("subtree"))
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("could not get subtree: %s", hash.String(), err))
 	}
@@ -453,7 +454,7 @@ func (g *GRPC) Set(ctx context.Context, request *asset_api.SetSubtreeRequest) (*
 	defer deferFn()
 
 	ttl := time.Duration(request.Ttl) * time.Second
-	err := g.repository.SubtreeStore.Set(ctx, request.Hash, request.Subtree, options.WithTTL(ttl))
+	err := g.repository.SubtreeStore.Set(ctx, request.Hash, request.Subtree, options.WithTTL(ttl), options.WithFileExtension("subtree"))
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("could not set subtree", err))
 	}
@@ -470,7 +471,7 @@ func (g *GRPC) SetTTL(ctx context.Context, request *asset_api.SetSubtreeTTLReque
 	defer deferFn()
 
 	ttl := time.Duration(request.Ttl) * time.Second
-	err := g.repository.SubtreeStore.SetTTL(ctx, request.Hash, ttl)
+	err := g.repository.SubtreeStore.SetTTL(ctx, request.Hash, ttl, options.WithFileExtension("subtree"))
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("could not set subtree TTL: %s", utils.ReverseAndHexEncodeSlice(request.Hash), err))
 	}

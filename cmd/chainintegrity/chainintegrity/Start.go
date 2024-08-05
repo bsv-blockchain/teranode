@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
@@ -206,7 +207,7 @@ func Start() {
 			for _, subtreeHash := range block.Subtrees {
 				logger.Debugf("checking subtree %s", subtreeHash)
 
-				subtreeBytes, err = subtreeStore.Get(ctx, subtreeHash[:])
+				subtreeBytes, err = subtreeStore.Get(ctx, subtreeHash[:], options.WithFileExtension("subtree"))
 				if err != nil {
 					logger.Errorf("failed to get subtree %s for block %s: %s", subtreeHash, block, err)
 					logger.Debugf("block dump: %s", block.Header.StringDump())

@@ -176,7 +176,7 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	// Create the subtree in the subtree store
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
+	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 	require.NoError(t, err)
 
 	// go get me a legacy block from the subtree-store and utxo-store

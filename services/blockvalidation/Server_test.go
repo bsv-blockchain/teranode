@@ -3,14 +3,16 @@ package blockvalidation
 import (
 	"context"
 	"encoding/hex"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/jarcoal/httpmock"
-	"github.com/ordishs/gocore"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/jarcoal/httpmock"
+	"github.com/ordishs/gocore"
+
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
@@ -73,7 +75,7 @@ func TestOneTransaction(t *testing.T) {
 	subtreeStore := memory.New()
 
 	subtreeBytes, _ := subtrees[0].Serialize()
-	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes)
+	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 
 	// loads the subtrees into the block
 	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
@@ -132,7 +134,7 @@ func TestTwoTransactions(t *testing.T) {
 	subtreeStore := memory.New()
 
 	subtreeBytes, _ := subtrees[0].Serialize()
-	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes)
+	_ = subtreeStore.Set(ctx, subtrees[0].RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 
 	// loads the subtrees into the block
 	err = block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore)
@@ -197,7 +199,7 @@ func TestMerkleRoot(t *testing.T) {
 		subtreeHashes[i], _ = chainhash.NewHash(rootHash[:])
 
 		subtreeBytes, _ := subTree.Serialize()
-		_ = subtreeStore.Set(ctx, rootHash[:], subtreeBytes)
+		_ = subtreeStore.Set(ctx, rootHash[:], subtreeBytes, options.WithFileExtension("subtree"))
 	}
 
 	block := &model.Block{

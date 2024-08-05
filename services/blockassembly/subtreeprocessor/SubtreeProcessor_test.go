@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -862,13 +863,13 @@ func TestSubtreeProcessor_moveDownBlock(t *testing.T) {
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes)
+		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 		require.NoError(t, err)
 
 		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes)
+		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 		require.NoError(t, err)
 
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx, 0)
@@ -969,19 +970,19 @@ func TestMoveDownBlocks(t *testing.T) {
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes)
+		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 		require.NoError(t, err)
 
 		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes)
+		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 		require.NoError(t, err)
 
 		subtree3 := createSubtree(t, 4, true)
 		subtreeBytes, err = subtree3.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeBytes)
+		err = subtreeStore.Set(context.Background(), subtree3.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 		require.NoError(t, err)
 
 		_, _ = utxosStore.Create(context.Background(), coinbaseTx, 0)
@@ -1066,13 +1067,13 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 		subtree1 := createSubtree(t, 4, true)
 		subtreeBytes, err := subtree1.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes)
+		err = subtreeStore.Set(context.Background(), subtree1.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 		require.NoError(t, err)
 
 		subtree2 := createSubtree(t, 4, false)
 		subtreeBytes, err = subtree2.Serialize()
 		require.NoError(t, err)
-		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes)
+		err = subtreeStore.Set(context.Background(), subtree2.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 		require.NoError(t, err)
 
 		block := &model.Block{
@@ -1124,7 +1125,7 @@ func TestSubtreeProcessor_createTransactionMap(t *testing.T) {
 			subtree := createSubtree(t, subtreeSize, i == 0)
 			subtreeBytes, err := subtree.Serialize()
 			require.NoError(t, err)
-			err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes)
+			err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 			require.NoError(t, err)
 			block.Subtrees = append(block.Subtrees, subtree.RootHash())
 			subtrees[i] = subtree

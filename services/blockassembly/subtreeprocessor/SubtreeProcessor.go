@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -553,7 +554,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 		idx := idx
 		subtreeHash := subtreeHash
 		g.Go(func() error {
-			subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+			subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
 			if err != nil {
 				return errors.NewServiceError("[moveDownBlock][%s] error getting subtree %s", block.String(), subtreeHash.String(), err)
 			}
@@ -672,7 +673,7 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 			idx := idx
 			subtreeHash := subtreeHash
 			g.Go(func() error {
-				subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+				subtreeReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
 				if err != nil {
 					return errors.NewServiceError("[moveDownBlocks][%s], block %d (block hash: %v), error getting subtree %s", block.String(), i, block.Hash(), subtreeHash.String(), err)
 				}
@@ -1106,7 +1107,7 @@ func (stp *SubtreeProcessor) createTransactionMap(ctx context.Context, blockSubt
 		st := subtreeHash
 		g.Go(func() error {
 			stp.logger.Debugf("getting subtree: %s", st.String())
-			subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, st[:])
+			subtreeReader, err := stp.subtreeStore.GetIoReader(ctx, st[:], options.WithFileExtension("subtree"))
 			if err != nil {
 				return errors.NewServiceError("error getting subtree: %s", st.String(), err)
 			}

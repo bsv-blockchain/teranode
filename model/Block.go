@@ -928,10 +928,10 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 				// probably when being moved to permanent storage in another service
 				subtree := &util.Subtree{}
 
-				subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+				subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
 				if err != nil {
 					subtreeReader, err = retry.Retry(gCtx, logger, func() (io.ReadCloser, error) {
-						return subtreeStore.GetIoReader(gCtx, subtreeHash[:])
+						return subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
 					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String())))
 
 					if err != nil {

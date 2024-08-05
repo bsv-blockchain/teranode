@@ -205,7 +205,7 @@ func (r *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, limi
 }
 
 func (r *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
-	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
+	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +223,7 @@ func (r *Repository) GetSubtreeDataReader(ctx context.Context, hash *chainhash.H
 
 func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {
 	r.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
-	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes())
+	subtreeBytes, err := r.SubtreeStore.Get(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 	if err != nil {
 		return nil, errors.NewServiceError("error in GetSubtree Get method", err)
 	}
@@ -239,7 +239,7 @@ func (r *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*uti
 // GetSubtreeHead returns the head of the subtree, which only includes the Fees and SizeInBytes
 func (r *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error) {
 	r.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
-	subtreeBytes, err := r.SubtreeStore.GetHead(ctx, hash.CloneBytes(), 56)
+	subtreeBytes, err := r.SubtreeStore.GetHead(ctx, hash.CloneBytes(), 56, options.WithFileExtension("subtree"))
 	if err != nil {
 		return nil, 0, errors.NewServiceError("error in GetSubtree GetHead method: %w", err)
 	}
