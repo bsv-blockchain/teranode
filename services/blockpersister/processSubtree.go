@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/services/blockpersister/utxo"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -19,7 +19,7 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxo.UTXODiff) error {
+func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXODiff) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessSubtree",
 		tracing.WithHistogram(prometheusBlockPersisterValidateSubtree),
 		tracing.WithLogMessage(u.logger, "[ProcessSubtree] called for subtree %s", subtreeHash.String()),
@@ -82,7 +82,7 @@ func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 	return u.blockStore.SetTTL(ctx, subtreeHash[:], 0, options.WithFileExtension("subtree"))
 }
 
-func WriteTxs(logger ulogger.Logger, writer *io.PipeWriter, txMetaSlice []*meta.Data, utxoDiff *utxo.UTXODiff) {
+func WriteTxs(logger ulogger.Logger, writer *io.PipeWriter, txMetaSlice []*meta.Data, utxoDiff *utxopersister.UTXODiff) {
 	bufferedWriter := bufio.NewWriter(writer)
 
 	defer func() {

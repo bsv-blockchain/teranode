@@ -11,7 +11,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blockpersister/utxo"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -111,7 +111,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	g.SetLimit(concurrency)
 
 	// Create a new UTXO diff
-	utxoDiff, err := utxo.NewUTXODiff(ctx, u.logger, u.blockStore, block.Header.Hash())
+	utxoDiff, err := utxopersister.NewUTXODiff(ctx, u.logger, u.blockStore, block.Header.Hash())
 	if err != nil {
 		return errors.NewProcessingError("error creating utxo diff", err)
 	}
@@ -179,19 +179,6 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	if err = u.blockStore.SetTTL(ctx, hash[:], 0, options.WithFileExtension("block")); err != nil {
 		return errors.NewStorageError("[BlockPersister] error persisting block", err)
-	}
-
-	if gocore.Config().GetBool("blockPersister_processUTXOSets", false) {
-		u.logger.Infof("[BlockPersister] Processing UTXOSet for block %s", block.Header.Hash().String())
-
-		pBlock := block.Header.HashPrevBlock
-		if pBlock.String() == "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f" {
-			// Genesis block
-			pBlock = nil
-		}
-		if err := utxoDiff.CreateUTXOSet(ctx, pBlock); err != nil {
-			u.logger.Errorf("[BlockPersister] Error processing UTXOSet for block %s: %v", block.Header.Hash().String(), err)
-		}
 	}
 
 	return nil
