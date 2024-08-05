@@ -51,7 +51,6 @@ func (e *Error) Is(target error) bool {
 
 	var ue *Error
 	if errors.As(target, &ue) {
-		//return e.Code == ue.Code
 		if e.Code == ue.Code {
 			return true
 		}
@@ -60,6 +59,9 @@ func (e *Error) Is(target error) bool {
 			return false
 		}
 	}
+
+	// process, storage, block not found, tx_missing
+	// errors.Is(storage, err) true
 
 	// Unwrap the current error and recursively call Is on the unwrapped error
 	if unwrapped := errors.Unwrap(e); unwrapped != nil {
@@ -127,7 +129,6 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			params = params[:len(params)-1]
 		} else if err, ok := lastParam.(error); ok {
 			wErr = &Error{Message: err.Error()}
-			//data = err.Data
 			params = params[:len(params)-1]
 		}
 	}

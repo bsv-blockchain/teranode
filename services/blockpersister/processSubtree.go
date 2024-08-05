@@ -79,7 +79,11 @@ func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 		return errors.NewStorageError("[BlockPersister] error persisting subtree", err)
 	}
 
-	return u.blockStore.SetTTL(ctx, subtreeHash[:], 0, options.WithFileExtension("subtree"))
+	if err = u.blockStore.SetTTL(ctx, subtreeHash[:], 0, options.WithFileExtension("subtree")); err != nil {
+		return errors.NewStorageError("[BlockPersister]error persisting subtree %s", subtreeHash.String(), err)
+	}
+
+	return nil
 }
 
 func WriteTxs(logger ulogger.Logger, writer *io.PipeWriter, txMetaSlice []*meta.Data, utxoDiff *utxopersister.UTXODiff) {
@@ -89,7 +93,7 @@ func WriteTxs(logger ulogger.Logger, writer *io.PipeWriter, txMetaSlice []*meta.
 		// Flush the buffer and close the writer with error handling
 		if err := bufferedWriter.Flush(); err != nil {
 			logger.Errorf("error flushing writer: %v", err)
-			writer.CloseWithError(err)
+			_ = writer.CloseWithError(err)
 			return
 		}
 
@@ -102,14 +106,14 @@ func WriteTxs(logger ulogger.Logger, writer *io.PipeWriter, txMetaSlice []*meta.
 	//      this makes it impossible to stream directly from S3 to the client
 	if err := binary.Write(bufferedWriter, binary.LittleEndian, uint32(len(txMetaSlice))); err != nil {
 		logger.Errorf("error writing number of txs: %v", err)
-		writer.CloseWithError(err)
+		_ = writer.CloseWithError(err)
 		return
 	}
 
 	for i := 0; i < len(txMetaSlice); i++ {
 		if _, err := bufferedWriter.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
 			logger.Errorf("error writing tx: %v", err)
-			writer.CloseWithError(err)
+			_ = writer.CloseWithError(err)
 			return
 		}
 

@@ -183,7 +183,7 @@ func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushB
 StartKafkaListener will start a single consumer
 */
 func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, workers int,
-	service string, groupID string, workerFn func(ctx context.Context, key []byte, data []byte) error) {
+	service string, groupID string, autoCommitEnabled bool, workerFn func(ctx context.Context, key []byte, data []byte) error) {
 
 	// create the workers to process all messages
 	n := atomic.Uint64{}
@@ -252,21 +252,30 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 		}
 		logger.Infof("[Kafka] starting group listener for topic %s on address: %s", topic, kafkaURL.String())
 
-		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1)
+		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1, autoCommitEnabled)
 		if err != nil {
 			logger.Errorf("[%s] Kafka listener failed to start: %s", service, err)
 		}
 	}()
 }
 
-func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int,
-	consumerClosure ...func(KafkaMessage)) error {
+// txMetaCache : autocommit should be enabled - true, we CAN miss.
+// subtree validation : autocommit should be disabled - false.
+// block persister : autocommit should be disabled - false.
+// block assembly: no kafka setup
+
+// StartKafkaGroupListener Autocommit is enabled/disabled according to the parameter fed in the function.
+// We DO NOT read autocommit parameter from the URL.
+func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int, autoCommitEnabled bool,
+	consumerClosure ...func(KafkaMessage) error) error {
 
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 
-	autoCommit := GetQueryParamInt(kafkaURL, "autocommit", 1)
-	if autoCommit == 0 {
+	// https://github.com/IBM/sarama/issues/1689
+	// https://github.com/IBM/sarama/pull/1699
+	// Default value for config.Consumer.Offsets.AutoCommit.Enable is true.
+	if !autoCommitEnabled {
 		config.Consumer.Offsets.AutoCommit.Enable = false
 	}
 
@@ -286,7 +295,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 		cancel()
 	}()
 
-	var consumerClosureFunc func(KafkaMessage)
+	var consumerClosureFunc func(KafkaMessage) error
 
 	if len(consumerClosure) > 0 {
 		consumerClosureFunc = consumerClosure[0]
@@ -307,7 +316,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 	for i := 0; i < consumerCount; i++ {
 		go func(consumerIndex int) {
 			// defer consumer.Close() // Ensure cleanup, if necessary
-			logger.Infof("[kafka] Starting consumer [%d] for group %s on topic %s", consumerIndex, groupID, topics[0])
+			logger.Infof("[kafka] Starting consumer [%d] for group %s on topic %s \n", consumerIndex, groupID, topics[0])
 
 			for {
 				select {
@@ -315,7 +324,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 					// Context cancelled, exit goroutine
 					return
 				default:
-					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, consumerClosureFunc)); err != nil {
+					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, autoCommitEnabled, consumerClosureFunc)); err != nil {
 						if errors.Is(err, context.Canceled) {
 							logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, groupID)
 						} else {
@@ -344,7 +353,6 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 }
 
 func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte) error {
-	logger.Debugf("Starting async producer")
 	topic := kafkaURL.Path[1:]
 	brokersUrl := strings.Split(kafkaURL.Host, ",")
 	signals := make(chan os.Signal, 1)
@@ -365,7 +373,9 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 	if err != nil {
 		return errors.NewConfigurationError("error while creating cluster admin", err)
 	}
-	defer clusterAdmin.Close()
+	defer func(clusterAdmin sarama.ClusterAdmin) {
+		_ = clusterAdmin.Close()
+	}(clusterAdmin)
 
 	partitions := GetQueryParamInt(kafkaURL, "partitions", 1)
 	replicationFactor := GetQueryParamInt(kafkaURL, "replication", 1)
@@ -406,7 +416,6 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 			logger.Errorf("Failed to deliver message: %v", err)
 		}
 	}()
-
 	// Sending a batch of 50 messages asynchronously
 	go func() {
 		for msgBytes := range ch {

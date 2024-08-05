@@ -127,6 +127,7 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, txHashes []utx
 			if errors.Is(err, io.EOF) {
 				break
 			}
+			// Not recoverable, returning processing error
 			return nil, errors.NewProcessingError("[getMissingTransactionsBatch] failed to read transaction from body", err)
 		}
 
@@ -193,6 +194,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 		return nil, errors.NewServiceError("[blessMissingTransaction][%s] failed to get tx meta", tx.TxID(), err)
 	}
 
+	// Not recoverable, returning processing error
 	if txMeta == nil {
 		return nil, errors.NewProcessingError("[blessMissingTransaction][%s] tx meta is nil", tx.TxID())
 	}
@@ -229,8 +231,8 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			return errors.NewStorageError("[validateSubtreeInternal][%s] failed to check if subtree exists in store", v.SubtreeHash.String(), err)
 		}
 		if subtreeExists {
-			// subtree already exists in store, which means it's valid
-			// TODO is this true?
+			// If the subtree is already in the store, it means it is already validated.
+			// Therefore, we finish processing of the subtree.
 			return nil
 		}
 
@@ -239,6 +241,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		for retries := 0; retries < 3; retries++ {
 			txHashes, err = u.getSubtreeTxHashes(ctx, stat, &v.SubtreeHash, v.BaseUrl)
 			if err != nil {
+				// TODO: Unify retry logic with the helper function
 				if retries < 2 {
 					backoff := time.Duration(2^retries) * time.Second
 					u.logger.Warnf("[validateSubtreeInternal][%s] failed to get subtree from network (try %d), will retry in %s", v.SubtreeHash.String(), retries, backoff.String())
@@ -256,7 +259,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	height := math.Ceil(math.Log2(float64(len(txHashes))))
 	subtree, err := util.NewTree(int(height))
 	if err != nil {
-		return err
+		return errors.NewProcessingError("failed to create new subtree", err)
 	}
 
 	subtreeMeta := util.NewSubtreeMeta(subtree)
@@ -312,11 +315,14 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 				continue
 			}
-			return errors.NewError("[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
+
+			// Don't wrap the error again, processTxMetaUsingCache returns the correctly formated error.
+			return err
 		}
 
 		if failFast && abandonTxThreshold > 0 && missed > abandonTxThreshold {
-			return errors.NewError("[validateSubtreeInternal][%s] [attempt #%d] abandoned - too many missing txmeta entries", v.SubtreeHash.String(), attempt, err)
+			// Not recoverable, returning processing error
+			return errors.NewProcessingError("[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from cache", v.SubtreeHash.String(), attempt, err)
 		}
 
 		if missed > 0 {
@@ -325,7 +331,8 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 			missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, batched, failFast)
 			if err != nil {
-				return errors.NewProcessingError("[validateSubtreeInternal][%s] [attempt #%d] failed to get tx meta from store", v.SubtreeHash.String(), attempt, err)
+				// Don't wrap the error again, processTxMetaUsingStore returns the correctly formated error.
+				return err
 			}
 		}
 
@@ -349,6 +356,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseUrl, txMetaSlice, blockHeight)
 			if err != nil {
+				// Don't wrap the error again, processMissingTransactions returns the correctly formated error.
 				return err
 			}
 			stat5.AddTime(start)
@@ -376,6 +384,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		}
 
 		if txMeta.IsCoinbase {
+			// Not recoverable, returning TxInvalid error
 			return errors.NewTxInvalidError("[validateSubtreeInternal][%s] invalid subtree index for coinbase tx %d", v.SubtreeHash.String(), idx, err)
 		}
 
@@ -397,7 +406,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// does the merkle tree give the correct root?
 	merkleRoot := subtree.RootHash()
 	if !merkleRoot.IsEqual(&v.SubtreeHash) {
-		return errors.NewProcessingError("[validateSubtreeInternal][%s] subtree root hash does not match [%s]", v.SubtreeHash.String(), merkleRoot.String())
+		return errors.NewSubtreeInvalidError("subtree root hash does not match", err)
 	}
 
 	//
@@ -476,6 +485,7 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 			if err == io.EOF {
 				break
 			}
+			// Not recoverable, returning processing error
 			if errors.Is(err, io.ErrUnexpectedEOF) {
 				return nil, errors.NewProcessingError("[getSubtreeTxHashes][%s] unexpected EOF: partial hash read", subtreeHash.String())
 			}
@@ -572,7 +582,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 
 	subtree := &util.Subtree{}
 	if err = subtree.DeserializeFromReader(subtreeReader); err != nil {
-		return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] failed to deserialize subtree", err)
+		return nil, err
 	}
 
 	// get the subtreeData
@@ -587,7 +597,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 
 	subtreeData, err := util.NewSubtreeDataFromReader(subtree, subtreeDataReader)
 	if err != nil {
-		return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] failed to get subtreeData from reader", err)
+		return nil, err
 	}
 
 	subtreeLookupMap := subtree.GetMap()

@@ -121,12 +121,42 @@ func (u *Server) Start(ctx context.Context) error {
 
 		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
 		u.logger.Infof("Starting %d Kafka consumers for subtree messages", consumerCount)
-		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, func(msg util.KafkaMessage) {
-			g.Go(func() error {
-				// TODO is there a way to return an error here and have Kafka mark the message as not done?
-				u.subtreeHandler(msg)
+		// Autocommit is disabled for subtree messages, so that we can commit the message only after the subtree has been processed.
+		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, false, func(msg util.KafkaMessage) error {
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- u.subtreeHandler(msg)
+			}()
+
+			select {
+			// error handling
+			case err := <-errCh:
+				// if err is nil, it means function is successfully executed, return nil.
+				if err == nil {
+					return nil
+				}
+
+				// currently, the following cases are considered recoverable:
+				// ERR_SERVICE_ERROR, ERR_STORAGE_ERROR, ERR_CONTEXT_ERROR, ERR_THRESHOLD_EXCEEDED, ERR_EXTERNAL_ERROR
+				// all other cases, including but not limited to, are considered as unrecoverable:
+				// ERR_PROCESSING, ERR_SUBTREE_INVALID, ERR_SUBTREE_INVALID_FORMAT, ERR_INVALID_ARGUMENT, ERR_SUBTREE_EXISTS, ERR_TX_INVALID
+
+				// if error is not nil, check if the error is a recoverable error.
+				// If the error is a recoverable error, then return the error, so that it kafka message is not marked as committed.
+				// So the message will be consumed again.
+				if errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContext) || errors.Is(err, errors.ErrExternal) {
+					u.logger.Errorf("Recoverable error (%v) processing kafka message %v for handling subtree, returning error, thus not marking Kafka message as complete.\n", msg, err)
+					return err
+				}
+
+				// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
+				// kafka message should be committed, so return nil to mark message.
+				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling subtree, marking Kafka message as completed.\n", msg, err)
 				return nil
-			})
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
 		})
 	}
 
@@ -152,7 +182,11 @@ func (u *Server) Start(ctx context.Context) error {
 		groupID := "subtreevalidation-" + uuid.New().String()
 
 		u.logger.Infof("Starting %d Kafka consumers for tx meta messages", consumerCount)
-		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, consumerCount, u.txmetaHandler)
+
+		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
+		// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
+		// Therefore, autocommit is set to true.
+		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, consumerCount, true, u.txmetaHandler)
 	}
 
 	// this will block
@@ -165,10 +199,10 @@ func (u *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage)) {
+func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, autoCommit bool, fn func(msg util.KafkaMessage) error) {
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, fn); err != nil {
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, autoCommit, fn); err != nil {
 		u.logger.Errorf("Failed to start Kafka listener: %v", err)
 	}
 }

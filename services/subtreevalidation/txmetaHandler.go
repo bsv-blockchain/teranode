@@ -5,11 +5,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func (u *Server) txmetaHandler(msg util.KafkaMessage) {
+func (u *Server) txmetaHandler(msg util.KafkaMessage) error {
 	if msg.Message != nil && len(msg.Message.Value) > chainhash.HashSize {
 		startTime := time.Now()
 
@@ -19,6 +20,7 @@ func (u *Server) txmetaHandler(msg util.KafkaMessage) {
 			if err := u.DelTxMetaCache(context.Background(), &hash); err != nil {
 				u.logger.Errorf("failed to delete tx meta data: %v", err)
 				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
+				return errors.NewProcessingError("failed to delete tx meta data: %v", err)
 			} else {
 				prometheusSubtreeValidationDelTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 			}
@@ -26,9 +28,11 @@ func (u *Server) txmetaHandler(msg util.KafkaMessage) {
 			if err := u.SetTxMetaCacheFromBytes(context.Background(), msg.Message.Value[:chainhash.HashSize], msg.Message.Value[chainhash.HashSize:]); err != nil {
 				u.logger.Errorf("failed to set tx meta data: %v", err)
 				prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
+				return errors.NewProcessingError("failed to set tx meta data: %v", err)
 			} else {
 				prometheusSubtreeValidationSetTXMetaCacheKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 			}
 		}
 	}
+	return nil
 }

@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+
 	"os"
 	"path"
 	"sync"
@@ -19,7 +20,7 @@ var (
 	once sync.Once
 )
 
-func (u *Server) subtreeHandler(msg util.KafkaMessage) {
+func (u *Server) subtreeHandler(msg util.KafkaMessage) error {
 	if msg.Message != nil {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -31,13 +32,13 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) {
 
 		if len(msg.Message.Value) < 32 {
 			u.logger.Errorf("Received subtree message of %d bytes", len(msg.Message.Value))
-			return
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Message.Value))
 		}
 
 		hash, err := chainhash.NewHash(msg.Message.Value[:32])
 		if err != nil {
 			u.logger.Errorf("Failed to parse subtree hash from message: %v", err)
-			return
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse subtree hash from message", err)
 		}
 
 		var baseUrl string
@@ -51,13 +52,13 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) {
 		gotLock, _, releaseLockFunc, err := tryLockIfNotExists(ctx, u.logger, u.subtreeStore, hash)
 		if err != nil {
 			u.logger.Infof("error getting lock for Subtree %s", hash.String())
-			return
+			return errors.NewProcessingError("error getting lock for Subtree %s", hash.String(), err)
 		}
 		defer releaseLockFunc()
 
 		if !gotLock {
 			u.logger.Infof("Subtree %s already exists", hash.String())
-			return
+			return errors.New(errors.ERR_SUBTREE_EXISTS, "Subtree %s already exists", hash.String())
 		}
 
 		v := ValidateSubtree{
@@ -70,8 +71,11 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) {
 		// Call the validateSubtreeInternal method
 		if err = u.validateSubtreeInternal(ctx, v, util.GenesisActivationHeight); err != nil {
 			u.logger.Errorf("Failed to validate subtree %s: %v", hash.String(), err)
+			// Here we return the error directly without further wrapping, as validateSubtreeInternal categorizes the error
+			return err
 		}
 	}
+	return nil
 }
 
 type Exister interface {

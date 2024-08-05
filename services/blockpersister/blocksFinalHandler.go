@@ -26,15 +26,8 @@ var (
 	once sync.Once
 )
 
-func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
+func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 	var err error
-
-	defer func() {
-		if msg.Message != nil && err == nil {
-			msg.Session.MarkMessage(msg.Message, "")
-			msg.Session.Commit()
-		}
-	}()
 
 	if msg.Message != nil {
 		ctx, _, deferFn := tracing.StartTracing(u.ctx, "blocksFinalHandler",
@@ -45,7 +38,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 
 		if len(msg.Message.Key) != 32 {
 			u.logger.Errorf("Received blocksFinal message key %d bytes", len(msg.Message.Value))
-			return
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Message.Value))
 		}
 
 		var hash *chainhash.Hash
@@ -53,7 +46,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 		hash, err = chainhash.NewHash(msg.Message.Key[:])
 		if err != nil {
 			u.logger.Errorf("Failed to parse block hash from message: %v", err)
-			return
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
 		}
 
 		var gotLock bool
@@ -61,18 +54,20 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 
 		gotLock, exists, err = tryLockIfNotExists(ctx, u.logger, hash, u.blockStore, options.WithFileExtension("block"))
 		if err != nil {
-			u.logger.Infof("error getting lock for Subtree %s: %v", hash.String(), err)
-			return
+			u.logger.Infof("error getting lock for block %s: %v", hash.String(), err)
+			return errors.NewProcessingError("error getting lock for block %s", hash.String(), err)
+			//return errors.NewLockExistsError()
 		}
 
 		if exists {
 			u.logger.Infof("Block %s already exists", hash.String())
-			return
+			return errors.NewBlockExistsError("Block %s already exists", hash.String())
 		}
 
 		if !gotLock {
 			u.logger.Infof("Block %s already being persisted", hash.String())
-			return
+			return errors.NewBlockExistsError("Block %s already being persisted", hash.String())
+
 		}
 
 		if err = u.persistBlock(ctx, hash, msg.Message.Value); err != nil {
@@ -80,11 +75,14 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) {
 				u.logger.Warnf("PreviousBlock %s not found, so UTXOSet not processed", hash.String())
 				err = nil
 			} else {
+				// don't wrap the error again, persistBlock should return the error in correct format
 				u.logger.Errorf("Error persisting block %s: %v", hash.String(), err)
 			}
-			return
+			return err
 		}
 	}
+
+	return nil
 }
 
 func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error {
@@ -132,7 +130,8 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
 
 	if err = g.Wait(); err != nil {
-		return errors.NewProcessingError("error processing subtrees", err)
+		// Don't wrap the error again, ProcessSubtree should return the error in correct format
+		return err
 	}
 
 	// At this point, we have a complete UTXODiff for this block.
