@@ -106,9 +106,7 @@ func getPropagationServers(ctx context.Context, logger ulogger.Logger) (map[stri
 
 	for _, address := range addresses {
 		pConn, err := util.GetGRPCClient(context.Background(), address, &util.ConnectionOptions{
-			OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-			Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-			MaxRetries:  3,
+			MaxRetries: 3,
 		})
 		if err != nil {
 			return nil, errors.NewServiceError("error creating grpc client for propagation server %s", address, err)
@@ -125,9 +123,7 @@ func getPropagationServers(ctx context.Context, logger ulogger.Logger) (map[stri
 
 func getPropagationServerFromAddress(ctx context.Context, logger ulogger.Logger, address string) (*propagation.Client, error) {
 	pConn, err := util.GetGRPCClient(context.Background(), address, &util.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-		MaxRetries:  3,
+		MaxRetries: 3,
 	})
 	if err != nil {
 		return nil, errors.NewServiceError("error connecting to propagation server %s", address, err)

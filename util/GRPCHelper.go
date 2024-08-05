@@ -4,20 +4,15 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"io"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
-	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/gocore"
 	prometheus_golang "github.com/prometheus/client_golang/prometheus"
-	"github.com/uber/jaeger-client-go"
-	"github.com/uber/jaeger-client-go/config"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -55,8 +50,6 @@ type ConnectionOptions struct {
 	MaxMessageSize   int                 // Max message size in bytes
 	SecurityLevel    int                 // 0 = insecure, 1 = secure, 2 = secure with client cert
 	OpenTelemetry    bool                // Enable OpenTelemetry tracing
-	OpenTracing      bool                // Enable OpenTelemetry tracing
-	Prometheus       bool                // Enable Prometheus metrics
 	CertFile         string              // CA cert file if SecurityLevel > 0
 	CaCertFile       string              // CA cert file if SecurityLevel > 0
 	KeyFile          string              // Client key file if SecurityLevel > 1
@@ -71,34 +64,6 @@ type ConnectionOptions struct {
 func init() {
 	// The secret sauce
 	resolver.SetDefaultScheme("dns")
-}
-
-func InitGlobalTracer(serviceName string, samplingRate float64) (opentracing.Tracer, io.Closer, error) {
-	// TODO ipfs/go-log registers a tracer in its init() function() :-S
-	// if opentracing.IsGlobalTracerRegistered() {
-	//      so we cannot check this here and must overwrite it
-	//return nil, nil, errors.New("global tracer already registered")
-	// }
-
-	cfg, err := config.FromEnv()
-	if err != nil {
-		return nil, nil, errors.NewConfigurationError("cannot parse jaeger environment variables", err)
-	}
-
-	cfg.ServiceName = serviceName
-	cfg.Sampler.Type = jaeger.SamplerTypeProbabilistic
-	cfg.Sampler.Param = samplingRate
-
-	var tracer opentracing.Tracer
-	var closer io.Closer
-	tracer, closer, err = cfg.NewTracer()
-	if err != nil {
-		return nil, nil, errors.NewConfigurationError("cannot initialize jaeger tracer", err)
-	}
-
-	opentracing.SetGlobalTracer(tracer)
-
-	return tracer, closer, nil
 }
 
 func GetGRPCClient(ctx context.Context, address string, connectionOptions *ConnectionOptions) (*grpc.ClientConn, error) {
@@ -132,23 +97,18 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 
 	opts = append(opts, grpc.WithTransportCredentials(tlsCredentials))
 
-	if connectionOptions.OpenTelemetry {
-		opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
-	}
-
 	unaryClientInterceptors := make([]grpc.UnaryClientInterceptor, 0)
 	streamClientInterceptors := make([]grpc.StreamClientInterceptor, 0)
 
-	if connectionOptions.OpenTracing {
-		if opentracing.IsGlobalTracerRegistered() {
-			tracer := opentracing.GlobalTracer()
+	// add tracing, which is configured and enabled in the config
+	opts, unaryClientInterceptors, streamClientInterceptors = tracing.GetGRPCClientTracerOptions(
+		opts,
+		unaryClientInterceptors,
+		streamClientInterceptors,
+	)
 
-			unaryClientInterceptors = append(unaryClientInterceptors, otgrpc.OpenTracingClientInterceptor(tracer))
-			streamClientInterceptors = append(streamClientInterceptors, otgrpc.OpenTracingStreamClientInterceptor(tracer))
-		}
-	}
-
-	if connectionOptions.Prometheus {
+	prometheusGRPCMetrics := gocore.Config().GetBool("use_prometheus_grpc_metrics", true)
+	if prometheusGRPCMetrics {
 		prometheusClientMetrics := prometheus.NewClientMetrics(
 			prometheus.WithClientStreamSendHistogram(),
 			prometheus.WithClientStreamRecvHistogram(),
@@ -221,25 +181,19 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 		}))
 	}
 
-	if connectionOptions.OpenTelemetry {
-		opts = append(opts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
-	}
-
 	// Interceptors.  The order may be important here.
 	unaryInterceptors := make([]grpc.UnaryServerInterceptor, 0)
 	streamInterceptors := make([]grpc.StreamServerInterceptor, 0)
 
-	if connectionOptions.OpenTracing {
-		if opentracing.IsGlobalTracerRegistered() {
-			tracer := opentracing.GlobalTracer()
-			unaryInterceptors = append(unaryInterceptors, otgrpc.OpenTracingServerInterceptor(tracer))
-			streamInterceptors = append(streamInterceptors, otgrpc.OpenTracingStreamServerInterceptor(tracer))
-		} else {
-			return nil, errors.NewConfigurationError("no global tracer set")
-		}
-	}
+	// add tracing, which is configured and enabled in the config
+	opts, unaryInterceptors, streamInterceptors = tracing.GetGRPCServerTracerOptions(
+		opts,
+		unaryInterceptors,
+		streamInterceptors,
+	)
 
-	if connectionOptions.Prometheus {
+	prometheusGRPCMetrics := gocore.Config().GetBool("use_prometheus_grpc_metrics", true)
+	if prometheusGRPCMetrics {
 		unaryInterceptors = append(unaryInterceptors, prometheusMetrics.UnaryServerInterceptor())
 		streamInterceptors = append(streamInterceptors, prometheusMetrics.StreamServerInterceptor())
 	}
@@ -261,7 +215,7 @@ func getGRPCServer(connectionOptions *ConnectionOptions) (*grpc.Server, error) {
 
 	server := grpc.NewServer(opts...)
 
-	if connectionOptions.Prometheus && prometheusMetrics != nil {
+	if prometheusGRPCMetrics && prometheusMetrics != nil {
 		prometheusMetrics.InitializeMetrics(server)
 	}
 

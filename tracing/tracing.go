@@ -3,13 +3,15 @@ package tracing
 import (
 	"context"
 	"fmt"
-	"github.com/opentracing/opentracing-go/mocktracer"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
 	"github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go/mocktracer"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc"
 )
 
 type Options func(s *TraceOptions)
@@ -150,4 +152,46 @@ func DecoupleTracingSpan(ctx context.Context, name string) Span {
 
 func SetGlobalMockTracer() {
 	opentracing.SetGlobalTracer(mocktracer.New())
+}
+
+func RegisterGRPCClientTracer(unaryClientInterceptors []grpc.UnaryClientInterceptor, streamClientInterceptors []grpc.StreamClientInterceptor) ([]grpc.UnaryClientInterceptor, []grpc.StreamClientInterceptor) {
+	tracer := opentracing.GlobalTracer()
+
+	unaryClientInterceptors = append(unaryClientInterceptors, otgrpc.OpenTracingClientInterceptor(tracer))
+	streamClientInterceptors = append(streamClientInterceptors, otgrpc.OpenTracingStreamClientInterceptor(tracer))
+
+	return unaryClientInterceptors, streamClientInterceptors
+}
+
+func RegisterGRPCServerTracer(unaryInterceptors []grpc.UnaryServerInterceptor, streamInterceptors []grpc.StreamServerInterceptor) ([]grpc.UnaryServerInterceptor, []grpc.StreamServerInterceptor) {
+	tracer := opentracing.GlobalTracer()
+
+	unaryInterceptors = append(unaryInterceptors, otgrpc.OpenTracingServerInterceptor(tracer))
+	streamInterceptors = append(streamInterceptors, otgrpc.OpenTracingStreamServerInterceptor(tracer))
+
+	return unaryInterceptors, streamInterceptors
+}
+
+func GetGRPCClientTracerOptions(opts []grpc.DialOption, unaryClientInterceptors []grpc.UnaryClientInterceptor, streamClientInterceptors []grpc.StreamClientInterceptor) ([]grpc.DialOption, []grpc.UnaryClientInterceptor, []grpc.StreamClientInterceptor) {
+	//if connectionOptions.OpenTelemetry {
+	//	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	//}
+
+	if opentracing.IsGlobalTracerRegistered() {
+		unaryClientInterceptors, streamClientInterceptors = RegisterGRPCClientTracer(unaryClientInterceptors, streamClientInterceptors)
+	}
+
+	return opts, unaryClientInterceptors, streamClientInterceptors
+}
+
+func GetGRPCServerTracerOptions(opts []grpc.ServerOption, unaryInterceptors []grpc.UnaryServerInterceptor, streamInterceptors []grpc.StreamServerInterceptor) ([]grpc.ServerOption, []grpc.UnaryServerInterceptor, []grpc.StreamServerInterceptor) {
+	//if connectionOptions.OpenTelemetry {
+	//	opts = append(opts, grpc.StatsHandler(otelgrpc.NewServerHandler()))
+	//}
+
+	if opentracing.IsGlobalTracerRegistered() {
+		unaryInterceptors, streamInterceptors = RegisterGRPCServerTracer(unaryInterceptors, streamInterceptors)
+	}
+
+	return opts, unaryInterceptors, streamInterceptors
 }

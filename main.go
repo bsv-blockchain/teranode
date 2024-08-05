@@ -39,6 +39,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
@@ -183,7 +184,7 @@ func main() {
 			samplingRate = 0.01
 		}
 
-		_, closer, err := util.InitGlobalTracer(serviceName, samplingRate)
+		_, closer, err := tracing.InitGlobalTracer(serviceName, samplingRate)
 		if err != nil {
 			logger.Warnf("failed to initialize tracer: %v", err)
 		}

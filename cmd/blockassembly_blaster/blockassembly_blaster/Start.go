@@ -97,12 +97,8 @@ func Start() {
 
 	switch broadcastProtocol {
 	case "grpc":
-		prom := gocore.Config().GetBool("use_prometheus_grpc_metrics", true)
-		log.Printf("Using prometheus grpc metrics: %v", prom)
-
 		grpcAddr, _ := gocore.Config().Get("blockassembly_grpcAddress")
 		conn, err := util.GetGRPCClient(context.Background(), grpcAddr, &util.ConnectionOptions{
-			Prometheus: prom,
 			MaxRetries: 3,
 		})
 		if err != nil {

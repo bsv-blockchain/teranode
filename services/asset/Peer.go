@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 )
 
@@ -51,9 +50,7 @@ func (c *Peer) Start(ctx context.Context) error {
 		for c.running.Load() {
 			c.logger.Infof("connecting to blob server at %s", c.address)
 			conn, err = util.GetGRPCClient(ctx, c.address, &util.ConnectionOptions{
-				OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-				Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-				MaxRetries:  3,
+				MaxRetries: 3,
 			})
 			if err != nil {
 				c.logger.Errorf("could not connect to blob server at %s: %v", c.address, err)

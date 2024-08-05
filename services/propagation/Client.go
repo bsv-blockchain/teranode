@@ -141,9 +141,7 @@ func initResolver(logger ulogger.Logger) {
 func getClientConn(ctx context.Context) (*grpc.ClientConn, error) {
 	propagation_grpcAddresses, _ := gocore.Config().GetMulti("propagation_grpcAddresses", "|")
 	conn, err := util.GetGRPCClient(ctx, propagation_grpcAddresses[0], &util.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-		MaxRetries:  3,
+		MaxRetries: 3,
 	})
 	if err != nil {
 		return nil, err

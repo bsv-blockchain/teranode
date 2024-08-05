@@ -43,9 +43,7 @@ func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Sto
 		return nil, errors.NewConfigurationError("no coinbase_grpcAddress setting found")
 	}
 	baConn, err := util.GetGRPCClient(context.Background(), coinbaseGrpcAddress, &util.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-		MaxRetries:  3,
+		MaxRetries: 3,
 	})
 	if err != nil {
 		return nil, err

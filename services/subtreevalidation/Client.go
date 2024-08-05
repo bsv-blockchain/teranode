@@ -22,9 +22,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) Interface {
 		panic("no blockvalidation_grpcAddress setting found")
 	}
 	baConn, err := util.GetGRPCClient(ctx, subtreeValidationGrpcAddress, &util.ConnectionOptions{
-		OpenTracing: gocore.Config().GetBool("use_open_tracing", true),
-		Prometheus:  gocore.Config().GetBool("use_prometheus_grpc_metrics", true),
-		MaxRetries:  3,
+		MaxRetries: 3,
 	})
 	if err != nil {
 		panic(err)
