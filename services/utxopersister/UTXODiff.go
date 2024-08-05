@@ -1,6 +1,7 @@
 package utxopersister
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"sync"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/ordishs/go-utils"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -25,12 +27,14 @@ const (
 
 // UTXODiff is a map of UTXOs.
 type UTXODiff struct {
-	ctx             context.Context
-	logger          ulogger.Logger
-	blockHash       chainhash.Hash
-	additionsWriter *io.PipeWriter
-	deletionsWriter *io.PipeWriter
-	store           blob.Store
+	ctx                     context.Context
+	logger                  ulogger.Logger
+	blockHash               chainhash.Hash
+	additionsWriter         *io.PipeWriter
+	additionsBufferedWriter *bufio.Writer
+	deletionsWriter         *io.PipeWriter
+	deletionsBufferedWriter *bufio.Writer
+	store                   blob.Store
 }
 
 // NewUTXOMap creates a new UTXODiff.
@@ -39,32 +43,48 @@ func NewUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, b
 	logger.Infof("[BlockPersister] Persisting utxo additions and deletions for block %s", blockHash.String())
 
 	additionsReader, additionsWriter := io.Pipe()
+	additionsBufferedWriter := bufio.NewWriter(additionsWriter)
 
 	go func() {
-		defer additionsReader.Close()
+		defer func() {
+			if err := additionsReader.Close(); err != nil {
+				logger.Errorf("Failed to close additionsReader: %v", err)
+			}
+		}()
 
-		if err := store.SetFromReader(ctx, blockHash[:], additionsReader, options.WithFileExtension(additionsExtension), options.WithTTL(24*time.Hour)); err != nil {
+		reader := io.NopCloser(bufio.NewReader(additionsReader))
+
+		if err := store.SetFromReader(ctx, blockHash[:], reader, options.WithFileExtension(additionsExtension), options.WithTTL(24*time.Hour)); err != nil {
 			logger.Errorf("%s", errors.NewStorageError("[BlockPersister] error setting additions reader", err))
 		}
 	}()
 
 	deletionsReader, deletionsWriter := io.Pipe()
+	deletionsBufferedWriter := bufio.NewWriter(deletionsWriter)
 
 	go func() {
-		defer deletionsReader.Close()
+		defer func() {
+			if err := deletionsReader.Close(); err != nil {
+				logger.Errorf("Failed to close deletionsReader: %v", err)
+			}
+		}()
 
-		if err := store.SetFromReader(ctx, blockHash[:], deletionsReader, options.WithFileExtension(deletionsExtension), options.WithTTL(24*time.Hour)); err != nil {
+		reader := io.NopCloser(bufio.NewReader(deletionsReader))
+
+		if err := store.SetFromReader(ctx, blockHash[:], reader, options.WithFileExtension(deletionsExtension), options.WithTTL(24*time.Hour)); err != nil {
 			logger.Errorf("%s", errors.NewStorageError("[BlockPersister] error setting deletions reader", err))
 		}
 	}()
 
 	return &UTXODiff{
-		ctx:             ctx,
-		logger:          logger,
-		blockHash:       *blockHash,
-		additionsWriter: additionsWriter,
-		deletionsWriter: deletionsWriter,
-		store:           store,
+		ctx:                     ctx,
+		logger:                  logger,
+		blockHash:               *blockHash,
+		additionsWriter:         additionsWriter,
+		additionsBufferedWriter: additionsBufferedWriter,
+		deletionsWriter:         deletionsWriter,
+		deletionsBufferedWriter: deletionsBufferedWriter,
+		store:                   store,
 	}, nil
 }
 
@@ -123,6 +143,10 @@ func (ud *UTXODiff) Close() error {
 	g, ctx := errgroup.WithContext(ud.ctx)
 
 	g.Go(func() error {
+		if err := ud.additionsBufferedWriter.Flush(); err != nil {
+			return errors.NewStorageError("Error flushing additions writer:", err)
+		}
+
 		if err := ud.additionsWriter.Close(); err != nil {
 			return errors.NewStorageError("Error closing additions writer:", err)
 		}
@@ -135,6 +159,10 @@ func (ud *UTXODiff) Close() error {
 	})
 
 	g.Go(func() error {
+		if err := ud.deletionsBufferedWriter.Flush(); err != nil {
+			return errors.NewStorageError("Error flushing deletions writer:", err)
+		}
+
 		if err := ud.deletionsWriter.Close(); err != nil {
 			return errors.NewStorageError("Error closing deletions writer: %v", err)
 		}
@@ -147,6 +175,14 @@ func (ud *UTXODiff) Close() error {
 	})
 
 	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	if err := ud.waitUntilFileIsAvailable(additionsExtension); err != nil {
+		return err
+	}
+
+	if err := ud.waitUntilFileIsAvailable(deletionsExtension); err != nil {
 		return err
 	}
 
@@ -224,6 +260,8 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 	}
 
 	reader, writer := io.Pipe()
+	bufferedReader := io.NopCloser(bufio.NewReader(reader))
+	bufferedWriter := bufio.NewWriter(writer)
 
 	// Use a channel to communicate errors from the goroutine
 	errChan := make(chan error, 1)
@@ -236,7 +274,7 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 		defer reader.Close()
 		defer wg.Done()
 
-		if err := ud.store.SetFromReader(ctx, ud.blockHash[:], reader, options.WithFileExtension(utxosetExtension), options.WithTTL(24*time.Hour)); err != nil {
+		if err := ud.store.SetFromReader(ctx, ud.blockHash[:], bufferedReader, options.WithFileExtension(utxosetExtension), options.WithTTL(24*time.Hour)); err != nil {
 			// Send the error to the channel
 			errChan <- errors.NewStorageError("[BlockPersister] error setting utxo-set reader", err)
 		}
@@ -298,13 +336,20 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 		}
 	}
 
-	err = writer.Close()
-	if err != nil {
+	if err = bufferedWriter.Flush(); err != nil {
+		return errors.NewStorageError("error flushing utxoset writer", err)
+	}
+
+	if err = writer.Close(); err != nil {
 		return errors.NewStorageError("error closing utxoset writer", err)
 	}
 
 	// Wait for the goroutine to finish
 	wg.Wait()
+
+	if err = ud.waitUntilFileIsAvailable(utxosetExtension); err != nil {
+		return err
+	}
 
 	// Check if the goroutine returned an error
 	if goroutineErr := <-errChan; goroutineErr != nil {
@@ -325,4 +370,24 @@ func (ud *UTXODiff) GetUTXOSetReader(optionalBlockHash ...chainhash.Hash) (io.Re
 	}
 
 	return ud.store.GetIoReader(ud.ctx, blockHash[:], options.WithFileExtension(utxosetExtension))
+}
+
+func (ud *UTXODiff) waitUntilFileIsAvailable(extension string) error {
+	maxRetries := 3
+	retryInterval := 10 * time.Millisecond
+
+	for i := 0; i < maxRetries; i++ {
+		exists, err := ud.store.Exists(ud.ctx, ud.blockHash[:], options.WithFileExtension(extension))
+		if err != nil {
+			return err
+		}
+
+		if exists {
+			return nil
+		}
+
+		time.Sleep(retryInterval)
+	}
+
+	return errors.NewStorageError("file %s.%s is not available", utils.ReverseAndHexEncodeSlice(ud.blockHash[:]), extension)
 }

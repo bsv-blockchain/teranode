@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -96,8 +95,6 @@ func TestNewUTXOSet(t *testing.T) {
 }
 
 func checkAdditions(t *testing.T, ud *UTXODiff, i uint32, count uint32) {
-	time.Sleep(10 * time.Millisecond) // Wait for the store to be written for make test to work
-
 	r, err := ud.GetUTXOAdditionsReader()
 	require.NoError(t, err)
 
@@ -125,8 +122,6 @@ func checkAdditions(t *testing.T, ud *UTXODiff, i uint32, count uint32) {
 }
 
 func checkDeletions(t *testing.T, ud *UTXODiff, i uint32, count uint32) {
-	time.Sleep(10 * time.Millisecond) // Wait for the store to be written for make test to work
-
 	r, err := ud.GetUTXODeletionsReader()
 	require.NoError(t, err)
 
@@ -151,8 +146,6 @@ func checkDeletions(t *testing.T, ud *UTXODiff, i uint32, count uint32) {
 }
 
 func checkUTXOSet(t *testing.T, ud *UTXODiff, count uint32) {
-	time.Sleep(10 * time.Millisecond) // Wait for the store to be written for make test to work
-
 	r, err := ud.GetUTXOSetReader()
 	require.NoError(t, err)
 

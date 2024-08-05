@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"testing"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -54,8 +53,6 @@ func TestNewUTXODiff(t *testing.T) {
 
 	_, found := d[b2]
 	assert.True(t, found)
-
-	time.Sleep(10 * time.Millisecond) // Wait for the store to be written for make test to work
 
 	r, err := ud.GetUTXOAdditionsReader()
 	require.NoError(t, err)
