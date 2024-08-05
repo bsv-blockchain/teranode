@@ -55,18 +55,18 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 		gotLock, exists, err = tryLockIfNotExists(ctx, u.logger, hash, u.blockStore, options.WithFileExtension("block"))
 		if err != nil {
 			u.logger.Infof("error getting lock for block %s: %v", hash.String(), err)
-			return errors.New(errors.ERR_PROCESSING, "error getting lock for block %s", hash.String(), err)
+			return errors.NewProcessingError("error getting lock for block %s", hash.String(), err)
 			//return errors.NewLockExistsError()
 		}
 
 		if exists {
 			u.logger.Infof("Block %s already exists", hash.String())
-			return errors.New(errors.ERR_BLOCK_EXISTS, "Block %s already exists", hash.String())
+			return errors.NewBlockExistsError("Block %s already exists", hash.String())
 		}
 
 		if !gotLock {
 			u.logger.Infof("Block %s already being persisted", hash.String())
-			return errors.New(errors.ERR_BLOCK_EXISTS, "Block %s already being persisted", hash.String())
+			return errors.NewBlockExistsError("Block %s already being persisted", hash.String())
 
 		}
 

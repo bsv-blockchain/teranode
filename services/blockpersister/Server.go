@@ -98,14 +98,14 @@ func (u *Server) Start(ctx context.Context) error {
 			}
 
 			// currently, the following cases are considered recoverable:
-			// ERR_PROCESSING, ERR_STORAGE_ERROR, ERR_SERVICE_ERROR
+			// ERR_STORAGE_ERROR, ERR_SERVICE_ERROR
 			// all other cases, including but not limited to, are considered as unrecoverable:
-			// ERR_BLOCK_EXISTS, ERR_INVALID_ARGUMENT
+			// ERR_PROCESSING, ERR_BLOCK_EXISTS, ERR_INVALID_ARGUMENT
 
 			// If error is not nil, check if the error is a recoverable error.
 			// If it is a recoverable error, then return the error, so that it kafka message is not marked as committed.
 			// So the message will be consumed again.
-			if errors.Is(err, errors.ErrProcessing) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) {
+			if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) {
 				u.logger.Errorf("blocksFinalHandler failed: %v", err)
 				return err
 			}
