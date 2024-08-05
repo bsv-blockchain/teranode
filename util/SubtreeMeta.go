@@ -104,9 +104,6 @@ func (s *SubtreeMeta) SetParentTxHash(index int, parentTxHash chainhash.Hash) er
 	}
 
 	if s.Subtree.Length() <= index || s.Subtree.Nodes[index].Hash.Equal(chainhash.Hash{}) {
-		// TODO GOKHAN:
-		// processing error is not recoverable. Because same input same output.
-		/// check processing errors, maybe some of them are recoverable, no should not be marked as irrecoverable.
 		return errors.NewProcessingError("node at index %d is not set in subtree", index)
 	}
 

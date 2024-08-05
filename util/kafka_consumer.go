@@ -2,7 +2,6 @@ package util
 
 import (
 	"context"
-	"fmt"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/retry"
 	"time"
@@ -53,8 +52,7 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 		select {
 		case message := <-claim.Messages():
 			// Handle the first message
-			fmt.Printf("Handling first message: topic = %s, partition = %d, offset = %d, key = %s, value = %s\n",
-				message.Topic, message.Partition, message.Offset, string(message.Key), string(message.Value))
+			//fmt.Printf("Handling first message: topic = %s, partition = %d, offset = %d, key = %s, value = %s\n", message.Topic, message.Partition, message.Offset, string(message.Key), string(message.Value))
 			if kc.autoCommitEnabled {
 				_ = kc.handleMessagesWithAutoCommit(session, message)
 			} else {
