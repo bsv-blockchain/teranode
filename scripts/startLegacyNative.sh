@@ -1,9 +1,9 @@
 #!/bin/bash
 
-cd $(dirname "$0")
+cd $(dirname "$0")/..
 
 # Build the project
 make build-ubsv
 
 # Run startLooper.sh with nohup in the same directory
-nohup ./startLooper.sh &
+nohup ./scripts/startLooper.sh &
