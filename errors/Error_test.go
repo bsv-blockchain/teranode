@@ -296,7 +296,7 @@ func Test_JoinWithMultipleErrs(t *testing.T) {
 
 	joinedErr := Join(err1, err2, err3)
 	require.NotNil(t, joinedErr)
-	require.Equal(t, "Error: NOT_FOUND (error code: 3),  not found: <nil>, data :, Error: BLOCK_NOT_FOUND (error code: 10),  block not found: <nil>, data :, Error: INVALID_ARGUMENT (error code: 1),  invalid argument: <nil>, data :", joinedErr.Error())
+	require.Equal(t, "Error: NOT_FOUND (error code: 3), not found: <nil>, Error: BLOCK_NOT_FOUND (error code: 10), block not found: <nil>, Error: INVALID_ARGUMENT (error code: 1), invalid argument: <nil>", joinedErr.Error())
 }
 
 func TestErrorString(t *testing.T) {
@@ -304,5 +304,5 @@ func TestErrorString(t *testing.T) {
 
 	thisErr := NewStorageError("failed to set data from reader [%s:%s]", "bucket", "key", err)
 
-	assert.Equal(t, "Error: STORAGE_ERROR (error code: 59),  failed to set data from reader [bucket:key]: 0: some error", thisErr.Error())
+	assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), failed to set data from reader [bucket:key]: 0: some error", thisErr.Error())
 }

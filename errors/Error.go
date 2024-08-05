@@ -37,10 +37,10 @@ func (e *Error) Error() string {
 	}
 
 	if dataMsg == "" {
-		return fmt.Sprintf("Error: %s (error code: %d),  %v: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
+		return fmt.Sprintf("Error: %s (error code: %d), %v: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
 	}
 
-	return fmt.Sprintf("Error: %s (error code: %d),  %v: %v, data :%s", e.Code.Enum(), e.Code, e.Message, e.WrappedErr, dataMsg)
+	return fmt.Sprintf("Error: %s (error code: %d), %v: %v, data: %s", e.Code.Enum(), e.Code, e.Message, e.WrappedErr, dataMsg)
 }
 
 // Is reports whether error codes match.
@@ -120,7 +120,12 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	// Extract the wrapped error, if present
 	if len(params) > 0 {
 		lastParam := params[len(params)-1]
-		if err, ok := lastParam.(error); ok {
+
+		if err, ok := lastParam.(*Error); ok {
+			wErr = err
+			//data = err.Data
+			params = params[:len(params)-1]
+		} else if err, ok := lastParam.(error); ok {
 			wErr = &Error{Message: err.Error()}
 			//data = err.Data
 			params = params[:len(params)-1]
