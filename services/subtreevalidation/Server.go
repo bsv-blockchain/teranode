@@ -123,7 +123,6 @@ func (u *Server) Start(ctx context.Context) error {
 		u.logger.Infof("Starting %d Kafka consumers for subtree messages", consumerCount)
 		// Autocommit is disabled for subtree messages, so that we can commit the message only after the subtree has been processed.
 		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, false, func(msg util.KafkaMessage) error {
-			// TODO is there a way to return an error here and have Kafka mark the message as not done?
 			errCh := make(chan error, 1)
 			go func() {
 				errCh <- u.subtreeHandler(msg)
@@ -184,7 +183,7 @@ func (u *Server) Start(ctx context.Context) error {
 
 		u.logger.Infof("Starting %d Kafka consumers for tx meta messages", consumerCount)
 
-		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible and iti s okay if some of the messages are not properly processed.
+		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
 		// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 		// Therefore, autocommit is set to true.
 		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, consumerCount, true, u.txmetaHandler)

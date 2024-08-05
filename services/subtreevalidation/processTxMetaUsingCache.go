@@ -56,7 +56,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 				select {
 				case <-gCtx.Done(): // Listen for cancellation signal
 					// Return the error that caused the cancellation
-					return errors.New(errors.ERR_CONTEXT_ERROR, "", gCtx.Err())
+					return errors.NewContextError("[processTxMetaUsingCache context cancelled]", gCtx.Err())
 
 				default:
 					txHash := txHashes[i+j]
@@ -84,7 +84,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 	}
 
 	if err := g.Wait(); err != nil {
-		return int(missed.Load()), errors.New(errors.ERR_PROCESSING, "error processing txMeta using cache: %v", err)
+		return int(missed.Load()), errors.NewProcessingError("error processing txMeta using cache: %v", err)
 	}
 
 	return int(missed.Load()), nil

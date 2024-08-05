@@ -46,7 +46,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					select {
 					case <-gCtx.Done(): // Listen for cancellation signal
 						// Return the error that caused the cancellation
-						return errors.New(errors.ERR_CONTEXT_ERROR, "", gCtx.Err())
+						return errors.NewContextError("[processTxMetaUsingStore] context done", gCtx.Err())
 
 					default:
 
@@ -64,19 +64,19 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					}
 				}
 				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, "fee", "sizeInBytes", "parentTxHashes", "blockIDs"); err != nil {
-					return errors.New(errors.ERR_STORAGE_ERROR, "error running batch decorate on utxo store for missing transactions", err)
+					return errors.NewStorageError("error running batch decorate on utxo store for missing transactions", err)
 				}
 
 				select {
 				case <-gCtx.Done(): // Listen for cancellation signal
 					// Return the error that caused the cancellation
-					return errors.New(errors.ERR_CONTEXT_ERROR, "", gCtx.Err())
+					return errors.NewContextError("[processTxMetaUsingStore] context done", gCtx.Err())
 				default:
 					for _, data := range missingTxHashesCompacted {
 						if data.Data == nil || data.Err != nil {
 							newMissed := missed.Add(1)
 							if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
-								return errors.New(errors.ERR_THRESHOLD_EXCEEDED, "threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
+								return errors.NewThresholdExceededError("threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
 							}
 							continue
 						}
@@ -88,7 +88,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		}
 
 		if err := g.Wait(); err != nil {
-			return int(missed.Load()), errors.New(errors.ERR_CONTEXT_ERROR, "", gCtx.Err())
+			return int(missed.Load()), errors.NewContextError("[processTxMetaUsingStore]", gCtx.Err())
 		}
 
 		return int(missed.Load()), nil
@@ -105,7 +105,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					select {
 					case <-gCtx.Done(): // Listen for cancellation signal
 						// Return the error that caused the cancellation
-						return errors.New(errors.ERR_CONTEXT_ERROR, "", gCtx.Err())
+						return errors.NewContextError("[processTxMetaUsingStore] context done", gCtx.Err())
 
 					default:
 						txHash := txHashes[i+j]
@@ -118,7 +118,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 						if txMetaSlice[i+j] == nil {
 							txMeta, err := u.utxoStore.GetMeta(gCtx, &txHash)
 							if err != nil {
-								return errors.New(errors.ERR_STORAGE_ERROR, "error getting tx meta from utxo store", err)
+								return errors.NewStorageError("error getting tx meta from utxo store", err)
 							}
 
 							if txMeta != nil {
@@ -129,7 +129,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 
 						newMissed := missed.Add(1)
 						if failFast && missingTxThreshold > 0 && newMissed > int32(missingTxThreshold) {
-							return errors.New(errors.ERR_THRESHOLD_EXCEEDED, "threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
+							return errors.NewThresholdExceededError("threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
 						}
 					}
 				}
@@ -139,7 +139,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		}
 
 		if err := g.Wait(); err != nil {
-			return int(missed.Load()), errors.New(errors.ERR_CONTEXT_ERROR, "", gCtx.Err())
+			return int(missed.Load()), errors.NewContextError("[processTxMetaUsingStore] context done", gCtx.Err())
 		}
 
 		return int(missed.Load()), nil
