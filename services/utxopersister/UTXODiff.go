@@ -120,14 +120,14 @@ func (ud *UTXODiff) delete(utxoDeletion *UTXODeletion) error {
 }
 
 func (ud *UTXODiff) Close() error {
-	g, _ := errgroup.WithContext(ud.ctx)
+	g, ctx := errgroup.WithContext(ud.ctx)
 
 	g.Go(func() error {
 		if err := ud.additionsWriter.Close(); err != nil {
 			return errors.NewStorageError("Error closing additions writer:", err)
 		}
 
-		if err := ud.store.SetTTL(ud.ctx, ud.blockHash[:], 0, options.WithFileExtension(additionsExtension)); err != nil {
+		if err := ud.store.SetTTL(ctx, ud.blockHash[:], 0, options.WithFileExtension(additionsExtension)); err != nil {
 			return errors.NewStorageError("Error setting ttl on additions file", err)
 		}
 
@@ -139,7 +139,7 @@ func (ud *UTXODiff) Close() error {
 			return errors.NewStorageError("Error closing deletions writer: %v", err)
 		}
 
-		if err := ud.store.SetTTL(ud.ctx, ud.blockHash[:], 0, options.WithFileExtension(deletionsExtension)); err != nil {
+		if err := ud.store.SetTTL(ctx, ud.blockHash[:], 0, options.WithFileExtension(deletionsExtension)); err != nil {
 			return errors.NewStorageError("Error setting ttl on deletions file", err)
 		}
 
@@ -214,6 +214,8 @@ func (ud *UTXODiff) GetUTXODeletionsSet() (map[[36]byte]struct{}, error) {
 	return m, nil
 }
 
+// CreateUTXOSet generates the UTXO set for the current block, using the previous block's UTXO set
+// and applying additions and deletions from the current block. It returns an error if the operation fails.
 func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainhash.Hash) (err error) {
 	// Load the deletions file for this block in to a set
 	deletions, err := ud.GetUTXODeletionsSet()
