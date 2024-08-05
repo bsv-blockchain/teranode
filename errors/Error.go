@@ -53,6 +53,9 @@ func (e *Error) Is(target error) bool {
 		}
 	}
 
+	// process, storage, block not found, tx_missing
+	// errors.Is(storage, err) true
+
 	// Unwrap the current error and recursively call Is on the unwrapped error
 	if unwrapped := errors.Unwrap(e); unwrapped != nil {
 		if ue, ok := unwrapped.(*Error); ok {

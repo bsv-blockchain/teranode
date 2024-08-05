@@ -56,6 +56,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 		if err != nil {
 			u.logger.Infof("error getting lock for block %s: %v", hash.String(), err)
 			return errors.New(errors.ERR_PROCESSING, "error getting lock for block %s", hash.String(), err)
+			//return errors.NewLockExistsError()
 		}
 
 		if exists {

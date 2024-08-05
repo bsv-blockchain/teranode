@@ -404,13 +404,13 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 		if txMeta.IsCoinbase {
 			// TODO (GOKHAN): Should we handle this in error handling for kafka?
+			// YES
 			return errors.NewTxInvalidError("[validateSubtreeInternal][%s] invalid subtree index for coinbase tx %d", v.SubtreeHash.String(), idx, err)
 		}
 
 		// finally add the transaction hash and fee to the subtree
 		err = subtree.AddNode(txHash, txMeta.Fee, txMeta.SizeInBytes)
 		if err != nil {
-
 			return errors.NewProcessingError("[validateSubtreeInternal][%s] failed to add node to subtree / subtreeMeta", v.SubtreeHash.String(), err)
 		}
 
