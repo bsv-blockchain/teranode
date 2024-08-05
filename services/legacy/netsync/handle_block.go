@@ -219,7 +219,6 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		if err = sm.subtreeStore.Set(ctx,
 			subtree.RootHash()[:],
 			subtreeBytes,
-			options.WithSubDirectory("legacy"),
 			options.WithFileExtension("subtree"),
 			options.WithTTL(2*time.Minute),
 		); err != nil {
@@ -233,7 +232,6 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		if err = sm.subtreeStore.Set(ctx,
 			subtreeData.RootHash()[:],
 			subtreeDataBytes,
-			options.WithSubDirectory("legacy"),
 			options.WithFileExtension("subtreeData"),
 			options.WithTTL(2*time.Minute),
 		); err != nil {

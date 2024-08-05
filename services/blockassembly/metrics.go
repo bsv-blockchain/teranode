@@ -8,19 +8,14 @@ import (
 )
 
 var (
-
 	// in Server
-	prometheusBlockAssemblyHealth                       prometheus.Counter
-	prometheusBlockAssemblyAddTxDuration                prometheus.Histogram
-	prometheusBlockAssemblyRemoveTx                     prometheus.Counter
-	prometheusBlockAssemblyRemoveTxDuration             prometheus.Histogram
-	prometheusBlockAssemblyGetMiningCandidate           prometheus.Counter
-	prometheusBlockAssemblyGetMiningCandidateDuration   prometheus.Histogram
-	prometheusBlockAssemblySubmitMiningSolutionCh       prometheus.Gauge
-	prometheusBlockAssemblySubmitMiningSolution         prometheus.Counter
-	prometheusBlockAssemblySubmitMiningSolutionDuration prometheus.Histogram
-	prometheusBlockAssemblyUpdateSubtreesTTL            prometheus.Histogram
-	//prometheusBlockAssemblyUpdateTxMinedStatus          prometheus.Histogram
+	prometheusBlockAssemblyHealth                     prometheus.Counter
+	prometheusBlockAssemblyAddTx                      prometheus.Histogram
+	prometheusBlockAssemblyRemoveTx                   prometheus.Histogram
+	prometheusBlockAssemblyGetMiningCandidateDuration prometheus.Histogram
+	prometheusBlockAssemblySubmitMiningSolutionCh     prometheus.Gauge
+	prometheusBlockAssemblySubmitMiningSolution       prometheus.Histogram
+	prometheusBlockAssemblyUpdateSubtreesTTL          prometheus.Histogram
 
 	// in BlockAssembler
 	prometheusBlockAssemblerGetMiningCandidate prometheus.Counter
@@ -29,9 +24,10 @@ var (
 	prometheusBlockAssemblerQueuedTransactions prometheus.Gauge
 	prometheusBlockAssemblerSubtrees           prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration  prometheus.Histogram
-	//prometheusBlockAssemblerUtxoStoreDuration  prometheus.Histogram
-	prometheusBlockAssemblerReorg             prometheus.Counter
-	prometheusBlockAssemblerReorgDuration     prometheus.Histogram
+
+	prometheusBlockAssemblerReorg         prometheus.Counter
+	prometheusBlockAssemblerReorgDuration prometheus.Histogram
+	//prometheusBlockAssemblerSetFromKafka      prometheus.Histogram
 	prometheusBlockAssemblyBestBlockHeight    prometheus.Gauge
 	prometheusBlockAssemblyCurrentBlockHeight prometheus.Gauge
 )
@@ -53,37 +49,21 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockAssemblyAddTxDuration = promauto.NewHistogram(
+	prometheusBlockAssemblyAddTx = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "add_tx_duration_seconds",
-			Help:      "Duration of AddTx in the blockassembly service",
+			Name:      "add_tx",
+			Help:      "Histogram of AddTx in the blockassembly service",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
 
-	prometheusBlockAssemblyRemoveTx = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockassembly",
-			Name:      "remove_tx",
-			Help:      "Number of txs removed to the blockassembly service",
-		},
-	)
-
-	prometheusBlockAssemblyRemoveTxDuration = promauto.NewHistogram(
+	prometheusBlockAssemblyRemoveTx = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "remove_tx_duration_millis",
-			Help:      "Duration of RemoveTx in the blockassembly service",
+			Name:      "remove_tx",
+			Help:      "Histogram of RemoveTx in the blockassembly service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-
-	prometheusBlockAssemblyGetMiningCandidate = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockassembly",
-			Name:      "get_mining_candidate",
-			Help:      "Number of calls to GetMiningCandidate in the blockassembly service",
 		},
 	)
 
@@ -104,19 +84,11 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockAssemblySubmitMiningSolution = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "blockassembly",
-			Name:      "submit_mining_solution",
-			Help:      "Number of calls to SubmitMiningSolution in the blockassembly service",
-		},
-	)
-
-	prometheusBlockAssemblySubmitMiningSolutionDuration = promauto.NewHistogram(
+	prometheusBlockAssemblySubmitMiningSolution = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "submit_mining_solution_duration_seconds",
-			Help:      "Duration of SubmitMiningSolution in the blockassembly service",
+			Name:      "submit_mining_solution",
+			Help:      "Histogram of SubmitMiningSolution in the blockassembly service",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
@@ -124,20 +96,11 @@ func _initPrometheusMetrics() {
 	prometheusBlockAssemblyUpdateSubtreesTTL = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "update_subtrees_ttl_duration_seconds",
+			Name:      "update_subtrees_ttl",
 			Help:      "Duration of updating subtrees TTL in the blockassembly service",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
-
-	//prometheusBlockAssemblyUpdateTxMinedStatus = promauto.NewHistogram(
-	//	prometheus.HistogramOpts{
-	//		Namespace: "blockassembly",
-	//		Name:      "update_tx_mined_status_duration",
-	//		Help:      "Duration of updating tx mined status in the blockassembly service",
-	//		Buckets:   util.MetricsBuckets,
-	//	},
-	//)
 
 	prometheusBlockAssemblerGetMiningCandidate = promauto.NewCounter(
 		prometheus.CounterOpts{
@@ -187,14 +150,6 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
-
-	//prometheusBlockAssemblerUtxoStoreDuration = promauto.NewHistogram(
-	//	prometheus.HistogramOpts{
-	//		Namespace: "blockassembly",
-	//		Name:      "utxo_store_duration_v2",
-	//		Help:      "Duration of storing new utxos by block assembler",
-	//	},
-	//)
 
 	prometheusBlockAssemblerReorg = promauto.NewCounter(
 		prometheus.CounterOpts{

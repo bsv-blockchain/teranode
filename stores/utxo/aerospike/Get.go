@@ -240,7 +240,6 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 				reader, err := s.externalStore.GetIoReader(
 					context.TODO(),
 					items[idx].Hash[:],
-					options.WithSubDirectory("legacy"),
 					options.WithFileExtension("tx"),
 				)
 				if err != nil {
@@ -360,7 +359,6 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 			reader, err := s.externalStore.GetIoReader(
 				context.TODO(),
 				outpoints[idx].PreviousTxID[:],
-				options.WithSubDirectory("legacy"),
 				options.WithFileExtension("tx"),
 			)
 			if err != nil {

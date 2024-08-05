@@ -227,9 +227,30 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 	return fileName, nil
 }
 
-func (s *File) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.Options) error {
-	// s.logger.Debugf("[File] SetTTL: %s", utils.ReverseAndHexEncodeSlice(hash))
-	// not supported on files yet
+func (s *File) SetTTL(_ context.Context, key []byte, newTtl time.Duration, opts ...options.Options) error {
+	fileName, err := s.getFileNameForSet(key, opts)
+	if err != nil {
+		return errors.NewStorageError("failed to get file name", err)
+	}
+
+	if newTtl == 0 {
+		// delete the ttl file
+		if err := os.Remove(fileName + ".ttl"); err != nil {
+			return errors.NewStorageError("failed to remove ttl file", err)
+		}
+		return nil
+	}
+
+	// write bytes to file
+	ttl := time.Now().Add(newTtl)
+	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
+	if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
+		return errors.NewStorageError("failed to write ttl to file", err)
+	}
+	s.fileTTLsMu.Lock()
+	s.fileTTLs[fileName] = ttl
+	s.fileTTLsMu.Unlock()
+
 	return nil
 }
 

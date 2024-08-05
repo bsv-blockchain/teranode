@@ -2,9 +2,9 @@ package coinbase
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -16,19 +16,6 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-// var (
-// 	prometheusCoinbaseAddBlock prometheus.Counter
-// )
-
-// func init() {
-// 	prometheusCoinbaseAddBlock = promauto.NewCounter(
-// 		prometheus.CounterOpts{
-// 			Name: "coinbase_add_block",
-// 			Help: "Number of blocks added to the coinbase service",
-// 		},
-// 	)
-// }
 
 // Server type carries the logger within it
 type Server struct {
@@ -115,16 +102,14 @@ func (s *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*coinbase_api.
 }
 
 func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFundsRequest) (*coinbase_api.RequestFundsResponse, error) {
-	start := gocore.CurrentTime()
-	stat := s.stats.NewStat("RequestFunds_grpc", true)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "RequestFunds",
+		tracing.WithParentStat(s.stats),
+		tracing.WithHistogram(prometheusRequestFunds),
+		tracing.WithLogMessage(s.logger, "[RequestFunds] called for %s", req.Address),
+	)
+	defer deferFn()
 
-	prometheusRequestFunds.Inc()
-
-	ctx1 := tracing.ContextWithStat(ctx, stat)
-	fundingTx, err := s.coinbase.RequestFunds(ctx1, req.Address, req.DisableDistribute)
+	fundingTx, err := s.coinbase.RequestFunds(ctx, req.Address, req.DisableDistribute)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -135,10 +120,12 @@ func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFund
 }
 
 func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.DistributeTransactionRequest) (*coinbase_api.DistributeTransactionResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		s.stats.NewStat("DistributeTransaction").AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "DistributeTransaction",
+		tracing.WithParentStat(s.stats),
+		tracing.WithHistogram(prometheusDistributeTransaction),
+		tracing.WithLogMessage(s.logger, "[DistributeTransaction] called"),
+	)
+	defer deferFn()
 
 	tx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
@@ -148,8 +135,6 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 	if !tx.IsExtended() {
 		return nil, errors.WrapGRPC(errors.NewTxInvalidError("transaction is not extended"))
 	}
-
-	prometheusDistributeTransaction.Inc()
 
 	responses, _ := s.coinbase.DistributeTransaction(ctx, tx)
 
@@ -180,6 +165,13 @@ func (s *Server) DistributeTransaction(ctx context.Context, req *coinbase_api.Di
 }
 
 func (s *Server) GetBalance(ctx context.Context, _ *emptypb.Empty) (*coinbase_api.GetBalanceResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBalance",
+		tracing.WithParentStat(s.stats),
+		tracing.WithHistogram(prometheusGetBalance),
+		tracing.WithLogMessage(s.logger, "[GetBalance] called"),
+	)
+	defer deferFn()
+
 	balance, err := s.coinbase.getBalance(ctx)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)

@@ -3,6 +3,7 @@ package tracing
 import (
 	"context"
 	"fmt"
+	"github.com/opentracing/opentracing-go/mocktracer"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -13,12 +14,18 @@ import (
 
 type Options func(s *TraceOptions)
 
+type logMessage struct {
+	message string
+	args    []interface{}
+	level   string
+}
+
 type TraceOptions struct {
-	ParentStat *gocore.Stat
-	Histogram  prometheus.Histogram
-	Logger     ulogger.Logger
-	LogMessage string
-	LogArgs    []interface{}
+	ParentStat  *gocore.Stat
+	Histogram   prometheus.Histogram
+	Counter     prometheus.Counter
+	Logger      ulogger.Logger
+	LogMessages []logMessage
 }
 
 func WithParentStat(stat *gocore.Stat) Options {
@@ -27,17 +34,49 @@ func WithParentStat(stat *gocore.Stat) Options {
 	}
 }
 
+// WithHistogram sets the prometheus histogram to be observed when the span is finished.
 func WithHistogram(histogram prometheus.Histogram) Options {
 	return func(s *TraceOptions) {
 		s.Histogram = histogram
 	}
 }
 
-func WithLogMessage(logger ulogger.Logger, format string, args ...interface{}) Options {
+// WithCounter sets the prometheus counter to be incremented when the span is finished.
+func WithCounter(counter prometheus.Counter) Options {
 	return func(s *TraceOptions) {
+		s.Counter = counter
+	}
+}
+
+// WithLogMessage sets the logger and log message to be used when starting the span and when the span is finished.
+// The log message is formatted with fmt.Sprintf and all arguments are passed to the logger.
+// The log message is logged at the INFO level. This should only be used in grpc / http calls and not internal functions.
+func WithLogMessage(logger ulogger.Logger, message string, args ...interface{}) Options {
+	return func(s *TraceOptions) {
+		s.addLogMessage(logger, message, "INFO", args)
+	}
+}
+
+func WithWarnLogMessage(logger ulogger.Logger, message string, args ...interface{}) Options {
+	return func(s *TraceOptions) {
+		s.addLogMessage(logger, message, "WARN", args)
+	}
+}
+
+func WithDebugLogMessage(logger ulogger.Logger, message string, args ...interface{}) Options {
+	return func(s *TraceOptions) {
+		s.addLogMessage(logger, message, "DEBUG", args)
+	}
+}
+
+func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level string, args []interface{}) {
+	if s.Logger == nil {
 		s.Logger = logger
-		s.LogMessage = format
-		s.LogArgs = args
+	}
+	if s.LogMessages == nil {
+		s.LogMessages = []logMessage{{message: message, args: args, level: level}}
+	} else {
+		s.LogMessages = append(s.LogMessages, logMessage{message: message, args: args, level: level})
 	}
 }
 
@@ -56,11 +95,20 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 	if options.ParentStat != nil {
 		start, stat, ctx = NewStatFromContext(spanCtx, name, options.ParentStat)
 	} else {
-		start, stat, ctx = StartStatFromContext(spanCtx, name)
+		start, stat, ctx = NewStatFromContext(spanCtx, name, defaultStat)
 	}
 
-	if options.Logger != nil && options.LogMessage != "" {
-		options.Logger.Infof(options.LogMessage, options.LogArgs...)
+	if options.Logger != nil && len(options.LogMessages) > 0 {
+		for _, l := range options.LogMessages {
+			switch {
+			case l.level == "WARN":
+				options.Logger.Warnf(l.message, l.args...)
+			case l.level == "DEBUG":
+				options.Logger.Debugf(l.message, l.args...)
+			default:
+				options.Logger.Infof(l.message, l.args...)
+			}
+		}
 	}
 
 	return ctx, stat, func() {
@@ -71,9 +119,35 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 			options.Histogram.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 		}
 
-		if options.Logger != nil && options.LogMessage != "" {
+		if options.Counter != nil {
+			options.Counter.Inc()
+		}
+
+		if options.Logger != nil && len(options.LogMessages) > 0 {
 			done := fmt.Sprintf(" DONE in %s", time.Since(start))
-			options.Logger.Infof(options.LogMessage+done, options.LogArgs...)
+			for _, l := range options.LogMessages {
+				switch {
+				case l.level == "WARN":
+					options.Logger.Warnf(l.message+done, l.args...)
+				case l.level == "DEBUG":
+					options.Logger.Debugf(l.message+done, l.args...)
+				default:
+					options.Logger.Infof(l.message+done, l.args...)
+				}
+			}
 		}
 	}
+}
+
+func DecoupleTracingSpan(ctx context.Context, name string) Span {
+	callerSpan := opentracing.SpanFromContext(ctx)
+	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	setCtx = CopyStatFromContext(ctx, setCtx)
+	setSpan := Start(setCtx, name)
+
+	return setSpan
+}
+
+func SetGlobalMockTracer() {
+	opentracing.SetGlobalTracer(mocktracer.New())
 }

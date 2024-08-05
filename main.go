@@ -36,6 +36,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/propagation"
 	"github.com/bitcoin-sv/ubsv/services/rpc"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -131,6 +132,7 @@ func main() {
 	startFaucet := shouldStart("Faucet")
 	startBootstrap := shouldStart("Bootstrap")
 	startBlockPersister := shouldStart("BlockPersister")
+	startUTXOPersister := shouldStart("UTXOPersister")
 	startLegacy := shouldStart("Legacy")
 	help := shouldStart("help")
 	startRpc := shouldStart("rpc")
@@ -259,7 +261,7 @@ func main() {
 
 	if startBlockPersister {
 		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
-			logger,
+			logger.New("bp"),
 			getBlockStore(logger),
 			getSubtreeStore(logger),
 			getUtxoStore(ctx, logger),
@@ -272,6 +274,15 @@ func main() {
 	blockchainClient, err := blockchain.NewClient(ctx, logger)
 	if err != nil {
 		panic(err)
+	}
+
+	if startUTXOPersister {
+		if err = sm.AddService("UTXOPersister", utxopersister.New(ctx,
+			logger.New("bp"),
+			getBlockStore(logger),
+		)); err != nil {
+			panic(err)
+		}
 	}
 
 	// blockAssembly

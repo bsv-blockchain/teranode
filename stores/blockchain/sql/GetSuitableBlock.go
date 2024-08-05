@@ -10,10 +10,8 @@ import (
 )
 
 func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*model.SuitableBlock, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetSuitableBlock")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetSuitableBlock")
+	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

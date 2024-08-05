@@ -1,8 +1,10 @@
 package repository
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
+	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -12,10 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	memory_utxo "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
-	"context"
-	"testing"
-
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -25,6 +24,7 @@ import (
 )
 
 func TestGetLegacyBlockWithBlockStore(t *testing.T) {
+	tracing.SetGlobalMockTracer()
 
 	var (
 		coinbase, _ = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
@@ -142,6 +142,7 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 
 }
 func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
+	tracing.SetGlobalMockTracer()
 
 	var (
 		coinbase, _ = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")

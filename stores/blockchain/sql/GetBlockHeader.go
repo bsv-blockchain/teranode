@@ -12,10 +12,8 @@ import (
 )
 
 func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBlockHeader")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeader")
+	defer deferFn()
 
 	header, meta, er := s.blocksCache.GetBlockHeader(*blockHash)
 	if er != nil {

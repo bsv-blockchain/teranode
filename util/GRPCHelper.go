@@ -145,8 +145,6 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 
 			unaryClientInterceptors = append(unaryClientInterceptors, otgrpc.OpenTracingClientInterceptor(tracer))
 			streamClientInterceptors = append(streamClientInterceptors, otgrpc.OpenTracingStreamClientInterceptor(tracer))
-		} else {
-			return nil, errors.NewConfigurationError("no global tracer set")
 		}
 	}
 

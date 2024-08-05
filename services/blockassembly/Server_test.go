@@ -15,9 +15,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/opentracing/opentracing-go"
-	"github.com/opentracing/opentracing-go/mocktracer"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,9 +63,9 @@ func TestServer_Performance(t *testing.T) {
 
 func initMockedServer(t *testing.T) (*BlockAssembly, error) {
 	memStore := memory.New()
-	utxoStore := utxostore.New(true)
+	utxoStore := utxostore.New(ulogger.TestLogger{})
 
-	opentracing.SetGlobalTracer(mocktracer.New())
+	tracing.SetGlobalMockTracer()
 
 	blockchainStoreURL, _ := url.Parse("sqlitememory://")
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, blockchainStoreURL)
@@ -74,7 +73,7 @@ func initMockedServer(t *testing.T) (*BlockAssembly, error) {
 		return nil, err
 	}
 
-	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -8,8 +8,7 @@ import (
 )
 
 var (
-	prometheusBlockMined         prometheus.Counter
-	prometheusBlockMinedDuration prometheus.Histogram
+	prometheusBlockMined prometheus.Histogram
 )
 
 var (
@@ -21,19 +20,11 @@ func initPrometheusMetrics() {
 }
 
 func _initPrometheusMetrics() {
-	prometheusBlockMined = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "miner",
-			Name:      "block_mined",
-			Help:      "Number of calls to the health endpoint of the miner service",
-		},
-	)
-
-	prometheusBlockMinedDuration = promauto.NewHistogram(
+	prometheusBlockMined = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "miner",
-			Name:      "block_mined_duration_seconds",
-			Help:      "Duration of block mining",
+			Name:      "block_mined",
+			Help:      "Histogram of block mining",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)

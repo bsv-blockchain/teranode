@@ -11,11 +11,13 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	utxo_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -28,13 +30,11 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 	var err error
 
 	if msg.Message != nil {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		startTime := time.Now()
-		defer func() {
-			prometheusBlockPersisterValidateSubtreeHandler.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-		}()
+		ctx, _, deferFn := tracing.StartTracing(u.ctx, "blocksFinalHandler",
+			tracing.WithHistogram(prometheusBlockPersisterValidateSubtreeHandler),
+			tracing.WithLogMessage(u.logger, "[blocksFinalHandler] called for block %s", utils.ReverseAndHexEncodeSlice(msg.Message.Key)),
+		)
+		defer deferFn()
 
 		if len(msg.Message.Key) != 32 {
 			u.logger.Errorf("Received blocksFinal message key %d bytes", len(msg.Message.Value))
@@ -86,6 +86,12 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 }
 
 func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBytes []byte) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "persistBlock",
+		tracing.WithHistogram(prometheusBlockPersisterPersistBlock),
+		tracing.WithLogMessage(u.logger, "[persistBlock] called for block %s", hash.String()),
+	)
+	defer deferFn()
+
 	block, err := model.NewBlockFromBytes(blockBytes)
 	if err != nil {
 		return errors.NewProcessingError("error creating block from bytes", err)
@@ -96,14 +102,19 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	concurrency, _ := gocore.Config().GetInt("blockpersister_concurrency", 8)
 	u.logger.Infof("[BlockPersister] Processing subtrees with concurrency %d", concurrency)
 
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(concurrency)
-
 	// Create a new UTXO diff
-	utxoDiff := utxo_model.NewUTXODiff(u.logger, block.Header.Hash())
+	utxoDiff, err := utxopersister.NewUTXODiff(ctx, u.logger, u.blockStore, block.Header.Hash())
+	if err != nil {
+		return errors.NewProcessingError("error creating utxo diff", err)
+	}
 
 	// Add coinbase utxos to the utxo diff
-	utxoDiff.ProcessTx(block.CoinbaseTx)
+	if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
+		return errors.NewProcessingError("error processing coinbase tx", err)
+	}
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(concurrency)
 
 	for i, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
@@ -111,17 +122,22 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 		g.Go(func() error {
 			u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i+1, len(block.Subtrees), subtreeHash.String())
-			// don't wrap the error again, ProcessSubtree should return the error in correct format
+
 			return u.ProcessSubtree(gCtx, *subtreeHash, block.CoinbaseTx, utxoDiff)
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		// don't wrap the error again, ProcessSubtree should return the error in correct format
+	u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
+
+	if err = g.Wait(); err != nil {
+		// Don't wrap the error again, ProcessSubtree should return the error in correct format
 		return err
 	}
 
-	utxoDiff.Trim()
+	// At this point, we have a complete UTXODiff for this block.
+	if err = utxoDiff.Close(); err != nil {
+		return errors.NewStorageError("error closing utxo diff", err)
+	}
 
 	// Now, write the block file
 	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())
@@ -146,7 +162,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		_, err := bufferedWriter.Write(blockBytes)
 		if err != nil {
 			u.logger.Errorf("Error writing block: %v", err)
-			_ = writer.CloseWithError(err)
+			writer.CloseWithError(err)
 			return
 		}
 	}()
@@ -159,49 +175,6 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	if err = u.blockStore.SetTTL(ctx, hash[:], 0, options.WithFileExtension("block")); err != nil {
 		return errors.NewStorageError("[BlockPersister] error persisting block", err)
-	}
-
-	u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
-
-	// At this point, we have a complete UTXODiff for this block.
-	if err = utxoDiff.Persist(ctx, u.blockStore); err != nil {
-		return errors.NewStorageError("error persisting utxo diff for block %s", block.Header.Hash().String(), err)
-	}
-
-	if gocore.Config().GetBool("blockPersister_processUTXOSets", false) {
-		u.logger.Infof("[BlockPersister] Processing UTXOSet for block %s", block.Header.Hash().String())
-
-		// Now we need to apply this UTXODiff to the UTXOSet for the previous block
-		previousUTXOSet, found := utxo_model.UTXOSetCache.Get(*block.Header.HashPrevBlock)
-		if !found {
-			// Load the UTXOSet from disk
-			previousUTXOSet, err = utxo_model.LoadUTXOSet(u.blockStore, *block.Header.HashPrevBlock)
-			if err != nil {
-				return errors.NewStorageError("LoadUTXOSet %s", *block.Header.HashPrevBlock, err)
-			}
-		}
-
-		// Create a new UTXOSet for this block from the previous UTXOSet
-		utxoSet := utxo_model.NewUTXOSetFromPrevious(block.Header.Hash(), previousUTXOSet)
-
-		// Remove all spent UTXOs
-		utxoDiff.Removed.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-			utxoSet.Delete(uk)
-			return
-		})
-
-		// Add all new UTXOs
-		utxoDiff.Added.Iter(func(uk utxo_model.UTXOKey, uv *utxo_model.UTXOValue) (stop bool) {
-			utxoSet.Add(uk, uv)
-
-			return
-		})
-
-		if err = utxoSet.Persist(ctx, u.blockStore); err != nil {
-			return errors.NewStorageError("error persisting utxo set for block %s", block.Header.Hash().String(), err)
-		}
-
-		utxo_model.UTXOSetCache.Put(*block.Header.Hash(), previousUTXOSet)
 	}
 
 	return nil

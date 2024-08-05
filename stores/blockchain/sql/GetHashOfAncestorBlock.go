@@ -11,10 +11,8 @@ import (
 )
 
 func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetHashOfAncestorBlock")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetHashOfAncestorBlock")
+	defer deferFn()
 
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()

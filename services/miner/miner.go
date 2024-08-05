@@ -301,8 +301,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	m.maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - r.Intn(maxSubtreeCountVariance*2)
 
-	prometheusBlockMined.Inc()
-	prometheusBlockMinedDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
+	prometheusBlockMined.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	return nil
 }

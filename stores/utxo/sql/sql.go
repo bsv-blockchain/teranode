@@ -169,14 +169,8 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 }
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
-
-	// s.logger.Infof("Storing transaction %s", tx.TxIDChainHash())
-
-	start, stat, _ := tracing.StartStatFromContext(ctx, "Create")
-
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:Create")
+	defer deferFn()
 
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.dbTimeout)
 	defer cancelTimeout()

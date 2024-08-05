@@ -1,6 +1,7 @@
 package coinbase
 
 import (
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"sync"
@@ -8,8 +9,9 @@ import (
 
 var (
 	prometheusHealth                prometheus.Counter
-	prometheusRequestFunds          prometheus.Counter
-	prometheusDistributeTransaction prometheus.Counter
+	prometheusRequestFunds          prometheus.Histogram
+	prometheusDistributeTransaction prometheus.Histogram
+	prometheusGetBalance            prometheus.Histogram
 )
 
 var (
@@ -29,19 +31,30 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusRequestFunds = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusRequestFunds = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "coinbase",
 			Name:      "request_funds",
-			Help:      "Number of calls to the RequestFunds endpoint",
+			Help:      "Histogram of calls to the RequestFunds endpoint",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
-	prometheusDistributeTransaction = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusDistributeTransaction = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "coinbase",
 			Name:      "distribute_transaction",
-			Help:      "Number of calls to the DistributeTransaction endpoint",
+			Help:      "Histogram of calls to the DistributeTransaction endpoint",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusGetBalance = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "coinbase",
+			Name:      "get_balance",
+			Help:      "Histogram of calls to the GetBalance endpoint",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 }

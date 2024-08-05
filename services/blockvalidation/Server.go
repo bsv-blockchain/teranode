@@ -412,15 +412,12 @@ func (u *Server) HealthGRPC(_ context.Context, _ *blockvalidation_api.EmptyMessa
 }
 
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
-	start, stat, ctx := tracing.NewStatFromContext(ctx, "BlockFound", u.stats)
-	defer func() {
-		stat.AddTime(start)
-		prometheusBlockValidationBlockFoundDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-		u.logger.Infof("[BlockFound][%s] DONE from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl())
-	}()
-
-	prometheusBlockValidationBlockFound.Inc()
-	u.logger.Infof("[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl())
+	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockFound",
+		tracing.WithParentStat(u.stats),
+		tracing.WithHistogram(prometheusBlockValidationBlockFound),
+		tracing.WithLogMessage(u.logger, "[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl()),
+	)
+	defer deferFn()
 
 	hash, err := chainhash.NewHash(req.Hash)
 	if err != nil {
@@ -467,10 +464,11 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 }
 
 func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
-	start, stat, ctx := tracing.NewStatFromContext(ctx, "ProcessBlock", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessBlock",
+		tracing.WithParentStat(u.stats),
+		tracing.WithLogMessage(u.logger, "[ProcessBlock][%s] process block called", request.Height),
+	)
+	defer deferFn()
 
 	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
@@ -508,8 +506,8 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseUrl string, useBlock ...*model.Block) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "processBlockFound",
-		tracing.WithHistogram(prometheusBlockValidationProcessBlockFoundDuration),
 		tracing.WithParentStat(u.stats),
+		tracing.WithHistogram(prometheusBlockValidationProcessBlockFound),
 		tracing.WithLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl),
 	)
 	defer deferFn()
@@ -689,13 +687,11 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 
 func (u *Server) catchup(ctx context.Context, fromBlock *model.Block, baseURL string) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "catchup",
-		tracing.WithHistogram(prometheusBlockValidationCatchupDuration),
 		tracing.WithParentStat(u.stats),
+		tracing.WithHistogram(prometheusBlockValidationCatchup),
 		tracing.WithLogMessage(u.logger, "[catchup][%s] catching up on server %s", fromBlock.Hash().String(), baseURL),
 	)
 	defer deferFn()
-
-	prometheusBlockValidationCatchup.Inc()
 
 	// first check whether this block already exists, which would mean we caught up from another peer
 	exists, err := u.blockValidation.GetBlockExists(ctx, fromBlock.Hash())

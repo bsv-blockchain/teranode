@@ -3,22 +3,24 @@ package memory
 import (
 	"bytes"
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"sync"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/libsv/go-bt/v2/chainhash"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 )
 
 type Memory struct {
-	mu    sync.Mutex
-	blobs map[string][]byte
+	mu    sync.RWMutex
+	blobs map[[32]byte][]byte
 }
 
 func New() *Memory {
 	return &Memory{
-		blobs: make(map[string][]byte),
+		blobs: make(map[[32]byte][]byte),
 	}
 }
 
@@ -27,6 +29,10 @@ func (m *Memory) Health(ctx context.Context) (int, string, error) {
 }
 
 func (m *Memory) Close(_ context.Context) error {
+	// The lock is to ensure that no other operations are happening while we close the store
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// noop
 	return nil
 }
@@ -39,29 +45,18 @@ func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 		return errors.NewStorageError("failed to read data from reader", err)
 	}
 
-	empty, err := io.ReadAll(reader)
-	if err != nil {
-		return errors.NewStorageError("failed to read data from reader", err)
-	}
-	if len(empty) > 0 {
-		return errors.NewStorageError("reader has more data than expected")
-	}
-
 	return m.Set(ctx, key, b, opts...)
 }
 
 func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	setOptions := options.NewSetOptions(nil, opts...)
 
-	storeKey := hash
-	if setOptions.Extension != "" {
-		storeKey = append(storeKey, []byte(setOptions.Extension)...)
-	}
+	storeKey := hashKey(hash, setOptions.Extension)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.blobs[string(storeKey)] = value
+	m.blobs[storeKey] = value
 
 	return nil
 }
@@ -90,15 +85,12 @@ func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Op
 func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
 	setOptions := options.NewSetOptions(nil, opts...)
 
-	storeKey := hash
-	if setOptions.Extension != "" {
-		storeKey = append(storeKey, []byte(setOptions.Extension)...)
-	}
+	storeKey := hashKey(hash, setOptions.Extension)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	bytes, ok := m.blobs[string(storeKey)]
+	bytes, ok := m.blobs[storeKey]
 	if !ok {
 		return nil, errors.NewStorageError("not found")
 	}
@@ -122,30 +114,28 @@ func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...
 func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	setOptions := options.NewSetOptions(nil, opts...)
 
-	storeKey := hash
-	if setOptions.Extension != "" {
-		storeKey = append(storeKey, []byte(setOptions.Extension)...)
-	}
+	storeKey := hashKey(hash, setOptions.Extension)
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	_, ok := m.blobs[string(storeKey)]
+	_, ok := m.blobs[storeKey]
 	return ok, nil
 }
 
 func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.Options) error {
 	setOptions := options.NewSetOptions(nil, opts...)
 
-	storeKey := hash
-	if setOptions.Extension != "" {
-		storeKey = append(storeKey, []byte(setOptions.Extension)...)
-	}
+	storeKey := hashKey(hash, setOptions.Extension)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	delete(m.blobs, string(storeKey))
+	delete(m.blobs, storeKey)
 
 	return nil
+}
+
+func hashKey(key []byte, extension string) [32]byte {
+	return chainhash.HashH(append(key, []byte(extension)...))
 }

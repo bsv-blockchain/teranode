@@ -14,6 +14,13 @@ var (
 	prometheusAssetGRPCGetBlock           prometheus.Counter
 	prometheusAssetGRPCGetNodes           prometheus.Counter
 	prometheusAssetGRPCSubscribe          prometheus.Counter
+	prometheusAssetGRPCGetBlockStats      prometheus.Counter
+	prometheusAssetGRPCGetBlockGraphData  prometheus.Counter
+	prometheusAssetGRPCGet                prometheus.Counter
+	prometheusAssetGRPCExists             prometheus.Counter
+	prometheusAssetGRPCSet                prometheus.Counter
+	prometheusAssetGRPCSetTTL             prometheus.Counter
+	prometheusAssetGRPCAddHttpSubscriber  prometheus.Counter
 )
 
 var (
@@ -78,6 +85,62 @@ func _initPrometheusMetrics() {
 			Namespace: "Asset",
 			Name:      "grpc_subscribe",
 			Help:      "Number of subscription ops",
+		},
+	)
+
+	prometheusAssetGRPCGetBlockStats = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "Asset",
+			Name:      "grpc_get_block_stats",
+			Help:      "Number of Get block stats ops",
+		},
+	)
+
+	prometheusAssetGRPCGetBlockGraphData = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "Asset",
+			Name:      "grpc_get_block_graph_data",
+			Help:      "Number of Get block graph data ops",
+		},
+	)
+
+	prometheusAssetGRPCGet = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "Asset",
+			Name:      "grpc_get",
+			Help:      "Number of Get subtree ops",
+		},
+	)
+
+	prometheusAssetGRPCExists = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "Asset",
+			Name:      "grpc_exists",
+			Help:      "Number of Exists subtree ops",
+		},
+	)
+
+	prometheusAssetGRPCSet = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "Asset",
+			Name:      "grpc_set",
+			Help:      "Number of Set subtree ops",
+		},
+	)
+
+	prometheusAssetGRPCSetTTL = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "Asset",
+			Name:      "grpc_set_ttl",
+			Help:      "Number of Set TTL subtree ops",
+		},
+	)
+
+	prometheusAssetGRPCAddHttpSubscriber = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "Asset",
+			Name:      "grpc_add_http_subscriber",
+			Help:      "Number of Add HTTP subscriber ops",
 		},
 	)
 }

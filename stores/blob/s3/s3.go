@@ -51,6 +51,11 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 	timeout := time.Duration(getQueryParamInt(s3URL, "TimeoutSeconds", 30)) * time.Second
 	keepAlive := time.Duration(getQueryParamInt(s3URL, "KeepAliveSeconds", 300)) * time.Second
 	region := s3URL.Query().Get("region")
+	subDirectory := s3URL.Query().Get("subDirectory")
+
+	if subDirectory != "" {
+		opts = append(opts, options.WithSubDirectory(subDirectory))
+	}
 
 	config, _ := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
 	client := s3.NewFromConfig(config)
@@ -110,6 +115,8 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	o := options.NewSetOptions(g.options, opts...)
 
 	objectKey := g.getObjectKey(key, o)
+
+	g.logger.Warnf("[S3][%s] Setting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(g.bucket),

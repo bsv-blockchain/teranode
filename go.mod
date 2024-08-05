@@ -38,7 +38,6 @@ require (
 	github.com/libsv/go-bk v0.1.6
 	github.com/libsv/go-bt v1.0.4
 	github.com/libsv/go-bt/v2 v2.2.5
-	github.com/loopholelabs/frisbee-go v0.7.2
 	github.com/loopholelabs/polyglot v1.1.4
 	github.com/looplab/fsm v1.0.1
 	github.com/multiformats/go-multiaddr v0.11.0
@@ -49,6 +48,7 @@ require (
 	github.com/prometheus/client_golang v1.19.1
 	github.com/quic-go/quic-go v0.38.2
 	github.com/rs/zerolog v1.32.0
+	github.com/segmentio/encoding v0.3.6
 	github.com/sercand/kuberesolver/v5 v5.1.1
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.9.0
@@ -222,7 +222,6 @@ require (
 	github.com/libp2p/go-reuseport v0.4.0 // indirect
 	github.com/libp2p/go-yamux/v4 v4.0.1 // indirect
 	github.com/libsv/go-p2p v0.1.9 // indirect
-	github.com/loopholelabs/common v0.4.9 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/magiconair/properties v1.8.7 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
@@ -291,7 +290,6 @@ require (
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.4.0 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
-	github.com/segmentio/encoding v0.3.6 // indirect
 	github.com/serialx/hashring v0.0.0-20190422032157-8b2912629002 // indirect
 	github.com/shibumi/go-pathspec v1.3.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.23.12 // indirect

@@ -13,10 +13,8 @@ import (
 )
 
 func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	start, stat, ctx := tracing.StartStatFromContext(ctx, "GetBestBlockHeader")
-	defer func() {
-		stat.AddTime(start)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBestBlockHeader")
+	defer deferFn()
 
 	header, meta, er := s.blocksCache.GetBestBlockHeader()
 	if er != nil {

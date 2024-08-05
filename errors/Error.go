@@ -30,7 +30,14 @@ func (e *Error) Error() string {
 	}
 
 	if e.WrappedErr == nil {
+		if dataMsg == "" {
+			return fmt.Sprintf("%d: %v", e.Code, e.Message)
+		}
 		return fmt.Sprintf("%d: %v, data: %s", e.Code, e.Message, dataMsg)
+	}
+
+	if dataMsg == "" {
+		return fmt.Sprintf("Error: %s (error code: %d),  %v: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
 	}
 
 	return fmt.Sprintf("Error: %s (error code: %d),  %v: %v, data :%s", e.Code.Enum(), e.Code, e.Message, e.WrappedErr, dataMsg)
@@ -114,8 +121,9 @@ func New(code ERR, message string, params ...interface{}) *Error {
 
 	// Extract the wrapped error, if present
 	if len(params) > 0 {
-		if err, ok := params[len(params)-1].(*Error); ok {
-			wErr = err
+		lastParam := params[len(params)-1]
+		if err, ok := lastParam.(error); ok {
+			wErr = &Error{Message: err.Error()}
 			params = params[:len(params)-1]
 		}
 	}

@@ -30,7 +30,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
-	"github.com/opentracing/opentracing-go"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	http3 "github.com/quic-go/quic-go/http3"
@@ -314,12 +313,12 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 }
 
 func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		propagationStat.NewStat("Health", true).AddTime(start)
-	}()
-
-	prometheusHealth.Inc()
+	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+		tracing.WithParentStat(propagationStat),
+		tracing.WithHistogram(prometheusHealth),
+		tracing.WithLogMessage(ps.logger, "[HealthGRPC] called"),
+	)
+	defer deferFn()
 
 	status := ps.status.Load()
 
@@ -379,6 +378,13 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 }
 
 func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessTransactionBatch",
+		tracing.WithParentStat(propagationStat),
+		tracing.WithHistogram(prometheusProcessedTransactionBatch),
+		tracing.WithLogMessage(ps.logger, "[ProcessTransactionBatch] called for %d transactions", len(req.Tx)),
+	)
+	defer deferFn()
+
 	response := &propagation_api.ProcessTransactionBatchResponse{
 		Error: make([]string, len(req.Tx)),
 	}
@@ -410,15 +416,11 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	return response, nil
 }
 
-func (ps *PropagationServer) processTransaction(cntxt context.Context, req *propagation_api.ProcessTransactionRequest) error {
-	start, stat, ctx := tracing.NewStatFromContext(cntxt, "ProcessTransaction", propagationStat)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusProcessedTransactions.Inc()
-	traceSpan := tracing.Start(ctx, "PropagationServer:Set")
-	defer traceSpan.Finish()
+func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) error {
+	_, _, deferFn := tracing.StartTracing(ctx, "processTransaction",
+		tracing.WithParentStat(propagationStat),
+	)
+	defer deferFn()
 
 	timeStart := time.Now()
 	btTx, err := bt.NewTxFromBytes(req.Tx)
@@ -438,11 +440,11 @@ func (ps *PropagationServer) processTransaction(cntxt context.Context, req *prop
 	}
 
 	// decouple the tracing context to not cancel the context when the tx is being saved in the background
-	callerSpan := opentracing.SpanFromContext(ctx)
-	setCtx := opentracing.ContextWithSpan(context.Background(), callerSpan)
+	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleStoreTransaction")
+	defer callerSpan.Finish()
 
 	// we should store all transactions, if this fails we should not validate the transaction
-	if err = ps.storeTransaction(setCtx, btTx); err != nil {
+	if err = ps.storeTransaction(callerSpan.Ctx, btTx); err != nil {
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
@@ -456,7 +458,7 @@ func (ps *PropagationServer) processTransaction(cntxt context.Context, req *prop
 	}
 
 	prometheusTransactionSize.Observe(float64(len(req.Tx)))
-	prometheusTransactionDuration.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
+	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	return nil
 }
@@ -500,11 +502,11 @@ func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *p
 	return &propagation_api.EmptyMessage{}, nil
 }
 
-func (ps *PropagationServer) storeTransaction(setCtx context.Context, btTx *bt.Tx) error {
-	span, spanCtx := opentracing.StartSpanFromContext(setCtx, "PropagationServer:Set:Store")
-	defer span.Finish()
+func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "PropagationServer:Set:Store")
+	defer deferFn()
 
-	if err := ps.txStore.Set(spanCtx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
+	if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
 		// TODO make this resilient to errors
 		// write it to secondary store (Kafka, Badger) and retry?
 		return err

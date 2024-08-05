@@ -32,11 +32,8 @@ type batchStoreItem struct {
 }
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
-	startTotal, stat, _ := tracing.StartStatFromContext(ctx, "Create")
-
-	defer func() {
-		stat.AddTime(startTotal)
-	}()
+	_, _, deferFn := tracing.StartTracing(ctx, "aerospike:Create")
+	defer deferFn()
 
 	txMeta, err := util.TxMetaDataFromTx(tx)
 	if err != nil {
@@ -304,7 +301,6 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 		context.TODO(),
 		bItem.tx.TxIDChainHash()[:],
 		bItem.tx.Bytes(),
-		options.WithSubDirectory("legacy"),
 		options.WithFileExtension("tx"),
 	); err != nil {
 		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.tx.TxIDChainHash().String(), err))
