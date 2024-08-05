@@ -3,9 +3,10 @@ package blockchain
 import (
 	"context"
 	"fmt"
-	"github.com/ordishs/go-utils"
 	"net/http"
 	"time"
+
+	"github.com/ordishs/go-utils"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -286,7 +287,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 			if err != nil {
 				b.logger.Errorf("[Blockchain] Error serializing block: %v", err)
 			} else {
-				b.logger.Infof("[BlockPersister] sending block to kafka: %s", block.String())
+				b.logger.Debugf("[BlockPersister] sending block to kafka: %s", block.String())
 				if err = b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
 					b.logger.Errorf("[Blockchain] Error sending block to kafka: %v", err)
 				}
