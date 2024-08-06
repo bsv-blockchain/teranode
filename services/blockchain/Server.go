@@ -116,17 +116,6 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				func() {
 					b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
 
-					if notification.Type == model.NotificationType_FSMEvent {
-						notificationMetadata := notification.Metadata.GetMetadata()
-						event := blockchain_api.FSMEventType(blockchain_api.FSMEventType_value[notificationMetadata["event"]])
-						b.logger.Debugf("[Blockchain Server] Sending FSM event: %s", event.String())
-						err := b.finiteStateMachine.Event(ctx, event.String())
-						if err != nil {
-							b.logger.Errorf("[Blockchain Server] Error sending FSM event: %v", err)
-						}
-						b.logger.Debugf("[Blockchain Server] FSM current state: %s", b.finiteStateMachine.Current())
-					}
-
 					for sub := range b.subscribers {
 						b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
 						go func(s subscriber) {
@@ -785,10 +774,6 @@ func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.N
 	)
 	defer deferFn()
 
-	if req.Type == model.NotificationType_FSMEvent {
-		b.logger.Infof("[Blockchain Server] SendNotification FSMevent called: %s", req.GetMetadata())
-	}
-
 	b.notifications <- req
 
 	return &emptypb.Empty{}, nil
@@ -879,6 +864,56 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 	return &blockchain_api.GetBlocksSubtreesNotSetResponse{
 		BlockBytes: blockBytes,
 	}, nil
+}
+
+func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
+	b.logger.Debugf("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
+
+	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
+	if err != nil {
+		return nil, err
+	}
+	state := b.finiteStateMachine.Current()
+
+	// Log the state immediately after storing it
+	b.logger.Infof("[Blockchain Server] state immediately after storing: %v", state)
+
+	resp := &blockchain_api.GetFSMStateResponse{
+		State: blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[state]),
+	}
+
+	b.logger.Debugf("[Blockchain Server] FSM current state: %s", b.finiteStateMachine.Current(), ", response: %v", resp)
+	return resp, nil
+}
+
+func (b *Blockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_CATCHUPTXS,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	b.client.StoreFSMState(b.finiteStateMachine.Current())
+	return nil, nil
+}
+
+func (b *Blockchain) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_MINE,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	b.client.StoreFSMState(b.finiteStateMachine.Current())
+	return nil, nil
 }
 
 func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {

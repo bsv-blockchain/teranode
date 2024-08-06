@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -12,7 +13,7 @@ import (
 type ClientI interface {
 	Health(ctx context.Context) (*blockchain_api.HealthResponse, error)
 	AddBlock(ctx context.Context, block *model.Block, peerID string) error
-	SendNotification(ctx context.Context, notification *model.Notification) error
+	SendNotification(ctx context.Context, notification *blockchain_api.Notification) error
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error)
 	GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error)
 	GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
@@ -30,15 +31,19 @@ type ClientI interface {
 	InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error
 	RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error)
-	Subscribe(ctx context.Context, source string) (chan *model.Notification, error)
+	Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error)
 	GetState(ctx context.Context, key string) ([]byte, error)
 	SetState(ctx context.Context, key string, data []byte) error
 	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error)
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
-	GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error)
+	GetFSMCurrentState() blockchain_api.FSMStateType
+	GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType
 	SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
+	StoreFSMState(state string)
+	CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
+	Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 
 	// new legacy endpoints
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error)
@@ -85,7 +90,7 @@ func (s *MockBlockchain) AddBlock(ctx context.Context, block *model.Block, peerI
 	s.block = block
 	return nil
 }
-func (s *MockBlockchain) SendNotification(ctx context.Context, notification *model.Notification) error {
+func (s *MockBlockchain) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
 	return nil
 }
 func (s *MockBlockchain) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
@@ -151,7 +156,7 @@ func (s *MockBlockchain) RevalidateBlock(ctx context.Context, blockHash *chainha
 func (s *MockBlockchain) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
 	return []uint32{0}, nil
 }
-func (s *MockBlockchain) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
+func (s *MockBlockchain) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
 	return nil, nil
 }
 func (s *MockBlockchain) GetState(ctx context.Context, key string) ([]byte, error) {
@@ -172,7 +177,19 @@ func (s *MockBlockchain) SetBlockSubtreesSet(ctx context.Context, blockHash *cha
 func (s *MockBlockchain) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
 	panic("not implemented")
 }
-func (s *MockBlockchain) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
+func (s *MockBlockchain) GetFSMCurrentState() blockchain_api.FSMStateType {
+	panic("not implemented")
+}
+func (s *MockBlockchain) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
+	panic("not implemented")
+}
+func (s *MockBlockchain) StoreFSMState(state string) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error {

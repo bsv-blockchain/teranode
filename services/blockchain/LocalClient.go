@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -125,11 +126,11 @@ func (c LocalClient) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash
 	return c.store.GetBlockHeaderIDs(ctx, blockHash, numberOfHeaders)
 }
 
-func (c LocalClient) SendNotification(ctx context.Context, notification *model.Notification) error {
+func (c LocalClient) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
 	return nil
 }
 
-func (c LocalClient) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
+func (c LocalClient) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
 	return nil, nil
 }
 
@@ -157,15 +158,30 @@ func (c LocalClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Bloc
 	return c.store.GetBlocksSubtreesNotSet(ctx)
 }
 
-func (c LocalClient) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
-	// TODO: check what this should be?
-	state := blockchain_api.FSMStateType_MINING
-	return &state, nil
+func (c LocalClient) GetFSMCurrentState() blockchain_api.FSMStateType {
+	// TODO: Fix me, this is a temporary solution
+	return blockchain_api.FSMStateType_MINING
+}
+
+func (c LocalClient) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
+	// TODO: Fix me, this is a temporary solution
+	return blockchain_api.FSMStateType_MINING
 }
 
 func (c LocalClient) SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error {
 	// TODO: "implement me"
 	return nil
+}
+
+func (c LocalClient) StoreFSMState(state string) {
+}
+
+func (c LocalClient) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return nil, nil
+}
+
+func (c LocalClient) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return nil, nil
 }
 
 // GetBlockLocator returns a block locator for the latest block.

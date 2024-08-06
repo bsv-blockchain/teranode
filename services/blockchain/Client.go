@@ -20,15 +20,12 @@ import (
 )
 
 type Client struct {
-	client  blockchain_api.BlockchainAPIClient
-	logger  ulogger.Logger
-	running *atomic.Bool
-	conn    *grpc.ClientConn
-	// currFSMstate blockchain_api.FSMStateType
+	client       blockchain_api.BlockchainAPIClient
+	logger       ulogger.Logger
+	running      *atomic.Bool
+	conn         *grpc.ClientConn
+	currFSMstate atomic.Int32
 }
-
-// client subscribes to server notifications and updates currFSMState.
-//
 
 type BestBlockHeader struct {
 	Header *model.BlockHeader
@@ -240,6 +237,7 @@ func (c *Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans boo
 
 	return resp.Blocks, nil
 }
+
 func (c *Client) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
 	resp, err := c.client.GetSuitableBlock(ctx, &blockchain_api.GetSuitableBlockRequest{
 		Hash: blockHash[:],
@@ -427,42 +425,24 @@ func (c *Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Has
 }
 
 func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEventType) error {
-	// All services started successfully
-	// create a new blockchain notification with Run event
-	notification := &model.Notification{
-		Type:    model.NotificationType_FSMEvent,
-		Hash:    &chainhash.Hash{}, // not relevant for FSMEvent notifications
-		BaseURL: "",                // not relevant for FSMEvent notifications
-		Metadata: model.NotificationMetadata{
-			Metadata: map[string]string{
-				"event": event.String(),
-			},
-		},
+	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
+
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: event,
 	}
-	// send FSMEvent notification to the blockchain client. FSM will transition to state Running
-	if err := c.SendNotification(ctx, notification); err != nil {
-		//logger.Errorf("[Main] failed to send RUN notification [%v]", err)
-		//panic(err)
+
+	resp, err := c.client.SendFSMEvent(ctx, req)
+	if err != nil {
 		return err
 	}
+
+	c.StoreFSMState(resp.State.String())
 
 	return nil
 }
 
-func (c *Client) SendNotification(ctx context.Context, notification *model.Notification) error {
-	blockchainNotification := &blockchain_api.Notification{
-		Type:    notification.Type,
-		Hash:    notification.Hash[:],
-		BaseUrl: notification.BaseURL,
-		Metadata: &blockchain_api.NotificationMetadata{
-			Metadata: notification.Metadata.Metadata,
-		},
-	}
-	if notification.Type == model.NotificationType_FSMEvent {
-		c.logger.Infof("[Blockchain Client] Sending FSMevent notification, metadata: %v", blockchainNotification.Metadata.Metadata)
-	}
-	_, err := c.client.SendNotification(ctx, blockchainNotification)
-
+func (c *Client) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
+	_, err := c.client.SendNotification(ctx, notification)
 	if err != nil {
 		return err
 	}
@@ -470,8 +450,8 @@ func (c *Client) SendNotification(ctx context.Context, notification *model.Notif
 	return nil
 }
 
-func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
-	ch := make(chan *model.Notification)
+func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
+	ch := make(chan *blockchain_api.Notification)
 
 	go func() {
 		<-ctx.Done()
@@ -512,9 +492,11 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.Noti
 					continue
 				}
 
-				utils.SafeSend(ch, &model.Notification{
-					Type: resp.Type,
-					Hash: hash,
+				utils.SafeSend(ch, &blockchain_api.Notification{
+					Type:     resp.Type,
+					Hash:     hash[:],
+					BaseUrl:  resp.BaseUrl,
+					Metadata: resp.Metadata,
 				})
 			}
 		}
@@ -604,14 +586,50 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 	return blocks, nil
 }
 
-func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
+func (c *Client) GetFSMCurrentState() blockchain_api.FSMStateType {
 
-	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
+	currentState := c.currFSMstate.Load()
+	return blockchain_api.FSMStateType(currentState)
+}
+
+func (c *Client) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
+	ctx := context.Background()
+	currentState, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
+	if err != nil {
+		c.logger.Errorf("[Blockchain Client] Failed to get FSM current state: %v", err)
+		return blockchain_api.FSMStateType_STOPPED
+	}
+	return currentState.State
+}
+
+func (c *Client) StoreFSMState(state string) {
+	c.currFSMstate.Store(blockchain_api.FSMStateType_value[state])
+}
+
+func (c *Client) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
+
+	req := emptypb.Empty{}
+
+	_, err := c.client.CatchUpTransactions(ctx, &req)
 	if err != nil {
 		return nil, err
 	}
 
-	return &state.State, nil
+	return nil, nil
+}
+
+func (c *Client) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Mine event")
+
+	req := emptypb.Empty{}
+
+	_, err := c.client.Mine(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
 }
 
 func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
