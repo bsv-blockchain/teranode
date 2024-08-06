@@ -11,9 +11,21 @@
   let pageSize = 20
 
   $: hash = $page.url.searchParams.get('hash') || ''
-  $: orientation = $page.url.searchParams.get('orientation') || 'left-to-right'
+  $: orientation = $page.url.searchParams.get('orientation') || checkOrientation()
 
   //let hash = "0048b884a7098dc33b7ef4a7ff1cd22fce98de9e0d0801f247351df947f97c21"
+
+  function checkOrientation() {
+    let orientation = 'left-to-right' // Default value
+
+    if (window.matchMedia('(orientation: portrait)').matches) {
+      orientation = 'top-to-bottom'
+    } else if (window.matchMedia('(orientation: landscape)').matches) {
+      orientation = 'left-to-right'
+    }
+
+    return orientation
+  }
 
   async function getStatsData() {
     try {
