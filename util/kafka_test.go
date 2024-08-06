@@ -30,6 +30,7 @@ func Test_NewKafkaConsumer(t *testing.T) {
 }
 
 func Test_KafkaAsyncProducerConsumerAutoCommit(t *testing.T) {
+	SkipVeryLongTests(t)
 	ctx := context.Background()
 	workerCh := make(chan KafkaMessage)
 
@@ -82,6 +83,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit(t *testing.T) {
 }
 
 func Test_KafkaAsyncProducerWithManualCommitParams(t *testing.T) {
+	SkipVeryLongTests(t)
 	ctx := context.Background()
 	workerCh := make(chan KafkaMessage)
 
@@ -170,6 +172,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams(t *testing.T) {
 }
 
 func Test_KafkaAsyncProducerWithManualCommitErrorClosure(t *testing.T) {
+	SkipVeryLongTests(t)
 	ctx := context.Background()
 	workerCh := make(chan KafkaMessage)
 
