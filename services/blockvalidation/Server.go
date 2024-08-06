@@ -291,7 +291,12 @@ func (u *Server) Start(ctx context.Context) error {
 						return
 					case notification := <-subscription:
 						if notification.Type == model.NotificationType_Block {
-							block, err = u.blockchainClient.GetBlock(ctx, notification.Hash)
+							hash, err := chainhash.NewHash(notification.Hash)
+							if err != nil {
+								u.logger.Errorf("[BlockValidation] failed to parse block hash from notification: %v", err)
+								continue
+							}
+							block, err = u.blockchainClient.GetBlock(ctx, hash)
 							if err != nil {
 								u.logger.Errorf("[BlockValidation] failed getting block from blockchain service - NOT sending subtree to blockpersister kafka producer")
 							} else if block == nil {

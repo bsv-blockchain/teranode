@@ -128,7 +128,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 
 					if notification.Type == model.NotificationType_BlockSubtreesSet {
 
-						bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", notification.Hash.String())
+						bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", string(notification.Hash))
 
 						// if blocks, err := bv.blockchainClient.GetBlocksSubtreesNotSet(ctx); err != nil {
 						// 	bv.logger.Errorf("[BlockValidation:setMined] failed to getBlocksSubtreesNotSet: %s", err)
@@ -140,9 +140,14 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 						// 		}
 						// 	}
 						// }
-
+						// convert hash to chainhash
+						hash, err := chainhash.NewHash(notification.Hash)
+						if err != nil {
+							bv.logger.Errorf("[BlockValidation:setMined] failed to convert hash to chainhash: %s", err)
+							continue
+						}
 						// push block hash to the setMinedChan
-						bv.setMinedChan <- notification.Hash
+						bv.setMinedChan <- hash
 					}
 				}
 			}
