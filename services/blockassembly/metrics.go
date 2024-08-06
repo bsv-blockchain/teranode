@@ -71,7 +71,7 @@ func _initPrometheusMetrics() {
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
 			Name:      "get_mining_candidate_duration_millis",
-			Help:      "Duration of GetMiningCandidate in the blockassembly service",
+			Help:      "Histogram of GetMiningCandidate in the blockassembly service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
@@ -97,7 +97,7 @@ func _initPrometheusMetrics() {
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
 			Name:      "update_subtrees_ttl",
-			Help:      "Duration of updating subtrees TTL in the blockassembly service",
+			Help:      "Histogram of updating subtrees TTL in the blockassembly service",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
@@ -145,8 +145,8 @@ func _initPrometheusMetrics() {
 	prometheusBlockAssemblerTxMetaGetDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "tx_meta_get_duration_micros",
-			Help:      "Duration of reading tx meta data from txmeta store in block assembler",
+			Name:      "tx_meta_get",
+			Help:      "Histogram of reading tx meta data from txmeta store in block assembler",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
@@ -162,8 +162,8 @@ func _initPrometheusMetrics() {
 	prometheusBlockAssemblerReorgDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockassembly",
-			Name:      "reorg_duration_seconds",
-			Help:      "Duration of reorg in block assembler",
+			Name:      "reorg_duration",
+			Help:      "Histogram of reorg in block assembler",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)

@@ -573,7 +573,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 }
 
 func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model.Block, baseUrl string) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "checkParentProcessingComplete",
+	_, _, deferFn := tracing.StartTracing(ctx, "checkParentProcessingComplete",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[checkParentProcessingComplete][%s] called from %s", block.Hash().String(), baseUrl),
 	)

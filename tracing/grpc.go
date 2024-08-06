@@ -6,23 +6,22 @@ import (
 	"google.golang.org/grpc"
 )
 
-func AddGRPCDialOptions(opts []grpc.DialOption) []grpc.DialOption {
-	tracer := opentracing.GlobalTracer()
-	if tracer != nil {
-		opts = append(opts, grpc.WithUnaryInterceptor(otgrpc.OpenTracingClientInterceptor(tracer)))
-		opts = append(opts, grpc.WithStreamInterceptor(otgrpc.OpenTracingStreamClientInterceptor(tracer)))
+func GetGRPCClientTracerOptions(opts []grpc.DialOption, unaryClientInterceptors []grpc.UnaryClientInterceptor, streamClientInterceptors []grpc.StreamClientInterceptor) ([]grpc.DialOption, []grpc.UnaryClientInterceptor, []grpc.StreamClientInterceptor) {
+	if opentracing.IsGlobalTracerRegistered() {
+		tracer := opentracing.GlobalTracer()
+		unaryClientInterceptors = append(unaryClientInterceptors, otgrpc.OpenTracingClientInterceptor(tracer))
+		streamClientInterceptors = append(streamClientInterceptors, otgrpc.OpenTracingStreamClientInterceptor(tracer))
 	}
 
-	return opts
+	return opts, unaryClientInterceptors, streamClientInterceptors
 }
 
-func AddGRPCServerOptions(opts []grpc.ServerOption) []grpc.ServerOption {
-	tracer := opentracing.GlobalTracer()
-
+func GetGRPCServerTracerOptions(opts []grpc.ServerOption, unaryInterceptors []grpc.UnaryServerInterceptor, streamInterceptors []grpc.StreamServerInterceptor) ([]grpc.ServerOption, []grpc.UnaryServerInterceptor, []grpc.StreamServerInterceptor) {
 	if opentracing.IsGlobalTracerRegistered() {
-		opts = append(opts, grpc.ChainUnaryInterceptor(otgrpc.OpenTracingServerInterceptor(tracer)))
-		opts = append(opts, grpc.ChainStreamInterceptor(otgrpc.OpenTracingStreamServerInterceptor(tracer)))
+		tracer := opentracing.GlobalTracer()
+		unaryInterceptors = append(unaryInterceptors, otgrpc.OpenTracingServerInterceptor(tracer))
+		streamInterceptors = append(streamInterceptors, otgrpc.OpenTracingStreamServerInterceptor(tracer))
 	}
 
-	return opts
+	return opts, unaryInterceptors, streamInterceptors
 }

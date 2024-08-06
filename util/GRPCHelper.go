@@ -49,7 +49,6 @@ func (PasswordCredentials) RequireTransportSecurity() bool {
 type ConnectionOptions struct {
 	MaxMessageSize   int                 // Max message size in bytes
 	SecurityLevel    int                 // 0 = insecure, 1 = secure, 2 = secure with client cert
-	OpenTelemetry    bool                // Enable OpenTelemetry tracing
 	CertFile         string              // CA cert file if SecurityLevel > 0
 	CaCertFile       string              // CA cert file if SecurityLevel > 0
 	KeyFile          string              // Client key file if SecurityLevel > 1

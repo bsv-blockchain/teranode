@@ -184,7 +184,7 @@ func main() {
 			samplingRate = 0.01
 		}
 
-		_, closer, err := tracing.InitGlobalTracer(serviceName, samplingRate)
+		closer, err := tracing.InitOpenTracer(serviceName, samplingRate)
 		if err != nil {
 			logger.Warnf("failed to initialize tracer: %v", err)
 		}

@@ -51,7 +51,7 @@ func _initPrometheusMetrics() {
 	prometheusTransactionSize = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "propagation",
-			Name:      "transactions_size_v2",
+			Name:      "transactions_size",
 			Help:      "Size of transactions processed by the propagation service",
 			Buckets:   util.MetricsBucketsSize,
 		},

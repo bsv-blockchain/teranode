@@ -87,8 +87,8 @@ func _initPrometheusMetrics() {
 	prometheusBlockValidationProcessBlockFound = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "process_block_found_duration_seconds",
-			Help:      "Duration of process block found",
+			Name:      "process_block_found",
+			Help:      "Histogram of process block found",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
@@ -131,8 +131,8 @@ func _initPrometheusMetrics() {
 	prometheusBlockValidationReValidateBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "blockvalidation",
-			Name:      "revalidate_block_duration_seconds",
-			Help:      "Duration of re-validate block",
+			Name:      "revalidate_block",
+			Help:      "Histogram of re-validate block",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)

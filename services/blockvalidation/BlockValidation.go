@@ -553,6 +553,7 @@ CheckParentMined:
 	}
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
+	// TODO is this wrong? This block might not be on our chain.
 	// Add the coinbase transaction to the metaTxStore
 	// don't be tempted to rely on BlockAssembly to do this.
 	// We need to be sure that the coinbase transaction is stored before we try and do setMinedMulti().

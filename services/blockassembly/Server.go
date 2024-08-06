@@ -363,7 +363,7 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_api.AddTxBatchRequest) (*blockassembly_api.AddTxBatchResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "AddTxBatch",
 		tracing.WithParentStat(blockAssemblyStat),
-		tracing.WithLogMessage(ba.logger, "[AddTxBatch] called with %d transactions", len(batch.GetTxRequests())),
+		tracing.WithDebugLogMessage(ba.logger, "[AddTxBatch] called with %d transactions", len(batch.GetTxRequests())),
 	)
 	defer func() {
 		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))

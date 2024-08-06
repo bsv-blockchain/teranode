@@ -50,8 +50,8 @@ func _initPrometheusMetrics() {
 	prometheusSubtreeProcessorMoveUpBlockDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "subtreeprocessor",
-			Name:      "move_up_duration_seconds",
-			Help:      "Duration of moving up block in subtree processor",
+			Name:      "move_up_duration",
+			Help:      "Histogram of moving up block in subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
@@ -67,8 +67,8 @@ func _initPrometheusMetrics() {
 	prometheusSubtreeProcessorMoveDownBlockDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "subtreeprocessor",
-			Name:      "move_down_duration_seconds",
-			Help:      "Duration of moving down block in subtree processor",
+			Name:      "move_down_duration",
+			Help:      "Histogram of moving down block in subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)

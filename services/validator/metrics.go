@@ -82,7 +82,7 @@ func _initPrometheusMetrics() {
 	prometheusTransactionDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
-			Name:      "transactions_duration",
+			Name:      "transactions",
 			Help:      "Histogram of transaction processing by the validator service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},

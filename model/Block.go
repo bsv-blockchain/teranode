@@ -62,7 +62,7 @@ func _initPrometheusMetrics() {
 		prometheus.HistogramOpts{
 			Namespace: "block",
 			Name:      "from_bytes",
-			Help:      "Duration of BlockFromBytes",
+			Help:      "Histogram of Block.FromBytes",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
@@ -71,7 +71,7 @@ func _initPrometheusMetrics() {
 		prometheus.HistogramOpts{
 			Namespace: "block",
 			Name:      "valid",
-			Help:      "Duration of Block.Valid",
+			Help:      "Histogram of Block.Valid",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
@@ -80,7 +80,7 @@ func _initPrometheusMetrics() {
 		prometheus.HistogramOpts{
 			Namespace: "block",
 			Name:      "check_merkle_root",
-			Help:      "Duration of Block.CheckMerkleRoot",
+			Help:      "Histogram of Block.CheckMerkleRoot",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
@@ -89,7 +89,7 @@ func _initPrometheusMetrics() {
 		prometheus.HistogramOpts{
 			Namespace: "block",
 			Name:      "get_subtrees",
-			Help:      "Duration of Block.GetSubtrees",
+			Help:      "Histogram of Block.GetSubtrees",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
@@ -98,7 +98,7 @@ func _initPrometheusMetrics() {
 		prometheus.HistogramOpts{
 			Namespace: "block",
 			Name:      "get_and_validate_subtrees",
-			Help:      "Duration of Block.GetAndValidateSubtrees",
+			Help:      "Histogram of Block.GetAndValidateSubtrees",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
