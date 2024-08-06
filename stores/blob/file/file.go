@@ -236,6 +236,9 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTtl time.Duration, opts 
 	if newTtl == 0 {
 		// delete the ttl file
 		if err := os.Remove(fileName + ".ttl"); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return errors.NewStorageError("failed to remove ttl file", err)
 		}
 		return nil

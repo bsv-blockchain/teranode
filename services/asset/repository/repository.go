@@ -214,7 +214,7 @@ func (r *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) 
 }
 
 func (r *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	return r.SubtreeStore.GetIoReader(ctx, hash.CloneBytes())
+	return r.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 }
 
 func (r *Repository) GetSubtreeDataReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
