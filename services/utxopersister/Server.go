@@ -84,7 +84,7 @@ func (s *Server) Start(ctx context.Context) error {
 				return err
 			}
 
-		case <-time.After(10 * time.Second):
+		case <-time.After(1 * time.Minute):
 			if err := s.trigger(ctx, "timer"); err != nil {
 				return err
 			}
