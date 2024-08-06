@@ -52,6 +52,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Name: blockchain_api.FSMEventType_RUN.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_STOPPED.String(),
+					blockchain_api.FSMStateType_CATCHINGLEGACY.String(),
 				},
 				Dst: blockchain_api.FSMStateType_RUNNING.String(),
 			},
@@ -61,6 +62,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 					blockchain_api.FSMStateType_RUNNING.String(),
 					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+					blockchain_api.FSMStateType_CATCHINGLEGACY.String(),
 				},
 				Dst: blockchain_api.FSMStateType_MINING.String(),
 			},
@@ -68,6 +70,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Name: blockchain_api.FSMEventType_CATCHUPBLOCKS.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_MINING.String(),
+					blockchain_api.FSMStateType_CATCHINGLEGACY.String(),
 				},
 				Dst: blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 			},
@@ -75,8 +78,20 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Name: blockchain_api.FSMEventType_CATCHUPTXS.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_MINING.String(),
+					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+					blockchain_api.FSMStateType_CATCHINGLEGACY.String(),
 				},
 				Dst: blockchain_api.FSMStateType_CATCHINGTXS.String(),
+			},
+			{
+				Name: blockchain_api.FSMEventType_CATCHUPLEGACY.String(),
+				Src: []string{
+					blockchain_api.FSMStateType_RUNNING.String(),
+					blockchain_api.FSMStateType_MINING.String(),
+					blockchain_api.FSMStateType_CATCHINGTXS.String(),
+					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+				},
+				Dst: blockchain_api.FSMStateType_CATCHINGLEGACY.String(),
 			},
 			{
 				Name: blockchain_api.FSMEventType_STOP.String(),
@@ -85,6 +100,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 					blockchain_api.FSMStateType_MINING.String(),
 					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+					blockchain_api.FSMStateType_CATCHINGLEGACY.String(),
 				},
 				Dst: blockchain_api.FSMStateType_STOPPED.String(),
 			},
