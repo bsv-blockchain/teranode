@@ -3,6 +3,7 @@ SHELL=/bin/bash
 DEBUG_FLAGS=
 RACE_FLAGS=
 TXMETA_TAG=
+SETTINGS_CONTEXT_DEFAULT := docker.ci
 
 .PHONY: set_debug_flags
 set_debug_flags:
@@ -175,10 +176,10 @@ ifdef test
 	# TEST_DIR := "$(firstword $(subst ., ,$(test)))"
 	# TEST_NAME := "$(word 2,$(subst ., ,$(test)))"
 	cd test/$(firstword $(subst ., ,$(test))) && \
-	SETTINGS_CONTEXT=docker.ci go test -run $(word 2,$(subst ., ,$(test)))
+	SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -run $(word 2,$(subst ., ,$(test)))
 else
 	cd test/e2e && \
-	SETTINGS_CONTEXT=docker.ci.tc1.run go test
+	SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test
 endif
 
 

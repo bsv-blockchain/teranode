@@ -15,23 +15,24 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	block_model "github.com/bitcoin-sv/ubsv/model"
+	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
+	utxom "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
+	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
-
-	block_model "github.com/bitcoin-sv/ubsv/model"
-	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
-	utxom "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
-	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 )
 
 type Transaction struct {
@@ -475,3 +476,77 @@ func CreateAndSendRawTxs(ctx context.Context, node tf.BitcoinNode, count int) ([
 // }
 
 // tx := response.Tx
+
+func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulogger.Logger) (bool, error) {
+	// Send transactions
+	txDistributor, _ := distributor.NewDistributor(ctx, logger,
+		distributor.WithBackoffDuration(200*time.Millisecond),
+		distributor.WithRetryAttempts(3),
+		distributor.WithFailureTolerance(0),
+	)
+
+	coinbaseClient := node.CoinbaseClient
+	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to decode Coinbase private key: %v", err)
+	}
+
+	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to generate private key: %v", err)
+	}
+
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to create address: %v", err)
+	}
+
+	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to request funds: %v", err)
+	}
+	fmt.Printf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
+
+	_, err = txDistributor.SendTransaction(ctx, tx)
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to send transaction: %v", err)
+	}
+
+	fmt.Printf("Transaction sent: %s %v\n", tx.TxIDChainHash(), len(tx.Outputs))
+
+	utxo := &bt.UTXO{
+		TxIDHash:      tx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: tx.Outputs[0].LockingScript,
+		Satoshis:      tx.Outputs[0].Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+	if err != nil {
+		return false, errors.NewProcessingError("Error adding UTXO to transaction: %s\n", err)
+	}
+
+	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
+	if err != nil {
+		return false, errors.NewProcessingError("Error adding output to transaction: %v", err)
+	}
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		return false, errors.NewProcessingError("Error filling transaction inputs: %v", err)
+	}
+
+	_, err = txDistributor.SendTransaction(ctx, newTx)
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to send new transaction: %v", err)
+	}
+
+	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
+	time.Sleep(5 * time.Second)
+
+	return true, nil
+}
