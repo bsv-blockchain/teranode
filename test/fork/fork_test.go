@@ -127,11 +127,11 @@ func TestRejectLongerChainWithDoubleSpend(t *testing.T) {
 			case <-done:
 				return
 			default:
-				response, err := blockchainNode1.GetFSMCurrentState(context.Background())
-				if err == nil && (lastState == nil || *response != *lastState) {
+				response := blockchainNode1.GetFSMCurrentState()
+				if err == nil && (lastState == nil || response != *lastState) {
 					mu.Lock()
-					states = append(states, *response)
-					lastState = response
+					states = append(states, response)
+					lastState = &response
 					mu.Unlock()
 				}
 				time.Sleep(10 * time.Millisecond)
@@ -223,11 +223,11 @@ func TestRejectChainWithDoubleSpend(t *testing.T) {
 			case <-done:
 				return
 			default:
-				response, err := blockchainNode1.GetFSMCurrentState(context.Background())
-				if err == nil && (lastState == nil || *response != *lastState) {
+				response := blockchainNode1.GetFSMCurrentState()
+				if err == nil && (lastState == nil || response != *lastState) {
 					mu.Lock()
-					states = append(states, *response)
-					lastState = response
+					states = append(states, response)
+					lastState = &response
 					mu.Unlock()
 				}
 				time.Sleep(10 * time.Millisecond)
