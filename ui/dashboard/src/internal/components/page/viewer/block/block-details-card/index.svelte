@@ -74,6 +74,8 @@
     >
       <Icon name="icon-reeverse-line" size={15} />
     </div>
+    &nbsp;&nbsp;&nbsp;
+    <a href="/forks/?hash={expandedHeader.hash}">forks</a>
   </div>
   <div class="btns" slot="header-tools">
     <Button
