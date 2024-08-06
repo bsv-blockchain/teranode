@@ -46,7 +46,7 @@ type BlockAssembler struct {
 	currentChainMap            map[chainhash.Hash]uint32
 	currentChainMapIDs         map[uint32]struct{}
 	currentChainMapMu          sync.RWMutex
-	blockchainSubscriptionCh   chan *model.Notification
+	blockchainSubscriptionCh   chan *blockchain_api.Notification
 	maxBlockReorgRollback      int
 	maxBlockReorgCatchup       int
 	difficultyAdjustmentWindow int
@@ -199,13 +199,11 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					})
 				} else {
 					// check if current state is mining
-					state, err := b.blockchainClient.GetFSMCurrentState(ctx)
-					if err != nil {
-						// TODO: should we add retry? or do something else?
-						b.logger.Errorf("[BlockValidation][checkIfMiningShouldStop] failed to get current state [%w]", err)
-					}
+					state := b.blockchainClient.GetFSMCurrentState()
 
-					if state != nil && *state == blockchain_api.FSMStateType_MINING {
+					b.logger.Debugf("[BlockAssembler] current state: %s", state)
+
+					if state == blockchain_api.FSMStateType_MINING {
 						miningCandidate, subtrees, err := b.getMiningCandidate()
 						utils.SafeSend(responseCh, &miningCandidateResponse{
 							miningCandidate: miningCandidate,

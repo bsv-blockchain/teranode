@@ -2,6 +2,8 @@ package blockassembly
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"net/url"
 
 	"time"
 
@@ -154,9 +156,13 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				// this is the dumbest way we can think of to fix it, at least temporarily
 				time.Sleep(20 * time.Millisecond)
 
-				if err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
-					Type: model.NotificationType_Subtree,
-					Hash: &subtreeRetry.subtreeHash,
+				if err = ba.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
+					Type:    model.NotificationType_Subtree,
+					Hash:    (&subtreeRetry.subtreeHash)[:],
+					BaseUrl: "",
+					Metadata: &blockchain_api.NotificationMetadata{
+						Metadata: nil,
+					},
 				}); err != nil {
 					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to send subtree notification: %s", subtreeRetry.subtreeHash.String(), err)
 				}
@@ -253,9 +259,13 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 	// this is the dumbest way we can think of to fix it, at least temporarily
 	time.Sleep(20 * time.Millisecond)
 
-	if err = ba.blockchainClient.SendNotification(ctx, &model.Notification{
-		Type: model.NotificationType_Subtree,
-		Hash: subtree.RootHash(),
+	if err = ba.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
+		Type:    model.NotificationType_Subtree,
+		Hash:    subtree.RootHash()[:],
+		BaseUrl: "",
+		Metadata: &blockchain_api.NotificationMetadata{
+			Metadata: nil,
+		},
 	}); err != nil {
 		return errors.NewServiceError("[BlockAssembly:Init][%s] failed to send subtree notification", subtree.RootHash().String(), err)
 	}
@@ -269,6 +279,11 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 		return errors.NewServiceError("failed to start block assembler", err)
 	}
 
+	kafkaURL, err, ok := gocore.Config().GetURL("kafka_txsConfig")
+	if err == nil && ok {
+		go ba.startKafkaListener(ctx, kafkaURL)
+	}
+
 	// this will block
 	if err = util.StartGRPCServer(ctx, ba.logger, "blockassembly", func(server *grpc.Server) {
 		blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
@@ -277,6 +292,57 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 	}
 
 	return nil
+}
+
+func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
+	workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
+	if workers < 1 {
+		// no workers, nothing to do
+		return
+	}
+	ba.logger.Infof("[BlockAssembly] starting Kafka listener")
+
+	consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
+	if consumerRatio < 1 {
+		consumerRatio = 1
+	}
+	partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
+	consumerCount := partitions / consumerRatio
+	if consumerCount < 0 {
+		consumerCount = 1
+	}
+	ba.logger.Infof("[BlockAssembly] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
+	// updates the stats every 5 seconds
+	go func() {
+		for {
+			time.Sleep(5 * time.Second)
+			prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+			prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
+			prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+		}
+	}()
+
+	// TODO GOKHAN: Check error handling
+	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaURL, "blockassembly", nil, consumerCount, true, func(msg util.KafkaMessage) error {
+		startTime := time.Now()
+		data, err := NewFromBytes(msg.Message.Value)
+		if err != nil {
+			ba.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
+			return err
+		}
+		if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
+			Txid: data.TxIDChainHash.CloneBytes(),
+			Fee:  data.Fee,
+			Size: data.Size,
+		}); err != nil {
+			ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
+			return err
+		}
+		prometheusBlockAssemblerSetFromKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+		return nil
+	}); err != nil {
+		ba.logger.Errorf("[BlockAssembly] failed to start Kafka listener: %s", err)
+	}
 }
 
 func (ba *BlockAssembly) Stop(_ context.Context) error {
@@ -452,9 +518,13 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 
 	go func() {
 		previousHash, _ := chainhash.NewHash(miningCandidate.PreviousHash)
-		if err := ba.blockchainClient.SendNotification(callerSpan.Ctx, &model.Notification{
-			Type: model.NotificationType_MiningOn,
-			Hash: previousHash,
+		if err := ba.blockchainClient.SendNotification(callerSpan.Ctx, &blockchain_api.Notification{
+			Type:    model.NotificationType_MiningOn,
+			Hash:    previousHash[:],
+			BaseUrl: "",
+			Metadata: &blockchain_api.NotificationMetadata{
+				Metadata: nil,
+			},
 		}); err != nil {
 			ba.logger.Errorf("failed to send mining on notification: %s", err)
 		}

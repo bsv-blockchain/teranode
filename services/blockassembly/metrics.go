@@ -25,9 +25,9 @@ var (
 	prometheusBlockAssemblerSubtrees           prometheus.Gauge
 	prometheusBlockAssemblerTxMetaGetDuration  prometheus.Histogram
 
-	prometheusBlockAssemblerReorg         prometheus.Counter
-	prometheusBlockAssemblerReorgDuration prometheus.Histogram
-	//prometheusBlockAssemblerSetFromKafka      prometheus.Histogram
+	prometheusBlockAssemblerReorg             prometheus.Counter
+	prometheusBlockAssemblerReorgDuration     prometheus.Histogram
+	prometheusBlockAssemblerSetFromKafka      prometheus.Histogram
 	prometheusBlockAssemblyBestBlockHeight    prometheus.Gauge
 	prometheusBlockAssemblyCurrentBlockHeight prometheus.Gauge
 )
