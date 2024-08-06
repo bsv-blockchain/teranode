@@ -41,6 +41,7 @@ type Server struct {
 	deadSubscriptions chan subscriber
 	subscribers       map[subscriber]bool
 	stats             *gocore.Stat
+	ctx               context.Context
 }
 
 // NewServer will return a server instance with the logger stored within it
@@ -62,6 +63,8 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {
+	v.ctx = ctx
+
 	v.validator, err = New(ctx, v.logger, v.utxoStore)
 	if err != nil {
 		return errors.NewServiceError("could not create validator", err)
@@ -152,10 +155,11 @@ func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*
 }
 
 func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {
-	start := gocore.CurrentTime()
-	defer func() {
-		v.stats.NewStat("ValidateTransactionStream", true).AddTime(start)
-	}()
+	_, _, deferFn := tracing.StartTracing(v.ctx, "ValidateTransactionStream",
+		tracing.WithParentStat(v.stats),
+		tracing.WithHistogram(prometheusValidateTransaction),
+	)
+	defer deferFn()
 
 	transactionData := bytes.Buffer{}
 
@@ -187,30 +191,23 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 		return status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
 	}
 
-	// increment prometheus counter
-	prometheusProcessedTransactions.Inc()
-
 	return stream.SendAndClose(&validator_api.ValidateTransactionResponse{
 		Valid: true,
 	})
 }
 
-func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
-	start, stat, ctx := tracing.NewStatFromContext(cntxt, "ValidateTransaction", v.stats)
-	defer func() {
-		stat.AddTime(start)
-		prometheusProcessedTransactions.Inc()
-		prometheusTransactionDuration.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
-
-	traceSpan := tracing.Start(ctx, "Validator:ValidateTransaction")
-	defer traceSpan.Finish()
+func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.ValidateTransactionRequest) (*validator_api.ValidateTransactionResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateTransaction",
+		tracing.WithParentStat(v.stats),
+		tracing.WithHistogram(prometheusValidateTransaction),
+		tracing.WithDebugLogMessage(v.logger, "[ValidateTransaction] called"),
+	)
+	defer deferFn()
 
 	transactionData := req.GetTransactionData()
 	tx, err := bt.NewTxFromBytes(transactionData)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		traceSpan.RecordError(err)
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
 		}, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
@@ -220,7 +217,6 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 	err = v.validator.Validate(ctx, tx, req.BlockHeight)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		traceSpan.RecordError(err)
 		v.sendInvalidTxNotification(tx.TxID(), err.Error())
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
@@ -234,23 +230,26 @@ func (v *Server) ValidateTransaction(cntxt context.Context, req *validator_api.V
 	}, nil
 }
 
-func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
-	start, stat, ctx := tracing.NewStatFromContext(cntxt, "ValidateTransactionBatch", v.stats)
-	defer func() {
-		stat.AddTime(start)
-		prometheusTransactionValidateBatch.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
+func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_api.ValidateTransactionBatchRequest) (*validator_api.ValidateTransactionBatchResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "ValidateTransactionBatch",
+		tracing.WithParentStat(v.stats),
+		tracing.WithHistogram(prometheusTransactionValidateBatch),
+		tracing.WithDebugLogMessage(v.logger, "[ValidateTransactionBatch] called for %d transactions", len(req.GetTransactions())),
+	)
+	defer deferFn()
 
 	errReasons := make([]*validator_api.ValidateTransactionError, 0, len(req.GetTransactions()))
 	for _, reqItem := range req.GetTransactions() {
 		tx, err := v.ValidateTransaction(ctx, reqItem)
 		if err != nil {
-			v.sendInvalidTxNotification(tx.String(), tx.Reason)
+			if tx != nil {
+				v.sendInvalidTxNotification(tx.String(), tx.Reason)
 
-			errReasons = append(errReasons, &validator_api.ValidateTransactionError{
-				TxId:   tx.String(),
-				Reason: tx.Reason,
-			})
+				errReasons = append(errReasons, &validator_api.ValidateTransactionError{
+					TxId:   tx.String(),
+					Reason: tx.Reason,
+				})
+			}
 		}
 	}
 
@@ -260,7 +259,13 @@ func (v *Server) ValidateTransactionBatch(cntxt context.Context, req *validator_
 	}, nil
 }
 
-func (v *Server) GetBlockHeight(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetBlockHeightResponse, error) {
+func (v *Server) GetBlockHeight(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetBlockHeightResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeight",
+		tracing.WithParentStat(v.stats),
+		tracing.WithDebugLogMessage(v.logger, "[GetBlockHeight] called"),
+	)
+	defer deferFn()
+
 	blockHeight, err := v.validator.GetBlockHeight()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "cannot get block height: %v", err)

@@ -107,9 +107,9 @@ func (v *Validator) GetBlockHeight() (height uint32, err error) {
 	return v.utxoStore.GetBlockHeight()
 }
 
-// TODO try to break this
-func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
-	start, stat, ctx := tracing.NewStatFromContext(cntxt, "Validate", v.stats)
+// Validate validates a transaction
+func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
+	start, stat, ctx := tracing.NewStatFromContext(ctx, "Validate", v.stats)
 	defer func() {
 		stat.AddTime(start)
 		prometheusTransactionValidateTotal.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
@@ -120,21 +120,6 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 
 	defer func(reservedUtxos *[]*utxo.Spend) {
 		traceSpan.Finish()
-
-		//if r := recover(); r != nil {
-		//	buf := make([]byte, 1024)
-		//	runtime.Stack(buf, false)
-		//
-		//	//if reservedUtxos != nil && len(*reservedUtxos) > 0 {
-		//	//	// TODO is this correct in the recover? should we be reversing the utxos?
-		//	//	spanCtx := tracing.Start(ctx, "Validator:Validate:Recover")
-		//	//	if reverseErr := v.reverseSpends(spanCtx, *reservedUtxos); reverseErr != nil {
-		//	//		v.logger.Errorf("[Validate][%s] error reversing utxos: %v", tx.TxID(), reverseErr)
-		//	//	}
-		//	//}
-		//
-		//	v.logger.Errorf("[Validate][%s] Validate recover [stack=%s]: %v", tx.TxID(), string(buf), r)
-		//}
 	}(&spentUtxos)
 
 	if tx.IsCoinbase() {

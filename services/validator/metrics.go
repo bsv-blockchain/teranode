@@ -10,13 +10,12 @@ import (
 
 var (
 	prometheusHealth                              prometheus.Counter
-	prometheusProcessedTransactions               prometheus.Counter
 	prometheusInvalidTransactions                 prometheus.Counter
 	prometheusTransactionValidateTotal            prometheus.Histogram
 	prometheusTransactionValidate                 prometheus.Histogram
 	prometheusTransactionValidateBatch            prometheus.Histogram
 	prometheusTransactionSpendUtxos               prometheus.Histogram
-	prometheusTransactionDuration                 prometheus.Histogram
+	prometheusValidateTransaction                 prometheus.Histogram
 	prometheusTransactionSize                     prometheus.Histogram
 	prometheusValidatorSendToBlockAssembly        prometheus.Histogram
 	prometheusValidatorSendToBlockAssemblyKafka   prometheus.Histogram
@@ -79,7 +78,7 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)
-	prometheusTransactionDuration = promauto.NewHistogram(
+	prometheusValidateTransaction = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "validator",
 			Name:      "transactions",
