@@ -51,6 +51,7 @@ type Blockchain struct {
 	blockKafkaProducer util.KafkaProducerI
 	stats              *gocore.Stat
 	finiteStateMachine *fsm.FSM
+	client             ClientI
 }
 
 // New will return a server instance with the logger stored within it
