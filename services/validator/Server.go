@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"syscall"
@@ -42,10 +45,11 @@ type Server struct {
 	subscribers       map[subscriber]bool
 	stats             *gocore.Stat
 	ctx               context.Context
+	blockchainClient  blockchain.ClientI
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxo.Store) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blockchain.ClientI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
@@ -55,6 +59,7 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Store) *Server {
 		deadSubscriptions: make(chan subscriber, 10),
 		subscribers:       make(map[subscriber]bool),
 		stats:             gocore.NewStat("validator"),
+		blockchainClient:  blockchainClient,
 	}
 }
 
@@ -97,6 +102,12 @@ func (v *Server) Start(ctx context.Context) error {
 		}
 	}()
 
+	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
+	if err == nil && ok {
+		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
+		go v.startKafkaListener(ctx, kafkaURL)
+	}
+
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
 		validator_api.RegisterValidatorAPIServer(server, v)
@@ -105,6 +116,64 @@ func (v *Server) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
+	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
+	if workers < 1 {
+		// no workers, nothing to do
+		return
+	}
+	v.logger.Infof("[Validator Server] starting Kafka listener")
+
+	consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
+	if consumerRatio < 1 {
+		consumerRatio = 1
+	}
+
+	partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
+
+	consumerCount := partitions / consumerRatio
+	if consumerCount < 0 {
+		consumerCount = 1
+	}
+
+	v.logger.Infof("[Validator] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
+
+	// TODO (Gokhan): Check error handling
+	if err := util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "blockassembly", nil, consumerCount, true, func(msg util.KafkaMessage) error {
+		//startTime := time.Now()
+		for v.blockchainClient.GetFSMCurrentState() == blockchain_api.FSMStateType_CATCHINGTXS {
+			v.logger.Debugf("[BlockAssembly] Waiting for FSM to finish catching txs")
+			time.Sleep(1 * time.Second) // Wait and check again in 1 second
+		}
+
+		data, err := NewTxValidationDataFromBytes(msg.Message.Value)
+		if err != nil {
+			prometheusInvalidTransactions.Inc()
+			v.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
+			return err
+		}
+
+		tx, err := bt.NewTxFromBytes(data.Tx)
+		if err != nil {
+			prometheusInvalidTransactions.Inc()
+			v.logger.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %w", err)
+			return err
+		}
+
+		if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil {
+			prometheusInvalidTransactions.Inc()
+			v.logger.Errorf("[BlockAssembly] Invalid tx: %s", err)
+			return err
+		}
+
+		//prometheusProcessedTransactions.Inc()
+		//prometheusTransactionDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+		return nil
+	}); err != nil {
+		v.logger.Errorf("[BlockAssembly] failed to start Kafka listener: %s", err)
+	}
 }
 
 func (v *Server) Stop(_ context.Context) error {

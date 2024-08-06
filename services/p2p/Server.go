@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"net/http"
 	"time"
 
@@ -273,7 +274,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 	}
 
 	// define vars here to prevent too many allocs
-	var notification *model.Notification
+	var notification *blockchain_api.Notification
 	var blockMessage p2p.BlockMessage
 	var miningOnMessage p2p.MiningOnMessage
 	var subtreeMessage p2p.SubtreeMessage
@@ -291,10 +292,15 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				continue
 			}
 			// received a message
-			s.logger.Debugf("P2P Received %s notification: %s", notification.Type, notification.Hash.String())
+			s.logger.Debugf("P2P Received %s notification: %s", notification.Type, string(notification.Hash))
+			hash, err := chainhash.NewHash(notification.Hash)
+			if err != nil {
+				s.logger.Errorf("error getting chainhash from notification hash %s: %v", notification.Hash, err)
+				continue
+			}
 
 			if notification.Type == model.NotificationType_Block {
-				_, meta, err := s.blockchainClient.GetBlockHeader(ctx, notification.Hash)
+				_, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
 				// // _, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 				// // // block, err := s.blockchainClient.GetBlock(ctx, notification.Hash)
 				if err != nil {
@@ -303,7 +309,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				}
 
 				blockMessage = p2p.BlockMessage{
-					Hash:       notification.Hash.String(),
+					Hash:       hash.String(),
 					Height:     meta.Height,
 					DataHubUrl: s.AssetHttpAddressURL,
 					PeerId:     s.P2PNode.HostID().String(),
@@ -348,7 +354,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 			} else if notification.Type == model.NotificationType_Subtree {
 				// if it's a subtree notification send it on the subtree channel.
 				subtreeMessage = p2p.SubtreeMessage{
-					Hash:       notification.Hash.String(),
+					Hash:       hash.String(),
 					DataHubUrl: s.AssetHttpAddressURL,
 					PeerId:     s.P2PNode.HostID().String(),
 				}

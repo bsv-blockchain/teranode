@@ -106,18 +106,6 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestValidate_ValidTransaction(t *testing.T) {
-}
-
-func TestValidate_InValidDoubleSpendTx(t *testing.T) {
-}
-
-func TestValidate_TxMetaStoreError(t *testing.T) {
-}
-
-func TestValidate_BlockAssemblyError(t *testing.T) {
-}
-
 func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3b80(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -142,7 +130,6 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 
 	err = v.validateTransaction(span, tx, height)
 	require.NoError(t, err)
-
 }
 
 func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840cda6(t *testing.T) {
@@ -169,7 +156,6 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 
 	err = v.validateTransaction(span, tx, height)
 	require.NoError(t, err)
-
 }
 
 func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d604(t *testing.T) {
@@ -196,7 +182,6 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	err = v.validateTransaction(span, tx, height)
 	require.NoError(t, err)
-
 }
 
 // func TestValidateTxdad5ecab132387e8e9b4e0330910c71930e637d840a5818eb92928668e52bbe5(t *testing.T) {
@@ -246,5 +231,4 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 
 	err = v.validateTransaction(span, tx, height)
 	require.NoError(t, err)
-
 }

@@ -335,6 +335,7 @@ func main() {
 			if err = sm.AddService("Validator", validator.NewServer(
 				logger.New("valid"),
 				getUtxoStore(ctx, logger),
+				blockchainClient,
 			)); err != nil {
 				panic(err)
 			}

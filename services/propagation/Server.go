@@ -49,9 +49,10 @@ var (
 type PropagationServer struct {
 	status atomic.Uint32
 	propagation_api.UnsafePropagationAPIServer
-	logger    ulogger.Logger
-	txStore   blob.Store
-	validator validator.Interface
+	logger             ulogger.Logger
+	txStore            blob.Store
+	validator          validator.Interface
+	validatorKafkaChan chan []byte
 }
 
 // New will return a server instance with the logger stored within it
@@ -112,6 +113,26 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	}
 
 	ps.status.Store(2)
+
+	ps.logger.Debugf("GOKHAN setting kafka validator channel")
+	//  kafka channel setup
+	validatortxsKafkaURL, _, found := gocore.Config().GetURL("kafka_validatortxsConfig")
+	if !found {
+		return fmt.Errorf("kafka_validatortxsConfig not found, valdiator channel configuration is required")
+	}
+	ps.logger.Infof("[Validator] connecting to kafka for sending txs at %s", validatortxsKafkaURL)
+	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
+	if workers > 0 {
+		ps.validatorKafkaChan = make(chan []byte, 10_000)
+		go func() {
+			// TODO (GOKHAN): add retry
+			if err := util.StartAsyncProducer(ps.logger, validatortxsKafkaURL, ps.validatorKafkaChan); err != nil {
+				ps.logger.Errorf("[Propagation Server] error starting kafka producer: %v", err)
+				return
+			}
+		}()
+		ps.logger.Infof("[Propagation Server] connected to kafka for sending transactions to validator at %s", validatortxsKafkaURL)
+	}
 
 	// this will block
 	maxConnectionAge, _, _ := gocore.Config().GetDuration("propagation_grpcMaxConnectionAge", 90*time.Second)
@@ -448,14 +469,41 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
-	// All transactions entering Teranode can be assumed to be after Genesis activation height
-	if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
-		err = errors.NewServiceError("failed validating transaction", err)
-		ps.logger.Debugf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
+	if ps.validatorKafkaChan != nil {
+		validatorData := &validator.TxValidationData{
+			Tx:     req.Tx,
+			Height: util.GenesisActivationHeight,
+		}
 
-		prometheusInvalidTransactions.Inc()
-		return err
+		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
+		ps.validatorKafkaChan <- validatorData.Bytes()
+	} else {
+		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
+
+		// All transactions entering Teranode can be assumed to be after Genesis activation height
+		if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
+			if errors.Is(err, validator.ErrInternal) {
+				err = fmt.Errorf("%v: %w", err, ErrInternal)
+			} else if errors.Is(err, validator.ErrBadRequest) {
+				err = fmt.Errorf("%v: %w", err, ErrBadRequest)
+			}
+
+			// TEMP: Log the error for now
+			ps.logger.Errorf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
+
+			prometheusInvalidTransactions.Inc()
+			return err
+		}
 	}
+
+	// All transactions entering Teranode can be assumed to be after Genesis activation height
+	//if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
+	//	err = errors.NewServiceError("failed validating transaction", err)
+	//	ps.logger.Debugf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
+	//
+	//	prometheusInvalidTransactions.Inc()
+	//	return err
+	//}
 
 	prometheusTransactionSize.Observe(float64(len(req.Tx)))
 	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
@@ -506,6 +554,7 @@ func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) 
 	ctx, _, deferFn := tracing.StartTracing(ctx, "PropagationServer:Set:Store")
 	defer deferFn()
 
+	// TODO (Gokhan): add retry
 	if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), btTx.ExtendedBytes()); err != nil {
 		// TODO make this resilient to errors
 		// write it to secondary store (Kafka, Badger) and retry?

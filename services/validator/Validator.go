@@ -108,8 +108,10 @@ func (v *Validator) GetBlockHeight() (height uint32, err error) {
 }
 
 // Validate validates a transaction
-func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
-	start, stat, ctx := tracing.NewStatFromContext(ctx, "Validate", v.stats)
+func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
+	v.logger.Debugf("[Validate][%s] validating transaction", tx.TxIDChainHash().String())
+
+	start, stat, ctx := tracing.NewStatFromContext(cntxt, "Validate", v.stats)
 	defer func() {
 		stat.AddTime(start)
 		prometheusTransactionValidateTotal.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
@@ -313,6 +315,8 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 
 	span := tracing.Start(ctx, "sendToBlockAssembler")
 	defer span.Finish()
+
+	v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 
 	if v.blockassemblyKafkaChan != nil {
 		start := time.Now()
