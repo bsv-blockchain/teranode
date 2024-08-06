@@ -20,6 +20,7 @@ var (
 	prometheusValidatorSendToBlockAssembly        prometheus.Histogram
 	prometheusValidatorSendToBlockAssemblyKafka   prometheus.Histogram
 	prometheusValidatorSendToBlockValidationKafka prometheus.Histogram
+	prometheusValidatorSendToP2PKafka             prometheus.Histogram
 	prometheusValidatorSetTxMeta                  prometheus.Histogram
 )
 
@@ -115,6 +116,14 @@ func _initPrometheusMetrics() {
 			Namespace: "validator",
 			Name:      "send_to_blockvalidation_kafka",
 			Help:      "Histogram of sending transactions to block validation kafka",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+	prometheusValidatorSendToP2PKafka = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "validator",
+			Name:      "send_to_p2p_kafka",
+			Help:      "Histogram of sending rejected transactions to p2p kafka",
 			Buckets:   util.MetricsBucketsMicroSeconds,
 		},
 	)

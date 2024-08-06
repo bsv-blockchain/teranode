@@ -34,6 +34,7 @@ type Validator struct {
 	blockAssemblyDisabled  bool
 	blockassemblyKafkaChan chan []byte
 	txMetaKafkaChan        chan []byte
+	rejectedTxKafkaChan    chan []byte
 	stats                  *gocore.Stat
 }
 
@@ -65,7 +66,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 			go func() {
 				// TODO add retry
 				if err := util.StartAsyncProducer(v.logger, txsKafkaURL, v.blockassemblyKafkaChan); err != nil {
-					v.logger.Errorf("[Validator] error starting kafka producer: %v", err)
+					v.logger.Errorf("[Validator] error starting kafka producer for Txs: %v", err)
 					return
 				}
 			}()
@@ -84,12 +85,31 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 			go func() {
 				// TODO add retry
 				if err := util.StartAsyncProducer(v.logger, txmetaKafkaURL, v.txMetaKafkaChan); err != nil {
-					v.logger.Errorf("[Validator] error starting kafka producer: %v", err)
+					v.logger.Errorf("[Validator] error starting kafka producer for txMeta: %v", err)
 					return
 				}
 			}()
 
 			logger.Infof("[Validator] connected to kafka at %s", txmetaKafkaURL.Host)
+		}
+	}
+
+	rejectedTxKafkaURL, _, found := gocore.Config().GetURL("kafka_rejectedTxConfig")
+	if found {
+		workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
+		// only start the kafka producer if there are workers listening
+		// this can be used to disable the kafka producer, by just setting workers to 0
+		if workers > 0 {
+			v.rejectedTxKafkaChan = make(chan []byte, 10000)
+			go func() {
+				// TODO add retry
+				if err := util.StartAsyncProducer(v.logger, rejectedTxKafkaURL, v.rejectedTxKafkaChan); err != nil {
+					v.logger.Errorf("[Validator] error starting kafka producer for rejected Txs: %v", err)
+					return
+				}
+			}()
+
+			logger.Infof("[Validator] connected to kafka at %s", rejectedTxKafkaURL.Host)
 		}
 	}
 
@@ -109,6 +129,19 @@ func (v *Validator) GetBlockHeight() (height uint32, err error) {
 
 // Validate validates a transaction
 func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
+	if err = v.validateInternal(ctx, tx, blockHeight); err != nil {
+		if v.rejectedTxKafkaChan != nil {
+			startKafka := time.Now()
+			v.rejectedTxKafkaChan <- append(tx.TxIDChainHash().CloneBytes(), err.Error()...)
+			prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
+		}
+
+	}
+
+	return err
+}
+
+func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
 	start, stat, ctx := tracing.NewStatFromContext(ctx, "Validate", v.stats)
 	defer func() {
 		stat.AddTime(start)

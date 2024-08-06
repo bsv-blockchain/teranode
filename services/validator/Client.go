@@ -2,13 +2,11 @@ package validator
 
 import (
 	"context"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	_ "github.com/bitcoin-sv/ubsv/k8sresolver"
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -159,51 +157,4 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*validator_ap
 	if len(resp.Reasons) > 0 {
 		c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
 	}
-}
-
-func (c *Client) Subscribe(ctx context.Context, source string) (chan *model.RejectedTxNotification, error) {
-	ch := make(chan *model.RejectedTxNotification)
-
-	go func() {
-		<-ctx.Done()
-		c.logger.Infof("[Asset] context done, closing subscription: %s", source)
-		c.running.Store(false)
-		err := c.conn.Close()
-		if err != nil {
-			c.logger.Errorf("[Asset] failed to close connection", err)
-		}
-	}()
-
-	go func() {
-		defer close(ch)
-
-		for c.running.Load() {
-			stream, err := c.client.Subscribe(ctx, &validator_api.SubscribeRequest{
-				Source: source,
-			})
-			if err != nil {
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			for c.running.Load() {
-				resp, err := stream.Recv()
-				if err != nil {
-					if !strings.Contains(err.Error(), context.Canceled.Error()) {
-						c.logger.Errorf("[Validator] failed to receive notification: %v", err)
-					}
-					time.Sleep(1 * time.Second)
-					break
-				}
-
-				c.logger.Debugf("[Validator] received notification %+v", resp)
-				ch <- &model.RejectedTxNotification{
-					TxId:   resp.TxId,
-					Reason: resp.Reason,
-				}
-			}
-		}
-	}()
-
-	return ch, nil
 }

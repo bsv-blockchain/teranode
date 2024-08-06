@@ -3,17 +3,18 @@ package util
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
-	"math/rand"
-	"strconv"
-	"sync"
-	"testing"
-	"time"
 )
 
 func Test_NewKafkaConsumer(t *testing.T) {
