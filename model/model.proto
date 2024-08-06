@@ -35,7 +35,7 @@ enum NotificationType {
   Subtree = 1;
   Block = 2;
   MiningOn = 3;
-  FSMEvent = 4;
+  FSMState = 4;
   BlockSubtreesSet = 5;
 }
 
