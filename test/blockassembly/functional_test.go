@@ -8,6 +8,7 @@ package test
 
 import (
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"os"
 	"testing"
 	"time"
@@ -79,7 +80,9 @@ func TestNode(t *testing.T) {
 				return
 			case notification := <-blockchainSubscription:
 				if notification.Type == model.NotificationType_Subtree {
-					hashes = append(hashes, notification.Hash)
+					hash, err := chainhash.NewHash(notification.Hash)
+					require.NoError(t, err)
+					hashes = append(hashes, hash)
 				}
 			}
 		}

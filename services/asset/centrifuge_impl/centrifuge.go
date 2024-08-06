@@ -221,7 +221,12 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 				switch asset_api.Type(notification.Type) {
 				case asset_api.Type_Block:
 					channel = "block"
-					block, err = c.blockchainClient.GetBlock(ctx, notification.Hash)
+					hash, err := chainhash.NewHash(notification.Hash)
+					if err != nil {
+						c.logger.Errorf("[Blockchain] failed to parse hash", err)
+						continue
+					}
+					block, err = c.blockchainClient.GetBlock(ctx, hash)
 					if err != nil {
 						c.logger.Errorf("[Centrifuge] error getting block header: %s", err)
 						continue
@@ -254,7 +259,7 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 					}
 				case asset_api.Type_Subtree:
 					channel = "subtree"
-					data = []byte(`{"hash": "` + notification.Hash.String() + `","baseUrl": "` + c.baseURL + `"}`)
+					data = []byte(`{"hash": "` + string(notification.Hash) + `","baseUrl": "` + c.baseURL + `"}`)
 				}
 
 				if channel != "" {

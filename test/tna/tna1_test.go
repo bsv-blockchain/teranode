@@ -3,6 +3,7 @@ package tna
 import (
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,7 +74,9 @@ func TestBroadcastNewTxAllNodes(t *testing.T) {
 				return
 			case notification := <-blockchainSubscription:
 				if notification.Type == model.NotificationType_Subtree {
-					hashes = append(hashes, notification.Hash)
+					hash, err := chainhash.NewHash(notification.Hash)
+					require.NoError(t, err)
+					hashes = append(hashes, hash)
 					fmt.Println("Length of hashes:", len(hashes))
 
 				} else {

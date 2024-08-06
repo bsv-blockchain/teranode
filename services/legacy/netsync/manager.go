@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"math/rand/v2"
 	"net"
 	"sync"
@@ -1302,7 +1303,7 @@ out:
 // handleBlockchainNotification handles notifications from blockchain.  It does
 // things such as request orphan block parents and relay accepted blocks to
 // connected peers.
-func (sm *SyncManager) handleBlockchainNotification(notification *model.Notification) {
+func (sm *SyncManager) handleBlockchainNotification(notification *blockchain_api.Notification) {
 	switch notification.Type {
 	// A block has been accepted into the blockchain.  Relay it to other
 	// peers.
@@ -1312,15 +1313,20 @@ func (sm *SyncManager) handleBlockchainNotification(notification *model.Notifica
 		if !sm.current() {
 			return
 		}
+		hash, err := chainhash.NewHash(notification.Hash)
+		if err != nil {
+			sm.logger.Errorf("Failed to create hash from block: %v", err)
+			return
+		}
 
-		blockHeader, _, err := sm.blockchainClient.GetBlockHeader(sm.ctx, notification.Hash)
+		blockHeader, _, err := sm.blockchainClient.GetBlockHeader(sm.ctx, hash)
 		if err != nil {
 			sm.logger.Errorf("Failed to get block %v: %v", notification.Hash, err)
 			return
 		}
 
 		// Generate the inventory vector and relay it.
-		iv := wire.NewInvVect(wire.InvTypeBlock, notification.Hash)
+		iv := wire.NewInvVect(wire.InvTypeBlock, hash)
 		sm.peerNotifier.RelayInventory(iv, blockHeader.ToWireBlockHeader())
 	}
 }

@@ -482,13 +482,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
-			if errors.Is(err, validator.ErrInternal) {
-				err = fmt.Errorf("%v: %w", err, ErrInternal)
-			} else if errors.Is(err, validator.ErrBadRequest) {
-				err = fmt.Errorf("%v: %w", err, ErrBadRequest)
-			}
-
-			// TEMP: Log the error for now
+			err = errors.NewServiceError("failed validating transaction", err)
 			ps.logger.Errorf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
 
 			prometheusInvalidTransactions.Inc()

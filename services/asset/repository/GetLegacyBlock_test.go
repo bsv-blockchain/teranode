@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/binary"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"io"
 	"testing"
 	"time"
@@ -287,7 +288,7 @@ func (s *mockStore) AddBlock(ctx context.Context, block *model.Block, peerID str
 	s.block = block
 	return nil
 }
-func (s *mockStore) SendNotification(ctx context.Context, notification *model.Notification) error {
+func (s *mockStore) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
 	panic("not implemented")
 }
 func (s *mockStore) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
@@ -341,7 +342,7 @@ func (s *mockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Ha
 func (s *mockStore) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
 	panic("not implemented")
 }
-func (s *mockStore) Subscribe(ctx context.Context, source string) (chan *model.Notification, error) {
+func (s *mockStore) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
 	panic("not implemented")
 }
 func (s *mockStore) GetState(ctx context.Context, key string) ([]byte, error) {
@@ -362,9 +363,6 @@ func (s *mockStore) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhas
 func (s *mockStore) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
 	panic("not implemented")
 }
-func (s *mockStore) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
-	panic("not implemented")
-}
 func (s *mockStore) SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error {
 	panic("not implemented")
 }
@@ -375,6 +373,21 @@ func (s *mockStore) HeightToHashRange(startHeight uint32, endHash *chainhash.Has
 	panic("not implemented")
 }
 func (s *mockStore) IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error) {
+	panic("not implemented")
+}
+func (s *mockStore) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *mockStore) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *mockStore) GetFSMCurrentState() blockchain_api.FSMStateType {
+	panic("not implemented")
+}
+func (s *mockStore) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
+	panic("not implemented")
+}
+func (s *mockStore) StoreFSMState(state string) {
 	panic("not implemented")
 }
 

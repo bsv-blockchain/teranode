@@ -137,7 +137,7 @@ func (g *GRPC) Start(ctx context.Context, addr string) error {
 					continue
 				}
 
-				g.logger.Debugf("Sending %s notification: %s to %d subscribers", asset_api.Type(notification.Type).String(), notification.Hash.String(), len(g.subscribers))
+				g.logger.Debugf("Sending %s notification: %s to %d subscribers", asset_api.Type(notification.Type).String(), string(notification.Hash), len(g.subscribers))
 
 				g.notifications <- &asset_api.Notification{
 					Type:    asset_api.Type(notification.Type),
