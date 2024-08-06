@@ -279,8 +279,9 @@ func main() {
 
 	if startUTXOPersister {
 		if err = sm.AddService("UTXOPersister", utxopersister.New(ctx,
-			logger.New("bp"),
+			logger.New("utxop"),
 			getBlockStore(logger),
+			blockchainClient,
 		)); err != nil {
 			panic(err)
 		}

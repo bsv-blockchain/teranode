@@ -35,6 +35,7 @@ type UTXODiff struct {
 	deletionsWriter         *io.PipeWriter
 	deletionsBufferedWriter *bufio.Writer
 	store                   blob.Store
+	deletionsSet            map[[36]byte]struct{}
 }
 
 // NewUTXOMap creates a new UTXODiff.
@@ -86,6 +87,35 @@ func NewUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, b
 		deletionsBufferedWriter: deletionsBufferedWriter,
 		store:                   store,
 	}, nil
+}
+
+func GetUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXODiff, error) {
+
+	ud := &UTXODiff{
+		ctx:       ctx,
+		logger:    logger,
+		blockHash: *blockHash,
+		store:     store,
+	}
+
+	// Check to see if the utxo-set already exists
+	exists, err := store.Exists(ctx, blockHash[:], options.WithFileExtension(utxosetExtension))
+	if err != nil {
+		return nil, errors.NewStorageError("error checking if utxo-set exists", err)
+	}
+
+	if exists {
+		return nil, nil
+	}
+
+	deletions, err := ud.GetUTXODeletionsSet()
+	if err != nil {
+		return nil, errors.NewStorageError("error getting utxo-deletions set", err)
+	}
+
+	ud.deletionsSet = deletions
+
+	return ud, nil
 }
 
 func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
@@ -209,8 +239,7 @@ func (ud *UTXODiff) GetUTXODeletionsReader() (io.ReadCloser, error) {
 	return r, nil
 }
 
-func GetUTXODeletionsSetFromReader(r io.Reader) (map[[36]byte]struct{}, error) {
-
+func getUTXODeletionsSetFromReader(r io.Reader) (map[[36]byte]struct{}, error) {
 	m := make(map[[36]byte]struct{})
 
 	var b [36]byte
@@ -242,7 +271,7 @@ func (ud *UTXODiff) GetUTXODeletionsSet() (map[[36]byte]struct{}, error) {
 
 	defer r.Close()
 
-	m, err := GetUTXODeletionsSetFromReader(r)
+	m, err := getUTXODeletionsSetFromReader(r)
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-deletions set", err)
 	}
@@ -253,10 +282,15 @@ func (ud *UTXODiff) GetUTXODeletionsSet() (map[[36]byte]struct{}, error) {
 // CreateUTXOSet generates the UTXO set for the current block, using the previous block's UTXO set
 // and applying additions and deletions from the current block. It returns an error if the operation fails.
 func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainhash.Hash) (err error) {
-	// Load the deletions file for this block in to a set
-	deletions, err := ud.GetUTXODeletionsSet()
-	if err != nil {
-		return errors.NewStorageError("error getting utxo-deletions set", err)
+	deletions := ud.deletionsSet
+
+	if deletions == nil {
+		// Load the deletions file for this block in to a set
+		var err error
+		deletions, err = ud.GetUTXODeletionsSet()
+		if err != nil {
+			return errors.NewStorageError("error getting utxo-deletions set", err)
+		}
 	}
 
 	reader, writer := io.Pipe()
