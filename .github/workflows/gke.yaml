@@ -85,10 +85,11 @@ jobs:
           # Download kubectl
           sudo snap install kubectl --classic
           kubectl version --client
-          aws eks update-kubeconfig --name aws-ubsv-playground --region ${{ inputs.region }}
+          aws eks update-kubeconfig --name aws-ubsv-playground --region eu-central-1
           kubectl cluster-info
 
       - name: Deploy to Operator
+        if: startsWith(github.event.ref, 'refs/tags/v')
         run: |
           kubectl patch -n t1 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ needs.get_tag.outputs.deployment_tag }}"}}';
           kubectl patch -n t2 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ needs.get_tag.outputs.deployment_tag }}"}}';
