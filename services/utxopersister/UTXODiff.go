@@ -124,6 +124,7 @@ func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
 	if tx.IsCoinbase() {
 		// We can ignore the error if the height is not found, because all old blocks are spendable today
 		spendingHeight, _ = util.ExtractCoinbaseHeight(tx)
+		spendingHeight += 101 // Height: If a block is mined at height 100,000, the coinbase transaction from this block can be spent only AFTER reaching block height 100,100.
 	} else {
 		for _, input := range tx.Inputs {
 			if err := ud.delete(&UTXODeletion{input.PreviousTxIDChainHash(), input.PreviousTxOutIndex}); err != nil {

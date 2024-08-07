@@ -1,8 +1,9 @@
 package util
 
 import (
-	"github.com/libsv/go-bt/v2"
 	"testing"
+
+	"github.com/libsv/go-bt/v2"
 
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/stretchr/testify/assert"
@@ -55,4 +56,13 @@ func TestExtractMiner2(t *testing.T) {
 func TestExtractMiner3(t *testing.T) {
 	miner := extractMiner("/taal.com")
 	assert.Equal(t, "/", miner) // This is the current behaviour. Should it be "/taal.com"?
+}
+
+func TestExtractCoinbaseHeight(t *testing.T) {
+	tx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17032a120d2f71646c6e6b2ffa3e9e2068b1e1743dc80d00ffffffff014864a012000000001976a91417db35d440a673a218e70a5b9d07f895facf50d288ac00000000")
+	require.NoError(t, err)
+
+	height, err := ExtractCoinbaseHeight(tx)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(856618), height)
 }
