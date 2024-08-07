@@ -197,7 +197,7 @@ func TestCoinbaseTXAmount(t *testing.T) {
 	}
 
 	coinbaseValueBlock := mc0.CoinbaseValue
-	fmt.Println("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
+	fmt.Printf("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
 
 	_, bbhmeta, errbb := bc.GetBestBlockHeader(ctx)
 	if errbb != nil {
