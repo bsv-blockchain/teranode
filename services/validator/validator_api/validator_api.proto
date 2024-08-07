@@ -11,6 +11,7 @@ service ValidatorAPI {
   rpc ValidateTransactionBatch(ValidateTransactionBatchRequest) returns (ValidateTransactionBatchResponse) {}
   rpc ValidateTransactionStream(stream ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
   rpc GetBlockHeight(EmptyMessage) returns (GetBlockHeightResponse) {}
+  rpc GetMedianBlockTime(EmptyMessage) returns (GetMedianBlockTimeResponse) {}
 }
 
 // swagger:model EmptyMessage
@@ -55,4 +56,9 @@ message ValidateTransactionBatchResponse {
 // swagger:model GetBlockHeightResponse
 message GetBlockHeightResponse {
   uint32 height = 1;
+}
+
+// swagger:model GetMedianBlockTimeResponse
+message GetMedianBlockTimeResponse {
+  uint32 median_time = 1;
 }

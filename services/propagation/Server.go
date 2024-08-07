@@ -289,8 +289,9 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 
 	localValidator := gocore.Config().GetBool("useLocalValidator", false)
 	if localValidator {
-		blockHeight, err := ps.validator.GetBlockHeight()
-		if err != nil {
+		blockHeight := ps.validator.GetBlockHeight()
+		if blockHeight == 0 {
+			err = errors.NewProcessingError("error getting blockHeight from validator: 0")
 			errs = append(errs, err)
 			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v\n", err))
 		} else {

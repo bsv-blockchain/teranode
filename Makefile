@@ -122,6 +122,15 @@ else
 	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna |grep -v test/tnc)
 endif
 
+.PHONY: verylongtests
+verylongtests: set_race_flag
+ifeq ($(USE_JSON_REPORTER),true)
+	$(MAKE) install-tools
+	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna) | go-ctrf-json-reporter -output ctrf-report.json
+else
+	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna)
+endif
+
 .PHONY: racetest
 racetest: set_race_flag
 	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor

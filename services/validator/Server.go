@@ -91,8 +91,9 @@ func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*
 	var sb strings.Builder
 	errs := make([]error, 0)
 
-	blockHeight, err := v.validator.GetBlockHeight()
-	if err != nil {
+	blockHeight := v.validator.GetBlockHeight()
+	if blockHeight == 0 {
+		err := errors.NewProcessingError("error getting blockHeight from validator: 0")
 		errs = append(errs, err)
 		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v\n", err))
 	} else {
@@ -111,7 +112,7 @@ func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*
 			Ok:        false,
 			Details:   sb.String(),
 			Timestamp: uint32(time.Now().Unix()),
-		}, err
+		}, errs[0]
 	}
 
 	return &validator_api.HealthResponse{
@@ -179,7 +180,6 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 		}, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
 	}
 
-	// v.logger.Debugf("[ValidateTransactions][%s] validating transaction (pq:)", tx.TxID())
 	err = v.validator.Validate(ctx, tx, req.BlockHeight)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
@@ -229,12 +229,29 @@ func (v *Server) GetBlockHeight(ctx context.Context, _ *validator_api.EmptyMessa
 	)
 	defer deferFn()
 
-	blockHeight, err := v.validator.GetBlockHeight()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "cannot get block height: %v", err)
+	blockHeight := v.validator.GetBlockHeight()
+	if blockHeight == 0 {
+		return nil, status.Errorf(codes.Internal, "cannot get block height: %d", blockHeight)
 	}
 
 	return &validator_api.GetBlockHeightResponse{
 		Height: blockHeight,
+	}, nil
+}
+
+func (v *Server) GetMedianBlockTime(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetMedianBlockTimeResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "GetMedianBlockTime",
+		tracing.WithParentStat(v.stats),
+		tracing.WithDebugLogMessage(v.logger, "[GetMedianBlockTime] called"),
+	)
+	defer deferFn()
+
+	medianTime := v.validator.GetMedianBlockTime()
+	if medianTime == 0 {
+		return nil, status.Errorf(codes.Internal, "cannot get median block time: %d", medianTime)
+	}
+
+	return &validator_api.GetMedianBlockTimeResponse{
+		MedianTime: medianTime,
 	}, nil
 }

@@ -3,13 +3,12 @@ package _factory
 import (
 	"context"
 	"github.com/bitcoin-sv/ubsv/errors"
-	"net/url"
-	"strconv"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"net/url"
+	"strconv"
 )
 
 var availableDatabases = map[string]func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error){}
@@ -56,13 +55,17 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 				panic(err)
 			}
 
-			_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
+			blockHeight, medianBlockTime, err := blockchain.GetBestHeightAndTime(ctx, blockchainClient)
 			if err != nil {
-				logger.Errorf("[UTXOStore] error getting best block header for %s: %v", source, err)
+				logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
 			} else {
-				logger.Debugf("[UTXOStore] setting block height to %d", meta.Height)
-				if err = setBlockHeight(ctx, logger, utxoStore, source, meta.Height); err != nil {
+				logger.Debugf("[UTXOStore] setting block height to %d", blockHeight)
+				if err = utxoStore.SetBlockHeight(blockHeight); err != nil {
 					logger.Errorf("[UTXOStore] error setting block height for %s: %v", source, err)
+				}
+				logger.Debugf("[UTXOStore] setting median block time to %d", medianBlockTime)
+				if err = utxoStore.SetMedianBlockTime(medianBlockTime); err != nil {
+					logger.Errorf("[UTXOStore] error setting median block time for %s: %v", source, err)
 				}
 			}
 
@@ -75,14 +78,17 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 						return
 					case notification := <-blockchainSubscriptionCh:
 						if notification.Type == model.NotificationType_Block {
-							_, meta, err := blockchainClient.GetBestBlockHeader(ctx)
+							blockHeight, medianBlockTime, err = blockchain.GetBestHeightAndTime(ctx, blockchainClient)
 							if err != nil {
-								logger.Warnf("[UTXOStore] could not get best block header for %s: %v", source, err)
-								continue
-							}
-							logger.Debugf("[UTXOStore] setting block height to %d", meta.Height)
-							if err = setBlockHeight(ctx, logger, utxoStore, source, meta.Height); err != nil {
-								logger.Errorf("[UTXOStore] error setting block height for %s: %v", source, err)
+								logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
+							} else {
+								logger.Debugf("[UTXOStore] updated block height to %d and median time to %d for %s", blockHeight, medianBlockTime, source)
+								if err = utxoStore.SetBlockHeight(blockHeight); err != nil {
+									logger.Errorf("[UTXOStore] error setting block height for %s: %v", source, err)
+								}
+								if err = utxoStore.SetMedianBlockTime(medianBlockTime); err != nil {
+									logger.Errorf("[UTXOStore] error setting median block time for %s: %v", source, err)
+								}
 							}
 						}
 					}
@@ -94,8 +100,4 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 	}
 
 	return nil, errors.NewProcessingError("unknown scheme: %s", storeUrl.Scheme)
-}
-
-func setBlockHeight(_ context.Context, _ ulogger.Logger, utxoStore utxo.Store, _ string, blockHeight uint32) error {
-	return utxoStore.SetBlockHeight(blockHeight)
 }

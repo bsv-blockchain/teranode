@@ -64,7 +64,9 @@ type Store interface {
 
 	// internal state functions
 	SetBlockHeight(height uint32) error
-	GetBlockHeight() (uint32, error)
+	GetBlockHeight() uint32
+	SetMedianBlockTime(height uint32) error
+	GetMedianBlockTime() uint32
 }
 
 var _ Store = &MockUtxostore{}
@@ -116,9 +118,15 @@ func (mu *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, outpoints 
 	return nil
 }
 
-func (mu *MockUtxostore) SetBlockHeight(height uint32) error {
+func (mu *MockUtxostore) SetBlockHeight(_ uint32) error {
 	return nil
 }
-func (mu *MockUtxostore) GetBlockHeight() (uint32, error) {
-	return 0, nil
+func (mu *MockUtxostore) GetBlockHeight() uint32 {
+	return 0
+}
+func (mu *MockUtxostore) SetMedianBlockTime(_ uint32) error {
+	return nil
+}
+func (mu *MockUtxostore) GetMedianBlockTime() uint32 {
+	return 0
 }

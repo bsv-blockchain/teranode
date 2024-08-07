@@ -39,6 +39,7 @@ var (
 	ErrCoinbaseMissingBlockHeight = New(ERR_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrSpent                      = New(ERR_SPENT, "utxo already spent")
 	ErrLockTime                   = New(ERR_LOCKTIME, "Bad lock time")
+	ErrNonFinal                   = New(ERR_NON_FINAL, "tx is non-final")
 	ErrKafkaDecode                = New(ERR_KAFKA_DECODE_ERROR, "error decoding kafka message")
 	ErrContext                    = New(ERR_CONTEXT_ERROR, "context cancelled")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
@@ -139,6 +140,9 @@ func NewSpentError(message string, params ...interface{}) error {
 }
 func NewLockTimeError(message string, params ...interface{}) error {
 	return New(ERR_LOCKTIME, message, params...)
+}
+func NewNonFinalError(message string, params ...interface{}) error {
+	return New(ERR_NON_FINAL, message, params...)
 }
 func NewStateInitializationError(message string, params ...interface{}) error {
 	return New(ERR_STATE_INITIALIZATION, message, params...)

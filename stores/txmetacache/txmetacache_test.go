@@ -24,7 +24,7 @@ var (
 
 func Test_txMetaCache_GetMeta(t *testing.T) {
 	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
-	util.SkipVeryLongTests(t)
+	//util.SkipVeryLongTests(t)
 
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
@@ -58,6 +58,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 			Fee:            100,
 			SizeInBytes:    111,
 			ParentTxHashes: []chainhash.Hash{},
+			BlockIDs:       make([]uint32, 0),
 		}
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")

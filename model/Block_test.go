@@ -190,7 +190,7 @@ func TestMedianTimestamp(t *testing.T) {
 
 	t.Run("test for correct median time", func(t *testing.T) {
 		expected := timestamps[5]
-		median, err := medianTimestamp(timestamps)
+		median, err := CalculateMedianTimestamp(timestamps)
 
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
@@ -204,7 +204,7 @@ func TestMedianTimestamp(t *testing.T) {
 		expected := timestamps[6]
 		// add a new high timestamp out of sequence
 		timestamps[5] = time.Unix(int64(20), 0)
-		median, err := medianTimestamp(timestamps)
+		median, err := CalculateMedianTimestamp(timestamps)
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
@@ -217,7 +217,7 @@ func TestMedianTimestamp(t *testing.T) {
 		expected := timestamps[4]
 		// add a new low timestamp out of sequence
 		timestamps[5] = time.Unix(int64(1), 0)
-		median, err := medianTimestamp(timestamps)
+		median, err := CalculateMedianTimestamp(timestamps)
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
@@ -228,7 +228,7 @@ func TestMedianTimestamp(t *testing.T) {
 
 	t.Run("test for less than 11 timestamps", func(t *testing.T) {
 		expected := timestamps[5]
-		median, err := medianTimestamp(timestamps[:10])
+		median, err := CalculateMedianTimestamp(timestamps[:10])
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
@@ -445,10 +445,9 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	_, _ = b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs, NewBloomStats())
-	// TODO reactivate this test when we have a way to check for duplicate transactions
-	// require.Error(t, err)
-	// require.False(t, v)
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs, NewBloomStats())
+	require.Error(t, err)
+	require.False(t, v)
 }
 
 func TestGetAndValidateSubtrees(t *testing.T) {

@@ -123,8 +123,12 @@ func (v *Validator) Health(cntxt context.Context) (int, string, error) {
 	return 0, "LocalValidator", nil
 }
 
-func (v *Validator) GetBlockHeight() (height uint32, err error) {
+func (v *Validator) GetBlockHeight() uint32 {
 	return v.utxoStore.GetBlockHeight()
+}
+
+func (v *Validator) GetMedianBlockTime() uint32 {
+	return v.utxoStore.GetMedianBlockTime()
 }
 
 // Validate validates a transaction
@@ -142,29 +146,37 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32)
 }
 
 func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
-	start, stat, ctx := tracing.NewStatFromContext(ctx, "Validate", v.stats)
-	defer func() {
-		stat.AddTime(start)
-		prometheusTransactionValidateTotal.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
+	ctx, _, deferFn := tracing.StartTracing(ctx, "Validator:Validate",
+		tracing.WithParentStat(v.stats),
+		tracing.WithHistogram(prometheusTransactionValidateTotal),
+		tracing.WithDebugLogMessage(v.logger, "[Validator:Validate] called for %s", tx.TxID()),
+	)
+	defer deferFn()
 
-	traceSpan := tracing.Start(ctx, "Validator:Validate")
 	var spentUtxos []*utxo.Spend
 
-	defer func(reservedUtxos *[]*utxo.Spend) {
-		traceSpan.Finish()
-	}(&spentUtxos)
+	// this should be updated automatically by the utxo store
+	utxoStoreBlockHeight := v.GetBlockHeight()
+	utxoStoreMedianBlockTime := v.GetMedianBlockTime()
+	if utxoStoreBlockHeight == 0 || utxoStoreMedianBlockTime == 0 {
+		return errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", utxoStoreBlockHeight, utxoStoreMedianBlockTime)
+	}
+
+	// this function should be moved into go-bt
+	if !util.IsTransactionFinal(tx, utxoStoreBlockHeight+1, utxoStoreMedianBlockTime) {
+		return errors.NewNonFinalError("[Validate][%s] transaction is not final", tx.TxIDChainHash().String())
+	}
 
 	if tx.IsCoinbase() {
 		return errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", tx.TxIDChainHash().String())
 	}
 
-	if err = v.validateTransaction(traceSpan, tx, blockHeight); err != nil {
+	if err = v.validateTransaction(ctx, tx, blockHeight); err != nil {
 		return errors.NewProcessingError("[Validate][%s] error validating transaction", tx.TxID(), err)
 	}
 
 	// decouple the tracing context to not cancel the context when finalize the block assembly
-	setSpan := tracing.DecoupleTracingSpan(traceSpan.Ctx, "decoupledSpan")
+	setSpan := tracing.DecoupleTracingSpan(ctx, "decoupledSpan")
 	defer setSpan.Finish()
 
 	/*
@@ -184,6 +196,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return errors.NewProcessingError("[Validate][%s] error spending utxos", tx.TxID(), err)
 	}
 
+	// TODO do we need to make this a 2 phase commit?
+	//      if the block assembly addition fails, the utxo should not be spendable yet
 	txMetaData, err := v.storeTxInUtxoMap(setSpan, tx, blockHeight)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
@@ -413,8 +427,8 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) error {
-	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "validateTransaction",
+func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
 	)
 	defer deferFn()

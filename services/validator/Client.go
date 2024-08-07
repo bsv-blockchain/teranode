@@ -91,13 +91,22 @@ func (c *Client) Health(ctx context.Context) (int, string, error) {
 	return 0, "Validator", nil
 }
 
-func (c *Client) GetBlockHeight() (uint32, error) {
+func (c *Client) GetBlockHeight() uint32 {
 	resp, err := c.client.GetBlockHeight(context.Background(), &validator_api.EmptyMessage{})
 	if err != nil {
-		return 0, errors.UnwrapGRPC(err)
+		return 0
 	}
 
-	return resp.Height, nil
+	return resp.Height
+}
+
+func (c *Client) GetMedianBlockTime() uint32 {
+	resp, err := c.client.GetMedianBlockTime(context.Background(), &validator_api.EmptyMessage{})
+	if err != nil {
+		return 0
+	}
+
+	return resp.MedianTime
 }
 
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) error {

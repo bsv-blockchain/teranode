@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/assert"
@@ -20,10 +19,8 @@ func TestReadWriteHeight(t *testing.T) {
 	s := New(ctx, ulogger.TestLogger{}, store, nil)
 
 	oldHeight, err := s.readLastHeight(ctx)
-	require.Error(t, err)
-	assert.Equal(t, uint32(0), oldHeight)
-	assert.Contains(t, err.Error(), "not found")
-	assert.True(t, errors.Is(err, errors.ErrNotFound))
+	require.NoError(t, err)
+	assert.Equal(t, uint32(1), oldHeight)
 
 	// Write the height
 	err = s.writeLastHeight(ctx, 100_000)

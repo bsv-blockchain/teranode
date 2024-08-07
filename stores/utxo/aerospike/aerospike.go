@@ -40,19 +40,20 @@ var (
 )
 
 type Store struct {
-	url           *url.URL
-	client        *uaerospike.Client
-	namespace     string
-	setName       string
-	expiration    uint32
-	blockHeight   atomic.Uint32
-	logger        ulogger.Logger
-	batchId       atomic.Uint64
-	storeBatcher  *batcher.Batcher2[batchStoreItem]
-	getBatcher    *batcher.Batcher2[batchGetItem]
-	spendBatcher  *batcher.Batcher2[batchSpend]
-	externalStore blob.Store
-	utxoBatchSize int
+	url             *url.URL
+	client          *uaerospike.Client
+	namespace       string
+	setName         string
+	expiration      uint32
+	blockHeight     atomic.Uint32
+	medianBlockTime atomic.Uint32
+	logger          ulogger.Logger
+	batchId         atomic.Uint64
+	storeBatcher    *batcher.Batcher2[batchStoreItem]
+	getBatcher      *batcher.Batcher2[batchGetItem]
+	spendBatcher    *batcher.Batcher2[batchSpend]
+	externalStore   blob.Store
+	utxoBatchSize   int
 }
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
@@ -141,8 +142,18 @@ func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	return nil
 }
 
-func (s *Store) GetBlockHeight() (uint32, error) {
-	return s.blockHeight.Load(), nil
+func (s *Store) GetBlockHeight() uint32 {
+	return s.blockHeight.Load()
+}
+
+func (s *Store) SetMedianBlockTime(medianTime uint32) error {
+	s.logger.Debugf("setting median block time to %d", medianTime)
+	s.medianBlockTime.Store(medianTime)
+	return nil
+}
+
+func (s *Store) GetMedianBlockTime() uint32 {
+	return s.medianBlockTime.Load()
 }
 
 func (s *Store) Health(ctx context.Context) (int, string, error) {

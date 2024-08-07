@@ -186,6 +186,7 @@ type Block struct {
 	subtreeLength   uint64
 	subtreeSlicesMu sync.RWMutex
 	txMap           util.TxMap
+	medianTimestamp uint32
 }
 
 type BlockBloomFilter struct {
@@ -390,17 +391,19 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 			prevTimeStamps[i] = time.Unix(int64(bh.Timestamp), 0)
 		}
 
-		// TODO fix this for test mode when generating lots of blocks quickly
 		// calculate the median timestamp
-		//ts, err := medianTimestamp(prevTimeStamps)
-		//if err != nil {
-		//	return false, err
-		//}
+		medianTimestamp, err := CalculateMedianTimestamp(prevTimeStamps)
+		if err != nil {
+			return false, err
+		}
+		b.medianTimestamp = uint32(medianTimestamp.Unix())
 
 		// validate that the block's timestamp is after the median timestamp
-		//if b.Header.Timestamp <= uint32(ts.Unix()) {
-		//return false, errors.NewProcessingError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, ts.Unix())
-		//}
+		if b.Header.Timestamp <= b.medianTimestamp {
+			// TODO fix this for test mode when generating lots of blocks quickly
+			//return false, errors.NewProcessingError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
+			logger.Errorf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
+		}
 	}
 	// 4. Check that the coinbase transaction is valid (reward checked later).
 	if b.CoinbaseTx == nil {
@@ -656,6 +659,12 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 						return errors.NewProcessingError("transaction %s is not blessed", subtreeNode.Hash.String())
 					}
 					parentTxHashes = txMeta.ParentTxHashes
+
+					if txMeta.LockTime > 0 {
+						if !util.ValidLockTime(txMeta.LockTime, b.Height, b.medianTimestamp) {
+							return errors.NewLockTimeError("[BLOCK][%s][%s:%d]:%d transaction %s has an invalid locktime: %d", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), txMeta.LockTime)
+						}
+					}
 				}
 				if parentTxHashes == nil {
 					return errors.NewBlockInvalidError("[BLOCK][%s][%s:%d]:%d transaction %s could not be found in tx meta data", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
@@ -1203,7 +1212,7 @@ func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logg
 	return filter, nil
 }
 
-func medianTimestamp(timestamps []time.Time) (*time.Time, error) {
+func CalculateMedianTimestamp(timestamps []time.Time) (*time.Time, error) {
 	n := len(timestamps)
 
 	if n == 0 {

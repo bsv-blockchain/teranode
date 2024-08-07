@@ -78,6 +78,7 @@ type Store struct {
 	db               *usql.DB
 	engine           string
 	blockHeight      atomic.Uint32
+	medianBlockTime  atomic.Uint32
 	dbTimeout        time.Duration
 	expirationMillis uint64
 }
@@ -106,11 +107,12 @@ func New(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL) (*Store,
 	dbTimeoutMillis, _ := gocore.Config().GetInt("utxostore_dbTimeoutMillis", 5000)
 
 	s := &Store{
-		logger:      logger,
-		db:          db,
-		engine:      storeUrl.Scheme,
-		blockHeight: atomic.Uint32{},
-		dbTimeout:   time.Duration(dbTimeoutMillis) * time.Millisecond,
+		logger:          logger,
+		db:              db,
+		engine:          storeUrl.Scheme,
+		blockHeight:     atomic.Uint32{},
+		medianBlockTime: atomic.Uint32{},
+		dbTimeout:       time.Duration(dbTimeoutMillis) * time.Millisecond,
 	}
 
 	expirationValue := storeUrl.Query().Get("expiration") // This is specified in seconds
@@ -153,8 +155,18 @@ func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	return nil
 }
 
-func (s *Store) GetBlockHeight() (uint32, error) {
-	return s.blockHeight.Load(), nil
+func (s *Store) GetBlockHeight() uint32 {
+	return s.blockHeight.Load()
+}
+
+func (s *Store) SetMedianBlockTime(medianTime uint32) error {
+	s.logger.Debugf("setting median block time to %d", medianTime)
+	s.medianBlockTime.Store(medianTime)
+	return nil
+}
+
+func (s *Store) GetMedianBlockTime() uint32 {
+	return s.medianBlockTime.Load()
 }
 
 func (s *Store) Health(ctx context.Context) (int, string, error) {

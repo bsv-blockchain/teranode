@@ -9,7 +9,8 @@ import (
 type Interface interface {
 	Health(ctx context.Context) (int, string, error)
 	Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) error
-	GetBlockHeight() (uint32, error)
+	GetBlockHeight() uint32
+	GetMedianBlockTime() uint32
 }
 
 var _ Interface = &MockValidator{}
@@ -24,6 +25,9 @@ func (mv *MockValidator) Validate(ctx context.Context, tx *bt.Tx, blockHeight ui
 	return nil
 }
 
-func (mv *MockValidator) GetBlockHeight() (uint32, error) {
-	return 0, nil
+func (mv *MockValidator) GetBlockHeight() uint32 {
+	return 0
+}
+func (mv *MockValidator) GetMedianBlockTime() uint32 {
+	return 0
 }
