@@ -1,16 +1,23 @@
+linters-settings:
+  depguard:
+    rules:
+      main:
+        deny:
+          - pkg: "errors"
+            desc: Should be replaced by standard lib errors package
+  forbidigo:
+    forbid:
+      - p: ^fmt\.Errorf.*$
+        msg: use of fmt.Errorf is deprecated, please use errors.New
+
 linters:
   enable:
     - gosec
     - errcheck
+    - forbidigo
+    - depguard
 
 issues:
-  # exclude-dirs:
-  #   - services/legacy/bsvutil
-  #   - services/legacy/wire
-  exclude:
-    - "G108: Profiling endpoint is automatically exposed on /debug/pprof"
-    - "G601: Implicit memory aliasing in for loop."
-
   exclude-rules:
     - path: services/legacy
       linters:
@@ -19,11 +26,9 @@ issues:
         - unused
         - errcheck
         - ineffassign
-
-    - path: services/rpc
+        - forbidigo
+        - depguard
+    - path: errors
       linters:
-        - govet
-        - staticcheck
-        - unused
-        - errcheck
-        - ineffassign
+        - depguard
+        - forbidigo
