@@ -965,6 +965,33 @@ func (b *Blockchain) LocateBlockHeaders(ctx context.Context, request *blockchain
 	}, nil
 }
 
+func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBestHeightAndTimeResponse, error) {
+	blockHeader, meta, err := b.store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	// get the median block time for the last 11 blocks
+	headers, _, err := b.store.GetBlockHeaders(ctx, blockHeader.Hash(), 11)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	prevTimeStamps := make([]time.Time, 0, 11)
+	for _, header := range headers {
+		prevTimeStamps = append(prevTimeStamps, time.Unix(int64(header.Timestamp), 0))
+	}
+	medianTimestamp, err := model.CalculateMedianTimestamp(prevTimeStamps)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[Blockchain] could not calculate median block time", err))
+	}
+
+	return &blockchain_api.GetBestHeightAndTimeResponse{
+		Height: meta.Height,
+		Time:   uint32(medianTimestamp.Unix()),
+	}, nil
+}
+
 func safeClose[T any](ch chan T) {
 	defer func() {
 		_ = recover()

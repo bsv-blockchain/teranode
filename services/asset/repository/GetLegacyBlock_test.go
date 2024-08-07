@@ -377,6 +377,9 @@ func (s *mockStore) HeightToHashRange(startHeight uint32, endHash *chainhash.Has
 func (s *mockStore) IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error) {
 	panic("not implemented")
 }
+func (s *mockStore) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
+	panic("implement me")
+}
 
 type testContext struct {
 	repo   *Repository

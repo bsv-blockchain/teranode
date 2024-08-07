@@ -668,6 +668,15 @@ func (c *Client) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Ha
 	return blockHeaders, nil
 }
 
+func (c *Client) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
+	resp, err := c.client.GetBestHeightAndTime(ctx, &emptypb.Empty{})
+	if err != nil {
+		return 0, 0, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Height, resp.Time, nil
+}
+
 // log2FloorMasks defines the masks to use when quickly calculating
 // floor(log2(x)) in a constant log2(32) = 5 steps, where x is a uint32, using
 // shifts.  They are derived from (2^(2^x) - 1) * (2^(2^x)), for x in 4..0.
@@ -685,27 +694,4 @@ func fastLog2Floor(n uint32) uint8 {
 		exponent >>= 1
 	}
 	return rv
-}
-
-func GetBestHeightAndTime(ctx context.Context, blockchainClient ClientI) (uint32, uint32, error) {
-	blockHeader, meta, err := blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil {
-		return 0, 0, errors.NewStorageError("[UTXOStore] could not get best block header", err)
-	}
-
-	// get the median block time for the last 11 blocks
-	headers, _, err := blockchainClient.GetBlockHeaders(ctx, blockHeader.Hash(), 11)
-	if err != nil {
-		return 0, 0, errors.NewStorageError("[UTXOStore] could not get block headers", err)
-	}
-	prevTimeStamps := make([]time.Time, 0, 11)
-	for _, header := range headers {
-		prevTimeStamps = append(prevTimeStamps, time.Unix(int64(header.Timestamp), 0))
-	}
-	medianTimestamp, err := model.CalculateMedianTimestamp(prevTimeStamps)
-	if err != nil {
-		return 0, 0, errors.NewProcessingError("[UTXOStore] could not calculate median block time", err)
-	}
-
-	return meta.Height, uint32(medianTimestamp.Unix()), nil
 }

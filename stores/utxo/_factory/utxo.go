@@ -55,7 +55,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 				panic(err)
 			}
 
-			blockHeight, medianBlockTime, err := blockchain.GetBestHeightAndTime(ctx, blockchainClient)
+			blockHeight, medianBlockTime, err := blockchainClient.GetBestHeightAndTime(ctx)
 			if err != nil {
 				logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
 			} else {
@@ -78,7 +78,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 						return
 					case notification := <-blockchainSubscriptionCh:
 						if notification.Type == model.NotificationType_Block {
-							blockHeight, medianBlockTime, err = blockchain.GetBestHeightAndTime(ctx, blockchainClient)
+							blockHeight, medianBlockTime, err = blockchainClient.GetBestHeightAndTime(ctx)
 							if err != nil {
 								logger.Errorf("[UTXOStore] error getting best height and time for %s: %v", source, err)
 							} else {
