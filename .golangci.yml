@@ -1,7 +1,15 @@
+linters-settings:
+  forbidigo:
+    forbid:
+      # Optional message that gets included in error reports.
+      - p: ^fmt\.Errorf.*$
+        msg: use of fmt.Errorf is deprecated, please use errors.New
+
 linters:
   enable:
     - gosec
     - errcheck
+    - forbidigo
 
 issues:
   # exclude-dirs:
@@ -19,6 +27,7 @@ issues:
         - unused
         - errcheck
         - ineffassign
+        - forbidigo
 
     - path: services/rpc
       linters:
@@ -27,3 +36,4 @@ issues:
         - unused
         - errcheck
         - ineffassign
+        - forbidigo
