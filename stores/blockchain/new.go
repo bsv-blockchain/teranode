@@ -1,8 +1,9 @@
 package blockchain
 
 import (
-	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
 	"github.com/bitcoin-sv/ubsv/ulogger"

@@ -274,10 +274,12 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		SizeInBytes:      request.SizeInBytes,
 	}
 
-	_, err = b.store.StoreBlock(ctx, block, request.PeerId)
+	_, height, err := b.store.StoreBlock(ctx, block, request.PeerId)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
+
+	block.Height = height
 
 	b.logger.Debugf("[BlockPersister] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
 	if b.blockKafkaProducer != nil {

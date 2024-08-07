@@ -2,10 +2,11 @@ package sql
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"sync"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -272,7 +273,7 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 			_, _ = s.db.Exec("SET session_replication_role = 'replica'")
 		}
 
-		_, err = s.StoreBlock(context.Background(), genesisBlock, "")
+		_, _, err = s.StoreBlock(context.Background(), genesisBlock, "")
 		if err != nil {
 			return errors.NewStorageError("failed to insert genesis block", err)
 		}

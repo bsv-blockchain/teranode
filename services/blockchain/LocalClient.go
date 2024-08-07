@@ -2,8 +2,9 @@ package blockchain
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -38,7 +39,7 @@ func (c LocalClient) Health(_ context.Context) (*blockchain_api.HealthResponse, 
 }
 
 func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
-	_, err := c.store.StoreBlock(ctx, block, peerID)
+	_, _, err := c.store.StoreBlock(ctx, block, peerID)
 	return err
 }
 

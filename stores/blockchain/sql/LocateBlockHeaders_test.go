@@ -3,13 +3,14 @@ package sql
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"testing"
+
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"net/url"
-	"testing"
 )
 
 var blockCount = 10
@@ -22,7 +23,7 @@ func TestSQL_LocateBlockHeaders(t *testing.T) {
 
 	blocks := generateBlocks(t, blockCount)
 	for _, block := range blocks {
-		_, err := s.StoreBlock(context.Background(), block, "")
+		_, _, err := s.StoreBlock(context.Background(), block, "")
 		require.NoError(t, err)
 	}
 

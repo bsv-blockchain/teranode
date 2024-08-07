@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/work"
@@ -15,7 +16,7 @@ import (
 	"modernc.org/sqlite"
 )
 
-func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, error) {
+func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, uint32, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:StoreBlock")
 	defer deferFn()
 
@@ -24,7 +25,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 
 	newBlockId, height, err := s.storeBlock(ctx, block, peerID)
 	if err != nil {
-		return 0, err
+		return 0, height, err
 	}
 
 	var miner string
@@ -34,7 +35,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 
 	meta := &model.BlockHeaderMeta{
 		ID:          uint32(newBlockId),
-		Height:      uint32(height),
+		Height:      height,
 		TxCount:     block.TransactionCount,
 		SizeInBytes: block.SizeInBytes,
 		Miner:       miner,
@@ -50,15 +51,15 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 	}
 	s.ResetResponseCache()
 
-	return newBlockId, nil
+	return newBlockId, height, nil
 }
 
-func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string) (uint64, uint64, error) {
+func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string) (uint64, uint32, error) {
 	var err error
 	var previousBlockId uint64
 	var previousChainWork []byte
-	var previousHeight uint64
-	var height uint64
+	var previousHeight uint32
+	var height uint32
 	previousBlockInvalid := false
 
 	q := `

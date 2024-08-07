@@ -35,10 +35,10 @@ func TestSQL_GetBlockByHeight(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeUrl)
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block1, "")
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block2, "")
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
 		require.NoError(t, err)
 
 		block, err := s.GetBlockByHeight(context.Background(), 1)

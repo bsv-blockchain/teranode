@@ -563,18 +563,15 @@ func (c *Coinbase) storeBlock(ctx context.Context, block *model.Block) error {
 	//ctxTimeout, cancelTimeout := context.WithTimeout(ctx, c.dbTimeout)
 	//defer cancelTimeout()
 
-	blockId, err := c.store.StoreBlock(ctx, block, "")
+	blockId, height, err := c.store.StoreBlock(ctx, block, "")
 	if err != nil {
 		return errors.NewStorageError("could not store block", err)
 	}
 
-	// _, blobBestBlockHeight, _ := c.AssetClient.GetBestBlockHeader(ctx)
-	_, coinbaseBestBlockMeta, _ := c.store.GetBestBlockHeader(ctx)
-
 	if c.waitForPeers {
 		/* Wait until all nodes are at least on same block height as this coinbase block */
 		/* Do this before attempting to distribute the coinbase splitting transactions to all nodes */
-		err = c.peerSync.WaitForAllPeers(ctx, coinbaseBestBlockMeta.Height, true)
+		err = c.peerSync.WaitForAllPeers(ctx, height, true)
 		if err != nil {
 			return errors.NewError("peers are not in sync", err)
 		}

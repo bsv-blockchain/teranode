@@ -33,10 +33,10 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeUrl)
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block1, "")
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block2, "")
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
 		require.NoError(t, err)
 
 		block2_alt := &model.Block{
@@ -55,7 +55,7 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 			},
 		}
 
-		_, err = s.StoreBlock(context.Background(), block2_alt, "")
+		_, _, err = s.StoreBlock(context.Background(), block2_alt, "")
 		require.NoError(t, err)
 
 		headers, metas, err := s.GetBlockHeaders(context.Background(), block2.Hash(), 2)

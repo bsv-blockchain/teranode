@@ -26,7 +26,7 @@ import (
 
 func Test_GetBlock(t *testing.T) {
 	ctx := setup(t)
-	_, err := ctx.server.store.StoreBlock(context.Background(), mockBlock(ctx, t), "")
+	_, _, err := ctx.server.store.StoreBlock(context.Background(), mockBlock(ctx, t), "")
 	require.NoError(t, err)
 
 	// var wg sync.WaitGroup
@@ -75,7 +75,7 @@ func Test_GetBlock(t *testing.T) {
 
 func Test_GetFSMCurrentState(t *testing.T) {
 	ctx := setup(t)
-	_, err := ctx.server.store.StoreBlock(context.Background(), mockBlock(ctx, t), "")
+	_, _, err := ctx.server.store.StoreBlock(context.Background(), mockBlock(ctx, t), "")
 	require.NoError(t, err)
 
 	// var wg sync.WaitGroup
@@ -229,9 +229,9 @@ func (s *mockStore) GetBlockExists(ctx context.Context, blockHash *chainhash.Has
 func (s *mockStore) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
 	panic("not implemented")
 }
-func (s *mockStore) StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, error) {
+func (s *mockStore) StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, uint32, error) {
 	s.block = block
-	return 0, nil
+	return 0, 0, nil
 }
 func (s *mockStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	panic("not implemented")

@@ -20,10 +20,10 @@ func Test_StoreBlock(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeUrl)
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block1, "")
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block2, "")
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
 		require.NoError(t, err)
 	})
 
@@ -34,7 +34,7 @@ func Test_StoreBlock(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeUrl)
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block1, "")
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
 		require.NoError(t, err)
 
 		err = s.InvalidateBlock(context.Background(), block1.Hash())
@@ -45,7 +45,7 @@ func Test_StoreBlock(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, blockInvalid)
 
-		_, err = s.StoreBlock(context.Background(), block2, "")
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
 		require.NoError(t, err)
 
 		// block 2 should be invalid
