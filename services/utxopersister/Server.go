@@ -119,7 +119,7 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 			s.mu.Unlock()
 		}()
 
-		s.logger.Infof("Trigger from %s to process next block", source)
+		s.logger.Debugf("Trigger from %s to process next block", source)
 
 		errCh <- s.processNextBlock(ctx)
 	}()
@@ -139,7 +139,7 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 	case s.triggerCh <- "iteration":
 		// Successfully sent
 	default:
-		s.logger.Warnf("Dropping iteration trigger due to full channel")
+		s.logger.Debugf("Dropping iteration trigger due to full channel")
 	}
 
 	return nil
