@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/p2p"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -48,7 +49,7 @@ type Server struct {
 	blockCh               chan []byte
 }
 
-func NewServer(logger ulogger.Logger) *Server {
+func NewServer(ctx context.Context, logger ulogger.Logger) *Server {
 	logger.Debugf("Creating P2P service")
 
 	p2pIp, ok := gocore.Config().Get("p2p_ip")
@@ -131,8 +132,11 @@ func NewServer(logger ulogger.Logger) *Server {
 	if found {
 		p2pServer.subtreeCh = make(chan []byte, 10)
 		go func() {
-			if err := util.StartAsyncProducer(logger, subtreesKafkaURL, p2pServer.subtreeCh); err != nil {
-				logger.Errorf("[P2P] error starting kafka subtree producer: %v", err)
+			_, err := retry.Retry(ctx, logger, func() (interface{}, error) {
+				return nil, util.StartAsyncProducer(logger, subtreesKafkaURL, p2pServer.subtreeCh)
+			}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
+			if err != nil {
+				logger.Fatalf("[P2P] failed to start kafka subtree producer: %v", err)
 				return
 			}
 		}()
@@ -148,8 +152,11 @@ func NewServer(logger ulogger.Logger) *Server {
 	if found {
 		p2pServer.blockCh = make(chan []byte, 10)
 		go func() {
-			if err := util.StartAsyncProducer(logger, blocksKafkaURL, p2pServer.blockCh); err != nil {
-				logger.Errorf("[P2P] error starting kafka block producer: %v", err)
+			_, err := retry.Retry(ctx, logger, func() (interface{}, error) {
+				return nil, util.StartAsyncProducer(logger, blocksKafkaURL, p2pServer.blockCh)
+			}, retry.WithMessage("[P2P] error starting kafka block producer"))
+			if err != nil {
+				logger.Fatalf("[P2P] failed to start kafka block producer: %v", err)
 				return
 			}
 		}()

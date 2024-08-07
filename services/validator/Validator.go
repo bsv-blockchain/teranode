@@ -2,7 +2,6 @@ package validator
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
@@ -68,7 +67,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 			go func() {
 				_, err := retry.Retry(ctx, logger, func() (interface{}, error) {
 					return nil, util.StartAsyncProducer(v.logger, txsKafkaURL, v.blockassemblyKafkaChan)
-				}, retry.WithMessage(fmt.Sprintf("[Validator] error starting kafka producer for BlockAssembly Txs")))
+				}, retry.WithMessage("[Validator] error starting kafka producer for BlockAssembly Txs"))
 				if err != nil {
 					v.logger.Fatalf("[Validator] failed to start kafka producer for BlockAssembly Txs: %v", err)
 					return
@@ -89,7 +88,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 			go func() {
 				_, err := retry.Retry(ctx, logger, func() (interface{}, error) {
 					return nil, util.StartAsyncProducer(v.logger, txmetaKafkaURL, v.txMetaKafkaChan)
-				}, retry.WithMessage(fmt.Sprintf("[Validator] error starting kafka producer for txMeta")))
+				}, retry.WithMessage("[Validator] error starting kafka producer for txMeta"))
 				if err != nil {
 					v.logger.Fatalf("[Validator] failed to start kafka producer for txMeta: %v", err)
 					return
@@ -110,7 +109,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 			go func() {
 				_, err := retry.Retry(ctx, logger, func() (interface{}, error) {
 					return nil, util.StartAsyncProducer(v.logger, rejectedTxKafkaURL, v.rejectedTxKafkaChan)
-				}, retry.WithMessage(fmt.Sprintf("[Validator] error starting kafka producer for rejected Txs")))
+				}, retry.WithMessage("[Validator] error starting kafka producer for rejected Txs"))
 				if err != nil {
 					v.logger.Fatalf("[Validator] failed to start kafka producer for rejected Txs: %v", err)
 					return

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
+
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
@@ -47,7 +49,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"golang.org/x/term"
-	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
 )
 
 // Name used by build script for the binaries. (Please keep on single line)
@@ -235,7 +236,7 @@ func main() {
 
 	// p2p server
 	if startP2P {
-		if err = sm.AddService("P2P", p2p.NewServer(
+		if err = sm.AddService("P2P", p2p.NewServer(ctx,
 			logger.New("P2P"),
 		)); err != nil {
 			panic(err)
