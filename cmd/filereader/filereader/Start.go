@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -67,7 +68,7 @@ func Start() {
 }
 
 func ProcessFile(path string, logger ulogger.Logger) error {
-	dir, ext, r, err := getReader(path, logger)
+	dir, filename, ext, r, err := getReader(path, logger)
 	if err != nil {
 		return errors.NewProcessingError("error getting reader", err)
 	}
@@ -76,7 +77,7 @@ func ProcessFile(path string, logger ulogger.Logger) error {
 
 	logger.Infof("Reading file %s\n", path)
 
-	if err := readFile(ext, logger, r, dir); err != nil {
+	if err := readFile(filename, ext, logger, r, dir); err != nil {
 		return errors.NewProcessingError("error reading file", err)
 	}
 
@@ -123,7 +124,7 @@ func verifyChain() error {
 		}
 
 		if err == nil {
-			if err := readFile(ext, logger, r, ""); err != nil {
+			if err := readFile(header.Hash().String(), ext, logger, r, ""); err != nil {
 				return errors.NewBlockError("error reading block", err)
 			} else {
 				p.Printf("%s (%d): FOUND with %12d transactions\n", header.Hash(), meta.Height, meta.TxCount)
@@ -142,7 +143,7 @@ func verifyChain() error {
 	return nil
 }
 
-func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error {
+func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, dir string) error {
 	switch ext {
 	case "utxodiff":
 		utxodiff, err := model.NewUTXODiffFromReader(logger, r)
@@ -173,6 +174,75 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 		} else {
 			fmt.Println()
 		}
+
+	case "utxo-set":
+		var count int
+
+		fmt.Printf("UTXOSet for block hash: %v\n", filename)
+
+		for {
+			ud, err := utxopersister.NewUTXOFromReader(r)
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return errors.NewProcessingError("error reading utxo-additions", err)
+			}
+
+			if verbose {
+				fmt.Printf("%v\n", ud)
+			}
+
+			count++
+		}
+
+		fmt.Printf("\tset contains %d UTXOs\n\n", count)
+
+	case "utxo-additions":
+		var count int
+
+		fmt.Printf("UTXOAdditions for block hash: %v\n", filename)
+
+		for {
+			ud, err := utxopersister.NewUTXOFromReader(r)
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return errors.NewProcessingError("error reading utxo-additions", err)
+			}
+
+			if verbose {
+				fmt.Printf("%v\n", ud)
+			}
+
+			count++
+		}
+
+		fmt.Printf("\tadded	 %d UTXOs\n\n", count)
+
+	case "utxo-deletions":
+		var count int
+
+		fmt.Printf("UTXODeletions for block hash: %v\n", filename)
+
+		for {
+			ud, err := utxopersister.NewUTXODeletionFromReader(r)
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return errors.NewProcessingError("error reading utxo-deletions", err)
+			}
+
+			if verbose {
+				fmt.Printf("%v\n", ud)
+			}
+
+			count++
+		}
+
+		fmt.Printf("\tremoved %d UTXOs\n\n", count)
 
 	case "utxoset":
 		utxoSet, err := model.NewUTXOSetFromReader(logger, r)
@@ -231,7 +301,7 @@ func readFile(ext string, logger ulogger.Logger, r io.Reader, dir string) error 
 
 			if verbose {
 				filename := filepath.Join(dir, fmt.Sprintf("%s.subtree", subtree.String()))
-				_, _, stReader, err := getReader(filename, logger)
+				_, _, _, stReader, err := getReader(filename, logger)
 				if err != nil {
 					return err
 				}
@@ -254,7 +324,7 @@ func usage(msg string) {
 	os.Exit(1)
 }
 
-func getReader(path string, logger ulogger.Logger) (string, string, io.Reader, error) {
+func getReader(path string, logger ulogger.Logger) (string, string, string, io.Reader, error) {
 	dir, file := filepath.Split(path)
 
 	ext := filepath.Ext(file)
@@ -275,18 +345,18 @@ func getReader(path string, logger ulogger.Logger) (string, string, io.Reader, e
 
 		r, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension(ext))
 		if err != nil {
-			return "", "", nil, errors.NewProcessingError("error getting reader from store", err)
+			return "", "", "", nil, errors.NewProcessingError("error getting reader from store", err)
 		}
 
-		return dir, ext, r, nil
+		return dir, fileWithoutExtension, ext, r, nil
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
-		return "", "", nil, errors.NewProcessingError("error opening file", err)
+		return "", "", "", nil, errors.NewProcessingError("error opening file", err)
 	}
 
-	return dir, ext, f, nil
+	return dir, fileWithoutExtension, ext, f, nil
 }
 
 func readSubtree(r io.Reader, logger ulogger.Logger, verbose bool) uint32 {
