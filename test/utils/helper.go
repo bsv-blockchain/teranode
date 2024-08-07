@@ -262,6 +262,13 @@ func GetMiningCandidate(ctx context.Context, baClient ba.Client, logger ulogger.
 	return miningCandidate, nil
 }
 
+func GetMiningCandidate_rpc(url string) (string, error) {
+	method := "getminingcandidate"
+	params := []interface{}{}
+
+	return CallRPC(url, method, params)
+}
+
 func MineBlock(ctx context.Context, baClient ba.Client, logger ulogger.Logger) ([]byte, error) {
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	if err != nil {
@@ -306,12 +313,39 @@ func MineBlockWithCandidate(ctx context.Context, baClient ba.Client, miningCandi
 		return nil, errors.NewProcessingError("error submitting mining solution: %w", err)
 	}
 
-	err = baClient.SubmitMiningSolution(ctx, solution)
+	return blockHash, nil
+}
+
+func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandidate *block_model.MiningCandidate, logger ulogger.Logger) ([]byte, error) {
+	solution, err := cpuminer.Mine(ctx, miningCandidate)
+	if err != nil {
+		return nil, errors.NewProcessingError("error mining block: %w", err)
+	}
+
+	blockHeader, err := cpuminer.BuildBlockHeader(miningCandidate, solution)
+	if err != nil {
+		return nil, errors.NewProcessingError("error building block header: %w", err)
+	}
+
+	blockHash := util.Sha256d(blockHeader)
+	
+	solutionJSON, err := json.Marshal(solution)
+	if err != nil {
+		return nil, errors.NewProcessingError("error marshalling solution: %w", err)
+	}
+	method := "submitminingsolution"
+	params := []interface{}{string(solutionJSON)}
+	logger.Infof("Submitting mining solution: %s", string(solutionJSON))
+
+	resp, err := CallRPC(rpcUrl, method, params)
 	if err != nil {
 		return nil, errors.NewProcessingError("error submitting mining solution: %w", err)
+	}else {
+		fmt.Printf("Response: %s\n", resp)
 	}
 	return blockHash, nil
 }
+
 
 func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Hash, error) {
 

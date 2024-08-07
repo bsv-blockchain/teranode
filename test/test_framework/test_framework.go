@@ -43,6 +43,7 @@ type BitcoinNode struct {
 	BlockstoreUrl       *url.URL
 	UtxoStore           *utxostore.Store
 	SubtreesKafkaURL    *url.URL
+	RPC_URL			 	string
 }
 
 func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
@@ -186,6 +187,14 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		if err != nil {
 			return errors.NewConfigurationError("error creating utxostore %w", err)
 		}
+
+		rpcUrl, ok := gocore.Config().Get(fmt.Sprintf("rpc_listener_url.%s", node.SETTINGS_CONTEXT))
+		//remove : from the prefix
+		rpcPort := strings.Replace(rpcUrl, ":", "", 1)
+		if !ok {
+			return errors.NewConfigurationError("no rpc_listener_url setting found")
+		}
+		b.Nodes[i].RPC_URL = fmt.Sprintf("http://localhost:%d%s", i+1, rpcPort)
 	}
 	return nil
 }
