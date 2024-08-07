@@ -1,7 +1,12 @@
 linters-settings:
+  depguard:
+    rules:
+      main:
+        deny:
+          - pkg: "errors"
+            desc: Should be replaced by standard lib errors package
   forbidigo:
     forbid:
-      # Optional message that gets included in error reports.
       - p: ^fmt\.Errorf.*$
         msg: use of fmt.Errorf is deprecated, please use errors.New
 
@@ -10,6 +15,7 @@ linters:
     - gosec
     - errcheck
     - forbidigo
+    - depguard
 
 issues:
   exclude-rules:
@@ -21,3 +27,7 @@ issues:
         - errcheck
         - ineffassign
         - forbidigo
+        - depguard
+    - path: errors
+      linters:
+        - depguard
