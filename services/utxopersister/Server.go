@@ -205,7 +205,7 @@ func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 	// Parse the string to a uint32
 	height, err := strconv.ParseUint(heightStr, 10, 32)
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse height from file: %w", err)
+		return 0, errors.NewProcessingError("failed to parse height from file: %w", err)
 	}
 
 	return uint32(height), nil

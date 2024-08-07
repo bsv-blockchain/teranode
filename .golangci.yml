@@ -31,3 +31,4 @@ issues:
     - path: errors
       linters:
         - depguard
+        - forbidigo

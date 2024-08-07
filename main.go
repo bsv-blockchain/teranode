@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"path"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -47,6 +47,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"golang.org/x/term"
+	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
 )
 
 // Name used by build script for the binaries. (Please keep on single line)
@@ -557,7 +558,7 @@ func waitForPostgresToStart(logger ulogger.Logger) error {
 		conn, err := net.DialTimeout("tcp", address, time.Second)
 		if err != nil {
 			if time.Now().After(deadline) {
-				return fmt.Errorf("timed out waiting for PostgreSQL to start: %w", err)
+				return errors.NewStorageError("timed out waiting for PostgreSQL to start: %w", err)
 			}
 
 			logger.Infof("PostgreSQL is not up yet - waiting")
