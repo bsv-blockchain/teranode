@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/go-utils"
 	"golang.org/x/sync/errgroup"
 
@@ -30,6 +29,7 @@ type UTXODiff struct {
 	ctx                     context.Context
 	logger                  ulogger.Logger
 	blockHash               chainhash.Hash
+	blockHeight             uint32
 	additionsWriter         *io.PipeWriter
 	additionsBufferedWriter *bufio.Writer
 	deletionsWriter         *io.PipeWriter
@@ -39,7 +39,7 @@ type UTXODiff struct {
 }
 
 // NewUTXOMap creates a new UTXODiff.
-func NewUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXODiff, error) {
+func NewUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXODiff, error) {
 	// Now, write the block file
 	logger.Infof("[BlockPersister] Persisting utxo additions and deletions for block %s", blockHash.String())
 
@@ -81,6 +81,7 @@ func NewUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, b
 		ctx:                     ctx,
 		logger:                  logger,
 		blockHash:               *blockHash,
+		blockHeight:             blockHeight,
 		additionsWriter:         additionsWriter,
 		additionsBufferedWriter: additionsBufferedWriter,
 		deletionsWriter:         deletionsWriter,
@@ -123,8 +124,7 @@ func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
 
 	if tx.IsCoinbase() {
 		// We can ignore the error if the height is not found, because all old blocks are spendable today
-		spendingHeight, _ = util.ExtractCoinbaseHeight(tx)
-		spendingHeight += 100
+		spendingHeight = ud.blockHeight + 100
 	} else {
 		for _, input := range tx.Inputs {
 			if err := ud.delete(&UTXODeletion{input.PreviousTxIDChainHash(), input.PreviousTxOutIndex}); err != nil {

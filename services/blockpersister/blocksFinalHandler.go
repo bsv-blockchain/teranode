@@ -103,7 +103,7 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	u.logger.Infof("[BlockPersister] Processing subtrees with concurrency %d", concurrency)
 
 	// Create a new UTXO diff
-	utxoDiff, err := utxopersister.NewUTXODiff(ctx, u.logger, u.blockStore, block.Header.Hash())
+	utxoDiff, err := utxopersister.NewUTXODiff(ctx, u.logger, u.blockStore, block.Header.Hash(), block.Height)
 	if err != nil {
 		return errors.NewProcessingError("error creating utxo diff", err)
 	}

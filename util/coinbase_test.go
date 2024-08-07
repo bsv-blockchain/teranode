@@ -22,7 +22,7 @@ func TestValidSigScript1(t *testing.T) {
 }
 
 func TestValidSigScript2(t *testing.T) {
-	sigScript, err := bscript.NewFromHexString("0100")
+	sigScript, err := bscript.NewFromHexString("03000000")
 	require.NoError(t, err)
 
 	height, miner, err := extractCoinbaseHeightAndText(*sigScript)
