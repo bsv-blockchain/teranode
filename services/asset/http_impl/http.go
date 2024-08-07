@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"net/http"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/libp2p/go-libp2p/core/crypto"
 
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
@@ -95,6 +96,9 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 
 		return c.String(http.StatusOK, details)
 	})
+
+	apiRestGroup := e.Group("/rest")
+	apiRestGroup.GET("/block/:hash.bin", h.GetRestLegacyBlock()) // BINARY_STREAM
 
 	apiPrefix, _ := gocore.Config().Get("asset_apiPrefix", "/api/v1")
 	apiGroup := e.Group(apiPrefix)

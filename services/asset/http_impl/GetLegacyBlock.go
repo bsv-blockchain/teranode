@@ -33,3 +33,30 @@ func (h *HTTP) GetLegacyBlock() func(c echo.Context) error {
 		return c.Stream(http.StatusOK, echo.MIMEOctetStream, r)
 	}
 }
+func (h *HTTP) GetRestLegacyBlock() func(c echo.Context) error {
+	return func(c echo.Context) error {
+		resource := c.Param("hash.bin")
+		hashString := strings.Replace(resource, ".bin", "", 1)
+
+		h.logger.Debugf("[Asset_http] GetBlockGetTestLegacyBlockByHash for %s: %s", c.Request().RemoteAddr, resource)
+		hash, err := chainhash.NewHashFromStr(hashString)
+		if err != nil {
+			return err
+		}
+
+		r, err := h.repository.GetLegacyBlockReader(c.Request().Context(), hash)
+		if err != nil {
+			if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), "not found") {
+				prometheusAssetHttpGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusNotFound)).Inc()
+				return echo.NewHTTPError(http.StatusNotFound, err.Error())
+			} else {
+				prometheusAssetHttpGetBlockLegacy.WithLabelValues("ERROR", http.StatusText(http.StatusInternalServerError)).Inc()
+				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+			}
+		}
+
+		prometheusAssetHttpGetBlockLegacy.WithLabelValues("OK", "200").Inc()
+
+		return c.Stream(http.StatusOK, echo.MIMEOctetStream, r)
+	}
+}
