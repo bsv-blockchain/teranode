@@ -122,6 +122,7 @@ func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
 	spendingHeight := uint32(0)
 
 	if tx.IsCoinbase() {
+		// We can ignore the error if the height is not found, because all old blocks are spendable today
 		spendingHeight, _ = util.ExtractCoinbaseHeight(tx)
 	} else {
 		for _, input := range tx.Inputs {

@@ -108,30 +108,32 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return errors.NewProcessingError("error creating utxo diff", err)
 	}
 
-	// Add coinbase utxos to the utxo diff
-	if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
-		return errors.NewProcessingError("error processing coinbase tx", err)
-	}
+	if len(block.Subtrees) == 0 {
+		// No subtrees to process, just write the coinbase UTXO to the diff and continue
+		if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
+			return errors.NewProcessingError("error processing coinbase tx", err)
+		}
+	} else {
+		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(concurrency)
 
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(concurrency)
+		for i, subtreeHash := range block.Subtrees {
+			subtreeHash := subtreeHash
+			i := i
 
-	for i, subtreeHash := range block.Subtrees {
-		subtreeHash := subtreeHash
-		i := i
+			g.Go(func() error {
+				u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i+1, len(block.Subtrees), subtreeHash.String())
 
-		g.Go(func() error {
-			u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i+1, len(block.Subtrees), subtreeHash.String())
+				return u.ProcessSubtree(gCtx, *subtreeHash, block.CoinbaseTx, utxoDiff)
+			})
+		}
 
-			return u.ProcessSubtree(gCtx, *subtreeHash, block.CoinbaseTx, utxoDiff)
-		})
-	}
+		u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
 
-	u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
-
-	if err = g.Wait(); err != nil {
-		// Don't wrap the error again, ProcessSubtree should return the error in correct format
-		return err
+		if err = g.Wait(); err != nil {
+			// Don't wrap the error again, ProcessSubtree should return the error in correct format
+			return err
+		}
 	}
 
 	// At this point, we have a complete UTXODiff for this block.
