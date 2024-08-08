@@ -90,7 +90,10 @@ jobs:
           kubectl cluster-info
 
       - name: Deploy to Operator
+        env:
+          TAG: ${{ needs.get_tag.outputs.deployment_tag }}
+        if: startsWith(github.event.ref, 'refs/tags/v')
         run: |
-          kubectl patch -n t1 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ needs.get_tag.outputs.deployment_tag }}"}}';
-          kubectl patch -n t2 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ needs.get_tag.outputs.deployment_tag }}"}}';
-          kubectl patch -n t3 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ needs.get_tag.outputs.deployment_tag }}"}}';
+          kubectl patch -n t1 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$TAG"}}';
+          kubectl patch -n t2 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$TAG"}}';
+          kubectl patch -n t3 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:$TAG"}}';
