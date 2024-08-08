@@ -2,13 +2,14 @@ package subtreevalidation
 
 import (
 	"context"
-	"github.com/ordishs/go-utils"
 	"net/url"
 	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ordishs/go-utils"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
@@ -241,7 +242,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 	ctx, _, deferFn := tracing.StartTracing(ctx, "checkSubtree",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
-		tracing.WithLogMessage(u.logger, "[checkSubtree] called for subtree %s", utils.ReverseAndHexEncodeSlice(request.Hash)),
+		tracing.WithLogMessage(u.logger, "[checkSubtree] called for subtree %s (height %d ??)", utils.ReverseAndHexEncodeSlice(request.Hash), request.BlockHeight),
 	)
 	defer deferFn()
 
