@@ -69,38 +69,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 func TestValidate_ValidTransaction(t *testing.T) {
 }
 
-func TestValidate_BlockAssemblyChannel(t *testing.T) {
-	tracing.SetGlobalMockTracer()
-
-	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
-	tx, err := bt.NewTxFromString(txHex)
-	require.NoError(t, err)
-
-	utxoStore, _ := nullstore.NewNullStore()
-	_ = utxoStore.SetBlockHeight(123)
-	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
-
-	initPrometheusMetrics()
-
-	v := &Validator{
-		logger: ulogger.TestLogger{},
-		txValidator: TxValidator{
-			policy: NewPolicySettings(),
-		},
-		utxoStore:              utxoStore,
-		blockAssembler:         nil,
-		saveInParallel:         true,
-		stats:                  gocore.NewStat("validator"),
-		blockassemblyKafkaChan: make(chan []byte, 1),
-	}
-
-	err = v.Validate(context.Background(), tx, 0)
-	require.NoError(t, err)
-
-	require.Equal(t, 1, len(v.blockassemblyKafkaChan), "blockassemblyKafkaChan should have 1 message")
-}
-
-func TestValidate_TxMetaChannel(t *testing.T) {
+func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	tracing.SetGlobalMockTracer()
 
 	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
@@ -124,12 +93,15 @@ func TestValidate_TxMetaChannel(t *testing.T) {
 		stats:                  gocore.NewStat("validator"),
 		blockassemblyKafkaChan: make(chan []byte, 1),
 		txMetaKafkaChan:        make(chan []byte, 1),
+		rejectedTxKafkaChan:    make(chan []byte, 1),
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.NoError(t, err)
 
+	require.Equal(t, 1, len(v.blockassemblyKafkaChan), "blockassemblyKafkaChan should have 1 message")
 	require.Equal(t, 1, len(v.txMetaKafkaChan), "txMetaKafkaChan should have 1 message")
+	require.Equal(t, 0, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should be empty")
 }
 
 func TestValidate_RejectedTransactionChannel(t *testing.T) {
@@ -148,16 +120,20 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
 		},
-		utxoStore:           utxoStore,
-		blockAssembler:      nil,
-		saveInParallel:      true,
-		stats:               gocore.NewStat("validator"),
-		rejectedTxKafkaChan: make(chan []byte, 1),
+		utxoStore:              utxoStore,
+		blockAssembler:         nil,
+		saveInParallel:         true,
+		stats:                  gocore.NewStat("validator"),
+		blockassemblyKafkaChan: make(chan []byte, 1),
+		txMetaKafkaChan:        make(chan []byte, 1),
+		rejectedTxKafkaChan:    make(chan []byte, 1),
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.Error(t, err)
 
+	require.Equal(t, 0, len(v.blockassemblyKafkaChan), "blockassemblyKafkaChan should be empty")
+	require.Equal(t, 0, len(v.txMetaKafkaChan), "txMetaKafkaChan should be empty")
 	require.Equal(t, 1, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should have 1 message")
 }
 
