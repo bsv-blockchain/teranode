@@ -145,6 +145,7 @@ testall:
 
 nightly-tests:
 	docker compose -f docker-compose.ci.build.yml build
+	$(MAKE) install-tools
 	cd $(TEST_DIR) && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../$(REPORT_NAME)
 	cd ../..;
 

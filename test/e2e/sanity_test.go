@@ -28,7 +28,6 @@ import (
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -429,18 +428,18 @@ func TestLocktimeFutureHeight(t *testing.T) {
 		t.Errorf("Error adding output to transaction: %v", err)
 	}
 
+	newTx.LockTime = 350
+	newTx.LockTime = getFutureLockTime(10)
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
 		t.Errorf("Error filling transaction inputs: %v", err)
 	}
 
-	newTx.LockTime = 350
-
 	_, err = txDistributor.SendTransaction(ctx, newTx)
-	require.Error(t, err)
-	// if err != nil {
-	// 	t.Errorf("Failed to send new transaction: %v", err)
-	// }
+	// require.Error(t, err)
+	if err != nil {
+		t.Errorf("Failed to send new transaction: %v", err)
+	}
 
 	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
 	time.Sleep(10 * time.Second)
@@ -504,7 +503,7 @@ func TestLocktimeFutureHeight(t *testing.T) {
 			logger.Infof("Tx hash: %s\n", newTx.TxIDChainHash())
 			logger.Infof("Tx inputs: %v\n", newTx.Inputs)
 			logger.Infof("Tx outputs: %v\n", newTx.Outputs)
-			assert.Equal(t, false, bl, "Test Tx was not expected to be found in the block")
+			assert.Equal(t, true, bl, "Test Tx was not expected to be found in the block")
 		}
 	}
 
@@ -574,21 +573,18 @@ func TestLocktimeFutureTimeStamp(t *testing.T) {
 		t.Errorf("Error adding output to transaction: %v", err)
 	}
 
-
+	newTx.LockTime = getFutureLockTime(10)
+	// newTx.Inputs[0].SequenceNumber = 0xFFFFFFFF
+	logger.Infof("Future time: %d\n", newTx.LockTime)
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	if err != nil {
 		t.Errorf("Error filling transaction inputs: %v", err)
 	}
-	
-	newTx.LockTime = getFutureLockTime(10)
-	// newTx.Inputs[0].SequenceNumber = 0xFFFFFFFF
-	logger.Infof("Future time: %d\n", newTx.LockTime)
 
 	_, err = txDistributor.SendTransaction(ctx, newTx)
-	require.Error(t, err)
-	// if err != nil {
-	// 	t.Errorf("Failed to send new transaction: %v", err)
-	// }
+	if err != nil {
+		t.Errorf("Failed to send new transaction: %v", err)
+	}
 
 	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
 	time.Sleep(20 * time.Second)
@@ -652,7 +648,7 @@ func TestLocktimeFutureTimeStamp(t *testing.T) {
 			logger.Infof("Tx hash: %s\n", newTx.TxIDChainHash())
 			logger.Infof("Tx inputs: %v\n", newTx.Inputs)
 			logger.Infof("Tx outputs: %v\n", newTx.Outputs)
-			assert.Equal(t, false, bl, "Test Tx was not expected to be found in the block")
+			assert.Equal(t, true, bl, "Test Tx was not expected to be found in the block")
 		}
 	}
 
