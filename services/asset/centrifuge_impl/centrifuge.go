@@ -59,11 +59,6 @@ func New(logger ulogger.Logger, repo *repository.Repository, httpServer *http_im
 func (c *Centrifuge) Init(ctx context.Context) (err error) {
 	c.logger.Infof("[AssetService] Centrifuge service initializing")
 
-	//c.blockchainClient, err = blockchain.NewClient(ctx, c.logger)
-	//if err != nil {
-	//	return err
-	//}
-
 	c.centrifugeNode, err = centrifuge.New(centrifuge.Config{
 		LogLevel: centrifuge.LogLevelDebug,
 		LogHandler: func(e centrifuge.LogEntry) {

@@ -87,7 +87,7 @@ func ProcessFile(path string, logger ulogger.Logger) error {
 func verifyChain() error {
 	logger := ulogger.NewZeroLogger("main")
 
-	blockchain, err := blockchain.NewClient(context.Background(), logger)
+	blockchain, err := blockchain.NewClient(context.Background(), logger, "cmd/filereader")
 	if err != nil {
 		return errors.NewServiceError("error creating blockchain client", err)
 	}

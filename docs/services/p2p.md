@@ -101,7 +101,7 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
 The P2P server's `Init` function is in charge of server setup:
 
 1. **Blockchain Client Initialization**:
-   - Creates a new blockchain client with `blockchain.NewClient(ctx, s.logger)`.
+   - Creates a new blockchain client with `blockchain.NewClient(ctx, s.logger, "source")`.
 
 2. **Asset HTTP Address Configuration**:
    - Retrieves the Asset HTTP Address URL from the configuration using `gocore.Config().GetURL("asset_httpAddress")`.

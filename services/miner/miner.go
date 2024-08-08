@@ -84,7 +84,7 @@ func (m *Miner) Init(ctx context.Context) error {
 	m.MineBlocksNImmediatelyChan = make(chan int, 1)
 	m.MineBlocksNImmediatelyCancelChan = make(chan bool, 1)
 	var err error
-	if m.blockchainClient, err = blockchain.NewClient(ctx, m.logger); err != nil {
+	if m.blockchainClient, err = blockchain.NewClient(ctx, m.logger, "services/miner"); err != nil {
 		return errors.NewServiceError("[Init] failed to create blockchain client", err)
 	}
 

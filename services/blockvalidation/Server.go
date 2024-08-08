@@ -104,7 +104,7 @@ func (u *Server) Health(_ context.Context) (int, string, error) {
 }
 
 func (u *Server) Init(ctx context.Context) (err error) {
-	if u.blockchainClient, err = blockchain.NewClient(ctx, u.logger); err != nil {
+	if u.blockchainClient, err = blockchain.NewClient(ctx, u.logger, "services/blockvalidation"); err != nil {
 		return errors.NewServiceError("[Init] failed to create blockchain client", err)
 	}
 

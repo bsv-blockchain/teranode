@@ -248,7 +248,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.logger.Infof("P2P service starting")
 	var err error
 
-	s.blockchainClient, err = blockchain.NewClient(ctx, s.logger)
+	s.blockchainClient, err = blockchain.NewClient(ctx, s.logger, "services/p2p")
 	if err != nil {
 		return errors.NewServiceError("could not create blockchain client [%w]", err)
 	}

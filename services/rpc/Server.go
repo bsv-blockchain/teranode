@@ -1058,7 +1058,7 @@ func (s *RpcServer) Init(ctx context.Context) (err error) {
 	rpcHandlers = rpcHandlersBeforeInit
 	// rand.Seed(time.Now().UnixNano())
 
-	blockchainClient, err := blockchain.NewClient(ctx, s.logger)
+	blockchainClient, err := blockchain.NewClient(ctx, s.logger, "services/rpc")
 	if err != nil {
 		return errors.NewServiceError("error creating blockchain client", err)
 	}

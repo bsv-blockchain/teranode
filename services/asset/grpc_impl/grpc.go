@@ -110,7 +110,7 @@ func New(logger ulogger.Logger, repo *repository.Repository, getPeers func() []s
 func (g *GRPC) Init(ctx context.Context) (err error) {
 	g.logger.Infof("[Asset] GRPC service initializing")
 
-	g.blockchainClient, err = blockchain.NewClient(ctx, g.logger)
+	g.blockchainClient, err = blockchain.NewClient(ctx, g.logger, "services/asset/grpc")
 	if err != nil {
 		return errors.NewServiceError("could not create blockchain client [%w]", err)
 	}

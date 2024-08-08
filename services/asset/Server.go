@@ -74,7 +74,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("no asset_grpcListenAddress or asset_httpListenAddress setting found")
 	}
 
-	blockchainClient, err := blockchain.NewClient(ctx, v.logger)
+	blockchainClient, err := blockchain.NewClient(ctx, v.logger, "services/asset")
 	if err != nil {
 		return errors.NewServiceError("error creating blockchain client", err)
 	}

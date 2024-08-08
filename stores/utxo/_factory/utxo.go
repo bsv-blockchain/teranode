@@ -46,7 +46,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 
 		if startBlockchain {
 			// get the latest block height to compare against lock time utxos
-			blockchainClient, err = blockchain.NewClient(ctx, logger)
+			blockchainClient, err = blockchain.NewClient(ctx, logger, "stores/utxo/factory")
 			if err != nil {
 				panic(err)
 			}
