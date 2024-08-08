@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"log"
 	"math/rand/v2"
 	"net"
 	"sync"
@@ -770,8 +771,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 
 	err := sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block)
 	if err != nil {
-		sm.logger.Errorf("SAO %s", err)
-		time.Sleep(1 * time.Second)
+		log.Printf("SAO %v", err)
+		time.Sleep(5 * time.Second)
 		panic(err)
 		// if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
 		// 	peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
