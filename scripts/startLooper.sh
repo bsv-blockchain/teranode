@@ -11,7 +11,7 @@ LOGFILE=$1
 # Main loop to keep the process running
 while true; do
     # Start the process and redirect both stdout and stderr to the log file
-    logLevel=INFO startLegacy=true blockassembly_disabled=true legacy_verifyOnly=false ./ubsv.run -all=0 -blockchain=1 -legacy=1 -subtreevalidation=1 -blockvalidation=1 -validator=1 -blockpersister=1 -utxopersister=1 >> $LOGFILE 2>&1 &
+    logLevel=INFO startLegacy=true blockassembly_disabled=true ./ubsv.run -all=0 -blockchain=1 -legacy=1 -subtreevalidation=1 -blockvalidation=1 -validator=1 -blockpersister=1 -utxopersister=1 >> $LOGFILE 2>&1 &
 
     # Get the PID of the last process started in the background
     PID=$!
