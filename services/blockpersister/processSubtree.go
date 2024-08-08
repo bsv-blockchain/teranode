@@ -17,8 +17,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXODiff) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessSubtree",
+func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXODiff) error {
+	ctx, _, deferFn := tracing.StartTracing(pCtx, "ProcessSubtree",
 		tracing.WithHistogram(prometheusBlockPersisterValidateSubtree),
 		tracing.WithLogMessage(u.logger, "[ProcessSubtree] called for subtree %s", subtreeHash.String()),
 	)
@@ -67,9 +67,9 @@ func (u *Server) ProcessSubtree(ctx context.Context, subtreeHash chainhash.Hash,
 		return errors.NewServiceError("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String())
 	}
 
-	storer := filestorer.NewFileStorer(ctx, u.logger, u.blockStore, subtreeHash[:], "subtree")
+	storer := filestorer.NewFileStorer(pCtx, u.logger, u.blockStore, subtreeHash[:], "subtree")
 
-	go WriteTxs(ctx, u.logger, storer, txMetaSlice, utxoDiff)
+	go WriteTxs(pCtx, u.logger, storer, txMetaSlice, utxoDiff)
 
 	return nil
 }
