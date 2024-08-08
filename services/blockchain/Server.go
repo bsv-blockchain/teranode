@@ -283,14 +283,15 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 	b.logger.Debugf("[BlockPersister] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
 	if b.blockKafkaProducer != nil {
-		// TODO add a retry mechanism
 		go func(block *model.Block) {
 			blockBytes, err := block.Bytes()
 			if err != nil {
 				b.logger.Errorf("[Blockchain] Error serializing block: %v", err)
 			} else {
 				b.logger.Debugf("[BlockPersister] sending block to kafka: %s", block.String())
+				// producer has built-in retry mechanism
 				if err = b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
+					// TODO: #938 Alter FSM state and keep going forever until it works and then reset the FSM state?
 					b.logger.Errorf("[Blockchain] Error sending block to kafka: %v", err)
 				}
 			}

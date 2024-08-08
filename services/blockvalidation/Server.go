@@ -303,7 +303,9 @@ func (u *Server) Start(ctx context.Context) error {
 								for _, subtreeHash := range block.Subtrees {
 									subtreeBytes := subtreeHash.CloneBytes()
 									u.logger.Debugf("[BlockValidation][%s][%s] processing subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
+									// Send has a built-in retry mechanism
 									if err := u.blockPersisterKafkaProducer.Send(subtreeBytes, subtreeBytes); err != nil {
+										// TODO - #938 what to do with the error? FSM event?
 										u.logger.Errorf("[BlockValidation][%s][%s] failed to send subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
 									}
 								}
