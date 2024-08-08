@@ -204,7 +204,7 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, grou
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
 	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, autoCommit, fn); err != nil {
-		u.logger.Errorf("Failed to start Kafka listener: %v", err)
+		u.logger.Errorf("Failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
 	}
 }
 
