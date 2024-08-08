@@ -4,6 +4,8 @@ import (
 	"github.com/libsv/go-bt/v2"
 )
 
+const LockTimeBIP113 = 419328
+
 // ValidLockTime checks whether a lock time is valid in the context of a block height and median block time
 // the block height and median block time are the values of the block in which the transaction is mined
 func ValidLockTime(lockTime uint32, blockHeight uint32, medianBlockTime uint32) bool {
