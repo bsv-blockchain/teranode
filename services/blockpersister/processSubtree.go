@@ -68,37 +68,34 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	}
 
 	storer := filestorer.NewFileStorer(context.Background(), u.logger, u.blockStore, subtreeHash[:], "subtree")
+	defer storer.Close(context.Background())
 
-	go WriteTxs(context.Background(), u.logger, storer, txMetaSlice, utxoDiff)
+	if err := WriteTxs(context.Background(), u.logger, storer, txMetaSlice, utxoDiff); err != nil {
+		return errors.NewProcessingError("[BlockPersister] error writing txs", err)
+	}
 
 	return nil
 }
 
-func WriteTxs(ctx context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txMetaSlice []*meta.Data, utxoDiff *utxopersister.UTXODiff) {
-	defer func() {
-		if err := writer.Close(ctx); err != nil {
-			logger.Errorf("error closing writer: %v", err)
-		}
-	}()
-
+func WriteTxs(ctx context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txMetaSlice []*meta.Data, utxoDiff *utxopersister.UTXODiff) error {
 	// Write the number of txs in the subtree
 	//      this makes it impossible to stream directly from S3 to the client
 	if err := binary.Write(writer, binary.LittleEndian, uint32(len(txMetaSlice))); err != nil {
-		logger.Errorf("error writing number of txs: %v", err)
-		return
+		return errors.NewProcessingError("error writing number of txs", err)
 	}
 
 	for i := 0; i < len(txMetaSlice); i++ {
 		if _, err := writer.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
-			logger.Errorf("error writing tx: %v", err)
-			return
+			return errors.NewProcessingError("error writing tx", err)
 		}
 
 		if utxoDiff != nil {
 			// Process the utxo diff...
 			if err := utxoDiff.ProcessTx(txMetaSlice[i].Tx); err != nil {
-				logger.Errorf("error processing tx: %v", err)
+				return errors.NewProcessingError("error processing tx", err)
 			}
 		}
 	}
+
+	return nil
 }
