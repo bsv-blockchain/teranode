@@ -337,13 +337,13 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 		}(i)
 	}
 
-	// Wait for signal to cancel context
-	<-signals
-	cancel()
-	logger.Infof("[kafka] Shutting down consumers for group %s", groupID)
-
-	<-ctx.Done()
-	logger.Infof("[kafka] shutting down consumer for %s", groupID)
+	select {
+	case <-signals:
+		logger.Infof("[kafka] Received signal, shutting down consumers for group %s", groupID)
+		cancel() // Ensure the context is canceled
+	case <-ctx.Done():
+		logger.Infof("[kafka] Context done, shutting down consumer for %s", groupID)
+	}
 
 	if err = client.Close(); err != nil {
 		logger.Errorf("[Kafka] %s: error closing client: %v", groupID, err)
