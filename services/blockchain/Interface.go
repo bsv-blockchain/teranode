@@ -43,6 +43,7 @@ type ClientI interface {
 	SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
 	StoreFSMState(state string)
 	CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
+	CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 	Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 
 	// new legacy endpoints
@@ -187,6 +188,9 @@ func (s *MockBlockchain) StoreFSMState(state string) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

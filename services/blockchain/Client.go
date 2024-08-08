@@ -619,6 +619,19 @@ func (c *Client) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*em
 	return nil, nil
 }
 
+func (c *Client) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
+
+	req := emptypb.Empty{}
+
+	_, err := c.client.CatchUpBlocks(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
 func (c *Client) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	c.logger.Infof("[Blockchain Client] Sending Mine event")
 

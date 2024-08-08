@@ -180,6 +180,10 @@ func (c LocalClient) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) 
 	return nil, nil
 }
 
+func (c LocalClient) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return nil, nil
+}
+
 func (c LocalClient) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, nil
 }

@@ -378,6 +378,9 @@ func (s *mockStore) IntervalBlockHashes(endHash *chainhash.Hash, interval int) (
 func (s *mockStore) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
+func (s *mockStore) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
 func (s *mockStore) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
