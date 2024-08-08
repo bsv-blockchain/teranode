@@ -372,8 +372,8 @@ func (sm *SyncManager) startSync() {
 		// can use block headers to learn about which blocks comprise
 		// the chain up to the checkpoint and perform less validation
 		// for them.  This is possible since each header contains the
-		// hash of the previous header and a merkle root.  Therefore if
-		// we validate all of the received headers link together
+		// hash of the previous header and a merkle root.  Therefore, if
+		// we validate all of the received headers linked together
 		// properly and the checkpoint hashes match, we can be sure the
 		// hashes for the blocks in between are accurate.  Further, once
 		// the full blocks are downloaded, the merkle root is computed
@@ -489,6 +489,8 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 
 	// If we don't have a sync peer, then there is nothing to do.
 	if sm.syncPeer == nil {
+		// GOKHAN: here check if it is nil, we can end the process of
+		// interval?
 		return
 	}
 
@@ -817,6 +819,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
 		if sm.current() { // used to check for isOrphan || sm.current()
+			// if you are at the Legacy Sync mode, tell FSM to transition to normal runing.
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
 		}
 	}

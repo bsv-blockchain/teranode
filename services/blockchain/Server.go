@@ -88,7 +88,17 @@ func (b *Blockchain) Health(ctx context.Context) (int, string, error) {
 }
 
 func (b *Blockchain) Init(_ context.Context) error {
+
 	b.finiteStateMachine = b.NewFiniteStateMachine()
+	// start state
+
+	// read the config
+	// transition to Restore if necessary
+	// transition to Legacy Sync
+
+	// manually run grpc functions that will run script
+	// for Legacy Sync mode, when it understands it is current it fires to exit the Legacy Sync mode
+
 	return nil
 }
 

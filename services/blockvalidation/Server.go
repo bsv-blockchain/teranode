@@ -182,12 +182,12 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						u.logger.Errorf("[BlockValidation Init] failed to send STOPMINING event [%v]", err)
 					}
 
-					u.logger.Infof("[Init] processing catchup on channel [%s]", c.block.Hash().String())
+					u.logger.Infof("[BlockValidation Init] processing catchup on channel [%s]", c.block.Hash().String())
 					if err := u.catchup(ctx1, c.block, c.baseURL); err != nil {
-						u.logger.Errorf("[Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
+						u.logger.Errorf("[BlockValidation Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
 					}
 
-					u.logger.Infof("[Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
+					u.logger.Infof("[BlockValidation Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 
 					// start mining
@@ -501,6 +501,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = request.Height
 
+	// GOKHAN
 	// TODO - check if hardcoding "legacy" is OK
 	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)
 	if err != nil {

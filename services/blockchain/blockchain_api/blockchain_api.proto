@@ -290,7 +290,8 @@ enum FSMEventType {
   MINE = 2;
   CATCHUPBLOCKS = 3;
   CATCHUPTXS = 4;
-  CATCHUPLEGACY = 5;
+  RESTORE = 5;
+  LEGACYSYNC = 6;
 }
 
 // swagger:enum FSMStateType
@@ -300,7 +301,8 @@ enum FSMStateType {
   MINING = 2;
   CATCHINGBLOCKS = 3;
   CATCHINGTXS = 4;
-  CATCHINGLEGACY = 5;
+  RESTORING = 5;
+  LEGACYSYNCING =7;
 }
 
 message GetBlockLocatorRequest {
