@@ -974,31 +974,24 @@ func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty)
 		return nil, errors.WrapGRPC(err)
 	}
 
-	var medianTime uint32
-	if meta.Height >= util.LockTimeBIP113 {
-		// get the median block time for the last 11 blocks
-		headers, _, err := b.store.GetBlockHeaders(ctx, blockHeader.Hash(), 11)
-		if err != nil {
-			return nil, errors.WrapGRPC(err)
-		}
+	// get the median block time for the last 11 blocks
+	headers, _, err := b.store.GetBlockHeaders(ctx, blockHeader.Hash(), 11)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
 
-		prevTimeStamps := make([]time.Time, 0, 11)
-		for _, header := range headers {
-			prevTimeStamps = append(prevTimeStamps, time.Unix(int64(header.Timestamp), 0))
-		}
-		medianTimestamp, err := model.CalculateMedianTimestamp(prevTimeStamps)
-		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("[Blockchain] could not calculate median block time", err))
-		}
-		medianTime = uint32(medianTimestamp.Unix())
-	} else {
-		// until block 419328 (BIP-113), use the block time
-		medianTime = blockHeader.Timestamp
+	prevTimeStamps := make([]time.Time, 0, 11)
+	for _, header := range headers {
+		prevTimeStamps = append(prevTimeStamps, time.Unix(int64(header.Timestamp), 0))
+	}
+	medianTimestamp, err := model.CalculateMedianTimestamp(prevTimeStamps)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[Blockchain] could not calculate median block time", err))
 	}
 
 	return &blockchain_api.GetBestHeightAndTimeResponse{
 		Height: meta.Height,
-		Time:   medianTime,
+		Time:   uint32(medianTimestamp.Unix()),
 	}, nil
 }
 

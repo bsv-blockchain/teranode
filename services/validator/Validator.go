@@ -164,14 +164,18 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	// this should be updated automatically by the utxo store
 	utxoStoreBlockHeight := v.GetBlockHeight()
-	utxoStoreMedianBlockTime := v.GetMedianBlockTime()
-	if utxoStoreBlockHeight == 0 || utxoStoreMedianBlockTime == 0 {
-		return errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", utxoStoreBlockHeight, utxoStoreMedianBlockTime)
-	}
+	// We do not check IsFinal for transactions before BIP113 change (block height 419328)
+	// This is an exception for transactions before the media block time was used
+	if utxoStoreBlockHeight > util.LockTimeBIP113 {
+		utxoStoreMedianBlockTime := v.GetMedianBlockTime()
+		if utxoStoreMedianBlockTime == 0 {
+			return errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", utxoStoreBlockHeight, utxoStoreMedianBlockTime)
+		}
 
-	// this function should be moved into go-bt
-	if !util.IsTransactionFinal(tx, utxoStoreBlockHeight+1, utxoStoreMedianBlockTime) {
-		return errors.NewNonFinalError("[Validate][%s] transaction is not final", tx.TxIDChainHash().String())
+		// this function should be moved into go-bt
+		if !util.IsTransactionFinal(tx, utxoStoreBlockHeight+1, utxoStoreMedianBlockTime) {
+			return errors.NewNonFinalError("[Validate][%s] transaction is not final", tx.TxIDChainHash().String())
+		}
 	}
 
 	if tx.IsCoinbase() {
