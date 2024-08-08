@@ -67,9 +67,9 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 		return errors.NewServiceError("[validateSubtreeInternal][%s] failed to get tx meta from store", subtreeHash.String())
 	}
 
-	storer := filestorer.NewFileStorer(pCtx, u.logger, u.blockStore, subtreeHash[:], "subtree")
+	storer := filestorer.NewFileStorer(context.Background(), u.logger, u.blockStore, subtreeHash[:], "subtree")
 
-	go WriteTxs(pCtx, u.logger, storer, txMetaSlice, utxoDiff)
+	go WriteTxs(context.Background(), u.logger, storer, txMetaSlice, utxoDiff)
 
 	return nil
 }
