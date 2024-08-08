@@ -184,3 +184,36 @@ func TestCheckHashPrevBlockCandidate(t *testing.T) {
 		t.Errorf("Teranode working on incorrect prevHash")
 	}
 }
+
+func TestCoinbaseTXAmount(t *testing.T) {
+	ctx := context.Background()
+
+	ba := framework.Nodes[0].BlockassemblyClient
+	bc := framework.Nodes[0].BlockchainClient
+
+	mc0, errmc0 := ba.GetMiningCandidate(ctx)
+	if errmc0 != nil {
+		t.Errorf("Error getting mining candidate on node 0")
+	}
+
+	coinbaseValueBlock := mc0.CoinbaseValue
+	fmt.Printf("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
+
+	_, bbhmeta, errbb := bc.GetBestBlockHeader(ctx)
+	if errbb != nil {
+		t.Errorf("Error getting best block")
+	}
+	block, errblock := bc.GetBlockByHeight(ctx, bbhmeta.Height)
+	if errblock != nil {
+		t.Errorf("Error getting block by height")
+	}
+	coinbaseTX := block.CoinbaseTx
+	amount := coinbaseTX.TotalOutputSatoshis()
+	fmt.Printf("Amount inside block coinbase tx: %d", amount)
+
+	if amount != coinbaseValueBlock {
+		t.Errorf("Error calculating Coinbase Tx amount")
+	}
+
+	// blockReward := block.CoinbaseTx.TotalOutputSatoshis()
+}
