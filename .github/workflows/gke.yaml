@@ -91,6 +91,6 @@ jobs:
 
       - name: Deploy to Operator
         run: |
-          kubectl patch -n t1 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:v2.2.28"}}';
-          kubectl patch -n t2 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:v2.2.28"}}';
-          kubectl patch -n t3 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:v2.2.28"}}';
+          kubectl patch -n t1 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:v2.2.28"}}';
+          kubectl patch -n t2 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:v2.2.28"}}';
+          kubectl patch -n t3 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:v2.2.28"}}';
