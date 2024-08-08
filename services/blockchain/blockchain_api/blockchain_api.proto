@@ -41,9 +41,10 @@ service BlockchainAPI {
   rpc GetBlocksSubtreesNotSet(google.protobuf.Empty) returns (GetBlocksSubtreesNotSetResponse) {}
   rpc SendFSMEvent(SendFSMEventRequest) returns (GetFSMStateResponse) {}
   rpc GetFSMCurrentState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
+  rpc Run(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  rpc Mine(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc CatchUpTransactions(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc CatchUpBlocks(google.protobuf.Empty) returns (google.protobuf.Empty) {}
-  rpc Mine(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc GetBlockLocator(GetBlockLocatorRequest) returns (GetBlockLocatorResponse) {}
   rpc LocateBlockHeaders(LocateBlockHeadersRequest) returns (LocateBlockHeadersResponse) {}
 }

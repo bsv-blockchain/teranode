@@ -176,7 +176,11 @@ func (c LocalClient) SendFSMEvent(ctx context.Context, state blockchain_api.FSME
 func (c LocalClient) StoreFSMState(state string) {
 }
 
-func (c LocalClient) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+func (c LocalClient) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return nil, nil
+}
+
+func (c LocalClient) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, nil
 }
 
@@ -184,7 +188,7 @@ func (c LocalClient) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*empt
 	return nil, nil
 }
 
-func (c LocalClient) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+func (c LocalClient) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, nil
 }
 

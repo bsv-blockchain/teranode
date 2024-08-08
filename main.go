@@ -393,9 +393,17 @@ func main() {
 		}
 	}
 
-	if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
-		logger.Errorf("[Main] failed to send RUN event [%v]", err)
-		panic(err)
+	restoring := gocore.Config().GetBool("profilerAddr", false)
+	syncingLegacy := gocore.Config().GetBool("snycLegacyMode", false)
+
+	// if we are in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
+	// if we are in the restoring mode, we need to wait for restore to complete, and manual RUN event to be sent.
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	if !restoring && !syncingLegacy {
+		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
+			logger.Errorf("[Main] failed to send RUN event [%v]", err)
+			panic(err)
+		}
 	}
 
 	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining

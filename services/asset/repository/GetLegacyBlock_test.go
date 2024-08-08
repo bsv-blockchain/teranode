@@ -375,13 +375,16 @@ func (s *mockStore) HeightToHashRange(startHeight uint32, endHash *chainhash.Has
 func (s *mockStore) IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error) {
 	panic("not implemented")
 }
+func (s *mockStore) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *mockStore) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
 func (s *mockStore) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
 func (s *mockStore) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	panic("not implemented")
-}
-func (s *mockStore) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
 func (s *mockStore) GetFSMCurrentState() blockchain_api.FSMStateType {

@@ -645,6 +645,19 @@ func (c *Client) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, er
 	return nil, nil
 }
 
+func (c *Client) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Run event")
+
+	req := emptypb.Empty{}
+
+	_, err := c.client.Run(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
 func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 
 	req := &blockchain_api.GetBlockLocatorRequest{
