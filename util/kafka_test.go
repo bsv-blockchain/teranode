@@ -305,7 +305,7 @@ func waitForKafkaReady(ctx context.Context, kafkaAddr string, timeout time.Durat
 			return nil
 		}
 		if time.Since(start) > timeout {
-			return fmt.Errorf("timed out waiting for Kafka to be ready")
+			return errors.NewUnknownError("timed out waiting for Kafka to be ready")
 		}
 		select {
 		case <-ctx.Done():
