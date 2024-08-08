@@ -1,9 +1,7 @@
 package blockpersister
 
 import (
-	"bufio"
 	"context"
-	"io"
 	"os"
 	"path"
 	"sync"
@@ -12,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -144,39 +143,14 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	// Now, write the block file
 	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())
 
-	reader, writer := io.Pipe()
+	storer := filestorer.NewFileStorer(ctx, u.logger, u.blockStore, hash[:], "block")
 
-	bufferedWriter := bufio.NewWriter(writer)
-
-	go func() {
-		defer func() {
-			// Flush the buffer and close the writer with error handling
-			if err := bufferedWriter.Flush(); err != nil {
-				u.logger.Errorf("Error flushing writer: %v", err)
-			}
-
-			if err := writer.CloseWithError(nil); err != nil {
-				u.logger.Errorf("Error closing writer: %v", err)
-			}
-		}()
-
-		// Write 80 byte block header
-		_, err := bufferedWriter.Write(blockBytes)
-		if err != nil {
-			u.logger.Errorf("Error writing block: %v", err)
-			writer.CloseWithError(err)
-			return
-		}
-	}()
-
-	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
-	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
-	if err = u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithTTL(24*time.Hour)); err != nil {
-		return errors.NewStorageError("[BlockPersister] error persisting block", err)
+	if _, err = storer.Write(blockBytes); err != nil {
+		return errors.NewStorageError("error writing block to disk", err)
 	}
 
-	if err = u.blockStore.SetTTL(ctx, hash[:], 0, options.WithFileExtension("block")); err != nil {
-		return errors.NewStorageError("[BlockPersister] error persisting block", err)
+	if err = storer.Close(ctx); err != nil {
+		return errors.NewStorageError("error closing block file", err)
 	}
 
 	return nil
