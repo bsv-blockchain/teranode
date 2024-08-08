@@ -356,6 +356,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseUrl, txMetaSlice, blockHeight)
 			if err != nil {
+				u.logger.Errorf("SAO %s", err)
 				// Don't wrap the error again, processMissingTransactions returns the correctly formatted error.
 				return err
 			}
