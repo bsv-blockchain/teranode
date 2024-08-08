@@ -66,14 +66,14 @@ jobs:
       repo: ubsv
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
   deploy_to_operator:
-    needs: [create_manifest]
     runs-on: self-hosted
+    needs: [create_manifest]
     steps:
       - uses: actions/checkout@v3
 
       # Set up AWS CLI
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2.2.0
+        uses: aws-actions/configure-aws-credentials@v4.0.2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -82,15 +82,15 @@ jobs:
       # Install and configure kubectl for AWS EKS
       - name: Install kubectl & Login to EKS
         run: |
-          # Download kubectl
-          sudo snap install kubectl --classic
+          
+          # kubectl already installed
           kubectl version --client
+          rm -rf ~/.kube
           aws eks update-kubeconfig --name aws-ubsv-playground --region eu-central-1
           kubectl cluster-info
 
       - name: Deploy to Operator
-        if: startsWith(github.event.ref, 'refs/tags/v')
         run: |
-          kubectl patch -n t1 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ needs.get_tag.outputs.deployment_tag }}"}}';
-          kubectl patch -n t2 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ needs.get_tag.outputs.deployment_tag }}"}}';
-          kubectl patch -n t3 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ needs.get_tag.outputs.deployment_tag }}"}}';
+          kubectl patch -n t1 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:v2.2.28"}}';
+          kubectl patch -n t2 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:v2.2.28"}}';
+          kubectl patch -n t3 --type=merge node.teranode.bsvblockchain.org node-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:v2.2.28"}}';
