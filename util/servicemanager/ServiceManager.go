@@ -127,6 +127,7 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 		sm.dependencyChannelsMux.Unlock()
 
 		if err := service.Start(sm.ctx); err != nil {
+			sm.logger.Errorf("Error from service start %s: %v", name, err)
 			return err
 		}
 
