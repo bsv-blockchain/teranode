@@ -356,7 +356,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 			err = u.processMissingTransactions(ctx5, &v.SubtreeHash, missingTxHashesCompacted, v.BaseUrl, txMetaSlice, blockHeight)
 			if err != nil {
-				// Don't wrap the error again, processMissingTransactions returns the correctly formated error.
+				// Don't wrap the error again, processMissingTransactions returns the correctly formatted error.
 				return err
 			}
 			stat5.AddTime(start)
