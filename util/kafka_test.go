@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"strconv"
 	"sync"
 	"testing"
@@ -44,12 +45,12 @@ func Test_KafkaAsyncProducerConsumerAutoCommit(t *testing.T) {
 
 	defer stopKafka(compose, ctx)
 
-	// Wait for the services to be ready
-	time.Sleep(10 * time.Second)
-
 	kafkaURL, err, ok := gocore.Config().GetURL("kafka_unitTest")
 	require.NoError(t, err)
 	require.True(t, ok)
+
+	err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
+	require.NoError(t, err)
 
 	kafkaChan := make(chan []byte, 10000)
 	go func() {
@@ -97,12 +98,13 @@ func Test_KafkaAsyncProducerWithManualCommitParams(t *testing.T) {
 
 	defer stopKafka(compose, ctx)
 
-	// Wait for the services to be ready
-	time.Sleep(10 * time.Second)
-
 	kafkaURL, err, ok := gocore.Config().GetURL("kafka_unitTest")
 	require.NoError(t, err)
 	require.True(t, ok)
+
+	err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
+	require.NoError(t, err)
+
 	var wg sync.WaitGroup
 
 	kafkaChan := make(chan []byte, 10000)
@@ -186,12 +188,12 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure(t *testing.T) {
 
 	defer stopKafka(compose, ctx)
 
-	// Wait for the services to be ready
-	time.Sleep(10 * time.Second)
-
 	kafkaURL, err, ok := gocore.Config().GetURL("kafka_unitTest")
 	require.NoError(t, err)
 	require.True(t, ok)
+
+	err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
+	require.NoError(t, err)
 
 	kafkaChan := make(chan []byte, 10000)
 	go func() {
@@ -253,10 +255,7 @@ func TestKafkaWithCompose(t *testing.T) {
 
 	err = compose.Up(ctx)
 	require.NoError(t, err, "Failed to start Docker Compose")
-	//defer compose.Down(ctx)
-
-	// Wait for Kafka to be ready
-	time.Sleep(10 * time.Second) // A simple wait for Kafka to start up; adjust as necessary
+	defer stopKafka(compose, ctx)
 
 	// Kafka client configuration
 	config := sarama.NewConfig()
@@ -264,6 +263,9 @@ func TestKafkaWithCompose(t *testing.T) {
 
 	// Kafka address from Docker Compose setup
 	kafkaAddress := "localhost:9092"
+
+	err = waitForKafkaReady(ctx, kafkaAddress, 30*time.Second)
+	require.NoError(t, err)
 
 	// Test message production
 	producer, err := sarama.NewSyncProducer([]string{kafkaAddress}, config)
@@ -291,5 +293,25 @@ func TestKafkaWithCompose(t *testing.T) {
 		fmt.Printf("Received message: %s\n", string(msg.Value))
 	case <-time.After(10 * time.Second):
 		t.Fatal("Timed out waiting for message")
+	}
+}
+
+func waitForKafkaReady(ctx context.Context, kafkaAddr string, timeout time.Duration) error {
+	start := time.Now()
+	for {
+		conn, err := net.DialTimeout("tcp", kafkaAddr, 1*time.Second)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		if time.Since(start) > timeout {
+			return fmt.Errorf("timed out waiting for Kafka to be ready")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			// Retry after a short delay
+		}
 	}
 }
