@@ -413,14 +413,14 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	//
 	// store subtree meta in store
 	//
-	u.logger.Infof("[validateSubtreeInternal][%s] serialize subtree meta", v.SubtreeHash.String())
+	u.logger.Debugf("[validateSubtreeInternal][%s] serialize subtree meta", v.SubtreeHash.String())
 	completeSubtreeMetaBytes, err := subtreeMeta.Serialize()
 	if err != nil {
 		return errors.NewProcessingError("[validateSubtreeInternal][%s] failed to serialize subtree meta", v.SubtreeHash.String(), err)
 	}
 
 	start = gocore.CurrentTime()
-	u.logger.Infof("[validateSubtreeInternal][%s] store subtree meta", v.SubtreeHash.String())
+	u.logger.Debugf("[validateSubtreeInternal][%s] store subtree meta", v.SubtreeHash.String())
 	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeMetaBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("meta"))
 	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
 	if err != nil {
@@ -430,14 +430,14 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	//
 	// store subtree in store
 	//
-	u.logger.Infof("[validateSubtreeInternal][%s] serialize subtree", v.SubtreeHash.String())
+	u.logger.Debugf("[validateSubtreeInternal][%s] serialize subtree", v.SubtreeHash.String())
 	completeSubtreeBytes, err := subtree.Serialize()
 	if err != nil {
 		return errors.NewProcessingError("[validateSubtreeInternal][%s] failed to serialize subtree", v.SubtreeHash.String(), err)
 	}
 
 	start = gocore.CurrentTime()
-	u.logger.Infof("[validateSubtreeInternal][%s] store subtree", v.SubtreeHash.String())
+	u.logger.Debugf("[validateSubtreeInternal][%s] store subtree", v.SubtreeHash.String())
 	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("subtree"))
 	stat.NewStat("8. storeSubtree").AddTime(start)
 	if err != nil {

@@ -20,7 +20,7 @@ import (
 func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXODiff) error {
 	ctx, _, deferFn := tracing.StartTracing(pCtx, "ProcessSubtree",
 		tracing.WithHistogram(prometheusBlockPersisterValidateSubtree),
-		tracing.WithLogMessage(u.logger, "[ProcessSubtree] called for subtree %s", subtreeHash.String()),
+		tracing.WithDebugLogMessage(u.logger, "[ProcessSubtree] called for subtree %s", subtreeHash.String()),
 	)
 	defer deferFn()
 

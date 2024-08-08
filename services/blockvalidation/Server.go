@@ -418,7 +418,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationBlockFound),
-		tracing.WithLogMessage(u.logger, "[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl()),
+		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl()),
 	)
 	defer deferFn()
 
@@ -469,7 +469,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessBlock",
 		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[ProcessBlock][%s] process block called", request.Height),
+		tracing.WithDebugLogMessage(u.logger, "[ProcessBlock][%s] process block called for height %d", request.Height),
 	)
 	defer deferFn()
 
@@ -511,7 +511,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	ctx, _, deferFn := tracing.StartTracing(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFound),
-		tracing.WithLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl),
+		tracing.WithDebugLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl),
 	)
 	defer deferFn()
 
@@ -577,7 +577,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model.Block, baseUrl string) {
 	_, _, deferFn := tracing.StartTracing(ctx, "checkParentProcessingComplete",
 		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[checkParentProcessingComplete][%s] called from %s", block.Hash().String(), baseUrl),
+		tracing.WithDebugLogMessage(u.logger, "[checkParentProcessingComplete][%s] called from %s", block.Hash().String(), baseUrl),
 	)
 	defer deferFn()
 

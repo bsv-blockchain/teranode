@@ -242,7 +242,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 	ctx, _, deferFn := tracing.StartTracing(ctx, "checkSubtree",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
-		tracing.WithLogMessage(u.logger, "[checkSubtree] called for subtree %s (height %d ??)", utils.ReverseAndHexEncodeSlice(request.Hash), request.BlockHeight),
+		tracing.WithDebugLogMessage(u.logger, "[checkSubtree] called for subtree %s (height %d)", utils.ReverseAndHexEncodeSlice(request.Hash), request.BlockHeight),
 	)
 	defer deferFn()
 
@@ -255,8 +255,8 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 		return false, errors.NewInvalidArgumentError("[CheckSubtree] Missing base URL in request")
 	}
 
-	u.logger.Infof("[CheckSubtree] Received priority subtree message for %s from %s", hash.String(), request.BaseUrl)
-	defer u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+	u.logger.Debugf("[CheckSubtree] Received priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+	defer u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 	u.prioritySubtreeCheckActiveMapLock.Lock()
 	u.prioritySubtreeCheckActiveMap[hash.String()] = true
@@ -319,7 +319,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 					return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 				}
 
-				u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+				u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 				return true, nil
 			}
@@ -335,7 +335,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 				return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 			}
 
-			u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+			u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 			return true, nil
 

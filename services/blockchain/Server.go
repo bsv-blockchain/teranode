@@ -242,7 +242,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	ctx, _, deferFn := tracing.StartTracing(ctx, "AddBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainAddBlock),
-		tracing.WithLogMessage(b.logger, "[AddBlock] called from %s", request.PeerId),
+		tracing.WithDebugLogMessage(b.logger, "[AddBlock] called from %s", request.PeerId),
 	)
 	defer deferFn()
 
