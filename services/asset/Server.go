@@ -9,7 +9,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/asset/centrifuge_impl"
-	"github.com/bitcoin-sv/ubsv/services/asset/grpc_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -26,9 +25,7 @@ type Server struct {
 	txStore          blob.Store
 	subtreeStore     blob.Store
 	blockStore       blob.Store
-	grpcAddr         string
 	httpAddr         string
-	grpcServer       *grpc_impl.GRPC
 	httpServer       *http_impl.HTTP
 	notificationCh   chan *asset_api.Notification
 	centrifugeAddr   string
@@ -54,11 +51,10 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {
-	var grpcOk, httpOk, centrifugeOk bool
-	v.grpcAddr, grpcOk = gocore.Config().Get("asset_grpcListenAddress")
+	var httpOk, centrifugeOk bool
 	v.httpAddr, httpOk = gocore.Config().Get("asset_httpListenAddress")
 
-	if !grpcOk && !httpOk {
+	if !httpOk {
 		return errors.NewConfigurationError("no asset_grpcListenAddress or asset_httpListenAddress setting found")
 	}
 
@@ -73,20 +69,6 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	}
 
 	v.centrifugeAddr, centrifugeOk = gocore.Config().Get("asset_centrifugeListenAddress", ":8101")
-
-	if grpcOk {
-		v.grpcServer, err = grpc_impl.New(v.logger, repo, func() []string {
-			return []string{}
-		})
-		if err != nil {
-			return errors.NewServiceError("error creating grpc server", err)
-		}
-
-		err = v.grpcServer.Init(ctx)
-		if err != nil {
-			return errors.NewServiceError("error initializing grpc server", err)
-		}
-	}
 
 	if httpOk {
 		v.httpServer, err = http_impl.New(v.logger, repo, v.notificationCh)
@@ -119,30 +101,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 func (v *Server) Start(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
-	if v.grpcServer != nil {
-		g.Go(func() error {
-			err := v.grpcServer.Start(ctx, v.grpcAddr)
-			if err != nil {
-				v.logger.Errorf("[Asset] error in grpc server: %v", err)
-			}
-			return err
-		})
-
-		AssetHttpAddressURL, _, _ := gocore.Config().GetURL("asset_httpAddress")
-		securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
-
-		if AssetHttpAddressURL.Scheme == "http" && securityLevel == 1 {
-			AssetHttpAddressURL.Scheme = "https"
-			v.logger.Warnf("asset_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
-		} else if AssetHttpAddressURL.Scheme == "https" && securityLevel == 0 {
-			AssetHttpAddressURL.Scheme = "http"
-			v.logger.Warnf("asset_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
-		}
-	}
-
 	if v.httpServer != nil {
-		v.grpcServer.AddHttpSubscriber(v.notificationCh)
-
 		g.Go(func() error {
 			err := v.httpServer.Start(ctx, v.httpAddr)
 			if err != nil {
@@ -169,13 +128,6 @@ func (v *Server) Start(ctx context.Context) error {
 func (v *Server) Stop(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	if v.grpcServer != nil {
-		v.logger.Infof("[Asset] Stopping grpc server")
-		if err := v.grpcServer.Stop(ctx); err != nil {
-			v.logger.Errorf("[Asset] error stopping grpc server: %v", err)
-		}
-	}
 
 	if v.httpServer != nil {
 		v.logger.Infof("[Asset] Stopping http server")
