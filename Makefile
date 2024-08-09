@@ -276,14 +276,6 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
-	services/bootstrap/bootstrap_api/bootstrap_api.proto
-
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-grpc_out=. \
-	--go-grpc_opt=paths=source_relative \
 	services/coinbase/coinbase_api/coinbase_api.proto
 
 .PHONY: clean_gen
@@ -296,7 +288,6 @@ clean_gen:
 	# rm -f ./services/txmeta/txmeta_api/*.pb.go
 	rm -f ./services/blockchain/blockchain_api/*.pb.go
 	rm -f ./services/asset/asset_api/*.pb.go
-	rm -f ./services/bootstrap/bootstrap_api/*.pb.go
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
 	rm -f ./model/*.pb.go
 	rm -f ./ubsverrors/*.pb.go

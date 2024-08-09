@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/asset"
+	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -44,28 +43,28 @@ type processBlockCatchup struct {
 }
 
 type Coinbase struct {
-	db           *usql.DB
-	engine       util.SQLEngine
-	store        blockchain.Store
-	AssetClient  *asset.Client
-	distributor  *distributor.Distributor
-	privateKey   *bec.PrivateKey
-	running      bool
-	blockFoundCh chan processBlockFound
-	catchupCh    chan processBlockCatchup
-	logger       ulogger.Logger
-	address      string
-	dbTimeout    time.Duration
-	peerSync     *p2p.PeerHeight
-	waitForPeers bool
-	g            *errgroup.Group
-	gCtx         context.Context
-	stats        *gocore.Stat
+	db               *usql.DB
+	engine           util.SQLEngine
+	blockchainClient bc.ClientI
+	store            blockchain.Store
+	distributor      *distributor.Distributor
+	privateKey       *bec.PrivateKey
+	running          bool
+	blockFoundCh     chan processBlockFound
+	catchupCh        chan processBlockCatchup
+	logger           ulogger.Logger
+	address          string
+	dbTimeout        time.Duration
+	peerSync         *p2p.PeerHeight
+	waitForPeers     bool
+	g                *errgroup.Group
+	gCtx             context.Context
+	stats            *gocore.Stat
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
 // Only SQL databases are supported
-func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, error) {
+func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store blockchain.Store) (*Coinbase, error) {
 	engine := store.GetDBEngine()
 	if engine != util.Postgres && engine != util.Sqlite && engine != util.SqliteMemory {
 		return nil, errors.NewStorageError("unsupported database engine: %s", engine)
@@ -119,21 +118,22 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 	g.SetLimit(runtime.NumCPU())
 
 	c := &Coinbase{
-		store:        store,
-		db:           store.GetDB(),
-		engine:       engine,
-		blockFoundCh: make(chan processBlockFound, 100),
-		catchupCh:    make(chan processBlockCatchup),
-		distributor:  d,
-		logger:       logger,
-		privateKey:   privateKey.PrivKey,
-		address:      coinbaseAddr.AddressString,
-		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
-		peerSync:     p2p.NewPeerHeight(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
-		waitForPeers: waitForPeers,
-		g:            g,
-		gCtx:         gCtx,
-		stats:        gocore.NewStat("coinbase"),
+		blockchainClient: blockchainClient,
+		store:            store,
+		db:               store.GetDB(),
+		engine:           engine,
+		blockFoundCh:     make(chan processBlockFound, 100),
+		catchupCh:        make(chan processBlockCatchup),
+		distributor:      d,
+		logger:           logger,
+		privateKey:       privateKey.PrivKey,
+		address:          coinbaseAddr.AddressString,
+		dbTimeout:        time.Duration(dbTimeoutMillis) * time.Millisecond,
+		peerSync:         p2p.NewPeerHeight(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
+		waitForPeers:     waitForPeers,
+		g:                g,
+		gCtx:             gCtx,
+		stats:            gocore.NewStat("coinbase"),
 	}
 
 	threshold, found := gocore.Config().GetInt("coinbase_notification_threshold")
@@ -149,20 +149,30 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 		return errors.NewProcessingError("failed to create coinbase tables", err)
 	}
 
-	assetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
-	if !ok {
-		assetAddr, ok = gocore.Config().Get("asset_grpcAddress")
-		if !ok {
-			return errors.NewConfigurationError("no asset_grpcAddress setting found")
-		}
-	}
-
-	c.AssetClient, err = asset.NewClient(ctx, c.logger, assetAddr)
+	notification, err := c.blockchainClient.Subscribe(ctx, "coinbase")
 	if err != nil {
-		return errors.NewServiceError("failed to create Asset client", err)
+		return errors.NewServiceError("failed to subscribe to coinbase notifications", err)
 	}
 
-	// process blocks found from channel
+	// process notifications from blockchainClient subscription
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case n := <-notification:
+				{
+					if n.Type == model.NotificationType_Block {
+						c.blockFoundCh <- processBlockFound{
+							hash:    n.Hash,
+							baseURL: n.BaseURL,
+						}
+					}
+				}
+			}
+		}
+	}()
+
 	go func() {
 		for {
 			select {
@@ -191,75 +201,7 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 		c.running = false
 	}()
 
-	ready := atomic.Bool{}
-
-	go func() {
-		ch, err := c.AssetClient.Subscribe(ctx, "")
-		if err != nil {
-			c.logger.Errorf("could not subscribe to blob server: %v", err)
-			return
-		}
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case notification := <-ch:
-				if !ready.Load() {
-					break
-				}
-				if notification.Type == model.NotificationType_Block {
-					c.blockFoundCh <- processBlockFound{
-						hash:    notification.Hash,
-						baseURL: notification.BaseURL,
-					}
-				}
-			}
-		}
-	}()
-
-	// get the best block header on startup and process
-	go func() {
-		c.waitTillInitialBlocksMined(ctx)
-
-		ready.Store(true) // block notifications will now be processed
-
-		blockHeader, _, err := c.AssetClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			c.logger.Errorf("could not get best block header from blob server [%v]", err)
-			return
-		}
-		c.blockFoundCh <- processBlockFound{
-			hash:    blockHeader.Hash(),
-			baseURL: "",
-		}
-
-	}()
-
 	return nil
-}
-
-func (c *Coinbase) waitTillInitialBlocksMined(ctx context.Context) {
-	//Wait until min_height is reached
-	coinbase_should_wait := gocore.Config().GetBool("coinbase_should_wait", false)
-	coinbase_wait_until_block, _ := gocore.Config().GetInt("coinbase_wait_until_block", 0)
-
-	if coinbase_should_wait {
-		c.logger.Infof("[coinbase] waiting to start. Need to reach block %d", coinbase_wait_until_block)
-		for {
-			_, height, err := c.AssetClient.GetBestBlockHeader(ctx)
-			if err != nil {
-				c.logger.Errorf("could not get best block header from blob server [%v]", err)
-				return
-			}
-			if height >= uint32(coinbase_wait_until_block) {
-				break
-			}
-			c.logger.Infof("[coinbase] waiting to start. Currently at block %d/%d", height, coinbase_wait_until_block)
-			time.Sleep(1 * time.Second)
-		}
-		c.logger.Infof("[coinbase] ready to start. Reached block %d", coinbase_wait_until_block)
-	}
 }
 
 func (c *Coinbase) createTables(ctx context.Context) error {
@@ -462,7 +404,7 @@ func (c *Coinbase) catchup(cntxt context.Context, fromBlock *model.Block, baseUR
 LOOP:
 	for {
 		c.logger.Debugf("getting block headers for catchup from [%s]", fromBlockHeaderHash.String())
-		blockHeaders, _, err := c.AssetClient.GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
+		blockHeaders, _, err := c.blockchainClient.GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
 		if err != nil {
 			return errors.NewServiceError("failed to get block headers from [%s]", fromBlockHeaderHash.String(), err)
 		}
@@ -495,7 +437,7 @@ LOOP:
 	for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
 		blockHeader := catchupBlockHeaders[i]
 
-		block, err := c.AssetClient.GetBlock(ctx, blockHeader.Hash())
+		block, err := c.blockchainClient.GetBlock(ctx, blockHeader.Hash())
 		if err != nil {
 			return errors.NewServiceError("failed to get block [%s]", blockHeader.String(), err)
 		}
@@ -518,7 +460,6 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 
 	c.logger.Debugf("processing block: %s", blockHash.String())
 
-	// check whether we already have the block
 	exists, err := c.store.GetBlockExists(ctx, blockHash)
 	if err != nil {
 		return nil, errors.NewStorageError("could not check whether block exists", err)
@@ -528,7 +469,7 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 		return nil, nil
 	}
 
-	block, err := c.AssetClient.GetBlock(ctx, blockHash)
+	block, err := c.blockchainClient.GetBlock(ctx, blockHash)
 	if err != nil {
 		return block, err
 	}
