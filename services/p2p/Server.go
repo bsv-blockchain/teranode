@@ -580,9 +580,6 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 		s.blockCh <- b
 	}
 
-	if err = s.blockValidationClient.BlockFound(ctx, hash, blockMessage.DataHubUrl, false); err != nil {
-		s.logger.Errorf("[p2p] error validating block from %s: %s", blockMessage.DataHubUrl, err)
-	}
 }
 
 func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) {
