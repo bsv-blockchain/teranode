@@ -310,7 +310,7 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 }
 
 func (c *Centrifuge) Stop(ctx context.Context) error {
-	c.logger.Infof("[AssetService] Centrifuge GRPC (impl) service shutting down")
+	c.logger.Infof("[AssetService] Centrifuge service shutting down")
 
 	return nil
 }

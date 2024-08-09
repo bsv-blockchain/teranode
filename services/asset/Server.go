@@ -52,7 +52,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	v.httpAddr, httpOk = gocore.Config().Get("asset_httpListenAddress")
 
 	if !httpOk {
-		return errors.NewConfigurationError("no asset_grpcListenAddress or asset_httpListenAddress setting found")
+		return errors.NewConfigurationError("no asset_httpListenAddress setting found")
 	}
 
 	blockchainClient, err := blockchain.NewClient(ctx, v.logger, "services/asset")
