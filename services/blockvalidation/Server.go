@@ -270,53 +270,6 @@ func (u *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesFinalConfig")
-	if err == nil && ok {
-		_, u.blockPersisterKafkaProducer, err = util.ConnectToKafka(subtreesKafkaURL)
-		if err != nil {
-			u.logger.Errorf("[BlockValidation] unable to connect to kafka for subtree assembly: %v", err)
-		} else {
-			// start the blockchain subscriber
-			go func() {
-				subscription, err := u.blockchainClient.Subscribe(ctx, "blockpersister")
-				if err != nil {
-					u.logger.Errorf("[BlockValidation] failed starting subtree assembly subscription")
-				}
-
-				var block *model.Block
-				for {
-					select {
-					case <-ctx.Done():
-						u.logger.Infof("[BlockValidation] closing subtree assembly kafka producer")
-						return
-					case notification := <-subscription:
-						if notification.Type == model.NotificationType_Block {
-							block, err = u.blockchainClient.GetBlock(ctx, notification.Hash)
-							if err != nil {
-								u.logger.Errorf("[BlockValidation] failed getting block from blockchain service - NOT sending subtree to blockpersister kafka producer")
-							} else if block == nil {
-								u.logger.Errorf("[BlockValidation] block is nil from blockchain service - NOT sending subtree to blockpersister kafka producer")
-							} else {
-
-								u.logger.Debugf("[BlockValidation][%s] processing block into blockpersister kafka producer", block.Hash().String())
-
-								for _, subtreeHash := range block.Subtrees {
-									subtreeBytes := subtreeHash.CloneBytes()
-									u.logger.Debugf("[BlockValidation][%s][%s] processing subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
-									// Send has a built-in retry mechanism
-									if err := u.blockPersisterKafkaProducer.Send(subtreeBytes, subtreeBytes); err != nil {
-										// TODO - #938 what to do with the error? FSM event?
-										u.logger.Errorf("[BlockValidation][%s][%s] failed to send subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
-									}
-								}
-							}
-						}
-					}
-				}
-			}()
-		}
-	}
-
 	//kafkaBlocksValidateConfigURL, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
 	//if err == nil && ok {
 	//	u.logger.Infof("[BlockValidation] starting block validation Kafka client on address: %s, with %d workers", kafkaBlocksValidateConfigURL.String(), 1)
