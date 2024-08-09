@@ -87,19 +87,17 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
 		},
-		utxoStore:              utxoStore,
-		blockAssembler:         nil,
-		saveInParallel:         true,
-		stats:                  gocore.NewStat("validator"),
-		blockassemblyKafkaChan: make(chan []byte, 1),
-		txMetaKafkaChan:        make(chan []byte, 1),
-		rejectedTxKafkaChan:    make(chan []byte, 1),
+		utxoStore:           utxoStore,
+		blockAssembler:      nil,
+		saveInParallel:      true,
+		stats:               gocore.NewStat("validator"),
+		txMetaKafkaChan:     make(chan []byte, 1),
+		rejectedTxKafkaChan: make(chan []byte, 1),
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, len(v.blockassemblyKafkaChan), "blockassemblyKafkaChan should have 1 message")
 	require.Equal(t, 1, len(v.txMetaKafkaChan), "txMetaKafkaChan should have 1 message")
 	require.Equal(t, 0, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should be empty")
 }
@@ -120,19 +118,17 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
 		},
-		utxoStore:              utxoStore,
-		blockAssembler:         nil,
-		saveInParallel:         true,
-		stats:                  gocore.NewStat("validator"),
-		blockassemblyKafkaChan: make(chan []byte, 1),
-		txMetaKafkaChan:        make(chan []byte, 1),
-		rejectedTxKafkaChan:    make(chan []byte, 1),
+		utxoStore:           utxoStore,
+		blockAssembler:      nil,
+		saveInParallel:      true,
+		stats:               gocore.NewStat("validator"),
+		txMetaKafkaChan:     make(chan []byte, 1),
+		rejectedTxKafkaChan: make(chan []byte, 1),
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.Error(t, err)
 
-	require.Equal(t, 0, len(v.blockassemblyKafkaChan), "blockassemblyKafkaChan should be empty")
 	require.Equal(t, 0, len(v.txMetaKafkaChan), "txMetaKafkaChan should be empty")
 	require.Equal(t, 1, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should have 1 message")
 }
