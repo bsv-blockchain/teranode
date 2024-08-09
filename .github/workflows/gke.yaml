@@ -38,7 +38,7 @@ jobs:
     secrets: inherit
   # Build for X86 (AMD64)
   build_amd64:
-    needs: [get_tag]
+    needs: [ get_tag ]
     uses: ./.github/workflows/gke_build.yaml
     secrets: inherit
     with:
@@ -48,7 +48,7 @@ jobs:
       region: eu-north-1
   # Build for ARM64 (Graviton and Darwin)
   build_arm64:
-    needs: [ get_tag]
+    needs: [ get_tag ]
     uses: ./.github/workflows/gke_build.yaml
     secrets: inherit
     with:
@@ -58,7 +58,7 @@ jobs:
       region: eu-north-1
   # Create docker manifest for multiple architecture tags
   create_manifest:
-    needs: [test_and_lint, build_amd64, build_arm64, get_tag]
+    needs: [ test_and_lint, build_amd64, build_arm64, get_tag ]
     uses: ./.github/workflows/gke_manifest.yaml
     secrets: inherit
     with:
@@ -67,7 +67,8 @@ jobs:
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
   deploy_to_operator:
     runs-on: self-hosted
-    needs: [create_manifest]
+    needs: [ create_manifest ]
+    if: startsWith(github.event.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v3
 
@@ -90,8 +91,28 @@ jobs:
           kubectl cluster-info
 
       - name: Deploy to Operator
-        if: startsWith(github.event.ref, 'refs/tags/v')
         run: |
           kubectl patch -n t1 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.ref_name }}"}}';
           kubectl patch -n t2 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.ref_name }}"}}';
           kubectl patch -n t3 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.ref_name }}"}}';
+  notify_on_failure:
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - build_amd64
+      - build_arm64
+      - create_manifest
+      - deploy_to_operator
+    steps:
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "Deployment failed"
+          curl -X POST https://hooks.slack.com/triggers/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 \
+          -H "Content-Type: application/json" \
+          -d '{
+            "repo": "${{ github.repository }}",
+            "commit": "${{ github.sha }}",
+            "build_number": "${{ github.run_id }}",
+            "link": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          }'
