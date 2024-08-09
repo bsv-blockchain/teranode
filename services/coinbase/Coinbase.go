@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -42,27 +43,28 @@ type processBlockCatchup struct {
 }
 
 type Coinbase struct {
-	db           *usql.DB
-	engine       util.SQLEngine
-	store        blockchain.Store
-	distributor  *distributor.Distributor
-	privateKey   *bec.PrivateKey
-	running      bool
-	blockFoundCh chan processBlockFound
-	catchupCh    chan processBlockCatchup
-	logger       ulogger.Logger
-	address      string
-	dbTimeout    time.Duration
-	peerSync     *p2p.PeerHeight
-	waitForPeers bool
-	g            *errgroup.Group
-	gCtx         context.Context
-	stats        *gocore.Stat
+	db               *usql.DB
+	engine           util.SQLEngine
+	blockchainClient bc.ClientI
+	store            blockchain.Store
+	distributor      *distributor.Distributor
+	privateKey       *bec.PrivateKey
+	running          bool
+	blockFoundCh     chan processBlockFound
+	catchupCh        chan processBlockCatchup
+	logger           ulogger.Logger
+	address          string
+	dbTimeout        time.Duration
+	peerSync         *p2p.PeerHeight
+	waitForPeers     bool
+	g                *errgroup.Group
+	gCtx             context.Context
+	stats            *gocore.Stat
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
 // Only SQL databases are supported
-func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, error) {
+func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store blockchain.Store) (*Coinbase, error) {
 	engine := store.GetDBEngine()
 	if engine != util.Postgres && engine != util.Sqlite && engine != util.SqliteMemory {
 		return nil, errors.NewStorageError("unsupported database engine: %s", engine)
@@ -116,21 +118,22 @@ func NewCoinbase(logger ulogger.Logger, store blockchain.Store) (*Coinbase, erro
 	g.SetLimit(runtime.NumCPU())
 
 	c := &Coinbase{
-		store:        store,
-		db:           store.GetDB(),
-		engine:       engine,
-		blockFoundCh: make(chan processBlockFound, 100),
-		catchupCh:    make(chan processBlockCatchup),
-		distributor:  d,
-		logger:       logger,
-		privateKey:   privateKey.PrivKey,
-		address:      coinbaseAddr.AddressString,
-		dbTimeout:    time.Duration(dbTimeoutMillis) * time.Millisecond,
-		peerSync:     p2p.NewPeerHeight(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
-		waitForPeers: waitForPeers,
-		g:            g,
-		gCtx:         gCtx,
-		stats:        gocore.NewStat("coinbase"),
+		blockchainClient: blockchainClient,
+		store:            store,
+		db:               store.GetDB(),
+		engine:           engine,
+		blockFoundCh:     make(chan processBlockFound, 100),
+		catchupCh:        make(chan processBlockCatchup),
+		distributor:      d,
+		logger:           logger,
+		privateKey:       privateKey.PrivKey,
+		address:          coinbaseAddr.AddressString,
+		dbTimeout:        time.Duration(dbTimeoutMillis) * time.Millisecond,
+		peerSync:         p2p.NewPeerHeight(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
+		waitForPeers:     waitForPeers,
+		g:                g,
+		gCtx:             gCtx,
+		stats:            gocore.NewStat("coinbase"),
 	}
 
 	threshold, found := gocore.Config().GetInt("coinbase_notification_threshold")
@@ -146,7 +149,30 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 		return errors.NewProcessingError("failed to create coinbase tables", err)
 	}
 
-	// process blocks found from channel
+	notification, err := c.blockchainClient.Subscribe(ctx, "coinbase")
+	if err != nil {
+		return errors.NewServiceError("failed to subscribe to coinbase notifications", err)
+	}
+
+	// process notifications from blockchainClient subscription
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case n := <-notification:
+				{
+					if n.Type == model.NotificationType_Block {
+						c.blockFoundCh <- processBlockFound{
+							hash:    n.Hash,
+							baseURL: n.BaseURL,
+						}
+					}
+				}
+			}
+		}
+	}()
+
 	go func() {
 		for {
 			select {
@@ -378,7 +404,7 @@ func (c *Coinbase) catchup(cntxt context.Context, fromBlock *model.Block, baseUR
 LOOP:
 	for {
 		c.logger.Debugf("getting block headers for catchup from [%s]", fromBlockHeaderHash.String())
-		blockHeaders, _, err := c.store.GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
+		blockHeaders, _, err := c.blockchainClient.GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
 		if err != nil {
 			return errors.NewServiceError("failed to get block headers from [%s]", fromBlockHeaderHash.String(), err)
 		}
@@ -411,7 +437,7 @@ LOOP:
 	for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
 		blockHeader := catchupBlockHeaders[i]
 
-		block, _, err := c.store.GetBlock(ctx, blockHeader.Hash())
+		block, err := c.blockchainClient.GetBlock(ctx, blockHeader.Hash())
 		if err != nil {
 			return errors.NewServiceError("failed to get block [%s]", blockHeader.String(), err)
 		}
@@ -434,7 +460,6 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 
 	c.logger.Debugf("processing block: %s", blockHash.String())
 
-	// check whether we already have the block
 	exists, err := c.store.GetBlockExists(ctx, blockHash)
 	if err != nil {
 		return nil, errors.NewStorageError("could not check whether block exists", err)
@@ -444,7 +469,7 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 		return nil, nil
 	}
 
-	block, _, err := c.store.GetBlock(ctx, blockHash)
+	block, err := c.blockchainClient.GetBlock(ctx, blockHash)
 	if err != nil {
 		return block, err
 	}

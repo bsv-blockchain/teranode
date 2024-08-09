@@ -337,6 +337,7 @@ func main() {
 	if startCoinbase {
 		if err = sm.AddService("Coinbase", coinbase.New(
 			logger.New("coinB"),
+			blockchainClient,
 		)); err != nil {
 			panic(err)
 		}

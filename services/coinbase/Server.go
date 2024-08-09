@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -20,18 +21,20 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	coinbase_api.UnimplementedCoinbaseAPIServer
-	coinbase *Coinbase
-	logger   ulogger.Logger
-	stats    *gocore.Stat
+	blockchainClient bc.ClientI
+	coinbase         *Coinbase
+	logger           ulogger.Logger
+	stats            *gocore.Stat
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger) *Server {
+func New(logger ulogger.Logger, blockchainClient bc.ClientI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
-		logger: logger,
-		stats:  gocore.NewStat("coinbase"),
+		logger:           logger,
+		blockchainClient: blockchainClient,
+		stats:            gocore.NewStat("coinbase"),
 	}
 }
 
@@ -55,7 +58,7 @@ func (s *Server) Init(ctx context.Context) error {
 		return errors.NewStorageError("failed to create coinbase store: %s", err)
 	}
 
-	s.coinbase, err = NewCoinbase(s.logger, store)
+	s.coinbase, err = NewCoinbase(s.logger, s.blockchainClient, store)
 	if err != nil {
 		return errors.NewServiceError("failed to create new coinbase: %s", err)
 	}
