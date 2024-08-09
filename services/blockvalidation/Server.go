@@ -469,7 +469,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessBlock",
 		tracing.WithParentStat(u.stats),
-		tracing.WithDebugLogMessage(u.logger, "[ProcessBlock][%s] process block called for height %d", request.Height),
+		tracing.WithLogMessage(u.logger, "[ProcessBlock][%s] process block called for height %d", request.Height),
 	)
 	defer deferFn()
 
