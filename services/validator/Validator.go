@@ -173,8 +173,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 
 		// this function should be moved into go-bt
-		if !util.IsTransactionFinal(tx, utxoStoreBlockHeight+1, utxoStoreMedianBlockTime) {
-			return errors.NewNonFinalError("[Validate][%s] transaction is not final", tx.TxIDChainHash().String())
+		if err := util.IsTransactionFinal(tx, utxoStoreBlockHeight+1, utxoStoreMedianBlockTime); err != nil {
+			return errors.NewNonFinalError("[Validate][%s] transaction is not final", tx.TxIDChainHash().String(), err)
 		}
 	}
 
