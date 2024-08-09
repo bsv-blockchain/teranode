@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func BenchmarkValidator(b *testing.B) {
@@ -88,7 +89,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 			policy: NewPolicySettings(),
 		},
 		utxoStore:           utxoStore,
-		blockAssembler:      nil,
+		blockAssembler:      BlockAssemblyStore{},
 		saveInParallel:      true,
 		stats:               gocore.NewStat("validator"),
 		txMetaKafkaChan:     make(chan []byte, 1),
@@ -292,4 +293,15 @@ func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b
 	// Median time past is 1400686491
 	err = util.IsTransactionFinal(tx, 301926, 1400689692) // Block time
 	require.NoError(t, err)
+}
+
+type BlockAssemblyStore struct {
+}
+
+func (s BlockAssemblyStore) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
+	return true, nil
+}
+
+func (s BlockAssemblyStore) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
 }
