@@ -19,11 +19,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type peerWithContext struct {
-	peer       PeerI
-	cancelFunc context.CancelFunc
-}
-
 // Server type carries the logger within it
 type Server struct {
 	logger           ulogger.Logger
@@ -35,7 +30,6 @@ type Server struct {
 	httpAddr         string
 	grpcServer       *grpc_impl.GRPC
 	httpServer       *http_impl.HTTP
-	peers            map[string]peerWithContext
 	notificationCh   chan *asset_api.Notification
 	useP2P           bool
 	centrifugeAddr   string
@@ -50,7 +44,6 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, 
 		txStore:        txStore,
 		subtreeStore:   subtreeStore,
 		blockStore:     blockStore,
-		peers:          make(map[string]peerWithContext),
 		notificationCh: make(chan *asset_api.Notification, 100),
 	}
 
@@ -84,11 +77,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 
 	if grpcOk {
 		v.grpcServer, err = grpc_impl.New(v.logger, repo, func() []string {
-			var peers []string
-			for k := range v.peers {
-				peers = append(peers, k)
-			}
-			return peers
+			return []string{}
 		})
 		if err != nil {
 			return errors.NewServiceError("error creating grpc server", err)
