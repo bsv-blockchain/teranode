@@ -467,16 +467,16 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 }
 
 func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessBlock",
-		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[ProcessBlock][%s] process block called for height %d", request.Height),
-	)
-	defer deferFn()
-
 	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to create block from bytes", err))
 	}
+
+	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessBlock",
+		tracing.WithParentStat(u.stats),
+		tracing.WithLogMessage(u.logger, "[ProcessBlock][%s] process block called for height %d", block.Hash(), request.Height),
+	)
+	defer deferFn()
 
 	// we need the height for the subsidy calculation
 	height := request.Height
