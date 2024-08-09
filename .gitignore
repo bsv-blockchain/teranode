@@ -28,6 +28,7 @@ vite.config.ts.timestamp-*
 
 coverage.out
 golangci-lint-report.xml
+sonar_filename_report.json
 
 *.prof
 /model/test-generated_test_data/
