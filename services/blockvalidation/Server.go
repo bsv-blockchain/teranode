@@ -49,17 +49,16 @@ type processBlockCatchup struct {
 // Server type carries the logger within it
 type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
-	logger                      ulogger.Logger
-	blockchainClient            blockchain.ClientI
-	subtreeStore                blob.Store
-	txStore                     blob.Store
-	utxoStore                   utxo.Store
-	validatorClient             validator.Interface
-	blockFoundCh                chan processBlockFound
-	catchupCh                   chan processBlockCatchup
-	blockValidation             *BlockValidation
-	blockPersisterKafkaProducer util.KafkaProducerI
-	SetTxMetaQ                  *util.LockFreeQ[[][]byte]
+	logger           ulogger.Logger
+	blockchainClient blockchain.ClientI
+	subtreeStore     blob.Store
+	txStore          blob.Store
+	utxoStore        utxo.Store
+	validatorClient  validator.Interface
+	blockFoundCh     chan processBlockFound
+	catchupCh        chan processBlockCatchup
+	blockValidation  *BlockValidation
+	SetTxMetaQ       *util.LockFreeQ[[][]byte]
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
