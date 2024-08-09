@@ -29,7 +29,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/faucet"
 	"github.com/bitcoin-sv/ubsv/services/legacy"
@@ -133,7 +132,6 @@ func main() {
 	startAsset := shouldStart("Asset")
 	startCoinbase := shouldStart("Coinbase")
 	startFaucet := shouldStart("Faucet")
-	startBootstrap := shouldStart("Bootstrap")
 	startBlockPersister := shouldStart("BlockPersister")
 	startUTXOPersister := shouldStart("UTXOPersister")
 	startLegacy := shouldStart("Legacy")
@@ -219,15 +217,6 @@ func main() {
 		}
 
 		if err := sm.AddService("BlockChainService", blockchainService); err != nil {
-			panic(err)
-		}
-	}
-
-	// bootstrap server
-	if startBootstrap {
-		if err := sm.AddService("Bootstrap", bootstrap.NewServer(
-			logger.New("bootS"),
-		)); err != nil {
 			panic(err)
 		}
 	}
@@ -534,9 +523,6 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("    -coinbase=<1|0>")
 	fmt.Println("          whether to start the coinbase server")
-	fmt.Println("")
-	fmt.Println("    -bootstrap=<1|0>")
-	fmt.Println("          whether to start the bootstrap server")
 	fmt.Println("")
 	fmt.Println("    -p2p=<1|0>")
 	fmt.Println("          whether to start the p2p server")

@@ -2,23 +2,19 @@ package asset
 
 import (
 	"context"
-	"fmt"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/asset/centrifuge_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/grpc_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -148,18 +144,6 @@ func (v *Server) Start(ctx context.Context) error {
 			return err
 		})
 
-		// We need to react to new nodes connecting to the network and we do this by subscribing to
-		// the bootstrap service.  Each time a new node connects to the network, we will start a new
-		// Asset subscription for that node.
-
-		// We define a channel that will receive a notification whenever a new block or subtree is announced
-		// by any Peer.  This will be handled by a WebSocket service that will push messages to any registered
-		// browser clients.
-
-		// TODO - This may need to be moved to a separate location in the code
-
-		AssetGrpcAddress, _ := gocore.Config().Get("asset_grpcAddress")
-
 		AssetHttpAddressURL, _, _ := gocore.Config().GetURL("asset_httpAddress")
 		securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
 
@@ -169,67 +153,6 @@ func (v *Server) Start(ctx context.Context) error {
 		} else if AssetHttpAddressURL.Scheme == "https" && securityLevel == 0 {
 			AssetHttpAddressURL.Scheme = "http"
 			v.logger.Warnf("asset_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
-		}
-
-		AssetClientName, _ := gocore.Config().Get("clientName")
-
-		if v.useP2P {
-			// if using p2p we are already subscribed but will need to get the best block from peers.
-			v.logger.Infof("Using libP2P")
-		} else if gocore.Config().GetBool("feature_bootstrap", true) {
-			v.logger.Infof("Using Asset service")
-			// Start a subscription to the Asset service
-
-			g.Go(func() error {
-				bootstrapClient := bootstrap.NewClient(v.logger, "BLOB_SERVER", AssetClientName).WithCallback(func(p bootstrap.Peer) {
-					if p.AssetGrpcAddress != "" {
-						v.logger.Infof("[Asset] Connecting to asset service at: %s", p.AssetGrpcAddress)
-						if pp, ok := v.peers[p.AssetGrpcAddress]; ok {
-							v.logger.Infof("[Asset] Already connected to blob server at: %s, stopping...", p.AssetGrpcAddress)
-							_ = pp.peer.Stop()
-							pp.cancelFunc()
-							delete(v.peers, p.AssetGrpcAddress)
-						}
-
-						// Start a subscription to the new peer's blob server
-						peerCtx, peerCtxCancel := context.WithCancel(ctx)
-
-						peer := NewPeer(peerCtx, v.logger, "asset_bs", p.AssetGrpcAddress, v.notificationCh)
-
-						v.peers[p.AssetGrpcAddress] = peerWithContext{
-							peer:       peer,
-							cancelFunc: peerCtxCancel,
-						}
-						g.Go(func() error {
-							return v.peers[p.AssetGrpcAddress].peer.Start(peerCtx)
-						})
-					}
-
-					if p.AssetHttpAddress != "" {
-						// get the best block header and send to the block validation for processing
-						v.logger.Infof("[Asset] Getting best block header from server at: %s", p.AssetHttpAddress)
-						blockHeaderBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/bestblockheader", p.AssetHttpAddress))
-						if err != nil {
-							v.logger.Errorf("[Asset] error getting best block header from %s: %s", p.AssetHttpAddress, err)
-							return
-						}
-						blockHeader, err := model.NewBlockHeaderFromBytes(blockHeaderBytes)
-						if err != nil {
-							v.logger.Errorf("[Asset] error parsing best block header from %s: %s", p.AssetHttpAddress, err)
-							return
-						}
-
-						validationClient := blockvalidation.NewClient(ctx, v.logger)
-						if err = validationClient.BlockFound(ctx, blockHeader.Hash(), p.AssetHttpAddress, false); err != nil {
-							v.logger.Errorf("[Asset] error validating block from %s: %s", p.AssetHttpAddress, err)
-						}
-					}
-				}).WithAssetGrpcAddress(AssetGrpcAddress).WithAssetHttpAddress(AssetHttpAddressURL.String())
-
-				return bootstrapClient.Start(ctx)
-			})
-		} else {
-			v.logger.Warnf("No P2P or Asset client is running")
 		}
 	}
 
