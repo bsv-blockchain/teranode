@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/looplab/fsm"
 	"github.com/ordishs/go-utils"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -21,7 +22,6 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/looplab/fsm"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
