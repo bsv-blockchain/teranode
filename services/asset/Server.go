@@ -31,7 +31,6 @@ type Server struct {
 	grpcServer       *grpc_impl.GRPC
 	httpServer       *http_impl.HTTP
 	notificationCh   chan *asset_api.Notification
-	useP2P           bool
 	centrifugeAddr   string
 	centrifugeServer *centrifuge_impl.Centrifuge
 }
@@ -111,10 +110,6 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		if err != nil {
 			return errors.NewServiceError("error initializing centrifuge server: %s", err)
 		}
-	}
-
-	if gocore.Config().GetBool("feature_libP2P", false) {
-		v.useP2P = true
 	}
 
 	return nil
