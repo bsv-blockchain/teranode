@@ -22,6 +22,7 @@ type logMessage struct {
 
 type TraceOptions struct {
 	ParentStat  *gocore.Stat
+	Tags        []tracingTag
 	Histogram   prometheus.Histogram
 	Counter     prometheus.Counter
 	Logger      ulogger.Logger
@@ -31,6 +32,20 @@ type TraceOptions struct {
 func WithParentStat(stat *gocore.Stat) Options {
 	return func(s *TraceOptions) {
 		s.ParentStat = stat
+	}
+}
+
+type tracingTag struct {
+	key   string
+	value string
+}
+
+func WithTag(key, value string) Options {
+	return func(s *TraceOptions) {
+		if s.Tags == nil {
+			s.Tags = make([]tracingTag, 0)
+		}
+		s.Tags = append(s.Tags, tracingTag{key: key, value: value})
 	}
 }
 
@@ -108,6 +123,12 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 			default:
 				options.Logger.Infof(l.message, l.args...)
 			}
+		}
+	}
+
+	if len(options.Tags) > 0 {
+		for _, tag := range options.Tags {
+			span.SetTag(tag.key, tag.value)
 		}
 	}
 

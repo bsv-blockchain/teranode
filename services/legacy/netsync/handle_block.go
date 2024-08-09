@@ -45,6 +45,8 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 			blockHeight,
 			peer.String(),
 		),
+		tracing.WithTag("blockHash", block.Hash().String()),
+		tracing.WithTag("peer", peer.String()),
 	)
 	defer deferFn()
 
@@ -94,10 +96,10 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 }
 
 func (sm *SyncManager) processBlock(ctx context.Context, teranodeBlock *model.Block) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "processBlock",
+	ctx, _, deferFn := tracing.StartTracing(ctx, "SyncManager:processBlock",
 		tracing.WithLogMessage(
 			sm.logger,
-			"[processBlock][%s %d] processing block",
+			"[SyncManager:processBlock][%s %d] processing block",
 			teranodeBlock.Hash().String(),
 			teranodeBlock.Height,
 		),
