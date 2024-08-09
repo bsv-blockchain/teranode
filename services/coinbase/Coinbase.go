@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -47,7 +45,6 @@ type Coinbase struct {
 	db           *usql.DB
 	engine       util.SQLEngine
 	store        blockchain.Store
-	AssetClient  *asset.Client
 	distributor  *distributor.Distributor
 	privateKey   *bec.PrivateKey
 	running      bool
@@ -149,19 +146,6 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 		return errors.NewProcessingError("failed to create coinbase tables", err)
 	}
 
-	assetAddr, ok := gocore.Config().Get("coinbase_assetGrpcAddress")
-	if !ok {
-		assetAddr, ok = gocore.Config().Get("asset_grpcAddress")
-		if !ok {
-			return errors.NewConfigurationError("no asset_grpcAddress setting found")
-		}
-	}
-
-	c.AssetClient, err = asset.NewClient(ctx, c.logger, assetAddr)
-	if err != nil {
-		return errors.NewServiceError("failed to create Asset client", err)
-	}
-
 	// process blocks found from channel
 	go func() {
 		for {
@@ -191,75 +175,7 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 		c.running = false
 	}()
 
-	ready := atomic.Bool{}
-
-	go func() {
-		ch, err := c.AssetClient.Subscribe(ctx, "")
-		if err != nil {
-			c.logger.Errorf("could not subscribe to blob server: %v", err)
-			return
-		}
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case notification := <-ch:
-				if !ready.Load() {
-					break
-				}
-				if notification.Type == model.NotificationType_Block {
-					c.blockFoundCh <- processBlockFound{
-						hash:    notification.Hash,
-						baseURL: notification.BaseURL,
-					}
-				}
-			}
-		}
-	}()
-
-	// get the best block header on startup and process
-	go func() {
-		c.waitTillInitialBlocksMined(ctx)
-
-		ready.Store(true) // block notifications will now be processed
-
-		blockHeader, _, err := c.AssetClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			c.logger.Errorf("could not get best block header from blob server [%v]", err)
-			return
-		}
-		c.blockFoundCh <- processBlockFound{
-			hash:    blockHeader.Hash(),
-			baseURL: "",
-		}
-
-	}()
-
 	return nil
-}
-
-func (c *Coinbase) waitTillInitialBlocksMined(ctx context.Context) {
-	//Wait until min_height is reached
-	coinbase_should_wait := gocore.Config().GetBool("coinbase_should_wait", false)
-	coinbase_wait_until_block, _ := gocore.Config().GetInt("coinbase_wait_until_block", 0)
-
-	if coinbase_should_wait {
-		c.logger.Infof("[coinbase] waiting to start. Need to reach block %d", coinbase_wait_until_block)
-		for {
-			_, height, err := c.AssetClient.GetBestBlockHeader(ctx)
-			if err != nil {
-				c.logger.Errorf("could not get best block header from blob server [%v]", err)
-				return
-			}
-			if height >= uint32(coinbase_wait_until_block) {
-				break
-			}
-			c.logger.Infof("[coinbase] waiting to start. Currently at block %d/%d", height, coinbase_wait_until_block)
-			time.Sleep(1 * time.Second)
-		}
-		c.logger.Infof("[coinbase] ready to start. Reached block %d", coinbase_wait_until_block)
-	}
 }
 
 func (c *Coinbase) createTables(ctx context.Context) error {
@@ -462,7 +378,7 @@ func (c *Coinbase) catchup(cntxt context.Context, fromBlock *model.Block, baseUR
 LOOP:
 	for {
 		c.logger.Debugf("getting block headers for catchup from [%s]", fromBlockHeaderHash.String())
-		blockHeaders, _, err := c.AssetClient.GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
+		blockHeaders, _, err := c.store.GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
 		if err != nil {
 			return errors.NewServiceError("failed to get block headers from [%s]", fromBlockHeaderHash.String(), err)
 		}
@@ -495,7 +411,7 @@ LOOP:
 	for i := len(catchupBlockHeaders) - 1; i >= 0; i-- {
 		blockHeader := catchupBlockHeaders[i]
 
-		block, err := c.AssetClient.GetBlock(ctx, blockHeader.Hash())
+		block, _, err := c.store.GetBlock(ctx, blockHeader.Hash())
 		if err != nil {
 			return errors.NewServiceError("failed to get block [%s]", blockHeader.String(), err)
 		}
@@ -528,7 +444,7 @@ func (c *Coinbase) processBlock(cntxt context.Context, blockHash *chainhash.Hash
 		return nil, nil
 	}
 
-	block, err := c.AssetClient.GetBlock(ctx, blockHash)
+	block, _, err := c.store.GetBlock(ctx, blockHash)
 	if err != nil {
 		return block, err
 	}

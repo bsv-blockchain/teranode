@@ -3,12 +3,13 @@ package centrifuge_impl
 import (
 	"context"
 	"encoding/json"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/ulogger"

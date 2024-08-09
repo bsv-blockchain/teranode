@@ -7,7 +7,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 
-	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
 	"github.com/bitcoin-sv/ubsv/services/asset/centrifuge_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
@@ -27,7 +26,6 @@ type Server struct {
 	blockStore       blob.Store
 	httpAddr         string
 	httpServer       *http_impl.HTTP
-	notificationCh   chan *asset_api.Notification
 	centrifugeAddr   string
 	centrifugeServer *centrifuge_impl.Centrifuge
 }
@@ -35,12 +33,11 @@ type Server struct {
 // NewServer will return a server instance with the logger stored within it
 func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockStore blob.Store) *Server {
 	s := &Server{
-		logger:         logger,
-		utxoStore:      utxoStore,
-		txStore:        txStore,
-		subtreeStore:   subtreeStore,
-		blockStore:     blockStore,
-		notificationCh: make(chan *asset_api.Notification, 100),
+		logger:       logger,
+		utxoStore:    utxoStore,
+		txStore:      txStore,
+		subtreeStore: subtreeStore,
+		blockStore:   blockStore,
 	}
 
 	return s
@@ -71,7 +68,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	v.centrifugeAddr, centrifugeOk = gocore.Config().Get("asset_centrifugeListenAddress", ":8101")
 
 	if httpOk {
-		v.httpServer, err = http_impl.New(v.logger, repo, v.notificationCh)
+		v.httpServer, err = http_impl.New(v.logger, repo)
 		if err != nil {
 			return errors.NewServiceError("error creating http server", err)
 		}
