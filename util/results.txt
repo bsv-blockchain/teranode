@@ -1,0 +1,613 @@
+=== RUN   TestBuildMerkleRootFromCoinbase
+=== RUN   TestBuildMerkleRootFromCoinbase/block_797330_-_tx_0
+--- PASS: TestBuildMerkleRootFromCoinbase (0.00s)
+    --- PASS: TestBuildMerkleRootFromCoinbase/block_797330_-_tx_0 (0.00s)
+=== RUN   TestEnqueueDequeue
+--- PASS: TestEnqueueDequeue (0.00s)
+=== RUN   TestConcurrentEnqueue
+--- PASS: TestConcurrentEnqueue (0.00s)
+=== RUN   TestNewSubtreeMeta
+=== RUN   TestNewSubtreeMeta/TestNewSubtreeMeta
+=== RUN   TestNewSubtreeMeta/TestNewSubtreeMeta_without_subtree_node
+=== RUN   TestNewSubtreeMeta/TestNewSubtreeMeta_with_1_set
+=== RUN   TestNewSubtreeMeta/TestNewSubtreeMeta_with_all_set
+--- PASS: TestNewSubtreeMeta (0.00s)
+    --- PASS: TestNewSubtreeMeta/TestNewSubtreeMeta (0.00s)
+    --- PASS: TestNewSubtreeMeta/TestNewSubtreeMeta_without_subtree_node (0.00s)
+    --- PASS: TestNewSubtreeMeta/TestNewSubtreeMeta_with_1_set (0.00s)
+    --- PASS: TestNewSubtreeMeta/TestNewSubtreeMeta_with_all_set (0.00s)
+=== RUN   TestNewSubtreeMetaFromBytes
+=== RUN   TestNewSubtreeMetaFromBytes/TestNewSubtreeMetaFromBytes
+=== RUN   TestNewSubtreeMetaFromBytes/TestNewSubtreeMetaFromReader
+=== RUN   TestNewSubtreeMetaFromBytes/TestNewSubtreeMetaFromBytes_with_all_set
+--- PASS: TestNewSubtreeMetaFromBytes (0.00s)
+    --- PASS: TestNewSubtreeMetaFromBytes/TestNewSubtreeMetaFromBytes (0.00s)
+    --- PASS: TestNewSubtreeMetaFromBytes/TestNewSubtreeMetaFromReader (0.00s)
+    --- PASS: TestNewSubtreeMetaFromBytes/TestNewSubtreeMetaFromBytes_with_all_set (0.00s)
+=== RUN   TestNewTree
+=== RUN   TestNewTree/invalid_size
+=== RUN   TestNewTree/valid_size
+--- PASS: TestNewTree (0.00s)
+    --- PASS: TestNewTree/invalid_size (0.00s)
+    --- PASS: TestNewTree/valid_size (0.00s)
+=== RUN   TestRootHash
+=== RUN   TestRootHash/root_hash
+--- PASS: TestRootHash (0.00s)
+    --- PASS: TestRootHash/root_hash (0.00s)
+=== RUN   Test_RootHashWithReplaceRootNode
+=== RUN   Test_RootHashWithReplaceRootNode/root_hash_with_replace_root_node
+--- PASS: Test_RootHashWithReplaceRootNode (0.00s)
+    --- PASS: Test_RootHashWithReplaceRootNode/root_hash_with_replace_root_node (0.00s)
+=== RUN   TestRootHashSimon
+--- PASS: TestRootHashSimon (0.00s)
+=== RUN   TestTwoTransactions
+--- PASS: TestTwoTransactions (0.00s)
+=== RUN   TestSubtree_GetMerkleProof
+--- PASS: TestSubtree_GetMerkleProof (0.00s)
+=== RUN   Test_Serialize
+=== RUN   Test_Serialize/Serialize
+=== RUN   Test_Serialize/Serialize_nodes
+=== RUN   Test_Serialize/New_subtree_from_bytes
+=== RUN   Test_Serialize/DeserializeNodes_with_reader
+=== RUN   Test_Serialize/Deserialize_with_reader
+=== RUN   Test_Serialize/Serialize_with_conflicting
+--- PASS: Test_Serialize (0.00s)
+    --- PASS: Test_Serialize/Serialize (0.00s)
+    --- PASS: Test_Serialize/Serialize_nodes (0.00s)
+    --- PASS: Test_Serialize/New_subtree_from_bytes (0.00s)
+    --- PASS: Test_Serialize/DeserializeNodes_with_reader (0.00s)
+    --- PASS: Test_Serialize/Deserialize_with_reader (0.00s)
+    --- PASS: Test_Serialize/Serialize_with_conflicting (0.00s)
+=== RUN   Test_Duplicate
+=== RUN   Test_Duplicate/Duplicate
+=== RUN   Test_Duplicate/Clone_-_not_same_root_hash
+--- PASS: Test_Duplicate (0.00s)
+    --- PASS: Test_Duplicate/Duplicate (0.00s)
+    --- PASS: Test_Duplicate/Clone_-_not_same_root_hash (0.00s)
+=== RUN   Test_BuildMerkleTreeStoreFromBytesBig
+    tests.go:16: Skipping very long running tests. Set LONG_TESTS=1 to run them.
+--- SKIP: Test_BuildMerkleTreeStoreFromBytesBig (0.00s)
+=== RUN   Test_BuildMerkleTreeStoreFromBytes
+=== RUN   Test_BuildMerkleTreeStoreFromBytes/complete_tree
+=== RUN   Test_BuildMerkleTreeStoreFromBytes/incomplete_tree
+=== RUN   Test_BuildMerkleTreeStoreFromBytes/incomplete_tree_2
+--- PASS: Test_BuildMerkleTreeStoreFromBytes (0.00s)
+    --- PASS: Test_BuildMerkleTreeStoreFromBytes/complete_tree (0.00s)
+    --- PASS: Test_BuildMerkleTreeStoreFromBytes/incomplete_tree (0.00s)
+    --- PASS: Test_BuildMerkleTreeStoreFromBytes/incomplete_tree_2 (0.00s)
+=== RUN   Test_Deserialize
+    tests.go:10: Skipping long running tests. Set LONG_TESTS=1 to run them.
+--- SKIP: Test_Deserialize (0.00s)
+=== RUN   Test_DeserializeFromReader
+    tests.go:10: Skipping long running tests. Set LONG_TESTS=1 to run them.
+--- SKIP: Test_DeserializeFromReader (0.00s)
+=== RUN   Test_getInputUtxoHash
+=== RUN   Test_getInputUtxoHash/input_2fb09ea4d1d282f55b4f4b5b1eec92fa314e1ba5a5a009e897f63d155b4dba82:0
+--- PASS: Test_getInputUtxoHash (0.00s)
+    --- PASS: Test_getInputUtxoHash/input_2fb09ea4d1d282f55b4f4b5b1eec92fa314e1ba5a5a009e897f63d155b4dba82:0 (0.00s)
+=== RUN   Test_getOutputUtxoHash
+=== RUN   Test_getOutputUtxoHash/output_2fb09ea4d1d282f55b4f4b5b1eec92fa314e1ba5a5a009e897f63d155b4dba82:0
+--- PASS: Test_getOutputUtxoHash (0.00s)
+    --- PASS: Test_getOutputUtxoHash/output_2fb09ea4d1d282f55b4f4b5b1eec92fa314e1ba5a5a009e897f63d155b4dba82:0 (0.00s)
+=== RUN   TestCollision
+    UTXOHash_test.go:134: utxoHash1: 75a4d690b598ba9ee2ef43852630fb35d4901b25ec65eb0e765cb9350d87d4f0
+    UTXOHash_test.go:135: utxoHash2: 625015ff5c2e912b61f1a2174fd3e02ad80d511ada4645bb191f431137efe4f4
+--- PASS: TestCollision (0.00s)
+=== RUN   TestValidSigScript1
+--- PASS: TestValidSigScript1 (0.00s)
+=== RUN   TestValidSigScript2
+--- PASS: TestValidSigScript2 (0.00s)
+=== RUN   TestValidHeight
+--- PASS: TestValidHeight (0.00s)
+=== RUN   TestExtractMiner
+--- PASS: TestExtractMiner (0.00s)
+=== RUN   TestExtractMiner2
+--- PASS: TestExtractMiner2 (0.00s)
+=== RUN   TestExtractMiner3
+--- PASS: TestExtractMiner3 (0.00s)
+=== RUN   TestExtractCoinbaseHeight
+--- PASS: TestExtractCoinbaseHeight (0.00s)
+=== RUN   Test_Main
+=== RUN   Test_Main/Test_KafkaAsyncProducerConsumerAutoCommit
+2024/08/09 16:49:20 github.com/testcontainers/testcontainers-go - Connected to docker: 
+  Server Version: 26.1.4
+  API Version: 1.44
+  Operating System: Docker Desktop
+  Total Memory: 24031 MB
+  Resolved Docker Host: unix:///var/run/docker.sock
+  Resolved Docker Socket Path: /var/run/docker.sock
+  Test SessionID: 6727310a043febff0ca87996731fce78fe784a01f03037c303ef3a3d8fd99ca7
+  Test ProcessID: a9503fdd-c3e7-4cd6-84c4-2ad9b72373e3
+ Network 6606ab06-3a29-43e7-9034-bfcd734eaf31_default  Creating
+ Network 6606ab06-3a29-43e7-9034-bfcd734eaf31_default  Created
+time="2024-08-09T16:49:20+03:00" level=warning msg="a network with name my-ubsv-network exists but was not created for project \"6606ab06-3a29-43e7-9034-bfcd734eaf31\".\nSet `external: true` to use an existing network"
+ Container kafka-shared  Creating
+ Container kafka-shared  Created
+ Container kafka-console-shared  Creating
+ Container kafka-console-shared  Created
+ Container kafka-shared  Starting
+ Container kafka-shared  Started
+ Container kafka-console-shared  Starting
+ Container kafka-console-shared  Started
+pushed message:  0
+pushed message:  1
+pushed message:  2
+pushed message:  3
+pushed message:  4
+pushed message:  5
+pushed message:  6
+pushed message:  7
+pushed message:  8
+pushed message:  9
+pushed message:  10
+pushed message:  11
+pushed message:  12
+pushed message:  13
+pushed message:  14
+pushed message:  15
+pushed message:  16
+pushed message:  17
+pushed message:  18
+pushed message:  19
+pushed message:  20
+pushed message:  21
+pushed message:  22
+pushed message:  23
+pushed message:  24
+pushed message:  25
+pushed message:  26
+pushed message:  27
+pushed message:  28
+pushed message:  29
+received message:  0 , Offset:  0
+received message:  1 , Offset:  1
+received message:  2 , Offset:  2
+received message:  3 , Offset:  3
+received message:  4 , Offset:  4
+received message:  5 , Offset:  5
+received message:  6 , Offset:  6
+received message:  7 , Offset:  7
+received message:  8 , Offset:  8
+received message:  9 , Offset:  9
+received message:  10 , Offset:  10
+received message:  11 , Offset:  11
+received message:  12 , Offset:  12
+received message:  13 , Offset:  13
+received message:  14 , Offset:  14
+received message:  15 , Offset:  15
+received message:  16 , Offset:  16
+received message:  17 , Offset:  17
+received message:  18 , Offset:  18
+received message:  19 , Offset:  19
+received message:  20 , Offset:  20
+received message:  21 , Offset:  21
+received message:  22 , Offset:  22
+pushed message:  30
+pushed message:  31
+pushed message:  32
+pushed message:  33
+pushed message:  34
+received message:  23 , Offset:  23
+received message:  24 , Offset:  24
+received message:  25 , Offset:  25
+received message:  26 , Offset:  26
+received message:  27 , Offset:  27
+received message:  28 , Offset:  28
+received message:  29 , Offset:  29
+received message:  30 , Offset:  30
+received message:  31 , Offset:  31
+received message:  32 , Offset:  32
+received message:  33 , Offset:  33
+received message:  34 , Offset:  34
+pushed message:  35
+pushed message:  36
+pushed message:  37
+pushed message:  38
+pushed message:  39
+pushed message:  40
+pushed message:  41
+pushed message:  42
+pushed message:  43
+pushed message:  44
+pushed message:  45
+pushed message:  46
+pushed message:  47
+received message:  35 , Offset:  35
+received message:  36 , Offset:  36
+received message:  37 , Offset:  37
+received message:  38 , Offset:  38
+received message:  39 , Offset:  39
+received message:  40 , Offset:  40
+received message:  41 , Offset:  41
+received message:  42 , Offset:  42
+received message:  43 , Offset:  43
+received message:  44 , Offset:  44
+received message:  45 , Offset:  45
+received message:  46 , Offset:  46
+received message:  47 , Offset:  47
+pushed message:  48
+pushed message:  49
+pushed message:  50
+pushed message:  51
+pushed message:  52
+pushed message:  53
+pushed message:  54
+pushed message:  55
+pushed message:  56
+pushed message:  57
+pushed message:  58
+received message:  48 , Offset:  48
+received message:  49 , Offset:  49
+received message:  50 , Offset:  50
+received message:  51 , Offset:  51
+received message:  52 , Offset:  52
+received message:  53 , Offset:  53
+received message:  54 , Offset:  54
+received message:  55 , Offset:  55
+received message:  56 , Offset:  56
+received message:  57 , Offset:  57
+received message:  58 , Offset:  58
+pushed message:  59
+pushed message:  60
+pushed message:  61
+pushed message:  62
+pushed message:  63
+pushed message:  64
+pushed message:  65
+pushed message:  66
+pushed message:  67
+pushed message:  68
+received message:  59 , Offset:  59
+received message:  60 , Offset:  60
+received message:  61 , Offset:  61
+received message:  62 , Offset:  62
+received message:  63 , Offset:  63
+received message:  64 , Offset:  64
+received message:  65 , Offset:  65
+received message:  66 , Offset:  66
+received message:  67 , Offset:  67
+received message:  68 , Offset:  68
+pushed message:  69
+pushed message:  70
+pushed message:  71
+pushed message:  72
+pushed message:  73
+pushed message:  74
+pushed message:  75
+pushed message:  76
+pushed message:  77
+pushed message:  78
+pushed message:  79
+pushed message:  80
+pushed message:  81
+pushed message:  82
+received message:  69 , Offset:  69
+received message:  70 , Offset:  70
+received message:  71 , Offset:  71
+received message:  72 , Offset:  72
+received message:  73 , Offset:  73
+received message:  74 , Offset:  74
+received message:  75 , Offset:  75
+received message:  76 , Offset:  76
+received message:  77 , Offset:  77
+received message:  78 , Offset:  78
+received message:  79 , Offset:  79
+received message:  80 , Offset:  80
+received message:  81 , Offset:  81
+received message:  82 , Offset:  82
+pushed message:  83
+pushed message:  84
+pushed message:  85
+pushed message:  86
+pushed message:  87
+pushed message:  88
+pushed message:  89
+pushed message:  90
+pushed message:  91
+pushed message:  92
+pushed message:  93
+received message:  83 , Offset:  83
+received message:  84 , Offset:  84
+received message:  85 , Offset:  85
+received message:  86 , Offset:  86
+received message:  87 , Offset:  87
+received message:  88 , Offset:  88
+received message:  89 , Offset:  89
+received message:  90 , Offset:  90
+received message:  91 , Offset:  91
+received message:  92 , Offset:  92
+received message:  93 , Offset:  93
+pushed message:  94
+pushed message:  95
+pushed message:  96
+pushed message:  97
+pushed message:  98
+pushed message:  99
+received message:  94 , Offset:  94
+received message:  95 , Offset:  95
+received message:  96 , Offset:  96
+received message:  97 , Offset:  97
+received message:  98 , Offset:  98
+received message:  99 , Offset:  99
+ Container kafka-console-shared  Stopping
+ Container kafka-console-shared  Stopped
+ Container kafka-console-shared  Removing
+ Container kafka-console-shared  Removed
+ Container kafka-shared  Stopping
+ Container kafka-shared  Stopped
+ Container kafka-shared  Removing
+ Container kafka-shared  Removed
+ Network 6606ab06-3a29-43e7-9034-bfcd734eaf31_default  Removing
+ Network 6606ab06-3a29-43e7-9034-bfcd734eaf31_default  Removed
+=== RUN   Test_Main/Test_KafkaAsyncProducerWithManualCommitParams
+time="2024-08-09T16:49:31+03:00" level=warning msg="a network with name my-ubsv-network exists but was not created for project \"b942aa57-0d63-4103-9a4d-94cf76c4afa7\".\nSet `external: true` to use an existing network"
+ Network b942aa57-0d63-4103-9a4d-94cf76c4afa7_default  Creating
+ Network b942aa57-0d63-4103-9a4d-94cf76c4afa7_default  Created
+ Container kafka-shared  Creating
+ Container kafka-shared  Created
+ Container kafka-console-shared  Creating
+ Container kafka-console-shared  Created
+ Container kafka-shared  Starting
+ Container kafka-shared  Started
+ Container kafka-console-shared  Starting
+ Container kafka-console-shared  Started
+pushed message:  0
+pushed message:  1
+pushed message:  2
+pushed message:  3
+pushed message:  4
+pushed message:  5
+pushed message:  6
+pushed message:  7
+pushed message:  8
+pushed message:  9
+=== RUN   Test_Main/Test_KafkaAsyncProducerWithManualCommitParams/Process_messages_with_all_success
+2024-08-09T16:49:33+03:00 | INFO  | kafka.go:319                     | test  | [kafka] Starting consumer [0] for group kafka_test on topic unittest 
+
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 0
+Consumer closure#1 received message:  0 , Offset:  0
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 0
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 1
+Consumer closure#1 received message:  1 , Offset:  1
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 1
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 2
+Consumer closure#1 received message:  2 , Offset:  2
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 2
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 3
+Consumer closure#1 received message:  3 , Offset:  3
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 3
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 4
+Consumer closure#1 received message:  4 , Offset:  4
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 4
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 5
+Consumer closure#1 received message:  5 , Offset:  5
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 5
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 6
+Consumer closure#1 received message:  6 , Offset:  6
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 6
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 7
+Consumer closure#1 received message:  7 , Offset:  7
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 7
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 8
+Consumer closure#1 received message:  8 , Offset:  8
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 8
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 9
+Consumer closure#1 received message:  9 , Offset:  9
+2024-08-09T16:49:35+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 9
+=== RUN   Test_Main/Test_KafkaAsyncProducerWithManualCommitParams/Process_messages_with_2nd_time_success_closure
+2024-08-09T16:49:35+03:00 | INFO  | kafka.go:345                     | test  | [kafka] Context done, shutting down consumer for kafka_test
+2024-08-09T16:49:35+03:00 | INFO  | kafka.go:319                     | test  | [kafka] Starting consumer [0] for group kafka_test on topic unittest 
+
+2024-08-09T16:49:36+03:00 | ERROR | kafka.go:349                     | test  | [Kafka] kafka_test: error closing client: kafka: error while consuming unittest/0: context canceled
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 0
+Consumer closure#2 received message:  0 , Offset:  0
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#2 received message:  0 , Offset:  0
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 0
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 1
+Consumer closure#2 received message:  1 , Offset:  1
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#2 received message:  1 , Offset:  1
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 1
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 2
+Consumer closure#2 received message:  2 , Offset:  2
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#2 received message:  2 , Offset:  2
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 2
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 3
+Consumer closure#2 received message:  3 , Offset:  3
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#2 received message:  3 , Offset:  3
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 3
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 4
+Consumer closure#2 received message:  4 , Offset:  4
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#2 received message:  4 , Offset:  4
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 4
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 5
+Consumer closure#2 received message:  5 , Offset:  5
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#2 received message:  5 , Offset:  5
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 5
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 6
+Consumer closure#2 received message:  6 , Offset:  6
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#2 received message:  6 , Offset:  6
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 6
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 7
+Consumer closure#2 received message:  7 , Offset:  7
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#2 received message:  7 , Offset:  7
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 7
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 8
+Consumer closure#2 received message:  8 , Offset:  8
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#2 received message:  8 , Offset:  8
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 8
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 9
+Consumer closure#2 received message:  9 , Offset:  9
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#2 received message:  9 , Offset:  9
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 9
+=== RUN   Test_Main/Test_KafkaAsyncProducerWithManualCommitParams/Process_messages_with_3rd_time_success_closure
+2024-08-09T16:49:36+03:00 | INFO  | kafka.go:345                     | test  | [kafka] Context done, shutting down consumer for kafka_test
+2024-08-09T16:49:36+03:00 | INFO  | kafka.go:319                     | test  | [kafka] Starting consumer [0] for group kafka_test on topic unittest 
+
+2024-08-09T16:49:36+03:00 | ERROR | kafka.go:349                     | test  | [Kafka] kafka_test: error closing client: kafka: error while consuming unittest/0: context canceled
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 0
+Consumer closure#3 received message:  0 , Offset:  0
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 0
+2024-08-09T16:49:36+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 1
+Consumer closure#3 received message:  1 , Offset:  1
+2024-08-09T16:49:36+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#3 received message:  1 , Offset:  1
+2024-08-09T16:49:37+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure#3 received message:  1 , Offset:  1
+2024-08-09T16:49:37+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 1
+2024-08-09T16:49:37+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 2
+Consumer closure#3 received message:  2 , Offset:  2
+2024-08-09T16:49:37+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#3 received message:  2 , Offset:  2
+2024-08-09T16:49:38+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure#3 received message:  2 , Offset:  2
+2024-08-09T16:49:38+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 2
+2024-08-09T16:49:38+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 3
+Consumer closure#3 received message:  3 , Offset:  3
+2024-08-09T16:49:38+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#3 received message:  3 , Offset:  3
+2024-08-09T16:49:39+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure#3 received message:  3 , Offset:  3
+2024-08-09T16:49:39+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 3
+2024-08-09T16:49:39+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 4
+Consumer closure#3 received message:  4 , Offset:  4
+2024-08-09T16:49:39+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#3 received message:  4 , Offset:  4
+2024-08-09T16:49:40+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure#3 received message:  4 , Offset:  4
+2024-08-09T16:49:40+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 4
+2024-08-09T16:49:40+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 5
+Consumer closure#3 received message:  5 , Offset:  5
+2024-08-09T16:49:40+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#3 received message:  5 , Offset:  5
+2024-08-09T16:49:41+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure#3 received message:  5 , Offset:  5
+2024-08-09T16:49:41+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 5
+2024-08-09T16:49:41+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 6
+Consumer closure#3 received message:  6 , Offset:  6
+2024-08-09T16:49:41+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#3 received message:  6 , Offset:  6
+2024-08-09T16:49:42+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure#3 received message:  6 , Offset:  6
+2024-08-09T16:49:42+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 6
+2024-08-09T16:49:42+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 7
+Consumer closure#3 received message:  7 , Offset:  7
+2024-08-09T16:49:42+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#3 received message:  7 , Offset:  7
+2024-08-09T16:49:43+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure#3 received message:  7 , Offset:  7
+2024-08-09T16:49:43+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 7
+2024-08-09T16:49:43+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 8
+Consumer closure#3 received message:  8 , Offset:  8
+2024-08-09T16:49:43+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#3 received message:  8 , Offset:  8
+2024-08-09T16:49:44+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure#3 received message:  8 , Offset:  8
+2024-08-09T16:49:44+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 8
+2024-08-09T16:49:44+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 9
+Consumer closure#3 received message:  9 , Offset:  9
+2024-08-09T16:49:44+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure#3 received message:  9 , Offset:  9
+2024-08-09T16:49:45+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure#3 received message:  9 , Offset:  9
+2024-08-09T16:49:45+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 9
+2024-08-09T16:49:45+03:00 | INFO  | kafka.go:345                     | test  | [kafka] Context done, shutting down consumer for kafka_test
+ Container kafka-console-shared  Stopping
+2024-08-09T16:49:45+03:00 | ERROR | kafka.go:349                     | test  | [Kafka] kafka_test: error closing client: kafka: error while consuming unittest/0: context canceled
+ Container kafka-console-shared  Stopped
+ Container kafka-console-shared  Removing
+ Container kafka-console-shared  Removed
+ Container kafka-shared  Stopping
+ Container kafka-shared  Stopped
+ Container kafka-shared  Removing
+ Container kafka-shared  Removed
+ Network b942aa57-0d63-4103-9a4d-94cf76c4afa7_default  Removing
+ Network b942aa57-0d63-4103-9a4d-94cf76c4afa7_default  Removed
+=== RUN   Test_Main/Test_KafkaAsyncProducerWithManualCommitErrorClosure
+time="2024-08-09T16:49:46+03:00" level=warning msg="a network with name my-ubsv-network exists but was not created for project \"66ad49bb-a311-4d50-9246-00e5081b6739\".\nSet `external: true` to use an existing network"
+ Network 66ad49bb-a311-4d50-9246-00e5081b6739_default  Creating
+ Network 66ad49bb-a311-4d50-9246-00e5081b6739_default  Created
+ Container kafka-shared  Creating
+ Container kafka-shared  Created
+ Container kafka-console-shared  Creating
+ Container kafka-console-shared  Created
+ Container kafka-shared  Starting
+ Container kafka-shared  Started
+ Container kafka-console-shared  Starting
+ Container kafka-console-shared  Started
+pushed message:  0
+pushed message:  1
+2024-08-09T16:49:49+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 0
+Consumer closure received message:  0 , Offset:  0
+2024-08-09T16:49:49+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure received message:  0 , Offset:  0
+2024-08-09T16:49:50+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure received message:  0 , Offset:  0
+2024-08-09T16:49:53+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=3)
+Consumer closure received message:  0 , Offset:  0
+2024-08-09T16:49:58+03:00 | ERROR | kafka_consumer.go:105            | kafka_consumer| [kafka_consumer] error processing kafka message, skipping: &{[] 2024-08-09 16:49:47.487 +0300 +03 0001-01-01 00:00:00 +0000 UTC [] [48] unittest 0 0}
+2024-08-09T16:49:58+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 0
+2024-08-09T16:49:58+03:00 | INFO  | kafka_consumer.go:92             | kafka_consumer| Processing message with offset: 1
+Consumer closure received message:  1 , Offset:  1
+2024-08-09T16:49:58+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=1)
+Consumer closure received message:  1 , Offset:  1
+2024-08-09T16:49:59+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=2)
+Consumer closure received message:  1 , Offset:  1
+2024-08-09T16:50:02+03:00 | INFO  | retry/retry.go:34                | kafka_consumer| [kafka_consumer] retrying to process message...%!(EXTRA string= (attempt %d): , int=3)
+Consumer closure received message:  1 , Offset:  1
+ Container kafka-console-shared  Stopping
+ Container kafka-console-shared  Stopped
+ Container kafka-console-shared  Removing
+ Container kafka-console-shared  Removed
+ Container kafka-shared  Stopping
+ Container kafka-shared  Stopped
+ Container kafka-shared  Removing
+ Container kafka-shared  Removed
+ Network 66ad49bb-a311-4d50-9246-00e5081b6739_default  Removing
+ Network 66ad49bb-a311-4d50-9246-00e5081b6739_default  Removed
+=== RUN   Test_Main/TestKafkaWithCompose
+time="2024-08-09T16:50:03+03:00" level=warning msg="a network with name my-ubsv-network exists but was not created for project \"dc9dd4fe-619a-42b6-be77-741b6a0399c4\".\nSet `external: true` to use an existing network"
+ Network dc9dd4fe-619a-42b6-be77-741b6a0399c4_default  Creating
+ Network dc9dd4fe-619a-42b6-be77-741b6a0399c4_default  Created
+ Container kafka-shared  Creating
+ Container kafka-shared  Created
+ Container kafka-console-shared  Creating
+ Container kafka-console-shared  Created
+ Container kafka-shared  Starting
+ Container kafka-shared  Started
+ Container kafka-console-shared  Starting
+ Container kafka-console-shared  Started
+Message is stored in topic(test_topic)/partition(0)/offset(0)
+Received message: Hello Kafka
+ Container kafka-console-shared  Stopping
+ Container kafka-console-shared  Stopped
+ Container kafka-console-shared  Removing
+ Container kafka-console-shared  Removed
+ Container kafka-shared  Stopping
+2024-08-09T16:50:07+03:00 | ERROR | kafka_consumer.go:105            | kafka_consumer| [kafka_consumer] error processing kafka message, skipping: &{[] 2024-08-09 16:49:47.487 +0300 +03 0001-01-01 00:00:00 +0000 UTC [] [49] unittest 0 1}
+2024-08-09T16:50:07+03:00 | INFO  | kafka_consumer.go:113            | kafka_consumer| Committing offset: 1
+panic: runtime error: invalid memory address or nil pointer dereference
+[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x10b680596]
+
+goroutine 707 [running]:
+github.com/bitcoin-sv/ubsv/util.(*KafkaConsumer).handleMessageWithManualCommit(0xc0008b4510, {0x10c4b4260, 0x10e9ba600}, {0x10c4c0bd0, 0xc0005dc120}, 0x0)
+	/Users/gokhansagirlar/goku/ubsv/util/kafka_consumer.go:92 +0x76
+github.com/bitcoin-sv/ubsv/util.(*KafkaConsumer).ConsumeClaim(0xc0008b4510, {0x10c4c0bd0, 0xc0005dc120}, {0x10c4b7640, 0xc00096ea20})
+	/Users/gokhansagirlar/goku/ubsv/util/kafka_consumer.go:71 +0x29e
+github.com/IBM/sarama.(*consumerGroupSession).consume(0xc0005dc120, {0xc000a481d8, 0x8}, 0x0)
+	/Users/gokhansagirlar/go/pkg/mod/github.com/!i!b!m/sarama@v1.42.2/consumer_group.go:952 +0x485
+github.com/IBM/sarama.newConsumerGroupSession.func2({0xc000a481d8, 0x8}, 0x0)
+	/Users/gokhansagirlar/go/pkg/mod/github.com/!i!b!m/sarama@v1.42.2/consumer_group.go:877 +0x10d
+created by github.com/IBM/sarama.newConsumerGroupSession in goroutine 623
+	/Users/gokhansagirlar/go/pkg/mod/github.com/!i!b!m/sarama@v1.42.2/consumer_group.go:869 +0x7fe
+exit status 2
+FAIL	github.com/bitcoin-sv/ubsv/util	48.742s

@@ -1,15 +1,9 @@
 # Define a common base configuration for ubsv nodes
-networks:
-  ubsv-network:
-    name: my-ubsv-network
-
 services:
   kafka-shared:
     container_name: kafka-shared
     image: vectorized/redpanda:latest
     mem_limit: 256m
-    networks:
-      - ubsv-network
     command:
       - redpanda start
       - --smp 1
@@ -27,8 +21,6 @@ services:
   kafka-console-shared:
     container_name: kafka-console-shared
     image: docker.redpanda.com/redpandadata/console:latest
-    networks:
-      - ubsv-network
     restart: on-failure
     entrypoint: /bin/sh
     command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
