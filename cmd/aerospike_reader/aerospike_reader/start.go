@@ -16,18 +16,18 @@ func Start() {
 
 	storeURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
-		logger.Errorf("[Asset_http] GetUTXOsByTXID error: %s", err.Error())
-		panic(err)
+		fmt.Printf("error reading utxostore setting: %s\n", err)
+		os.Exit(1)
 	}
 	if !found {
-		logger.Errorf("[Asset_http] GetUTXOsByTXID error: no utxostore setting found")
-		panic("no utxostore setting found")
+		fmt.Printf("missing utxostore setting\n")
+		os.Exit(1)
 	}
 
 	client, err := util.GetAerospikeClient(logger, storeURL)
 	if err != nil {
-		logger.Errorf("[Asset_http] GetUTXOsByTXID error: %s", err.Error())
-		panic(err.Error())
+		fmt.Printf("Failed to connect to aerospike: %s\n", err)
+		os.Exit(1)
 	}
 
 	namespace := storeURL.Path[1:]
@@ -36,23 +36,32 @@ func Start() {
 		setName = "txmeta"
 	}
 
+	fmt.Println()
+
+	if len(os.Args) != 2 {
+		fmt.Printf("Usage: %s <txid>\n", os.Args[0])
+		os.Exit(1)
+	}
+
 	txid := os.Args[1]
 
 	hash, err := chainhash.NewHashFromStr(txid)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Invalid txid: %s\n", txid)
+		os.Exit(1)
 	}
 
 	// get transaction meta data
 	key, err := aero.NewKey(namespace, setName, hash[:])
 	if err != nil {
-		logger.Errorf("[Asset_http] GetUTXOsByTXID error creating key: %s", err.Error())
-		panic(err)
+		fmt.Printf("Failed to create key: %s\n", err)
+		os.Exit(1)
 	}
 
 	response, err := client.Get(nil, key)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Failed to get record: %s\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("Digest      : %x\n", response.Key.Digest())
@@ -108,20 +117,18 @@ func Start() {
 func printArray(name string, arr []interface{}) {
 	fmt.Printf("%-12s:", name)
 
-	indent := false
-
 	for i, item := range arr {
 		if b, ok := item.([]byte); ok {
-			if indent {
-				fmt.Printf("            : %5d : %x\n", i, b)
-			} else {
+			if i == 0 {
 				fmt.Printf(" %5d : %x\n", i, b)
+			} else {
+				fmt.Printf("            : %5d : %x\n", i, b)
 			}
 		} else {
-			if indent {
-				fmt.Printf("            : %5d : %v\n", i, item)
-			} else {
+			if i == 0 {
 				fmt.Printf(" %5d : %v\n", i, item)
+			} else {
+				fmt.Printf("            : %5d : %v\n", i, item)
 			}
 		}
 	}
