@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -40,7 +40,7 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxo.Store {
 	if !found {
 		panic("no utxostore setting found")
 	}
-	utxoStore, err := _factory.NewStore(ctx, logger, utxoStoreURL, "aerospike_reader")
+	utxoStore, err := utxofactory.NewStore(ctx, logger, utxoStoreURL, "aerospike_reader", false) // false to not start blockchain listener
 	if err != nil {
 		panic(err)
 	}
