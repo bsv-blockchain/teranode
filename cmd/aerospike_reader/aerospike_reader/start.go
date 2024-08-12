@@ -77,7 +77,15 @@ func Start() {
 		case "outputs":
 			fallthrough
 		case "utxos":
-			fmt.Printf("%-11s: %x\n", k, v.([]byte))
+			if arr, ok := v.([]interface{}); ok {
+				fmt.Printf("%-11s:\n", k)
+
+				for i, item := range arr {
+					fmt.Printf("%-11d: %v:\n", i, item)
+				}
+			} else {
+				fmt.Printf("%-11s: %x\n", k, v.([]byte))
+			}
 		default:
 			fmt.Printf("%-11s: %+v\n", k, v)
 		}
