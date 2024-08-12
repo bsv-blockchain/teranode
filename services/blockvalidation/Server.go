@@ -50,17 +50,16 @@ type processBlockCatchup struct {
 // Server type carries the logger within it
 type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
-	logger                      ulogger.Logger
-	blockchainClient            blockchain.ClientI
-	subtreeStore                blob.Store
-	txStore                     blob.Store
-	utxoStore                   utxo.Store
-	validatorClient             validator.Interface
-	blockFoundCh                chan processBlockFound
-	catchupCh                   chan processBlockCatchup
-	blockValidation             *BlockValidation
-	blockPersisterKafkaProducer util.KafkaProducerI
-	SetTxMetaQ                  *util.LockFreeQ[[][]byte]
+	logger           ulogger.Logger
+	blockchainClient blockchain.ClientI
+	subtreeStore     blob.Store
+	txStore          blob.Store
+	utxoStore        utxo.Store
+	validatorClient  validator.Interface
+	blockFoundCh     chan processBlockFound
+	catchupCh        chan processBlockCatchup
+	blockValidation  *BlockValidation
+	SetTxMetaQ       *util.LockFreeQ[[][]byte]
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
@@ -391,53 +390,6 @@ func (u *Server) Start(ctx context.Context) error {
 		err := u.httpServer(ctx, httpAddress)
 		if err != nil {
 			u.logger.Errorf("[BlockValidation] failed to start http server: %v", err)
-		}
-	}
-
-	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesFinalConfig")
-	if err == nil && ok {
-		_, u.blockPersisterKafkaProducer, err = util.ConnectToKafka(subtreesKafkaURL)
-		if err != nil {
-			u.logger.Errorf("[BlockValidation] unable to connect to kafka for subtree assembly: %v", err)
-		} else {
-			// start the blockchain subscriber
-			go func() {
-				subscription, err := u.blockchainClient.Subscribe(ctx, "blockpersister")
-				if err != nil {
-					u.logger.Errorf("[BlockValidation] failed starting subtree assembly subscription")
-				}
-
-				var block *model.Block
-				for {
-					select {
-					case <-ctx.Done():
-						u.logger.Infof("[BlockValidation] closing subtree assembly kafka producer")
-						return
-					case notification := <-subscription:
-						if notification.Type == model.NotificationType_Block {
-							block, err = u.blockchainClient.GetBlock(ctx, notification.Hash)
-							if err != nil {
-								u.logger.Errorf("[BlockValidation] failed getting block from blockchain service - NOT sending subtree to blockpersister kafka producer")
-							} else if block == nil {
-								u.logger.Errorf("[BlockValidation] block is nil from blockchain service - NOT sending subtree to blockpersister kafka producer")
-							} else {
-
-								u.logger.Debugf("[BlockValidation][%s] processing block into blockpersister kafka producer", block.Hash().String())
-
-								for _, subtreeHash := range block.Subtrees {
-									subtreeBytes := subtreeHash.CloneBytes()
-									u.logger.Debugf("[BlockValidation][%s][%s] processing subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
-									// Send has a built-in retry mechanism
-									if err := u.blockPersisterKafkaProducer.Send(subtreeBytes, subtreeBytes); err != nil {
-										// TODO - #938 what to do with the error? FSM event?
-										u.logger.Errorf("[BlockValidation][%s][%s] failed to send subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
-									}
-								}
-							}
-						}
-					}
-				}
-			}()
 		}
 	}
 
