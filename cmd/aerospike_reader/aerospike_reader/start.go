@@ -55,17 +55,16 @@ func Start() {
 		panic(err)
 	}
 
-	fmt.Printf("Key:        %x\n", response.Key)
 	fmt.Printf("Digest:     %x\n", response.Key.Digest())
 	fmt.Printf("Namespace:  %s\n", response.Key.Namespace())
 	fmt.Printf("SetName:    %s\n", response.Key.SetName())
 	fmt.Printf("Node:       %s\n", response.Node.GetName())
 	fmt.Printf("Bins:\n")
 	for _, bin := range response.Bins {
-		fmt.Printf("             %s\n", bin)
+		fmt.Printf("            %v\n", bin)
 	}
-	fmt.Printf("Generation: %s\n", response.Generation)
-	fmt.Printf("Expiration: %s\n", response.Expiration)
+	fmt.Printf("Generation: %d\n", response.Generation)
+	fmt.Printf("Expiration: %d\n", response.Expiration)
 
 	fmt.Println()
 
@@ -78,8 +77,6 @@ func Start() {
 		case "outputs":
 			fallthrough
 		case "utxos":
-			fmt.Printf("%-11s: %x\n", k, v.([]byte))
-		case "parentTxHashes":
 			fmt.Printf("%-11s: %x\n", k, v.([]byte))
 		default:
 			fmt.Printf("%-11s: %+v\n", k, v)
