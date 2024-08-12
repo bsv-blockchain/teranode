@@ -221,6 +221,15 @@ func main() {
 		}
 	}
 
+	//var blockchainClient blockchain.ClientI
+
+	// should this be done globally somewhere?
+	blockchainClient, err := blockchain.NewClient(ctx, logger)
+	if err != nil {
+		panic(err)
+	}
+	blockchainService.SetClient(blockchainClient)
+
 	// bootstrap server
 	if startBootstrap {
 		if err := sm.AddService("Bootstrap", bootstrap.NewServer(
@@ -230,12 +239,11 @@ func main() {
 		}
 	}
 
-	var err error
-
 	// p2p server
 	if startP2P {
 		if err = sm.AddService("P2P", p2p.NewServer(
 			logger.New("P2P"),
+			blockchainClient,
 		)); err != nil {
 			panic(err)
 		}
@@ -255,7 +263,10 @@ func main() {
 	}
 
 	if startRpc {
-		if err := sm.AddService("Rpc", rpc.NewServer(logger.New("rpc"))); err != nil {
+		if err := sm.AddService("Rpc", rpc.NewServer(
+			logger.New("rpc"),
+			blockchainClient,
+		)); err != nil {
 			panic(err)
 		}
 	}
@@ -269,12 +280,6 @@ func main() {
 		)); err != nil {
 			panic(err)
 		}
-	}
-
-	// should this be done globally somewhere?
-	blockchainClient, err := blockchain.NewClient(ctx, logger)
-	if err != nil {
-		panic(err)
 	}
 
 	if startUTXOPersister {
@@ -323,6 +328,7 @@ func main() {
 				getTxStore(logger),
 				getUtxoStore(ctx, logger),
 				getValidatorClient(ctx, logger),
+				blockchainClient,
 			)); err != nil {
 				panic(err)
 			}

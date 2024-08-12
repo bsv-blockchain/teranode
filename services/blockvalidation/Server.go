@@ -70,7 +70,7 @@ type Server struct {
 
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
-	utxoStore utxo.Store, validatorClient validator.Interface) *Server {
+	utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI) *Server {
 
 	initPrometheusMetrics()
 
@@ -86,6 +86,7 @@ func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
 	bVal := &Server{
 		logger:               logger,
 		subtreeStore:         subtreeStore,
+		blockchainClient:     blockchainClient,
 		txStore:              txStore,
 		utxoStore:            utxoStore,
 		validatorClient:      validatorClient,
@@ -104,10 +105,6 @@ func (u *Server) Health(_ context.Context) (int, string, error) {
 }
 
 func (u *Server) Init(ctx context.Context) (err error) {
-	if u.blockchainClient, err = blockchain.NewClient(ctx, u.logger); err != nil {
-		return errors.NewServiceError("[Init] failed to create blockchain client", err)
-	}
-
 	subtreeValidationClient := subtreevalidation.NewClient(ctx, u.logger)
 
 	storeURL, err, found := gocore.Config().GetURL("utxostore")
@@ -211,6 +208,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound processBlockFound) error {
 	useCatchupWhenBehind := gocore.Config().GetBool("blockvalidation_useCatchupWhenBehind", false)
+	// TODO GOKHAN: parameterize this
 	if useCatchupWhenBehind && len(u.blockFoundCh) > 3 {
 		// we are multiple blocks behind, process all the blocks per peer on the catchup channel
 		u.logger.Infof("[Init] processing block found on channel [%s] - too many blocks behind", blockFound.hash.String())

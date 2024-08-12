@@ -46,7 +46,7 @@ type Server struct {
 	blockCh               chan []byte
 }
 
-func NewServer(logger ulogger.Logger) *Server {
+func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) *Server {
 	logger.Debugf("Creating P2P service")
 
 	p2pIp, ok := gocore.Config().Get("p2p_ip")
@@ -119,6 +119,7 @@ func NewServer(logger ulogger.Logger) *Server {
 		logger:            logger,
 		bitcoinProtocolId: "ubsv/bitcoin/1.0.0",
 		notificationCh:    make(chan *notificationMsg),
+		blockchainClient:  blockchainClient,
 	}
 
 	subtreesKafkaURL, err, found := gocore.Config().GetURL("kafka_subtreesConfig")
@@ -184,10 +185,10 @@ func (s *Server) Start(ctx context.Context) error {
 	s.logger.Infof("P2P service starting")
 	var err error
 
-	s.blockchainClient, err = blockchain.NewClient(ctx, s.logger)
-	if err != nil {
-		return errors.NewServiceError("could not create blockchain client [%w]", err)
-	}
+	//s.blockchainClient, err = blockchain.NewClient(ctx, s.logger)
+	//if err != nil {
+	//	return errors.NewServiceError("could not create blockchain client [%w]", err)
+	//}
 
 	s.blockValidationClient = blockvalidation.NewClient(ctx, s.logger)
 

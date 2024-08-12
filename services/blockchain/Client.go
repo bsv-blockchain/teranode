@@ -431,13 +431,14 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 		Event: event,
 	}
 
+	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
 	resp, err := c.client.SendFSMEvent(ctx, req)
 	if err != nil {
 		return err
 	}
-
+	c.logger.Infof("Storing response state: %s", resp.State.String())
 	c.StoreFSMState(resp.State.String())
-
+	c.logger.Infof("returning with new state: %s", c.GetFSMCurrentState().String())
 	return nil
 }
 
@@ -587,8 +588,8 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 }
 
 func (c *Client) GetFSMCurrentState() blockchain_api.FSMStateType {
-
 	currentState := c.currFSMstate.Load()
+	c.logger.Infof("GOKHAN Getting current state: %s", blockchain_api.FSMStateType(currentState).String())
 	return blockchain_api.FSMStateType(currentState)
 }
 

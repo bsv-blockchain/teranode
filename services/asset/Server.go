@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/asset/grpc_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -44,6 +44,7 @@ type Server struct {
 	useP2P           bool
 	centrifugeAddr   string
 	centrifugeServer *centrifuge_impl.Centrifuge
+	blockchainClient blockchain.ClientI
 }
 
 // NewServer will return a server instance with the logger stored within it
@@ -74,12 +75,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("no asset_grpcListenAddress or asset_httpListenAddress setting found")
 	}
 
-	blockchainClient, err := blockchain.NewClient(ctx, v.logger)
-	if err != nil {
-		return errors.NewServiceError("error creating blockchain client", err)
-	}
-
-	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, blockchainClient, v.subtreeStore, v.blockStore)
+	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, v.blockchainClient, v.subtreeStore, v.blockStore)
 	if err != nil {
 		return errors.NewServiceError("error creating repository", err)
 	}

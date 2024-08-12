@@ -943,16 +943,21 @@ func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*empt
 }
 
 func (b *Blockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	b.logger.Errorf("[Blockchain] CatchUpTransactions called")
+
 	req := &blockchain_api.SendFSMEventRequest{
 		Event: blockchain_api.FSMEventType_CATCHUPTXS,
 	}
 
+	b.logger.Errorf("[Blockchain] sending CatchUpTransactions event")
+
 	_, err := b.SendFSMEvent(ctx, req)
 	if err != nil {
 		// unable to send the event, no need to update the state.
+		b.logger.Errorf("[Blockchain] error sending CatchUpTransactions event: %v", err)
 		return nil, err
 	}
-
+	b.logger.Errorf("[Blockchain] Stroing CatchUpTransactions state")
 	b.client.StoreFSMState(b.finiteStateMachine.Current())
 	return nil, nil
 }
@@ -1047,6 +1052,10 @@ func safeClose[T any](ch chan T) {
 	}()
 
 	close(ch)
+}
+
+func (b *Blockchain) SetClient(client ClientI) {
+	b.client = client
 }
 
 func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
