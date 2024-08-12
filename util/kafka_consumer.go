@@ -51,6 +51,12 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 	for {
 		select {
 		case message := <-claim.Messages():
+
+			if message == nil {
+				// Received a nil message, skip
+
+				continue
+			}
 			// Handle the first message
 			//fmt.Printf("Handling first message: topic = %s, partition = %d, offset = %d, key = %s, value = %s\n", message.Topic, message.Partition, message.Offset, string(message.Key), string(message.Value))
 			if kc.autoCommitEnabled {
@@ -64,6 +70,13 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 			for messageCount < 1000 {
 				select {
 				case message := <-claim.Messages():
+					if message == nil {
+						// Received a nil message, skip
+						// TODO: Should we break here? Maybe get rid of break here.
+						// Context: If we don't break, in the tests we keep getting nil messages.
+						break InnerLoop
+					}
+
 					if kc.autoCommitEnabled {
 						// No need to check the error here as we are auto committing
 						_ = kc.handleMessagesWithAutoCommit(session, message)

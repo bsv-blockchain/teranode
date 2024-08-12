@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func BenchmarkValidator(b *testing.B) {
@@ -87,19 +88,17 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
 		},
-		utxoStore:              utxoStore,
-		blockAssembler:         nil,
-		saveInParallel:         true,
-		stats:                  gocore.NewStat("validator"),
-		blockassemblyKafkaChan: make(chan []byte, 1),
-		txMetaKafkaChan:        make(chan []byte, 1),
-		rejectedTxKafkaChan:    make(chan []byte, 1),
+		utxoStore:           utxoStore,
+		blockAssembler:      BlockAssemblyStore{},
+		saveInParallel:      true,
+		stats:               gocore.NewStat("validator"),
+		txMetaKafkaChan:     make(chan []byte, 1),
+		rejectedTxKafkaChan: make(chan []byte, 1),
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, len(v.blockassemblyKafkaChan), "blockassemblyKafkaChan should have 1 message")
 	require.Equal(t, 1, len(v.txMetaKafkaChan), "txMetaKafkaChan should have 1 message")
 	require.Equal(t, 0, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should be empty")
 }
@@ -120,19 +119,17 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
 		},
-		utxoStore:              utxoStore,
-		blockAssembler:         nil,
-		saveInParallel:         true,
-		stats:                  gocore.NewStat("validator"),
-		blockassemblyKafkaChan: make(chan []byte, 1),
-		txMetaKafkaChan:        make(chan []byte, 1),
-		rejectedTxKafkaChan:    make(chan []byte, 1),
+		utxoStore:           utxoStore,
+		blockAssembler:      nil,
+		saveInParallel:      true,
+		stats:               gocore.NewStat("validator"),
+		txMetaKafkaChan:     make(chan []byte, 1),
+		rejectedTxKafkaChan: make(chan []byte, 1),
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.Error(t, err)
 
-	require.Equal(t, 0, len(v.blockassemblyKafkaChan), "blockassemblyKafkaChan should be empty")
 	require.Equal(t, 0, len(v.txMetaKafkaChan), "txMetaKafkaChan should be empty")
 	require.Equal(t, 1, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should have 1 message")
 }
@@ -296,4 +293,15 @@ func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b
 	// Median time past is 1400686491
 	err = util.IsTransactionFinal(tx, 301926, 1400689692) // Block time
 	require.NoError(t, err)
+}
+
+type BlockAssemblyStore struct {
+}
+
+func (s BlockAssemblyStore) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
+	return true, nil
+}
+
+func (s BlockAssemblyStore) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
 }
