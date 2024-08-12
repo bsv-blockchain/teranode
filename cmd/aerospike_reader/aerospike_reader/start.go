@@ -56,12 +56,18 @@ func Start() {
 	}
 
 	fmt.Printf("Digest      : %x\n", response.Key.Digest())
-	fmt.Printf("Namespace   :  %s\n", response.Key.Namespace())
-	fmt.Printf("SetName     :    %s\n", response.Key.SetName())
-	fmt.Printf("Node        :       %s\n", response.Node.GetName())
-	fmt.Printf("Bins        :\n")
+	fmt.Printf("Namespace   : %s\n", response.Key.Namespace())
+	fmt.Printf("SetName     : %s\n", response.Key.SetName())
+	fmt.Printf("Node        : %s\n", response.Node.GetName())
+	fmt.Printf("Bins        :")
+	var indent = false
 	for binName := range response.Bins {
-		fmt.Printf("  %-10s\n", binName)
+		if indent {
+			fmt.Printf("            : %s\n", binName)
+		} else {
+			fmt.Printf(" %s\n", binName)
+		}
+		indent = true
 	}
 	fmt.Printf("Generation  : %d\n", response.Generation)
 	fmt.Printf("Expiration  : %d\n", response.Expiration)
@@ -102,11 +108,21 @@ func Start() {
 func printArray(name string, arr []interface{}) {
 	fmt.Printf("%-12s:\n", name)
 
+	indent := false
+
 	for i, item := range arr {
 		if b, ok := item.([]byte); ok {
-			fmt.Printf("  %-10d: %x\n", i, b)
+			if indent {
+				fmt.Printf("            : %5d : %x\n", i, b)
+			} else {
+				fmt.Printf(" %5d : %x\n", i, b)
+			}
 		} else {
-			fmt.Printf("  %-10d: %v\n", i, item)
+			if indent {
+				fmt.Printf("            : %5d : %v\n", i, item)
+			} else {
+				fmt.Printf(" %5d : %v\n", i, item)
+			}
 		}
 	}
 }
