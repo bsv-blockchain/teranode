@@ -1,21 +1,40 @@
 package aerospike_reader
 
 import (
-	"context"
+	"fmt"
 	"os"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+	aero "github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
 func Start() {
-	ctx := context.Background()
 	logger := ulogger.NewGoCoreLogger("aerospike_reader")
 
-	utxoStore := getUtxoStore(ctx, logger)
+	storeURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil {
+		logger.Errorf("[Asset_http] GetUTXOsByTXID error: %s", err.Error())
+		panic(err)
+	}
+	if !found {
+		logger.Errorf("[Asset_http] GetUTXOsByTXID error: no utxostore setting found")
+		panic("no utxostore setting found")
+	}
+
+	client, err := util.GetAerospikeClient(logger, storeURL)
+	if err != nil {
+		logger.Errorf("[Asset_http] GetUTXOsByTXID error: %s", err.Error())
+		panic(err.Error())
+	}
+
+	namespace := storeURL.Path[1:]
+	setName := storeURL.Query().Get("set")
+	if setName == "" {
+		setName = "txmeta"
+	}
 
 	txid := os.Args[1]
 
@@ -24,26 +43,39 @@ func Start() {
 		panic(err)
 	}
 
-	tx, err := utxoStore.Get(ctx, hash)
+	// get transaction meta data
+	key, err := aero.NewKey(namespace, setName, hash[:])
+	if err != nil {
+		logger.Errorf("[Asset_http] GetUTXOsByTXID error creating key: %s", err.Error())
+		panic(err)
+	}
+
+	response, err := client.Get(nil, key)
 	if err != nil {
 		panic(err)
 	}
 
-	logger.Infof("tx: %#v", tx)
-}
+	fmt.Printf("Key:        %s\n", response.Key.String())
+	fmt.Printf("Digest:     %x\n", response.Key.Digest())
+	fmt.Printf("Namespace:  %s\n", response.Key.Namespace())
+	fmt.Printf("SetName:    %s\n", response.Key.SetName())
+	fmt.Printf("Node:       %s\n", response.Node.GetName())
+	fmt.Printf("Bins:       %s\n", response.Bins)
+	fmt.Printf("Generation: %s\n", response.Generation)
+	fmt.Printf("Expiration: %s\n", response.Expiration)
 
-func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxo.Store {
-	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil {
-		panic(err)
-	}
-	if !found {
-		panic("no utxostore setting found")
-	}
-	utxoStore, err := utxofactory.NewStore(ctx, logger, utxoStoreURL, "aerospike_reader", false) // false to not start blockchain listener
-	if err != nil {
-		panic(err)
+	fmt.Println()
+
+	for k, v := range response.Bins {
+		switch k {
+		case "tx":
+			fmt.Printf("%-11s: %x\n", k, v.([]byte))
+		case "parentTxHashes":
+			fmt.Printf("%-11s: %x\n", k, v.([]byte))
+		default:
+			fmt.Printf("%-11s: %+v\n", k, v)
+		}
 	}
 
-	return utxoStore
+	fmt.Println()
 }
