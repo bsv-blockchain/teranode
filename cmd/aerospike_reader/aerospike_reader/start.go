@@ -55,16 +55,16 @@ func Start() {
 		panic(err)
 	}
 
-	fmt.Printf("Digest:     %x\n", response.Key.Digest())
-	fmt.Printf("Namespace:  %s\n", response.Key.Namespace())
-	fmt.Printf("SetName:    %s\n", response.Key.SetName())
-	fmt.Printf("Node:       %s\n", response.Node.GetName())
-	fmt.Printf("Bins:\n")
+	fmt.Printf("Digest      : %x\n", response.Key.Digest())
+	fmt.Printf("Namespace   :  %s\n", response.Key.Namespace())
+	fmt.Printf("SetName     :    %s\n", response.Key.SetName())
+	fmt.Printf("Node        :       %s\n", response.Node.GetName())
+	fmt.Printf("Bins        :\n")
 	for binName := range response.Bins {
-		fmt.Printf("            %v\n", binName)
+		fmt.Printf("  %-10s\n", binName)
 	}
-	fmt.Printf("Generation: %d\n", response.Generation)
-	fmt.Printf("Expiration: %d\n", response.Expiration)
+	fmt.Printf("Generation  : %d\n", response.Generation)
+	fmt.Printf("Expiration  : %d\n", response.Expiration)
 
 	fmt.Println()
 
@@ -83,37 +83,30 @@ func Start() {
 
 		default:
 			if arr, ok := v.([]interface{}); ok {
-				fmt.Printf("%-11s:\n", k)
-
-				for i, item := range arr {
-					if b, ok := item.([]byte); ok {
-						fmt.Printf("  %-11d: %x\n", i, b)
-					} else {
-						fmt.Printf("  %-11d: %v\n", i, item)
-					}
-				}
+				printArray(k, arr)
 			} else if b, ok := v.([]byte); ok {
-				fmt.Printf("%-11s: %x\n", k, b)
+				fmt.Printf("%-12s: %x\n", k, b)
 			} else {
-				fmt.Printf("%-11s: %v\n", k, v)
+				fmt.Printf("%-12s: %v\n", k, v)
 			}
 		}
 	}
 
-	fmt.Printf("inputs:\n")
-	for i, input := range response.Bins["inputs"].([]interface{}) {
-		fmt.Printf("  %-11d: %x\n", i, input.([]byte))
-	}
-
-	fmt.Printf("outputs:\n")
-	for i, output := range response.Bins["outputs"].([]interface{}) {
-		fmt.Printf("  %-11d: %x\n", i, output.([]byte))
-	}
-
-	fmt.Printf("utxos:\n")
-	for i, utxo := range response.Bins["utxos"].([]interface{}) {
-		fmt.Printf("  %-11d: %x\n", i, utxo.([]byte))
-	}
+	printArray("inputs", response.Bins["inputs"].([]interface{}))
+	printArray("outputs", response.Bins["outputs"].([]interface{}))
+	printArray("utxos", response.Bins["utxos"].([]interface{}))
 
 	fmt.Println()
+}
+
+func printArray(name string, arr []interface{}) {
+	fmt.Printf("%-12s:\n", name)
+
+	for i, item := range arr {
+		if b, ok := item.([]byte); ok {
+			fmt.Printf("  %-10d: %x\n", i, b)
+		} else {
+			fmt.Printf("  %-10d: %v\n", i, item)
+		}
+	}
 }
