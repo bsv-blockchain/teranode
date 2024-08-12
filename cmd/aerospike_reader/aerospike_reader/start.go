@@ -106,7 +106,7 @@ func Start() {
 }
 
 func printArray(name string, arr []interface{}) {
-	fmt.Printf("%-12s:\n", name)
+	fmt.Printf("%-12s:", name)
 
 	indent := false
 
