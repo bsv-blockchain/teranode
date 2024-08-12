@@ -202,7 +202,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 }
 
 func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, blockHeight uint32) {
-	_, _, deferFn := tracing.StartTracing(ctx, "validateTransactions")
+	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactions")
 	defer deferFn()
 
 	// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
@@ -214,6 +214,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		// we don't want to limit this, that will be done by the batcher
 		// g.SetLimit(runtime.NumCPU() * 4)
 		for _, tx := range blockTxsPerLevel[i] {
+			tx := tx
 			g.Go(func() error {
 				// send to validation, but only if the parent is not in the same block
 				_ = sm.validationClient.Validate(gCtx, tx, blockHeight)
