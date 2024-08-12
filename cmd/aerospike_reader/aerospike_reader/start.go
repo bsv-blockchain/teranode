@@ -86,10 +86,16 @@ func Start() {
 				fmt.Printf("%-11s:\n", k)
 
 				for i, item := range arr {
-					fmt.Printf("%-11d: %v:\n", i, item)
+					if b, ok := item.([]byte); ok {
+						fmt.Printf("  %-11d: %x\n", i, b)
+					} else {
+						fmt.Printf("  %-11d: %v\n", i, item)
+					}
 				}
+			} else if b, ok := v.([]byte); ok {
+				fmt.Printf("%-11s: %x\n", k, b)
 			} else {
-				fmt.Printf("%-11s: %x\n", k, v.([]byte))
+				fmt.Printf("%-11s: %v\n", k, v)
 			}
 		}
 	}
