@@ -60,8 +60,8 @@ func Start() {
 	fmt.Printf("SetName:    %s\n", response.Key.SetName())
 	fmt.Printf("Node:       %s\n", response.Node.GetName())
 	fmt.Printf("Bins:\n")
-	for _, bin := range response.Bins {
-		fmt.Printf("            %v\n", bin)
+	for binName := range response.Bins {
+		fmt.Printf("            %v\n", binName)
 	}
 	fmt.Printf("Generation: %d\n", response.Generation)
 	fmt.Printf("Expiration: %d\n", response.Expiration)
@@ -70,6 +70,10 @@ func Start() {
 
 	for k, v := range response.Bins {
 		switch k {
+		case "Generation":
+			fallthrough
+		case "Expiration":
+			fallthrough
 		case "inputs":
 			fallthrough
 		case "outputs":
