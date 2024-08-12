@@ -70,13 +70,14 @@ func Start() {
 
 	for k, v := range response.Bins {
 		switch k {
-		case "tx":
-			fallthrough
 		case "inputs":
 			fallthrough
 		case "outputs":
 			fallthrough
 		case "utxos":
+			// IGNORE
+
+		default:
 			if arr, ok := v.([]interface{}); ok {
 				fmt.Printf("%-11s:\n", k)
 
@@ -86,9 +87,22 @@ func Start() {
 			} else {
 				fmt.Printf("%-11s: %x\n", k, v.([]byte))
 			}
-		default:
-			fmt.Printf("%-11s: %+v\n", k, v)
 		}
+	}
+
+	fmt.Printf("inputs:\n")
+	for i, input := range response.Bins["inputs"].([]interface{}) {
+		fmt.Printf("  %-11d: %x\n", i, input.([]byte))
+	}
+
+	fmt.Printf("outputs:\n")
+	for i, output := range response.Bins["outputs"].([]interface{}) {
+		fmt.Printf("  %-11d: %x\n", i, output.([]byte))
+	}
+
+	fmt.Printf("utxos:\n")
+	for i, utxo := range response.Bins["utxos"].([]interface{}) {
+		fmt.Printf("  %-11d: %x\n", i, utxo.([]byte))
 	}
 
 	fmt.Println()
