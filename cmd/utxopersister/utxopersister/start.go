@@ -52,6 +52,11 @@ func Start() {
 
 	logger.Infof("Starting utxopersister service")
 
+	if err := service.Init(ctx); err != nil {
+		logger.Errorf("Failed to init utxopersister service: %v", err)
+		return
+	}
+
 	if err := service.Start(ctx); err != nil {
 		logger.Errorf("Failed utxopersister service: %v", err)
 		return
