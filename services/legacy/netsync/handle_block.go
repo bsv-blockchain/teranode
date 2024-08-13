@@ -191,6 +191,23 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.NewStorageError("failed to store subtree data", err)
 		}
 
+		if subtree == nil {
+			return nil, errors.NewProcessingError("subtree is nil")
+		}
+
+		rootHash := subtree.RootHash()
+		if rootHash == nil {
+			return nil, errors.NewProcessingError("subtree RootHash is nil")
+		}
+
+		if err = sm.subtreeValidation.CheckSubtree(ctx, *rootHash, "legacy", blockHeight); err != nil {
+			return nil, errors.NewSubtreeError("failed to check subtree", err)
+		}
+
+		if sm.subtreeValidation == nil {
+			return nil, errors.NewProcessingError("subtreeValidation is nil")
+		}
+
 		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "legacy", blockHeight); err != nil {
 			return nil, errors.NewSubtreeError("failed to check subtree", err)
 		}
