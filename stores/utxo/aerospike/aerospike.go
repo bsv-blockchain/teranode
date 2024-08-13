@@ -6,12 +6,13 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"log"
 	"net/url"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 
@@ -79,7 +80,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	if expirationValue != "" {
 		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
 		if err != nil {
-			logger.Fatalf("could not parse expiration %s: %v", expirationValue, err)
+			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
 		}
 		expiration = uint32(expiration64)
 	}
