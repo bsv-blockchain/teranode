@@ -195,17 +195,20 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.NewProcessingError("subtree is nil")
 		}
 
-		rootHash := subtree.RootHash()
-		if rootHash == nil {
+		if subtree.RootHash() == nil {
 			return nil, errors.NewProcessingError("subtree RootHash is nil")
 		}
 
-		if err = sm.subtreeValidation.CheckSubtree(ctx, *rootHash, "legacy", blockHeight); err != nil {
-			return nil, errors.NewSubtreeError("failed to check subtree", err)
+		if sm == nil {
+			return nil, errors.NewProcessingError("sm is nil")
 		}
 
 		if sm.subtreeValidation == nil {
 			return nil, errors.NewProcessingError("subtreeValidation is nil")
+		}
+
+		if ctx == nil {
+			return nil, errors.NewProcessingError("ctx is nil")
 		}
 
 		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "legacy", blockHeight); err != nil {
