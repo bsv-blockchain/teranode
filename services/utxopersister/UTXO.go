@@ -31,7 +31,7 @@ func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 
 	n, err := io.ReadFull(r, b)
 	if err != nil {
-		return nil, errors.NewStorageError("Failed to read a complete UTXO from reader.  Got %d bytes, expected %d bytes", n, 52, err)
+		return nil, err
 	}
 
 	if n != 52 {

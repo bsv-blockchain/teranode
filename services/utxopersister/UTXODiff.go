@@ -223,7 +223,7 @@ func (ud *UTXODiff) GetUTXODeletionsSet() (map[[36]byte]struct{}, error) {
 func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainhash.Hash) (err error) {
 	deletions := ud.deletionsSet
 
-	if deletions == nil {
+	if deletions == nil && previousBlockHash != nil {
 		// Load the deletions file for this block in to a set
 		var err error
 		deletions, err = ud.GetUTXODeletionsSet()

@@ -159,7 +159,7 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 	}
 
 	// write the bytes from the reader to a file with the filename
-	file, err := os.Create(fileName)
+	file, err := os.Create(fileName + ".tmp")
 	if err != nil {
 		return errors.NewStorageError("failed to create file", err)
 	}
@@ -167,6 +167,11 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 
 	if _, err = io.Copy(file, reader); err != nil {
 		return errors.NewStorageError("failed to write data to file", err)
+	}
+
+	// rename the file to remove the .tmp extension
+	if err = os.Rename(fileName+".tmp", fileName); err != nil {
+		return errors.NewStorageError("failed to rename file", err)
 	}
 
 	return nil
