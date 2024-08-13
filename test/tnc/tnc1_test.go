@@ -188,6 +188,9 @@ func TestCheckHashPrevBlockCandidate(t *testing.T) {
 func TestCoinbaseTXAmount(t *testing.T) {
 	ctx := context.Background()
 
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
+
 	ba := framework.Nodes[0].BlockassemblyClient
 	bc := framework.Nodes[0].BlockchainClient
 
@@ -197,7 +200,7 @@ func TestCoinbaseTXAmount(t *testing.T) {
 	}
 
 	coinbaseValueBlock := mc0.CoinbaseValue
-	fmt.Printf("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
+	logger.Infof("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
 
 	_, bbhmeta, errbb := bc.GetBestBlockHeader(ctx)
 	if errbb != nil {
@@ -209,7 +212,7 @@ func TestCoinbaseTXAmount(t *testing.T) {
 	}
 	coinbaseTX := block.CoinbaseTx
 	amount := coinbaseTX.TotalOutputSatoshis()
-	fmt.Printf("Amount inside block coinbase tx: %d", amount)
+	logger.Infof("Amount inside block coinbase tx: %d", amount)
 
 	if amount != coinbaseValueBlock {
 		t.Errorf("Error calculating Coinbase Tx amount")
@@ -235,15 +238,15 @@ func TestCoinbaseTXAmount2(t *testing.T) {
 	}
 
 	coinbaseValueBlock := mc0.CoinbaseValue
-	fmt.Printf("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
+	logger.Infof("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
 
 	block, errblock := helper.GetBestBlock(ctx, framework.Nodes[0])
 	if errblock != nil {
 		t.Errorf("Error getting best block")
 	}
 
-	fmt.Printf("Header of the best block %v", block.Header.String())
-	fmt.Printf("Lenght of subtree slices %d", len(block.SubtreeSlices))
+	logger.Infof("Header of the best block %v", block.Header.String())
+	logger.Infof("Lenght of subtree slices %d", len(block.SubtreeSlices))
 
 	// for _, subtree := range block.SubtreeSlices {
 	// 	for _, node := range subtree.Nodes {
@@ -253,8 +256,8 @@ func TestCoinbaseTXAmount2(t *testing.T) {
 
 	coinbaseTX := block.CoinbaseTx
 	amount := coinbaseTX.TotalOutputSatoshis()
-	fmt.Printf("Amount inside block coinbase tx: %d\n", amount)
-	fmt.Printf("Fees: %d", coinbaseValueBlock-amount)
+	logger.Infof("Amount inside block coinbase tx: %d\n", amount)
+	logger.Infof("Fees: %d", coinbaseValueBlock-amount)
 
 	if coinbaseValueBlock < amount {
 		t.Errorf("Error calculating fees")
