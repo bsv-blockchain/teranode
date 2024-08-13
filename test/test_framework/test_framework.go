@@ -9,7 +9,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 
-	"github.com/bitcoin-sv/ubsv/services/asset"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	cb "github.com/bitcoin-sv/ubsv/services/coinbase"
@@ -36,14 +35,13 @@ type BitcoinNode struct {
 	BlockchainClient    bc.ClientI
 	BlockassemblyClient ba.Client
 	DistributorClient   distributor.Distributor
-	AssetClient         asset.Client
 	BlockChainDB        blockchain_store.Store
 	Blockstore          blob.Store
 	SubtreeStore        blob.Store
 	BlockstoreUrl       *url.URL
 	UtxoStore           *utxostore.Store
 	SubtreesKafkaURL    *url.URL
-	RPC_URL			 	string
+	RPC_URL             string
 }
 
 func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
@@ -124,16 +122,6 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 			return errors.NewConfigurationError("error creating distributor client %w", err)
 		}
 		b.Nodes[i].DistributorClient = *distributorClient
-
-		coinbase_assetGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_assetGrpcAddress.%s", node.SETTINGS_CONTEXT))
-		if !ok {
-			return errors.NewConfigurationError("no coinbase_assetGrpcAddress setting found")
-		}
-		assetClient, err := asset.NewClient(b.Context, logger, getHostAddress(coinbase_assetGrpcAddress))
-		if err != nil {
-			return errors.NewConfigurationError("error creating asset client %w", err)
-		}
-		b.Nodes[i].AssetClient = *assetClient
 
 		subtreesKafkaUrl, err, ok := gocore.Config().GetURL(fmt.Sprintf("kafka_subtreesConfig.%s.run", node.SETTINGS_CONTEXT))
 		if err != nil {

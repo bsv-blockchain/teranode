@@ -125,7 +125,9 @@ func (s *File) ttlCleaner(ctx context.Context) {
 					s.logger.Warnf("failed to remove file: %s", fileName)
 				}
 				if err := os.Remove(fileName + ".ttl"); err != nil {
-					s.logger.Warnf("failed to remove ttl file: %s", fileName+".ttl")
+					if !os.IsNotExist(err) {
+						s.logger.Warnf("failed to remove ttl file: %s", fileName+".ttl")
+					}
 				}
 
 				s.fileTTLsMu.Lock()

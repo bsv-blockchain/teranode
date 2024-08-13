@@ -67,9 +67,11 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 
 	// 7) The transaction size in bytes is greater than or equal to 100
 	// There are many examples in the chain up to height 422559 where this rule was not in place
-	if blockHeight > 422559 && txSize < 100 {
-		return errors.NewTxInvalidError("transaction size in bytes is less than 100 bytes")
-	}
+	// TODO where does this come from???
+	// Example https://whatsonchain.com/tx/e54038d0b41004a8b08bb01bf6df11c63f37c7f39b83ca9b8c96a9f5dbdba403 is only 97 bytes
+	//if blockHeight > 422559 && txSize < 100 {
+	//	return errors.NewTxInvalidError("transaction size in bytes is less than 100 bytes")
+	//}
 
 	// 8) The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
 	if err := tv.sigOpsCheck(tx, tv.policy); err != nil {

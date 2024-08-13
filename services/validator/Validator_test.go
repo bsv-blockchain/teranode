@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 func BenchmarkValidator(b *testing.B) {
@@ -87,19 +88,17 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
 		},
-		utxoStore:              utxoStore,
-		blockAssembler:         nil,
-		saveInParallel:         true,
-		stats:                  gocore.NewStat("validator"),
-		blockassemblyKafkaChan: make(chan []byte, 1),
-		txMetaKafkaChan:        make(chan []byte, 1),
-		rejectedTxKafkaChan:    make(chan []byte, 1),
+		utxoStore:           utxoStore,
+		blockAssembler:      BlockAssemblyStore{},
+		saveInParallel:      true,
+		stats:               gocore.NewStat("validator"),
+		txMetaKafkaChan:     make(chan []byte, 1),
+		rejectedTxKafkaChan: make(chan []byte, 1),
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, len(v.blockassemblyKafkaChan), "blockassemblyKafkaChan should have 1 message")
 	require.Equal(t, 1, len(v.txMetaKafkaChan), "txMetaKafkaChan should have 1 message")
 	require.Equal(t, 0, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should be empty")
 }
@@ -120,19 +119,17 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
 		},
-		utxoStore:              utxoStore,
-		blockAssembler:         nil,
-		saveInParallel:         true,
-		stats:                  gocore.NewStat("validator"),
-		blockassemblyKafkaChan: make(chan []byte, 1),
-		txMetaKafkaChan:        make(chan []byte, 1),
-		rejectedTxKafkaChan:    make(chan []byte, 1),
+		utxoStore:           utxoStore,
+		blockAssembler:      nil,
+		saveInParallel:      true,
+		stats:               gocore.NewStat("validator"),
+		txMetaKafkaChan:     make(chan []byte, 1),
+		rejectedTxKafkaChan: make(chan []byte, 1),
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.Error(t, err)
 
-	require.Equal(t, 0, len(v.blockassemblyKafkaChan), "blockassemblyKafkaChan should be empty")
 	require.Equal(t, 0, len(v.txMetaKafkaChan), "txMetaKafkaChan should be empty")
 	require.Equal(t, 1, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should have 1 message")
 }
@@ -277,14 +274,34 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 
 }
 
-func Test7b27e3ed7ebf878d985f5fcc35bfbf0e3116489ff75f5e7eec8480780975920c(t *testing.T) {
-
+func TestIsFinal7b27e3ed7ebf878d985f5fcc35bfbf0e3116489ff75f5e7eec8480780975920c(t *testing.T) {
 	tx, err := bt.NewTxFromString("010000000000000000ef01ffd5c45f91eac31aa75de5cb1cac9d559f25e732f620b09582bf5d9b8aaa6d41010000006b48304502207c2cc4f80d58a524384364c250611a78a312045ef1ed6ab7def42438ce743cfc022100c8686df6eadcd8638fc91d4aee36e4d60793bcc71ff298f9600c869e14a1058601210319564fb11701a3aa24057afcdc24db5b1880339ec8612914cbd0b6ad8ba9211f10ffffff124a1700000000001976a914335df8a6ed745a6fb37ea8c1c3ff3d4257d222aa88ac0240420f00000000001976a9140b655a2a9748b30d6a1c9df810f116d2c8386b3d88acc2e00700000000001976a9145ebf8758fba212df6ed18eceecc1533574a8dc8988ac602d2653")
 
 	require.NoError(t, err)
+	assert.Equal(t, "7b27e3ed7ebf878d985f5fcc35bfbf0e3116489ff75f5e7eec8480780975920c", tx.TxIDChainHash().String())
 
-	final := util.IsTransactionFinal(tx, 290918, 1395011852) // Block time
+	err = util.IsTransactionFinal(tx, 290918, 1395011852) // Block time
 	require.NoError(t, err)
-	assert.True(t, final)
+}
+func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b(t *testing.T) {
+	tx, err := bt.NewTxFromString("010000000000000000ef017eac59de00f046e6d0a68d24963ae6273dc743e6eb47435389feb797ba2eed11000000008b4830450220781bf3ae77e09c900c5b5bcd4ef8800d0bb2313cff3691eedec4193d0daed489022100b1c3b624e1d8ffeed997067dc14cf95587ac85aa4406cc2823ee1540ac69c6a101410420ecf1f137e2aec6a47ae844b695772ab5a9177d4a830b328fbe753c41dc2d99cee9e13de3de5bb85e56b83b6923a147365b19747e7afe16c92625d5b121374eff0000ffb8b10e00000000001976a914d20671f2248ff5176fc245b1c4f72256f77bc00988ac01a88a0e00000000001976a9143910660af6df1e1aed432be83d8e9036d69ed14988ac81cd7c53")
 
+	require.NoError(t, err)
+	assert.Equal(t, "b633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b", tx.TxIDChainHash().String())
+
+	// Block time          1400689692
+	// Median time past is 1400686491
+	err = util.IsTransactionFinal(tx, 301926, 1400689692) // Block time
+	require.NoError(t, err)
+}
+
+type BlockAssemblyStore struct {
+}
+
+func (s BlockAssemblyStore) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
+	return true, nil
+}
+
+func (s BlockAssemblyStore) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
 }

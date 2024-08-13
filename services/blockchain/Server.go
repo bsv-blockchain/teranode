@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/looplab/fsm"
 	"github.com/ordishs/go-utils"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -21,7 +22,6 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/looplab/fsm"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -242,7 +242,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	ctx, _, deferFn := tracing.StartTracing(ctx, "AddBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainAddBlock),
-		tracing.WithLogMessage(b.logger, "[AddBlock] called from %s", request.PeerId),
+		tracing.WithDebugLogMessage(b.logger, "[AddBlock] called from %s", request.PeerId),
 	)
 	defer deferFn()
 
@@ -974,31 +974,24 @@ func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty)
 		return nil, errors.WrapGRPC(err)
 	}
 
-	var medianTime uint32
-	if meta.Height >= util.LockTimeBIP113 {
-		// get the median block time for the last 11 blocks
-		headers, _, err := b.store.GetBlockHeaders(ctx, blockHeader.Hash(), 11)
-		if err != nil {
-			return nil, errors.WrapGRPC(err)
-		}
+	// get the median block time for the last 11 blocks
+	headers, _, err := b.store.GetBlockHeaders(ctx, blockHeader.Hash(), 11)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
 
-		prevTimeStamps := make([]time.Time, 0, 11)
-		for _, header := range headers {
-			prevTimeStamps = append(prevTimeStamps, time.Unix(int64(header.Timestamp), 0))
-		}
-		medianTimestamp, err := model.CalculateMedianTimestamp(prevTimeStamps)
-		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("[Blockchain] could not calculate median block time", err))
-		}
-		medianTime = uint32(medianTimestamp.Unix())
-	} else {
-		// until block 419328 (BIP-113), use the block time
-		medianTime = blockHeader.Timestamp
+	prevTimeStamps := make([]time.Time, 0, 11)
+	for _, header := range headers {
+		prevTimeStamps = append(prevTimeStamps, time.Unix(int64(header.Timestamp), 0))
+	}
+	medianTimestamp, err := model.CalculateMedianTimestamp(prevTimeStamps)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[Blockchain] could not calculate median block time", err))
 	}
 
 	return &blockchain_api.GetBestHeightAndTimeResponse{
 		Height: meta.Height,
-		Time:   medianTime,
+		Time:   uint32(medianTimestamp.Unix()),
 	}, nil
 }
 

@@ -1,10 +1,12 @@
 package util
 
 import (
-	"github.com/libsv/go-bt/v2"
-	"github.com/stretchr/testify/assert"
 	"testing"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/libsv/go-bt/v2"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestIsTransactionFinal(t *testing.T) {
@@ -190,7 +192,12 @@ func TestIsTransactionFinal(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, IsTransactionFinal(tt.args.tx, tt.args.blockHeight, tt.args.medianBlockTime), "IsTransactionFinal(%v, %v, %v)", tt.args.tx, tt.args.blockHeight, tt.args.medianBlockTime)
+			err := IsTransactionFinal(tt.args.tx, tt.args.blockHeight, tt.args.medianBlockTime)
+			if tt.want {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
 		})
 	}
 }
@@ -202,25 +209,25 @@ func Test_IsTransactionFinal_FromRequirements(t *testing.T) {
 	txNonFinal := &bt.Tx{Inputs: []*bt.Input{{SequenceNumber: 0xfffffff0}}, LockTime: 500000005}
 
 	// Locktime >= 500M, Time lower			TRUE	FALSE
-	assert.True(t, IsTransactionFinal(txFinal, 123, 500000004))
-	assert.False(t, IsTransactionFinal(txNonFinal, 123, 500000004))
+	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000004))
+	assert.True(t, errors.Is(IsTransactionFinal(txNonFinal, 123, 500000004), errors.ErrLockTime))
 	// Locktime >= 500M, Time equal			TRUE	TRUE
-	assert.True(t, IsTransactionFinal(txFinal, 123, 500000005))
-	assert.True(t, IsTransactionFinal(txNonFinal, 123, 500000005))
+	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000005))
+	assert.NoError(t, IsTransactionFinal(txNonFinal, 123, 500000005))
 	// Locktime >= 500M, Time higher		TRUE	TRUE
-	assert.True(t, IsTransactionFinal(txFinal, 123, 500000006))
-	assert.True(t, IsTransactionFinal(txNonFinal, 123, 500000006))
+	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000006))
+	assert.NoError(t, IsTransactionFinal(txNonFinal, 123, 500000006))
 
 	txFinal = &bt.Tx{Inputs: []*bt.Input{{SequenceNumber: 0xffffffff}}, LockTime: 123}
 	txNonFinal = &bt.Tx{Inputs: []*bt.Input{{SequenceNumber: 0xfffffff0}}, LockTime: 123}
 
 	// Locktime < 500M, Block Height lower	TRUE	FALSE
-	assert.True(t, IsTransactionFinal(txFinal, 122, 500000004))
-	assert.False(t, IsTransactionFinal(txNonFinal, 122, 500000004))
+	assert.NoError(t, IsTransactionFinal(txFinal, 122, 500000004))
+	assert.True(t, errors.Is(IsTransactionFinal(txNonFinal, 122, 500000004), errors.ErrLockTime))
 	// Locktime < 500M, Block Height equal	TRUE	TRUE
-	assert.True(t, IsTransactionFinal(txFinal, 123, 500000005))
-	assert.True(t, IsTransactionFinal(txNonFinal, 123, 500000005))
+	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000005))
+	assert.NoError(t, IsTransactionFinal(txNonFinal, 123, 500000005))
 	// Locktime < 500M, Block Height higher	TRUE	TRUE
-	assert.True(t, IsTransactionFinal(txFinal, 124, 500000006))
-	assert.True(t, IsTransactionFinal(txNonFinal, 124, 500000006))
+	assert.NoError(t, IsTransactionFinal(txFinal, 124, 500000006))
+	assert.NoError(t, IsTransactionFinal(txNonFinal, 124, 500000006))
 }

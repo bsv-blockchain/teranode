@@ -39,7 +39,7 @@ require (
 	github.com/libsv/go-bt v1.0.4
 	github.com/libsv/go-bt/v2 v2.2.5
 	github.com/loopholelabs/polyglot v1.1.4
-	github.com/looplab/fsm v1.0.1
+	github.com/looplab/fsm v1.0.2
 	github.com/multiformats/go-multiaddr v0.11.0
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opentracing/opentracing-go v1.2.0
@@ -144,7 +144,7 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/flynn/noise v1.0.0 // indirect
 	github.com/francoispqt/gojay v1.2.13 // indirect
-	github.com/fsnotify/fsevents v0.1.1 // indirect
+	github.com/fsnotify/fsevents v0.2.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/fvbommel/sortorder v1.0.2 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect

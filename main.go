@@ -13,6 +13,7 @@ import (
 
 	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
 
+	"github.com/bitcoin-sv/ubsv/cmd/aerospike_reader/aerospike_reader"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
@@ -29,7 +30,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/faucet"
 	"github.com/bitcoin-sv/ubsv/services/legacy"
@@ -107,6 +107,9 @@ func main() {
 	case "s3inventoryintegrity.run":
 		s3inventoryintegrity.Start()
 		return
+	case "aerospike_reader.run":
+		aerospike_reader.Start()
+		return
 	}
 
 	serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
@@ -133,7 +136,6 @@ func main() {
 	startAsset := shouldStart("Asset")
 	startCoinbase := shouldStart("Coinbase")
 	startFaucet := shouldStart("Faucet")
-	startBootstrap := shouldStart("Bootstrap")
 	startBlockPersister := shouldStart("BlockPersister")
 	startUTXOPersister := shouldStart("UTXOPersister")
 	startLegacy := shouldStart("Legacy")
@@ -219,15 +221,6 @@ func main() {
 		}
 
 		if err := sm.AddService("BlockChainService", blockchainService); err != nil {
-			panic(err)
-		}
-	}
-
-	// bootstrap server
-	if startBootstrap {
-		if err := sm.AddService("Bootstrap", bootstrap.NewServer(
-			logger.New("bootS"),
-		)); err != nil {
 			panic(err)
 		}
 	}
@@ -348,6 +341,7 @@ func main() {
 	if startCoinbase {
 		if err = sm.AddService("Coinbase", coinbase.New(
 			logger.New("coinB"),
+			blockchainClient,
 		)); err != nil {
 			panic(err)
 		}
@@ -534,9 +528,6 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("    -coinbase=<1|0>")
 	fmt.Println("          whether to start the coinbase server")
-	fmt.Println("")
-	fmt.Println("    -bootstrap=<1|0>")
-	fmt.Println("          whether to start the bootstrap server")
 	fmt.Println("")
 	fmt.Println("    -p2p=<1|0>")
 	fmt.Println("          whether to start the p2p server")

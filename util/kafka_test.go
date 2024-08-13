@@ -3,6 +3,7 @@ package util
 import (
 	"context"
 	"fmt"
+	"github.com/IBM/sarama"
 	"math/rand"
 	"net"
 	"strconv"
@@ -10,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
@@ -246,38 +246,7 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure(t *testing.T) {
 	}
 }
 
-func stopKafka(compose tc.ComposeStack, ctx context.Context) {
-	if err := compose.Down(ctx); err != nil {
-		panic(err)
-	}
-}
-
-func byteArrayToIntFromString(message []byte) (int, error) {
-	strValue := string(message)             // Convert byte array to string
-	intValue, err := strconv.Atoi(strValue) // Parse string as integer
-	if err != nil {
-		return 0, err
-	}
-	return intValue, nil
-}
-
-func produceMessages(wg *sync.WaitGroup, kafkaChan chan []byte, numberOfMessages int) {
-	// #nosec G404: ignoring the warning
-	r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
-	for i := 0; i < numberOfMessages; i++ {
-		msg := []byte(strconv.Itoa(i))
-		kafkaChan <- msg
-		fmt.Println("pushed message: ", string(msg))
-
-		randomDelay := time.Duration(r.Intn(200)+1) * time.Millisecond
-		time.Sleep(randomDelay)
-		if wg != nil {
-			wg.Done()
-		}
-	}
-}
-
-func TestKafkaWithCompose(t *testing.T) {
+func Test_KafkaWithCompose(t *testing.T) {
 	ctx := context.Background()
 
 	composeFilePaths := "../docker-compose-kafka.yml"
@@ -317,13 +286,46 @@ func TestKafkaWithCompose(t *testing.T) {
 
 	partitionConsumer, err := consumer.ConsumePartition(topic, partition, offset)
 	require.NoError(t, err, "Failed to consume message from Kafka")
-	defer partitionConsumer.Close()
+	defer func(partitionConsumer sarama.PartitionConsumer) {
+		_ = partitionConsumer.Close()
+	}(partitionConsumer)
 
 	select {
 	case msg := <-partitionConsumer.Messages():
 		fmt.Printf("Received message: %s\n", string(msg.Value))
 	case <-time.After(10 * time.Second):
 		t.Fatal("Timed out waiting for message")
+	}
+}
+
+func stopKafka(compose tc.ComposeStack, ctx context.Context) {
+	if err := compose.Down(ctx); err != nil {
+		panic(err)
+	}
+}
+
+func byteArrayToIntFromString(message []byte) (int, error) {
+	strValue := string(message)             // Convert byte array to string
+	intValue, err := strconv.Atoi(strValue) // Parse string as integer
+	if err != nil {
+		return 0, err
+	}
+	return intValue, nil
+}
+
+func produceMessages(wg *sync.WaitGroup, kafkaChan chan []byte, numberOfMessages int) {
+	// #nosec G404: ignoring the warning
+	r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
+	for i := 0; i < numberOfMessages; i++ {
+		msg := []byte(strconv.Itoa(i))
+		kafkaChan <- msg
+		fmt.Println("pushed message: ", string(msg))
+
+		randomDelay := time.Duration(r.Intn(200)+1) * time.Millisecond
+		time.Sleep(randomDelay)
+		if wg != nil {
+			wg.Done()
+		}
 	}
 }
 

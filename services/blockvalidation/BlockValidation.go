@@ -224,7 +224,7 @@ func (u *BlockValidation) start(ctx context.Context) {
 				return
 			case blockHash := <-u.setMinedChan:
 				startTime := time.Now()
-				u.logger.Infof("[BlockValidation:start][%s] block setTxMined", blockHash.String())
+				u.logger.Debugf("[BlockValidation:start][%s] block setTxMined", blockHash.String())
 
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
 
@@ -236,7 +236,7 @@ func (u *BlockValidation) start(ctx context.Context) {
 					_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
 				}
 
-				u.logger.Infof("[BlockValidation:start][%s] block setTxMined DONE in %s", blockHash.String(), time.Since(startTime))
+				u.logger.Debugf("[BlockValidation:start][%s] block setTxMined DONE in %s", blockHash.String(), time.Since(startTime))
 			}
 		}
 	}()
@@ -557,7 +557,7 @@ CheckParentMined:
 	// Add the coinbase transaction to the metaTxStore
 	// don't be tempted to rely on BlockAssembly to do this.
 	// We need to be sure that the coinbase transaction is stored before we try and do setMinedMulti().
-	u.logger.Infof("[ValidateBlock][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), block.Height, block.CoinbaseTx.TxIDChainHash().String())
+	u.logger.Debugf("[ValidateBlock][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), block.Height, block.CoinbaseTx.TxIDChainHash().String())
 	if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height); err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
@@ -565,7 +565,7 @@ CheckParentMined:
 			return errors.NewTxError("[ValidateBlock][%s] error storing utxos", block.Header.Hash().String(), err)
 		}
 	}
-	u.logger.Infof("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
+	u.logger.Debugf("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
 	useOptimisticMining := u.optimisticMining
 	if len(disableOptimisticMining) > 0 {
@@ -884,7 +884,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
 			}
 			if !subtreeExists {
-				u.logger.Infof("[validateBlockSubtrees][%s] instructing stv to check missing subtree [%s]", block.Hash().String(), subtreeHash.String())
+				u.logger.Debugf("[validateBlockSubtrees][%s] instructing stv to check missing subtree [%s]", block.Hash().String(), subtreeHash.String())
 				// we don't have the subtree, so we need to process it in the subtree validation service
 				// this will also store the subtree in the store and block while the subtree is being processed
 				// we do this with a timeout of max 2 minutes

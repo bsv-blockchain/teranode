@@ -661,8 +661,8 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					parentTxHashes = txMeta.ParentTxHashes
 
 					if txMeta.LockTime > 0 {
-						if !util.ValidLockTime(txMeta.LockTime, b.Height, b.medianTimestamp) {
-							return errors.NewLockTimeError("[BLOCK][%s][%s:%d]:%d transaction %s has an invalid locktime: %d", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), txMeta.LockTime)
+						if err := util.ValidLockTime(txMeta.LockTime, b.Height, b.medianTimestamp); err != nil {
+							return errors.NewLockTimeError("[BLOCK][%s][%s:%d]:%d transaction %s has an invalid locktime: %d", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), txMeta.LockTime, err)
 						}
 					}
 				}

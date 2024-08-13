@@ -94,6 +94,10 @@ jobs:
         with:
           name: coverage-report
 
+      - name: Run filename check script
+        run: |
+          ./scripts/check_filenames.sh
+
       # Re-run golangci separately without exiting on errors and generating a report for use in Sonar
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v5

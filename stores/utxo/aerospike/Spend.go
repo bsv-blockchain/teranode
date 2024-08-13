@@ -136,6 +136,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		spend := batch[idx].spend
 		err = batchRecord.BatchRec().Err
 		if err != nil {
+			s.logger.Errorf("SAO idx: %d, %s:%d", idx, spend.TxID, spend.Vout)
 			batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %w", spend.TxID.String(), thisBlockHeight, batchId, err)
 		} else {
 			response := batchRecord.BatchRec().Record

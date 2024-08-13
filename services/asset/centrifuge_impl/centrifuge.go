@@ -3,12 +3,13 @@ package centrifuge_impl
 import (
 	"context"
 	"encoding/json"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -309,7 +310,7 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 }
 
 func (c *Centrifuge) Stop(ctx context.Context) error {
-	c.logger.Infof("[AssetService] Centrifuge GRPC (impl) service shutting down")
+	c.logger.Infof("[AssetService] Centrifuge service shutting down")
 
 	return nil
 }
