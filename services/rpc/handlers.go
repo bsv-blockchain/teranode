@@ -5,11 +5,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/tracing"
 	"io"
 	"net/http"
 	"net/url"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/tracing"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
@@ -340,11 +341,11 @@ func handleGenerate(ctx context.Context, s *RpcServer, cmd interface{}, _ <-chan
 		}
 	}
 	if minerHttpPort < 0 || minerHttpPort > 65535 {
-		s.logger.Fatalf("Invalid port number: %d", minerHttpPort)
+		return nil, errors.NewInvalidArgumentError("Invalid port number: %d", minerHttpPort)
 	}
 
 	if c.NumBlocks <= 0 {
-		s.logger.Fatalf("Invalid number of blocks: %d", c.NumBlocks)
+		return nil, errors.NewInvalidArgumentError("Invalid number of blocks: %d", c.NumBlocks)
 	}
 
 	// causes lint:gosec error G107: Potential HTTP request made with variable url (gosec)

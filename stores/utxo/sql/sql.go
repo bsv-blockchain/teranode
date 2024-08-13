@@ -119,7 +119,7 @@ func New(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL) (*Store,
 	if expirationValue != "" {
 		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
 		if err != nil {
-			logger.Fatalf("could not parse expiration %s: %v", expirationValue, err)
+			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
 		}
 		s.expirationMillis = expiration64 * 1000
 

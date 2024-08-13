@@ -101,7 +101,7 @@ func (u *Server) Start(ctx context.Context) error {
 		// g.SetLimit(subtreeConcurrency)
 		var partitions int
 		if partitions, err = strconv.Atoi(subtreesKafkaURL.Query().Get("partitions")); err != nil {
-			u.logger.Fatalf("[Subtreevalidation] unable to parse Kafka partitions from %s: %s", subtreesKafkaURL, err)
+			return errors.NewInvalidArgumentError("[Subtreevalidation] unable to parse Kafka partitions from %s", subtreesKafkaURL, err)
 		}
 
 		consumerRatio := util.GetQueryParamInt(subtreesKafkaURL, "consumer_ratio", 4)
@@ -165,7 +165,7 @@ func (u *Server) Start(ctx context.Context) error {
 	if err == nil && ok {
 		var partitions int
 		if partitions, err = strconv.Atoi(txmetaKafkaURL.Query().Get("partitions")); err != nil {
-			u.logger.Fatalf("[Subtreevalidation] unable to parse Kafka partitions from %s: %s", txmetaKafkaURL, err)
+			return errors.NewInvalidArgumentError("[Subtreevalidation] unable to parse Kafka partitions from %s", txmetaKafkaURL, err)
 		}
 
 		consumerRatio := util.GetQueryParamInt(txmetaKafkaURL, "consumer_ratio", 8)

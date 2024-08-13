@@ -176,10 +176,11 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainh
 
 	once.Do(func() {
 		logger.Infof("Creating block quorum path %s", quorumPath)
-		if err := os.MkdirAll(quorumPath, 0755); err != nil {
-			logger.Fatalf("Failed to create block quorum path: %v", err)
-		}
+		err = os.MkdirAll(quorumPath, 0755)
 	})
+	if err != nil {
+		return false, false, errors.NewStorageError("Failed to create block quorum path", err)
+	}
 
 	lockFile := path.Join(quorumPath, hash.String()) + ".lock"
 

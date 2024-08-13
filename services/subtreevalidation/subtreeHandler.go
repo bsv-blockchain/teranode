@@ -108,10 +108,11 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exis
 
 	once.Do(func() {
 		logger.Infof("Creating subtree quorum path: %s", quorumPath)
-		if err := os.MkdirAll(quorumPath, 0755); err != nil {
-			logger.Fatalf("Failed to create subtree quorum path: %v", err)
-		}
+		err = os.MkdirAll(quorumPath, 0755)
 	})
+	if err != nil {
+		return false, false, releaseLockFunc, errors.NewStorageError("Failed to create subtree quorum path", err)
+	}
 
 	lockFile := path.Join(quorumPath, hash.String()) + ".lock"
 
