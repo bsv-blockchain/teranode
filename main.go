@@ -535,7 +535,11 @@ func main() {
 
 	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining
 	if startMiner {
-		if err = sm.AddService("miner", miner.NewMiner(ctx, logger.New("miner"))); err != nil {
+		miner, err := miner.NewMiner(ctx, logger.New("miner"))
+		if err != nil {
+			panic(err)
+		}
+		if err = sm.AddService("miner", miner); err != nil {
 			panic(err)
 		}
 	}

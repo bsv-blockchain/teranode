@@ -41,7 +41,10 @@ type Validator struct {
 func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interface, error) {
 	initPrometheusMetrics()
 
-	ba := blockassembly.NewClient(ctx, logger)
+	ba, err := blockassembly.NewClient(ctx, logger)
+	if err != nil {
+		return nil, errors.NewServiceError("failed to create block assembly client", err)
+	}
 
 	v := &Validator{
 		logger: logger,

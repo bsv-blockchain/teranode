@@ -1064,7 +1064,7 @@ func (s *RpcServer) Init(ctx context.Context) (err error) {
 	}
 
 	s.blockchainClient = blockchainClient
-	s.blockAssemblyClient = blockassembly.NewClient(ctx, s.logger)
+	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger)
 
-	return nil
+	return err
 }

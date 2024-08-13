@@ -110,7 +110,10 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		if !ok {
 			return errors.NewConfigurationError("no blockassembly_grpcAddress setting found")
 		}
-		blockassemblyClient := ba.NewClientWithAddress(b.Context, logger, getHostAddress(blockassembly_grpcAddress))
+		blockassemblyClient, err := ba.NewClientWithAddress(b.Context, logger, getHostAddress(blockassembly_grpcAddress))
+		if err != nil {
+			return errors.NewServiceError("error creating blockassembly client %w", err)
+		}
 		b.Nodes[i].BlockassemblyClient = *blockassemblyClient
 
 		propagation_grpcAddress, ok := gocore.Config().Get(fmt.Sprintf("propagation_grpcAddress.%s", node.SETTINGS_CONTEXT))

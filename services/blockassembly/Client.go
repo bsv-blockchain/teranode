@@ -27,17 +27,17 @@ type Client struct {
 	batcher   batcher.Batcher2[batchItem]
 }
 
-func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
+func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 	blockAssemblyGrpcAddress, ok := gocore.Config().Get("blockassembly_grpcAddress")
 	if !ok {
-		panic("no blockassembly_grpcAddress setting found")
+		return nil, errors.NewConfigurationError("no blockassembly_grpcAddress setting found")
 	}
 
 	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {
-		panic(err)
+		return nil, errors.NewServiceError("failed to connect to block assembly", err)
 	}
 
 	batchSize, _ := gocore.Config().GetInt("blockassembly_sendBatchSize", 0)
@@ -61,15 +61,15 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 	}
 	client.batcher = *batcher.New[batchItem](batchSize, duration, sendBatch, true)
 
-	return client
+	return client, nil
 }
 
-func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, blockAssemblyGrpcAddress string) *Client {
+func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, blockAssemblyGrpcAddress string) (*Client, error) {
 	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {
-		panic(err)
+		return nil, errors.NewServiceError("failed to connect to block assembly", err)
 	}
 
 	batchSize, _ := gocore.Config().GetInt("blockassembly_sendBatchSize", 0)
@@ -93,7 +93,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, blockAssem
 	}
 	client.batcher = *batcher.New[batchItem](batchSize, duration, sendBatch, true)
 
-	return client
+	return client, nil
 }
 
 func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
