@@ -218,7 +218,7 @@ func (s *Server) processNextBlock(ctx context.Context) error {
 	if ud == nil {
 		s.logger.Infof("UTXOSet already exists for block %s height %d", hash, meta.Height)
 		s.lastHeight++
-		return nil
+		return s.writeLastHeight(ctx, s.lastHeight)
 	}
 
 	if err := ud.CreateUTXOSet(ctx, pBlock); err != nil {
