@@ -100,7 +100,7 @@ func TestCandidateContainsAllTxs(t *testing.T) {
 		}
 	}()
 
-	_, errTXs := helper.SendTXsWithDistributor(ctx, framework.Nodes[0], logger)
+	_, errTXs := helper.SendTXsWithDistributor(ctx, framework.Nodes[0], logger, 10000)
 	if errTXs != nil {
 		t.Errorf("Failed to send txs with distributor: %v", errTXs)
 	}
@@ -149,7 +149,7 @@ func TestCheckHashPrevBlockCandidate(t *testing.T) {
 	ba := framework.Nodes[0].BlockassemblyClient
 	bc := framework.Nodes[0].BlockchainClient
 
-	_, errTXs := helper.SendTXsWithDistributor(ctx, framework.Nodes[0], logger)
+	_, errTXs := helper.SendTXsWithDistributor(ctx, framework.Nodes[0], logger, 10000)
 	if errTXs != nil {
 		t.Errorf("Failed to send txs with distributor: %v", errTXs)
 	}
@@ -188,6 +188,9 @@ func TestCheckHashPrevBlockCandidate(t *testing.T) {
 func TestCoinbaseTXAmount(t *testing.T) {
 	ctx := context.Background()
 
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
+
 	ba := framework.Nodes[0].BlockassemblyClient
 	bc := framework.Nodes[0].BlockchainClient
 
@@ -197,7 +200,7 @@ func TestCoinbaseTXAmount(t *testing.T) {
 	}
 
 	coinbaseValueBlock := mc0.CoinbaseValue
-	fmt.Printf("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
+	logger.Infof("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
 
 	_, bbhmeta, errbb := bc.GetBestBlockHeader(ctx)
 	if errbb != nil {
@@ -209,11 +212,54 @@ func TestCoinbaseTXAmount(t *testing.T) {
 	}
 	coinbaseTX := block.CoinbaseTx
 	amount := coinbaseTX.TotalOutputSatoshis()
-	fmt.Printf("Amount inside block coinbase tx: %d", amount)
+	logger.Infof("Amount inside block coinbase tx: %d", amount)
 
 	if amount != coinbaseValueBlock {
 		t.Errorf("Error calculating Coinbase Tx amount")
 	}
+}
 
-	// blockReward := block.CoinbaseTx.TotalOutputSatoshis()
+func TestCoinbaseTXAmount2(t *testing.T) {
+	ctx := context.Background()
+
+	ba := framework.Nodes[0].BlockassemblyClient
+
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
+
+	_, errTXs := helper.SendTXsWithDistributor(ctx, framework.Nodes[0], logger, 9000)
+	if errTXs != nil {
+		t.Errorf("Failed to send txs with distributor: %v", errTXs)
+	}
+
+	mc0, errmc0 := ba.GetMiningCandidate(ctx)
+	if errmc0 != nil {
+		t.Errorf("Error getting mining candidate on node 0")
+	}
+
+	coinbaseValueBlock := mc0.CoinbaseValue
+	logger.Infof("Coinbase value mining candidate 0: %d", coinbaseValueBlock)
+
+	block, errblock := helper.GetBestBlock(ctx, framework.Nodes[0])
+	if errblock != nil {
+		t.Errorf("Error getting best block")
+	}
+
+	logger.Infof("Header of the best block %v", block.Header.String())
+	logger.Infof("Lenght of subtree slices %d", len(block.SubtreeSlices))
+
+	// for _, subtree := range block.SubtreeSlices {
+	// 	for _, node := range subtree.Nodes {
+	// 		fmt.Printf("Fees inside the subtrees: %d", node.Fee)
+	// 	}
+	// }
+
+	coinbaseTX := block.CoinbaseTx
+	amount := coinbaseTX.TotalOutputSatoshis()
+	logger.Infof("Amount inside block coinbase tx: %d\n", amount)
+	logger.Infof("Fees: %d", coinbaseValueBlock-amount)
+
+	if coinbaseValueBlock < amount {
+		t.Errorf("Error calculating fees")
+	}
 }
