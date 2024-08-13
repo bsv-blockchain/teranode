@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
+	utxopersister_cmd "github.com/bitcoin-sv/ubsv/cmd/utxopersister/utxopersister"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
@@ -109,6 +110,9 @@ func main() {
 		return
 	case "aerospike_reader.run":
 		aerospike_reader.Start()
+		return
+	case "utxopersister.run":
+		utxopersister_cmd.Start()
 		return
 	}
 
