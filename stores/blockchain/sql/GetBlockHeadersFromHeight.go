@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -82,8 +83,8 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 			return nil, nil, errors.NewStorageError("failed to scan row", err)
 		}
 
-		blockHeaderMeta.Timestamp = uint32(insertedAt.Unix())
-		blockHeader.Bits = model.NewNBitFromSlice(nBits)
+		bits, _ := model.NewNBitFromSlice(nBits)
+		blockHeader.Bits = *bits
 
 		blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 		if err != nil {

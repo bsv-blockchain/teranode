@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -69,7 +70,8 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		return nil, nil, err
 	}
 
-	blockHeader.Bits = model.NewNBitFromSlice(nBits)
+	bits, _ := model.NewNBitFromSlice(nBits)
+	blockHeader.Bits = *bits
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {

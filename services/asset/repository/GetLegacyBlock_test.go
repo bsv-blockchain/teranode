@@ -107,8 +107,8 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	// difficulty, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
-	difficulty := model.NewNBitFromSlice(bytes[:n])
-	assert.Equal(t, block.Header.Bits, difficulty)
+	difficulty, _ := model.NewNBitFromSlice(bytes[:n])
+	assert.Equal(t, block.Header.Bits, *difficulty)
 
 	// nonce, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
@@ -228,8 +228,8 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	// difficulty, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
 	require.NoError(t, err)
-	difficulty := model.NewNBitFromSlice(bytes[:n])
-	assert.Equal(t, block.Header.Bits, difficulty)
+	difficulty, _ := model.NewNBitFromSlice(bytes[:n])
+	assert.Equal(t, block.Header.Bits, *difficulty)
 
 	// nonce, 4 bytes
 	n, err = io.ReadFull(r, bytes[:4])
@@ -425,7 +425,7 @@ func newBlock(ctx *testContext, t *testing.T, b blockInfo) (*model.Block, *util.
 		}
 	}
 
-	nBits := model.NewNBitFromString(b.bits)
+	nBits, _ := model.NewNBitFromString(b.bits)
 	hashPrevBlock, _ := chainhash.NewHashFromStr(b.previousBlockHash)
 
 	subtreeHashes := make([]*chainhash.Hash, 0)
@@ -436,7 +436,7 @@ func newBlock(ctx *testContext, t *testing.T, b blockInfo) (*model.Block, *util.
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: subtree.RootHash(), // doesn't matter, we're only checking the value and not whether it's correct
 		Timestamp:      b.timestamp,
-		Bits:           nBits,
+		Bits:           *nBits,
 		Nonce:          b.nonce,
 	}
 

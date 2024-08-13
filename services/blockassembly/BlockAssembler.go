@@ -4,12 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 
@@ -69,7 +70,8 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
 
 	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
-	defaultMiningBits := model.NewNBitFromString(nBitsString)
+	defaultMiningBits, _ := model.NewNBitFromString(nBitsString)
+
 	b := &BlockAssembler{
 		logger:                     logger,
 		utxoStore:                  utxoStore,
@@ -83,7 +85,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 		maxBlockReorgCatchup:       maxBlockReorgCatchup,
 		difficultyAdjustmentWindow: difficultyAdjustmentWindow,
 		difficultyAdjustment:       difficultyAdjustment,
-		defaultMiningNBits:         &defaultMiningBits,
+		defaultMiningNBits:         defaultMiningBits,
 		resetCh:                    make(chan struct{}, 2),
 		resetWaitCount:             atomic.Int32{},
 		resetWaitTime:              atomic.Int32{},

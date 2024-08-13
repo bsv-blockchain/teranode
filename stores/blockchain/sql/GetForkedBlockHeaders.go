@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -97,7 +98,8 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 			return nil, nil, errors.NewStorageError("failed to scan row", err)
 		}
 
-		blockHeader.Bits = model.NewNBitFromSlice(nBits)
+		bits, _ := model.NewNBitFromSlice(nBits)
+		blockHeader.Bits = *bits
 
 		blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 		if err != nil {

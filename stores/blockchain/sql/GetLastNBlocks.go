@@ -139,7 +139,8 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 			return nil, errors.NewStorageError("failed to scan row", err)
 		}
 
-		header.Bits = model.NewNBitFromSlice(nBits)
+		bits, _ := model.NewNBitFromSlice(nBits)
+		header.Bits = *bits
 
 		header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 		if err != nil {

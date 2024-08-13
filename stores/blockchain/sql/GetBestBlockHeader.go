@@ -74,7 +74,8 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		return nil, nil, err
 	}
 
-	blockHeader.Bits = model.NewNBitFromSlice(nBits)
+	bits, _ := model.NewNBitFromSlice(nBits)
+	blockHeader.Bits = *bits
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {

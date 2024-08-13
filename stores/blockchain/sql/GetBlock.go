@@ -101,7 +101,8 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		return nil, 0, err
 	}
 
-	block.Header.Bits = model.NewNBitFromSlice(nBits)
+	bits, _ := model.NewNBitFromSlice(nBits)
+	block.Header.Bits = *bits
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {

@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -66,7 +67,8 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 		return nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 	}
 
-	blockHeader.Bits = model.NewNBitFromSlice(nBits)
+	bits, _ := model.NewNBitFromSlice(nBits)
+	blockHeader.Bits = *bits
 
 	return blockHeader, nil
 }

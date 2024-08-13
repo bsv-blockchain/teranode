@@ -463,12 +463,12 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 	)
 	defer deferFn()
 
-	var nBits model.NBit
+	var nBits *model.NBit
 	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
 
 	if b.difficulty == nil {
 		b.logger.Debugf("difficulty is null")
-		nBits = model.NewNBitFromString(nBitsString)
+		nBits, _ = model.NewNBitFromString(nBitsString)
 	} else {
 
 		hash, err := chainhash.NewHash(request.BlockHash)
@@ -483,10 +483,10 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 
 		nBitsp, err := b.difficulty.GetNextWorkRequired(ctx, blockHeader, meta.Height)
 		if err == nil {
-			nBits = *nBitsp
+			nBits = nBitsp
 		} else {
 			b.logger.Debugf("error in GetNextWorkRequired: %v", err)
-			nBits = model.NewNBitFromString(nBitsString)
+			nBits, _ = model.NewNBitFromString(nBitsString)
 		}
 
 		b.logger.Debugf("difficulty adjustment. Difficulty set to %s", nBits.String())

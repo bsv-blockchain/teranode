@@ -135,7 +135,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		httpmock.NewBytesResponder(200, nodeBytes),
 	)
 
-	nBits := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("2000ffff")
 	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
@@ -162,7 +162,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: calculatedMerkleRootHash,
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           nBits,
+		Bits:           *nBits,
 		Nonce:          0,
 	}
 
@@ -228,7 +228,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		httpmock.NewBytesResponder(200, nodeBytes),
 	)
 
-	nBits := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("2000ffff")
 	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
@@ -264,7 +264,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: calculatedMerkleRootHash,
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           nBits,
+		Bits:           *nBits,
 		Nonce:          0,
 	}
 
@@ -306,7 +306,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, deferFunc := setup()
 	defer deferFunc()
 
-	nBits := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("2000ffff")
 	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
@@ -347,7 +347,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: calculatedMerkleRootHash,
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           nBits,
+		Bits:           *nBits,
 		Nonce:          0,
 	}
 
@@ -389,7 +389,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, deferFunc := setup()
 	defer deferFunc()
 
-	nBits := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("2000ffff")
 	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
@@ -430,7 +430,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: calculatedMerkleRootHash,
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           nBits,
+		Bits:           *nBits,
 		Nonce:          0,
 	}
 
