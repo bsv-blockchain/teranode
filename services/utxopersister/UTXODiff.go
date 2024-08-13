@@ -3,7 +3,6 @@ package utxopersister
 import (
 	"context"
 	"io"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
