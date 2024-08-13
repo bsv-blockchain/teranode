@@ -46,9 +46,7 @@ func VerifySignature(message []byte, signature []byte, publicKey []byte) bool {
 	// the signatures are normalized before verification - which means the malleability checks are not performed
 	// From secp256k1.h: To avoid accepting malleable signatures, only ECDSA signatures in lower-S form are accepted.
 	var normalizedCSig C.secp256k1_ecdsa_signature
-	if C.secp256k1_ecdsa_signature_normalize(ctx, &normalizedCSig, &cSig) != 1 {
-		return false
-	}
+	C.secp256k1_ecdsa_signature_normalize(ctx, &normalizedCSig, &cSig)
 
 	// Verify the signature
 	if C.secp256k1_ecdsa_verify(ctx, &normalizedCSig, (*C.uchar)(cMessage), &cPubKey) != 1 {

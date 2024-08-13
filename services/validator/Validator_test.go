@@ -3,6 +3,8 @@ package validator
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/native"
+	"github.com/libsv/go-bt/v2/bscript/interpreter"
 	"log"
 	"testing"
 	"time"
@@ -246,6 +248,38 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 // 	require.NoError(t, err)
 
 // }
+
+var testTransactions = map[string]string{
+	"ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80": "010000000000000000ef0140ed240a0a018469a1cdd3656800c23ec796d698d82ea336c4b6fb72b141c9cd000000008b483045022100de3b4c67e8a3eb09f18e8b5834257c0a27812df490365b8ac0e30e1d3dcc01630220426997ee904736647ae2e0b93cb2a11511f7b33e8f8a8ce0c5265cbd5b113ae8504104b1796b0e02f327e1a6f61abdff028374de9c80d6189460b0b7035752a2d00364fb19f16868ba34a4e93350e49e6ff8bfb48d23ab15f14871b01d6562f69b9973ffffffff0065cd1d000000001976a914990a8e1eb7a69c41602bd46fed56b6a38fd9bc1e88ac0300e1f505000000001976a914ac625f248f3be5c1c17767b8b2b93dd03553984788ace0e2cf17000000001976a9142c00769e224ac558cf0e726c8e4d6aa9d34f6e5688ac107a0700000000001976a9144bd0ac767d24acc4c5af736767b7b3acd1a6776188ac00000000",
+	"0fb02dfd6811c72379ddcd4b25352ff85d77f8cc52723ee087c50042236ff470": "010000000000000000ef0225894047a817115970e49cc0b77dc2e1fd5d185632c244c055512dc490e82a5a000000006a47304402205bccbecf7d1658032759c4d182a8170174ad7dc687d58555707198a1e230f84f02203ae6804eef77319876223db1b354828e1beeccaeafb6d667879436eef7aa5f3141210300e3b001c4addf714e8c4d5ac1427fb19349d3d05e416e47fc6186cd2d95eb0effffffff962fb15b000000001976a9145632e2f253ac71e2dda1a8dcec6eac384a74251b88ac88ad2770b0bc82235a6414c68d4eb8764750c48178ffa01f6a93ba972dc1e418000000006b483045022100c348ff56a2f00b608fadb4583b76a9a91079bf25b507ef44da562e8aa90fbdd202204fc40afdb76409527a05cfb67fbc67d496e6b0bd720121a26779123b5dd30212412102381da97b922c1584ca700f97650f1a2c2dcdba8a480ff998541504263f5ce551ffffffff00e1f505000000001976a914f9878c4ef91c883c451bee25ca6daf17da20a29688ac0116b16d61000000001976a914cc401501b36a914bc31f2322612b673cbb98a2d788ac00000000",
+}
+
+func TestValidateTransactions(t *testing.T) {
+	initPrometheusMetrics()
+	interpreter.InjectExternalVerifySignatureFn(native.VerifySignature)
+
+	for txid, txHex := range testTransactions {
+		tx, err := bt.NewTxFromString(txHex)
+		require.NoError(t, err)
+		assert.Equal(t, txid, tx.TxID())
+
+		var height uint32 = 264084
+
+		v := &Validator{
+			txValidator: TxValidator{
+				policy: NewPolicySettings(),
+			},
+		}
+
+		ctx := context.Background()
+
+		span := tracing.Start(ctx, "Test")
+		defer span.Finish()
+
+		err = v.validateTransaction(span.Ctx, tx, height)
+		require.NoError(t, err)
+	}
+}
 
 func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80(t *testing.T) {
 	initPrometheusMetrics()
