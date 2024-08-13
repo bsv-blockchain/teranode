@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -25,6 +26,7 @@ type FileStorer struct {
 	writer         *io.PipeWriter
 	bufferedWriter *bufio.Writer
 	hasher         hash.Hash
+	wg             sync.WaitGroup // Add a WaitGroup to manage the goroutine
 }
 
 func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store, key []byte, extension string) *FileStorer {
@@ -35,11 +37,24 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store,
 	bufferedReader := io.NopCloser(bufio.NewReader(reader))
 	bufferedWriter := bufio.NewWriter(io.MultiWriter(writer, hasher))
 
+	fs := &FileStorer{
+		logger:         logger,
+		store:          store,
+		key:            key,
+		extension:      extension,
+		hasher:         hasher,
+		writer:         writer,
+		bufferedWriter: bufferedWriter,
+	}
+
+	fs.wg.Add(1) // Increment the WaitGroup counter
+
 	go func() {
 		defer func() {
 			if err := reader.Close(); err != nil {
 				logger.Errorf("Failed to close reader: %v", err)
 			}
+			fs.wg.Done() // Decrement the WaitGroup counter
 		}()
 
 		// TODO - we actually want the TTL to  be 1 hour and then we set it to 0 after success.  However, we need
@@ -72,6 +87,8 @@ func (f *FileStorer) Close(ctx context.Context) error {
 	if err := f.writer.Close(); err != nil {
 		return errors.NewStorageError("Error closing writer:", err)
 	}
+
+	f.wg.Wait() // Wait for the goroutine to finish
 
 	if err := f.store.SetTTL(ctx, f.key, 0, options.WithFileExtension(f.extension)); err != nil {
 		return errors.NewStorageError("Error setting ttl on additions file", err)
