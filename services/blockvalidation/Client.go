@@ -2,9 +2,10 @@ package blockvalidation
 
 import (
 	"context"
+	"time"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -22,16 +23,16 @@ type Client struct {
 	logger      ulogger.Logger
 }
 
-func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
+func NewClient(ctx context.Context, logger ulogger.Logger, source string) (*Client, error) {
 	blockValidationGrpcAddress, ok := gocore.Config().Get("blockvalidation_grpcAddress")
 	if !ok {
-		panic("no blockvalidation_grpcAddress setting found")
+		return nil, errors.NewConfigurationError("no blockvalidation_grpcAddress setting found")
 	}
 	baConn, err := util.GetGRPCClient(ctx, blockValidationGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {
-		panic(err)
+		return nil, errors.NewServiceError("failed to init block validation service connection for '%s'", source, err)
 	}
 
 	client := &Client{
@@ -44,7 +45,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) *Client {
 		client.httpAddress = httpAddress
 	}
 
-	return client
+	return client, nil
 }
 
 func (s *Client) Health(ctx context.Context) (bool, error) {

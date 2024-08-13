@@ -253,7 +253,10 @@ func (s *Server) Start(ctx context.Context) error {
 		return errors.NewServiceError("could not create blockchain client [%w]", err)
 	}
 
-	s.blockValidationClient = blockvalidation.NewClient(ctx, s.logger)
+	s.blockValidationClient, err = blockvalidation.NewClient(ctx, s.logger, "p2p")
+	if err != nil {
+		return errors.NewServiceError("could not create block validation client [%w]", err)
+	}
 
 	localValidator := gocore.Config().GetBool("useLocalValidator", false)
 	if !localValidator {

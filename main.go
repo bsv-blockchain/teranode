@@ -242,12 +242,32 @@ func main() {
 
 	// asset service
 	if startAsset {
+		utxoStore, err := getUtxoStore(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+
+		txStore, err := getTxStore(logger)
+		if err != nil {
+			panic(err)
+		}
+
+		subtreeStore, err := getSubtreeStore(logger)
+		if err != nil {
+			panic(err)
+		}
+
+		blockStore, err := getBlockStore(logger)
+		if err != nil {
+			panic(err)
+		}
+
 		if err := sm.AddService("Asset", asset.NewServer(
 			logger.New("asset"),
-			getUtxoStore(ctx, logger),
-			getTxStore(logger),
-			getSubtreeStore(logger),
-			getBlockStore(logger),
+			utxoStore,
+			txStore,
+			subtreeStore,
+			blockStore,
 		)); err != nil {
 			panic(err)
 		}
@@ -260,11 +280,26 @@ func main() {
 	}
 
 	if startBlockPersister {
+		blockStore, err := getBlockStore(logger)
+		if err != nil {
+			panic(err)
+		}
+
+		subtreeStore, err := getSubtreeStore(logger)
+		if err != nil {
+			panic(err)
+		}
+
+		utxoStore, err := getUtxoStore(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+
 		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
 			logger.New("bp"),
-			getBlockStore(logger),
-			getSubtreeStore(logger),
-			getUtxoStore(ctx, logger),
+			blockStore,
+			subtreeStore,
+			utxoStore,
 		)); err != nil {
 			panic(err)
 		}
@@ -277,9 +312,14 @@ func main() {
 	}
 
 	if startUTXOPersister {
-		if err = sm.AddService("UTXOPersister", utxopersister.New(ctx,
+		blockStore, err := getBlockStore(logger)
+		if err != nil {
+			panic(err)
+		}
+
+		if err := sm.AddService("UTXOPersister", utxopersister.New(ctx,
 			logger.New("utxop"),
-			getBlockStore(logger),
+			blockStore,
 			blockchainClient,
 		)); err != nil {
 			panic(err)
@@ -289,11 +329,26 @@ func main() {
 	// blockAssembly
 	if startBlockAssembly {
 		if _, found := gocore.Config().Get("blockassembly_grpcListenAddress"); found {
+			txStore, err := getTxStore(logger)
+			if err != nil {
+				panic(err)
+			}
+
+			utxoStore, err := getUtxoStore(ctx, logger)
+			if err != nil {
+				panic(err)
+			}
+
+			subtreeStore, err := getSubtreeStore(logger)
+			if err != nil {
+				panic(err)
+			}
+
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
 				logger.New("bass"),
-				getTxStore(logger),
-				getUtxoStore(ctx, logger),
-				getSubtreeStore(logger),
+				txStore,
+				utxoStore,
+				subtreeStore,
 				blockchainClient,
 			)); err != nil {
 				panic(err)
@@ -303,12 +358,32 @@ func main() {
 
 	// subtreeValidation
 	if startSubtreeValidation {
+		subtreeStore, err := getSubtreeStore(logger)
+		if err != nil {
+			panic(err)
+		}
+
+		txStore, err := getTxStore(logger)
+		if err != nil {
+			panic(err)
+		}
+
+		utxoStore, err := getUtxoStore(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+
+		validatorClient, err := getValidatorClient(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+
 		if err = sm.AddService("Subtree Validation", subtreevalidation.New(ctx,
 			logger.New("stval"),
-			getSubtreeStore(logger),
-			getTxStore(logger),
-			getUtxoStore(ctx, logger),
-			getValidatorClient(ctx, logger),
+			subtreeStore,
+			txStore,
+			utxoStore,
+			validatorClient,
 		)); err != nil {
 			panic(err)
 		}
@@ -317,12 +392,32 @@ func main() {
 	// blockValidation
 	if startBlockValidation {
 		if _, found := gocore.Config().Get("blockvalidation_grpcListenAddress"); found {
+			subtreeStore, err := getSubtreeStore(logger)
+			if err != nil {
+				panic(err)
+			}
+
+			txStore, err := getTxStore(logger)
+			if err != nil {
+				panic(err)
+			}
+
+			utxoStore, err := getUtxoStore(ctx, logger)
+			if err != nil {
+				panic(err)
+			}
+
+			validatorClient, err := getValidatorClient(ctx, logger)
+			if err != nil {
+				panic(err)
+			}
+
 			if err = sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
-				getSubtreeStore(logger),
-				getTxStore(logger),
-				getUtxoStore(ctx, logger),
-				getValidatorClient(ctx, logger),
+				subtreeStore,
+				txStore,
+				utxoStore,
+				validatorClient,
 			)); err != nil {
 				panic(err)
 			}
@@ -332,9 +427,14 @@ func main() {
 	// validator
 	if startValidator {
 		if _, found := gocore.Config().Get("validator_grpcListenAddress"); found {
+			utxoStore, err := getUtxoStore(ctx, logger)
+			if err != nil {
+				panic(err)
+			}
+
 			if err = sm.AddService("Validator", validator.NewServer(
 				logger.New("valid"),
-				getUtxoStore(ctx, logger),
+				utxoStore,
 			)); err != nil {
 				panic(err)
 			}
@@ -368,10 +468,20 @@ func main() {
 					panic(err)
 				}
 			} else {
+				txStore, err := getTxStore(logger)
+				if err != nil {
+					panic(err)
+				}
+
+				validatorClient, err := getValidatorClient(ctx, logger)
+				if err != nil {
+					panic(err)
+				}
+
 				if err = sm.AddService("PropagationServer", propagation.New(
 					logger.New("prop"),
-					getTxStore(logger),
-					getValidatorClient(ctx, logger),
+					txStore,
+					validatorClient,
 				)); err != nil {
 					panic(err)
 				}
@@ -380,14 +490,39 @@ func main() {
 	}
 
 	if startLegacy {
+		subtreeStore, err := getSubtreeStore(logger)
+		if err != nil {
+			panic(err)
+		}
+
+		utxoStore, err := getUtxoStore(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+
+		validatorClient, err := getValidatorClient(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+
+		blockchainClient, err := getBlockchainClient(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+
+		blockValidationClient, err := getBlockValidationClient(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+
 		if err = sm.AddService("Legacy", legacy.New(
 			logger,
-			getBlockchainClient(ctx, logger),
-			getValidatorClient(ctx, logger),
-			getSubtreeStore(logger),
-			getUtxoStore(ctx, logger),
-			getSubtreeValidationClient(ctx, logger),
-			getBlockValidationClient(ctx, logger),
+			blockchainClient,
+			validatorClient,
+			subtreeStore,
+			utxoStore,
+			subtreeValidationClient,
+			blockValidationClient,
 		)); err != nil {
 			panic(err)
 		}

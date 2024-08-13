@@ -16,16 +16,16 @@ type Client struct {
 	logger    ulogger.Logger
 }
 
-func NewClient(ctx context.Context, logger ulogger.Logger) Interface {
+func NewClient(ctx context.Context, logger ulogger.Logger, source string) (Interface, error) {
 	subtreeValidationGrpcAddress, ok := gocore.Config().Get("subtreevalidation_grpcAddress")
 	if !ok {
-		panic("no blockvalidation_grpcAddress setting found")
+		return nil, errors.NewConfigurationError("no subtreevalidation_grpcAddress setting found")
 	}
 	baConn, err := util.GetGRPCClient(ctx, subtreeValidationGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
 	if err != nil {
-		panic(err)
+		return nil, errors.NewServiceError("failed to init subtree validation service connection for '%s'", source, err)
 	}
 
 	client := &Client{
@@ -33,7 +33,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) Interface {
 		logger:    logger,
 	}
 
-	return client
+	return client, nil
 }
 
 func (s *Client) Health(ctx context.Context) (int, string, error) {

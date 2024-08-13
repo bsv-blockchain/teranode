@@ -108,7 +108,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("[Init] failed to create blockchain client", err)
 	}
 
-	subtreeValidationClient := subtreevalidation.NewClient(ctx, u.logger)
+	subtreeValidationClient, err := subtreevalidation.NewClient(ctx, u.logger, "blockvalidation")
+	if err != nil {
+		return errors.NewServiceError("[Init] failed to create subtree validation client", err)
+	}
 
 	storeURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil || !found {
