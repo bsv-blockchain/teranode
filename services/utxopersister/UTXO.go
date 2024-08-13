@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -30,11 +31,11 @@ func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 
 	n, err := io.ReadFull(r, b)
 	if err != nil {
-		return nil, err
+		return nil, errors.NewStorageError("Failed to read a complete UTXO from reader.  Got %d bytes, expected %d bytes", n, 52, err)
 	}
 
 	if n != 52 {
-		return nil, io.ErrUnexpectedEOF
+		return nil, errors.NewStorageError("Not enough bytes read %d", n, io.ErrUnexpectedEOF)
 	}
 
 	txID, err := chainhash.NewHash(b[:32])

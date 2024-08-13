@@ -222,8 +222,6 @@ func (ud *UTXODiff) GetUTXODeletionsSet() (map[[36]byte]struct{}, error) {
 // CreateUTXOSet generates the UTXO set for the current block, using the previous block's UTXO set
 // and applying additions and deletions from the current block. It returns an error if the operation fails.
 func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainhash.Hash) (err error) {
-	time.Sleep(1 * time.Second)
-
 	deletions := ud.deletionsSet
 
 	if deletions == nil {
