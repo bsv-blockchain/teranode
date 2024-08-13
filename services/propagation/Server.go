@@ -118,8 +118,9 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	//  kafka channel setup
 	validatortxsKafkaURL, _, found := gocore.Config().GetURL("kafka_validatortxsConfig")
 	if !found {
-		return fmt.Errorf("kafka_validatortxsConfig not found, valdiator channel configuration is required")
+		return errors.New(errors.ERR_CONFIGURATION, "kafka_validatortxsConfig not found, validator channel configuration is required")
 	}
+
 	ps.logger.Infof("[Validator] connecting to kafka for sending txs at %s", validatortxsKafkaURL)
 	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
 	if workers > 0 {

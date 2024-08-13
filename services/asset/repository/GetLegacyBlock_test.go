@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/binary"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"io"
 	"testing"
 	"time"
@@ -380,6 +381,18 @@ func (s *mockStore) IntervalBlockHashes(endHash *chainhash.Hash, interval int) (
 }
 func (s *mockStore) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
 	panic("implement me")
+}
+func (s *mockStore) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *mockStore) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *mockStore) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *mockStore) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
 }
 func (s *mockStore) GetFSMCurrentState() blockchain_api.FSMStateType {
 	panic("not implemented")

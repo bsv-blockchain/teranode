@@ -335,7 +335,7 @@ func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandid
 	}
 
 	blockHash := util.Sha256d(blockHeader)
-	
+
 	solutionJSON, err := json.Marshal(solution)
 	if err != nil {
 		return nil, errors.NewProcessingError("error marshalling solution: %w", err)
@@ -347,12 +347,11 @@ func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandid
 	resp, err := CallRPC(rpcUrl, method, params)
 	if err != nil {
 		return nil, errors.NewProcessingError("error submitting mining solution: %w", err)
-	}else {
+	} else {
 		fmt.Printf("Response: %s\n", resp)
 	}
 	return blockHash, nil
 }
-
 
 func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Hash, error) {
 
@@ -494,11 +493,11 @@ func QueryPrometheusMetric(serverURL, metricName string) (float64, error) {
 
 	parsedURL, err := url.Parse(serverURL)
 	if err != nil {
-		return 0, fmt.Errorf("invalid server URL: %v", err)
+		return 0, errors.New(errors.ERR_CONFIGURATION, "error parsing Prometheus server URL", err)
 	}
 
 	if !isAllowedHost(parsedURL.Host) {
-		return 0, fmt.Errorf("host not allowed: %v", parsedURL.Host)
+		return 0, errors.New(errors.ERR_CONFIGURATION, "error host not allowed", err)
 	}
 
 	queryURL := fmt.Sprintf("%s/api/v1/query?query=%s", serverURL, metricName)

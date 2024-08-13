@@ -162,10 +162,17 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 				return
 			case n := <-notification:
 				{
+					// convert hash to chainhash
+					hash, err := chainhash.NewHash(n.Hash)
+					if err != nil {
+						c.logger.Errorf("[Coinbase] failed to convert hash to chainhash: %s", err)
+						continue
+					}
+
 					if n.Type == model.NotificationType_Block {
 						c.blockFoundCh <- processBlockFound{
-							hash:    n.Hash,
-							baseURL: n.BaseURL,
+							hash:    hash,
+							baseURL: n.BaseUrl,
 						}
 					}
 				}

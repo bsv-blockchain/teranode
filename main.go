@@ -228,7 +228,7 @@ func main() {
 	//var blockchainClient blockchain.ClientI
 
 	// should this be done globally somewhere?
-	blockchainClient, err := blockchain.NewClient(ctx, logger)
+	blockchainClient, err := blockchain.NewClient(ctx, logger, "main")
 	if err != nil {
 		panic(err)
 	}

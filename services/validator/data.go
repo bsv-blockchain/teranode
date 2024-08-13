@@ -2,7 +2,7 @@ package validator
 
 import (
 	"encoding/binary"
-	"errors"
+	"github.com/bitcoin-sv/ubsv/errors"
 )
 
 type TxValidationData struct {
@@ -12,7 +12,7 @@ type TxValidationData struct {
 
 func NewTxValidationDataFromBytes(bytes []byte) (*TxValidationData, error) {
 	if len(bytes) < 4 {
-		return nil, errors.New("input bytes too short")
+		return nil, errors.New(errors.ERR_ERROR, "input bytes too short")
 	}
 
 	d := &TxValidationData{}
