@@ -258,6 +258,11 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 
 		responseWrapperCh := make(chan *ResponseWrapper, len(d.propagationServers))
 
+		timeout, err, _ := gocore.Config().GetDuration("distributor_timeout", 30*time.Second)
+		if err != nil {
+			return nil, errors.NewConfigurationError("Invalid timeout format (valid examples 5s, 1m, 100ms, etc) - distributor_timeout", err)
+		}
+
 		for addr, propagationServer := range d.propagationServers {
 			a := addr // Create a local copy
 			p := propagationServer
@@ -276,10 +281,6 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 				backoff := d.backoff
 
 				for {
-					timeout, err, _ := gocore.Config().GetDuration("distributor_timeout", 30*time.Second)
-					if err != nil {
-						d.logger.Fatalf("Invalid timeout format (valid examples 5s, 1m, 100ms, etc) - distributor_timeout : %v", err)
-					}
 					ctx1, cancel := context.WithTimeout(ctx1, timeout)
 					err = p.ProcessTransaction(ctx1, tx)
 					cancel()
