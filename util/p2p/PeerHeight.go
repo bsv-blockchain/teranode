@@ -72,7 +72,7 @@ func NewPeerHeight(logger ulogger.Logger, processName string, numberOfExpectedPe
 func (p *PeerHeight) Start(ctx context.Context) error {
 	topicPrefix, ok := gocore.Config().Get("p2p_topic_prefix")
 	if !ok {
-		panic("[PeerHeight] p2p_topic_prefix not set in config")
+		return errors.NewConfigurationError("[PeerHeight] p2p_topic_prefix not set in config")
 	}
 	topic, _ := gocore.Config().Get("p2p_block_topic", "block")
 

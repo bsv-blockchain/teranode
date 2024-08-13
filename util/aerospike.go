@@ -2,13 +2,14 @@ package util
 
 import (
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -83,10 +84,10 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 	} else {
 		readPolicyUrl, err, found := gocore.Config().GetURL("aerospike_readPolicy")
 		if err != nil {
-			panic(err)
+			return nil, errors.NewConfigurationError("error getting aerospike_readPolicy", err)
 		}
 		if !found {
-			panic("no aerospike_readPolicy setting found")
+			return nil, errors.NewConfigurationError("no aerospike_readPolicy setting found")
 		}
 
 		logger.Infof("[Aerospike] readPolicy url %s", readPolicyUrl)
@@ -99,10 +100,10 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 
 		writePolicyUrl, err, found := gocore.Config().GetURL("aerospike_writePolicy")
 		if err != nil {
-			panic(err)
+			return nil, errors.NewConfigurationError("error getting aerospike_writePolicy", err)
 		}
 		if !found {
-			panic("no aerospike_writePolicy setting found")
+			return nil, errors.NewConfigurationError("no aerospike_writePolicy setting found")
 		}
 
 		logger.Infof("[Aerospike] writePolicy url %s", writePolicyUrl)
@@ -122,10 +123,10 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		// batching stuff
 		batchPolicyUrl, err, found := gocore.Config().GetURL("aerospike_batchPolicy")
 		if err != nil {
-			panic(err)
+			return nil, errors.NewConfigurationError("error getting aerospike_batchPolicy", err)
 		}
 		if !found {
-			panic("no aerospike_writePolicy setting found")
+			return nil, errors.NewConfigurationError("no aerospike_batchPolicy setting found")
 		}
 
 		logger.Infof("[Aerospike] batchPolicy url %s", batchPolicyUrl)
