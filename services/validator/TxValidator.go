@@ -23,6 +23,7 @@ var (
 		"e218970e8f810be99d60aa66262a1d382bc4b1a26a69af07ac47d622885db1a7": {},
 		"ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80": {},
 		"38df010716e13254fb5fc16065c1cf62ee2aeaed2fad79973f8a76ba91da36da": {},
+		"07475205f119e64f0c5cdc4bd988443114e7773d6a522a4945498ad8b27504e8": {}, // error validating transaction: Error: TX_INVALID (error code: 31), script execution failed: %w: 0: false stack entry at end of script execution
 	}
 )
 
