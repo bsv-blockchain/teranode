@@ -48,16 +48,16 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) (utxostore.Store, 
 	return utxoStore, nil
 }
 
-func getSubtreeValidationClient(ctx context.Context, logger ulogger.Logger) (subtreevalidation.Interface, error) {
-	if subtreeValidationClient != nil {
-		return subtreeValidationClient, nil
-	}
-
-	var err error
-	subtreeValidationClient, err = subtreevalidation.NewClient(ctx, logger, "main_stores")
-
-	return subtreeValidationClient, err
-}
+//func getSubtreeValidationClient(ctx context.Context, logger ulogger.Logger) (subtreevalidation.Interface, error) {
+//	if subtreeValidationClient != nil {
+//		return subtreeValidationClient, nil
+//	}
+//
+//	var err error
+//	subtreeValidationClient, err = subtreevalidation.NewClient(ctx, logger, "main_stores")
+//
+//	return subtreeValidationClient, err
+//}
 
 func getBlockValidationClient(ctx context.Context, logger ulogger.Logger) (blockvalidation.Interface, error) {
 	if blockValidationClient != nil {

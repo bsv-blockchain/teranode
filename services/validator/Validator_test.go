@@ -7,13 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/native"
-	"github.com/libsv/go-bt/v2/bscript/interpreter"
-
-	"github.com/ordishs/gocore"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	utxoMemorystore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
@@ -22,6 +15,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func BenchmarkValidator(b *testing.B) {
@@ -257,7 +253,7 @@ var testTransactions = map[string]string{
 
 func TestValidateTransactions(t *testing.T) {
 	initPrometheusMetrics()
-	interpreter.InjectExternalVerifySignatureFn(native.VerifySignature)
+	//interpreter.InjectExternalVerifySignatureFn(native.VerifySignature)
 
 	for txid, txHex := range testTransactions {
 		tx, err := bt.NewTxFromString(txHex)

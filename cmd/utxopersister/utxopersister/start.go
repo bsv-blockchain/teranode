@@ -61,6 +61,4 @@ func Start() {
 		logger.Errorf("Failed utxopersister service: %v", err)
 		return
 	}
-
-	return
 }

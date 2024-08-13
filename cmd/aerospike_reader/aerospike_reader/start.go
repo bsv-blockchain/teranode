@@ -5,6 +5,7 @@ import (
 	"os"
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
@@ -82,7 +83,7 @@ func Start() {
 					os.Exit(1)
 				}
 
-				printRecord(client, key)
+				_, _ = printRecord(client, key)
 			}
 		}
 	}
@@ -91,7 +92,7 @@ func Start() {
 func printRecord(client *uaerospike.Client, key *aero.Key) (*aero.Record, error) {
 	response, err := client.Get(nil, key)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to get record: %w\n", err)
+		return nil, errors.NewError("Failed to get record", err)
 	}
 
 	fmt.Printf("Digest      : %x\n", response.Key.Digest())
