@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"runtime"
 	"slices"
 	"strconv"
@@ -105,6 +106,13 @@ func (u *Server) Health(_ context.Context) (int, string, error) {
 }
 
 func (u *Server) Init(ctx context.Context) (err error) {
+	//<<<<<<< HEAD
+	//=======
+	//	if u.blockchainClient, err = blockchain.NewClient(ctx, u.logger, "services/blockvalidation"); err != nil {
+	//		return errors.NewServiceError("[Init] failed to create blockchain client", err)
+	//	}
+	//
+	//>>>>>>> master
 	subtreeValidationClient := subtreevalidation.NewClient(ctx, u.logger)
 
 	storeURL, err, found := gocore.Config().GetURL("utxostore")
@@ -202,6 +210,129 @@ func (u *Server) Init(ctx context.Context) (err error) {
 			}
 		}
 	}()
+
+	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksConfig")
+	if err == nil && ok {
+		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.
+		// subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
+		// g.SetLimit(subtreeConcurrency)
+		var partitions int
+		if partitions, err = strconv.Atoi(blocksKafkaURL.Query().Get("partitions")); err != nil {
+			u.logger.Fatalf("[Blockvalidation] unable to parse Kafka partitions from %s: %s", blocksKafkaURL, err)
+		}
+
+		consumerRatio := util.GetQueryParamInt(blocksKafkaURL, "consumer_ratio", 4)
+		if consumerRatio < 1 {
+			consumerRatio = 1
+		}
+
+		quotient := partitions / consumerRatio
+		remainder := partitions % consumerRatio
+
+		consumerCount := quotient
+		if remainder > 0 {
+			consumerCount++
+		}
+		// set the concurrency limit by default to leave 16 cpus for doing tx meta processing
+		blockConcurrency, _ := gocore.Config().GetInt("blockvalidation_kafkaBlockConcurrency", util.Max(4, runtime.NumCPU()-16))
+		g := errgroup.Group{}
+		g.SetLimit(blockConcurrency)
+
+		// By using the fixed "blockvalidation" group ID, we ensure that only one instance of this service will process the block messages.
+		u.logger.Infof("Starting %d Kafka consumers for block messages", consumerCount)
+		// Autocommit is disabled for block messages, so that we can commit the message only after the subtree has been processed.
+		go u.startKafkaListener(ctx, blocksKafkaURL, "blockvalidation", consumerCount, false, func(msg util.KafkaMessage) error {
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- u.blockHandler(msg)
+			}()
+
+			select {
+			// error handling
+			case err := <-errCh:
+				// if err is nil, it means function is successfully executed, return nil.
+				if err == nil {
+					return nil
+				}
+
+				// if error is not nil, check if the error is a recoverable error.
+				// If the error is a recoverable error, then return the error, so that it kafka message is not marked as committed.
+				// So the message will be consumed again.
+				if errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContext) || errors.Is(err, errors.ErrExternal) {
+					u.logger.Errorf("Recoverable error (%v) processing kafka message %v for handling block, returning error, thus not marking Kafka message as complete.\n", msg, err)
+					return err
+				}
+
+				// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
+				// kafka message should be committed, so return nil to mark message.
+				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling block, marking Kafka message as completed.\n", msg, err)
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+		})
+	}
+
+	return nil
+}
+
+func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, autoCommit bool, fn func(msg util.KafkaMessage) error) {
+	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
+
+	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, autoCommit, fn); err != nil {
+		u.logger.Errorf("Failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
+	}
+}
+
+func (u *Server) blockHandler(msg util.KafkaMessage) error {
+	if msg.Message == nil {
+		return nil
+	}
+
+	hash, err := chainhash.NewHash(msg.Message.Value[:32])
+	if err != nil {
+		u.logger.Errorf("Failed to parse subtree hash from message: %v", err)
+		return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse subtree hash from message", err)
+	}
+
+	var baseUrl string
+	if len(msg.Message.Value) > 32 {
+		baseUrl = string(msg.Message.Value[32:])
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockFound",
+		tracing.WithParentStat(u.stats),
+		tracing.WithHistogram(prometheusBlockValidationBlockFound),
+		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", hash.String(), baseUrl),
+	)
+	defer deferFn()
+
+	// first check if the block exists, it is very expensive to do all the checks below
+	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
+	if err != nil {
+		return errors.NewServiceError("[BlockFound][%s] failed to check if block exists", hash.String(), err)
+	}
+	if exists {
+		u.logger.Infof("[BlockFound][%s] already validated, skipping", hash.String())
+		return nil
+	}
+
+	var errCh chan error
+
+	// process the block in the background, in the order we receive them, but without blocking the grpc call
+	// go func() {
+	u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
+	u.blockFoundCh <- processBlockFound{
+		hash:    hash,
+		baseURL: baseUrl,
+		errCh:   errCh,
+	}
+	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
+	// }()
 
 	return nil
 }
@@ -306,7 +437,9 @@ func (u *Server) Start(ctx context.Context) error {
 								for _, subtreeHash := range block.Subtrees {
 									subtreeBytes := subtreeHash.CloneBytes()
 									u.logger.Debugf("[BlockValidation][%s][%s] processing subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
+									// Send has a built-in retry mechanism
 									if err := u.blockPersisterKafkaProducer.Send(subtreeBytes, subtreeBytes); err != nil {
+										// TODO - #938 what to do with the error? FSM event?
 										u.logger.Errorf("[BlockValidation][%s][%s] failed to send subtree into blockpersister kafka producer", block.Hash().String(), subtreeHash.String())
 									}
 								}
@@ -419,7 +552,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	ctx, _, deferFn := tracing.StartTracing(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationBlockFound),
-		tracing.WithLogMessage(u.logger, "[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl()),
+		tracing.WithDebugLogMessage(u.logger, "[BlockFound][%s] called from %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.GetBaseUrl()),
 	)
 	defer deferFn()
 
@@ -468,16 +601,16 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 }
 
 func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.ProcessBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessBlock",
-		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[ProcessBlock][%s] process block called", request.Height),
-	)
-	defer deferFn()
-
 	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to create block from bytes", err))
 	}
+
+	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessBlock",
+		tracing.WithParentStat(u.stats),
+		tracing.WithLogMessage(u.logger, "[ProcessBlock][%s] process block called for height %d", block.Hash(), request.Height),
+	)
+	defer deferFn()
 
 	// we need the height for the subsidy calculation
 	height := request.Height
@@ -513,7 +646,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	ctx, _, deferFn := tracing.StartTracing(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFound),
-		tracing.WithLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl),
+		tracing.WithDebugLogMessage(u.logger, "[processBlockFound][%s] processing block found from %s", hash.String(), baseUrl),
 	)
 	defer deferFn()
 
@@ -579,7 +712,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model.Block, baseUrl string) {
 	_, _, deferFn := tracing.StartTracing(ctx, "checkParentProcessingComplete",
 		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[checkParentProcessingComplete][%s] called from %s", block.Hash().String(), baseUrl),
+		tracing.WithDebugLogMessage(u.logger, "[checkParentProcessingComplete][%s] called from %s", block.Hash().String(), baseUrl),
 	)
 	defer deferFn()
 

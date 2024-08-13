@@ -143,11 +143,7 @@ func GetGRPCClient(ctx context.Context, address string, connectionOptions *Conne
 		opts = append(opts, grpc.WithChainUnaryInterceptor(retryInterceptor(connectionOptions.MaxRetries, connectionOptions.RetryBackoff)))
 	}
 
-	conn, err := grpc.DialContext(
-		ctx,
-		address,
-		opts...,
-	)
+	conn, err := grpc.NewClient(address, opts...)
 	if err != nil {
 		return nil, errors.NewServiceError("error dialing grpc service at %s", address, err)
 	}

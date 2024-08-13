@@ -3,8 +3,6 @@ package blockpersisterintegrity
 import (
 	"bytes"
 	"context"
-	"fmt"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	p_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
@@ -38,19 +36,19 @@ func (p *UTXOProcessor) VerifyDiff(blockHeader *model.BlockHeader, diff2 *p_mode
 	diff1.Trim()
 
 	if diff1 == nil {
-		return fmt.Errorf("utxodiff for block %s is nil", blockHeader.Hash())
+		return errors.NewProcessingError("utxodiff for block %s is nil", blockHeader.Hash())
 	}
 
 	if !diff1.BlockHash.IsEqual(blockHeader.Hash()) {
-		return fmt.Errorf("utxodiff block hash %s does not match block header hash %s", diff1.BlockHash, blockHeader.Hash())
+		return errors.NewProcessingError("utxodiff block hash %s does not match block header hash %s", diff1.BlockHash, blockHeader.Hash())
 	}
 
 	if ok, difference := diff1.Added.IsEqual(diff2.Added, ValueCompareFn); !ok {
-		return fmt.Errorf("utxodiff added set does not match block diff added set: %s", difference)
+		return errors.NewProcessingError("utxodiff added set does not match block diff added set: %s", difference)
 	}
 
 	if ok, difference := diff1.Removed.IsEqual(diff2.Removed, ValueCompareFn); !ok {
-		return fmt.Errorf("utxodiff removed set does not match block diff removed set: %s", difference)
+		return errors.NewProcessingError("utxodiff removed set does not match block diff removed set: %s", difference)
 	}
 
 	return nil
@@ -65,7 +63,7 @@ func LoadDiff(p *UTXOProcessor, blockHeader *model.BlockHeader) (*p_model.UTXODi
 
 	utxoDiff, err = p_model.NewUTXODiffFromReader(p.logger, r)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse utxodiff for block %s: %s", blockHeader.Hash(), err)
+		return nil, errors.NewStorageError("failed to parse utxodiff for block %s", blockHeader.Hash(), err)
 	}
 
 	return utxoDiff, nil
@@ -89,7 +87,7 @@ func (p *UTXOProcessor) VerifySet(blockHeader *model.BlockHeader, diff *p_model.
 	}
 
 	if ok, difference := utxoSet1.Current.IsEqual(utxoSet2.Current, ValueCompareFn); !ok {
-		return fmt.Errorf("utxoset added set does not match block diff added set: %s", difference)
+		return errors.NewProcessingError("utxoset added set does not match block diff added set: %s", difference)
 	}
 
 	return nil
@@ -108,11 +106,11 @@ func loadSet(p *UTXOProcessor, blockHash chainhash.Hash) (*p_model.UTXOSet, erro
 	}
 
 	if utxoSet == nil {
-		return nil, fmt.Errorf("utxoset for block %s is nil", blockHash)
+		return nil, errors.NewProcessingError("utxoset for block %s is nil", blockHash)
 	}
 
 	if !utxoSet.BlockHash.IsEqual(&blockHash) {
-		return nil, fmt.Errorf("utxoset block hash %s does not match block header hash %s", utxoSet.BlockHash, blockHash)
+		return nil, errors.NewProcessingError("utxoset block hash %s does not match block header hash %s", utxoSet.BlockHash, blockHash)
 	}
 	return utxoSet, nil
 }

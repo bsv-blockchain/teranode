@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -22,7 +23,7 @@ func TestGRPCStreaming(t *testing.T) {
 	logger := ulogger.TestLogger{}
 
 	// Start the Server
-	validator := NewServer(logger, nil, nil)
+	validator := NewServer(logger, nil)
 
 	go func() {
 		err := validator.Start(context.Background())
@@ -52,13 +53,13 @@ func TestGRPCStreaming(t *testing.T) {
 
 	err = stream.Send(&validator_api.ValidateTransactionRequest{
 		TransactionData: tx[:50],
-		BlockHeight:     GenesisActivationHeight,
+		BlockHeight:     util.GenesisActivationHeight,
 	})
 	require.NoError(t, err)
 
 	err = stream.Send(&validator_api.ValidateTransactionRequest{
 		TransactionData: tx[50:],
-		BlockHeight:     GenesisActivationHeight,
+		BlockHeight:     util.GenesisActivationHeight,
 	})
 	require.NoError(t, err)
 

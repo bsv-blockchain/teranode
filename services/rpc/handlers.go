@@ -343,7 +343,7 @@ func handleGenerate(ctx context.Context, s *RpcServer, cmd interface{}, _ <-chan
 		s.logger.Fatalf("Invalid port number: %d", minerHttpPort)
 	}
 
-	if c.NumBlocks < 0 {
+	if c.NumBlocks <= 0 {
 		s.logger.Fatalf("Invalid number of blocks: %d", c.NumBlocks)
 	}
 

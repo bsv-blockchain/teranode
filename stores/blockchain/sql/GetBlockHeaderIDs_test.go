@@ -31,13 +31,13 @@ func TestSQL_GetBlockHeaderIDs(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeUrl)
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block1, "")
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block2, "")
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), blockAlternative2, "")
+		_, _, err = s.StoreBlock(context.Background(), blockAlternative2, "")
 		require.NoError(t, err)
 
 		headerIDs, err := s.GetBlockHeaderIDs(context.Background(), &chainhash.Hash{}, 10)
@@ -59,7 +59,7 @@ func TestSQL_GetBlockHeaderIDs(t *testing.T) {
 		assert.Equal(t, 3, len(headerIDs))
 		require.Equal(t, headerIDs, []uint32{3, 1, 0})
 
-		_, err = s.StoreBlock(context.Background(), block3, "")
+		_, _, err = s.StoreBlock(context.Background(), block3, "")
 		require.NoError(t, err)
 
 		headerIDs, err = s.GetBlockHeaderIDs(context.Background(), block3.Hash(), 10)

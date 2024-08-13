@@ -148,6 +148,7 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 		t.metrics.hits.Add(1)
 		txmetaData := meta.Data{}
 		meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+		txmetaData.BlockIDs = make([]uint32, 0) // this is expected behavior, needs to be non-nil
 		return &txmetaData, nil
 	}
 	t.metrics.misses.Add(1)
@@ -325,6 +326,14 @@ func (t *TxMetaCache) SetBlockHeight(height uint32) error {
 	return t.utxoStore.SetBlockHeight(height)
 }
 
-func (t *TxMetaCache) GetBlockHeight() (uint32, error) {
+func (t *TxMetaCache) GetBlockHeight() uint32 {
 	return t.utxoStore.GetBlockHeight()
+}
+
+func (t *TxMetaCache) SetMedianBlockTime(height uint32) error {
+	return t.utxoStore.SetMedianBlockTime(height)
+}
+
+func (t *TxMetaCache) GetMedianBlockTime() uint32 {
+	return t.utxoStore.GetMedianBlockTime()
 }

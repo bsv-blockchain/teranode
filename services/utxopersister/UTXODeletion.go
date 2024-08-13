@@ -1,6 +1,7 @@
 package utxopersister
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -50,4 +51,8 @@ func (u *UTXODeletion) DeletionBytes() []byte {
 	b = append(b, byte(u.Index), byte(u.Index>>8), byte(u.Index>>16), byte(u.Index>>24))
 
 	return b
+}
+
+func (u *UTXODeletion) String() string {
+	return fmt.Sprintf("%s:%d", u.TxID.String(), u.Index)
 }

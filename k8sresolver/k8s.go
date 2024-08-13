@@ -3,6 +3,7 @@ package k8sresolver
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -33,12 +34,12 @@ func newInClusterClient(logger ulogger.Logger, namespace string) (*serviceClient
 	logger.Debugf("[k8s] newInClusterClient called with namespace: %s", namespace)
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		return nil, fmt.Errorf("k8s resolver: failed to build in-cluster kuberenets config: %s", err)
+		return nil, errors.NewServiceError("k8s resolver: failed to build in-cluster kuberenets config: %s", err)
 	}
 	// creates the clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, fmt.Errorf("k8s resolver: failed to provisiong Kubernetes client set: %s", err)
+		return nil, errors.NewConfigurationError("k8s resolver: failed to provisiong Kubernetes client set: %s", err)
 	}
 
 	return &serviceClient{
@@ -62,7 +63,7 @@ func (s *serviceClient) Resolve(ctx context.Context, host string, port string) (
 
 	ep, err := s.k8s.CoreV1().Endpoints(s.namespace).Get(ctx, host, metav1.GetOptions{})
 	if err != nil {
-		return eps, fmt.Errorf("k8s resolver: failed to fetch service endpoint: %s", err)
+		return eps, errors.NewServiceError("k8s resolver: failed to fetch service endpoint: %s", err)
 	}
 
 	for _, v := range ep.Subsets {

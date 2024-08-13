@@ -108,18 +108,27 @@ install-tools:
 test: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test go test -json $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna) | go-ctrf-json-reporter -output ctrf-report.json
+	SETTINGS_CONTEXT=test go test -json $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna |grep -v test/tnc |grep -v test/tnj) | go-ctrf-json-reporter -output ctrf-report.json
 else
-	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna)
+	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna |grep -v test/tnc |grep -v test/tnj)
 endif
 
 .PHONY: longtests
 longtests: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna) | go-ctrf-json-reporter -output ctrf-report.json
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna |grep -v test/tnc |grep -v test/tnj) | go-ctrf-json-reporter -output ctrf-report.json
 else
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna)
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna |grep -v test/tnc |grep -v test/tnj)
+endif
+
+.PHONY: verylongtests
+verylongtests: set_race_flag
+ifeq ($(USE_JSON_REPORTER),true)
+	$(MAKE) install-tools
+	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna |grep -v test/tnj) | go-ctrf-json-reporter -output ctrf-report.json
+else
+	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc | grep -v test/e2e | grep -v test/settings | grep -v test/state | grep -v test/fork | grep -v test/blockassembly | grep -v test/resilience |grep -v test/tna |grep -v test/tnj)
 endif
 
 .PHONY: racetest
@@ -137,15 +146,8 @@ testall:
 nightly-tests:
 	docker compose -f docker-compose.ci.build.yml build
 	$(MAKE) install-tools
-	cd test/blockassembly && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../blockassembly-ctrf-report.json
-	$(MAKE) reset-data;
-	cd test/resilience && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../resilience-ctrf-report.json
-	$(MAKE) reset-data;
-	cd test/settings && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../settings-ctrf-report.json
-	$(MAKE) reset-data;
-	cd test/state && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../state-ctrf-report.json
-	$(MAKE) reset-data;
-	cd test/fork && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../fork-ctrf-report.json
+	cd $(TEST_DIR) && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../$(REPORT_NAME)
+	cd ../..;
 
 reset-data:
 	unzip data.zip
@@ -274,14 +276,6 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
-	services/bootstrap/bootstrap_api/bootstrap_api.proto
-
-	protoc \
-	--proto_path=. \
-	--go_out=. \
-	--go_opt=paths=source_relative \
-	--go-grpc_out=. \
-	--go-grpc_opt=paths=source_relative \
 	services/coinbase/coinbase_api/coinbase_api.proto
 
 .PHONY: clean_gen
@@ -294,7 +288,6 @@ clean_gen:
 	# rm -f ./services/txmeta/txmeta_api/*.pb.go
 	rm -f ./services/blockchain/blockchain_api/*.pb.go
 	rm -f ./services/asset/asset_api/*.pb.go
-	rm -f ./services/bootstrap/bootstrap_api/*.pb.go
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
 	rm -f ./model/*.pb.go
 	rm -f ./ubsverrors/*.pb.go

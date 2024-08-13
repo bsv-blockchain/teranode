@@ -92,7 +92,7 @@ func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.Options) ([
 
 	bytes, ok := m.blobs[storeKey]
 	if !ok {
-		return nil, errors.NewStorageError("not found")
+		return nil, errors.ErrNotFound
 	}
 
 	return bytes, nil

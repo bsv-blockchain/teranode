@@ -2,13 +2,14 @@ package subtreevalidation
 
 import (
 	"context"
-	"github.com/ordishs/go-utils"
 	"net/url"
 	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ordishs/go-utils"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
@@ -203,7 +204,7 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, grou
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
 	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, autoCommit, fn); err != nil {
-		u.logger.Errorf("Failed to start Kafka listener: %v", err)
+		u.logger.Errorf("Failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
 	}
 }
 
@@ -241,7 +242,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 	ctx, _, deferFn := tracing.StartTracing(ctx, "checkSubtree",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
-		tracing.WithLogMessage(u.logger, "[checkSubtree] called for subtree %s", utils.ReverseAndHexEncodeSlice(request.Hash)),
+		tracing.WithDebugLogMessage(u.logger, "[checkSubtree] called for subtree %s (height %d)", utils.ReverseAndHexEncodeSlice(request.Hash), request.BlockHeight),
 	)
 	defer deferFn()
 
@@ -254,8 +255,8 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 		return false, errors.NewInvalidArgumentError("[CheckSubtree] Missing base URL in request")
 	}
 
-	u.logger.Infof("[CheckSubtree] Received priority subtree message for %s from %s", hash.String(), request.BaseUrl)
-	defer u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+	u.logger.Debugf("[CheckSubtree] Received priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+	defer u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 	u.prioritySubtreeCheckActiveMapLock.Lock()
 	u.prioritySubtreeCheckActiveMap[hash.String()] = true
@@ -314,10 +315,11 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 
 				// Call the validateSubtreeInternal method
 				if err = u.validateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
+					u.logger.Errorf("SAO %s", err)
 					return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 				}
 
-				u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+				u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 				return true, nil
 			}
@@ -333,7 +335,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 				return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
 			}
 
-			u.logger.Infof("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+			u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 			return true, nil
 

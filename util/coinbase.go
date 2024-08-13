@@ -32,6 +32,17 @@ func extractCoinbaseHeightAndText(sigScript bscript.Script) (uint32, string, err
 	}
 
 	serializedLen := int(sigScript[0])
+
+	// This first byte is an OP_PUSH3 opcode, which means the next 3 bytes are the block height
+	// This will be the case for blocks with height >= 2^16 (65536) and < 2^24 (16777216) which will
+	// be the case for the next 100 years or so.
+
+	// Therefore, if this first byte is not 03, then we will assume that the block height is not encoded
+	// in the coinbase script, and we will return 0 for the height and an error.
+	if serializedLen != 3 {
+		return 0, "", errors.NewCoinbaseMissingBlockHeightError("the coinbase signature script must start with the length of the serialized block height (0x03)")
+	}
+
 	if len(sigScript[1:]) < serializedLen {
 		return 0, "", errors.NewCoinbaseMissingBlockHeightError("the coinbase signature script must start with the serialized block height")
 	}

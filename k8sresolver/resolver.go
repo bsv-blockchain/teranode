@@ -2,10 +2,10 @@ package k8sresolver
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/gocore"
@@ -18,7 +18,7 @@ const (
 )
 
 var (
-	errNoEndpoints = errors.New("no endpoints available")
+	errNoEndpoints = errors.NewConfigurationError("no endpoints available")
 	resolveTTL     time.Duration
 	resolveCache   *ttlcache.Cache[string, *resolver.State]
 )

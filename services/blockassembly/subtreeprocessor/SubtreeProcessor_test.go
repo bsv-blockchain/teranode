@@ -283,6 +283,8 @@ func TestMoveUpBlock(t *testing.T) {
 	assert.Equal(t, 2, stp.currentSubtree.Length())
 
 	stp.currentItemsPerFile = 2
+	_ = stp.utxoStore.SetBlockHeight(1)
+	_ = stp.utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
 
 	// moveUpBlock saying the last subtree in the block was number 2 in the chainedSubtree slice
 	// this means half the subtrees will be moveUpBlock
@@ -361,6 +363,8 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 	assert.Equal(t, 1, stp.currentSubtree.Length())
 
 	stp.currentItemsPerFile = 2
+	_ = stp.utxoStore.SetBlockHeight(1)
+	_ = stp.utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
 
 	wg.Add(5) // we are expecting 4 subtrees
 
@@ -376,8 +380,9 @@ func TestIncompleteSubtreeMoveUpBlock(t *testing.T) {
 		},
 		CoinbaseTx: coinbaseTx,
 	})
-	wg.Wait()
 	require.NoError(t, err)
+
+	wg.Wait()
 	assert.Equal(t, 5, len(stp.chainedSubtrees))
 	assert.Equal(t, 0, stp.currentSubtree.Length())
 }
@@ -435,6 +440,8 @@ func TestSubtreeMoveUpBlockNewCurrent(t *testing.T) {
 	assert.Equal(t, 0, stp.currentSubtree.Length())
 
 	stp.currentItemsPerFile = 2
+	_ = stp.utxoStore.SetBlockHeight(1)
+	_ = stp.utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
 
 	wg.Add(4) // we are expecting 4 subtrees
 
@@ -510,6 +517,8 @@ func TestMoveUpBlockLarge(t *testing.T) {
 	assert.Equal(t, 1000, stp.currentSubtree.Length())
 
 	stp.currentItemsPerFile = 65536
+	_ = stp.utxoStore.SetBlockHeight(1)
+	_ = stp.utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
 
 	wg.Add(8) // we are expecting 4 subtrees
 

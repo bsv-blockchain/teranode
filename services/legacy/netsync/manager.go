@@ -9,6 +9,8 @@ import (
 	"container/list"
 	"context"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+
+	"log"
 	"math/rand/v2"
 	"net"
 	"sync"
@@ -773,6 +775,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 
 	err := sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block)
 	if err != nil {
+		log.Printf("SAO %v", err)
+		time.Sleep(5 * time.Second)
 		panic(err)
 		// if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
 		// 	peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)

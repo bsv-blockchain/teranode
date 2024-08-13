@@ -260,6 +260,7 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 		TransactionCount: transactionIdCount,
 		SizeInBytes:      123123,
 		Subtrees:         subtreeHashes,
+		Height:           123,
 	}
 
 	blockFile, err = os.Create(fileNameTemplateBlock)

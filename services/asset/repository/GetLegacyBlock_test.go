@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"encoding/binary"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"io"
 	"testing"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
 	memory_blob "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	memory_utxo "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
@@ -56,10 +56,12 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	}
 
 	// create the block-store .subtree file
-	reader, writer := io.Pipe()
-	go blockpersister.WriteTxs(ctx.logger, writer, metaDatas, nil)
-	err := ctx.repo.BlockStore.SetFromReader(context.Background(), subtree.RootHash()[:], reader, options.WithFileExtension("subtree"))
+	storer := filestorer.NewFileStorer(context.Background(), ctx.logger, ctx.repo.BlockStore, subtree.RootHash()[:], "subtree")
+
+	err := blockpersister.WriteTxs(context.Background(), ctx.logger, storer, metaDatas, nil)
 	require.NoError(t, err)
+
+	storer.Close(context.Background())
 
 	// should be able to get the block from the block-store (should NOT be looking at subtree-store)
 	r, err := ctx.repo.GetLegacyBlockReader(context.Background(), &chainhash.Hash{})
@@ -142,6 +144,7 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	assert.Equal(t, 0, n)
 
 }
+
 func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	tracing.SetGlobalMockTracer()
 
@@ -375,17 +378,8 @@ func (s *mockStore) HeightToHashRange(startHeight uint32, endHash *chainhash.Has
 func (s *mockStore) IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error) {
 	panic("not implemented")
 }
-func (s *mockStore) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	panic("not implemented")
-}
-func (s *mockStore) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	panic("not implemented")
-}
-func (s *mockStore) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	panic("not implemented")
-}
-func (s *mockStore) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	panic("not implemented")
+func (s *mockStore) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
+	panic("implement me")
 }
 func (s *mockStore) GetFSMCurrentState() blockchain_api.FSMStateType {
 	panic("not implemented")

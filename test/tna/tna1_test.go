@@ -27,7 +27,7 @@ var (
 
 func TestMain(m *testing.M) {
 	setupBitcoinTestFramework()
-	//defer tearDownBitcoinTestFramework()
+	defer tearDownBitcoinTestFramework()
 
 	m.Run()
 
@@ -47,12 +47,12 @@ func setupBitcoinTestFramework() {
 	}
 }
 
-//func tearDownBitcoinTestFramework() {
-//	if err := framework.StopNodes(); err != nil {
-//		fmt.Printf("Error stopping nodes: %v\n", err)
-//	}
-//	_ = os.RemoveAll("../../data")
-//}
+func tearDownBitcoinTestFramework() {
+	if err := framework.StopNodes(); err != nil {
+		fmt.Printf("Error stopping nodes: %v\n", err)
+	}
+	_ = os.RemoveAll("../../data")
+}
 
 func TestBroadcastNewTxAllNodes(t *testing.T) {
 	// Test setup

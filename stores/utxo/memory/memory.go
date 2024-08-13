@@ -22,18 +22,20 @@ type memoryData struct {
 }
 
 type Memory struct {
-	logger      ulogger.Logger
-	txs         map[chainhash.Hash]*memoryData
-	txsMu       sync.Mutex
-	blockHeight atomic.Uint32
+	logger          ulogger.Logger
+	txs             map[chainhash.Hash]*memoryData
+	txsMu           sync.Mutex
+	blockHeight     atomic.Uint32
+	medianBlockTime atomic.Uint32
 }
 
 func New(logger ulogger.Logger) utxo.Store {
 	return &Memory{
-		logger:      logger,
-		txs:         make(map[chainhash.Hash]*memoryData),
-		txsMu:       sync.Mutex{},
-		blockHeight: atomic.Uint32{},
+		logger:          logger,
+		txs:             make(map[chainhash.Hash]*memoryData),
+		txsMu:           sync.Mutex{},
+		blockHeight:     atomic.Uint32{},
+		medianBlockTime: atomic.Uint32{},
 	}
 }
 
@@ -259,6 +261,16 @@ func (m *Memory) SetBlockHeight(height uint32) error {
 	return nil
 }
 
-func (m *Memory) GetBlockHeight() (uint32, error) {
-	return m.blockHeight.Load(), nil
+func (m *Memory) GetBlockHeight() uint32 {
+	return m.blockHeight.Load()
+}
+
+func (m *Memory) SetMedianBlockTime(medianTime uint32) error {
+	m.logger.Debugf("setting median block time to %d", medianTime)
+	m.medianBlockTime.Store(medianTime)
+	return nil
+}
+
+func (m *Memory) GetMedianBlockTime() uint32 {
+	return m.medianBlockTime.Load()
 }

@@ -32,7 +32,7 @@ type BestBlockHeader struct {
 	Height uint32
 }
 
-func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
+func NewClient(ctx context.Context, logger ulogger.Logger, source string) (ClientI, error) {
 	logger = logger.New("blkcC")
 
 	blockchainGrpcAddress, ok := gocore.Config().Get("blockchain_grpcAddress")
@@ -54,7 +54,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
 			MaxRetries: 3,
 		})
 		if err != nil {
-			return nil, errors.NewServiceError("failed to init blockchain service connection", err)
+			return nil, errors.NewServiceError("failed to init blockchain service connection for '%s'", source, err)
 		}
 
 		baClient = blockchain_api.NewBlockchainAPIClient(baConn)
@@ -64,12 +64,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
 			if retries < maxRetries {
 				retries++
 				backoff := time.Duration(retries*retrySleep) * time.Millisecond
-				logger.Debugf("[Blockchain] failed to connect to blockchain service, retrying %d in %s: %v", retries, backoff, err)
+				logger.Debugf("[Blockchain] failed to connect to blockchain service for '%s', retrying %d in %s: %v", source, retries, backoff, err)
 				time.Sleep(backoff)
 				continue
 			}
 
-			logger.Errorf("[Blockchain] failed to connect to blockchain service, retried %d times: %v", maxRetries, err)
+			logger.Errorf("[Blockchain] failed to connect to blockchain service for '%s', retried %d times: %v", source, maxRetries, err)
 			return nil, err
 		}
 		break
@@ -711,6 +711,15 @@ func (c *Client) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Ha
 	}
 
 	return blockHeaders, nil
+}
+
+func (c *Client) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
+	resp, err := c.client.GetBestHeightAndTime(ctx, &emptypb.Empty{})
+	if err != nil {
+		return 0, 0, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Height, resp.Time, nil
 }
 
 // log2FloorMasks defines the masks to use when quickly calculating

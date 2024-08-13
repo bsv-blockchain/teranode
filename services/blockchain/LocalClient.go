@@ -2,7 +2,11 @@ package blockchain
 
 import (
 	"context"
+
 	"google.golang.org/protobuf/types/known/emptypb"
+	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -37,7 +41,7 @@ func (c LocalClient) Health(_ context.Context) (*blockchain_api.HealthResponse, 
 }
 
 func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
-	_, err := c.store.StoreBlock(ctx, block, peerID)
+	_, _, err := c.store.StoreBlock(ctx, block, peerID)
 	return err
 }
 
@@ -199,4 +203,28 @@ func (c LocalClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chain
 }
 func (c LocalClient) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	return nil, nil
+}
+func (c LocalClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
+	blockHeader, meta, err := c.store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	// get the median block time for the last 11 blocks
+	headers, _, err := c.store.GetBlockHeaders(ctx, blockHeader.Hash(), 11)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	prevTimeStamps := make([]time.Time, 0, 11)
+	for _, header := range headers {
+		prevTimeStamps = append(prevTimeStamps, time.Unix(int64(header.Timestamp), 0))
+	}
+
+	medianTimestamp, err := model.CalculateMedianTimestamp(prevTimeStamps)
+	if err != nil {
+		return 0, 0, errors.NewProcessingError("[Blockchain] could not calculate median block time", err)
+	}
+
+	return meta.Height, uint32(medianTimestamp.Unix()), nil
 }

@@ -34,13 +34,13 @@ func TestSQL_GetSuitableBlock(t *testing.T) {
 	s, err := New(ulogger.TestLogger{}, storeUrl)
 	require.NoError(t, err)
 
-	_, err = s.StoreBlock(context.Background(), block1, "")
+	_, _, err = s.StoreBlock(context.Background(), block1, "")
 	require.NoError(t, err)
 
-	_, err = s.StoreBlock(context.Background(), block2, "")
+	_, _, err = s.StoreBlock(context.Background(), block2, "")
 	require.NoError(t, err)
 
-	_, err = s.StoreBlock(context.Background(), block3, "")
+	_, _, err = s.StoreBlock(context.Background(), block3, "")
 	require.NoError(t, err)
 
 	suitableBlock, err := s.GetSuitableBlock(context.Background(), block3Hash)

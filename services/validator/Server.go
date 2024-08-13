@@ -27,25 +27,16 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type subscriber struct {
-	subscription validator_api.ValidatorAPI_SubscribeServer
-	source       string
-	done         chan struct{}
-}
-
 // Server type carries the logger within it
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
-	validator         Interface
-	logger            ulogger.Logger
-	utxoStore         utxo.Store
-	kafkaSignal       chan os.Signal
-	newSubscriptions  chan subscriber
-	deadSubscriptions chan subscriber
-	subscribers       map[subscriber]bool
-	stats             *gocore.Stat
-	ctx               context.Context
-	blockchainClient  blockchain.ClientI
+	validator        Interface
+	logger           ulogger.Logger
+	utxoStore        utxo.Store
+	kafkaSignal      chan os.Signal
+	stats            *gocore.Stat
+	ctx              context.Context
+	blockchainClient blockchain.ClientI
 }
 
 // NewServer will return a server instance with the logger stored within it
@@ -53,13 +44,10 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blo
 	initPrometheusMetrics()
 
 	return &Server{
-		logger:            logger,
-		utxoStore:         utxoStore,
-		newSubscriptions:  make(chan subscriber, 10),
-		deadSubscriptions: make(chan subscriber, 10),
-		subscribers:       make(map[subscriber]bool),
-		stats:             gocore.NewStat("validator"),
-		blockchainClient:  blockchainClient,
+		logger:           logger,
+		utxoStore:        utxoStore,
+		stats:            gocore.NewStat("validator"),
+		blockchainClient: blockchainClient,
 	}
 }
 
@@ -80,39 +68,17 @@ func (v *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (v *Server) Start(ctx context.Context) error {
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				v.logger.Infof("[Validator] Stopping channel listeners go routine")
-				for sub := range v.subscribers {
-					safeClose(sub.done)
-				}
-				return
-			case s := <-v.newSubscriptions:
-				v.subscribers[s] = true
-				v.logger.Infof("[Validator] New Subscription received from %s (Total=%d).", s.source, len(v.subscribers))
-
-			case s := <-v.deadSubscriptions:
-				delete(v.subscribers, s)
-				safeClose(s.done)
-				v.logger.Infof("[Validator] Subscription removed (Total=%d).", len(v.subscribers))
-			}
-		}
-	}()
-
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
-	if err == nil && ok {
-		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
-		go v.startKafkaListener(ctx, kafkaURL)
-	}
-
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
 		validator_api.RegisterValidatorAPIServer(server, v)
 	}); err != nil {
 		return err
+	}
+
+	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
+	if err == nil && ok {
+		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
+		go v.startKafkaListener(ctx, kafkaURL)
 	}
 
 	return nil
@@ -194,8 +160,9 @@ func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*
 	var sb strings.Builder
 	errs := make([]error, 0)
 
-	blockHeight, err := v.validator.GetBlockHeight()
-	if err != nil {
+	blockHeight := v.validator.GetBlockHeight()
+	if blockHeight == 0 {
+		err := errors.NewProcessingError("error getting blockHeight from validator: 0")
 		errs = append(errs, err)
 		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v\n", err))
 	} else {
@@ -214,7 +181,7 @@ func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*
 			Ok:        false,
 			Details:   sb.String(),
 			Timestamp: uint32(time.Now().Unix()),
-		}, err
+		}, errs[0]
 	}
 
 	return &validator_api.HealthResponse{
@@ -282,11 +249,9 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 		}, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
 	}
 
-	// v.logger.Debugf("[ValidateTransactions][%s] validating transaction (pq:)", tx.TxID())
 	err = v.validator.Validate(ctx, tx, req.BlockHeight)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
-		v.sendInvalidTxNotification(tx.TxID(), err.Error())
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
 		}, status.Errorf(codes.Internal, "transaction %s is invalid: %v", tx.TxID(), err)
@@ -312,8 +277,6 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 		tx, err := v.ValidateTransaction(ctx, reqItem)
 		if err != nil {
 			if tx != nil {
-				v.sendInvalidTxNotification(tx.String(), tx.Reason)
-
 				errReasons = append(errReasons, &validator_api.ValidateTransactionError{
 					TxId:   tx.String(),
 					Reason: tx.Reason,
@@ -335,9 +298,9 @@ func (v *Server) GetBlockHeight(ctx context.Context, _ *validator_api.EmptyMessa
 	)
 	defer deferFn()
 
-	blockHeight, err := v.validator.GetBlockHeight()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "cannot get block height: %v", err)
+	blockHeight := v.validator.GetBlockHeight()
+	if blockHeight == 0 {
+		return nil, status.Errorf(codes.Internal, "cannot get block height: %d", blockHeight)
 	}
 
 	return &validator_api.GetBlockHeightResponse{
@@ -345,53 +308,19 @@ func (v *Server) GetBlockHeight(ctx context.Context, _ *validator_api.EmptyMessa
 	}, nil
 }
 
-func (v *Server) Subscribe(req *validator_api.SubscribeRequest, sub validator_api.ValidatorAPI_SubscribeServer) error {
-	// prometheusBlockchainSubscribe.Inc()
-	v.logger.Debugf("subscribe request from %s", req.Source)
-	// Keep this subscription alive without endless loop - use a channel that blocks forever.
-	ch := make(chan struct{})
+func (v *Server) GetMedianBlockTime(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.GetMedianBlockTimeResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "GetMedianBlockTime",
+		tracing.WithParentStat(v.stats),
+		tracing.WithDebugLogMessage(v.logger, "[GetMedianBlockTime] called"),
+	)
+	defer deferFn()
 
-	v.newSubscriptions <- subscriber{
-		subscription: sub,
-		done:         ch,
-		source:       req.Source,
+	medianTime := v.validator.GetMedianBlockTime()
+	if medianTime == 0 {
+		return nil, status.Errorf(codes.Internal, "cannot get median block time: %d", medianTime)
 	}
 
-	for {
-		select {
-		case <-sub.Context().Done():
-			// Client disconnected.
-			v.logger.Infof("[Validator] GRPC client disconnected: %s", req.Source)
-			return nil
-		case <-ch:
-			// Subscription ended.
-			return nil
-		}
-	}
-}
-
-func (v *Server) sendInvalidTxNotification(txId string, reason string) {
-	notification := &validator_api.RejectedTxNotification{
-		TxId:   txId,
-		Reason: reason,
-	}
-	v.logger.Debugf("[Validator] Sending notification: %s", notification)
-	for sub := range v.subscribers {
-		v.logger.Debugf("[Validator] Sending notification to %s in background: %s", sub.source, notification)
-		go func(s subscriber) {
-			v.logger.Debugf("[Validator] Sending notification to %s: %s", s.source, notification)
-			if err := s.subscription.Send(notification); err != nil {
-				v.logger.Errorf("[Validator] Error sending notification to %s: %s", s.source, err)
-				v.deadSubscriptions <- s
-			}
-		}(sub)
-	}
-}
-
-func safeClose[T any](ch chan T) {
-	defer func() {
-		_ = recover()
-	}()
-
-	close(ch)
+	return &validator_api.GetMedianBlockTimeResponse{
+		MedianTime: medianTime,
+	}, nil
 }

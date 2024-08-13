@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"time"
 
+	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
+
+	"github.com/bitcoin-sv/ubsv/cmd/aerospike_reader/aerospike_reader"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
@@ -21,13 +23,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/bootstrap"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/services/faucet"
 	"github.com/bitcoin-sv/ubsv/services/legacy"
@@ -105,6 +107,9 @@ func main() {
 	case "s3inventoryintegrity.run":
 		s3inventoryintegrity.Start()
 		return
+	case "aerospike_reader.run":
+		aerospike_reader.Start()
+		return
 	}
 
 	serviceName, _ := gocore.Config().Get("SERVICE_NAME", "ubsv")
@@ -131,7 +136,6 @@ func main() {
 	startAsset := shouldStart("Asset")
 	startCoinbase := shouldStart("Coinbase")
 	startFaucet := shouldStart("Faucet")
-	startBootstrap := shouldStart("Bootstrap")
 	startBlockPersister := shouldStart("BlockPersister")
 	startUTXOPersister := shouldStart("UTXOPersister")
 	startLegacy := shouldStart("Legacy")
@@ -231,17 +235,17 @@ func main() {
 	blockchainService.SetClient(blockchainClient)
 
 	// bootstrap server
-	if startBootstrap {
-		if err := sm.AddService("Bootstrap", bootstrap.NewServer(
-			logger.New("bootS"),
-		)); err != nil {
-			panic(err)
-		}
-	}
+	//if startBootstrap {
+	//	if err := sm.AddService("Bootstrap", bootstrap.NewServer(
+	//		logger.New("bootS"),
+	//	)); err != nil {
+	//		panic(err)
+	//	}
+	//}
 
 	// p2p server
 	if startP2P {
-		if err = sm.AddService("P2P", p2p.NewServer(
+		if err = sm.AddService("P2P", p2p.NewServer(ctx,
 			logger.New("P2P"),
 			blockchainClient,
 		)); err != nil {
@@ -284,8 +288,9 @@ func main() {
 
 	if startUTXOPersister {
 		if err = sm.AddService("UTXOPersister", utxopersister.New(ctx,
-			logger.New("bp"),
+			logger.New("utxop"),
 			getBlockStore(logger),
+			blockchainClient,
 		)); err != nil {
 			panic(err)
 		}
@@ -352,6 +357,7 @@ func main() {
 	if startCoinbase {
 		if err = sm.AddService("Coinbase", coinbase.New(
 			logger.New("coinB"),
+			blockchainClient,
 		)); err != nil {
 			panic(err)
 		}
@@ -547,9 +553,6 @@ func printUsage() {
 	fmt.Println("    -coinbase=<1|0>")
 	fmt.Println("          whether to start the coinbase server")
 	fmt.Println("")
-	fmt.Println("    -bootstrap=<1|0>")
-	fmt.Println("          whether to start the bootstrap server")
-	fmt.Println("")
 	fmt.Println("    -p2p=<1|0>")
 	fmt.Println("          whether to start the p2p server")
 	fmt.Println("")
@@ -571,7 +574,7 @@ func waitForPostgresToStart(logger ulogger.Logger) error {
 		conn, err := net.DialTimeout("tcp", address, time.Second)
 		if err != nil {
 			if time.Now().After(deadline) {
-				return fmt.Errorf("timed out waiting for PostgreSQL to start: %w", err)
+				return errors.NewStorageError("timed out waiting for PostgreSQL to start: %w", err)
 			}
 
 			logger.Infof("PostgreSQL is not up yet - waiting")

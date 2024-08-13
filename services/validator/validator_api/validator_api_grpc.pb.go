@@ -24,7 +24,7 @@ const (
 	ValidatorAPI_ValidateTransactionBatch_FullMethodName  = "/validator_api.ValidatorAPI/ValidateTransactionBatch"
 	ValidatorAPI_ValidateTransactionStream_FullMethodName = "/validator_api.ValidatorAPI/ValidateTransactionStream"
 	ValidatorAPI_GetBlockHeight_FullMethodName            = "/validator_api.ValidatorAPI/GetBlockHeight"
-	ValidatorAPI_Subscribe_FullMethodName                 = "/validator_api.ValidatorAPI/Subscribe"
+	ValidatorAPI_GetMedianBlockTime_FullMethodName        = "/validator_api.ValidatorAPI/GetMedianBlockTime"
 )
 
 // ValidatorAPIClient is the client API for ValidatorAPI service.
@@ -37,7 +37,7 @@ type ValidatorAPIClient interface {
 	ValidateTransactionBatch(ctx context.Context, in *ValidateTransactionBatchRequest, opts ...grpc.CallOption) (*ValidateTransactionBatchResponse, error)
 	ValidateTransactionStream(ctx context.Context, opts ...grpc.CallOption) (ValidatorAPI_ValidateTransactionStreamClient, error)
 	GetBlockHeight(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetBlockHeightResponse, error)
-	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (ValidatorAPI_SubscribeClient, error)
+	GetMedianBlockTime(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetMedianBlockTimeResponse, error)
 }
 
 type validatorAPIClient struct {
@@ -118,36 +118,13 @@ func (c *validatorAPIClient) GetBlockHeight(ctx context.Context, in *EmptyMessag
 	return out, nil
 }
 
-func (c *validatorAPIClient) Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (ValidatorAPI_SubscribeClient, error) {
-	stream, err := c.cc.NewStream(ctx, &ValidatorAPI_ServiceDesc.Streams[1], ValidatorAPI_Subscribe_FullMethodName, opts...)
+func (c *validatorAPIClient) GetMedianBlockTime(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetMedianBlockTimeResponse, error) {
+	out := new(GetMedianBlockTimeResponse)
+	err := c.cc.Invoke(ctx, ValidatorAPI_GetMedianBlockTime_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &validatorAPISubscribeClient{stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-type ValidatorAPI_SubscribeClient interface {
-	Recv() (*RejectedTxNotification, error)
-	grpc.ClientStream
-}
-
-type validatorAPISubscribeClient struct {
-	grpc.ClientStream
-}
-
-func (x *validatorAPISubscribeClient) Recv() (*RejectedTxNotification, error) {
-	m := new(RejectedTxNotification)
-	if err := x.ClientStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
+	return out, nil
 }
 
 // ValidatorAPIServer is the server API for ValidatorAPI service.
@@ -160,7 +137,7 @@ type ValidatorAPIServer interface {
 	ValidateTransactionBatch(context.Context, *ValidateTransactionBatchRequest) (*ValidateTransactionBatchResponse, error)
 	ValidateTransactionStream(ValidatorAPI_ValidateTransactionStreamServer) error
 	GetBlockHeight(context.Context, *EmptyMessage) (*GetBlockHeightResponse, error)
-	Subscribe(*SubscribeRequest, ValidatorAPI_SubscribeServer) error
+	GetMedianBlockTime(context.Context, *EmptyMessage) (*GetMedianBlockTimeResponse, error)
 	mustEmbedUnimplementedValidatorAPIServer()
 }
 
@@ -183,8 +160,8 @@ func (UnimplementedValidatorAPIServer) ValidateTransactionStream(ValidatorAPI_Va
 func (UnimplementedValidatorAPIServer) GetBlockHeight(context.Context, *EmptyMessage) (*GetBlockHeightResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeight not implemented")
 }
-func (UnimplementedValidatorAPIServer) Subscribe(*SubscribeRequest, ValidatorAPI_SubscribeServer) error {
-	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
+func (UnimplementedValidatorAPIServer) GetMedianBlockTime(context.Context, *EmptyMessage) (*GetMedianBlockTimeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetMedianBlockTime not implemented")
 }
 func (UnimplementedValidatorAPIServer) mustEmbedUnimplementedValidatorAPIServer() {}
 
@@ -297,25 +274,22 @@ func _ValidatorAPI_GetBlockHeight_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _ValidatorAPI_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(SubscribeRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
+func _ValidatorAPI_GetMedianBlockTime_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
 	}
-	return srv.(ValidatorAPIServer).Subscribe(m, &validatorAPISubscribeServer{stream})
-}
-
-type ValidatorAPI_SubscribeServer interface {
-	Send(*RejectedTxNotification) error
-	grpc.ServerStream
-}
-
-type validatorAPISubscribeServer struct {
-	grpc.ServerStream
-}
-
-func (x *validatorAPISubscribeServer) Send(m *RejectedTxNotification) error {
-	return x.ServerStream.SendMsg(m)
+	if interceptor == nil {
+		return srv.(ValidatorAPIServer).GetMedianBlockTime(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ValidatorAPI_GetMedianBlockTime_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ValidatorAPIServer).GetMedianBlockTime(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 // ValidatorAPI_ServiceDesc is the grpc.ServiceDesc for ValidatorAPI service.
@@ -341,17 +315,16 @@ var ValidatorAPI_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "GetBlockHeight",
 			Handler:    _ValidatorAPI_GetBlockHeight_Handler,
 		},
+		{
+			MethodName: "GetMedianBlockTime",
+			Handler:    _ValidatorAPI_GetMedianBlockTime_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "ValidateTransactionStream",
 			Handler:       _ValidatorAPI_ValidateTransactionStream_Handler,
 			ClientStreams: true,
-		},
-		{
-			StreamName:    "Subscribe",
-			Handler:       _ValidatorAPI_Subscribe_Handler,
-			ServerStreams: true,
 		},
 	},
 	Metadata: "services/validator/validator_api/validator_api.proto",

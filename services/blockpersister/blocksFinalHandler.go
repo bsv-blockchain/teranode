@@ -1,9 +1,7 @@
 package blockpersister
 
 import (
-	"bufio"
 	"context"
-	"io"
 	"os"
 	"path"
 	"sync"
@@ -12,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -103,35 +102,37 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	u.logger.Infof("[BlockPersister] Processing subtrees with concurrency %d", concurrency)
 
 	// Create a new UTXO diff
-	utxoDiff, err := utxopersister.NewUTXODiff(ctx, u.logger, u.blockStore, block.Header.Hash())
+	utxoDiff, err := utxopersister.NewUTXODiff(ctx, u.logger, u.blockStore, block.Header.Hash(), block.Height)
 	if err != nil {
 		return errors.NewProcessingError("error creating utxo diff", err)
 	}
 
-	// Add coinbase utxos to the utxo diff
-	if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
-		return errors.NewProcessingError("error processing coinbase tx", err)
-	}
+	if len(block.Subtrees) == 0 {
+		// No subtrees to process, just write the coinbase UTXO to the diff and continue
+		if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
+			return errors.NewProcessingError("error processing coinbase tx", err)
+		}
+	} else {
+		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(concurrency)
 
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(concurrency)
+		for i, subtreeHash := range block.Subtrees {
+			subtreeHash := subtreeHash
+			i := i
 
-	for i, subtreeHash := range block.Subtrees {
-		subtreeHash := subtreeHash
-		i := i
+			g.Go(func() error {
+				u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i+1, len(block.Subtrees), subtreeHash.String())
 
-		g.Go(func() error {
-			u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i+1, len(block.Subtrees), subtreeHash.String())
+				return u.ProcessSubtree(gCtx, *subtreeHash, block.CoinbaseTx, utxoDiff)
+			})
+		}
 
-			return u.ProcessSubtree(gCtx, *subtreeHash, block.CoinbaseTx, utxoDiff)
-		})
-	}
+		u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
 
-	u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
-
-	if err = g.Wait(); err != nil {
-		// Don't wrap the error again, ProcessSubtree should return the error in correct format
-		return err
+		if err = g.Wait(); err != nil {
+			// Don't wrap the error again, ProcessSubtree should return the error in correct format
+			return err
+		}
 	}
 
 	// At this point, we have a complete UTXODiff for this block.
@@ -142,39 +143,14 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	// Now, write the block file
 	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())
 
-	reader, writer := io.Pipe()
+	storer := filestorer.NewFileStorer(ctx, u.logger, u.blockStore, hash[:], "block")
 
-	bufferedWriter := bufio.NewWriter(writer)
-
-	go func() {
-		defer func() {
-			// Flush the buffer and close the writer with error handling
-			if err := bufferedWriter.Flush(); err != nil {
-				u.logger.Errorf("Error flushing writer: %v", err)
-			}
-
-			if err := writer.CloseWithError(nil); err != nil {
-				u.logger.Errorf("Error closing writer: %v", err)
-			}
-		}()
-
-		// Write 80 byte block header
-		_, err := bufferedWriter.Write(blockBytes)
-		if err != nil {
-			u.logger.Errorf("Error writing block: %v", err)
-			writer.CloseWithError(err)
-			return
-		}
-	}()
-
-	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
-	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
-	if err = u.blockStore.SetFromReader(ctx, hash[:], reader, options.WithFileExtension("block"), options.WithTTL(24*time.Hour)); err != nil {
-		return errors.NewStorageError("[BlockPersister] error persisting block", err)
+	if _, err = storer.Write(blockBytes); err != nil {
+		return errors.NewStorageError("error writing block to disk", err)
 	}
 
-	if err = u.blockStore.SetTTL(ctx, hash[:], 0, options.WithFileExtension("block")); err != nil {
-		return errors.NewStorageError("[BlockPersister] error persisting block", err)
+	if err = storer.Close(ctx); err != nil {
+		return errors.NewStorageError("error closing block file", err)
 	}
 
 	return nil

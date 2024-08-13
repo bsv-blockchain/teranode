@@ -11,6 +11,8 @@ import (
 )
 
 type NullStore struct {
+	blockHeight     uint32
+	medianBlockTime uint32
 }
 
 // BatchDecorate implements utxo.Store.
@@ -23,11 +25,21 @@ func NewNullStore() (*NullStore, error) {
 }
 
 func (m *NullStore) SetBlockHeight(height uint32) error {
+	m.blockHeight = height
 	return nil
 }
 
-func (m *NullStore) GetBlockHeight() (uint32, error) {
-	return 0, nil
+func (m *NullStore) GetBlockHeight() uint32 {
+	return m.blockHeight
+}
+
+func (m *NullStore) SetMedianBlockTime(medianTime uint32) error {
+	m.medianBlockTime = medianTime
+	return nil
+}
+
+func (m *NullStore) GetMedianBlockTime() uint32 {
+	return m.medianBlockTime
 }
 
 func (m *NullStore) Health(ctx context.Context) (int, string, error) {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/looplab/fsm"
 	"github.com/ordishs/go-utils"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -21,7 +22,6 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/looplab/fsm"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -242,7 +242,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	ctx, _, deferFn := tracing.StartTracing(ctx, "AddBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainAddBlock),
-		tracing.WithLogMessage(b.logger, "[AddBlock] called from %s", request.PeerId),
+		tracing.WithDebugLogMessage(b.logger, "[AddBlock] called from %s", request.PeerId),
 	)
 	defer deferFn()
 
@@ -274,21 +274,24 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		SizeInBytes:      request.SizeInBytes,
 	}
 
-	_, err = b.store.StoreBlock(ctx, block, request.PeerId)
+	_, height, err := b.store.StoreBlock(ctx, block, request.PeerId)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
 
+	block.Height = height
+
 	b.logger.Debugf("[BlockPersister] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
 	if b.blockKafkaProducer != nil {
-		// TODO add a retry mechanism
 		go func(block *model.Block) {
 			blockBytes, err := block.Bytes()
 			if err != nil {
 				b.logger.Errorf("[Blockchain] Error serializing block: %v", err)
 			} else {
 				b.logger.Debugf("[BlockPersister] sending block to kafka: %s", block.String())
+				// producer has built-in retry mechanism
 				if err = b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
+					// TODO: #938 Alter FSM state and keep going forever until it works and then reset the FSM state?
 					b.logger.Errorf("[Blockchain] Error sending block to kafka: %v", err)
 				}
 			}
@@ -1043,6 +1046,33 @@ func (b *Blockchain) LocateBlockHeaders(ctx context.Context, request *blockchain
 
 	return &blockchain_api.LocateBlockHeadersResponse{
 		BlockHeaders: blockHeaderBytes,
+	}, nil
+}
+
+func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBestHeightAndTimeResponse, error) {
+	blockHeader, meta, err := b.store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	// get the median block time for the last 11 blocks
+	headers, _, err := b.store.GetBlockHeaders(ctx, blockHeader.Hash(), 11)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	prevTimeStamps := make([]time.Time, 0, 11)
+	for _, header := range headers {
+		prevTimeStamps = append(prevTimeStamps, time.Unix(int64(header.Timestamp), 0))
+	}
+	medianTimestamp, err := model.CalculateMedianTimestamp(prevTimeStamps)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[Blockchain] could not calculate median block time", err))
+	}
+
+	return &blockchain_api.GetBestHeightAndTimeResponse{
+		Height: meta.Height,
+		Time:   uint32(medianTimestamp.Unix()),
 	}, nil
 }
 

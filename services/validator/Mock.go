@@ -8,9 +8,10 @@ import (
 )
 
 type MockValidatorClient struct {
-	BlockHeight uint32
-	Errors      []error
-	TxMetaStore utxo.Store
+	BlockHeight     uint32
+	MedianBlockTime uint32
+	Errors          []error
+	TxMetaStore     utxo.Store
 }
 
 func (m *MockValidatorClient) Health(ctx context.Context) (int, string, error) {
@@ -22,8 +23,17 @@ func (m *MockValidatorClient) SetBlockHeight(blockHeight uint32) error {
 	return nil
 }
 
-func (m *MockValidatorClient) GetBlockHeight() (uint32, error) {
-	return m.BlockHeight, nil
+func (m *MockValidatorClient) GetBlockHeight() uint32 {
+	return m.BlockHeight
+}
+
+func (m *MockValidatorClient) SetMedianBlockTime(medianTime uint32) error {
+	m.MedianBlockTime = medianTime
+	return nil
+}
+
+func (m *MockValidatorClient) GetMedianBlockTime() uint32 {
+	return m.MedianBlockTime
 }
 
 func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight uint32) error {

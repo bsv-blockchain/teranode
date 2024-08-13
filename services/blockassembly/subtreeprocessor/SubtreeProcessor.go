@@ -1005,13 +1005,13 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 		// lookup the block height for the current block from the blockchain service, we cannot rely on the block height
 		// that is set in the utxo store, since that is the height of the current block in block assembly, which might
 		// not be the same
-		blockHeight, err = stp.utxoStore.GetBlockHeight()
-		if err != nil {
-			return errors.NewServiceError("[SubtreeProcessor][coinbase:%s]error extracting coinbase height via utxo store", block.CoinbaseTx.TxIDChainHash(), err)
+		blockHeight = stp.utxoStore.GetBlockHeight()
+		if blockHeight == 0 {
+			return errors.NewServiceError("[SubtreeProcessor][coinbase:%s] error extracting coinbase height via utxo store", block.CoinbaseTx.TxIDChainHash())
 		}
 	}
 
-	stp.logger.Infof("[SubtreeProcessor][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), blockHeight, block.CoinbaseTx.TxIDChainHash().String())
+	stp.logger.Debugf("[SubtreeProcessor][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), blockHeight, block.CoinbaseTx.TxIDChainHash().String())
 	// we pass in the block height we are working on here, since the utxo store will recognize the tx as
 	// a coinbase and add the correct spending height, which should be + 99
 	if _, err = stp.utxoStore.Create(ctx, block.CoinbaseTx, blockHeight); err != nil {

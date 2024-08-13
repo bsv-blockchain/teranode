@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/libp2p/go-libp2p/core/crypto"
 	"net/http"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/asset/asset_api"
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/libp2p/go-libp2p/core/crypto"
+
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
 	"github.com/bitcoin-sv/ubsv/ui/dashboard"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -22,15 +22,14 @@ import (
 var AssetStat = gocore.NewStat("Asset")
 
 type HTTP struct {
-	logger         ulogger.Logger
-	repository     *repository.Repository
-	e              *echo.Echo
-	notificationCh chan *asset_api.Notification
-	startTime      time.Time
-	privKey        crypto.PrivKey
+	logger     ulogger.Logger
+	repository *repository.Repository
+	e          *echo.Echo
+	startTime  time.Time
+	privKey    crypto.PrivKey
 }
 
-func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan *asset_api.Notification) (*HTTP, error) {
+func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error) {
 	initPrometheusMetrics()
 
 	// TODO: change logger name
@@ -56,11 +55,10 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	e.Use(middleware.Gzip())
 
 	h := &HTTP{
-		logger:         logger,
-		repository:     repo,
-		e:              e,
-		notificationCh: notificationCh,
-		startTime:      time.Now(),
+		logger:     logger,
+		repository: repo,
+		e:          e,
+		startTime:  time.Now(),
 	}
 
 	// add the private key for signing responses
@@ -95,6 +93,9 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 
 		return c.String(http.StatusOK, details)
 	})
+
+	apiRestGroup := e.Group("/rest")
+	apiRestGroup.GET("/block/:hash.bin", h.GetRestLegacyBlock()) // BINARY_STREAM
 
 	apiPrefix, _ := gocore.Config().Get("asset_apiPrefix", "/api/v1")
 	apiGroup := e.Group(apiPrefix)
@@ -157,8 +158,6 @@ func New(logger ulogger.Logger, repo *repository.Repository, notificationCh chan
 	apiGroup.GET("/bestblockheader", h.GetBestBlockHeader(BINARY_STREAM))
 	apiGroup.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
 	apiGroup.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))
-
-	apiGroup.GET("/asset-ws", h.HandleWebSocket(h.notificationCh))
 
 	// TODO make configurable, whether stats are enabled
 	prefix := gocore.GetStatPrefix()

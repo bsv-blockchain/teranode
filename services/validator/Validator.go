@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
@@ -34,6 +35,7 @@ type Validator struct {
 	blockAssemblyDisabled  bool
 	blockassemblyKafkaChan chan []byte
 	txMetaKafkaChan        chan []byte
+	rejectedTxKafkaChan    chan []byte
 	stats                  *gocore.Stat
 }
 
@@ -82,14 +84,37 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		if workers > 0 {
 			v.txMetaKafkaChan = make(chan []byte, 10000)
 			go func() {
-				// TODO add retry
-				if err := util.StartAsyncProducer(v.logger, txmetaKafkaURL, v.txMetaKafkaChan); err != nil {
-					v.logger.Errorf("[Validator] error starting kafka producer: %v", err)
+				_, err := retry.Retry(ctx, logger, func() (interface{}, error) {
+					return nil, util.StartAsyncProducer(v.logger, txmetaKafkaURL, v.txMetaKafkaChan)
+				}, retry.WithMessage("[Validator] error starting kafka producer for txMeta"))
+				if err != nil {
+					v.logger.Fatalf("[Validator] failed to start kafka producer for txMeta: %v", err)
 					return
 				}
 			}()
 
 			logger.Infof("[Validator] connected to kafka at %s", txmetaKafkaURL.Host)
+		}
+	}
+
+	rejectedTxKafkaURL, _, found := gocore.Config().GetURL("kafka_rejectedTxConfig")
+	if found {
+		workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
+		// only start the kafka producer if there are workers listening
+		// this can be used to disable the kafka producer, by just setting workers to 0
+		if workers > 0 {
+			v.rejectedTxKafkaChan = make(chan []byte, 10000)
+			go func() {
+				_, err := retry.Retry(ctx, logger, func() (interface{}, error) {
+					return nil, util.StartAsyncProducer(v.logger, rejectedTxKafkaURL, v.rejectedTxKafkaChan)
+				}, retry.WithMessage("[Validator] error starting kafka producer for rejected Txs"))
+				if err != nil {
+					v.logger.Fatalf("[Validator] failed to start kafka producer for rejected Txs: %v", err)
+					return
+				}
+			}()
+
+			logger.Infof("[Validator] connected to kafka at %s", rejectedTxKafkaURL.Host)
 		}
 	}
 
@@ -103,37 +128,63 @@ func (v *Validator) Health(cntxt context.Context) (int, string, error) {
 	return 0, "LocalValidator", nil
 }
 
-func (v *Validator) GetBlockHeight() (height uint32, err error) {
+func (v *Validator) GetBlockHeight() uint32 {
 	return v.utxoStore.GetBlockHeight()
 }
 
+func (v *Validator) GetMedianBlockTime() uint32 {
+	return v.utxoStore.GetMedianBlockTime()
+}
+
 // Validate validates a transaction
-func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
-	v.logger.Debugf("[Validate][%s] validating transaction", tx.TxIDChainHash().String())
+func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
+	if err = v.validateInternal(ctx, tx, blockHeight); err != nil {
+		if v.rejectedTxKafkaChan != nil {
+			startKafka := time.Now()
+			v.rejectedTxKafkaChan <- append(tx.TxIDChainHash().CloneBytes(), err.Error()...)
+			prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
+		}
 
-	start, stat, ctx := tracing.NewStatFromContext(cntxt, "Validate", v.stats)
-	defer func() {
-		stat.AddTime(start)
-		prometheusTransactionValidateTotal.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	}()
+	}
 
-	traceSpan := tracing.Start(ctx, "Validator:Validate")
+	return err
+}
+
+func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "Validator:Validate",
+		tracing.WithParentStat(v.stats),
+		tracing.WithHistogram(prometheusTransactionValidateTotal),
+		tracing.WithDebugLogMessage(v.logger, "[Validator:Validate] called for %s", tx.TxID()),
+	)
+	defer deferFn()
 	var spentUtxos []*utxo.Spend
 
-	defer func(reservedUtxos *[]*utxo.Spend) {
-		traceSpan.Finish()
-	}(&spentUtxos)
+	// this should be updated automatically by the utxo store
+	utxoStoreBlockHeight := v.GetBlockHeight()
+	// We do not check IsFinal for transactions before BIP113 change (block height 419328)
+	// This is an exception for transactions before the media block time was used
+	if utxoStoreBlockHeight > util.LockTimeBIP113 {
+		utxoStoreMedianBlockTime := v.GetMedianBlockTime()
+		if utxoStoreMedianBlockTime == 0 {
+			return errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", utxoStoreBlockHeight, utxoStoreMedianBlockTime)
+		}
+
+		// this function should be moved into go-bt
+		if err := util.IsTransactionFinal(tx, utxoStoreBlockHeight+1, utxoStoreMedianBlockTime); err != nil {
+			return errors.NewNonFinalError("[Validate][%s] transaction is not final", tx.TxIDChainHash().String(), err)
+		}
+	}
 
 	if tx.IsCoinbase() {
 		return errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", tx.TxIDChainHash().String())
 	}
 
-	if err = v.validateTransaction(traceSpan, tx, blockHeight); err != nil {
+	if err = v.validateTransaction(ctx, tx, blockHeight); err != nil {
 		return errors.NewProcessingError("[Validate][%s] error validating transaction", tx.TxID(), err)
 	}
 
 	// decouple the tracing context to not cancel the context when finalize the block assembly
-	setSpan := tracing.DecoupleTracingSpan(traceSpan.Ctx, "decoupledSpan")
+	setSpan := tracing.DecoupleTracingSpan(ctx, "decoupledSpan")
 	defer setSpan.Finish()
 
 	/*
@@ -153,6 +204,8 @@ func (v *Validator) Validate(cntxt context.Context, tx *bt.Tx, blockHeight uint3
 		return errors.NewProcessingError("[Validate][%s] error spending utxos", tx.TxID(), err)
 	}
 
+	// TODO do we need to make this a 2 phase commit?
+	//      if the block assembly addition fails, the utxo should not be spendable yet
 	txMetaData, err := v.storeTxInUtxoMap(setSpan, tx, blockHeight)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
@@ -319,15 +372,16 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 
 	if v.blockassemblyKafkaChan != nil {
-		start := time.Now()
+		//start := time.Now()
 		v.blockassemblyKafkaChan <- bData.Bytes()
-		prometheusValidatorSendToBlockAssemblyKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
+		//prometheusValidatorSendToBlockAssemblyKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	} else {
 		if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size); err != nil {
 			e := errors.NewStorageError("error calling blockAssembler Store()", err)
 			traceSpan.RecordError(e)
 			return e
 		}
+
 	}
 
 	return nil
@@ -384,8 +438,8 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-func (v *Validator) validateTransaction(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) error {
-	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "validateTransaction",
+func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
 	)
 	defer deferFn()

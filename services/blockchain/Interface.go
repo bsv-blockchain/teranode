@@ -38,6 +38,9 @@ type ClientI interface {
 	GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error)
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
+	GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error)
+
+	// FSM related endpoints
 	GetFSMCurrentState() blockchain_api.FSMStateType
 	GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType
 	SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
@@ -214,4 +217,7 @@ func (s *MockBlockchain) HeightToHashRange(startHeight uint32, endHash *chainhas
 }
 func (s *MockBlockchain) IntervalBlockHashes(endHash *chainhash.Hash, interval int) ([]chainhash.Hash, error) {
 	panic("not implemented")
+}
+func (s *MockBlockchain) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
+	panic("implement me")
 }

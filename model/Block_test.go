@@ -190,7 +190,7 @@ func TestMedianTimestamp(t *testing.T) {
 
 	t.Run("test for correct median time", func(t *testing.T) {
 		expected := timestamps[5]
-		median, err := medianTimestamp(timestamps)
+		median, err := CalculateMedianTimestamp(timestamps)
 
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
@@ -204,7 +204,7 @@ func TestMedianTimestamp(t *testing.T) {
 		expected := timestamps[6]
 		// add a new high timestamp out of sequence
 		timestamps[5] = time.Unix(int64(20), 0)
-		median, err := medianTimestamp(timestamps)
+		median, err := CalculateMedianTimestamp(timestamps)
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
@@ -217,7 +217,7 @@ func TestMedianTimestamp(t *testing.T) {
 		expected := timestamps[4]
 		// add a new low timestamp out of sequence
 		timestamps[5] = time.Unix(int64(1), 0)
-		median, err := medianTimestamp(timestamps)
+		median, err := CalculateMedianTimestamp(timestamps)
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
@@ -228,7 +228,7 @@ func TestMedianTimestamp(t *testing.T) {
 
 	t.Run("test for less than 11 timestamps", func(t *testing.T) {
 		expected := timestamps[5]
-		median, err := medianTimestamp(timestamps[:10])
+		median, err := CalculateMedianTimestamp(timestamps[:10])
 		if err != nil {
 			t.Errorf("Unexpected error: %v", err)
 		}
@@ -445,10 +445,9 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	_, _ = b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs, NewBloomStats())
-	// TODO reactivate this test when we have a way to check for duplicate transactions
-	// require.Error(t, err)
-	// require.False(t, v)
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs, NewBloomStats())
+	require.Error(t, err)
+	require.False(t, v)
 }
 
 func TestGetAndValidateSubtrees(t *testing.T) {
@@ -602,4 +601,12 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 		require.NoError(t, err)
 	})
 
+}
+
+var blockBytesForBenchmark, _ = hex.DecodeString("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e3629901d7026fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000bddd99ccfda39da1b108ce1a5d70038d0a967bacb68b6b63065f626a0000000001000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac0000000000")
+
+func Benchmark_NewBlockFromBytes(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, _ = NewBlockFromBytes(blockBytesForBenchmark)
+	}
 }

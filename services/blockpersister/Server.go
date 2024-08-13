@@ -2,8 +2,9 @@ package blockpersister
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -166,7 +167,7 @@ func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, grou
 
 	// Autocommit is disabled for all Kafka listeners for blockpersister, we want to manually commit.
 	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, false, fn); err != nil {
-		u.logger.Errorf("Failed to start Kafka listener: %v", err)
+		u.logger.Errorf("Failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
 	}
 }
 

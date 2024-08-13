@@ -131,8 +131,16 @@ func (m *MockStore) SetBlockHeight(height uint32) error {
 	return nil
 }
 
-func (m *MockStore) GetBlockHeight() (uint32, error) {
-	return 0, nil
+func (m *MockStore) GetBlockHeight() uint32 {
+	return 0
+}
+
+func (m *MockStore) SetMedianBlockTime(height uint32) error {
+	return nil
+}
+
+func (m *MockStore) GetMedianBlockTime() uint32 {
+	return 0
 }
 
 func TestBlock(t *testing.T) {

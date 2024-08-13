@@ -1,7 +1,7 @@
 name: nightly-test-runs
 on:
   schedule:
-    - cron: "0 0 * * *"  # Runs at midnight UTC every day
+    - cron: "0 0 * * *" # Runs at midnight UTC every day
   workflow_dispatch:
 
 env:
@@ -9,18 +9,19 @@ env:
   ECR_REGION: eu-north-1
 
 jobs:
-
-  smoketest:
-    name: smoketest
+  settings-test:
+    name: Settings Test
     runs-on: ubsv-runner
+    env:
+      TEST_DIR: test/settings
+      REPORT_NAME: settings-ctrf-report.json
     steps:
-      # Setup Docker Buildx
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        # with:
-        #   buildkitd-flags: --debug # Debug logs
 
-      # Set up AWS CLI
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -28,29 +29,147 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.ECR_REGION }}
 
-      # Authenticate Docker to AWS ECR
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
-        with:
-          mask-password: true
-
-      - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.21.0'
+          go-version: "1.21.0"
 
-      - name: Run Smoke tests
+      - name: Run Settings Test
         run: make nightly-tests
-        continue-on-error: true
-      - name: Publish Blockassembly Test Summary Results
-        run: npx github-actions-ctrf blockassembly-ctrf-report.json
-      - name: Publish Resilience Test Summary Results
-        run: npx github-actions-ctrf resilience-ctrf-report.json
+        continue-on-error: false
       - name: Publish Settings Test Summary Results
         run: npx github-actions-ctrf settings-ctrf-report.json
+
+  state-test:
+    name: State Test
+    runs-on: ubsv-runner
+    env:
+      TEST_DIR: test/state
+      REPORT_NAME: state-ctrf-report.json
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.0"
+
+      - name: Run State Test
+        run: make nightly-tests
+        continue-on-error: false
       - name: Publish State Test Summary Results
         run: npx github-actions-ctrf state-ctrf-report.json
+
+  fork-test:
+    name: Fork Test
+    runs-on: ubsv-runner
+    env:
+      TEST_DIR: test/fork
+      REPORT_NAME: fork-ctrf-report.json
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.0"
+
+      - name: Run Fork Test
+        run: make nightly-tests
+        continue-on-error: false
       - name: Publish Fork Test Summary Results
         run: npx github-actions-ctrf fork-ctrf-report.json
+
+  blockassembly-test:
+    name: Blockassembly Test
+    runs-on: ubsv-runner
+    env:
+      TEST_DIR: test/blockassembly
+      REPORT_NAME: blockassembly-ctrf-report.json
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.0"
+
+      - name: Run Blockassembly Test
+        run: make nightly-tests
+        continue-on-error: false
+      - name: Publish Blockassembly Test Summary Results
+        run: npx github-actions-ctrf blockassembly-ctrf-report.json
+
+  resilience-test:
+    name: Resilience Test
+    runs-on: ubsv-runner
+    env:
+      TEST_DIR: test/resilience
+      REPORT_NAME: resilience-ctrf-report.json
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.0"
+
+      - name: Run Resilience Test
+        run: make nightly-tests
+        continue-on-error: false
+      - name: Publish Resilience Test Summary Results
+        run: npx github-actions-ctrf resilience-ctrf-report.json

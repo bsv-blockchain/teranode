@@ -24,7 +24,7 @@ func TestSQL_GetHashOfAncestorBlock(t *testing.T) {
 
 	blocks := generateBlocks(t, blockWindow+4)
 	for _, block := range blocks {
-		_, err = s.StoreBlock(context.Background(), block, "")
+		_, _, err = s.StoreBlock(context.Background(), block, "")
 		require.NoError(t, err)
 	}
 
@@ -42,7 +42,7 @@ func TestSQL_GetHashOfAncestorBlock_short(t *testing.T) {
 	// don't generate enough blocks
 	blocks := generateBlocks(t, blockWindow-5)
 	for _, block := range blocks {
-		_, err = s.StoreBlock(context.Background(), block, "")
+		_, _, err = s.StoreBlock(context.Background(), block, "")
 		require.NoError(t, err)
 	}
 	var expectedHash *chainhash.Hash

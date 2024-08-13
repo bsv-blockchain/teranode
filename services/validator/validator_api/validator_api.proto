@@ -11,8 +11,7 @@ service ValidatorAPI {
   rpc ValidateTransactionBatch(ValidateTransactionBatchRequest) returns (ValidateTransactionBatchResponse) {}
   rpc ValidateTransactionStream(stream ValidateTransactionRequest) returns (ValidateTransactionResponse) {}
   rpc GetBlockHeight(EmptyMessage) returns (GetBlockHeightResponse) {}
-  rpc Subscribe (SubscribeRequest) returns (stream RejectedTxNotification) {}
-
+  rpc GetMedianBlockTime(EmptyMessage) returns (GetMedianBlockTimeResponse) {}
 }
 
 // swagger:model EmptyMessage
@@ -59,13 +58,7 @@ message GetBlockHeightResponse {
   uint32 height = 1;
 }
 
-// swagger:model SubscribeRequest
-message SubscribeRequest {
-  string source = 1;
-}
-
-// swagger:model Notification
-message RejectedTxNotification {
-  string txId = 1;
-  string reason = 2;
+// swagger:model GetMedianBlockTimeResponse
+message GetMedianBlockTimeResponse {
+  uint32 median_time = 1;
 }

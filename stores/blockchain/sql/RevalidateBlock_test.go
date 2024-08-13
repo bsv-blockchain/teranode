@@ -2,11 +2,12 @@ package sql
 
 import (
 	"context"
+	"net/url"
+	"testing"
+
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"net/url"
-	"testing"
 )
 
 func TestSQL_RevalidateBlock(t *testing.T) {
@@ -31,13 +32,13 @@ func TestSQL_RevalidateBlock(t *testing.T) {
 		err = s.insertGenesisTransaction(ulogger.TestLogger{})
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block1, "")
+		_, _, err = s.StoreBlock(context.Background(), block1, "")
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block2, "")
+		_, _, err = s.StoreBlock(context.Background(), block2, "")
 		require.NoError(t, err)
 
-		_, err = s.StoreBlock(context.Background(), block3, "")
+		_, _, err = s.StoreBlock(context.Background(), block3, "")
 		require.NoError(t, err)
 
 		err = s.InvalidateBlock(context.Background(), block3.Hash())

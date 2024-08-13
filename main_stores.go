@@ -73,7 +73,7 @@ func getBlockchainClient(ctx context.Context, logger ulogger.Logger) blockchain.
 	}
 
 	var err error
-	blockchainClient, err = blockchain.NewClient(ctx, logger)
+	blockchainClient, err = blockchain.NewClient(ctx, logger, "main_stores")
 	if err != nil {
 		panic(err)
 	}

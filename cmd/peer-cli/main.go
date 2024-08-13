@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"log"
 	"net"
 	"os"
@@ -112,7 +113,7 @@ func connect(c *cli.Context) error {
 	case <-time.After(time.Second * 5):
 		fmt.Println("connection: verack timeout")
 		p.Disconnect()
-		return fmt.Errorf("verack timeout")
+		return errors.NewError("verack timeout")
 	}
 
 	return nil
@@ -123,7 +124,7 @@ func sendMessage(msgType string, args ...string) error {
 	if p == nil || !p.Connected() {
 		err := reconnect(conn.RemoteAddr().String())
 		if err != nil {
-			return fmt.Errorf("failed to reconnect: %v", err)
+			return errors.NewError("failed to reconnect: %v", err)
 		}
 	}
 
@@ -175,7 +176,7 @@ func sendMessage(msgType string, args ...string) error {
 		if len(args) > 0 {
 			parsedNonce, err := strconv.ParseUint(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("invalid nonce value: %s", args[0])
+				return errors.NewError("invalid nonce value: %s", args[0])
 			}
 			nonce = parsedNonce
 		}
@@ -186,7 +187,7 @@ func sendMessage(msgType string, args ...string) error {
 		if len(args) > 0 {
 			parsedNonce, err := strconv.ParseUint(args[0], 10, 64)
 			if err != nil {
-				return fmt.Errorf("invalid nonce value: %s", args[0])
+				return errors.NewError("invalid nonce value: %s", args[0])
 			}
 			nonce = parsedNonce
 		}
@@ -194,7 +195,7 @@ func sendMessage(msgType string, args ...string) error {
 		p.QueueMessage(pongMsg, nil)
 	// Add other cases as needed
 	default:
-		return fmt.Errorf("unknown message type: %s", msgType)
+		return errors.NewError("unknown message type: %s", msgType)
 	}
 
 	fmt.Printf("Message of type %s sent to Bitcoin peer\n", msgType)

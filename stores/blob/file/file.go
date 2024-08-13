@@ -125,7 +125,9 @@ func (s *File) ttlCleaner(ctx context.Context) {
 					s.logger.Warnf("failed to remove file: %s", fileName)
 				}
 				if err := os.Remove(fileName + ".ttl"); err != nil {
-					s.logger.Warnf("failed to remove ttl file: %s", fileName+".ttl")
+					if !os.IsNotExist(err) {
+						s.logger.Warnf("failed to remove ttl file: %s", fileName+".ttl")
+					}
 				}
 
 				s.fileTTLsMu.Lock()
@@ -188,20 +190,36 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 }
 
 func (s *File) getFileNameForGet(hash []byte, opts []options.Options) (string, error) {
-	fileName := s.filename(hash)
-
 	fileOptions := options.NewSetOptions(nil, opts...)
+
+	var fileName string
+
+	if fileOptions.Filename != "" {
+		fileName = fmt.Sprintf("%s/%s", s.paths[0], fileOptions.Filename)
+	} else {
+		fileName = s.filename(hash)
+	}
 
 	if fileOptions.Extension != "" {
 		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
 	}
 
+	if fileOptions.SubDirectory != "" {
+		// TODO: add subdirectory to filename, which could be a full path to the file
+		s.logger.Warnf("SubDirectory set, but is not supported yet: %s", fileOptions.SubDirectory)
+	}
+
 	return fileName, nil
 }
 func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
-	fileName := s.filename(hash)
-
 	fileOptions := options.NewSetOptions(nil, opts...)
+
+	var fileName string
+	if fileOptions.Filename != "" {
+		fileName = fmt.Sprintf("%s/%s", s.paths[0], fileOptions.Filename)
+	} else {
+		fileName = s.filename(hash)
+	}
 
 	if fileOptions.Extension != "" {
 		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)

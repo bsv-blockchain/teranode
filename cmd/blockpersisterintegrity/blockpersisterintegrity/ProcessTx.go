@@ -2,7 +2,7 @@ package blockpersisterintegrity
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	p_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
@@ -36,7 +36,7 @@ func (tp *TxProcessor) ProcessTx(ctx context.Context, tx *bt.Tx) error {
 		isCoinbasePlaceholder := len(tx.Inputs) == 0 && len(tx.Outputs) == 0 && tx.Version == bt.DefaultSequenceNumber && tx.LockTime == bt.DefaultSequenceNumber
 
 		if !isCoinbasePlaceholder {
-			return fmt.Errorf("first transaction in a block must be a coinbase transaction")
+			return errors.NewBlockError("first transaction in a block must be a coinbase transaction")
 		}
 
 		// if !model.CoinbasePlaceholderHash.Equal(*tx.TxIDChainHash()) && !tx.IsCoinbase() {
@@ -47,7 +47,7 @@ func (tp *TxProcessor) ProcessTx(ctx context.Context, tx *bt.Tx) error {
 
 	// make sure we don't have a coinbase transaction in the middle of the block
 	if model.CoinbasePlaceholderHash.Equal(*tx.TxIDChainHash()) || tx.IsCoinbase() {
-		return fmt.Errorf("coinbase transaction must be the first transaction in a block")
+		return errors.NewBlockError("coinbase transaction must be the first transaction in a block")
 	}
 
 	// if !model.CoinbasePlaceholderHash.Equal(*tx.TxIDChainHash()) {

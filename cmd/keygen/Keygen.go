@@ -29,10 +29,10 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Printf("[P2PNode] peer ID: %s\n", h.ID().Pretty())
+	fmt.Printf("[P2PNode] peer ID: %s\n", h.ID().String())
 	fmt.Printf("[P2PNode] Connect to me on:\n")
 	for _, addr := range h.Addrs() {
-		fmt.Printf("[P2PNode]   %s/p2p/%s\n", addr, h.ID().Pretty())
+		fmt.Printf("[P2PNode]   %s/p2p/%s\n", addr, h.ID().String())
 	}
 }
 

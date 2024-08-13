@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"io"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -36,12 +35,12 @@ func (stp *SubtreeProcessor) ProcessSubtree(ctx context.Context, subtreeHash cha
 	fees := uint64(0)
 	subtreeReader, err := stp.store.GetIoReader(ctx, subtreeHash[:], options.WithFileExtension("subtree"))
 	if err != nil {
-		return fmt.Errorf("failed to get subtree %s for block %s: %s", subtreeHash, stp.block, err)
+		return errors.NewStorageError("failed to get subtree %s for block %s: %s", subtreeHash, stp.block, err)
 	}
 
 	var txCountBytes = make([]byte, 4)
 	if _, err := io.ReadFull(subtreeReader, txCountBytes); err != nil {
-		return fmt.Errorf("failed to read tx count for subtree %s: %s", subtreeHash, err)
+		return errors.NewProcessingError("failed to read tx count for subtree %s: %s", subtreeHash, err)
 	}
 	txCount := binary.LittleEndian.Uint32(txCountBytes)
 
@@ -64,7 +63,7 @@ func (stp *SubtreeProcessor) ProcessSubtree(ctx context.Context, subtreeHash cha
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("failed to parse transaction %d in subtree %s: %s", i, subtreeHash, err)
+			return errors.NewProcessingError("failed to parse transaction %d in subtree %s: %s", i, subtreeHash, err)
 		}
 		partialBuffer.Next(bytesRead)
 		i++
@@ -78,7 +77,7 @@ func (stp *SubtreeProcessor) ProcessSubtree(ctx context.Context, subtreeHash cha
 	} // for each Tx
 
 	if i != txCount {
-		return fmt.Errorf("subtree %s has %d transactions, but only %d were read", subtreeHash, txCount, i)
+		return errors.NewSubtreeError("subtree %s has %d transactions, but only %d were read", subtreeHash, txCount, i)
 	}
 
 	return nil

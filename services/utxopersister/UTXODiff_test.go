@@ -21,7 +21,7 @@ func TestNewUTXODiff(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a new UTXODiff
-	ud, err := NewUTXODiff(ctx, ulogger.TestLogger{}, store, &hash)
+	ud, err := NewUTXODiff(ctx, ulogger.TestLogger{}, store, &hash, 0)
 	require.NoError(t, err)
 
 	script := []byte{0x00, 0x01, 0x02, 0x03, 0x04}

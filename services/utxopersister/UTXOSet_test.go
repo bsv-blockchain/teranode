@@ -25,7 +25,7 @@ func TestNewUTXOSet(t *testing.T) {
 	// store, err := file.New(ulogger.TestLogger{}, "utxo")
 	// require.NoError(t, err)
 
-	ud1, err := NewUTXODiff(ctx, ulogger.TestLogger{}, store, &hash1)
+	ud1, err := NewUTXODiff(ctx, ulogger.TestLogger{}, store, &hash1, 0)
 	require.NoError(t, err)
 
 	for i := uint32(0); i < 5; i++ {
@@ -44,7 +44,7 @@ func TestNewUTXOSet(t *testing.T) {
 	checkAdditions(t, ud1, 0, 5)
 	checkDeletions(t, ud1, 3, 5)
 
-	ud2, err := NewUTXODiff(ctx, ulogger.TestLogger{}, store, &hash2)
+	ud2, err := NewUTXODiff(ctx, ulogger.TestLogger{}, store, &hash2, 0)
 	require.NoError(t, err)
 
 	for i := uint32(9); i < 15; i++ {

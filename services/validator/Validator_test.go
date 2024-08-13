@@ -5,60 +5,20 @@ import (
 	"fmt"
 	"log"
 	"testing"
+	"time"
 
-	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	utxoMemorystore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
-
-type NullStore struct{}
-
-func (ns *NullStore) SetBlockHeight(height uint32) error {
-	return nil
-}
-
-func (ns *NullStore) GetBlockHeight() (uint32, error) {
-	return 0, nil
-}
-
-func (ns *NullStore) Health(ctx context.Context) (int, string, error) {
-	return 0, "Validator test Null Store", nil
-}
-
-func (ns *NullStore) DeleteSpends(deleteSpends bool) {
-}
-
-func (ns *NullStore) Get(ctx context.Context, spend *utxostore.Spend) (*utxostore.SpendResponse, error) {
-	return nil, nil
-}
-
-func (ns *NullStore) Store(ctx context.Context, tx *bt.Tx, lockTime ...uint32) error {
-	return nil
-}
-
-func (ns *NullStore) StoreFromHashes(ctx context.Context, txID chainhash.Hash, utxoHashes []chainhash.Hash, lockTime uint32) error {
-	return nil
-}
-
-func (ns *NullStore) Spend(ctx context.Context, spends []*utxostore.Spend, blockHeight uint32) error {
-	return nil
-}
-
-func (ns *NullStore) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
-	return nil
-}
-
-func (ns *NullStore) Delete(ctx context.Context, tx *bt.Tx) error {
-	return nil
-}
 
 func BenchmarkValidator(b *testing.B) {
 	tx, err := bt.NewTxFromString("010000000000000000ef01f3f0d33a5c5afd524043762f8b812999caa5a225e6e20ecdb71a7e0e1c207b43530000006a473044022049e20908f21bdcb901b5c5a9a93b238446606267e19db4e662df1a7c4a5bae08022036960a340515e2cfee79b9c194093f24f253d4243bf9d0baa97352983e2263fa412102a98c1a3be041da2591761fbef4b2ab0f147aef36c308aee66df0b9825218de23ffffffff10000000000000001976a914a8d6bd6648139d95dac35d411c592b05bc0973aa88ac01000000000000000070006a0963657274696861736822314c6d763150594d70387339594a556e374d3948565473446b64626155386b514e4a403263333934306361313334353331373035326334346630613861636362323162323165633131386465646330396538643764393064323166333935663063613000000000")
@@ -106,6 +66,82 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestValidate_ValidTransaction(t *testing.T) {
+}
+
+func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
+	tracing.SetGlobalMockTracer()
+
+	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	utxoStore, _ := nullstore.NewNullStore()
+	_ = utxoStore.SetBlockHeight(123)
+	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
+
+	initPrometheusMetrics()
+
+	v := &Validator{
+		logger: ulogger.TestLogger{},
+		txValidator: TxValidator{
+			policy: NewPolicySettings(),
+		},
+		utxoStore:           utxoStore,
+		blockAssembler:      BlockAssemblyStore{},
+		saveInParallel:      true,
+		stats:               gocore.NewStat("validator"),
+		txMetaKafkaChan:     make(chan []byte, 1),
+		rejectedTxKafkaChan: make(chan []byte, 1),
+	}
+
+	err = v.Validate(context.Background(), tx, 0)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, len(v.txMetaKafkaChan), "txMetaKafkaChan should have 1 message")
+	require.Equal(t, 0, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should be empty")
+}
+
+func TestValidate_RejectedTransactionChannel(t *testing.T) {
+	tracing.SetGlobalMockTracer()
+
+	txHex := "010000000000000000ef01febe0cbd7d87d44cbd4b5adac0a5bfcdbd2b672c9113f5d74a6459a2b85569db010000008b48304502207ec38d0a4ef79c3a4286ba3e5a5b6ede1fa678af9242465140d78a901af9e4e0022100c26c377d44b761469cf0bdcdbf4931418f2c5a02ce6b72bbb7af52facd7228c1014104bc9eb4fe4cb53e35df7e7734c4c3cd91c6af7840be80f4a1fff283e2cd6ae8f7713cb263a4590263240e3c01ec36bc603c32281ac08773484dc69b8152e48cecffffffff60b74700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac0230424700000000001976a9148ac9bdc626352d16e18c26f431e834f9aae30e2888ac1027000000000000166a148ac9bdc626352d16e18c26f431e834f9aae30e2800000000"
+	tx, err := bt.NewTxFromString(txHex)
+	require.NoError(t, err)
+
+	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
+
+	initPrometheusMetrics()
+
+	v := &Validator{
+		logger: ulogger.TestLogger{},
+		txValidator: TxValidator{
+			policy: NewPolicySettings(),
+		},
+		utxoStore:           utxoStore,
+		blockAssembler:      nil,
+		saveInParallel:      true,
+		stats:               gocore.NewStat("validator"),
+		txMetaKafkaChan:     make(chan []byte, 1),
+		rejectedTxKafkaChan: make(chan []byte, 1),
+	}
+
+	err = v.Validate(context.Background(), tx, 0)
+	require.Error(t, err)
+
+	require.Equal(t, 0, len(v.txMetaKafkaChan), "txMetaKafkaChan should be empty")
+	require.Equal(t, 1, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should have 1 message")
+}
+
+func TestValidate_InValidDoubleSpendTx(t *testing.T) {
+}
+
+func TestValidate_TxMetaStoreError(t *testing.T) {
+}
+
+func TestValidate_BlockAssemblyError(t *testing.T) {
+}
+
 func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3b80(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -128,8 +164,9 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 	span := tracing.Start(ctx, "Test")
 	defer span.Finish()
 
-	err = v.validateTransaction(span, tx, height)
+	err = v.validateTransaction(span.Ctx, tx, height)
 	require.NoError(t, err)
+
 }
 
 func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840cda6(t *testing.T) {
@@ -154,8 +191,9 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 	span := tracing.Start(ctx, "Test")
 	defer span.Finish()
 
-	err = v.validateTransaction(span, tx, height)
+	err = v.validateTransaction(span.Ctx, tx, height)
 	require.NoError(t, err)
+
 }
 
 func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d604(t *testing.T) {
@@ -180,8 +218,9 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	span := tracing.Start(ctx, "Test")
 	defer span.Finish()
 
-	err = v.validateTransaction(span, tx, height)
+	err = v.validateTransaction(span.Ctx, tx, height)
 	require.NoError(t, err)
+
 }
 
 // func TestValidateTxdad5ecab132387e8e9b4e0330910c71930e637d840a5818eb92928668e52bbe5(t *testing.T) {
@@ -207,6 +246,38 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 // }
 
+var testTransactions = map[string]string{
+	"ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80": "010000000000000000ef0140ed240a0a018469a1cdd3656800c23ec796d698d82ea336c4b6fb72b141c9cd000000008b483045022100de3b4c67e8a3eb09f18e8b5834257c0a27812df490365b8ac0e30e1d3dcc01630220426997ee904736647ae2e0b93cb2a11511f7b33e8f8a8ce0c5265cbd5b113ae8504104b1796b0e02f327e1a6f61abdff028374de9c80d6189460b0b7035752a2d00364fb19f16868ba34a4e93350e49e6ff8bfb48d23ab15f14871b01d6562f69b9973ffffffff0065cd1d000000001976a914990a8e1eb7a69c41602bd46fed56b6a38fd9bc1e88ac0300e1f505000000001976a914ac625f248f3be5c1c17767b8b2b93dd03553984788ace0e2cf17000000001976a9142c00769e224ac558cf0e726c8e4d6aa9d34f6e5688ac107a0700000000001976a9144bd0ac767d24acc4c5af736767b7b3acd1a6776188ac00000000",
+	"0fb02dfd6811c72379ddcd4b25352ff85d77f8cc52723ee087c50042236ff470": "010000000000000000ef0225894047a817115970e49cc0b77dc2e1fd5d185632c244c055512dc490e82a5a000000006a47304402205bccbecf7d1658032759c4d182a8170174ad7dc687d58555707198a1e230f84f02203ae6804eef77319876223db1b354828e1beeccaeafb6d667879436eef7aa5f3141210300e3b001c4addf714e8c4d5ac1427fb19349d3d05e416e47fc6186cd2d95eb0effffffff962fb15b000000001976a9145632e2f253ac71e2dda1a8dcec6eac384a74251b88ac88ad2770b0bc82235a6414c68d4eb8764750c48178ffa01f6a93ba972dc1e418000000006b483045022100c348ff56a2f00b608fadb4583b76a9a91079bf25b507ef44da562e8aa90fbdd202204fc40afdb76409527a05cfb67fbc67d496e6b0bd720121a26779123b5dd30212412102381da97b922c1584ca700f97650f1a2c2dcdba8a480ff998541504263f5ce551ffffffff00e1f505000000001976a914f9878c4ef91c883c451bee25ca6daf17da20a29688ac0116b16d61000000001976a914cc401501b36a914bc31f2322612b673cbb98a2d788ac00000000",
+}
+
+func TestValidateTransactions(t *testing.T) {
+	initPrometheusMetrics()
+	//interpreter.InjectExternalVerifySignatureFn(native.VerifySignature)
+
+	for txid, txHex := range testTransactions {
+		tx, err := bt.NewTxFromString(txHex)
+		require.NoError(t, err)
+		assert.Equal(t, txid, tx.TxID())
+
+		var height uint32 = 264084
+
+		v := &Validator{
+			txValidator: TxValidator{
+				policy: NewPolicySettings(),
+			},
+		}
+
+		ctx := context.Background()
+
+		span := tracing.Start(ctx, "Test")
+		defer span.Finish()
+
+		err = v.validateTransaction(span.Ctx, tx, height)
+		require.NoError(t, err)
+	}
+}
+
 func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -229,6 +300,66 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 	span := tracing.Start(ctx, "Test")
 	defer span.Finish()
 
-	err = v.validateTransaction(span, tx, height)
+	err = v.validateTransaction(span.Ctx, tx, height)
 	require.NoError(t, err)
+
+}
+
+func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a363b7(t *testing.T) {
+	initPrometheusMetrics()
+	//interpreter.InjectExternalVerifySignatureFn(native.VerifySignature)
+
+	txid := "944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a363b7"
+	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
+	require.NoError(t, err)
+	assert.Equal(t, txid, tx.TxID())
+
+	var height uint32 = 800000
+
+	v := &Validator{
+		txValidator: TxValidator{
+			policy: NewPolicySettings(),
+		},
+	}
+
+	ctx := context.Background()
+
+	span := tracing.Start(ctx, "Test")
+	defer span.Finish()
+
+	err = v.validateTransaction(span.Ctx, tx, height)
+	require.NoError(t, err)
+
+}
+
+func TestIsFinal7b27e3ed7ebf878d985f5fcc35bfbf0e3116489ff75f5e7eec8480780975920c(t *testing.T) {
+	tx, err := bt.NewTxFromString("010000000000000000ef01ffd5c45f91eac31aa75de5cb1cac9d559f25e732f620b09582bf5d9b8aaa6d41010000006b48304502207c2cc4f80d58a524384364c250611a78a312045ef1ed6ab7def42438ce743cfc022100c8686df6eadcd8638fc91d4aee36e4d60793bcc71ff298f9600c869e14a1058601210319564fb11701a3aa24057afcdc24db5b1880339ec8612914cbd0b6ad8ba9211f10ffffff124a1700000000001976a914335df8a6ed745a6fb37ea8c1c3ff3d4257d222aa88ac0240420f00000000001976a9140b655a2a9748b30d6a1c9df810f116d2c8386b3d88acc2e00700000000001976a9145ebf8758fba212df6ed18eceecc1533574a8dc8988ac602d2653")
+
+	require.NoError(t, err)
+	assert.Equal(t, "7b27e3ed7ebf878d985f5fcc35bfbf0e3116489ff75f5e7eec8480780975920c", tx.TxIDChainHash().String())
+
+	err = util.IsTransactionFinal(tx, 290918, 1395011852) // Block time
+	require.NoError(t, err)
+}
+func TestIsFinalb633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b(t *testing.T) {
+	tx, err := bt.NewTxFromString("010000000000000000ef017eac59de00f046e6d0a68d24963ae6273dc743e6eb47435389feb797ba2eed11000000008b4830450220781bf3ae77e09c900c5b5bcd4ef8800d0bb2313cff3691eedec4193d0daed489022100b1c3b624e1d8ffeed997067dc14cf95587ac85aa4406cc2823ee1540ac69c6a101410420ecf1f137e2aec6a47ae844b695772ab5a9177d4a830b328fbe753c41dc2d99cee9e13de3de5bb85e56b83b6923a147365b19747e7afe16c92625d5b121374eff0000ffb8b10e00000000001976a914d20671f2248ff5176fc245b1c4f72256f77bc00988ac01a88a0e00000000001976a9143910660af6df1e1aed432be83d8e9036d69ed14988ac81cd7c53")
+
+	require.NoError(t, err)
+	assert.Equal(t, "b633531280f980108329e3e0b9335b2290892d120916f9e17a9e3033bde1260b", tx.TxIDChainHash().String())
+
+	// Block time          1400689692
+	// Median time past is 1400686491
+	err = util.IsTransactionFinal(tx, 301926, 1400689692) // Block time
+	require.NoError(t, err)
+}
+
+type BlockAssemblyStore struct {
+}
+
+func (s BlockAssemblyStore) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {
+	return true, nil
+}
+
+func (s BlockAssemblyStore) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
 }

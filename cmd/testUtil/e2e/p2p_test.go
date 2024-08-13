@@ -166,7 +166,7 @@ func TestTwoP2PNodes(t *testing.T) {
 		return
 	}
 
-	blockchainClient, err := blockchain.NewClient(ctx, logger)
+	blockchainClient, err := blockchain.NewClient(ctx, logger, "cmd/testUtil/e2e")
 	if err != nil {
 		t.Errorf("Error creating blockchain client: %v", err)
 		return

@@ -56,6 +56,7 @@ const (
 	BlockchainAPI_CatchUpBlocks_FullMethodName             = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
 	BlockchainAPI_GetBlockLocator_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlockLocator"
 	BlockchainAPI_LocateBlockHeaders_FullMethodName        = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
+	BlockchainAPI_GetBestHeightAndTime_FullMethodName      = "/blockchain_api.BlockchainAPI/GetBestHeightAndTime"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -99,6 +100,7 @@ type BlockchainAPIClient interface {
 	CatchUpBlocks(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetBlockLocator(ctx context.Context, in *GetBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockLocatorResponse, error)
 	LocateBlockHeaders(ctx context.Context, in *LocateBlockHeadersRequest, opts ...grpc.CallOption) (*LocateBlockHeadersResponse, error)
+	GetBestHeightAndTime(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBestHeightAndTimeResponse, error)
 }
 
 type blockchainAPIClient struct {
@@ -447,6 +449,15 @@ func (c *blockchainAPIClient) LocateBlockHeaders(ctx context.Context, in *Locate
 	return out, nil
 }
 
+func (c *blockchainAPIClient) GetBestHeightAndTime(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBestHeightAndTimeResponse, error) {
+	out := new(GetBestHeightAndTimeResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBestHeightAndTime_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockchainAPIServer is the server API for BlockchainAPI service.
 // All implementations must embed UnimplementedBlockchainAPIServer
 // for forward compatibility
@@ -488,6 +499,7 @@ type BlockchainAPIServer interface {
 	CatchUpBlocks(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error)
 	LocateBlockHeaders(context.Context, *LocateBlockHeadersRequest) (*LocateBlockHeadersResponse, error)
+	GetBestHeightAndTime(context.Context, *emptypb.Empty) (*GetBestHeightAndTimeResponse, error)
 	mustEmbedUnimplementedBlockchainAPIServer()
 }
 
@@ -599,6 +611,9 @@ func (UnimplementedBlockchainAPIServer) GetBlockLocator(context.Context, *GetBlo
 }
 func (UnimplementedBlockchainAPIServer) LocateBlockHeaders(context.Context, *LocateBlockHeadersRequest) (*LocateBlockHeadersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LocateBlockHeaders not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetBestHeightAndTime(context.Context, *emptypb.Empty) (*GetBestHeightAndTimeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBestHeightAndTime not implemented")
 }
 func (UnimplementedBlockchainAPIServer) mustEmbedUnimplementedBlockchainAPIServer() {}
 
@@ -1246,6 +1261,24 @@ func _BlockchainAPI_LocateBlockHeaders_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_GetBestHeightAndTime_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetBestHeightAndTime(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetBestHeightAndTime_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetBestHeightAndTime(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockchainAPI_ServiceDesc is the grpc.ServiceDesc for BlockchainAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1388,6 +1421,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LocateBlockHeaders",
 			Handler:    _BlockchainAPI_LocateBlockHeaders_Handler,
+		},
+		{
+			MethodName: "GetBestHeightAndTime",
+			Handler:    _BlockchainAPI_GetBestHeightAndTime_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

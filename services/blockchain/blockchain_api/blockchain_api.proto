@@ -47,6 +47,7 @@ service BlockchainAPI {
   rpc CatchUpBlocks(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc GetBlockLocator(GetBlockLocatorRequest) returns (GetBlockLocatorResponse) {}
   rpc LocateBlockHeaders(LocateBlockHeadersRequest) returns (LocateBlockHeadersResponse) {}
+  rpc GetBestHeightAndTime(google.protobuf.Empty) returns (GetBestHeightAndTimeResponse) {}
 }
 
 // swagger:model HealthResponse
@@ -325,3 +326,10 @@ message LocateBlockHeadersRequest {
 message LocateBlockHeadersResponse {
   repeated bytes block_headers = 1;
 }
+
+// swagger:model GetBestHeightAndTimeResponse
+message GetBestHeightAndTimeResponse {
+  uint32 height = 1;
+  uint32 time = 2;
+}
+
