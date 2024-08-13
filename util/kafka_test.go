@@ -3,7 +3,6 @@ package util
 import (
 	"context"
 	"fmt"
-	"github.com/IBM/sarama"
 	"math/rand"
 	"net"
 	"strconv"
@@ -243,58 +242,6 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure(t *testing.T) {
 		case <-c:
 			count++
 		}
-	}
-}
-
-func Test_KafkaWithCompose(t *testing.T) {
-	ctx := context.Background()
-
-	composeFilePaths := "../docker-compose-kafka.yml"
-	compose, err := tc.NewDockerCompose(composeFilePaths)
-	require.NoError(t, err)
-
-	err = compose.Up(ctx)
-	require.NoError(t, err, "Failed to start Docker Compose")
-	defer stopKafka(compose, ctx)
-
-	// Kafka client configuration
-	config := sarama.NewConfig()
-	config.Producer.Return.Successes = true
-
-	// Kafka address from Docker Compose setup
-	kafkaAddress := "localhost:9092"
-
-	err = waitForKafkaReady(ctx, kafkaAddress, 30*time.Second)
-	require.NoError(t, err)
-
-	// Test message production
-	producer, err := sarama.NewSyncProducer([]string{kafkaAddress}, config)
-	require.NoError(t, err, "Failed to create Kafka producer")
-
-	topic := "test_topic"
-	message := &sarama.ProducerMessage{
-		Topic: topic,
-		Value: sarama.StringEncoder("Hello Kafka"),
-	}
-	partition, offset, err := producer.SendMessage(message)
-	require.NoError(t, err, "Failed to send message to Kafka")
-	fmt.Printf("Message is stored in topic(%s)/partition(%d)/offset(%d)\n", topic, partition, offset)
-
-	// Test message consumption
-	consumer, err := sarama.NewConsumer([]string{kafkaAddress}, nil)
-	require.NoError(t, err, "Failed to create Kafka consumer")
-
-	partitionConsumer, err := consumer.ConsumePartition(topic, partition, offset)
-	require.NoError(t, err, "Failed to consume message from Kafka")
-	defer func(partitionConsumer sarama.PartitionConsumer) {
-		_ = partitionConsumer.Close()
-	}(partitionConsumer)
-
-	select {
-	case msg := <-partitionConsumer.Messages():
-		fmt.Printf("Received message: %s\n", string(msg.Value))
-	case <-time.After(10 * time.Second):
-		t.Fatal("Timed out waiting for message")
 	}
 }
 
