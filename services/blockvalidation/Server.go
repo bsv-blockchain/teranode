@@ -550,7 +550,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessBlock",
 		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[ProcessBlock][%s] process block called for height %d", block.Hash(), request.Height),
+		tracing.WithLogMessage(u.logger, "[ProcessBlock][%s] process block called for height %d (%d txns)", block.Hash(), request.Height, block.TransactionCount),
 	)
 	defer deferFn()
 
