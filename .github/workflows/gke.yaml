@@ -99,6 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     needs:
+      - test_and_lint
       - build_amd64
       - build_arm64
       - create_manifest
