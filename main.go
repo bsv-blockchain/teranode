@@ -515,6 +515,11 @@ func main() {
 			panic(err)
 		}
 
+		subtreeValidationClient, err := getSubtreeValidationClient(ctx, logger)
+		if err != nil {
+			panic(err)
+		}
+
 		blockValidationClient, err := getBlockValidationClient(ctx, logger)
 		if err != nil {
 			panic(err)
