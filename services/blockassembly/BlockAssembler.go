@@ -72,12 +72,13 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
 	defaultMiningBits, _ := model.NewNBitFromString(nBitsString)
 
+	subtreeProcessor, _ := subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan)
 	b := &BlockAssembler{
 		logger:                     logger,
 		utxoStore:                  utxoStore,
 		subtreeStore:               subtreeStore,
 		blockchainClient:           blockchainClient,
-		subtreeProcessor:           subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan),
+		subtreeProcessor:           subtreeProcessor,
 		miningCandidateCh:          make(chan chan *miningCandidateResponse),
 		currentChainMap:            make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
 		currentChainMapIDs:         make(map[uint32]struct{}, maxBlockReorgCatchup),

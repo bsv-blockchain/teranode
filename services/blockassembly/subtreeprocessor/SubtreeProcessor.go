@@ -90,7 +90,7 @@ var (
 )
 
 func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, utxoStore utxostore.Store,
-	newSubtreeChan chan NewSubtreeRequest, options ...Options) *SubtreeProcessor {
+	newSubtreeChan chan NewSubtreeRequest, options ...Options) (*SubtreeProcessor, error) {
 
 	initPrometheusMetrics()
 
@@ -98,11 +98,11 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 
 	firstSubtree, err := util.NewTreeByLeafCount(initialItemsPerFile)
 	if err != nil {
-		panic(err)
+		return nil, errors.NewInvalidArgumentError("error creating first subtree", err)
 	}
 	// We add a placeholder for the coinbase tx because we know this is the first subtree in the chain
 	if err := firstSubtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
-		panic(err)
+		return nil, errors.NewInvalidArgumentError("error adding coinbase placeholder to first subtree", err)
 	}
 
 	txChanBufferSize := 100_000
@@ -265,7 +265,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		}
 	}()
 
-	return stp
+	return stp, nil
 }
 
 func (stp *SubtreeProcessor) GetCurrentRunningState() string {

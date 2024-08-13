@@ -317,7 +317,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	)
 
 	// overwrite default subtree processor with a new one
-	ba.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(
+	ba.subtreeProcessor, _ = subtreeprocessor.NewSubtreeProcessor(
 		context.Background(),
 		ulogger.TestLogger{},
 		nil,
