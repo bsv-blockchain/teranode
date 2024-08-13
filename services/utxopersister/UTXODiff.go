@@ -249,7 +249,7 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 				if err == io.EOF {
 					break
 				}
-				return errors.NewStorageError("error reading utxo-set", err)
+				return errors.NewStorageError("error reading previous utxo-set (%s.%s)", previousBlockHash.String(), utxosetExtension, err)
 			}
 
 			// Stream each record and write to new UTXOSet if not in the deletions set
