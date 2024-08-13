@@ -103,13 +103,13 @@ func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store block
 
 	addresses, ok := gocore.Config().Get("propagation_grpcAddresses")
 	if !ok {
-		panic("[PeerStatus] propagation_grpcAddresses not found")
+		return nil, errors.NewConfigurationError("[PeerStatus] propagation_grpcAddresses not found")
 	}
 	numberOfExpectedPeers := 1 + strings.Count(addresses, "|") // each | is a ip:port separator
 
 	peerStatusTimeout, err, _ := gocore.Config().GetDuration("peerStatus_timeout", 30*time.Second)
 	if err != nil {
-		panic(fmt.Sprintf("[PeerStatus] failed to parse peerStatus_timeout: %s", err))
+		return nil, errors.NewConfigurationError("[PeerStatus] failed to parse peerStatus_timeout", err)
 	}
 
 	waitForPeers := gocore.Config().GetBool("coinbase_wait_for_peers", false)
@@ -117,6 +117,10 @@ func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store block
 	g, gCtx := errgroup.WithContext(context.Background())
 	g.SetLimit(runtime.NumCPU())
 
+	peerSync, err := p2p.NewPeerHeight(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout)
+	if err != nil {
+		return nil, errors.NewServiceError("could not create peer sync service", err)
+	}
 	c := &Coinbase{
 		blockchainClient: blockchainClient,
 		store:            store,
@@ -129,7 +133,7 @@ func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store block
 		privateKey:       privateKey.PrivKey,
 		address:          coinbaseAddr.AddressString,
 		dbTimeout:        time.Duration(dbTimeoutMillis) * time.Millisecond,
-		peerSync:         p2p.NewPeerHeight(logger, "coinbase", numberOfExpectedPeers, peerStatusTimeout),
+		peerSync:         peerSync,
 		waitForPeers:     waitForPeers,
 		g:                g,
 		gCtx:             gCtx,

@@ -49,47 +49,47 @@ type Server struct {
 	blockCh               chan []byte
 }
 
-func NewServer(ctx context.Context, logger ulogger.Logger) *Server {
+func NewServer(ctx context.Context, logger ulogger.Logger) (*Server, error) {
 	logger.Debugf("Creating P2P service")
 
 	p2pIp, ok := gocore.Config().Get("p2p_ip")
 	if !ok {
-		panic("p2p_ip not set in config")
+		return nil, errors.NewConfigurationError("p2p_ip not set in config")
 	}
 	p2pPort, ok := gocore.Config().GetInt("p2p_port")
 	if !ok {
-		panic("p2p_port not set in config")
+		return nil, errors.NewConfigurationError("p2p_port not set in config")
 	}
 
 	topicPrefix, ok := gocore.Config().Get("p2p_topic_prefix")
 	if !ok {
-		panic("p2p_topic_prefix not set in config")
+		return nil, errors.NewConfigurationError("p2p_topic_prefix not set in config")
 	}
 	btn, ok := gocore.Config().Get("p2p_block_topic")
 	if !ok {
-		panic("p2p_block_topic not set in config")
+		return nil, errors.NewConfigurationError("p2p_block_topic not set in config")
 	}
 	stn, ok := gocore.Config().Get("p2p_subtree_topic")
 	if !ok {
-		panic("p2p_subtree_topic not set in config")
+		return nil, errors.NewConfigurationError("p2p_subtree_topic not set in config")
 	}
 	bbtn, ok := gocore.Config().Get("p2p_bestblock_topic")
 	if !ok {
-		panic("p2p_bestblock_topic not set in config")
+		return nil, errors.NewConfigurationError("p2p_bestblock_topic not set in config")
 	}
 
 	miningOntn, ok := gocore.Config().Get("p2p_mining_on_topic")
 	if !ok {
-		panic("p2p_mining_on_topic not set in config")
+		return nil, errors.NewConfigurationError("p2p_mining_on_topic not set in config")
 	}
 	rtn, ok := gocore.Config().Get("p2p_rejected_tx_topic")
 	if !ok {
-		panic("p2p_rejected_tx_topic not set in config")
+		return nil, errors.NewConfigurationError("p2p_rejected_tx_topic not set in config")
 	}
 
 	sharedKey, ok := gocore.Config().Get("p2p_shared_key")
 	if !ok {
-		panic(errors.NewConfigurationError("error getting p2p_shared_key"))
+		return nil, errors.NewConfigurationError("error getting p2p_shared_key")
 	}
 	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
 	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
@@ -115,7 +115,10 @@ func NewServer(ctx context.Context, logger ulogger.Logger) *Server {
 		StaticPeers:     staticPeers,
 	}
 
-	p2pNode := p2p.NewP2PNode(logger, config)
+	p2pNode, err := p2p.NewP2PNode(logger, config)
+	if err != nil {
+		return nil, errors.NewServiceError("Error creating P2PNode", err)
+	}
 
 	p2pServer := &Server{
 		P2PNode:           p2pNode,
@@ -126,7 +129,7 @@ func NewServer(ctx context.Context, logger ulogger.Logger) *Server {
 
 	subtreesKafkaURL, err, found := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err != nil {
-		panic(fmt.Sprintf("[P2P] error getting kafka url: %v", err))
+		return nil, errors.NewConfigurationError("[P2P] error getting kafka url", err)
 	}
 
 	if found {
@@ -146,7 +149,7 @@ func NewServer(ctx context.Context, logger ulogger.Logger) *Server {
 
 	blocksKafkaURL, err, found := gocore.Config().GetURL("kafka_blocksConfig")
 	if err != nil {
-		panic(fmt.Sprintf("[P2P] error getting kafka url: %v", err))
+		return nil, errors.NewConfigurationError("[P2P] error getting kafka url", err)
 	}
 
 	if found {
@@ -164,7 +167,7 @@ func NewServer(ctx context.Context, logger ulogger.Logger) *Server {
 		logger.Infof("[P2P] connected to kafka at %s", subtreesKafkaURL.Host)
 	}
 
-	return p2pServer
+	return p2pServer, nil
 }
 
 func (s *Server) Health(ctx context.Context) (int, string, error) {

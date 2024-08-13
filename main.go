@@ -233,9 +233,14 @@ func main() {
 
 	// p2p server
 	if startP2P {
-		if err = sm.AddService("P2P", p2p.NewServer(ctx,
+		p2pService, err := p2p.NewServer(ctx,
 			logger.New("P2P"),
-		)); err != nil {
+		)
+		if err != nil {
+			panic(err)
+		}
+
+		if err = sm.AddService("P2P", p2pService); err != nil {
 			panic(err)
 		}
 	}

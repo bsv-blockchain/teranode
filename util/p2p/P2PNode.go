@@ -6,12 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libp2p/go-libp2p"
@@ -56,7 +57,7 @@ type P2PConfig struct {
 	StaticPeers     []string
 }
 
-func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
+func NewP2PNode(logger ulogger.Logger, config P2PConfig) (*P2PNode, error) {
 	logger.Infof("[P2PNode] Creating node")
 
 	var pk *crypto.PrivKey
@@ -68,13 +69,13 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 		if err != nil {
 			pk, err = generatePrivateKey(privateKeyFilename)
 			if err != nil {
-				panic(err)
+				return nil, errors.NewConfigurationError("[P2PNode] error generating private key", err)
 			}
 		}
 	} else {
 		pk, err = decodeHexEd25519PrivateKey(config.PrivateKey)
 		if err != nil {
-			panic(err)
+			return nil, errors.NewInvalidArgumentError("[P2PNode] error decoding private key", err)
 		}
 	}
 
@@ -87,7 +88,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 
 		psk, err := pnet.DecodeV1PSK(bytes.NewBuffer([]byte(s)))
 		if err != nil {
-			panic(err)
+			return nil, errors.NewInvalidArgumentError("[P2PNode] error decoding shared key", err)
 		}
 		h, err = libp2p.New(
 			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
@@ -95,7 +96,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 			libp2p.PrivateNetwork(psk),
 		)
 		if err != nil {
-			panic(err)
+			return nil, errors.NewServiceError("[P2PNode] error creating private network", err)
 		}
 	} else {
 		// copied from txblaster
@@ -107,7 +108,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 			libp2p.Identity(*pk),
 		)
 		if err != nil {
-			panic(err)
+			return nil, errors.NewServiceError("[P2PNode] error creating libp2p host", err)
 		}
 	}
 
@@ -124,7 +125,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 		bitcoinProtocolId: "ubsv/bitcoin/1.0.0",
 		handlerByTopic:    make(map[string]Handler),
 		startTime:         time.Now(),
-	}
+	}, nil
 }
 
 func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
