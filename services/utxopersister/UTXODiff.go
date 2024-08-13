@@ -3,6 +3,7 @@ package utxopersister
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
@@ -221,6 +222,8 @@ func (ud *UTXODiff) GetUTXODeletionsSet() (map[[36]byte]struct{}, error) {
 // CreateUTXOSet generates the UTXO set for the current block, using the previous block's UTXO set
 // and applying additions and deletions from the current block. It returns an error if the operation fails.
 func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainhash.Hash) (err error) {
+	time.Sleep(1 * time.Second)
+
 	deletions := ud.deletionsSet
 
 	if deletions == nil {
@@ -251,7 +254,7 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 				if err == io.EOF {
 					break
 				}
-				return errors.NewStorageError("error reading previous utxo-set (%s.%s) at iteration %d", previousBlockHash.String(), utxosetExtension, err, count)
+				return errors.NewStorageError("error reading previous utxo-set (%s.%s) at iteration %d", previousBlockHash.String(), utxosetExtension, count, err)
 			}
 
 			// Stream each record and write to new UTXOSet if not in the deletions set
