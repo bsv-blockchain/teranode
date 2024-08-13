@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"golang.org/x/sync/errgroup"
 )
@@ -120,7 +121,9 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 			channel := sm.dependencyChannels[sw.index-1]
 			sm.dependencyChannelsMux.Unlock()
 
-			sm.waitForPreviousServiceToStart(sw, channel)
+			if err := sm.waitForPreviousServiceToStart(sw, channel); err != nil {
+				return err
+			}
 		}
 		sm.dependencyChannelsMux.Lock()
 		close(sm.dependencyChannels[sw.index])
@@ -137,16 +140,16 @@ func (sm *ServiceManager) AddService(name string, service Service) error {
 	return nil
 }
 
-func (sm *ServiceManager) waitForPreviousServiceToStart(sw serviceWrapper, channel chan bool) {
+func (sm *ServiceManager) waitForPreviousServiceToStart(sw serviceWrapper, channel chan bool) error {
 	timer := time.NewTimer(5 * time.Second)
 
 	// Wait for previous service to start
 	select {
 	case <-channel:
 		// Previous service has started
-		return
+		return nil
 	case <-timer.C:
-		sm.logger.Fatalf("%s (index %d) timed out waiting for previous service to start", sw.name, sw.index)
+		return errors.NewServiceError("%s (index %d) timed out waiting for previous service to start", sw.name, sw.index)
 	}
 }
 

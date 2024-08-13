@@ -69,8 +69,14 @@ func (ctx *testContext) Setup(config *testConfig) error {
 
 	subtreeStore := blob_memory.New()
 
-	blockvalidationClient := blockvalidation.NewClient(context.Background(), ulogger.TestLogger{})
-	subtreeValidationClient := subtreevalidation.NewClient(context.Background(), ulogger.TestLogger{})
+	blockvalidationClient, err := blockvalidation.NewClient(context.Background(), ulogger.TestLogger{}, "manager_test")
+	if err != nil {
+		return fmt.Errorf("failed to create block validation client: %v", err)
+	}
+	subtreeValidationClient, err := subtreevalidation.NewClient(context.Background(), ulogger.TestLogger{}, "manager_test")
+	if err != nil {
+		return fmt.Errorf("failed to create subtree validation client: %v", err)
+	}
 
 	syncMgr, err := netsync.New(context.Background(),
 		ulogger.TestLogger{},

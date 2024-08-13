@@ -3,9 +3,10 @@ package blockchain
 import (
 	"context"
 	"encoding/binary"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"math/big"
 	"math/rand"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"time"
 
@@ -65,8 +66,8 @@ func (d *Difficulty) GetNextWorkRequired(ctx context.Context, bestBlockHeader *m
 		d.logger.Debugf("not enough blocks to calculate difficulty adjustment")
 		// not enough blocks to calculate difficulty adjustment
 		// set to start difficulty
-		nBits := model.NewNBitFromString(d.nBitsString)
-		return &nBits, nil
+		nBits, _ := model.NewNBitFromString(d.nBitsString)
+		return nBits, nil
 	}
 
 	// Special difficulty rule for testnet:
@@ -91,16 +92,16 @@ func (d *Difficulty) GetNextWorkRequired(ctx context.Context, bestBlockHeader *m
 		d.logger.Debugf("applying special difficulty rule")
 		d.lastSlowBlockHash = bestBlockHeader.Hash()
 		// set to start difficulty
-		nBits := model.NewNBitFromString(d.nBitsString)
-		return &nBits, nil
+		nBits, _ := model.NewNBitFromString(d.nBitsString)
+		return nBits, nil
 	}
 
 	if gocore.Config().GetBool("mine_initial_blocks", false) && bestBlockHeight < uint32(initialBlockCount) {
 		// set to start difficulty
 		d.logger.Debugf("mining initial blocks")
 
-		nBits := model.NewNBitFromString(d.nBitsString)
-		return &nBits, nil
+		nBits, _ := model.NewNBitFromString(d.nBitsString)
+		return nBits, nil
 	}
 
 	lastSuitableBlock, err := d.store.GetSuitableBlock(ctx, bestBlockHeader.Hash())
@@ -120,11 +121,13 @@ func (d *Difficulty) GetNextWorkRequired(ctx context.Context, bestBlockHeader *m
 
 	// d.logger.Debugf("firstSuitableBlock: %+v", firstSuitableBlock)
 	// d.logger.Debugf("lastSuitableBlock: %+v", lastSuitableBlock)
+	bits1, _ := model.NewNBitFromSlice(firstSuitableBlock.NBits)
+	bits2, _ := model.NewNBitFromSlice(lastSuitableBlock.NBits)
 	nBits, err := d.ComputeTarget(&model.BlockHeader{
-		Bits:      model.NewNBitFromSlice(firstSuitableBlock.NBits),
+		Bits:      *bits1,
 		Timestamp: firstSuitableBlock.Time,
 	}, &model.BlockHeader{
-		Bits:      model.NewNBitFromSlice(lastSuitableBlock.NBits),
+		Bits:      *bits2,
 		Timestamp: lastSuitableBlock.Time,
 	})
 	if err != nil {
@@ -168,8 +171,8 @@ func (d *Difficulty) ComputeTarget(firstBlock *model.BlockHeader, lastBlock *mod
 	}
 
 	nBitsUint := BigToCompact(newTarget)
-	nb := model.NewNBitFromSlice(uint32ToBytes(nBitsUint))
-	return &nb, nil
+	nb, _ := model.NewNBitFromSlice(uint32ToBytes(nBitsUint))
+	return nb, nil
 }
 
 // BigToCompact converts a whole number N to a compact representation using

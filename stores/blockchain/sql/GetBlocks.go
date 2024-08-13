@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -93,7 +94,8 @@ func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numb
 			return nil, errors.NewStorageError("failed to scan row", err)
 		}
 
-		block.Header.Bits = model.NewNBitFromSlice(nBits)
+		bits, _ := model.NewNBitFromSlice(nBits)
+		block.Header.Bits = *bits
 
 		block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 		if err != nil {

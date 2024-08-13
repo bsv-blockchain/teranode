@@ -24,19 +24,21 @@ func TestCalcNextRequiredDifficulty(t *testing.T) {
 	// 826223 - 1704738 582
 
 	// use bits from block 826077 (826223-146)
+	bits, _ := model.NewNBitFromString("1808f160")
 	firstBlockHeader := &model.BlockHeader{
-		Bits:      model.NewNBitFromString("1808f160"),
+		Bits:      *bits,
 		Timestamp: 1704647484,
 	}
 
 	// use bits from block 826221
+	bits, _ = model.NewNBitFromString("1809dd97")
 	lastBlockHeader := &model.BlockHeader{
-		Bits:      model.NewNBitFromString("1809dd97"),
+		Bits:      *bits,
 		Timestamp: 1704738369,
 	}
 
 	// expected from block 826224 - 180a39ef
-	expectedNbits := model.NewNBitFromString("1809dd97")
+	expectedNbits, _ := model.NewNBitFromString("1809dd97")
 	// expectedNbits := model.NewNBitFromString("180a1de9") // this is the actual nBit value in block 826224
 
 	os.Setenv("difficulty_target_time_per_block", "144")
@@ -47,31 +49,37 @@ func TestCalcNextRequiredDifficulty(t *testing.T) {
 	nbits, err := d.ComputeTarget(firstBlockHeader, lastBlockHeader)
 	require.NoError(t, err)
 
-	require.Equal(t, expectedNbits, *nbits)
+	require.Equal(t, *expectedNbits, *nbits)
 }
 
 func TestCalculateDifficulty(t *testing.T) {
+	firstBits, _ := model.NewNBitFromString("180d589d")
+	lastBits, _ := model.NewNBitFromString("180f0e84")
+	expectedBits, _ := model.NewNBitFromString("180f0e84")
+	fBits, _ := model.NewNBitFromString("18087ed7")
+	lBits, _ := model.NewNBitFromString("1807e0fb")
+	eBits, _ := model.NewNBitFromString("1807e0fb")
 	tests := map[string]struct {
 		firstBlockHeader model.BlockHeader
 		lastBlockHeader  model.BlockHeader
 		expected         model.NBit
 	}{
 		"block #800000": {firstBlockHeader: model.BlockHeader{
-			Bits:      model.NewNBitFromString("180d589d"), // 800000
+			Bits:      *firstBits, // 800000
 			Timestamp: 1688957834,
 		}, lastBlockHeader: model.BlockHeader{ // 800144
-			Bits:      model.NewNBitFromString("180f0e84"),
+			Bits:      *lastBits,
 			Timestamp: 1689046071,
-		}, expected: model.NewNBitFromString("180f0e84"), // 800146
+		}, expected: *expectedBits, // 800146
 		// expected     180f6077
 		},
 		"block #826768": {firstBlockHeader: model.BlockHeader{
-			Bits:      model.NewNBitFromString("18087ed7"), // 826623
+			Bits:      *fBits, // 826623
 			Timestamp: 1704972003,
 		}, lastBlockHeader: model.BlockHeader{ // 826767
-			Bits:      model.NewNBitFromString("1807e0fb"),
+			Bits:      *lBits,
 			Timestamp: 1705054404,
-		}, expected: model.NewNBitFromString("1807e0fb")}, // 826768
+		}, expected: *eBits}, // 826768
 		// expected    180783a0
 	}
 
@@ -90,18 +98,20 @@ func TestCalculateDifficulty(t *testing.T) {
 }
 
 func TestCalcNextRequiredDifficulty_fastBlocks(t *testing.T) {
+	firstBits, _ := model.NewNBitFromString("1808de5f")
 	firstBlockHeader := &model.BlockHeader{
-		Bits:      model.NewNBitFromString("1808de5f"),
+		Bits:      *firstBits,
 		Timestamp: 1704647590,
 	}
 
+	lastBits, _ := model.NewNBitFromString("180a097a")
 	lastBlockHeader := &model.BlockHeader{
-		Bits:      model.NewNBitFromString("180a097a"),
+		Bits:      *lastBits,
 		Timestamp: 1704647599,
 	}
 
 	// as the timestapms are too close together difficulty should be the last difficulty
-	expectedNbits := model.NewNBitFromString("180a097a")
+	expectedNbits, _ := model.NewNBitFromString("180a097a")
 
 	os.Setenv("difficulty_target_time_per_block", "144")
 
@@ -110,6 +120,6 @@ func TestCalcNextRequiredDifficulty_fastBlocks(t *testing.T) {
 	nbits, err := d.ComputeTarget(firstBlockHeader, lastBlockHeader)
 	require.NoError(t, err)
 
-	require.Equal(t, expectedNbits, *nbits)
+	require.Equal(t, *expectedNbits, *nbits)
 
 }

@@ -151,68 +151,19 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		// except the coinbase transaction
 		subtreeData := util.NewSubtreeData(subtree)
 
-		txMap, err := sm.createTxMap(block)
+		txMap, err := sm.createTxMap(ctx, block)
 		if err != nil {
 			return nil, err
 		}
 
-		g, gCtx := errgroup.WithContext(ctx)
-		g.SetLimit(runtime.NumCPU() * 4)
-		for _, wireTx := range block.Transactions() {
-			txHash := *wireTx.Hash()
-
-			// the coinbase transaction is not part of the txMap
-			if txWrapper, found := txMap[txHash]; found {
-				tx := txWrapper.tx
-				txSize := uint64(tx.Size())
-
-				if err = subtree.AddNode(txHash, 0, txSize); err != nil {
-					return nil, fmt.Errorf("failed to add node (%s) to subtree: %w", txHash, err)
-				}
-				// we need to match the indexes of the subtree and the tx data in subtreeData
-				currentIdx := subtree.Length() - 1
-
-				g.Go(func() error {
-					if err := sm.extendTransaction(tx, txMap); err != nil {
-						return fmt.Errorf("failed to extend transaction: %w", err)
-					}
-
-					// store the extended transaction in our subtree tx data file
-					if err = subtreeData.AddTx(tx, currentIdx); err != nil {
-						return fmt.Errorf("failed to add tx to subtree data: %w", err)
-					}
-
-					return nil
-				})
-			}
-		}
-
-		// wait for all tx to be processed - we don't need to process errors here
-		if err = g.Wait(); err != nil {
-			return nil, errors.NewProcessingError("failed to process transactions", err)
+		err = sm.extendTransactions(ctx, block, txMap, subtree, subtreeData)
+		if err != nil {
+			return nil, err
 		}
 
 		maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
 
-		// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
-		// This allows us to process all the transactions that are not referencing transactions from this current block
-		// to be processed in parallel.
-		for i := uint32(0); i <= maxLevel; i++ {
-			// process all the transactions on a certain level in parallel
-			g, gCtx = errgroup.WithContext(ctx)
-			g.SetLimit(runtime.NumCPU() * 4)
-			for _, tx := range blockTxsPerLevel[i] {
-				g.Go(func() error {
-					// send to validation, but only if the parent is not in the same block
-					_ = sm.validationClient.Validate(gCtx, tx, blockHeight)
-
-					return nil
-				})
-			}
-
-			// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
-			_ = g.Wait()
-		}
+		sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, blockHeight)
 
 		subtreeBytes, err := subtree.Serialize()
 		if err != nil {
@@ -250,7 +201,87 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	return subtrees, nil
 }
 
-func (sm *SyncManager) createTxMap(block *bsvutil.Block) (map[chainhash.Hash]*txMapWrapper, error) {
+func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, blockHeight uint32) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactions")
+	defer deferFn()
+
+	// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
+	// This allows us to process all the transactions that are not referencing transactions from this current block
+	// to be processed in parallel.
+	for i := uint32(0); i <= maxLevel; i++ {
+		// process all the transactions on a certain level in parallel
+		g, gCtx := errgroup.WithContext(ctx)
+		// we don't want to limit this, that will be done by the batcher
+		// g.SetLimit(runtime.NumCPU() * 4)
+		for _, tx := range blockTxsPerLevel[i] {
+			tx := tx
+			g.Go(func() error {
+				// send to validation, but only if the parent is not in the same block
+				_ = sm.validationClient.Validate(gCtx, tx, blockHeight)
+
+				return nil
+			})
+		}
+
+		// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
+		_ = g.Wait()
+	}
+}
+
+func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper, subtree *util.Subtree, subtreeData *util.SubtreeData) error {
+	_, _, deferFn := tracing.StartTracing(ctx, "extendTransactions")
+	defer deferFn()
+
+	g := errgroup.Group{}
+	g.SetLimit(runtime.NumCPU() * 4)
+	for _, wireTx := range block.Transactions() {
+		txHash := *wireTx.Hash()
+
+		// the coinbase transaction is not part of the txMap
+		if txWrapper, found := txMap[txHash]; found {
+			tx := txWrapper.tx
+			txSize := uint64(tx.Size())
+
+			if err := subtree.AddNode(txHash, 0, txSize); err != nil {
+				return fmt.Errorf("failed to add node (%s) to subtree: %w", txHash, err)
+			}
+			// we need to match the indexes of the subtree and the tx data in subtreeData
+			currentIdx := subtree.Length() - 1
+
+			g.Go(func() error {
+				if err := sm.extendTransaction(tx, txMap); err != nil {
+					return fmt.Errorf("failed to extend transaction: %w", err)
+				}
+
+				// store the extended transaction in our subtree tx data file
+				if err := subtreeData.AddTx(tx, currentIdx); err != nil {
+					return fmt.Errorf("failed to add tx to subtree data: %w", err)
+				}
+
+				return nil
+			})
+		}
+	}
+
+	// wait for all tx to be processed - we don't need to process errors here
+	if err := g.Wait(); err != nil {
+		return errors.NewProcessingError("failed to process transactions", err)
+	}
+
+	return nil
+}
+
+func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (map[chainhash.Hash]*txMapWrapper, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "createTxMap",
+		tracing.WithDebugLogMessage(
+			sm.logger,
+			"[createTxMap][%s %d] processing transactions into map for block",
+			block.Hash().String(),
+			block.Height(),
+		),
+	)
+	defer deferFn()
+
 	// Create a map of all transactions in the block
 	txMap := make(map[chainhash.Hash]*txMapWrapper)
 

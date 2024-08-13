@@ -597,7 +597,9 @@ func isAllowedHost(host string) bool {
 
 // tx := response.Tx
 
-func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulogger.Logger) (bool, error) {
+func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulogger.Logger, fees uint64) (bool, error) {
+	var defaultSathosis uint64 = 10000
+
 	// Send transactions
 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
@@ -650,7 +652,11 @@ func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulo
 		return false, errors.NewProcessingError("Error adding UTXO to transaction: %s\n", err)
 	}
 
-	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
+	if fees != defaultSathosis {
+		defaultSathosis = fees
+	}
+
+	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, defaultSathosis)
 	if err != nil {
 		return false, errors.NewProcessingError("Error adding output to transaction: %v", err)
 	}
@@ -669,4 +675,16 @@ func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulo
 	time.Sleep(5 * time.Second)
 
 	return true, nil
+}
+
+func GetBestBlock(ctx context.Context, node tf.BitcoinNode) (*block_model.Block, error) {
+	_, bbhmeta, errbb := node.BlockchainClient.GetBestBlockHeader(ctx)
+	if errbb != nil {
+		return nil, errors.NewProcessingError("Error getting best block header: %s\n", errbb)
+	}
+	block, errblock := node.BlockchainClient.GetBlockByHeight(ctx, bbhmeta.Height)
+	if errblock != nil {
+		return nil, errors.NewProcessingError("Error getting block by height: %s\n", errblock)
+	}
+	return block, nil
 }

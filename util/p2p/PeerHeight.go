@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"sync"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
@@ -20,19 +21,19 @@ type PeerHeight struct {
 	defaultTimeout        time.Duration
 }
 
-func NewPeerHeight(logger ulogger.Logger, processName string, numberOfExpectedPeers int, defaultTimeout time.Duration) *PeerHeight {
+func NewPeerHeight(logger ulogger.Logger, processName string, numberOfExpectedPeers int, defaultTimeout time.Duration) (*PeerHeight, error) {
 
 	p2pIp, ok := gocore.Config().Get("p2p_ip")
 	if !ok {
-		panic("[PeerHeight] p2p_ip not set in config")
+		return nil, errors.NewConfigurationError("[PeerHeight] p2p_ip not set in config")
 	}
 	p2pPort, ok := gocore.Config().GetInt(fmt.Sprintf("p2p_port_%s", processName))
 	if !ok {
-		panic(fmt.Sprintf("[PeerHeight] p2p_port_%s not set in config", processName))
+		return nil, errors.NewConfigurationError("[PeerHeight] p2p_port_%s not set in config", processName)
 	}
 	sharedKey, ok := gocore.Config().Get("p2p_shared_key")
 	if !ok {
-		panic(errors.NewConfigurationError("[PeerHeight] error getting p2p_shared_key"))
+		return nil, errors.NewConfigurationError("[PeerHeight] error getting p2p_shared_key")
 	}
 	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
 	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
@@ -51,7 +52,10 @@ func NewPeerHeight(logger ulogger.Logger, processName string, numberOfExpectedPe
 		Advertise:       false, // no one need to discover or connect to us, we just listen
 		StaticPeers:     staticPeers,
 	}
-	peerConnection := NewP2PNode(logger, config)
+	peerConnection, err := NewP2PNode(logger, config)
+	if err != nil {
+		return nil, errors.NewServiceError("[PeerHeight] Error creating P2PNode", err)
+	}
 
 	peerStatus := &PeerHeight{
 		logger:                logger,
@@ -61,14 +65,14 @@ func NewPeerHeight(logger ulogger.Logger, processName string, numberOfExpectedPe
 		defaultTimeout:        defaultTimeout,
 	}
 
-	return peerStatus
+	return peerStatus, nil
 
 }
 
 func (p *PeerHeight) Start(ctx context.Context) error {
 	topicPrefix, ok := gocore.Config().Get("p2p_topic_prefix")
 	if !ok {
-		panic("[PeerHeight] p2p_topic_prefix not set in config")
+		return errors.NewConfigurationError("[PeerHeight] p2p_topic_prefix not set in config")
 	}
 	topic, _ := gocore.Config().Get("p2p_block_topic", "block")
 

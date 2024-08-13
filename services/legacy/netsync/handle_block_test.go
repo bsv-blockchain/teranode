@@ -45,7 +45,7 @@ func TestSyncManager_createTxMap(t *testing.T) {
 
 			sm := &SyncManager{}
 
-			txMap, err := sm.createTxMap(block)
+			txMap, err := sm.createTxMap(context.Background(), block)
 			require.NoError(t, err)
 			require.Len(t, txMap, tc.expectedTxMapLen)
 		})
@@ -87,7 +87,7 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 
 			sm := &SyncManager{}
 			//sm.utxoStore = utxostore.New(ulogger.TestLogger{})
-			txMap, err := sm.createTxMap(block)
+			txMap, err := sm.createTxMap(context.Background(), block)
 			require.NoError(t, err)
 			require.Len(t, txMap, tc.expectedTxMapLen)
 

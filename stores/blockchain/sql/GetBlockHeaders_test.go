@@ -46,7 +46,7 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 				Nonce:          1639830026,
 				HashPrevBlock:  block2PrevBlockHash,
 				HashMerkleRoot: block2MerkleRootHash,
-				Bits:           bits,
+				Bits:           *bits,
 			},
 			CoinbaseTx:       coinbaseTx2,
 			TransactionCount: 1,

@@ -677,13 +677,17 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	// add the size of the coinbase tx to the blocksize
 	blockSize += uint64(coinbaseTx.Size())
 
+	bits, err := model.NewNBitFromSlice(job.MiningCandidate.NBits)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
 	block := &model.Block{
 		Header: &model.BlockHeader{
 			Version:        req.Version,
 			HashPrevBlock:  hashPrevBlock,
 			HashMerkleRoot: hashMerkleRoot,
 			Timestamp:      req.Time,
-			Bits:           model.NewNBitFromSlice(job.MiningCandidate.NBits),
+			Bits:           *bits,
 			Nonce:          req.Nonce,
 		},
 		CoinbaseTx:       coinbaseTx,

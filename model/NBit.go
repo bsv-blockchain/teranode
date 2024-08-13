@@ -4,26 +4,27 @@ import (
 	"encoding/binary"
 	"math/big"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/ordishs/go-utils"
 )
 
 type NBit [4]byte // nBits is 4 bytes array held internal in little endian format
 
-func NewNBitFromSlice(nBits []byte) NBit {
+func NewNBitFromSlice(nBits []byte) (*NBit, error) {
 	if len(nBits) != 4 {
-		panic("nBits should be 4 bytes long")
+		return nil, errors.NewInvalidArgumentError("nBits should be 4 bytes long")
 	}
 
 	var nBit NBit
 	copy(nBit[:], nBits)
 
-	return nBit
+	return &nBit, nil
 }
 
-func NewNBitFromString(nBitStr string) NBit {
+func NewNBitFromString(nBitStr string) (*NBit, error) {
 	nBits, err := utils.DecodeAndReverseHexString(nBitStr)
 	if err != nil {
-		panic("error decoding nBitStr: " + err.Error())
+		return nil, errors.NewInvalidArgumentError("error decoding nBitStr ", err)
 	}
 
 	return NewNBitFromSlice(nBits)

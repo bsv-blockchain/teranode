@@ -105,7 +105,8 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 		return nil, errors.NewStorageError("failed to get block by height", err)
 	}
 
-	block.Header.Bits = model.NewNBitFromSlice(nBits)
+	bits, _ := model.NewNBitFromSlice(nBits)
+	block.Header.Bits = *bits
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {

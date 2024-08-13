@@ -1058,8 +1058,6 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) *RpcS
 func (s *RpcServer) Init(ctx context.Context) (err error) {
 	rpcHandlers = rpcHandlersBeforeInit
 	// rand.Seed(time.Now().UnixNano())
-
-	s.blockAssemblyClient = blockassembly.NewClient(ctx, s.logger)
-
-	return nil
+	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger)
+	return err
 }

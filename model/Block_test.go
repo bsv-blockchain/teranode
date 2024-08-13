@@ -376,7 +376,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	// add a P2PKH output to the coinbase transaction with fees
 	coinbase.Outputs = nil
 	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", util.GetBlockSubsidyForHeight(1)+subtree.Fees)
-	nBits := NewNBitFromString("2000ffff")
+	nBits, _ := NewNBitFromString("2000ffff")
 
 	// get subtree root hash
 	subtreeHash := subtree.RootHash()
@@ -404,7 +404,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: rootHash,
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           nBits,
+		Bits:           *nBits,
 		Nonce:          0,
 	}
 

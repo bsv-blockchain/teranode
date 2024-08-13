@@ -131,7 +131,8 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		blockHash := util.Sha256d(blockHeader)
 		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
 
-		target := model.NewNBitFromSlice(miningCandidate.NBits).CalculateTarget()
+		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
+		target := bits.CalculateTarget()
 
 		var bn = big.NewInt(0)
 		bn.SetString(hashStr, 16)
@@ -144,54 +145,55 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 var (
 	hashGenesisBlock, _ = chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	bits, _             = model.NewNBitFromString("1d00ffff")
 	blockHeader1        = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  hashGenesisBlock,
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          1,
-		Bits:           model.NewNBitFromString("1d00ffff"),
+		Bits:           *bits,
 	}
 	blockHeader2 = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  blockHeader1.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          2,
-		Bits:           model.NewNBitFromString("1d00ffff"),
+		Bits:           *bits,
 	}
 	blockHeader3 = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  blockHeader2.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          3,
-		Bits:           model.NewNBitFromString("1d00ffff"),
+		Bits:           *bits,
 	}
 	blockHeader4 = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  blockHeader3.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          4,
-		Bits:           model.NewNBitFromString("1d00ffff"),
+		Bits:           *bits,
 	}
 	blockHeader2_alt = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  blockHeader1.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          12,
-		Bits:           model.NewNBitFromString("1d00ffff"),
+		Bits:           *bits,
 	}
 	blockHeader3_alt = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  blockHeader2_alt.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          13,
-		Bits:           model.NewNBitFromString("1d00ffff"),
+		Bits:           *bits,
 	}
 	blockHeader4_alt = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  blockHeader3_alt.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          14,
-		Bits:           model.NewNBitFromString("1d00ffff"),
+		Bits:           *bits,
 	}
 )
 
@@ -315,7 +317,7 @@ func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
 	)
 
 	// overwrite default subtree processor with a new one
-	ba.subtreeProcessor = subtreeprocessor.NewSubtreeProcessor(
+	ba.subtreeProcessor, _ = subtreeprocessor.NewSubtreeProcessor(
 		context.Background(),
 		ulogger.TestLogger{},
 		nil,
@@ -395,7 +397,8 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCBTx(t *testing.T) {
 		blockHash := util.Sha256d(blockHeader)
 		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
 
-		target := model.NewNBitFromSlice(miningCandidate.NBits).CalculateTarget()
+		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
+		target := bits.CalculateTarget()
 
 		var bn = big.NewInt(0)
 		bn.SetString(hashStr, 16)

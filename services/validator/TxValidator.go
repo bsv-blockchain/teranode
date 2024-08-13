@@ -66,10 +66,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	//    => checked by the node, we do not want to have to know the current block height
 
 	// 7) The transaction size in bytes is greater than or equal to 100
-	// There are many examples in the chain up to height 422559 where this rule was not in place
-	if blockHeight > 422559 && txSize < 100 {
-		return errors.NewTxInvalidError("transaction size in bytes is less than 100 bytes")
-	}
+	//    => This is a BCH only check, not applicable to BSV
 
 	// 8) The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
 	if err := tv.sigOpsCheck(tx, tv.policy); err != nil {
@@ -161,9 +158,11 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 		}
 		total += input.PreviousTxSatoshis
 	}
-	if total == 0 && blockHeight >= util.ForkIDActivationHeight {
+
+	if total == 0 && blockHeight >= util.GenesisActivationHeight {
 		return errors.NewTxInvalidError("transaction input total satoshis cannot be zero")
 	}
+
 	if total > MaxSatoshis {
 		return errors.NewTxInvalidError("transaction input total satoshis is too high")
 	}

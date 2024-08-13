@@ -5,14 +5,36 @@ import (
 	"os"
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
 func Start() {
 	logger := ulogger.NewGoCoreLogger("aerospike_reader")
+
+	fmt.Println()
+
+	if len(os.Args) != 2 {
+		fmt.Printf("Usage: %s <txid> | key\n", os.Args[0])
+		os.Exit(1)
+	}
+
+	var keySource []byte
+
+	if len(os.Args[1]) == 64 {
+		hash, err := chainhash.NewHashFromStr(os.Args[1])
+		if err != nil {
+			fmt.Printf("Invalid txid: %s\n", os.Args[1])
+			os.Exit(1)
+		}
+		keySource = hash[:]
+	} else {
+		keySource = []byte(os.Args[1])
+	}
 
 	storeURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil {
@@ -24,44 +46,53 @@ func Start() {
 		os.Exit(1)
 	}
 
+	namespace := storeURL.Path[1:]
+	setName := storeURL.Query().Get("set")
+
+	fmt.Printf("Reading record from %s.%s\n", namespace, setName)
+
+	// get transaction meta data
+	key, err := aero.NewKey(namespace, setName, keySource)
+	if err != nil {
+		fmt.Printf("Failed to create key: %s\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Key         : %x\n", keySource)
+
 	client, err := util.GetAerospikeClient(logger, storeURL)
 	if err != nil {
 		fmt.Printf("Failed to connect to aerospike: %s\n", err)
 		os.Exit(1)
 	}
 
-	namespace := storeURL.Path[1:]
-	setName := storeURL.Query().Get("set")
-	if setName == "" {
-		setName = "txmeta"
-	}
-
-	fmt.Println()
-
-	if len(os.Args) != 2 {
-		fmt.Printf("Usage: %s <txid>\n", os.Args[0])
-		os.Exit(1)
-	}
-
-	txid := os.Args[1]
-
-	hash, err := chainhash.NewHashFromStr(txid)
+	record, err := printRecord(client, key)
 	if err != nil {
-		fmt.Printf("Invalid txid: %s\n", txid)
+		fmt.Printf("Failed to print record: %s\n", err)
 		os.Exit(1)
 	}
 
-	// get transaction meta data
-	key, err := aero.NewKey(namespace, setName, hash[:])
-	if err != nil {
-		fmt.Printf("Failed to create key: %s\n", err)
-		os.Exit(1)
-	}
+	nrRecordsIfc, ok := record.Bins["nrRecords"]
+	if ok {
+		nrRecords, ok := nrRecordsIfc.(int)
+		if ok {
+			for i := 0; i < nrRecords; i++ {
+				key, err := aero.NewKey(namespace, setName, []byte(fmt.Sprintf("%s_%d", keySource, i)))
+				if err != nil {
+					fmt.Printf("Failed to create key: %s\n", err)
+					os.Exit(1)
+				}
 
+				_, _ = printRecord(client, key)
+			}
+		}
+	}
+}
+
+func printRecord(client *uaerospike.Client, key *aero.Key) (*aero.Record, error) {
 	response, err := client.Get(nil, key)
 	if err != nil {
-		fmt.Printf("Failed to get record: %s\n", err)
-		os.Exit(1)
+		return nil, errors.NewError("Failed to get record", err)
 	}
 
 	fmt.Printf("Digest      : %x\n", response.Key.Digest())
@@ -94,7 +125,6 @@ func Start() {
 		case "outputs":
 			fallthrough
 		case "utxos":
-			// IGNORE
 
 		default:
 			if arr, ok := v.([]interface{}); ok {
@@ -107,28 +137,46 @@ func Start() {
 		}
 	}
 
-	printArray("inputs", response.Bins["inputs"].([]interface{}))
-	printArray("outputs", response.Bins["outputs"].([]interface{}))
-	printArray("utxos", response.Bins["utxos"].([]interface{}))
+	printArray("inputs", response.Bins["inputs"])
+	printArray("outputs", response.Bins["outputs"])
+	printArray("utxos", response.Bins["utxos"])
 
 	fmt.Println()
+
+	return response, nil
 }
 
-func printArray(name string, arr []interface{}) {
+func printArray(name string, ifc interface{}) {
 	fmt.Printf("%-12s:", name)
+
+	if ifc == nil {
+		fmt.Printf(" <nil>\n")
+		return
+	}
+
+	arr, ok := ifc.([]interface{})
+	if !ok {
+		fmt.Printf(" <not array>\n")
+		return
+	}
+
+	if len(arr) == 0 {
+		fmt.Printf(" <empty>\n")
+		return
+	}
 
 	for i, item := range arr {
 		if b, ok := item.([]byte); ok {
 			if i == 0 {
-				fmt.Printf(" %5d : %x\n", i, b)
+				fmt.Printf(" %-5d : %x\n", i, b)
 			} else {
-				fmt.Printf("            : %5d : %x\n", i, b)
+				fmt.Printf("            : %-5d : %x\n", i, b)
 			}
 		} else {
 			if i == 0 {
-				fmt.Printf(" %5d : %v\n", i, item)
+				fmt.Printf(" %-5d : %v\n", i, item)
 			} else {
-				fmt.Printf("            : %5d : %v\n", i, item)
+				fmt.Printf("            : %-5d : %v\n", i, item)
 			}
 		}
 	}

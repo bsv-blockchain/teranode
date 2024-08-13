@@ -271,9 +271,9 @@ func (c *Client) GetNextWorkRequired(ctx context.Context, blockHash *chainhash.H
 	if err != nil {
 		return nil, err
 	}
-	bits := model.NewNBitFromSlice(resp.Bits)
+	bits, err := model.NewNBitFromSlice(resp.Bits)
 
-	return &bits, nil
+	return bits, err
 }
 
 func (c *Client) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {

@@ -223,7 +223,7 @@ func (ud *UTXODiff) GetUTXODeletionsSet() (map[[36]byte]struct{}, error) {
 func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainhash.Hash) (err error) {
 	deletions := ud.deletionsSet
 
-	if deletions == nil {
+	if deletions == nil && previousBlockHash != nil {
 		// Load the deletions file for this block in to a set
 		var err error
 		deletions, err = ud.GetUTXODeletionsSet()
@@ -242,6 +242,8 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 		}
 		defer previousUTXOSetReader.Close()
 
+		var count int
+
 		for {
 			// Read the next 36 bytes...
 			utxo, err := NewUTXOFromReader(previousUTXOSetReader)
@@ -249,7 +251,7 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 				if err == io.EOF {
 					break
 				}
-				return errors.NewStorageError("error reading utxo-set", err)
+				return errors.NewStorageError("error reading previous utxo-set (%s.%s) at iteration %d", previousBlockHash.String(), utxosetExtension, count, err)
 			}
 
 			// Stream each record and write to new UTXOSet if not in the deletions set
@@ -259,7 +261,11 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 					return errors.NewStorageError("error writing utxo", err)
 				}
 			}
+
+			count++
 		}
+
+		ud.logger.Infof("Read %d UTXOs from previous block %s", count, previousBlockHash.String())
 	}
 
 	// Open the additions file for this block and stream each record to the new UTXOSet if not in the deletions set

@@ -200,6 +200,7 @@ func TestMerkleRoot(t *testing.T) {
 		_ = subtreeStore.Set(ctx, rootHash[:], subtreeBytes, options.WithFileExtension("subtree"))
 	}
 
+	nBits, _ := model.NewNBitFromSlice(bits)
 	block := &model.Block{
 		Header: &model.BlockHeader{
 			Version:        1,
@@ -207,7 +208,7 @@ func TestMerkleRoot(t *testing.T) {
 			Nonce:          274148111,
 			HashPrevBlock:  prevBlockHash,
 			HashMerkleRoot: merkleRoot,
-			Bits:           model.NewNBitFromSlice(bits),
+			Bits:           *nBits,
 		},
 		Subtrees:   subtreeHashes,
 		CoinbaseTx: coinbaseTx,

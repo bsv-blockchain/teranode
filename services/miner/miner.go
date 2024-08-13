@@ -46,7 +46,7 @@ const (
 
 var generateBlocks = false
 
-func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
+func NewMiner(ctx context.Context, logger ulogger.Logger) (*Miner, error) {
 	initPrometheusMetrics()
 
 	// The number of seconds to wait before requesting a new mining candidate
@@ -66,14 +66,19 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) *Miner {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	maxSubtreeCount = maxSubtreeCount + maxSubtreeCountVariance - r.Intn(maxSubtreeCountVariance*2)
 
+	blockAssemblyClient, err := blockassembly.NewClient(ctx, logger)
+	if err != nil {
+		return nil, errors.NewServiceError("[NewMiner] failed to create block assembly client", err)
+	}
+
 	return &Miner{
 		logger:                        logger,
-		blockAssemblyClient:           blockassembly.NewClient(ctx, logger),
+		blockAssemblyClient:           blockAssemblyClient,
 		candidateRequestInterval:      time.Duration(candidateRequestInterval),
 		timeMining:                    timeMining,
 		initialBlockFinalWaitDuration: initialBlockFinalWaitDuration,
 		maxSubtreeCount:               maxSubtreeCount,
-	}
+	}, nil
 }
 
 func (m *Miner) Health(ctx context.Context) (int, string, error) {

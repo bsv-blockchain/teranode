@@ -6,12 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libp2p/go-libp2p"
@@ -56,7 +57,7 @@ type P2PConfig struct {
 	StaticPeers     []string
 }
 
-func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
+func NewP2PNode(logger ulogger.Logger, config P2PConfig) (*P2PNode, error) {
 	logger.Infof("[P2PNode] Creating node")
 
 	var pk *crypto.PrivKey
@@ -68,13 +69,13 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 		if err != nil {
 			pk, err = generatePrivateKey(privateKeyFilename)
 			if err != nil {
-				panic(err)
+				return nil, errors.NewConfigurationError("[P2PNode] error generating private key", err)
 			}
 		}
 	} else {
 		pk, err = decodeHexEd25519PrivateKey(config.PrivateKey)
 		if err != nil {
-			panic(err)
+			return nil, errors.NewInvalidArgumentError("[P2PNode] error decoding private key", err)
 		}
 	}
 
@@ -87,7 +88,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 
 		psk, err := pnet.DecodeV1PSK(bytes.NewBuffer([]byte(s)))
 		if err != nil {
-			panic(err)
+			return nil, errors.NewInvalidArgumentError("[P2PNode] error decoding shared key", err)
 		}
 		h, err = libp2p.New(
 			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
@@ -95,7 +96,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 			libp2p.PrivateNetwork(psk),
 		)
 		if err != nil {
-			panic(err)
+			return nil, errors.NewServiceError("[P2PNode] error creating private network", err)
 		}
 	} else {
 		// copied from txblaster
@@ -107,7 +108,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 			libp2p.Identity(*pk),
 		)
 		if err != nil {
-			panic(err)
+			return nil, errors.NewServiceError("[P2PNode] error creating libp2p host", err)
 		}
 	}
 
@@ -124,7 +125,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) *P2PNode {
 		bitcoinProtocolId: "ubsv/bitcoin/1.0.0",
 		handlerByTopic:    make(map[string]Handler),
 		startTime:         time.Now(),
-	}
+	}, nil
 }
 
 func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
@@ -162,7 +163,11 @@ func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
 
 	}
 
-	go s.discoverPeers(ctx, topicNames)
+	go func() {
+		if err := s.discoverPeers(ctx, topicNames); err != nil {
+			s.logger.Errorf("[P2PNode] error discovering peers: %+v", err)
+		}
+	}()
 
 	ps, err := pubsub.NewGossipSub(ctx, s.host)
 	if err != nil {
@@ -346,16 +351,20 @@ func (s *P2PNode) connectToStaticPeers(ctx context.Context, staticPeers []string
 	}
 	return i == 0
 }
-func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
+func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) error {
 	var kademliaDHT *dht.IpfsDHT
+	var err error
 
 	if s.config.UsePrivateDHT {
-		kademliaDHT = s.initPrivateDHT(ctx, s.host)
+		kademliaDHT, err = s.initPrivateDHT(ctx, s.host)
 	} else {
-		kademliaDHT = s.initDHT(ctx, s.host)
+		kademliaDHT, err = s.initDHT(ctx, s.host)
+	}
+	if err != nil {
+		return errors.NewServiceError("[P2PNode] error creating DHT", err)
 	}
 	if kademliaDHT == nil {
-		return
+		return nil
 	}
 	routingDiscovery := dRouting.NewRoutingDiscovery(kademliaDHT)
 
@@ -377,7 +386,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 		select {
 		case <-ctx.Done():
 			s.logger.Infof("[P2PNode] shutting down")
-			return
+			return nil
 		default:
 
 			peerAddrMap := sync.Map{}
@@ -476,7 +485,7 @@ func (s *P2PNode) discoverPeers(ctx context.Context, topicNames []string) {
 	}
 }
 
-func (s *P2PNode) initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
+func (s *P2PNode) initDHT(ctx context.Context, h host.Host) (*dht.IpfsDHT, error) {
 	// Start a DHT, for use in peer discovery. We can't just make a new DHT
 	// client because we want each peer to maintain its own local copy of the
 	// DHT, so that the bootstrapping node of the DHT can go down without
@@ -487,10 +496,10 @@ func (s *P2PNode) initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
 
 	kademliaDHT, err := dht.New(ctx, h, options...)
 	if err != nil {
-		panic(err)
+		return nil, errors.NewServiceError("[P2PNode] error creating DHT", err)
 	}
 	if err = kademliaDHT.Bootstrap(ctx); err != nil {
-		panic(err)
+		return nil, errors.NewServiceError("[P2PNode] error bootstrapping DHT", err)
 	}
 	var wg sync.WaitGroup
 	for _, peerAddr := range dht.DefaultBootstrapPeers {
@@ -505,35 +514,35 @@ func (s *P2PNode) initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
 	}
 	wg.Wait()
 
-	return kademliaDHT
+	return kademliaDHT, nil
 }
 
-func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsDHT {
+func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.IpfsDHT, error) {
 	bootstrapAddresses, _ := gocore.Config().GetMulti("p2p_bootstrapAddresses", "|")
 	if len(bootstrapAddresses) == 0 {
-		panic(errors.NewServiceError("[P2PNode] bootstrapAddresses not set in config"))
+		return nil, errors.NewServiceError("[P2PNode] bootstrapAddresses not set in config")
 	}
 	for _, ba := range bootstrapAddresses {
 		bootstrapAddr, err := multiaddr.NewMultiaddr(ba)
 		if err != nil {
-			panic(errors.NewServiceError("[P2PNode] failed to create bootstrap multiaddress %s: %v", ba, err))
+			return nil, errors.NewServiceError("[P2PNode] failed to create bootstrap multiaddress %s", ba, err)
 		}
 
 		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
 		if err != nil {
-			panic(fmt.Sprintf("[P2PNode] failed to get peerInfo from  %s: %v", ba, err))
+			return nil, errors.NewServiceError("[P2PNode] failed to get peerInfo from  %s", ba, err)
 		}
 
 		err = host.Connect(ctx, *peerInfo)
 		if err != nil {
 			s.logger.Infof(fmt.Sprintf("[P2PNode] failed to connect to bootstrap address %s: %v", ba, err))
-			return nil
+			return nil, nil
 		}
 	}
 
 	dhtProtocolIdStr, ok := gocore.Config().Get("p2p_dht_protocol_id")
 	if !ok {
-		panic(errors.NewServiceError("[P2PNode] error getting p2p_dht_protocol_id"))
+		return nil, errors.NewServiceError("[P2PNode] error getting p2p_dht_protocol_id")
 	}
 	dhtProtocolID := protocol.ID(dhtProtocolIdStr)
 
@@ -543,15 +552,15 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) *dht.IpfsD
 
 	kademliaDHT, err := dht.New(ctx, host, options...)
 	if err != nil {
-		panic(err)
+		return nil, errors.NewServiceError("[P2PNode] error creating DHT", err)
 	}
 
 	err = kademliaDHT.Bootstrap(ctx)
 	if err != nil {
-		panic(err)
+		return nil, errors.NewServiceError("[P2PNode] error bootstrapping DHT", err)
 	}
 
-	return kademliaDHT
+	return kademliaDHT, nil
 }
 
 func (s *P2PNode) streamHandler(ns network.Stream) {

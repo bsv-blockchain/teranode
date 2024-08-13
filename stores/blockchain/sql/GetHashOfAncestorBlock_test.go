@@ -78,7 +78,7 @@ func generateBlocks(t *testing.T, numberOfBlocks int) []*model.Block {
 				Nonce:          2573394689,
 				HashPrevBlock:  hashPrevBlock,
 				HashMerkleRoot: merkleRoot,
-				Bits:           bits,
+				Bits:           *bits,
 			},
 			CoinbaseTx:       coinbase,
 			TransactionCount: 1,

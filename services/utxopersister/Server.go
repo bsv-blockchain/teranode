@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 )
@@ -19,6 +21,7 @@ import (
 type Server struct {
 	logger           ulogger.Logger
 	blockchainClient blockchain.ClientI
+	blockchainStore  blockchain_store.Store
 	blockStore       blob.Store
 	stats            *gocore.Stat
 	lastHeight       uint32
@@ -43,6 +46,22 @@ func New(
 	}
 }
 
+func NewDirect(
+	ctx context.Context,
+	logger ulogger.Logger,
+	blockStore blob.Store,
+	blockchainStore blockchain_store.Store,
+) (*Server, error) {
+
+	return &Server{
+		logger:          logger,
+		blockStore:      blockStore,
+		blockchainStore: blockchainStore,
+		stats:           gocore.NewStat("utxopersister"),
+		triggerCh:       make(chan string, 5),
+	}, nil
+}
+
 func (s *Server) Health(ctx context.Context) (int, string, error) {
 	return 0, "", nil
 }
@@ -59,15 +78,28 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (s *Server) Start(ctx context.Context) error {
-	ch, err := s.blockchainClient.Subscribe(ctx, "utxo-persister")
-	if err != nil {
-		return err
+	var err error
+	var ch chan *model.Notification
+
+	if s.blockchainClient == nil {
+		ch = make(chan *model.Notification) // Create a dummy channel
+	} else {
+		ch, err = s.blockchainClient.Subscribe(ctx, "utxo-persister")
+		if err != nil {
+			return err
+		}
 	}
 
 	go func() {
 		// Kick off the first block processing
 		s.triggerCh <- "startup"
 	}()
+
+	duration := 1 * time.Minute
+	if s.blockchainClient == nil {
+		// We do not have a sbuscription, so we need to poll the blockchain more frequently
+		duration = 10 * time.Second
+	}
 
 	for {
 		select {
@@ -84,7 +116,7 @@ func (s *Server) Start(ctx context.Context) error {
 				return err
 			}
 
-		case <-time.After(1 * time.Minute):
+		case <-time.After(duration):
 			if err := s.trigger(ctx, "timer"); err != nil {
 				return err
 			}
@@ -148,7 +180,16 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 func (s *Server) processNextBlock(ctx context.Context) error {
 	// Get the next block
 
-	headers, metas, err := s.blockchainClient.GetBlockHeadersFromHeight(ctx, s.lastHeight, 1)
+	var headers []*model.BlockHeader
+	var metas []*model.BlockHeaderMeta
+	var err error
+
+	if s.blockchainStore != nil {
+		headers, metas, err = s.blockchainStore.GetBlockHeadersFromHeight(ctx, s.lastHeight, 1)
+	} else {
+		headers, metas, err = s.blockchainClient.GetBlockHeadersFromHeight(ctx, s.lastHeight, 1)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -177,7 +218,7 @@ func (s *Server) processNextBlock(ctx context.Context) error {
 	if ud == nil {
 		s.logger.Infof("UTXOSet already exists for block %s height %d", hash, meta.Height)
 		s.lastHeight++
-		return nil
+		return s.writeLastHeight(ctx, s.lastHeight)
 	}
 
 	if err := ud.CreateUTXOSet(ctx, pBlock); err != nil {

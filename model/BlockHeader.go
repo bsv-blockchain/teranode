@@ -4,10 +4,11 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -48,7 +49,7 @@ var (
 	*/
 	previousBlock = &chainhash.Hash{}
 	merkleRoot, _ = chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
-	bits          = NewNBitFromString("1d00ffff")
+	bits, _       = NewNBitFromString("1d00ffff")
 
 	BlockHeaderSize    = 80
 	GenesisBlockHeader = &BlockHeader{
@@ -57,7 +58,7 @@ var (
 		Nonce:          2083236893,
 		HashPrevBlock:  previousBlock,
 		HashMerkleRoot: merkleRoot,
-		Bits:           bits,
+		Bits:           *bits,
 	}
 
 	GenesisBlockHeaderMeta = &BlockHeaderMeta{
@@ -82,12 +83,13 @@ func NewBlockHeaderFromBytes(headerBytes []byte) (*BlockHeader, error) {
 		return nil, errors.NewProcessingError("error creating merkle root hash from bytes", err)
 	}
 
+	NBit, _ := NewNBitFromSlice(headerBytes[72:76])
 	bh := &BlockHeader{
 		Version:        binary.LittleEndian.Uint32(headerBytes[:4]),
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: hashMerkleRoot,
 		Timestamp:      binary.LittleEndian.Uint32(headerBytes[68:72]),
-		Bits:           NewNBitFromSlice(headerBytes[72:76]),
+		Bits:           *NBit,
 		Nonce:          binary.LittleEndian.Uint32(headerBytes[76:]),
 	}
 

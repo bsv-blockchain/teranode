@@ -9,7 +9,7 @@ import (
 
 func TestTarget(t *testing.T) {
 	// bits, _ := hex.DecodeString("1d00ffff")
-	bits := model.NewNBitFromString("2000ffff")
+	bits, _ := model.NewNBitFromString("2000ffff")
 
 	target := bits.CalculateTarget()
 

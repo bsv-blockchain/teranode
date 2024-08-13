@@ -71,12 +71,13 @@ miningLoop:
 		case <-ctx.Done():
 			return nil, nil
 		default:
+			nBits, _ := model.NewNBitFromSlice(candidate.NBits)
 			blockHeader := model.BlockHeader{
 				Version:        candidate.Version,
 				HashPrevBlock:  previousHash,
 				HashMerkleRoot: merkleRootHash,
 				Timestamp:      candidate.Time,
-				Bits:           model.NewNBitFromSlice(candidate.NBits),
+				Bits:           *nBits,
 				Nonce:          nonce,
 			}
 
