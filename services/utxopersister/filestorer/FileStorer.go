@@ -64,15 +64,7 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store,
 		}
 	}()
 
-	return &FileStorer{
-		logger:         logger,
-		store:          store,
-		key:            key,
-		extension:      extension,
-		hasher:         hasher,
-		writer:         writer,
-		bufferedWriter: bufferedWriter,
-	}
+	return fs
 }
 
 func (f *FileStorer) Write(b []byte) (n int, err error) {
