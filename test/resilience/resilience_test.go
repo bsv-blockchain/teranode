@@ -173,24 +173,24 @@ func TestShutDownBlockchain(t *testing.T) {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
-	// blockchainHealth, err := framework.Nodes[1].BlockchainClient.Health(framework.Context)
-	// if err != nil {
-	// 	t.Errorf("Failed to start blockchain: %v", err)
-	// }
+	blockchainHealth, err := framework.Nodes[1].BlockchainClient.Health(framework.Context)
+	if err != nil {
+		t.Fatalf("Failed to start blockchain: %v", err)
+	}
 
 	blockchainAssemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
 	if err != nil {
-		t.Errorf("Failure of blockchain assembly: %v", err)
+		t.Fatalf("Failure of blockchain assembly: %v", err)
 	}
 
 	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
 	if err != nil {
-		t.Errorf("Failure of coinbase assembly: %v", err)
+		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
 
-	// if blockchainHealth.Ok {
-	// 	t.Errorf("Expected blockchainHealth to be false, but got true")
-	// }
+	if blockchainHealth.Ok {
+		t.Errorf("Expected blockchainHealth to be false, but got true")
+	}
 	if !blockchainAssemblyHealth.Ok {
 		t.Errorf("Expected blockchainAssemblyHealth to be true, but got false")
 	}
