@@ -2,6 +2,7 @@ package validator
 
 import (
 	"encoding/hex"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
+	"github.com/ordishs/gocore"
 )
 
 var (
@@ -26,6 +28,9 @@ var (
 		"b3146a5012e75fa06eaf92171416796e141e984b29bf23999726f6d698957cef": {}, // spending of OP_RETURN
 		"ad74a116639ea654ed8ba4170781199c2f37004b14dc9a5c54df55788c9ab50c": {}, // spending of weird OP_SHIFT script causing panic
 		"cc95cdc21ff31afb8295d8015b222d0e54dcae634010bea8e79c09325ac173cf": {}, // spending of weird OP_SHIFT script causing panic
+		"6e1d88f10e829fa2dd9691ef5cf9550ba6f0eed51d676f1b74df3fa894fe7035": {}, // spending of weird OP_SHIFT script causing panic
+		"7562141b4a26e2482f43e9e123222579c8c9f704d465aacf11ed041a85d2e50d": {}, // spending of weird OP_SHIFT script causing panic
+		"6974a4c575c661a918e50d735852c29541a3263dcc4ff46bf90eb9f8f0ec485e": {}, // spending of weird OP_SHIFT script causing panic
 	}
 )
 
@@ -238,7 +243,14 @@ func (tv *TxValidator) pushDataCheck(tx *bt.Tx) error {
 func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			// log the error
+			// TODO - remove this when script engine is fixed
+			if rErr, ok := r.(error); ok {
+				if strings.Contains(rErr.Error(), "negative shift amount") {
+					gocore.Log("RUNTIME").Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
+					err = nil
+					return
+				}
+			}
 			err = errors.NewTxInvalidError("script execution failed: %v", r)
 		}
 	}()
