@@ -39,20 +39,21 @@ var (
 )
 
 type Store struct {
-	url             *url.URL
-	client          *uaerospike.Client
-	namespace       string
-	setName         string
-	expiration      uint32
-	blockHeight     atomic.Uint32
-	medianBlockTime atomic.Uint32
-	logger          ulogger.Logger
-	batchId         atomic.Uint64
-	storeBatcher    *batcher.Batcher2[batchStoreItem]
-	getBatcher      *batcher.Batcher2[batchGetItem]
-	spendBatcher    *batcher.Batcher2[batchSpend]
-	externalStore   blob.Store
-	utxoBatchSize   int
+	url                        *url.URL
+	client                     *uaerospike.Client
+	namespace                  string
+	setName                    string
+	expiration                 uint32
+	blockHeight                atomic.Uint32
+	medianBlockTime            atomic.Uint32
+	logger                     ulogger.Logger
+	batchId                    atomic.Uint64
+	storeBatcher               *batcher.Batcher2[batchStoreItem]
+	getBatcher                 *batcher.Batcher2[batchGetItem]
+	spendBatcher               *batcher.Batcher2[batchSpend]
+	externalStore              blob.Store
+	utxoBatchSize              int
+	externalizeAllTransactions bool
 }
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
@@ -99,14 +100,15 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	}
 
 	s := &Store{
-		url:           aerospikeURL,
-		client:        client,
-		namespace:     namespace,
-		setName:       setName,
-		expiration:    expiration,
-		logger:        logger,
-		externalStore: externalStore,
-		utxoBatchSize: 20_000, // Do not change this value, it is used to calculate the offset for the output
+		url:                        aerospikeURL,
+		client:                     client,
+		namespace:                  namespace,
+		setName:                    setName,
+		expiration:                 expiration,
+		logger:                     logger,
+		externalStore:              externalStore,
+		utxoBatchSize:              20_000, // Do not change this value, it is used to calculate the offset for the output
+		externalizeAllTransactions: gocore.Config().GetBool("utxo_externalizeAllTransactions", false),
 	}
 
 	storeBatchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
