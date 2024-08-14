@@ -514,9 +514,9 @@ func (b *Block) checkBlockRewardAndFees(height uint32) error {
 
 	coinbaseReward := util.GetBlockSubsidyForHeight(height)
 
-	if height < 800_000 { // TODO - this is an arbitary number, we need to find the correct one
+	if height < 800_000 { // TODO - this is an arbitrary number, we need to find the correct one
 		if coinbaseOutputSatoshis > subtreeFees+coinbaseReward {
-			return errors.NewBlockInvalidError("[BLOCK][%s] coinbase output (%d) is greated than fees + block subsidy (%d)", b.Hash().String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
+			return errors.NewBlockInvalidError("[BLOCK][%s] coinbase output (%d) is greater than fees + block subsidy (%d)", b.Hash().String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
 		}
 	} else {
 		// TODO should this be != instead of > ?

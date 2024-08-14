@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -95,18 +96,16 @@ func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
 	}
 
 	for i, output := range tx.Outputs {
-		if output.LockingScript.IsData() {
-			continue
-		}
-
-		if err := ud.add(&UTXO{
-			tx.TxIDChainHash(),
-			uint32(i),
-			output.Satoshis,
-			spendingHeight,
-			*output.LockingScript,
-		}); err != nil {
-			return err
+		if utxo.ShouldStoreOutputAsUTXO(output, ud.blockHeight) {
+			if err := ud.add(&UTXO{
+				tx.TxIDChainHash(),
+				uint32(i),
+				output.Satoshis,
+				spendingHeight,
+				*output.LockingScript,
+			}); err != nil {
+				return err
+			}
 		}
 	}
 
