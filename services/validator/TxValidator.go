@@ -25,6 +25,7 @@ var (
 		"38df010716e13254fb5fc16065c1cf62ee2aeaed2fad79973f8a76ba91da36da": {},
 		"b3146a5012e75fa06eaf92171416796e141e984b29bf23999726f6d698957cef": {}, // spending of OP_RETURN
 		"ad74a116639ea654ed8ba4170781199c2f37004b14dc9a5c54df55788c9ab50c": {}, // spending of weird OP_SHIFT script causing panic
+		"cc95cdc21ff31afb8295d8015b222d0e54dcae634010bea8e79c09325ac173cf": {}, // spending of weird OP_SHIFT script causing panic
 	}
 )
 
