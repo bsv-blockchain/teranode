@@ -90,6 +90,18 @@ func TestGetUtxoHashes(t *testing.T) {
 	})
 }
 
+func TestShouldStoreNonZeroUTXO(t *testing.T) {
+	txID := "956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d604"
+	tx, err := bt.NewTxFromString("010000000000000000ef015400c3490d91f3f742e73e81bc37dfca4f24f9a73a17c90ccab3012ddbc795bb000000008a473044022006a960f73ea637af867f69ed69edd291bee1d6daec241649caf909fb864dcd3b022011c82189c4a3379aba85fdb907d341db8067e426d7660fbba05c12fa370fa8aa0141048e69627b4807fe4ab00002a01c4a26a50d558cce969708e75dc5bfb345bbe92f06082757c85cbcac4ff0bbb91e221c59d3f9e675125da07e8110fd7d9b0ab6eeffffffff00000000000000001976a9146f9e896bb7cd9d27ca5b18c3ec9587ff0be7895188ac0100000000000000001976a9144477154cba7f0474a578fe734e00bd60513fbab588ac00000000")
+	require.NoError(t, err)
+	require.Equal(t, txID, tx.TxIDChainHash().String())
+
+	t.Run("should return true for non-zero UTXO", func(t *testing.T) {
+		assert.True(t, ShouldStoreNonZeroUTXO(tx.Outputs[0].LockingScript, util.GenesisActivationHeight-1))
+		assert.False(t, ShouldStoreNonZeroUTXO(tx.Outputs[0].LockingScript, util.GenesisActivationHeight+1))
+	})
+}
+
 func BenchmarkGetUtxoHashes(b *testing.B) {
 	txs := make([]*bt.Tx, b.N)
 	for i := 0; i < b.N; i++ {

@@ -3,6 +3,7 @@ package utxo
 import (
 	"context"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/libsv/go-bt/v2/bscript"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -83,4 +84,17 @@ func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
 	}
 
 	return utxoHashes, nil
+}
+
+func ShouldStoreNonZeroUTXO(script *bscript.Script, blockHeight uint32) bool {
+	// there is an exception before Genesis where 0 sat outputs were stored in the utxo store
+	if blockHeight < util.GenesisActivationHeight {
+		b := []byte(*script)
+		opReturn := len(b) > 0 && b[0] == bscript.OpRETURN
+		opFalseOpReturn := len(b) > 1 && b[0] == bscript.OpFALSE && b[1] == bscript.OpRETURN
+
+		return !(opReturn || opFalseOpReturn)
+	}
+
+	return false
 }

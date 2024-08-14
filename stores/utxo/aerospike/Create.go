@@ -253,7 +253,8 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	for i, output := range tx.Outputs {
 		outputs[i] = output.Bytes()
 
-		if !output.LockingScript.IsData() {
+		// store all non-zero utxos and exceptions from pre-genesis
+		if output.Satoshis > 0 || utxo.ShouldStoreNonZeroUTXO(output.LockingScript, blockHeight) {
 			utxos[i] = aerospike.NewBytesValue(utxoHashes[i][:])
 		}
 	}
