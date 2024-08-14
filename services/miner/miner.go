@@ -46,7 +46,7 @@ const (
 
 var generateBlocks = false
 
-func NewMiner(ctx context.Context, logger ulogger.Logger) (*Miner, error) {
+func NewMiner(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Miner, error) {
 	initPrometheusMetrics()
 
 	// The number of seconds to wait before requesting a new mining candidate
@@ -78,6 +78,7 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) (*Miner, error) {
 		timeMining:                    timeMining,
 		initialBlockFinalWaitDuration: initialBlockFinalWaitDuration,
 		maxSubtreeCount:               maxSubtreeCount,
+		blockchainClient:              blockchainClient,
 	}, nil
 }
 
@@ -89,9 +90,9 @@ func (m *Miner) Init(ctx context.Context) error {
 	m.MineBlocksNImmediatelyChan = make(chan int, 1)
 	m.MineBlocksNImmediatelyCancelChan = make(chan bool, 1)
 	var err error
-	if m.blockchainClient, err = blockchain.NewClient(ctx, m.logger, "services/miner"); err != nil {
-		return errors.NewServiceError("[Init] failed to create blockchain client", err)
-	}
+	//if m.blockchainClient, err = blockchain.NewClient(ctx, m.logger, "services/miner"); err != nil {
+	//	return errors.NewServiceError("[Init] failed to create blockchain client", err)
+	//}
 
 	return err
 }

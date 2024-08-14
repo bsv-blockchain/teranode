@@ -35,13 +35,14 @@ type Server struct {
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockStore blob.Store) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockStore blob.Store, blockchainClient blockchain.ClientI) *Server {
 	s := &Server{
-		logger:       logger,
-		utxoStore:    utxoStore,
-		txStore:      txStore,
-		subtreeStore: subtreeStore,
-		blockStore:   blockStore,
+		logger:           logger,
+		utxoStore:        utxoStore,
+		txStore:          txStore,
+		subtreeStore:     subtreeStore,
+		blockStore:       blockStore,
+		blockchainClient: blockchainClient,
 	}
 
 	return s

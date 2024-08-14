@@ -290,6 +290,7 @@ func main() {
 			txStore,
 			subtreeStore,
 			blockStore,
+			blockchainClient,
 		)); err != nil {
 			panic(err)
 		}
@@ -569,7 +570,11 @@ func main() {
 
 	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining
 	if startMiner {
-		miner, err := miner.NewMiner(ctx, logger.New("miner"))
+		miner, err := miner.NewMiner(
+			ctx,
+			logger.New("miner"),
+			blockchainClient,
+		)
 		if err != nil {
 			panic(err)
 		}
