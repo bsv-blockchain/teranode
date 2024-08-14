@@ -279,7 +279,12 @@ func main() {
 	}
 
 	if startRpc {
-		if err := sm.AddService("Rpc", rpc.NewServer(logger.New("rpc"))); err != nil {
+		rpcServer, err := rpc.NewServer(logger.New("rpc"))
+		if err != nil {
+			panic(err)
+		}
+
+		if err := sm.AddService("Rpc", rpcServer); err != nil {
 			panic(err)
 		}
 	}

@@ -268,7 +268,7 @@ func (w *Worker) Start(ctx context.Context) (err error) {
 	if w.topic != nil {
 		sub, err := w.topic.Subscribe()
 		if err != nil {
-			panic(err)
+			return errors.NewServiceUnavailableError("error subscribing to topic", err)
 		}
 
 		go func() {

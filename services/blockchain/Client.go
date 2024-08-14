@@ -441,8 +441,6 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 	}
 	// send FSMEvent notification to the blockchain client. FSM will transition to state Running
 	if err := c.SendNotification(ctx, notification); err != nil {
-		//logger.Errorf("[Main] failed to send RUN notification [%v]", err)
-		//panic(err)
 		return err
 	}
 
