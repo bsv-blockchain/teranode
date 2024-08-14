@@ -60,9 +60,13 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.S
 		maxMB = options[0]
 	}
 
+	cache, err := NewImprovedCache(maxMB*1024*1024, types.Trimmed)
+	if err != nil {
+		return nil, errors.NewProcessingError("error creating cache", err)
+	}
 	m := &TxMetaCache{
 		utxoStore: utxoStore,
-		cache:     NewImprovedCache(maxMB*1024*1024, types.Trimmed),
+		cache:     cache,
 		metrics:   metrics{},
 		logger:    logger,
 	}
