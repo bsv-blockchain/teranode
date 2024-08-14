@@ -24,6 +24,7 @@ var (
 		"ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80": {},
 		"38df010716e13254fb5fc16065c1cf62ee2aeaed2fad79973f8a76ba91da36da": {},
 		"f77a391a62a128ba17559f3716dd7f68bb0a6df6ac3d10249f06323c1148ad03": {}, // non 0 value op return
+		"63518daaab78b7fd7488eb9b241f145c7b27cd43b86369aa38cdafa213e018c5": {}, // non 0 value op return
 	}
 )
 
