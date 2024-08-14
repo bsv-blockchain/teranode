@@ -23,8 +23,6 @@ var (
 		"e218970e8f810be99d60aa66262a1d382bc4b1a26a69af07ac47d622885db1a7": {},
 		"ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80": {},
 		"38df010716e13254fb5fc16065c1cf62ee2aeaed2fad79973f8a76ba91da36da": {},
-		"f77a391a62a128ba17559f3716dd7f68bb0a6df6ac3d10249f06323c1148ad03": {}, // non 0 value op return
-		"63518daaab78b7fd7488eb9b241f145c7b27cd43b86369aa38cdafa213e018c5": {}, // non 0 value op return
 	}
 )
 
@@ -128,7 +126,10 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 		case !isData && (output.Satoshis > MaxSatoshis || output.Satoshis < minOutput):
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
 		case isData && output.Satoshis != 0 && blockHeight >= util.GenesisActivationHeight:
-			return errors.NewTxInvalidError("transaction output %d has non 0 value op return (height=%d)", index, blockHeight)
+			//  This is not enforced on a consensus level, but it is a good practice to not have non 0 value op returns
+			// 		"f77a391a62a128ba17559f3716dd7f68bb0a6df6ac3d10249f06323c1148ad03": {}, // non 0 value op return
+			//		"63518daaab78b7fd7488eb9b241f145c7b27cd43b86369aa38cdafa213e018c5": {}, // non 0 value op return
+			// return errors.NewTxInvalidError("transaction output %d has non 0 value op return (height=%d)", index, blockHeight)
 		}
 		total += output.Satoshis
 	}
