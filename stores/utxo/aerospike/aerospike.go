@@ -4,7 +4,6 @@ package aerospike
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"log"
 	"net/url"
@@ -22,7 +21,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
@@ -216,19 +214,4 @@ func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
 	}
 
 	return vout % uint32(s.utxoBatchSize)
-}
-
-func calculateKeySource(hash *chainhash.Hash, num uint32) []byte {
-	// The key is normally the hash of the transaction
-	keySource := hash.CloneBytes()
-	if num == 0 {
-		return keySource
-	}
-
-	// Convert the offset to int64 little ending
-	batchOffsetLE := make([]byte, 4)
-	binary.LittleEndian.PutUint32(batchOffsetLE, num)
-
-	keySource = append(keySource, batchOffsetLE...)
-	return keySource
 }

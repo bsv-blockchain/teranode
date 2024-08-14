@@ -168,7 +168,7 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 			Zone: useInterface.Name,
 		})
 		if err != nil {
-			log.Fatalf("error starting listener: %v", err)
+			return errors.NewServiceError("error starting listener", err)
 		}
 
 		go func(conn *net.UDPConn) {
@@ -227,14 +227,18 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 func (ps *PropagationServer) quicServer(_ context.Context, quicAddresses string) error {
 	ps.logger.Infof("Starting QUIC listeners on %s", quicAddresses)
 
+	tlsConfig, err := ps.generateTLSConfig()
+	if err != nil {
+		return errors.NewInvalidArgumentError("error generating TLS config", err)
+	}
 	server := http3.Server{
 		Addr:      quicAddresses,
-		TLSConfig: ps.generateTLSConfig(), // Assume generateTLSConfig() sets up your TLS
+		TLSConfig: tlsConfig, // Assume generateTLSConfig() sets up your TLS
 	}
 
 	http.Handle("/tx", http.HandlerFunc(ps.handleStream))
 
-	err := server.ListenAndServe() // Empty because certs are in TLSConfig
+	err = server.ListenAndServe() // Empty because certs are in TLSConfig
 	if err != nil {
 		ps.logger.Errorf("error starting HTTP server: %v", err)
 		return err
@@ -561,39 +565,36 @@ func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) 
 }
 
 // Setup a bare-bones TLS config for the server
-func (ps *PropagationServer) generateTLSConfig() *tls.Config {
+func (ps *PropagationServer) generateTLSConfig() (*tls.Config, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		ps.logger.Errorf("error generating rsa key: %s", err.Error())
-		return nil
+		return nil, errors.NewError("error generating rsa key", err)
 	}
 
 	template := x509.Certificate{SerialNumber: big.NewInt(1)}
 
 	remoteAddress, err := utils.GetPublicIPAddress()
 	if err != nil {
-		ps.logger.Fatalf("Failed to get public IP address: %v", err)
+		return nil, errors.NewServiceError("failed to get public IP address", err)
 	}
 	// Add IP SANs
 	template.IPAddresses = []net.IP{net.ParseIP(remoteAddress)}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
 	if err != nil {
-		ps.logger.Errorf("error creating x509 certificate: %s", err.Error())
-		return nil
+		return nil, errors.NewError("error creating x509 certificate", err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		ps.logger.Errorf("error generating x509 key pair: %s", err.Error())
-		return nil
+		return nil, errors.NewError("error generating x509 key pair", err)
 	}
 	return &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		NextProtos:   []string{"txblaster2"},
 		MinVersion:   tls.VersionTLS12,
-	}
+	}, nil
 }
 
 // RemoveInvalidUTF8 returns a string with all invalid UTF-8 characters removed

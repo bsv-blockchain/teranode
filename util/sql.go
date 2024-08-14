@@ -2,12 +2,13 @@ package util
 
 import (
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strconv"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/usql"

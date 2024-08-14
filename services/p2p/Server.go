@@ -195,7 +195,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	if err == nil && ok {
 		var partitions int
 		if partitions, err = strconv.Atoi(rejectedTxKafkaURL.Query().Get("partitions")); err != nil {
-			s.logger.Fatalf("[Subtreevalidation] unable to parse Kafka partitions from %s: %s", rejectedTxKafkaURL, err)
+			return errors.NewInvalidArgumentError("[Subtreevalidation] unable to parse Kafka partitions from %s", rejectedTxKafkaURL, err)
 		}
 
 		consumerRatio := util.GetQueryParamInt(rejectedTxKafkaURL, "consumer_ratio", 8)

@@ -56,7 +56,7 @@ func NewMiner(ctx context.Context, logger ulogger.Logger) (*Miner, error) {
 	// How long to wait between mining the last few blocks
 	initialBlockFinalWaitDuration, err, _ := gocore.Config().GetDuration("mine_initial_blocks_final_wait", 5*time.Second)
 	if err != nil {
-		logger.Fatalf("[Miner] Error parsing mine_initial_blocks_final_wait: %v", err)
+		return nil, errors.NewServiceError("[NewMiner] failed to get mine_initial_blocks_final_wait", err)
 	}
 
 	maxSubtreeCount, _ := gocore.Config().GetInt("miner_max_subtree_count", 600)
@@ -101,7 +101,7 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	listenAddress, ok := gocore.Config().Get("miner_httpListenAddress")
 	if !ok {
-		m.logger.Fatalf("[Miner] No miner_httpListenAddress specified")
+		return errors.NewConfigurationError("[Miner] No miner_httpListenAddress specified")
 	}
 	server := &http.Server{
 		Addr:         listenAddress,

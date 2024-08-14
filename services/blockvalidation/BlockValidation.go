@@ -155,13 +155,15 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 	}
 
 	go func() {
-		bv.start(ctx)
+		if err := bv.start(ctx); err != nil {
+			logger.Errorf("[BlockValidation:start] failed to start: %s", err)
+		}
 	}()
 
 	return bv
 }
 
-func (u *BlockValidation) start(ctx context.Context) {
+func (u *BlockValidation) start(ctx context.Context) error {
 	go u.bloomFilterStats.BloomFilterStatsProcessor(ctx)
 
 	if u.blockchainClient != nil {
@@ -217,7 +219,7 @@ func (u *BlockValidation) start(ctx context.Context) {
 		// wait for all blocks to be processed
 		if err = g.Wait(); err != nil {
 			// we cannot start the block validation, we are in a bad state
-			u.logger.Fatalf("[BlockValidation:start] failed to start, process old block mined/subtrees sets: %s", err)
+			return errors.NewServiceError("[BlockValidation:start] failed to start, process old block mined/subtrees sets", err)
 		}
 	}
 
@@ -277,6 +279,7 @@ func (u *BlockValidation) start(ctx context.Context) {
 			}
 		}
 	}()
+	return nil
 }
 
 // validateBlock()

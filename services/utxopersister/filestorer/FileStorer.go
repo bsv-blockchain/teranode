@@ -77,7 +77,7 @@ func (f *FileStorer) Close(ctx context.Context) error {
 		return errors.NewStorageError("Error flushing writer:", err)
 	}
 
-	f.logger.Infof("Closed buffered writer")
+	// f.logger.Infof("Closed buffered writer")
 
 	if err := f.writer.Close(); err != nil {
 		return errors.NewStorageError("Error closing writer:", err)

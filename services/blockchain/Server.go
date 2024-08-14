@@ -153,7 +153,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 
 	httpAddress, ok := gocore.Config().Get("blockchain_httpListenAddress")
 	if !ok {
-		b.logger.Fatalf("[Miner] No blockchain_httpListenAddress specified")
+		return errors.NewConfigurationError("[Miner] No blockchain_httpListenAddress specified")
 	} else {
 		e := echo.New()
 		e.HideBanner = true

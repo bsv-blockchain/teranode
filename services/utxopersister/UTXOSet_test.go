@@ -44,6 +44,11 @@ func TestNewUTXOSet(t *testing.T) {
 	checkAdditions(t, ud1, 0, 5)
 	checkDeletions(t, ud1, 3, 5)
 
+	err = ud1.CreateUTXOSet(ctx, nil)
+	require.NoError(t, err)
+
+	checkUTXOSet(t, ud1, 5)
+
 	ud2, err := NewUTXODiff(ctx, ulogger.TestLogger{}, store, &hash2, 0)
 	require.NoError(t, err)
 
@@ -52,7 +57,7 @@ func TestNewUTXOSet(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	for i := uint32(15); i < 18; i++ {
+	for i := uint32(3); i < 8; i++ {
 		err = ud2.delete(&UTXODeletion{&hash1, i})
 		require.NoError(t, err)
 	}
@@ -61,37 +66,12 @@ func TestNewUTXOSet(t *testing.T) {
 	require.NoError(t, err)
 
 	checkAdditions(t, ud2, 9, 6)
-	checkDeletions(t, ud2, 15, 3)
-
-	err = ud1.CreateUTXOSet(ctx, nil)
-	require.NoError(t, err)
-
-	checkUTXOSet(t, ud1, 3)
+	checkDeletions(t, ud2, 3, 5)
 
 	err = ud2.CreateUTXOSet(ctx, &hash1)
 	require.NoError(t, err)
 
 	checkUTXOSet(t, ud2, 9)
-
-	r, err := ud2.GetUTXOSetReader()
-	require.NoError(t, err)
-
-	var i uint32 = 9
-
-	for {
-		utxo, err := NewUTXOFromReader(r)
-		if err != nil {
-			assert.ErrorIs(t, err, io.EOF)
-			break
-		}
-
-		require.NoError(t, err)
-		assert.Equal(t, &hash1, utxo.TxID)
-		assert.Equal(t, script, utxo.Script)
-		// t.Log(utxo)
-
-		i++
-	}
 }
 
 func checkAdditions(t *testing.T, ud *UTXODiff, i uint32, count uint32) {

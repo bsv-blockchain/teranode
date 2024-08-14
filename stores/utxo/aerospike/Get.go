@@ -15,6 +15,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/exp/slices"
@@ -38,7 +39,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 
 	prometheusUtxoMapGet.Inc()
 
-	keySource := calculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
+	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
 
 	key, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if aErr != nil {

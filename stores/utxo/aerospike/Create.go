@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -320,7 +321,7 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 			wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
 		}
 
-		keySource := calculateKeySource(txid, uint32(i))
+		keySource := uaerospike.CalculateKeySource(txid, uint32(i))
 
 		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {

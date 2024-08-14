@@ -214,7 +214,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		// g.SetLimit(subtreeConcurrency)
 		var partitions int
 		if partitions, err = strconv.Atoi(blocksKafkaURL.Query().Get("partitions")); err != nil {
-			u.logger.Fatalf("[Blockvalidation] unable to parse Kafka partitions from %s: %s", blocksKafkaURL, err)
+			return errors.NewConfigurationError("unable to parse Kafka partitions from %s", blocksKafkaURL.String(), err)
 		}
 
 		consumerRatio := util.GetQueryParamInt(blocksKafkaURL, "consumer_ratio", 4)

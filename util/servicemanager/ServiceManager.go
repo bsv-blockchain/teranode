@@ -43,11 +43,6 @@ func NewServiceManager(logger ulogger.Logger) (*ServiceManager, context.Context)
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	// statusClient, err := status.NewClient(context.Background(), logger)
-	// if err != nil {
-	// 	logger.Fatalf("Failed to create status client: %v", err)
-	// }
-
 	sm := &ServiceManager{
 		services:   make([]serviceWrapper, 0),
 		logger:     logger,
