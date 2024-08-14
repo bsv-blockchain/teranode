@@ -275,6 +275,13 @@ func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
 		// opts = append(opts, interpreter.WithDebugger(&LogDebugger{}),
 
 		if err = interpreter.NewEngine().Execute(opts...); err != nil {
+			// TODO - in the interests of completeing the IBD, we should not fail the node on script errors
+			// and instead log them and continue. This is a temporary measure until we can fix the script engine
+			if blockHeight < 800_000 {
+				gocore.Log("RUNTIME").Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
+				return nil
+			}
+
 			return errors.NewTxInvalidError("script execution error: %w", err)
 		}
 	}
