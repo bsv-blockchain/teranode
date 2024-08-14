@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob/file"
+	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -21,9 +21,9 @@ var (
 )
 
 func TestNewUTXOSet(t *testing.T) {
-	// store := memory.New()
-	store, err := file.New(ulogger.TestLogger{}, "utxo")
-	require.NoError(t, err)
+	store := memory.New()
+	// store, err := file.New(ulogger.TestLogger{}, "utxo")
+	// require.NoError(t, err)
 
 	ud1, err := NewUTXODiff(ctx, ulogger.TestLogger{}, store, &hash1, 0)
 	require.NoError(t, err)
