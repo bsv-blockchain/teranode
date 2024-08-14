@@ -229,23 +229,12 @@ func main() {
 		}
 	}
 
-	//var blockchainClient blockchain.ClientI
-
 	// should this be done globally somewhere?
 	blockchainClient, err := blockchain.NewClient(ctx, logger, "main")
 	if err != nil {
 		panic(err)
 	}
 	blockchainService.SetClient(blockchainClient)
-
-	// bootstrap server
-	//if startBootstrap {
-	//	if err := sm.AddService("Bootstrap", bootstrap.NewServer(
-	//		logger.New("bootS"),
-	//	)); err != nil {
-	//		panic(err)
-	//	}
-	//}
 
 	// p2p server
 	if startP2P {
