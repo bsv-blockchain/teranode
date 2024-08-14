@@ -254,7 +254,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		outputs[i] = output.Bytes()
 
 		// store all non-zero utxos and exceptions from pre-genesis
-		if output.Satoshis > 0 || utxo.ShouldStoreNonZeroUTXO(output.LockingScript, blockHeight) {
+		if utxo.ShouldStoreOutputAsUTXO(output, blockHeight) {
 			utxos[i] = aerospike.NewBytesValue(utxoHashes[i][:])
 		}
 	}

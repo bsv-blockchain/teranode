@@ -86,7 +86,11 @@ func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
 	return utxoHashes, nil
 }
 
-func ShouldStoreNonZeroUTXO(script *bscript.Script, blockHeight uint32) bool {
+func ShouldStoreOutputAsUTXO(output *bt.Output, blockHeight uint32) bool {
+	return output.Satoshis > 0 || shouldStoreNonZeroUTXO(output.LockingScript, blockHeight)
+}
+
+func shouldStoreNonZeroUTXO(script *bscript.Script, blockHeight uint32) bool {
 	// there is an exception before Genesis where 0 sat outputs were stored in the utxo store
 	if blockHeight < util.GenesisActivationHeight {
 		b := []byte(*script)
