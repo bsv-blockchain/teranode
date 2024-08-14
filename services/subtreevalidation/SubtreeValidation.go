@@ -269,7 +269,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	maxRetries, _ := gocore.Config().GetInt("blockvalidation_validation_max_retries", 3)
 	retrySleepDuration, err, _ := gocore.Config().GetDuration("blockvalidation_validation_retry_sleep", 10*time.Second)
 	if err != nil {
-		panic(fmt.Sprintf("invalid value for blockvalidation_fail_fast_validation_retry_sleep: %v", err))
+		return errors.NewConfigurationError("invalid value for blockvalidation_validation_retry_sleep", err)
 	}
 
 	// TODO document, what does this do?
