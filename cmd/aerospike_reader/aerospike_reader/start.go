@@ -19,21 +19,19 @@ func Start() {
 	fmt.Println()
 
 	if len(os.Args) != 2 {
-		fmt.Printf("Usage: %s <txid> | key\n", os.Args[0])
+		fmt.Printf("Usage: %s <txid>\n", os.Args[0])
 		os.Exit(1)
 	}
 
-	var keySource []byte
+	if len(os.Args[1]) != 64 {
+		fmt.Printf("Invalid txid: %s\n", os.Args[1])
+		os.Exit(1)
+	}
 
-	if len(os.Args[1]) == 64 {
-		hash, err := chainhash.NewHashFromStr(os.Args[1])
-		if err != nil {
-			fmt.Printf("Invalid txid: %s\n", os.Args[1])
-			os.Exit(1)
-		}
-		keySource = hash[:]
-	} else {
-		keySource = []byte(os.Args[1])
+	hash, err := chainhash.NewHashFromStr(os.Args[1])
+	if err != nil {
+		fmt.Printf("Invalid txid: %s\n", os.Args[1])
+		os.Exit(1)
 	}
 
 	storeURL, err, found := gocore.Config().GetURL("utxostore")
@@ -51,7 +49,8 @@ func Start() {
 
 	fmt.Printf("Reading record from %s.%s\n", namespace, setName)
 
-	// get transaction meta data
+	keySource := uaerospike.CalculateKeySource(hash, 0)
+
 	key, err := aero.NewKey(namespace, setName, keySource)
 	if err != nil {
 		fmt.Printf("Failed to create key: %s\n", err)
@@ -76,14 +75,19 @@ func Start() {
 	if ok {
 		nrRecords, ok := nrRecordsIfc.(int)
 		if ok {
-			for i := 0; i < nrRecords; i++ {
-				key, err := aero.NewKey(namespace, setName, []byte(fmt.Sprintf("%s_%d", keySource, i)))
+			for i := uint32(1); i < uint32(nrRecords); i++ {
+				keySource := uaerospike.CalculateKeySource(hash, i)
+
+				key, err := aero.NewKey(namespace, setName, keySource)
 				if err != nil {
 					fmt.Printf("Failed to create key: %s\n", err)
 					os.Exit(1)
 				}
 
-				_, _ = printRecord(client, key)
+				if _, err := printRecord(client, key); err != nil {
+					fmt.Printf("Failed to print record %d: %s\n", i, err)
+					os.Exit(1)
+				}
 			}
 		}
 	}

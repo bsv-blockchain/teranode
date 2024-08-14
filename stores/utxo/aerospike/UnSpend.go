@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -45,7 +46,7 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 
 	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
-	keySource := calculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
+	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if err != nil {

@@ -17,6 +17,8 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	aero "github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -890,7 +892,7 @@ func TestMultiUTXORecords(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 3, nrRecords)
 
-	key1, err := aerospike.NewKey(db.namespace, db.setName, calculateKeySource(bigTx.TxIDChainHash(), 1))
+	key1, err := aerospike.NewKey(db.namespace, db.setName, uaerospike.CalculateKeySource(bigTx.TxIDChainHash(), 1))
 	require.NoError(t, err)
 	assert.NotNil(t, key1)
 
@@ -900,7 +902,7 @@ func TestMultiUTXORecords(t *testing.T) {
 	require.True(t, ok)
 	assert.Len(t, utxos, 2)
 
-	key2, err := aero.NewKey(db.namespace, db.setName, calculateKeySource(bigTx.TxIDChainHash(), 2))
+	key2, err := aero.NewKey(db.namespace, db.setName, uaerospike.CalculateKeySource(bigTx.TxIDChainHash(), 2))
 	require.NoError(t, err)
 	assert.NotNil(t, key2)
 
@@ -966,15 +968,15 @@ func TestMultiUTXORecords(t *testing.T) {
 func TestCalculateKeySource(t *testing.T) {
 	hash := chainhash.HashH([]byte("test"))
 
-	h := calculateKeySource(&hash, 0)
+	h := uaerospike.CalculateKeySource(&hash, 0)
 	assert.Equal(t, hash[:], h)
 
-	h = calculateKeySource(&hash, 1)
+	h = uaerospike.CalculateKeySource(&hash, 1)
 	extra := make([]byte, 4)
 	binary.LittleEndian.PutUint32(extra, uint32(1))
 	assert.Equal(t, append(hash[:], extra...), h)
 
-	h = calculateKeySource(&hash, 2)
+	h = uaerospike.CalculateKeySource(&hash, 2)
 	extra = make([]byte, 4)
 	binary.LittleEndian.PutUint32(extra, uint32(2))
 	assert.Equal(t, append(hash[:], extra...), h)

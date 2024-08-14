@@ -1,10 +1,12 @@
 package uaerospike
 
 import (
+	"encoding/binary"
 	"sort"
 	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v7"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
@@ -125,4 +127,19 @@ func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike
 	}()
 
 	return c.Client.BatchOperate(policy, records)
+}
+
+func CalculateKeySource(hash *chainhash.Hash, num uint32) []byte {
+	// The key is normally the hash of the transaction
+	keySource := hash.CloneBytes()
+	if num == 0 {
+		return keySource
+	}
+
+	// Convert the offset to int64 little ending
+	batchOffsetLE := make([]byte, 4)
+	binary.LittleEndian.PutUint32(batchOffsetLE, num)
+
+	keySource = append(keySource, batchOffsetLE...)
+	return keySource
 }

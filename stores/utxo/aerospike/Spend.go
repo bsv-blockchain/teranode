@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"golang.org/x/sync/errgroup"
 )
@@ -100,7 +101,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	var key *aerospike.Key
 	var err error
 	for idx, bItem := range batch {
-		keySource := calculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize))
+		keySource := uaerospike.CalculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize))
 
 		key, err = aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
