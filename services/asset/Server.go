@@ -11,9 +11,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/asset/centrifuge_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
-
-	//"github.com/bitcoin-sv/ubsv/services/bootstrap"
-
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"

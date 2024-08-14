@@ -114,7 +114,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 
 	ps.status.Store(2)
 
-	ps.logger.Debugf("GOKHAN setting kafka validator channel")
 	//  kafka channel setup
 	validatortxsKafkaURL, _, found := gocore.Config().GetURL("kafka_validatortxsConfig")
 	if !found {
@@ -495,15 +494,6 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 			return err
 		}
 	}
-
-	// All transactions entering Teranode can be assumed to be after Genesis activation height
-	//if err = ps.validator.Validate(ctx, btTx, util.GenesisActivationHeight); err != nil {
-	//	err = errors.NewServiceError("failed validating transaction", err)
-	//	ps.logger.Debugf("[ProcessTransaction][%s] failed to validate transaction: %v", btTx.TxID(), err)
-	//
-	//	prometheusInvalidTransactions.Inc()
-	//	return err
-	//}
 
 	prometheusTransactionSize.Observe(float64(len(req.Tx)))
 	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)

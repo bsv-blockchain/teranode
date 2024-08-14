@@ -289,8 +289,7 @@ func (r *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.Spen
 }
 
 func (r *Repository) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	r.logger.Debugf("[Repository] GetBestBlockHeader Repository: %v", r)
-	r.logger.Debugf("[Repository] GetBestBlockHeader, blockchain client: %v", r.BlockchainClient)
+	r.logger.Debugf("[Repository] GetBestBlockHeader")
 
 	header, meta, err := r.BlockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {

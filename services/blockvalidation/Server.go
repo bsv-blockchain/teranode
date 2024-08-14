@@ -576,7 +576,6 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = request.Height
 
-	// GOKHAN
 	// TODO - check if hardcoding "legacy" is OK
 	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)
 	if err != nil {

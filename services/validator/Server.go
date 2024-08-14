@@ -106,7 +106,6 @@ func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 
 	v.logger.Infof("[Validator] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
 
-	// TODO (Gokhan): Check error handling
 	if err := util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "blockassembly", nil, consumerCount, true, func(msg util.KafkaMessage) error {
 		//startTime := time.Now()
 		for v.blockchainClient.GetFSMCurrentState() == blockchain_api.FSMStateType_CATCHINGTXS {
