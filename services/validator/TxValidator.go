@@ -233,7 +233,14 @@ func (tv *TxValidator) pushDataCheck(tx *bt.Tx) error {
 	return nil
 }
 
-func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) error {
+func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// log the error
+			err = errors.NewTxInvalidError("script execution failed: %v", r)
+		}
+	}()
+
 	for i, in := range tx.Inputs {
 		prevOutput := &bt.Output{
 			Satoshis:      in.PreviousTxSatoshis,
@@ -253,8 +260,8 @@ func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) error {
 
 		// opts = append(opts, interpreter.WithDebugger(&LogDebugger{}),
 
-		if err := interpreter.NewEngine().Execute(opts...); err != nil {
-			return errors.NewTxInvalidError("script execution failed: %w", err)
+		if err = interpreter.NewEngine().Execute(opts...); err != nil {
+			return errors.NewTxInvalidError("script execution error: %w", err)
 		}
 	}
 
