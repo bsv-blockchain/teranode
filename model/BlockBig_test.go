@@ -2,13 +2,14 @@ package model
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"os"
 	"runtime"
 	"runtime/pprof"
 	"testing"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -39,7 +40,7 @@ func TestBigBlock_Valid(t *testing.T) {
 
 	txMetaStore := memory.New(ulogger.TestLogger{})
 	loadMetaToMemoryOnce.Do(func() {
-		cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+		cachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
 		err = loadTxMetaIntoMemory()
 		require.NoError(t, err)
 	})
@@ -96,7 +97,7 @@ func Test_LoadTxMetaIntoMemory(t *testing.T) {
 	util.SkipVeryLongTests(t)
 
 	txMetaStore := memory.New(ulogger.TestLogger{})
-	cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
+	cachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore)
 
 	f, _ := os.Create("cpu.prof")
 	defer f.Close()

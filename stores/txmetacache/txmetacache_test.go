@@ -29,7 +29,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test empty", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+		c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 		_, err := c.GetMeta(ctx, &chainhash.Hash{})
 		require.Error(t, err)
 	})
@@ -37,7 +37,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test in cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+		c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 
 		meta, err := c.Create(ctx, coinbaseTx, 100)
 		require.NoError(t, err)
@@ -52,7 +52,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	t.Run("test set cache", func(t *testing.T) {
 		ctx := context.Background()
 
-		c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+		c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
 
 		metaData := &meta.Data{
 			Fee:            100,
@@ -76,7 +76,7 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 func Benchmark_txMetaCache_Set(b *testing.B) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	c := NewTxMetaCache(ctx, logger, memory.New(logger))
+	c, _ := NewTxMetaCache(ctx, logger, memory.New(logger))
 	cache := c.(*TxMetaCache)
 
 	// Pre-generate all hashes
@@ -102,7 +102,7 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 func Benchmark_txMetaCache_Get(b *testing.B) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	c := NewTxMetaCache(ctx, logger, memory.New(logger))
+	c, _ := NewTxMetaCache(ctx, logger, memory.New(logger))
 	cache := c.(*TxMetaCache)
 
 	meta := &meta.Data{
@@ -148,7 +148,7 @@ func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
 	util.SkipVeryLongTests(t)
 	ctx := context.Background()
-	c := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 2048)
+	c, _ := NewTxMetaCache(ctx, ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), 2048)
 	cache := c.(*TxMetaCache)
 	var err error
 

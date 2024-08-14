@@ -144,7 +144,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	defer deferFunc()
 
 	blockValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
-	blockValidation.utxoStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
+	blockValidation.utxoStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
 
 	numberOfItems := 1_024 * 1_024
 

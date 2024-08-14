@@ -74,7 +74,7 @@ func New(
 	// create a caching tx meta store
 	if gocore.Config().GetBool("subtreevalidation_txMetaCacheEnabled", true) {
 		logger.Infof("Using cached version of tx meta store")
-		u.utxoStore = txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, utxoStore)
+		u.utxoStore, _ = txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, utxoStore)
 	} else {
 		u.utxoStore = utxoStore
 	}

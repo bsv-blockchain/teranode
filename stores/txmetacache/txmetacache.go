@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -45,10 +46,10 @@ type CacheStats struct {
 	TotalElementsAdded uint64
 }
 
-func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Store, options ...int) utxo.Store {
+func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Store, options ...int) (utxo.Store, error) {
 	if _, ok := utxoStore.(*TxMetaCache); ok {
 		// txMetaStore is a TxMetaCache, this is not allowed
-		panic("Cannot use TxMetaCache as the underlying store for TxMetaCache")
+		return nil, errors.NewServiceError("Cannot use TxMetaCache as the underlying store for TxMetaCache")
 	}
 
 	initPrometheusMetrics()
@@ -89,7 +90,7 @@ func NewTxMetaCache(ctx context.Context, logger ulogger.Logger, utxoStore utxo.S
 		}
 	}()
 
-	return m
+	return m, nil
 }
 
 func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {

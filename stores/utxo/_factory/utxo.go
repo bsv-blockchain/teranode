@@ -2,13 +2,14 @@ package _factory
 
 import (
 	"context"
+	"net/url"
+	"strconv"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"net/url"
-	"strconv"
 )
 
 var availableDatabases = map[string]func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error){}
@@ -48,11 +49,11 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 			// get the latest block height to compare against lock time utxos
 			blockchainClient, err = blockchain.NewClient(ctx, logger, "stores/utxo/factory")
 			if err != nil {
-				panic(err)
+				return nil, errors.NewServiceError("error creating blockchain client", err)
 			}
 			blockchainSubscriptionCh, err = blockchainClient.Subscribe(ctx, "UTXOStore")
 			if err != nil {
-				panic(err)
+				return nil, errors.NewServiceError("error subscribing to blockchain", err)
 			}
 
 			blockHeight, medianBlockTime, err := blockchainClient.GetBestHeightAndTime(ctx)
