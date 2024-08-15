@@ -18,7 +18,14 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"golang.org/x/exp/slices"
+)
+
+var (
+	stat = gocore.NewStat("Aerospike")
+
+	previousOutputsDecorateStat = stat.NewStat("PreviousOutputsDecorate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
 )
 
 type batchGetItemData struct {
@@ -318,6 +325,11 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 }
 
 func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+	start := gocore.CurrentTime()
+	defer func() {
+		previousOutputsDecorateStat.AddTimeForRange(start, len(outpoints))
+	}()
+
 	var err error
 
 	batchPolicy := util.GetAerospikeBatchPolicy()
