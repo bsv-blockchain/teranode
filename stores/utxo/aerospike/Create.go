@@ -211,9 +211,18 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 			end = len(utxos)
 		}
 		batchUtxos := utxos[start:end]
+
+		// Count the number of non-nil utxos in this batch
+		nrUtxos := 0
+		for _, utxo := range batchUtxos {
+			if utxo != nil {
+				nrUtxos++
+			}
+		}
+
 		batch := append([]*aerospike.Bin(nil), commonBins...)
 		batch = append(batch, aerospike.NewBin("utxos", aerospike.NewListValue(batchUtxos)))
-		batch = append(batch, aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(len(batchUtxos))))
+		batch = append(batch, aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(nrUtxos)))
 		batches = append(batches, batch)
 	}
 	return batches
