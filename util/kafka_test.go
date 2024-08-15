@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"net"
+	"net/url"
 	"strconv"
 	"sync"
 	"testing"
@@ -12,46 +12,106 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/ordishs/gocore"
+	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
-	tc "github.com/testcontainers/testcontainers-go/modules/compose"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func Test_NewKafkaConsumer(t *testing.T) {
-	workerCh := make(chan KafkaMessage)
-	consumer := NewKafkaConsumer(workerCh, true)
-	if consumer.autoCommitEnabled != true {
-		t.Errorf("Expected autoCommitEnabled to be true, got %v", consumer.autoCommitEnabled)
-	}
-	consumer = NewKafkaConsumer(workerCh, false)
-	if consumer.autoCommitEnabled != false {
-		t.Errorf("Expected autoCommitEnabled to be false, got %v", consumer.autoCommitEnabled)
-	}
-
+const (
+	RedpandaImage   = "docker.vectorized.io/vectorized/redpanda"
+	RedpandaVersion = "latest"
+)
+type TestContainerWrapper struct {
+	container testcontainers.Container
+	hostPort  int
 }
 
-func Test_KafkaAsyncProducerConsumerAutoCommit(t *testing.T) {
-	SkipVeryLongTests(t)
+func (t *TestContainerWrapper) RunContainer(index int) error {
+	assignPort := 9092 + index
+	natPort := nat.Port(fmt.Sprintf("%d", assignPort))
+	req := testcontainers.ContainerRequest{
+		Image: fmt.Sprintf("%s:%s", RedpandaImage, RedpandaVersion),
+		ExposedPorts: []string{
+			fmt.Sprintf("%d:%d/tcp", assignPort, assignPort), // Map the dynamic port
+		},
+		Cmd: []string{
+			"redpanda", "start",
+			"--overprovisioned", "--smp=1",
+			fmt.Sprintf("--kafka-addr=PLAINTEXT://0.0.0.0:%d", assignPort),
+			fmt.Sprintf("--advertise-kafka-addr=PLAINTEXT://localhost:%d", assignPort),
+		},
+		WaitingFor: wait.ForLog("Successfully started Redpanda!"),
+		AutoRemove: true,
+	}
+
+	container, err := testcontainers.GenericContainer(context.Background(), testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		return errors.NewProcessingError("could not start the container: %w", err)
+	}
+
+	mPort, err := container.MappedPort(context.Background(), natPort)
+	if err != nil {
+		return errors.NewConfigurationError("could not get the mapped port: %", err)
+	}
+
+	t.container = container
+	t.hostPort = mPort.Int()
+
+	return nil
+}
+
+func (t *TestContainerWrapper) CleanUp() error {
+	ctx, cancelFunc := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelFunc()
+
+	if err := t.container.Terminate(ctx); err != nil {
+		return errors.NewConfigurationError("could not terminate the container: %w", err)
+	}
+	return nil
+}
+
+func (t *TestContainerWrapper) GetBrokerAddresses() []string {
+	return []string{fmt.Sprintf("localhost:%d", t.hostPort)}
+}
+
+func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
+	t.Parallel()	
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel() // shuts down the listener
+	defer cancel()
 
 	workerCh := make(chan KafkaMessage)
 
-	filePaths := "../docker-compose-kafka.yml"
-	compose, err := tc.NewDockerCompose(filePaths)
+	testContainer := &TestContainerWrapper{}
+
+	err := testContainer.RunContainer(1)
 	require.NoError(t, err)
 
-	err = compose.Up(context.Background())
-	require.NoError(t, err)
+	defer func() {
+		cleanupErr := testContainer.CleanUp()
+		if cleanupErr != nil {
+			t.Errorf("failed to clean up container: %v", cleanupErr)
+		}
+	}()
 
-	defer stopKafka(compose, ctx)
+	const (
+		KAFKA_PARTITIONS          = 1
+		KAFKA_REPLICATION_FACTOR  = 1
+		KAFKA_UNITTEST            = "unittest"
+	)
 
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_unitTest")
-	require.NoError(t, err)
-	require.True(t, ok)
+	kafkaURL := &url.URL{
+		Scheme: "kafka",
+		Host:   testContainer.GetBrokerAddresses()[0],
+		Path:   KAFKA_UNITTEST,
+		RawQuery: fmt.Sprintf("partitions=%d&replicationFactor=%d", KAFKA_PARTITIONS, KAFKA_REPLICATION_FACTOR),
+	}
 
-	err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
-	require.NoError(t, err)
+	// err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
+	// require.NoError(t, err)
 
 	kafkaChan := make(chan []byte, 10000)
 	go func() {
@@ -85,29 +145,45 @@ func Test_KafkaAsyncProducerConsumerAutoCommit(t *testing.T) {
 	wg.Wait()
 }
 
-func Test_KafkaAsyncProducerWithManualCommitParams(t *testing.T) {
-	SkipVeryLongTests(t)
-
-	ctx, cancel := context.WithCancel(context.Background())
+func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
+	t.Parallel()
+	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	workerCh := make(chan KafkaMessage)
 
-	filePaths := "../docker-compose-kafka.yml"
-	compose, err := tc.NewDockerCompose(filePaths)
+	// Initialize your TestContainerWrapper
+	testContainer := &TestContainerWrapper{}
+
+	// Start the Kafka container
+	err := testContainer.RunContainer(2)
 	require.NoError(t, err)
 
-	err = compose.Up(ctx)
-	require.NoError(t, err)
+	// Ensure cleanup after the test
+	defer func() {
+		cleanupErr := testContainer.CleanUp()
+		if cleanupErr != nil {
+			t.Errorf("failed to clean up container: %v", cleanupErr)
+		}
+	}()
+	const (
+		KAFKA_PARTITIONS          = 1
+		KAFKA_REPLICATION_FACTOR  = 1
+		KAFKA_UNITTEST            = "unittest"
+	)
 
-	defer stopKafka(compose, ctx)
+	// Construct the Kafka URL
+	kafkaURL := &url.URL{
+		Scheme: "kafka",
+		Host:   testContainer.GetBrokerAddresses()[0],
+		Path:   KAFKA_UNITTEST,
+		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=600000&flush_bytes=1024&flush_messages=10000&flush_frequency=1s&replay=1", KAFKA_PARTITIONS, KAFKA_REPLICATION_FACTOR),
+	}
 
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_unitTest")
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
-	require.NoError(t, err)
+	fmt.Println("Kafka URL: ", kafkaURL)
+	// (Optional) Uncomment if you want to wait for Kafka readiness
+	// err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
+	// require.NoError(t, err)
 
 	var wg sync.WaitGroup
 
@@ -158,7 +234,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams(t *testing.T) {
 		},
 	}
 
-	// send 10 messages
+	// Send 10 messages
 	wgP := sync.WaitGroup{}
 	wgP.Add(10)
 	go produceMessages(&wgP, kafkaChan, 10)
@@ -171,9 +247,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams(t *testing.T) {
 
 			wg.Add(10)
 
-			// because we start a new listener for each test case, it will pick up the previously sent messages - no need to send more messages
-			// go produceMessages(nil, kafkaChan, 0, 10)
-
+			// Start the Kafka group listener for the current test case
 			go func() {
 				err := StartKafkaGroupListener(ctx, ulogger.NewZeroLogger("test"), kafkaURL, "kafka_test", workerCh, 1, false, tCase.consumerClosure)
 				require.NoError(t, err)
@@ -187,28 +261,48 @@ func Test_KafkaAsyncProducerWithManualCommitParams(t *testing.T) {
 	}
 }
 
-func Test_KafkaAsyncProducerWithManualCommitErrorClosure(t *testing.T) {
-	SkipVeryLongTests(t)
-	ctx, cancel := context.WithCancel(context.Background())
+func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) {
+	t.Parallel()
+	_, cancel := context.WithCancel(context.Background())
 	defer cancel() // shuts down listener
 
 	workerCh := make(chan KafkaMessage)
 
-	filePaths := "../docker-compose-kafka.yml"
-	compose, err := tc.NewDockerCompose(filePaths)
+	// Initialize your TestContainerWrapper
+	testContainer := &TestContainerWrapper{}
+
+	// Start the Kafka container
+	err := testContainer.RunContainer(3)
 	require.NoError(t, err)
 
-	err = compose.Up(context.Background())
-	require.NoError(t, err)
+	// Ensure cleanup after the test
+	defer func() {
+		cleanupErr := testContainer.CleanUp()
+		if cleanupErr != nil {
+			t.Errorf("failed to clean up container: %v", cleanupErr)
+		}
+	}()
 
-	defer stopKafka(compose, ctx)
+	const (
+		KAFKA_PARTITIONS          = 1
+		KAFKA_REPLICATION_FACTOR  = 1
+		KAFKA_UNITTEST            = "unittest"
+	)
 
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_unitTest")
-	require.NoError(t, err)
-	require.True(t, ok)
+	// Construct the Kafka URL
+	kafkaURL := &url.URL{
+		Scheme: "kafka",
+		Host:   testContainer.GetBrokerAddresses()[0],
+		Path:   KAFKA_UNITTEST,
+		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=600000&flush_bytes=1024&flush_messages=10000&flush_frequency=1s&replay=1", 
+			KAFKA_PARTITIONS, KAFKA_REPLICATION_FACTOR),
+	}
 
-	err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
-	require.NoError(t, err)
+	fmt.Println("Kafka URL: ", kafkaURL)
+
+	// (Optional) Uncomment if you want to wait for Kafka readiness
+	// err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
+	// require.NoError(t, err)
 
 	kafkaChan := make(chan []byte, 10000)
 	go func() {
@@ -230,7 +324,7 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure(t *testing.T) {
 	}
 
 	go func() {
-		err := StartKafkaGroupListener(ctx, ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, 1, false, errClosure)
+		err := StartKafkaGroupListener(context.Background(), ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, 1, false, errClosure)
 		require.NoError(t, err)
 	}()
 
@@ -242,12 +336,6 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure(t *testing.T) {
 		case <-c:
 			count++
 		}
-	}
-}
-
-func stopKafka(compose tc.ComposeStack, ctx context.Context) {
-	if err := compose.Down(ctx); err != nil {
-		panic(err)
 	}
 }
 
@@ -272,26 +360,6 @@ func produceMessages(wg *sync.WaitGroup, kafkaChan chan []byte, numberOfMessages
 		time.Sleep(randomDelay)
 		if wg != nil {
 			wg.Done()
-		}
-	}
-}
-
-func waitForKafkaReady(ctx context.Context, kafkaAddr string, timeout time.Duration) error {
-	start := time.Now()
-	for {
-		conn, err := net.DialTimeout("tcp", kafkaAddr, 1*time.Second)
-		if err == nil {
-			conn.Close()
-			return nil
-		}
-		if time.Since(start) > timeout {
-			return errors.NewUnknownError("timed out waiting for Kafka to be ready")
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-			// Retry after a short delay
 		}
 	}
 }

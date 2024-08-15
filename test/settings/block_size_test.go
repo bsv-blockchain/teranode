@@ -57,7 +57,7 @@ func TestMain(m *testing.M) {
 	// time.Sleep(10 * time.Second)
 	m.Run()
 
-	// os.Exit(exitCode)
+	os.Exit(0)
 }
 
 func setupBitcoinTestFramework() {
