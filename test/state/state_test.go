@@ -68,13 +68,12 @@ func TestNodeCatchUpState_WithStartAndStopNodes(t *testing.T) {
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
 	var (
-		states    []blockchain_api.FSMStateType
-		lastState *blockchain_api.FSMStateType
 		mu        sync.Mutex
 		wg        sync.WaitGroup
 		done      = make(chan struct{})
 	)
 
+	stateSet := make(map[blockchain_api.FSMStateType]struct{})
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
@@ -110,13 +109,13 @@ func TestNodeCatchUpState_WithStartAndStopNodes(t *testing.T) {
 			case <-done:
 				return
 			default:
-				response := blockchainNode1.GetFSMCurrentState()
-				if err == nil && (lastState == nil || response != *lastState) {
-					mu.Lock()
-					states = append(states, response)
-					lastState = &response
-					mu.Unlock()
+				response := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
+				mu.Lock()
+				if _, exists := stateSet[response]; !exists {
+					framework.Logger.Infof("New unique state: %v", response)
+					stateSet[response] = struct{}{} // Add the state to the set
 				}
+				mu.Unlock()
 				// time.Sleep(10 * time.Millisecond) // Adjust the interval as needed
 			}
 		}
@@ -127,14 +126,13 @@ func TestNodeCatchUpState_WithStartAndStopNodes(t *testing.T) {
 	wg.Wait()
 
 	stateFound := false
-	for _, state := range states {
+	for state := range stateSet {
 		if state == blockchain_api.FSMStateType(3) {
 			stateFound = true
 			break
 		}
 	}
 	assert.True(t, stateFound, "State 3 was not captured")
-	fmt.Printf("Captured states: %v\n", states)
 
 	headerNode1, _, _ := blockchainNode1.GetBestBlockHeader(ctx)
 	headerNode0, _, _ := blockchainNode0.GetBestBlockHeader(ctx)
@@ -147,12 +145,12 @@ func TestNodeCatchUpState_WithP2PSwitch(t *testing.T) {
 
 	var (
 		states    []blockchain_api.FSMStateType
-		lastState *blockchain_api.FSMStateType
 		mu        sync.Mutex
 		wg        sync.WaitGroup
 		done      = make(chan struct{})
 	)
 
+	stateSet := make(map[blockchain_api.FSMStateType]struct{})
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.tc3"
 	if err := framework.RestartNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
@@ -189,13 +187,13 @@ func TestNodeCatchUpState_WithP2PSwitch(t *testing.T) {
 			case <-done:
 				return
 			default:
-				response := blockchainNode1.GetFSMCurrentState()
-				if lastState == nil || response != *lastState {
-					mu.Lock()
-					states = append(states, response)
-					lastState = &response
-					mu.Unlock()
+				response := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
+				mu.Lock()
+				if _, exists := stateSet[response]; !exists {
+					framework.Logger.Infof("New unique state: %v", response)
+					stateSet[response] = struct{}{} // Add the state to the set
 				}
+				mu.Unlock()
 				// time.Sleep(10 * time.Millisecond)
 			}
 		}
@@ -206,7 +204,7 @@ func TestNodeCatchUpState_WithP2PSwitch(t *testing.T) {
 	wg.Wait()
 
 	stateFound := false
-	for _, state := range states {
+	for state := range stateSet {
 		if state == blockchain_api.FSMStateType(3) {
 			stateFound = true
 			break
