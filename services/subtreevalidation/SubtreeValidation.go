@@ -8,6 +8,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -533,39 +534,129 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 
 	u.logger.Infof("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
 
-	var txMeta *meta.Data
 	var mTx missingTx
-	var missingCount int
+	var missingCount atomic.Uint32
 	missed := make([]*chainhash.Hash, 0, len(txMetaSlice))
+	missedMu := sync.Mutex{}
 
-	for _, mTx = range missingTxs {
-		if mTx.tx == nil {
-			return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
+	// process the transactions in parallel, based on the number of parents in the list
+	maxLevel, txsPerLevel := u.prepareTxsPerLevel(ctx, missingTxs)
+
+	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(spendBatcherSize * 8)
+	for level := uint32(0); level <= maxLevel; level++ {
+		for _, mTx = range txsPerLevel[level] {
+			if mTx.tx == nil {
+				return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
+			}
+
+			g.Go(func() error {
+				txMeta, err := u.blessMissingTransaction(gCtx, mTx.tx, blockHeight)
+				if err != nil {
+					return errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String(), err)
+				}
+
+				if txMeta == nil {
+					missingCount.Add(1)
+					missedMu.Lock()
+					missed = append(missed, mTx.tx.TxIDChainHash())
+					missedMu.Unlock()
+					u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
+				} else {
+					u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
+					txMetaSlice[mTx.idx] = txMeta
+				}
+
+				return nil
+			})
 		}
 
-		txMeta, err = u.blessMissingTransaction(ctx, mTx.tx, blockHeight)
-		if err != nil {
-			return errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String(), err)
-		}
-
-		if txMeta == nil {
-			missingCount++
-			missed = append(missed, mTx.tx.TxIDChainHash())
-			u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
-		} else {
-			u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
-			txMetaSlice[mTx.idx] = txMeta
+		// wait for each level to process separately
+		if err = g.Wait(); err != nil {
+			return err
 		}
 	}
 
-	if missingCount > 0 {
-		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice (%d requested)", subtreeHash.String(), missingCount, len(txMetaSlice))
+	if missingCount.Load() > 0 {
+		u.logger.Errorf("[validateSubtree][%s] %d missing entries in txMetaSlice (%d requested)", subtreeHash.String(), missingCount.Load(), len(txMetaSlice))
 		for _, m := range missed {
 			u.logger.Debugf("\t txid: %s", m)
 		}
 	}
 
 	return nil
+}
+
+type txMapWrapper struct {
+	missingTx          missingTx
+	someParentsInBlock bool
+	childLevelInBlock  uint32
+}
+
+// prepareTxsPerLevel prepares the transactions per level for processing
+// levels are determined by the number of parents in the block
+// this code is very similar to the one in the legacy netsync/handle_block handler, but works on different base tx data
+func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, map[uint32][]missingTx) {
+	_, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel")
+	defer deferFn()
+
+	// create a map of transactions for easy lookup when determining parents
+	txMap := make(map[chainhash.Hash]*txMapWrapper)
+	for _, mTx := range transactions {
+		txHash := *mTx.tx.TxIDChainHash()
+		// don't add the coinbase to the txMap, we cannot process it anyway
+		if !mTx.tx.IsCoinbase() {
+			txMap[txHash] = &txMapWrapper{missingTx: mTx}
+
+			for _, input := range mTx.tx.Inputs {
+				prevTxHash := *input.PreviousTxIDChainHash()
+				if _, found := txMap[prevTxHash]; found {
+					txMap[txHash].someParentsInBlock = true
+				}
+			}
+		}
+	}
+
+	maxLevel := uint32(0)
+	sizePerLevel := make(map[uint32]uint64)
+	blockTxsPerLevel := make(map[uint32][]missingTx)
+
+	// determine the level of each transaction in the block, based on the number of parents in the block
+	for _, mTx := range transactions {
+		txHash := *mTx.tx.TxIDChainHash()
+		if _, found := txMap[txHash]; found {
+			if txMap[txHash].someParentsInBlock {
+				for _, input := range txMap[txHash].missingTx.tx.Inputs {
+					parentTxHash := *input.PreviousTxIDChainHash()
+					if parentTxWrapper, found := txMap[parentTxHash]; found {
+						// if the parent from this input is at the same level or higher,
+						// we need to increase the child level of this transaction
+						if parentTxWrapper.childLevelInBlock >= txMap[txHash].childLevelInBlock {
+							txMap[txHash].childLevelInBlock = parentTxWrapper.childLevelInBlock + 1
+						}
+						if txMap[txHash].childLevelInBlock > maxLevel {
+							maxLevel = txMap[txHash].childLevelInBlock
+						}
+					}
+				}
+			}
+			sizePerLevel[txMap[txHash].childLevelInBlock] += 1
+		}
+	}
+
+	// pre-allocation of the blockTxsPerLevel map
+	for i := uint32(0); i <= maxLevel; i++ {
+		blockTxsPerLevel[i] = make([]missingTx, 0, sizePerLevel[i])
+	}
+
+	// put all transactions in a map per level for processing
+	for _, txWrapper := range txMap {
+		blockTxsPerLevel[txWrapper.childLevelInBlock] = append(blockTxsPerLevel[txWrapper.childLevelInBlock], txWrapper.missingTx)
+	}
+
+	return maxLevel, blockTxsPerLevel
 }
 
 func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash *chainhash.Hash,
@@ -659,7 +750,7 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []u
 	}
 
 	if err = g.Wait(); err != nil {
-		return nil, errors.NewProcessingError("[blessMissingTransaction] failed to get all transactions", err)
+		return nil, errors.NewProcessingError("[getMissingTransaction] failed to get all transactions", err)
 	}
 
 	// populate the missingTx slice with the tx data
@@ -667,10 +758,10 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []u
 	for _, mTx := range missingTxHashes {
 		tx, ok := missingTxsMap[mTx.Hash]
 		if !ok {
-			return nil, errors.NewProcessingError("[blessMissingTransaction] missing transaction [%s]", mTx.Hash.String())
+			return nil, errors.NewProcessingError("[getMissingTransaction] missing transaction [%s]", mTx.Hash.String())
 		}
 		if tx == nil {
-			return nil, errors.NewProcessingError("[blessMissingTransaction] #3 missing transaction is nil [%s]", mTx.Hash.String())
+			return nil, errors.NewProcessingError("[getMissingTransaction] #3 missing transaction is nil [%s]", mTx.Hash.String())
 		}
 		missingTxs = append(missingTxs, missingTx{tx: tx, idx: mTx.Idx})
 	}

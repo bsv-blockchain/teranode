@@ -219,8 +219,8 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 		// process all the transactions on a certain level in parallel
 		g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
-		g.SetLimit(spendBatcherSize * 16)                     // we limit the number of concurrent requests, to not overload Aerospike
-		for txIdx, _ := range blockTxsPerLevel[i] {
+		g.SetLimit(spendBatcherSize * 8)                      // we limit the number of concurrent requests, to not overload Aerospike
+		for txIdx := range blockTxsPerLevel[i] {
 			txIdx := txIdx
 			g.Go(func() error {
 				// send to validation, but only if the parent is not in the same block
@@ -350,7 +350,7 @@ func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Bl
 					}
 				}
 			}
-			sizePerLevel[txMap[txHash].childLevelInBlock] += uint64(txMap[txHash].tx.Size())
+			sizePerLevel[txMap[txHash].childLevelInBlock] += 1
 		}
 	}
 
