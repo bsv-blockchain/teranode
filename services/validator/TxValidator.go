@@ -171,10 +171,10 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 		total += input.PreviousTxSatoshis
 	}
 
-	if total == 0 && blockHeight >= util.GenesisActivationHeight {
-		// TODO there is a lot of shit transactions on-chain with 0 inputs and 0 outputs - WTF
-		// return errors.NewTxInvalidError("transaction input total satoshis cannot be zero")
-	}
+	//if total == 0 && blockHeight >= util.GenesisActivationHeight {
+	// TODO there is a lot of shit transactions on-chain with 0 inputs and 0 outputs - WTF
+	// return errors.NewTxInvalidError("transaction input total satoshis cannot be zero")
+	//}
 
 	if total > MaxSatoshis {
 		return errors.NewTxInvalidError("transaction input total satoshis is too high")
