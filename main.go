@@ -629,7 +629,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		}
 	}
 
-	restoring := gocore.Config().GetBool("profilerAddr", false)
+	restoring := gocore.Config().GetBool("restoreMode", false)
 	syncingLegacy := gocore.Config().GetBool("snycLegacyMode", false)
 
 	// if we are in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
