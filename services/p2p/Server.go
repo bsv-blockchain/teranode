@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -49,7 +50,7 @@ type Server struct {
 	blockCh               chan []byte
 }
 
-func NewServer(ctx context.Context, logger ulogger.Logger) (*Server, error) {
+func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Server, error) {
 	logger.Debugf("Creating P2P service")
 
 	p2pIp, ok := gocore.Config().Get("p2p_ip")
@@ -125,6 +126,7 @@ func NewServer(ctx context.Context, logger ulogger.Logger) (*Server, error) {
 		logger:            logger,
 		bitcoinProtocolId: "ubsv/bitcoin/1.0.0",
 		notificationCh:    make(chan *notificationMsg),
+		blockchainClient:  blockchainClient,
 	}
 
 	subtreesKafkaURL, err, found := gocore.Config().GetURL("kafka_subtreesConfig")
@@ -251,11 +253,6 @@ func (s *Server) Start(ctx context.Context) error {
 	s.logger.Infof("P2P service starting")
 	var err error
 
-	s.blockchainClient, err = blockchain.NewClient(ctx, s.logger, "services/p2p")
-	if err != nil {
-		return errors.NewServiceError("could not create blockchain client [%w]", err)
-	}
-
 	s.blockValidationClient, err = blockvalidation.NewClient(ctx, s.logger, "p2p")
 	if err != nil {
 		return errors.NewServiceError("could not create block validation client [%w]", err)
@@ -340,7 +337,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 	}
 
 	// define vars here to prevent too many allocs
-	var notification *model.Notification
+	var notification *blockchain_api.Notification
 	var blockMessage p2p.BlockMessage
 	var miningOnMessage p2p.MiningOnMessage
 	var subtreeMessage p2p.SubtreeMessage
@@ -358,10 +355,16 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				continue
 			}
 			// received a message
-			s.logger.Debugf("P2P Received %s notification: %s", notification.Type, notification.Hash.String())
+			cHash := chainhash.Hash(notification.Hash)
+			s.logger.Debugf("P2P Received %s notification: %s", notification.Type, cHash.String())
+			hash, err := chainhash.NewHash(notification.Hash)
+			if err != nil {
+				s.logger.Errorf("error getting chainhash from notification hash %s: %v", notification.Hash, err)
+				continue
+			}
 
 			if notification.Type == model.NotificationType_Block {
-				_, meta, err := s.blockchainClient.GetBlockHeader(ctx, notification.Hash)
+				_, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
 				// // _, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 				// // // block, err := s.blockchainClient.GetBlock(ctx, notification.Hash)
 				if err != nil {
@@ -370,7 +373,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				}
 
 				blockMessage = p2p.BlockMessage{
-					Hash:       notification.Hash.String(),
+					Hash:       hash.String(),
 					Height:     meta.Height,
 					DataHubUrl: s.AssetHttpAddressURL,
 					PeerId:     s.P2PNode.HostID().String(),
@@ -415,7 +418,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 			} else if notification.Type == model.NotificationType_Subtree {
 				// if it's a subtree notification send it on the subtree channel.
 				subtreeMessage = p2p.SubtreeMessage{
-					Hash:       notification.Hash.String(),
+					Hash:       hash.String(),
 					DataHubUrl: s.AssetHttpAddressURL,
 					PeerId:     s.P2PNode.HostID().String(),
 				}

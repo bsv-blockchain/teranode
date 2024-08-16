@@ -7,5 +7,5 @@ import (
 )
 
 func (n *Notification) Stringify() string {
-	return fmt.Sprintf("%s: %s", n.Type.String(), utils.ReverseAndHexEncodeSlice(n.Hash))
+	return fmt.Sprintf("%s: %s, metadata: %s", n.Type.String(), utils.ReverseAndHexEncodeSlice(n.Hash), n.Metadata)
 }

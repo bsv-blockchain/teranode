@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+
 	"log"
 	"math/rand/v2"
 	"net"
@@ -372,8 +374,8 @@ func (sm *SyncManager) startSync() {
 		// can use block headers to learn about which blocks comprise
 		// the chain up to the checkpoint and perform less validation
 		// for them.  This is possible since each header contains the
-		// hash of the previous header and a merkle root.  Therefore if
-		// we validate all of the received headers link together
+		// hash of the previous header and a merkle root.  Therefore, if
+		// we validate all of the received headers linked together
 		// properly and the checkpoint hashes match, we can be sure the
 		// hashes for the blocks in between are accurate.  Further, once
 		// the full blocks are downloaded, the merkle root is computed
@@ -489,6 +491,8 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 
 	// If we don't have a sync peer, then there is nothing to do.
 	if sm.syncPeer == nil {
+		// GOKHAN: here check if it is nil, we can end the process of
+		// interval?
 		return
 	}
 
@@ -819,6 +823,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
 		if sm.current() { // used to check for isOrphan || sm.current()
+			// if you are at the Legacy Sync mode, tell FSM to transition to normal runing.
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
 		}
 	}
@@ -1305,7 +1310,7 @@ out:
 // handleBlockchainNotification handles notifications from blockchain.  It does
 // things such as request orphan block parents and relay accepted blocks to
 // connected peers.
-func (sm *SyncManager) handleBlockchainNotification(notification *model.Notification) {
+func (sm *SyncManager) handleBlockchainNotification(notification *blockchain_api.Notification) {
 	switch notification.Type {
 	// A block has been accepted into the blockchain.  Relay it to other
 	// peers.
@@ -1315,15 +1320,20 @@ func (sm *SyncManager) handleBlockchainNotification(notification *model.Notifica
 		if !sm.current() {
 			return
 		}
+		hash, err := chainhash.NewHash(notification.Hash)
+		if err != nil {
+			sm.logger.Errorf("Failed to create hash from block: %v", err)
+			return
+		}
 
-		blockHeader, _, err := sm.blockchainClient.GetBlockHeader(sm.ctx, notification.Hash)
+		blockHeader, _, err := sm.blockchainClient.GetBlockHeader(sm.ctx, hash)
 		if err != nil {
 			sm.logger.Errorf("Failed to get block %v: %v", notification.Hash, err)
 			return
 		}
 
 		// Generate the inventory vector and relay it.
-		iv := wire.NewInvVect(wire.InvTypeBlock, notification.Hash)
+		iv := wire.NewInvVect(wire.InvTypeBlock, hash)
 		sm.peerNotifier.RelayInventory(iv, blockHeader.ToWireBlockHeader())
 	}
 }

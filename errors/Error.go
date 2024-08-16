@@ -125,7 +125,6 @@ func New(code ERR, message string, params ...interface{}) *Error {
 
 		if err, ok := lastParam.(*Error); ok {
 			wErr = err
-			//data = err.Data
 			params = params[:len(params)-1]
 		} else if err, ok := lastParam.(error); ok {
 			wErr = &Error{Message: err.Error()}

@@ -4,13 +4,13 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 
 	"github.com/bitcoin-sv/ubsv/services/asset/centrifuge_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
@@ -28,16 +28,18 @@ type Server struct {
 	httpServer       *http_impl.HTTP
 	centrifugeAddr   string
 	centrifugeServer *centrifuge_impl.Centrifuge
+	blockchainClient blockchain.ClientI
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockStore blob.Store) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockStore blob.Store, blockchainClient blockchain.ClientI) *Server {
 	s := &Server{
-		logger:       logger,
-		utxoStore:    utxoStore,
-		txStore:      txStore,
-		subtreeStore: subtreeStore,
-		blockStore:   blockStore,
+		logger:           logger,
+		utxoStore:        utxoStore,
+		txStore:          txStore,
+		subtreeStore:     subtreeStore,
+		blockStore:       blockStore,
+		blockchainClient: blockchainClient,
 	}
 
 	return s
@@ -55,12 +57,8 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("no asset_httpListenAddress setting found")
 	}
 
-	blockchainClient, err := blockchain.NewClient(ctx, v.logger, "services/asset")
-	if err != nil {
-		return errors.NewServiceError("error creating blockchain client", err)
-	}
+	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, v.blockchainClient, v.subtreeStore, v.blockStore)
 
-	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, blockchainClient, v.subtreeStore, v.blockStore)
 	if err != nil {
 		return errors.NewServiceError("error creating repository", err)
 	}

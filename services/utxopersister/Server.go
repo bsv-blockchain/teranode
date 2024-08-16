@@ -3,6 +3,7 @@ package utxopersister
 import (
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"strconv"
 	"sync"
 	"time"
@@ -79,10 +80,10 @@ func (s *Server) Init(ctx context.Context) (err error) {
 // Start function
 func (s *Server) Start(ctx context.Context) error {
 	var err error
-	var ch chan *model.Notification
+	var ch chan *blockchain_api.Notification
 
 	if s.blockchainClient == nil {
-		ch = make(chan *model.Notification) // Create a dummy channel
+		ch = make(chan *blockchain_api.Notification) // Create a dummy channel
 	} else {
 		ch, err = s.blockchainClient.Subscribe(ctx, "utxo-persister")
 		if err != nil {
