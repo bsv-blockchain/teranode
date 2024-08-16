@@ -494,7 +494,7 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 				utils.SafeSend(ch, &blockchain_api.Notification{
 					Type:     resp.Type,
 					Hash:     hash[:],
-					BaseUrl:  resp.BaseUrl,
+					Base_URL: resp.Base_URL,
 					Metadata: resp.Metadata,
 				})
 			}

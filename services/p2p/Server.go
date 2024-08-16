@@ -355,7 +355,8 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				continue
 			}
 			// received a message
-			s.logger.Debugf("P2P Received %s notification: %s", notification.Type, string(notification.Hash))
+			cHash := chainhash.Hash(notification.Hash)
+			s.logger.Debugf("P2P Received %s notification: %s", notification.Type, cHash.String())
 			hash, err := chainhash.NewHash(notification.Hash)
 			if err != nil {
 				s.logger.Errorf("error getting chainhash from notification hash %s: %v", notification.Hash, err)

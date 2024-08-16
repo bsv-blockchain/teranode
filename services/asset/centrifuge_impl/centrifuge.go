@@ -255,7 +255,8 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 					}
 				case asset_api.Type_Subtree:
 					channel = "subtree"
-					data = []byte(`{"hash": "` + string(notification.Hash) + `","baseUrl": "` + c.baseURL + `"}`)
+					cHash := chainhash.Hash(notification.Hash)
+					data = []byte(`{"hash": "` + cHash.String() + `","baseUrl": "` + c.baseURL + `"}`)
 				}
 
 				if channel != "" {

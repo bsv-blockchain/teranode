@@ -176,7 +176,7 @@ func (c *Coinbase) Init(ctx context.Context) (err error) {
 					if n.Type == model.NotificationType_Block {
 						c.blockFoundCh <- processBlockFound{
 							hash:    hash,
-							baseURL: n.BaseUrl,
+							baseURL: n.Base_URL,
 						}
 					}
 				}

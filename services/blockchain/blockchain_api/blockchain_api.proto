@@ -187,7 +187,7 @@ message SubscribeRequest {
 message Notification {
   model.NotificationType type = 1;
   bytes hash = 2;
-  string base_url = 3;
+  string base_URL = 3;
   NotificationMetadata metadata = 4;
 }
 

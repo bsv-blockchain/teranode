@@ -157,9 +157,9 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				time.Sleep(20 * time.Millisecond)
 
 				if err = ba.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
-					Type:    model.NotificationType_Subtree,
-					Hash:    (&subtreeRetry.subtreeHash)[:],
-					BaseUrl: "",
+					Type:     model.NotificationType_Subtree,
+					Hash:     (&subtreeRetry.subtreeHash)[:],
+					Base_URL: "",
 					Metadata: &blockchain_api.NotificationMetadata{
 						Metadata: nil,
 					},
@@ -260,9 +260,9 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 	time.Sleep(20 * time.Millisecond)
 
 	if err = ba.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
-		Type:    model.NotificationType_Subtree,
-		Hash:    subtree.RootHash()[:],
-		BaseUrl: "",
+		Type:     model.NotificationType_Subtree,
+		Hash:     subtree.RootHash()[:],
+		Base_URL: "",
 		Metadata: &blockchain_api.NotificationMetadata{
 			Metadata: nil,
 		},
@@ -517,11 +517,14 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	defer callerSpan.Finish()
 
 	go func() {
-		previousHash, _ := chainhash.NewHash(miningCandidate.PreviousHash)
+		previousHash, err := chainhash.NewHash(miningCandidate.PreviousHash)
+		if err != nil {
+			ba.logger.Errorf("failed to convert previous hash: %s", err)
+		}
 		if err := ba.blockchainClient.SendNotification(callerSpan.Ctx, &blockchain_api.Notification{
-			Type:    model.NotificationType_MiningOn,
-			Hash:    previousHash[:],
-			BaseUrl: "",
+			Type:     model.NotificationType_MiningOn,
+			Hash:     previousHash[:],
+			Base_URL: "",
 			Metadata: &blockchain_api.NotificationMetadata{
 				Metadata: nil,
 			},

@@ -30,9 +30,9 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 			metadata["destination"] = e.Dst
 
 			_, err := b.SendNotification(context.Background(), &blockchain_api.Notification{
-				Type:    model.NotificationType_FSMState,
-				Hash:    (&chainhash.Hash{})[:], // not relevant for FSMEvent notifications
-				BaseUrl: "",                     // not relevant for FSMEvent notifications
+				Type:     model.NotificationType_FSMState,
+				Hash:     (&chainhash.Hash{})[:], // not relevant for FSMEvent notifications
+				Base_URL: "",                     // not relevant for FSMEvent notifications
 				Metadata: &blockchain_api.NotificationMetadata{
 					Metadata: metadata,
 				},

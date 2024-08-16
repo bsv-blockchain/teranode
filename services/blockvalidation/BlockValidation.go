@@ -127,8 +127,8 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 					}
 
 					if notification.Type == model.NotificationType_BlockSubtreesSet {
-
-						bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", string(notification.Hash))
+						cHash := chainhash.Hash(notification.Hash)
+						bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", cHash.String())
 
 						// if blocks, err := bv.blockchainClient.GetBlocksSubtreesNotSet(ctx); err != nil {
 						// 	bv.logger.Errorf("[BlockValidation:setMined] failed to getBlocksSubtreesNotSet: %s", err)

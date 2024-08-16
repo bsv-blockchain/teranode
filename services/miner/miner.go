@@ -93,8 +93,6 @@ func (m *Miner) Init(ctx context.Context) error {
 }
 
 func (m *Miner) Start(ctx context.Context) error {
-	m.logger.Errorf("STARTING MINER")
-
 	listenAddress, ok := gocore.Config().Get("miner_httpListenAddress")
 	if !ok {
 		return errors.NewConfigurationError("[Miner] No miner_httpListenAddress specified")
