@@ -31,7 +31,6 @@ var (
 		"6e1d88f10e829fa2dd9691ef5cf9550ba6f0eed51d676f1b74df3fa894fe7035": {}, // spending of weird OP_SHIFT script causing panic
 		"7562141b4a26e2482f43e9e123222579c8c9f704d465aacf11ed041a85d2e50d": {}, // spending of weird OP_SHIFT script causing panic
 		"6974a4c575c661a918e50d735852c29541a3263dcc4ff46bf90eb9f8f0ec485e": {}, // spending of weird OP_SHIFT script causing panic
-		"5f37c7a38b5e0bc177a4c353481f30c6de1bc46db534019846d7bc829f58254a": {}, // 0 sat output WTF
 	}
 )
 
@@ -124,15 +123,16 @@ func (tv *TxValidator) checkTxSize(txSize int, policy *PolicySettings) error {
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
 
-	minOutput := uint64(0)
-	if blockHeight >= util.GenesisActivationHeight {
-		minOutput = bt.DustLimit
-	}
+	//minOutput := uint64(0)
+	//if blockHeight >= util.GenesisActivationHeight {
+	//	minOutput = bt.DustLimit
+	//}
 
 	for index, output := range tx.Outputs {
 		isData := output.LockingScript.IsData()
 		switch {
-		case !isData && (output.Satoshis > MaxSatoshis || (minOutput > 0 && output.Satoshis < minOutput)):
+		// TODO there are transactions on-chain with 0 sat outputs WTF
+		case !isData && output.Satoshis > MaxSatoshis: // || (minOutput > 0 && output.Satoshis < minOutput)):
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
 		case isData && output.Satoshis != 0 && blockHeight >= util.GenesisActivationHeight:
 			//  This is not enforced on a consensus level, but it is a good practice to not have non 0 value op returns
