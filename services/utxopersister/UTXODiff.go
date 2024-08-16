@@ -82,12 +82,7 @@ func GetUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, b
 }
 
 func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
-	spendingHeight := uint32(0)
-
-	if tx.IsCoinbase() {
-		// We can ignore the error if the height is not found, because all old blocks are spendable today
-		spendingHeight = ud.blockHeight + 100
-	} else {
+	if !tx.IsCoinbase() {
 		for _, input := range tx.Inputs {
 			if err := ud.delete(&UTXODeletion{input.PreviousTxIDChainHash(), input.PreviousTxOutIndex}); err != nil {
 				return err
@@ -101,8 +96,9 @@ func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
 				tx.TxIDChainHash(),
 				uint32(i),
 				output.Satoshis,
-				spendingHeight,
+				ud.blockHeight,
 				*output.LockingScript,
+				tx.IsCoinbase(),
 			}); err != nil {
 				return err
 			}

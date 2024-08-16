@@ -1,6 +1,7 @@
 package utxopersister
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 
@@ -9,11 +10,12 @@ import (
 )
 
 type UTXO struct {
-	TxID           *chainhash.Hash
-	Index          uint32
-	Value          uint64
-	SpendingHeight uint32
-	Script         []byte
+	TxID     *chainhash.Hash
+	Index    uint32
+	Value    uint64
+	Height   uint32
+	Script   []byte
+	Coinbase bool
 }
 
 /* Binary format is:
@@ -43,11 +45,14 @@ func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 		return nil, err
 	}
 
+	encodedHeight := uint32(b[44]) | uint32(b[45])<<8 | uint32(b[46])<<16 | uint32(b[47])<<24
+
 	u := &UTXO{
-		TxID:           txID,
-		Index:          uint32(b[32]) | uint32(b[33])<<8 | uint32(b[34])<<16 | uint32(b[35])<<24,
-		Value:          uint64(b[36]) | uint64(b[37])<<8 | uint64(b[38])<<16 | uint64(b[39])<<24 | uint64(b[40])<<32 | uint64(b[41])<<40 | uint64(b[42])<<48 | uint64(b[43])<<56,
-		SpendingHeight: uint32(b[44]) | uint32(b[45])<<8 | uint32(b[46])<<16 | uint32(b[47])<<24,
+		TxID:     txID,
+		Index:    uint32(b[32]) | uint32(b[33])<<8 | uint32(b[34])<<16 | uint32(b[35])<<24,
+		Value:    uint64(b[36]) | uint64(b[37])<<8 | uint64(b[38])<<16 | uint64(b[39])<<24 | uint64(b[40])<<32 | uint64(b[41])<<40 | uint64(b[42])<<48 | uint64(b[43])<<56,
+		Height:   encodedHeight >> 1,       // right-shift to remove the flag bit
+		Coinbase: (encodedHeight & 1) == 1, // AND to extract the flag bit
 	}
 
 	// Read the script length
@@ -63,6 +68,10 @@ func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 	return u, nil
 }
 
+func NewUTXOFromBytes(b []byte) (*UTXO, error) {
+	return NewUTXOFromReader(bytes.NewReader(b))
+}
+
 func (u *UTXO) Bytes() []byte {
 	b := make([]byte, 0, 32+4+8+4+4+len(u.Script))
 
@@ -71,8 +80,20 @@ func (u *UTXO) Bytes() []byte {
 	b = append(b, byte(u.Index), byte(u.Index>>8), byte(u.Index>>16), byte(u.Index>>24))
 	// Append little-endian value
 	b = append(b, byte(u.Value), byte(u.Value>>8), byte(u.Value>>16), byte(u.Value>>24), byte(u.Value>>32), byte(u.Value>>40), byte(u.Value>>48), byte(u.Value>>56))
+
+	// To store the height and coinbase flag in a single uint32:
+	// 1.	Shift the height left by 1 bit to leave space for the flag.
+	// 2.	Set the flag as the least significant bit.
+
+	var flag uint32
+	if u.Coinbase {
+		flag = 1
+	}
+
+	encodedValue := (u.Height << 1) | flag
+
 	// Append little-endian spendingHeight
-	b = append(b, byte(u.SpendingHeight), byte(u.SpendingHeight>>8), byte(u.SpendingHeight>>16), byte(u.SpendingHeight>>24))
+	b = append(b, byte(encodedValue), byte(encodedValue>>8), byte(encodedValue>>16), byte(encodedValue>>24))
 
 	// Append little-endian script length
 	scriptLen := uint32(len(u.Script))
@@ -97,5 +118,8 @@ func (u *UTXO) DeletionBytes() [36]byte {
 }
 
 func (u *UTXO) String() string {
-	return fmt.Sprintf("%s:%d - %d (%d) - %x", u.TxID.String(), u.Index, u.Value, u.SpendingHeight, u.Script)
+	if u.Coinbase {
+		return fmt.Sprintf("%s:%d - %d (%d coinbase) - %x", u.TxID.String(), u.Index, u.Value, u.Height, u.Script)
+	}
+	return fmt.Sprintf("%s:%d - %d (%d) - %x", u.TxID.String(), u.Index, u.Value, u.Height, u.Script)
 }
