@@ -32,11 +32,9 @@ var (
 
 func TestMain(m *testing.M) {
 	setupBitcoinTestFramework()
-	defer tearDownBitcoinTestFramework()
-
-	m.Run()
-
-	os.Exit(0)
+	exitCode := m.Run()
+	tearDownBitcoinTestFramework()
+	defer os.Exit(exitCode)
 }
 
 func setupBitcoinTestFramework() {
