@@ -38,8 +38,9 @@ import (
 
 func main() {
 	// Command Line Options (Flags)
-	chainstate := flag.String("db", "", "Location of bitcoin chainstate db.") // chainstate folder
-	flag.Parse()                                                              // execute command line parsing for all declared flags
+	chainstate := flag.String("db", "", "Location of bitcoin chainstate db.")             // chainstate folder
+	outFile := flag.String("out", "chainstate.utxo-set", "Output filename for UTXO set.") // output file
+	flag.Parse()                                                                          // execute command line parsing for all declared flags
 
 	// Check if OS type is Mac OS, then increase ulimit -n to 4096 filehandler during runtime and reset to 1024 at the end
 	// Mac OS standard is 1024
@@ -60,7 +61,7 @@ func main() {
 		return
 	}
 
-	if err := runImport(chainstate); err != nil {
+	if err := runImport(chainstate, outFile); err != nil {
 		fmt.Printf("Error running import: %v\n", err)
 		os.Exit(1)
 	}
@@ -68,7 +69,7 @@ func main() {
 	os.Exit(0)
 }
 
-func runImport(chainstate *string) error {
+func runImport(chainstate *string, outFile *string) error {
 
 	// Select bitcoin chainstate leveldb folder
 	// open leveldb without compression to avoid corrupting the database for bitcoin
@@ -89,7 +90,7 @@ func runImport(chainstate *string) error {
 	var obfuscateKey []byte // obfuscateKey := make([]byte, 0)
 
 	// Open a file for writing
-	file, err := os.Create("chainstate.utxo-set")
+	file, err := os.Create(*outFile)
 	if err != nil {
 		return errors.NewProcessingError("Couldn't create file:", err)
 	}
