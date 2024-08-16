@@ -392,7 +392,7 @@ func runImport(chainstate *string, outFile *string) error {
 				utxosSkipped++
 			}
 
-			if (utxosWritten+utxosSkipped)%100000 == 0 {
+			if (utxosWritten+utxosSkipped)%1_000_000 == 0 {
 				logger.Infof("Processed %d utxos, skipped %d", utxosWritten, utxosSkipped)
 			}
 		}
@@ -405,6 +405,8 @@ func runImport(chainstate *string, outFile *string) error {
 	if err := os.WriteFile(*outFile+".sha256", []byte(hashData), 0644); err != nil {
 		return errors.NewProcessingError("Couldn't write hash file:", err)
 	}
+
+	logger.Infof("Finished with %d utxos, skipped %d", utxosWritten, utxosSkipped)
 
 	return nil
 }
