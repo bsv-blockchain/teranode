@@ -2,7 +2,7 @@ package netsync
 
 import (
 	"context"
-	"fmt"
+	"github.com/stretchr/testify/assert"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
@@ -56,11 +56,13 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 	testCases := []struct {
 		name             string
 		blockFilePath    string
+		expectedLevels   uint32
 		expectedTxMapLen int
 	}{
 		{
 			name:             "Block1",
 			blockFilePath:    "../testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.bin",
+			expectedLevels:   15,
 			expectedTxMapLen: 563,
 		},
 		// {
@@ -108,15 +110,12 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 			}
 
 			maxLevel, blockTXsPerLevel := sm.prepareTxsPerLevel(context.Background(), block, txMap)
-			fmt.Println("Max Level: ", maxLevel)
-			// for level, txs := range blockTXsPerLevel {
-			// 	fmt.Printf("Level %d: %d transactions\n", level, len(txs))
-			// }
+			assert.Equal(t, tc.expectedLevels, maxLevel)
 			allParents := 0
 			for i := range blockTXsPerLevel {
 				allParents += len(blockTXsPerLevel[i])
 			}
-			fmt.Println("all Parents: ", allParents)
+			assert.Equal(t, tc.expectedTxMapLen, allParents)
 		})
 	}
 }
