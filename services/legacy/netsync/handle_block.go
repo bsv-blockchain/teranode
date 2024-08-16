@@ -17,6 +17,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -209,6 +210,8 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactions")
 	defer deferFn()
 
+	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
+
 	// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
 	// This allows us to process all the transactions in parallel. The levels indicate the number of parents in the block.
 	for i := uint32(0); i <= maxLevel; i++ {
@@ -216,13 +219,12 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 		// process all the transactions on a certain level in parallel
 		g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
-		// we don't want to limit this, that will be done by the batcher
-		// g.SetLimit(runtime.NumCPU() * 4)
-		for _, tx := range blockTxsPerLevel[i] {
-			tx := tx
+		g.SetLimit(spendBatcherSize * 16)                     // we limit the number of concurrent requests, to not overload Aerospike
+		for txIdx, _ := range blockTxsPerLevel[i] {
+			txIdx := txIdx
 			g.Go(func() error {
 				// send to validation, but only if the parent is not in the same block
-				_ = sm.validationClient.Validate(gCtx, tx, blockHeight)
+				_ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeight)
 
 				return nil
 			})
@@ -238,8 +240,10 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	_, _, deferFn := tracing.StartTracing(ctx, "extendTransactions")
 	defer deferFn()
 
+	outpointBatcherSize, _ := gocore.Config().GetInt("utxostore_outpointBatcherSize", 1024)
+
 	g := errgroup.Group{}
-	// g.SetLimit(runtime.NumCPU() * 4)
+	g.SetLimit(outpointBatcherSize * 16) // we limit the number of concurrent requests, to not overload Aerospike
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()
 
