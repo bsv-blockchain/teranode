@@ -131,7 +131,7 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 	for index, output := range tx.Outputs {
 		isData := output.LockingScript.IsData()
 		switch {
-		case !isData && (output.Satoshis > MaxSatoshis || output.Satoshis < minOutput):
+		case !isData && (output.Satoshis > MaxSatoshis || (minOutput > 0 && output.Satoshis < minOutput)):
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
 		case isData && output.Satoshis != 0 && blockHeight >= util.GenesisActivationHeight:
 			//  This is not enforced on a consensus level, but it is a good practice to not have non 0 value op returns
