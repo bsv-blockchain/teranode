@@ -2,8 +2,9 @@ package test
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"testing"
+
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
@@ -30,7 +31,7 @@ func Test_GenerateBlock(t *testing.T) {
 	require.NotEmpty(t, block)
 
 	utxoStore := memory.New(ulogger.TestLogger{})
-	CachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, utxoStore, 1024)
+	CachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, utxoStore, 1024)
 	err = LoadTxMetaIntoMemory()
 	require.NoError(t, err)
 

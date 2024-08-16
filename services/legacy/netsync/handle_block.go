@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"runtime"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -18,10 +17,16 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
 func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, block *bsvutil.Block) error {
+	if block.Hash().String() == "0000000000000000037a2d6e18b515f606d25b9d7baea47c6e519825cd763734" {
+		sm.logger.Warnf("skipping block 0000000000000000037a2d6e18b515f606d25b9d7baea47c6e519825cd763734 as already processed")
+		return nil
+	}
+
 	// Make sure we have the correct height for this block before continuing
 	var blockHeight uint32
 
@@ -205,19 +210,21 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactions")
 	defer deferFn()
 
+	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
+
 	// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
-	// This allows us to process all the transactions that are not referencing transactions from this current block
-	// to be processed in parallel.
+	// This allows us to process all the transactions in parallel. The levels indicate the number of parents in the block.
 	for i := uint32(0); i <= maxLevel; i++ {
+		_, _, deferLevelFn := tracing.StartTracing(ctx, fmt.Sprintf("validateTransactions:level:%d", i))
+
 		// process all the transactions on a certain level in parallel
-		g, gCtx := errgroup.WithContext(ctx)
-		// we don't want to limit this, that will be done by the batcher
-		// g.SetLimit(runtime.NumCPU() * 4)
-		for _, tx := range blockTxsPerLevel[i] {
-			tx := tx
+		g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
+		g.SetLimit(spendBatcherSize * 2)                      // we limit the number of concurrent requests, to not overload Aerospike
+		for txIdx := range blockTxsPerLevel[i] {
+			txIdx := txIdx
 			g.Go(func() error {
 				// send to validation, but only if the parent is not in the same block
-				_ = sm.validationClient.Validate(gCtx, tx, blockHeight)
+				_ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeight)
 
 				return nil
 			})
@@ -225,6 +232,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 		// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
 		_ = g.Wait()
+		deferLevelFn()
 	}
 }
 
@@ -232,8 +240,10 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	_, _, deferFn := tracing.StartTracing(ctx, "extendTransactions")
 	defer deferFn()
 
+	outpointBatcherSize, _ := gocore.Config().GetInt("utxostore_outpointBatcherSize", 1024)
+
 	g := errgroup.Group{}
-	g.SetLimit(runtime.NumCPU() * 4)
+	g.SetLimit(outpointBatcherSize * 16) // we limit the number of concurrent requests, to not overload Aerospike
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()
 
@@ -340,7 +350,7 @@ func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Bl
 					}
 				}
 			}
-			sizePerLevel[txMap[txHash].childLevelInBlock] += uint64(txMap[txHash].tx.Size())
+			sizePerLevel[txMap[txHash].childLevelInBlock] += 1
 		}
 	}
 

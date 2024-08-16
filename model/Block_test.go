@@ -290,7 +290,7 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	require.NoError(t, err)
 
 	txMetaStore := memory.New(ulogger.TestLogger{})
-	cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+	cachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
 	err = loadTxMetaIntoMemory()
 	require.NoError(t, err)
 
@@ -339,7 +339,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 
 	subtreeStore := newLocalSubtreeStore()
 	txMetaStore := memory.New(ulogger.TestLogger{})
-	cachedTxMetaStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+	cachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
 	txMetaCache := cachedTxMetaStore.(*txmetacache.TxMetaCache)
 
 	// create a slice of random hashes, for the leaves

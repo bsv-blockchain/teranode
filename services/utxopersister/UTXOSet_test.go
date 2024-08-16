@@ -29,7 +29,7 @@ func TestNewUTXOSet(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := uint32(0); i < 5; i++ {
-		err = ud1.add(&UTXO{&hash1, i, uint64(1000 + i), 10 + i, script})
+		err = ud1.add(&UTXO{&hash1, i, uint64(1000 + i), 10 + i, script, false})
 		require.NoError(t, err)
 	}
 
@@ -53,7 +53,7 @@ func TestNewUTXOSet(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := uint32(9); i < 15; i++ {
-		err = ud2.add(&UTXO{&hash1, i, uint64(1000 + i), 10 + i, script})
+		err = ud2.add(&UTXO{&hash1, i, uint64(1000 + i), 10 + i, script, false})
 		require.NoError(t, err)
 	}
 
@@ -91,7 +91,7 @@ func checkAdditions(t *testing.T, ud *UTXODiff, i uint32, count uint32) {
 		assert.Equal(t, &hash1, utxo.TxID)
 		assert.Equal(t, i, utxo.Index)
 		assert.Equal(t, uint64(1000+i), utxo.Value)
-		assert.Equal(t, uint32(10+i), utxo.SpendingHeight)
+		assert.Equal(t, uint32(10+i), utxo.Height)
 		assert.Equal(t, script, utxo.Script)
 
 		i++

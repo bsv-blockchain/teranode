@@ -2,10 +2,11 @@ package txmetacache
 
 import (
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"math"
 	"sync"
 	"unsafe"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/types"
@@ -72,7 +73,7 @@ func (s *Stats) Reset() {
 
 // create a bucket interface, which will be implemented by the bucket and bucketUnallcated
 type bucketInterface interface {
-	Init(maxBytes uint64, trimRatio int)
+	Init(maxBytes uint64, trimRatio int) error
 	Reset()
 	Set(k, v []byte, h uint64, skipLocking ...bool) error
 	SetMultiKeysSingleValue(keys [][]byte, value []byte)
@@ -101,11 +102,11 @@ type ImprovedCache struct {
 
 // NewImprovedCache returns new cache with the given maxBytes capacity in bytes.
 // trimRatioSetting is the percentage of the chunks to be removed when the chunks are full, default is 25%.
-func NewImprovedCache(maxBytes int, bucketType types.BucketType) *ImprovedCache {
+func NewImprovedCache(maxBytes int, bucketType types.BucketType) (*ImprovedCache, error) {
 	LogCacheSize() // log whether we are using small or large cache
 
 	if maxBytes <= 0 {
-		panic(errors.NewProcessingError("maxBytes must be greater than 0; got %d", maxBytes))
+		return nil, errors.NewServiceError("maxBytes must be greater than 0; got %d", maxBytes)
 	}
 	var c ImprovedCache
 
@@ -121,22 +122,28 @@ func NewImprovedCache(maxBytes int, bucketType types.BucketType) *ImprovedCache 
 	if bucketType == types.Unallocated {
 		for i := 0; i < bucketsCount; i++ {
 			c.buckets[i] = &bucketUnallocated{}
-			c.buckets[i].Init(maxBucketBytes, 0)
+			if err := c.buckets[i].Init(maxBucketBytes, 0); err != nil {
+				return nil, errors.NewProcessingError("error creating unallocated cache", err)
+			}
 		}
 	} else if bucketType == types.Preallocated {
 		c.trimRatio = trimRatio
 
 		for i := 0; i < bucketsCount; i++ {
 			c.buckets[i] = &bucketPreallocated{}
-			c.buckets[i].Init(maxBucketBytes, c.trimRatio)
+			if err := c.buckets[i].Init(maxBucketBytes, c.trimRatio); err != nil {
+				return nil, errors.NewProcessingError("error creating preallocated cache", err)
+			}
 		}
 	} else { // trimmed cache
 		for i := 0; i < bucketsCount; i++ {
 			c.buckets[i] = &bucketTrimmed{}
-			c.buckets[i].Init(maxBucketBytes, 0)
+			if err := c.buckets[i].Init(maxBucketBytes, 0); err != nil {
+				return nil, errors.NewProcessingError("error creating trimmed cache", err)
+			}
 		}
 	}
-	return &c
+	return &c, nil
 }
 
 // Set stores (k, v) in the cache.
@@ -323,18 +330,20 @@ type bucketTrimmed struct {
 	overWriting bool
 }
 
-func (b *bucketTrimmed) Init(maxBytes uint64, _ int) {
+func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 	if maxBytes == 0 {
-		panic(errors.NewProcessingError("maxBytes cannot be zero"))
+		return errors.NewInvalidArgumentError("maxBytes cannot be zero")
 	}
 	if maxBytes >= maxBucketSize {
-		panic(errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
+		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
 	}
 	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
 	b.chunks = make([][]byte, maxChunks)
 	b.m = util.NewSplitSwissMapKVUint64(1024)
 	b.overWriting = false
 	b.Reset()
+
+	return nil
 }
 
 func (b *bucketTrimmed) Reset() {
@@ -476,7 +485,11 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	chunk := chunks[chunkIdx]
 
 	if chunk == nil {
-		chunk = b.getChunk()
+		var err error
+		chunk, err = b.getChunk()
+		if err != nil {
+			return errors.NewProcessingError("cannot allocate chunk", err)
+		}
 		chunk = chunk[:0]
 	}
 
@@ -568,13 +581,13 @@ func (b *bucketTrimmed) SetMultiKeysSingleValue(keys [][]byte, value []byte) { /
 	}
 }
 
-func (b *bucketTrimmed) getChunk() []byte {
+func (b *bucketTrimmed) getChunk() ([]byte, error) {
 	if len(b.freeChunks) == 0 {
 		// Allocate offheap memory, so GOGC won't take into account cache size.
 		// This should reduce free memory waste.
 		data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 		if err != nil {
-			panic(errors.NewProcessingError("cannot allocate %d bytes via mmap", chunkSize*chunksPerAlloc, err))
+			return nil, errors.NewProcessingError("cannot allocate %d bytes via mmap", chunkSize*chunksPerAlloc, err)
 		}
 		for len(data) > 0 {
 			p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
@@ -586,7 +599,7 @@ func (b *bucketTrimmed) getChunk() []byte {
 	p := b.freeChunks[n]
 	b.freeChunks[n] = nil
 	b.freeChunks = b.freeChunks[:n]
-	return p[:]
+	return p[:], nil
 }
 
 func (b *bucketTrimmed) putChunk(chunk []byte) {
@@ -635,18 +648,18 @@ type bucketPreallocated struct {
 	trimCount uint64
 }
 
-func (b *bucketPreallocated) Init(maxBytes uint64, trimRatio int) {
+func (b *bucketPreallocated) Init(maxBytes uint64, trimRatio int) error {
 	if maxBytes == 0 {
-		panic(errors.NewProcessingError("maxBytes cannot be zero"))
+		return errors.NewProcessingError("maxBytes cannot be zero")
 	}
 	if maxBytes >= maxBucketSize {
-		panic(errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
+		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
 	}
 
 	// allocate memory for all chunks of the bucket
 	data, err := unix.Mmap(-1, 0, int(maxBytes), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 	if err != nil {
-		panic(errors.NewProcessingError("cannot allocate %d bytes via mmap", maxBytes, err))
+		return errors.NewProcessingError("cannot allocate %d bytes via mmap", maxBytes, err)
 	}
 	for len(data) > 0 {
 		p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
@@ -657,6 +670,8 @@ func (b *bucketPreallocated) Init(maxBytes uint64, trimRatio int) {
 	b.m = make(map[uint64]uint64)
 	b.trimRatio = trimRatio
 	b.Reset()
+
+	return nil
 }
 
 func (b *bucketPreallocated) Reset() {
@@ -797,7 +812,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 
 	chunk := chunks[chunkIdx]
 	if len(chunk) == 0 {
-		panic(errors.NewProcessingError("SHOULD NEVER ENTER HERE, chunk is nil or empty"))
+		return errors.NewProcessingError("SHOULD NEVER ENTER HERE, chunk is nil or empty")
 	}
 	data := append(append(kvLenBuf[:], k...), v...)
 	copy(chunk[idx%chunkSize:], data)
@@ -884,17 +899,19 @@ type bucketUnallocated struct {
 	freeChunks []*[chunkSize]byte
 }
 
-func (b *bucketUnallocated) Init(maxBytes uint64, _ int) {
+func (b *bucketUnallocated) Init(maxBytes uint64, _ int) error {
 	if maxBytes == 0 {
-		panic(errors.NewProcessingError("maxBytes cannot be zero"))
+		return errors.NewProcessingError("maxBytes cannot be zero")
 	}
 	if maxBytes >= maxBucketSize {
-		panic(errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize))
+		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
 	}
 	maxChunks := (maxBytes + chunkSize - 1) / chunkSize
 	b.chunks = make([][]byte, maxChunks)
 	b.m = make(map[uint64]uint64)
 	b.Reset()
+
+	return nil
 }
 
 func (b *bucketUnallocated) Reset() {
@@ -1027,7 +1044,11 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	}
 	chunk := chunks[chunkIdx]
 	if chunk == nil {
-		chunk = b.getChunk()
+		var err error
+		chunk, err = b.getChunk()
+		if err != nil {
+			return errors.NewProcessingError("cannot allocate chunk", err)
+		}
 		chunk = chunk[:0]
 	}
 	chunk = append(chunk, kvLenBuf[:]...)
@@ -1105,13 +1126,13 @@ func (b *bucketUnallocated) SetMultiKeysSingleValue(keys [][]byte, value []byte)
 	}
 }
 
-func (b *bucketUnallocated) getChunk() []byte {
+func (b *bucketUnallocated) getChunk() ([]byte, error) {
 	if len(b.freeChunks) == 0 {
 		// Allocate offheap memory, so GOGC won't take into account cache size.
 		// This should reduce free memory waste.
 		data, err := unix.Mmap(-1, 0, chunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
 		if err != nil {
-			panic(errors.NewProcessingError("cannot allocate %d bytes via mmap", chunkSize*chunksPerAlloc, err))
+			return nil, errors.NewProcessingError("cannot allocate %d bytes via mmap", chunkSize*chunksPerAlloc, err)
 		}
 		for len(data) > 0 {
 			p := (*[chunkSize]byte)(unsafe.Pointer(&data[0]))
@@ -1123,7 +1144,7 @@ func (b *bucketUnallocated) getChunk() []byte {
 	p := b.freeChunks[n]
 	b.freeChunks[n] = nil
 	b.freeChunks = b.freeChunks[:n]
-	return p[:]
+	return p[:], nil
 }
 
 func (b *bucketUnallocated) putChunk(chunk []byte) {

@@ -53,11 +53,9 @@ var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
 func TestMain(m *testing.M) {
 	setupBitcoinTestFramework()
-	defer tearDownBitcoinTestFramework()
-	// time.Sleep(10 * time.Second)
-	m.Run()
-
-	// os.Exit(exitCode)
+	exitCode := m.Run()
+	tearDownBitcoinTestFramework()
+	defer os.Exit(exitCode)
 }
 
 func setupBitcoinTestFramework() {

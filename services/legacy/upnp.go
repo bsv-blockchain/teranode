@@ -35,13 +35,14 @@ package legacy
 import (
 	"bytes"
 	"encoding/xml"
-	"errors"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 )
 
 // NAT is an interface representing a NAT traversal options for example UPNP or
@@ -132,7 +133,7 @@ func Discover() (nat NAT, err error) {
 		nat = &upnpNAT{serviceURL: serviceURL, ourIP: ourIP}
 		return
 	}
-	err = errors.New("UPnP port discovery failed")
+	err = errors.NewServiceError("UPnP port discovery failed")
 	return
 }
 
@@ -211,15 +212,18 @@ func getChildService(d *device, serviceType string) *service {
 }
 
 // getOurIP returns a best guess at what the local IP is.
-func getOurIP() (ip string, err error) {
-	netIp := GetOutboundIP()
+func getOurIP() (string, error) {
+	netIp, err := GetOutboundIP()
+	if err != nil {
+		return "", err
+	}
 	if netIp != nil {
 		return netIp.String(), nil
 	}
 
 	hostname, err := os.Hostname()
 	if err != nil {
-		return
+		return "", err
 	}
 	return net.LookupCNAME(hostname)
 }
@@ -238,7 +242,7 @@ func getServiceURL(rootURL string) (url string, err error) {
 	}
 	defer r.Body.Close()
 	if r.StatusCode >= 400 {
-		err = errors.New(string(rune(r.StatusCode)))
+		err = errors.NewError(string(rune(r.StatusCode)))
 		return
 	}
 	var root root
@@ -248,22 +252,22 @@ func getServiceURL(rootURL string) (url string, err error) {
 	}
 	a := &root.Device
 	if a.DeviceType != "urn:schemas-upnp-org:device:InternetGatewayDevice:1" {
-		err = errors.New("no InternetGatewayDevice")
+		err = errors.NewError("no InternetGatewayDevice")
 		return
 	}
 	b := getChildDevice(a, "urn:schemas-upnp-org:device:WANDevice:1")
 	if b == nil {
-		err = errors.New("no WANDevice")
+		err = errors.NewError("no WANDevice")
 		return
 	}
 	c := getChildDevice(b, "urn:schemas-upnp-org:device:WANConnectionDevice:1")
 	if c == nil {
-		err = errors.New("no WANConnectionDevice")
+		err = errors.NewError("no WANConnectionDevice")
 		return
 	}
 	d := getChildService(c, "urn:schemas-upnp-org:service:WANIPConnection:1")
 	if d == nil {
-		err = errors.New("no WANIPConnection")
+		err = errors.NewError("no WANIPConnection")
 		return
 	}
 	url = combineURL(rootURL, d.ControlURL)
@@ -323,7 +327,7 @@ func soapRequest(url, function, message string) (replyXML []byte, err error) {
 
 	if r.StatusCode >= 400 {
 		// log.Stderr(function, r.StatusCode)
-		err = errors.New("Error " + strconv.Itoa(r.StatusCode) + " for " + function)
+		err = errors.NewError("Error " + strconv.Itoa(r.StatusCode) + " for " + function)
 		r = nil
 		return
 	}
@@ -359,7 +363,7 @@ func (n *upnpNAT) GetExternalAddress() (addr net.IP, err error) {
 
 	addr = net.ParseIP(reply.ExternalIPAddress)
 	if addr == nil {
-		return nil, errors.New("unable to parse ip address")
+		return nil, errors.NewError("unable to parse ip address")
 	}
 	return addr, nil
 }
@@ -414,14 +418,14 @@ func (n *upnpNAT) DeletePortMapping(protocol string, externalPort, internalPort 
 
 // GetOutboundIP - Get preferred outbound ip of this machine
 // from https://stackoverflow.com/a/37382208
-func GetOutboundIP() net.IP {
+func GetOutboundIP() (net.IP, error) {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
-		panic(err)
+		return nil, errors.NewServiceError("failed to get outbound IP", err)
 	}
 	defer conn.Close()
 
 	localAddr := conn.LocalAddr().(*net.UDPAddr)
 
-	return localAddr.IP
+	return localAddr.IP, nil
 }

@@ -11,19 +11,20 @@ const (
 )
 
 func IsExtended(tx *bt.Tx, blockHeight uint32) bool {
-	if blockHeight < GenesisActivationHeight {
-		if tx == nil || tx.Inputs == nil {
-			return false
-		}
+	//if blockHeight < GenesisActivationHeight {
 
-		for _, input := range tx.Inputs {
-			if input.PreviousTxScript == nil {
-				return false
-			}
-		}
-
-		return true
+	if tx == nil || tx.Inputs == nil {
+		return false
 	}
 
-	return tx.IsExtended()
+	for _, input := range tx.Inputs {
+		if input.PreviousTxScript == nil {
+			return false
+		}
+	}
+
+	return true
+
+	//}
+	//return tx.IsExtended()
 }

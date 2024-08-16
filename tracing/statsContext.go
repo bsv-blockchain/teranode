@@ -24,7 +24,6 @@ func NewStatFromContextWithCancel(ctx context.Context, key string, defaultParent
 func NewStatFromContext(ctx context.Context, key string, defaultParent *gocore.Stat, options ...bool) (time.Time, *gocore.Stat, context.Context) {
 	parentStat, ok := ctx.Value(statsKey{}).(*gocore.Stat)
 	if !ok {
-		// panic("No stat in context")
 		if defaultParent != nil {
 			parentStat = defaultParent
 		} else {
@@ -46,7 +45,6 @@ func NewStatFromDefaultContext(ctx context.Context, key string, options ...bool)
 func CopyStatFromContext(ctxFrom context.Context, ctxTo context.Context) context.Context {
 	stat, ok := ctxFrom.Value(statsKey{}).(*gocore.Stat)
 	if !ok {
-		// panic("No stat in context")
 		stat = defaultStat
 	}
 	return context.WithValue(ctxTo, statsKey{}, stat)

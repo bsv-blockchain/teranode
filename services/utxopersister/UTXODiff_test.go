@@ -28,7 +28,7 @@ func TestNewUTXODiff(t *testing.T) {
 
 	// Add some UTXOs
 	for i := uint32(0); i < 5; i++ {
-		err = ud.add(&UTXO{&hash, i, uint64(1000 + i), 10 + i, script})
+		err = ud.add(&UTXO{&hash, i, uint64(1000 + i), 10 + i, script, false})
 		require.NoError(t, err)
 	}
 
@@ -72,7 +72,7 @@ func TestNewUTXODiff(t *testing.T) {
 		assert.Equal(t, &hash, utxo.TxID)
 		assert.Equal(t, i, utxo.Index)
 		assert.Equal(t, uint64(1000+i), utxo.Value)
-		assert.Equal(t, uint32(10+i), utxo.SpendingHeight)
+		assert.Equal(t, uint32(10+i), utxo.Height)
 		assert.Equal(t, script, utxo.Script)
 
 		i++

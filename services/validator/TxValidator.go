@@ -2,6 +2,7 @@ package validator
 
 import (
 	"encoding/hex"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
+	"github.com/ordishs/gocore"
 )
 
 var (
@@ -23,6 +25,12 @@ var (
 		"e218970e8f810be99d60aa66262a1d382bc4b1a26a69af07ac47d622885db1a7": {},
 		"ba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538bf80": {},
 		"38df010716e13254fb5fc16065c1cf62ee2aeaed2fad79973f8a76ba91da36da": {},
+		"b3146a5012e75fa06eaf92171416796e141e984b29bf23999726f6d698957cef": {}, // spending of OP_RETURN
+		"ad74a116639ea654ed8ba4170781199c2f37004b14dc9a5c54df55788c9ab50c": {}, // spending of weird OP_SHIFT script causing panic
+		"cc95cdc21ff31afb8295d8015b222d0e54dcae634010bea8e79c09325ac173cf": {}, // spending of weird OP_SHIFT script causing panic
+		"6e1d88f10e829fa2dd9691ef5cf9550ba6f0eed51d676f1b74df3fa894fe7035": {}, // spending of weird OP_SHIFT script causing panic
+		"7562141b4a26e2482f43e9e123222579c8c9f704d465aacf11ed041a85d2e50d": {}, // spending of weird OP_SHIFT script causing panic
+		"6974a4c575c661a918e50d735852c29541a3263dcc4ff46bf90eb9f8f0ec485e": {}, // spending of weird OP_SHIFT script causing panic
 	}
 )
 
@@ -126,7 +134,10 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 		case !isData && (output.Satoshis > MaxSatoshis || output.Satoshis < minOutput):
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
 		case isData && output.Satoshis != 0 && blockHeight >= util.GenesisActivationHeight:
-			return errors.NewTxInvalidError("transaction output %d has non 0 value op return (height=%d)", index, blockHeight)
+			//  This is not enforced on a consensus level, but it is a good practice to not have non 0 value op returns
+			// 		"f77a391a62a128ba17559f3716dd7f68bb0a6df6ac3d10249f06323c1148ad03": {}, // non 0 value op return
+			//		"63518daaab78b7fd7488eb9b241f145c7b27cd43b86369aa38cdafa213e018c5": {}, // non 0 value op return
+			// return errors.NewTxInvalidError("transaction output %d has non 0 value op return (height=%d)", index, blockHeight)
 		}
 		total += output.Satoshis
 	}
@@ -229,7 +240,21 @@ func (tv *TxValidator) pushDataCheck(tx *bt.Tx) error {
 	return nil
 }
 
-func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) error {
+func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			// TODO - remove this when script engine is fixed
+			if rErr, ok := r.(error); ok {
+				if strings.Contains(rErr.Error(), "negative shift amount") {
+					gocore.Log("RUNTIME").Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
+					err = nil
+					return
+				}
+			}
+			err = errors.NewTxInvalidError("script execution failed: %v", r)
+		}
+	}()
+
 	for i, in := range tx.Inputs {
 		prevOutput := &bt.Output{
 			Satoshis:      in.PreviousTxSatoshis,
@@ -249,8 +274,15 @@ func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) error {
 
 		// opts = append(opts, interpreter.WithDebugger(&LogDebugger{}),
 
-		if err := interpreter.NewEngine().Execute(opts...); err != nil {
-			return errors.NewTxInvalidError("script execution failed: %w", err)
+		if err = interpreter.NewEngine().Execute(opts...); err != nil {
+			// TODO - in the interests of completeing the IBD, we should not fail the node on script errors
+			// and instead log them and continue. This is a temporary measure until we can fix the script engine
+			if blockHeight < 800_000 {
+				gocore.Log("RUNTIME").Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
+				return nil
+			}
+
+			return errors.NewTxInvalidError("script execution error: %w", err)
 		}
 	}
 

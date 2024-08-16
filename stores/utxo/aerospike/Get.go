@@ -18,7 +18,14 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"golang.org/x/exp/slices"
+)
+
+var (
+	stat = gocore.NewStat("Aerospike")
+
+	previousOutputsDecorateStat = stat.NewStat("PreviousOutputsDecorate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
 )
 
 type batchGetItemData struct {
@@ -30,6 +37,11 @@ type batchGetItem struct {
 	hash   chainhash.Hash
 	fields []string
 	done   chan batchGetItemData
+}
+
+type batchOutpoint struct {
+	outpoint *meta.PreviousOutput
+	errCh    chan error
 }
 
 func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
@@ -317,7 +329,36 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 	return nil
 }
 
-func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+func (s *Store) PreviousOutputsDecorate(_ context.Context, outpoints []*meta.PreviousOutput) error {
+	errChans := make([]chan error, len(outpoints))
+
+	for i, outpoint := range outpoints {
+		errChan := make(chan error, 1)
+		errChans[i] = errChan
+
+		// Wrap the outpoint in OutpointRequest and put it in the batcher
+		s.outpointBatcher.Put(&batchOutpoint{
+			outpoint: outpoint,
+			errCh:    errChan,
+		})
+	}
+
+	// Wait for all error channels to receive a result
+	for _, errChan := range errChans {
+		if err := <-errChan; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
+	start := gocore.CurrentTime()
+	defer func() {
+		previousOutputsDecorateStat.AddTimeForRange(start, len(batch))
+	}()
+
 	var err error
 
 	batchPolicy := util.GetAerospikeBatchPolicy()
@@ -325,12 +366,16 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 
 	policy := util.GetAerospikeBatchReadPolicy()
 
-	batchRecords := make([]aerospike.BatchRecordIfc, len(outpoints))
+	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 
-	for idx, item := range outpoints {
-		key, err := aerospike.NewKey(s.namespace, s.setName, item.PreviousTxID[:])
+	for idx, item := range batch {
+		key, err := aerospike.NewKey(s.namespace, s.setName, item.outpoint.PreviousTxID[:])
 		if err != nil {
-			return errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err)
+			for _, item := range batch {
+				item.errCh <- errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err)
+				close(item.errCh)
+			}
+			return
 		}
 
 		bins := []string{"version", "locktime", "inputs", "outputs", "external"}
@@ -341,13 +386,18 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		return errors.NewStorageError("error in aerospike map store batch records: %w", err)
+		for _, item := range batch {
+			item.errCh <- errors.NewStorageError("error in aerospike map store batch records: %w", err)
+			close(item.errCh)
+		}
 	}
 
 	for idx, batchRecordIfc := range batchRecords {
 		batchRecord := batchRecordIfc.BatchRec()
 		if batchRecord.Err != nil {
-			return errors.NewProcessingError("error in aerospike map store batch record: %w", batchRecord.Err)
+			batch[idx].errCh <- errors.NewProcessingError("error in aerospike map store batch record: %w", batchRecord.Err)
+			close(batch[idx].errCh)
+			continue
 		}
 
 		bins := batchRecord.Record.Bins
@@ -359,33 +409,39 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 			// Get the raw transaction from the externalStore...
 			reader, err := s.externalStore.GetIoReader(
 				context.TODO(),
-				outpoints[idx].PreviousTxID[:],
+				batch[idx].outpoint.PreviousTxID[:],
 				options.WithFileExtension("tx"),
 			)
 			if err != nil {
-				return errors.NewStorageError("could not get tx from external store", err)
+				batch[idx].errCh <- errors.NewStorageError("could not get tx from external store", err)
+				close(batch[idx].errCh)
+				continue
 			}
 
 			_, err = previousTx.ReadFrom(reader)
 			if err != nil {
-				return errors.NewTxInvalidError("could not read tx from reader", err)
+				batch[idx].errCh <- errors.NewTxInvalidError("could not read tx from reader: %w", err)
+				close(batch[idx].errCh)
+				continue
 			}
 
 		} else {
 			previousTx, err = s.getTxFromBins(bins)
 			if err != nil {
-				return errors.NewTxInvalidError("invalid tx: %v", err)
+				batch[idx].errCh <- errors.NewTxInvalidError("invalid tx: %v", err)
+				close(batch[idx].errCh)
+				continue
 			}
 		}
 
-		outpoints[idx].Satoshis = previousTx.Outputs[outpoints[idx].Vout].Satoshis
-		outpoints[idx].LockingScript = *previousTx.Outputs[outpoints[idx].Vout].LockingScript
+		batch[idx].outpoint.Satoshis = previousTx.Outputs[batch[idx].outpoint.Vout].Satoshis
+		batch[idx].outpoint.LockingScript = *previousTx.Outputs[batch[idx].outpoint.Vout].LockingScript
+		batch[idx].errCh <- nil
+		close(batch[idx].errCh)
 	}
 
 	prometheusTxMetaAerospikeMapGetMulti.Inc()
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
-
-	return nil
 }
 
 func (s *Store) sendGetBatch(batch []*batchGetItem) {

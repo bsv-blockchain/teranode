@@ -45,11 +45,26 @@ var (
 func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, error) {
 	logger = logger.New("s3")
 
-	maxIdleConns := getQueryParamInt(s3URL, "MaxIdleConns", 100)
-	maxIdleConnsPerHost := getQueryParamInt(s3URL, "MaxIdleConnsPerHost", 100)
-	idleConnTimeout := time.Duration(getQueryParamInt(s3URL, "IdleConnTimeoutSeconds", 100)) * time.Second
-	timeout := time.Duration(getQueryParamInt(s3URL, "TimeoutSeconds", 30)) * time.Second
-	keepAlive := time.Duration(getQueryParamInt(s3URL, "KeepAliveSeconds", 300)) * time.Second
+	maxIdleConns, err := getQueryParamInt(s3URL, "MaxIdleConns", 100)
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to parse MaxIdleConns", err)
+	}
+	maxIdleConnsPerHost, err := getQueryParamInt(s3URL, "MaxIdleConnsPerHost", 100)
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to parse MaxIdleConnsPerHost", err)
+	}
+	idleConnTimeout, err := getQueryParamDuration(s3URL, "IdleConnTimeoutSeconds", 100, time.Second)
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to parse IdleConnTimeoutSeconds", err)
+	}
+	timeout, err := getQueryParamDuration(s3URL, "TimeoutSeconds", 30, time.Second)
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to parse TimeoutSeconds", err)
+	}
+	keepAlive, err := getQueryParamDuration(s3URL, "KeepAliveSeconds", 300, time.Second)
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to parse KeepAliveSeconds", err)
+	}
 	region := s3URL.Query().Get("region")
 	subDirectory := s3URL.Query().Get("subDirectory")
 
@@ -398,14 +413,20 @@ func (g *S3) getObjectKey(hash []byte, o *options.SetOptions) *string {
 	return aws.String(filepath.Join(o.SubDirectory, prefix, key))
 }
 
-func getQueryParamInt(url *url.URL, key string, defaultValue int) int {
+func getQueryParamInt(url *url.URL, key string, defaultValue int) (int, error) {
 	value := url.Query().Get(key)
 	if value == "" {
-		return defaultValue
+		return defaultValue, nil
 	}
 	result, err := strconv.Atoi(value)
-	if err != nil {
-		panic(err)
+	return result, err
+}
+
+func getQueryParamDuration(url *url.URL, key string, defaultValue int, duration time.Duration) (time.Duration, error) {
+	value := url.Query().Get(key)
+	if value == "" {
+		return time.Duration(defaultValue) * duration, nil
 	}
-	return result
+	result, err := strconv.Atoi(value)
+	return time.Duration(result) * duration, err
 }

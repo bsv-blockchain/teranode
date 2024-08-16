@@ -10,6 +10,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -81,12 +82,7 @@ func GetUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, b
 }
 
 func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
-	spendingHeight := uint32(0)
-
-	if tx.IsCoinbase() {
-		// We can ignore the error if the height is not found, because all old blocks are spendable today
-		spendingHeight = ud.blockHeight + 100
-	} else {
+	if !tx.IsCoinbase() {
 		for _, input := range tx.Inputs {
 			if err := ud.delete(&UTXODeletion{input.PreviousTxIDChainHash(), input.PreviousTxOutIndex}); err != nil {
 				return err
@@ -95,18 +91,17 @@ func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
 	}
 
 	for i, output := range tx.Outputs {
-		if output.LockingScript.IsData() {
-			continue
-		}
-
-		if err := ud.add(&UTXO{
-			tx.TxIDChainHash(),
-			uint32(i),
-			output.Satoshis,
-			spendingHeight,
-			*output.LockingScript,
-		}); err != nil {
-			return err
+		if utxo.ShouldStoreOutputAsUTXO(output, ud.blockHeight) {
+			if err := ud.add(&UTXO{
+				tx.TxIDChainHash(),
+				uint32(i),
+				output.Satoshis,
+				ud.blockHeight,
+				*output.LockingScript,
+				tx.IsCoinbase(),
+			}); err != nil {
+				return err
+			}
 		}
 	}
 

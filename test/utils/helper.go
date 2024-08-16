@@ -120,21 +120,21 @@ func GetBlockHeight(url string) (int, error) {
 	return blocks[0].Height, nil
 }
 
-func GetBlockStore(logger ulogger.Logger) blob.Store {
+func GetBlockStore(logger ulogger.Logger) (blob.Store, error) {
 	blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
 	if err != nil {
-		panic(err)
+		return nil, errors.NewConfigurationError("error getting blockstore config", err)
 	}
 	if !found {
-		panic("blockstore config not found")
+		return nil, errors.NewConfigurationError("blockstore config not found")
 	}
 
 	blockStore, err := blob.NewStore(logger, blockStoreUrl)
 	if err != nil {
-		panic(err)
+		return nil, errors.NewServiceError("error creating block store", err)
 	}
 
-	return blockStore
+	return blockStore, nil
 }
 
 func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhash.Hash, dir *url.URL) (bool, error) {

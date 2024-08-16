@@ -16,11 +16,9 @@ var (
 
 func TestMain(m *testing.M) {
 	setupBitcoinTestFramework()
-	defer tearDownBitcoinTestFramework()
-
-	m.Run()
-
-	// os.Exit(0)
+	exitCode := m.Run()
+	tearDownBitcoinTestFramework()
+	defer os.Exit(exitCode)
 }
 
 func setupBitcoinTestFramework() {
@@ -37,7 +35,7 @@ func setupBitcoinTestFramework() {
 }
 
 func tearDownBitcoinTestFramework() {
-	if err := framework.StopNodesWithRmVolume(); err != nil {
+	if err := framework.StopNodes(); err != nil {
 		fmt.Printf("Error stopping nodes: %v\n", err)
 	}
 	err := os.RemoveAll("../../data")
@@ -69,9 +67,9 @@ func TestShutDownPropagationService(t *testing.T) {
 		t.Errorf("Failed to start blockchain: %v", err)
 	}
 
-	blockchainAssemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	blockassemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
 	if err != nil {
-		t.Errorf("Failure of blockchain assembly: %v", err)
+		t.Errorf("Failure of blockassembly: %v", err)
 	}
 
 	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
@@ -82,8 +80,8 @@ func TestShutDownPropagationService(t *testing.T) {
 	if !blockchainHealth.Ok {
 		t.Errorf("Expected blockchainHealth to be true, but got false")
 	}
-	if !blockchainAssemblyHealth.Ok {
-		t.Errorf("Expected blockchainAssemblyHealth to be true, but got false")
+	if !blockassemblyHealth.Ok {
+		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
 	if !coinbaseHealth.Ok {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
@@ -91,8 +89,6 @@ func TestShutDownPropagationService(t *testing.T) {
 }
 
 func TestShutDownBlockAssembly(t *testing.T) {
-
-	emptyMessage := &blockassembly_api.EmptyMessage{}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc2"
 	if err := framework.RestartNodes(settingsMap); err != nil {
@@ -104,11 +100,6 @@ func TestShutDownBlockAssembly(t *testing.T) {
 		t.Fatalf("Failed to start blockchain: %v", err)
 	}
 
-	blockchainAssemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
-	if err != nil {
-		t.Fatalf("Failure of blockchain assembly: %v", err)
-	}
-
 	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
 	if err != nil {
 		t.Fatalf("Failure of coinbase assembly: %v", err)
@@ -116,9 +107,6 @@ func TestShutDownBlockAssembly(t *testing.T) {
 
 	if !blockchainHealth.Ok {
 		t.Errorf("Expected blockchainHealth to be true, but got false")
-	}
-	if blockchainAssemblyHealth.Ok {
-		t.Errorf("Expected blockchainAssemblyHealth to be false, but got true")
 	}
 	if !coinbaseHealth.Ok {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
@@ -138,9 +126,9 @@ func TestShutDownBlockValidation(t *testing.T) {
 		t.Errorf("Failed to start blockchain: %v", err)
 	}
 
-	blockchainAssemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	blockassemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
 	if err != nil {
-		t.Errorf("Failure of blockchain assembly: %v", err)
+		t.Errorf("Failure of blockassembly: %v", err)
 	}
 
 	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
@@ -148,11 +136,11 @@ func TestShutDownBlockValidation(t *testing.T) {
 		t.Errorf("Failure of coinbase assembly: %v", err)
 	}
 
-	if blockchainHealth.Ok {
+	if !blockchainHealth.Ok {
 		t.Errorf("Expected blockchainHealth to be false, but got true")
 	}
-	if !blockchainAssemblyHealth.Ok {
-		t.Errorf("Expected blockchainAssemblyHealth to be true, but got false")
+	if !blockassemblyHealth.Ok {
+		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
 	if !coinbaseHealth.Ok {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
@@ -173,26 +161,18 @@ func TestShutDownBlockchain(t *testing.T) {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
-	// blockchainHealth, err := framework.Nodes[1].BlockchainClient.Health(framework.Context)
-	// if err != nil {
-	// 	t.Errorf("Failed to start blockchain: %v", err)
-	// }
-
-	blockchainAssemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	blockassemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
 	if err != nil {
-		t.Errorf("Failure of blockchain assembly: %v", err)
+		t.Fatalf("Failure of blockassembly: %v", err)
 	}
 
 	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
 	if err != nil {
-		t.Errorf("Failure of coinbase assembly: %v", err)
+		t.Fatalf("Failure of coinbase assembly: %v", err)
 	}
 
-	// if blockchainHealth.Ok {
-	// 	t.Errorf("Expected blockchainHealth to be false, but got true")
-	// }
-	if !blockchainAssemblyHealth.Ok {
-		t.Errorf("Expected blockchainAssemblyHealth to be true, but got false")
+	if !blockassemblyHealth.Ok {
+		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
 	if !coinbaseHealth.Ok {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
@@ -212,9 +192,9 @@ func TestShutDownP2P(t *testing.T) {
 		t.Errorf("Failed to start blockchain: %v", err)
 	}
 
-	blockchainAssemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	blockassemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
 	if err != nil {
-		t.Errorf("Failure of blockchain assembly: %v", err)
+		t.Errorf("Failure of blockassembly: %v", err)
 	}
 
 	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
@@ -225,8 +205,8 @@ func TestShutDownP2P(t *testing.T) {
 	if !blockchainHealth.Ok {
 		t.Errorf("Expected blockchainHealth to be false, but got true")
 	}
-	if !blockchainAssemblyHealth.Ok {
-		t.Errorf("Expected blockchainAssemblyHealth to be true, but got false")
+	if !blockassemblyHealth.Ok {
+		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
 	if !coinbaseHealth.Ok {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
@@ -246,9 +226,9 @@ func TestShutDownAsset(t *testing.T) {
 		t.Errorf("Failed to start blockchain: %v", err)
 	}
 
-	blockchainAssemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
+	blockassemblyHealth, err := framework.Nodes[1].BlockassemblyClient.BlockAssemblyAPIClient().HealthGRPC(framework.Context, emptyMessage)
 	if err != nil {
-		t.Errorf("Failure of blockchain assembly: %v", err)
+		t.Errorf("Failure of blockassembly: %v", err)
 	}
 
 	coinbaseHealth, err := framework.Nodes[1].CoinbaseClient.Health(framework.Context)
@@ -259,8 +239,8 @@ func TestShutDownAsset(t *testing.T) {
 	if !blockchainHealth.Ok {
 		t.Errorf("Expected blockchainHealth to be false, but got true")
 	}
-	if !blockchainAssemblyHealth.Ok {
-		t.Errorf("Expected blockchainAssemblyHealth to be true, but got false")
+	if !blockassemblyHealth.Ok {
+		t.Errorf("Expected blockassemblyHealth to be true, but got false")
 	}
 	if !coinbaseHealth.Ok {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")

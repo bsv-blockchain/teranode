@@ -35,23 +35,16 @@ var (
 )
 
 func getFutureLockTime(daysAhead int) uint32 {
-    // Get the current time
     now := time.Now()
-    
-    // Add the number of seconds in `daysAhead` days
     futureTime := now.Add(time.Duration(daysAhead*24) * time.Hour)
-    
-    // Return the Unix timestamp for the future time
     return uint32(futureTime.Unix())
 }
 
 func TestMain(m *testing.M) {
 	setupBitcoinTestFramework()
-	defer tearDownBitcoinTestFramework()
-
-	m.Run()
-
-	// os.Exit(exitCode)
+	exitCode := m.Run()
+	tearDownBitcoinTestFramework()
+	defer os.Exit(exitCode)
 }
 
 func setupBitcoinTestFramework() {

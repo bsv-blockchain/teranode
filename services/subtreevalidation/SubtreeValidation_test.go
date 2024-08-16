@@ -1,6 +1,7 @@
 package subtreevalidation
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blobmemory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
@@ -18,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/libsv/go-bt/v2"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -144,7 +147,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	defer deferFunc()
 
 	blockValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
-	blockValidation.utxoStore = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
+	blockValidation.utxoStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
 
 	numberOfItems := 1_024 * 1_024
 
@@ -232,4 +235,52 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	// Call the validateSubtreeInternal method
 	err = subtreeValidation.validateSubtreeInternal(ctx, v, util.GenesisActivationHeight)
 	require.NoError(t, err)
+}
+
+func TestServer_prepareTxsPerLevel(t *testing.T) {
+	testCases := []struct {
+		name             string
+		blockFilePath    string
+		expectedLevels   uint32
+		expectedTxMapLen int
+	}{
+		{
+			name:             "Block1",
+			blockFilePath:    "../legacy/testdata/00000000000000000ad4cd15bbeaf6cb4583c93e13e311f9774194aadea87386.bin",
+			expectedLevels:   15,
+			expectedTxMapLen: 563,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			block, err := testdata.ReadBlockFromFile(tc.blockFilePath)
+			require.NoError(t, err)
+
+			s := &Server{}
+
+			transactions := make([]missingTx, 0)
+			for _, wireTx := range block.Transactions() {
+				// Serialize the tx
+				var txBytes bytes.Buffer
+				err = wireTx.MsgTx().Serialize(&txBytes)
+				require.NoError(t, err)
+
+				tx, err := bt.NewTxFromBytes(txBytes.Bytes())
+				require.NoError(t, err)
+
+				transactions = append(transactions, missingTx{
+					tx: tx,
+				})
+			}
+
+			maxLevel, blockTXsPerLevel := s.prepareTxsPerLevel(context.Background(), transactions)
+			assert.Equal(t, tc.expectedLevels, maxLevel)
+			allParents := 0
+			for i := range blockTXsPerLevel {
+				allParents += len(blockTXsPerLevel[i])
+			}
+			assert.Equal(t, tc.expectedTxMapLen, allParents)
+		})
+	}
 }

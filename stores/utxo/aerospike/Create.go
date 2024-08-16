@@ -106,7 +106,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		// We calculate the bin that we want to store, but we may get back lots of bin batches
 		// because we have had to split the UTXOs into multiple records
 
-		binsToStore, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, false) // false is to say this is a normal record, not external.
+		binsToStore, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, s.externalizeAllTransactions) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not get bins to store", err))
 			//NOOP for this record
@@ -123,6 +123,17 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			go s.storeTransactionExternally(batch[idx], binsToStore)
 
 			continue
+		} else if s.externalizeAllTransactions {
+			// store the tx data externally, it is not in our aerospike record
+			if err = s.externalStore.Set(
+				context.Background(),
+				bItem.tx.TxIDChainHash()[:],
+				bItem.tx.Bytes(),
+				options.WithFileExtension("tx"),
+			); err != nil {
+				utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.tx.TxIDChainHash().String(), err))
+				continue
+			}
 		}
 
 		putOps := make([]*aerospike.Operation, len(binsToStore[0]))
@@ -200,9 +211,18 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 			end = len(utxos)
 		}
 		batchUtxos := utxos[start:end]
+
+		// Count the number of non-nil utxos in this batch
+		nrUtxos := 0
+		for _, utxo := range batchUtxos {
+			if utxo != nil {
+				nrUtxos++
+			}
+		}
+
 		batch := append([]*aerospike.Bin(nil), commonBins...)
 		batch = append(batch, aerospike.NewBin("utxos", aerospike.NewListValue(batchUtxos)))
-		batch = append(batch, aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(len(batchUtxos))))
+		batch = append(batch, aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(nrUtxos)))
 		batches = append(batches, batch)
 	}
 	return batches
@@ -253,7 +273,8 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	for i, output := range tx.Outputs {
 		outputs[i] = output.Bytes()
 
-		if !output.LockingScript.IsData() {
+		// store all non-zero utxos and exceptions from pre-genesis
+		if utxo.ShouldStoreOutputAsUTXO(output, blockHeight) {
 			utxos[i] = aerospike.NewBytesValue(utxoHashes[i][:])
 		}
 	}

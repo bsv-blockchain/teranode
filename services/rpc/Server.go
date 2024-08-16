@@ -990,8 +990,7 @@ func (s *RpcServer) Start(ctx context.Context) error {
 	return nil
 }
 
-// NewServer returns a new instance of the rpcServer struct.
-func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) *RpcServer {
+func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RpcServer, error) {
 	initPrometheusMetrics()
 
 	rpc := RpcServer{
@@ -1042,7 +1041,7 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) *RpcS
 
 	rpcListenerUrl, ok := gocore.Config().Get("rpc_listener_url")
 	if !ok {
-		panic("rpc_listener_url not set in config")
+		return nil, errors.NewConfigurationError("rpc_listener_url not set in config")
 	}
 
 	listener, err := net.Listen("tcp", rpcListenerUrl)
@@ -1052,7 +1051,7 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) *RpcS
 	}
 	rpc.listeners = append(rpc.listeners, listener)
 
-	return &rpc
+	return &rpc, nil
 }
 
 func (s *RpcServer) Init(ctx context.Context) (err error) {

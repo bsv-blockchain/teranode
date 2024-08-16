@@ -2,7 +2,7 @@
 
 docker network create app-tier --driver bridge
 
-docker run -d -p 9092-9093:9092-9093 --name kafka-server --hostname localhost \
+docker run --rm -d -p 9092-9093:9092-9093 --name kafka-server --hostname localhost \
     --network app-tier \
     -e ALLOW_PLAINTEXT_LISTENER=yes \
     -e KAFKA_CFG_NODE_ID=0 \

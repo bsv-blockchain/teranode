@@ -3,6 +3,7 @@ package legacy
 import (
 	"context"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 
@@ -79,14 +80,17 @@ func (s *Server) Init(ctx context.Context) error {
 	connectAddresses, _ := gocore.Config().GetMulti("legacy_connect_peers", "|", []string{"44.213.141.106:8333|13.213.100.250:8333|18.199.12.185:8333"})
 
 	// get the public IP and listen on it
-	ip := GetOutboundIP()
+	ip, err := GetOutboundIP()
+	if err != nil {
+		return err
+	}
 	defaultListenAddresses := []string{ip.String() + ":8333"}
 	// TODO not setting any listen addresses triggers upnp, which does not seem to work yet
 	listenAddresses, _ := gocore.Config().GetMulti("legacy_listen_addresses", "|", defaultListenAddresses)
 
 	assetHttpAddress, ok := gocore.Config().Get("asset_httpAddress", "")
 	if !ok {
-		panic("missing setting: asset_httpAddress")
+		return errors.NewConfigurationError("missing setting: asset_httpAddress")
 	}
 
 	s.server, err = newServer(ctx, s.logger, gocore.Config(),
