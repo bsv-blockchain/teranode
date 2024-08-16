@@ -2,11 +2,14 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 
@@ -14,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/keys"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/btcsuite/goleveldb/leveldb"
 	"github.com/libsv/go-bt/v2/chainhash"
 
@@ -70,6 +74,7 @@ func main() {
 }
 
 func runImport(chainstate *string, outFile *string) error {
+	logger := ulogger.NewGoCoreLogger("cs2utxo")
 
 	// Select bitcoin chainstate leveldb folder
 	// open leveldb without compression to avoid corrupting the database for bitcoin
@@ -79,6 +84,8 @@ func runImport(chainstate *string, outFile *string) error {
 	// https://bitcoin.stackexchange.com/questions/52257/chainstate-leveldb-corruption-after-reading-from-the-database
 	// https://github.com/syndtr/goleveldb/issues/61
 	// https://godoc.org/github.com/syndtr/goleveldb/leveldb/opt
+
+	logger.Infof("Opening LevelDB at %s", *chainstate)
 
 	db, err := leveldb.OpenFile(*chainstate, opts) // You have got to dereference the pointer to get the actual value
 	if err != nil {
@@ -90,13 +97,17 @@ func runImport(chainstate *string, outFile *string) error {
 	var obfuscateKey []byte // obfuscateKey := make([]byte, 0)
 
 	// Open a file for writing
+	logger.Infof("Opening output file %s", *outFile)
+
 	file, err := os.Create(*outFile)
 	if err != nil {
 		return errors.NewProcessingError("Couldn't create file:", err)
 	}
 	defer file.Close()
 
-	bufferedWriter := bufio.NewWriter(file)
+	hasher := sha256.New()
+
+	bufferedWriter := bufio.NewWriter(io.MultiWriter(file, hasher))
 	defer bufferedWriter.Flush()
 
 	// Iterate over LevelDB keys
@@ -118,7 +129,11 @@ func runImport(chainstate *string, outFile *string) error {
 		os.Exit(0)             // exit
 	}()
 
-	i := 0
+	utxosWritten := 0
+	utxosSkipped := 0
+
+	logger.Infof("Processing UTXOs...")
+
 	for iter.Next() {
 
 		key := iter.Key()
@@ -339,16 +354,7 @@ func runImport(chainstate *string, outFile *string) error {
 			default:
 				scriptType = "non-standard"
 
-			} // switch
-
-			// txMetaStore.Create(ctx.TODO()) // create txmeta (transaction metadata) from the output results map
-
-			// -------
-			// Results
-			// -------
-
-			// Increment Count
-			i++
+			}
 
 			switch scriptType {
 			case "p2pkh":
@@ -362,9 +368,7 @@ func runImport(chainstate *string, outFile *string) error {
 			case "non-standard":
 				hash, err := chainhash.NewHash(txid)
 				if err != nil {
-					fmt.Printf("Couldn't create hash from %x: %v\n", txid, err)
-					db.Close() // close database
-					os.Exit(1)
+					return errors.NewProcessingError("Couldn't create hash from %x:", txid, err)
 				}
 
 				utxo := &utxopersister.UTXO{
@@ -378,19 +382,29 @@ func runImport(chainstate *string, outFile *string) error {
 
 				_, err = bufferedWriter.Write(utxo.Bytes())
 				if err != nil {
-					fmt.Println("Couldn't write to file.")
-					fmt.Println(err)
-					db.Close() // close database
-					os.Exit(1)
+					return errors.NewProcessingError("Couldn't write to file:")
 				}
+
+				utxosWritten++
 
 			default:
 				fmt.Printf("ERROR: Unknown script type: %v\n", scriptType)
+				utxosSkipped++
+			}
+
+			if (utxosWritten+utxosSkipped)%100000 == 0 {
+				logger.Infof("Processed %d utxos, skipped %d", utxosWritten, utxosSkipped)
 			}
 		}
 	}
 
 	iter.Release() // Do not defer this, want to release iterator before closing database
+
+	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), filepath.Base(*outFile)) // N.B. The 2 spaces is important for the hash to be valid
+	//nolint:gosec
+	if err := os.WriteFile(*outFile+".sha256", []byte(hashData), 0644); err != nil {
+		return errors.NewProcessingError("Couldn't write hash file:", err)
+	}
 
 	return nil
 }

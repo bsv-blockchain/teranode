@@ -38,7 +38,7 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		}
 	case "filea":
 		// TODO make this more generic, you should be able to pass in an absolute path
-		store, err = file.New(logger, storeUrl.Path) // relative
+		store, err = file.New(logger, storeUrl.Path) // absolute
 		if err != nil {
 			return nil, errors.NewStorageError("error creating file blob store", err)
 		}
