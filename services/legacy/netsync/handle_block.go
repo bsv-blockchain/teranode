@@ -210,9 +210,10 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	defer deferFn()
 
 	// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
-	// This allows us to process all the transactions that are not referencing transactions from this current block
-	// to be processed in parallel.
+	// This allows us to process all the transactions in parallel. The levels indicate the number of parents in the block.
 	for i := uint32(0); i <= maxLevel; i++ {
+		_, _, deferLevelFn := tracing.StartTracing(ctx, fmt.Sprintf("validateTransactions:level:%d", i))
+
 		// process all the transactions on a certain level in parallel
 		g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
 		// we don't want to limit this, that will be done by the batcher
@@ -229,6 +230,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 		// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
 		_ = g.Wait()
+		deferLevelFn()
 	}
 }
 
