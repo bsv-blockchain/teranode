@@ -544,9 +544,10 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 
 	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
 
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(spendBatcherSize * 4)
 	for level := uint32(0); level <= maxLevel; level++ {
+		g, gCtx := errgroup.WithContext(ctx)
+		g.SetLimit(spendBatcherSize * 2)
+
 		for _, mTx = range txsPerLevel[level] {
 			if mTx.tx == nil {
 				return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
