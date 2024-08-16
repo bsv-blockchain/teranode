@@ -329,7 +329,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 	return nil
 }
 
-func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+func (s *Store) PreviousOutputsDecorate(_ context.Context, outpoints []*meta.PreviousOutput) error {
 	errChans := make([]chan error, len(outpoints))
 
 	for i, outpoint := range outpoints {
