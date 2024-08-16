@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"runtime"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -215,7 +214,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	// to be processed in parallel.
 	for i := uint32(0); i <= maxLevel; i++ {
 		// process all the transactions on a certain level in parallel
-		g, gCtx := errgroup.WithContext(ctx)
+		g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
 		// we don't want to limit this, that will be done by the batcher
 		// g.SetLimit(runtime.NumCPU() * 4)
 		for _, tx := range blockTxsPerLevel[i] {
@@ -238,7 +237,7 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	defer deferFn()
 
 	g := errgroup.Group{}
-	g.SetLimit(runtime.NumCPU() * 4)
+	// g.SetLimit(runtime.NumCPU() * 4)
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()
 
