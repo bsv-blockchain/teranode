@@ -465,3 +465,218 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	require.Error(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
+
+func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
+
+	initPrometheusMetrics()
+
+	txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	subtree, err := util.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+
+	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
+	require.NoError(t, subtree.AddNode(*hash2, 100, 0))
+	require.NoError(t, subtree.AddNode(*hash3, 100, 0))
+
+	_, err = txMetaStore.Create(context.Background(), tx1, 0)
+	require.NoError(t, err)
+
+	_, err = txMetaStore.Create(context.Background(), tx2, 0)
+	require.NoError(t, err)
+
+	_, err = txMetaStore.Create(context.Background(), tx3, 0)
+	require.NoError(t, err)
+
+	_, err = txMetaStore.Create(context.Background(), tx4, 0)
+	require.NoError(t, err)
+
+	nodeBytes, err := subtree.SerializeNodes()
+	require.NoError(t, err)
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^/subtree/[a-z0-9]+\z`,
+		httpmock.NewBytesResponder(200, nodeBytes),
+	)
+
+	nBits, _ := model.NewNBitFromString("2000ffff")
+	hashPrevBlock, _ := chainhash.NewHashFromStr("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+
+	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+	coinbase, err := bt.NewTxFromString(coinbaseHex)
+	require.NoError(t, err)
+	coinbase.Outputs = nil
+	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+300)
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+	require.NoError(t, err)
+
+	subtreeHashes := make([]*chainhash.Hash, 0)
+	subtreeHashes = append(subtreeHashes, subtree.RootHash())
+	// now create a subtree with the coinbase to calculate the merkle root
+	replicatedSubtree := subtree.Duplicate()
+	replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+
+	calculatedMerkleRootHash := replicatedSubtree.RootHash()
+
+	blockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  hashPrevBlock,
+		HashMerkleRoot: calculatedMerkleRootHash,
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           *nBits,
+		Nonce:          0,
+	}
+
+	// mine to the target difficulty
+	for {
+		if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+			break
+		}
+		blockHeader.Nonce++
+
+		if blockHeader.Nonce%1000000 == 0 {
+			fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
+		}
+	}
+
+	block := &model.Block{
+		Header:           blockHeader,
+		CoinbaseTx:       coinbase,
+		TransactionCount: uint64(subtree.Length()),
+		SizeInBytes:      123123,
+		Subtrees:         subtreeHashes, // should be the subtree with placeholder
+	}
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
+	start := time.Now()
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	require.Error(t, err)
+	t.Logf("Time taken: %s\n", time.Since(start))
+	expectedErrorMessage := "Error: SERVICE_ERROR (error code: 49), [ValidateBlock][" + block.Header.Hash().String() + "] failed to store block: Error: STORAGE_ERROR (error code: 59), error storing block " + block.Header.Hash().String() + " as previous block " + hashPrevBlock.String() + " not found: 0: sql: no rows in result set"
+	require.Contains(t, err.Error(), expectedErrorMessage)
+}
+
+func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
+	// Given: A blockchain setup with a chain that does not connect to the Genesis block
+	initPrometheusMetrics()
+
+	txMetaStore, validatorClient, subtreeValidationClient, txStore, subtreeStore, deferFunc := setup()
+	defer deferFunc()
+
+	// Ensure transactions are stored
+	t.Logf("Storing transactions in txMetaStore...")
+	txns := []*bt.Tx{tx1, tx2, tx3, tx4}
+	for i, tx := range txns {
+		_, err := txMetaStore.Create(context.Background(), tx, 0)
+		require.NoError(t, err, "Failed to store tx%d: %v", i+1, tx.TxIDChainHash())
+		t.Logf("Stored tx%d: %s", i+1, tx.TxIDChainHash())
+	}
+
+	// Build the chain starting from a block that does not connect to the Genesis block
+	numBlocks := 5
+	previousBlockHash, _ := chainhash.NewHashFromStr("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+	var blocks []*model.Block
+
+	for i := 0; i < numBlocks; i++ {
+		subtree, err := util.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+
+		require.NoError(t, subtree.AddNode(*hash1, 100, 0))
+		require.NoError(t, subtree.AddNode(*hash2, 100, 0))
+		require.NoError(t, subtree.AddNode(*hash3, 100, 0))
+
+		nodeBytes, err := subtree.SerializeNodes()
+		require.NoError(t, err)
+
+		httpmock.RegisterResponder(
+			"GET",
+			`=~^/subtree/[a-z0-9]+\z`,
+			httpmock.NewBytesResponder(200, nodeBytes),
+		)
+
+		nBits, _ := model.NewNBitFromString("2000ffff")
+
+		coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
+		coinbase, err := bt.NewTxFromString(coinbaseHex)
+		require.NoError(t, err)
+		coinbase.Outputs = nil
+		_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+300)
+
+		subtreeBytes, err := subtree.Serialize()
+		require.NoError(t, err)
+		err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+		require.NoError(t, err)
+
+		subtreeHashes := []*chainhash.Hash{subtree.RootHash()}
+
+		// Create a replicated subtree to calculate the merkle root with the coinbase
+		replicatedSubtree := subtree.Duplicate()
+		replicatedSubtree.ReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
+
+		calculatedMerkleRootHash := replicatedSubtree.RootHash()
+
+		blockHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  previousBlockHash,
+			HashMerkleRoot: calculatedMerkleRootHash,
+			Timestamp:      uint32(time.Now().Unix()),
+			Bits:           *nBits,
+			Nonce:          0,
+		}
+
+		// Mine to the target difficulty
+		for {
+			if ok, _, _ := blockHeader.HasMetTargetDifficulty(); ok {
+				break
+			}
+			blockHeader.Nonce++
+
+			if blockHeader.Nonce%1000000 == 0 {
+				fmt.Printf("mining Nonce: %d, hash: %s\n", blockHeader.Nonce, blockHeader.Hash().String())
+			}
+		}
+
+		block := &model.Block{
+			Header:           blockHeader,
+			CoinbaseTx:       coinbase,
+			TransactionCount: uint64(subtree.Length()),
+			SizeInBytes:      123123,
+			Subtrees:         subtreeHashes, // should be the subtree with placeholder
+		}
+
+		blocks = append(blocks, block)
+		previousBlockHash = block.Header.Hash() // Update the previous block hash for the next block
+	}
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"})
+	require.NoError(t, err)
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, blockchainClient, subtreeStore, txStore, txMetaStore, validatorClient, subtreeValidationClient, time.Duration(0))
+
+	// When: The last block in the chain is validated
+	start := time.Now()
+	err = blockValidation.ValidateBlock(context.Background(), blocks[len(blocks)-1], "http://localhost:8000", model.NewBloomStats())
+
+	// Then: An error should be received because the chain does not connect to the Genesis block
+	require.Error(t, err)
+	// expectedErrorMessage := "Error: SERVICE_ERROR (error code: 49), [ValidateBlock][" + blocks[len(blocks)-1].Header.Hash().String() + "] failed to store block: Error: STORAGE_ERROR (error code: 59), error storing block " + blocks[len(blocks)-1].Header.Hash().String() + " as previous block " + blocks[0].Header.HashPrevBlock.String() + " not found: 0: sql: no rows in result set"
+	// require.Contains(t, err.Error(), expectedErrorMessage)
+
+	t.Logf("Error received as expected: %s", err.Error())
+	t.Logf("Time taken: %s\n", time.Since(start))
+}
+
+
