@@ -21,17 +21,14 @@ loop for each Subtree in the Block
     BlockPersister -> FileStorage: Create subtree file (.subtree)
 end
 
-BlockPersister -> FileStorage: Create UTXODiff file  (.utxodiff)
+BlockPersister -> FileStorage: Create UTXO Deletions file  (.utxo-deletions)
 
-activate BlockPersister
-BlockPersister -> FileStorage: Create UTXO Set file (.utxoset)
+BlockPersister -> FileStorage: Create UTXO Additions file (.utxo-additions)
 deactivate BlockPersister
 
 
-deactivate BlockPersister
-deactivate BlockPersister
 
 
-left footer Last Modified On: 7-June-2024
+left footer Last Modified On: 12-August-2024
 
 @enduml
