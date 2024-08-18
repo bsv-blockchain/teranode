@@ -153,6 +153,7 @@ Store Documentation:
 Overlay Service documentation:
 
 + [Block Persister Service](docs/services/blockPersister.md)
++ [UTXO Persister Service](docs/services/utxoPersister.md)
 + [P2P Service](docs/services/p2p.md)
 + [P2P Bootstrap Service](docs/services/p2pBootstrap.md)
 + [P2P Legacy Service](docs/services/p2pLegacy.md)
@@ -375,7 +376,8 @@ ubsv/
 │   ├── p2p/                      # P2P Service
 │   ├── propagation/              # Propagation Service
 │   ├── subtreevalidation/        # Subtree Validation Service
-│   └── validator/                # Validator Service
+│   ├── validator/                # Validator Service
+│   └── utxopersister/            # UTXO Persister Service
 │
 ├── stores/                       # This directory contains the different stores used by the node.
 │   ├── blob/                     # A collection of supported or experimental stores for the Blob service.

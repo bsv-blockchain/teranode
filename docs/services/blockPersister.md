@@ -149,18 +149,10 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 The `blockpersister` service utilizes specific `gocore` settings for configuration, each serving a distinct purpose in the service's operation:
 
-1. **blockPersister_persistURL**
+1. **blockstore**
   - **Purpose:** Defines the URL for the persistence layer storing block files.
   - **Usage:** Initializes the blob store component for data storage during the server setup.
 
 2. **kafka_blocksFinalConfig**
   - **Purpose:** Provides Kafka configuration details for receiving block data.
   - **Usage:** Configures and initiates a Kafka listener to process incoming blocks when the service starts.
-
-3. **blockPersister_workingDir**
-  - **Purpose:** Specifies the directory for temporary block processing files.
-  - **Usage:** Used for file operations while handling blocks and subtrees, defaulting to the OS's temp directory if unset.
-
-4. **blockPersister_groupLimit**
-  - **Purpose:** Sets the concurrency limit for parallel transaction processing in subtrees.
-  - **Usage:** Controls the number of goroutines for processing transaction metadata concurrently during subtree processing.

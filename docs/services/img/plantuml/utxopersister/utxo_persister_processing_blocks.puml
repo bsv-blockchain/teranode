@@ -1,0 +1,40 @@
+@startuml
+title UTXO Persister - Block and Dependencies Processing
+
+participant "UTXO Persister Server" as Server
+participant "UTXODiff" as UTXODiff
+participant "Blockchain Client" as BlockchainClient
+participant "Blockchain Store" as BlockchainStore
+participant "FileStorer" as FileStorer
+participant "Block Store" as BlockStore
+
+activate Server
+Server -> Server : trigger()
+Server -> BlockchainClient : GetBlockHeadersFromHeight()
+alt direct mode
+    Server -> BlockchainStore : GetBlockHeadersFromHeight()
+end
+Server -> UTXODiff : GetUTXODiff()
+activate UTXODiff
+UTXODiff -> BlockStore : Get UTXO additions and deletions
+BlockStore --> UTXODiff : UTXO additions and deletions
+UTXODiff -> UTXODiff : Process additions and deletions
+UTXODiff --> Server : Return UTXODiff
+deactivate UTXODiff
+
+Server -> UTXODiff : CreateUTXOSet()
+activate UTXODiff
+UTXODiff -> BlockStore : Get previous block's UTXO set
+BlockStore --> UTXODiff : Previous block's UTXO set
+UTXODiff -> FileStorer : Create new UTXO set file
+loop for each UTXO
+    UTXODiff -> FileStorer : Write UTXO Set
+end
+UTXODiff -> FileStorer : Close()
+FileStorer -> BlockStore : Persist UTXO Set file
+deactivate UTXODiff
+
+Server -> Server : Record last processed block height
+Server -> Server : Trigger next block processing
+deactivate Server
+@enduml
