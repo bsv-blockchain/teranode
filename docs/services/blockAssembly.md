@@ -49,7 +49,7 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
 
 4. **Creating Mining Candidates**:
     - The block assembly continuously creates mining candidates.
-    - A mining candidate is essentially a potential block that includes all the subtrees known up to that time.
+    - A mining candidate is essentially a potential block that includes all the subtrees known up to that time, built on top of the longest honest chain.
     - This candidate block is then submitted to the mining module of the node.
 
 5. **Mining Process**:
@@ -135,7 +135,7 @@ The Job Store is a temporary in-memory map that tracks information about the can
 - The "Miner" initiates the process by requesting a mining candidate (a block to mine) from the Block Assembly.
 
 
-- The "Block Assembler" sub-component interacts with the Subtree Processor to obtain completed subtrees that can be included in the mining candidate.
+- The "Block Assembler" sub-component interacts with the Subtree Processor to obtain completed subtrees that can be included in the mining candidate. It must be noted that there is no subtree limit, Teranode has no restrictions on the maximum block size (hence, neither on the number of subtrees).
 
 
 - The Block Assembler then calculates the coinbase value and merkle proof for the candidate block.
@@ -177,21 +177,23 @@ Once a miner solves the mining challenge, it submits a solution to the Block Ass
 
 - In case of an error at any point in the process, the block is invalidated through the Blockchain Client.
 
-¡
+
 
 ### 3.5. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts
 
 The block assembly service subscribes to the Blockchain service, and receives notifications (`model.NotificationType_Block`) when a new block is received from another node. The logic for processing these blocks can be found in the `BlockAssembler.go` file, `startChannelListeners` function.
 
-We have 3 scenarios to consider:
+Once a new block has been received from another node, there are 4 scenarios to consider:
 
 ### 3.5.1. The block received is the same as the current chaintip (i.e. the block we have already seen).
 
-In this case, the service does nothing.
+In this case, the block notification is redundant, and refers to a block that the service already considers the current chaintip. The service does nothing.
 
 ### 3.5.2. The block received is a new block, and it is the new chaintip.
 
-In this case, the services need to "move up" the block. By this, we mean the process to identify transactions included in the new block (so we do not include them in future blocks) and to process the coinbase UTXOs (so we can include them in future blocks).
+In this scenario, another node has mined a new block that is now the new chaintip.
+
+The service needs to "move up" the block. By this, we mean the process to identify transactions included in the new block (so we do not include them in future blocks) and to process the coinbase UTXOs (so we can include them in future blocks).
 
 ![block_assembly_move_up.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_move_up.svg)
 
@@ -221,8 +223,14 @@ In this case, the services need to "move up" the block. By this, we mean the pro
 ### 3.5.3. The block received is a new block, but it represents a fork.
 
 In this scenario, the function needs to handle a reorganization. A blockchain reorganization occurs when a node discovers a longer or more difficult chain different from the current local chain. This can happen due to network delays or forks in the blockchain network.
+
+
 It is the responsibility of the block assembly to always build on top of the longest chain of work. For clarity, it is not the Block Validation or Blockchain services's responsibility to resolve forks. The Block Assembly is notified of the ongoing chains of work, and it makes sure to build on the longest one. If the longest chain of work is different from the current local chain the block assembly was working on, a reorganization will take place.
+
+
 The process typically involves reverting transactions in the current chain's blocks (starting from the fork point) and then processing the transactions from the newly discovered blocks.
+
+
 In this context, `BlockAssembler` is tasked with ensuring that the local version of the blockchain reflects the most widely accepted version of the chain within the network.
 
 ![block_assembly_reorg.svg](img%2Fplantuml%2Fblockassembly%2Fblock_assembly_reorg.svg)
@@ -241,6 +249,8 @@ In this context, `BlockAssembler` is tasked with ensuring that the local version
         - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
         - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
         - It involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
+
+Note - Should proposed blocks by other nodes include a transaction that Teranode considers a double-spend based on First-Seen rule, Teranode will not build on top of such a block. The only exception is if a second block is built on top of this one, essentially confirming that the other nodes applied the first-seen rule to the transaction this node identified as double-spend.
 
 
 ### 3.6. Resetting the Block Assembly

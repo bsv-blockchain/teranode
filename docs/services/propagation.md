@@ -37,6 +37,8 @@ The Notice how fRPC does not allow for load balancing.
 
 ![Propagation_Service_Component_Diagram.png](img/Propagation_Service_Component_Diagram.png)
 
+Notice that the Validator, as shown in the diagram above, can be either an instantiated library or a separate service, depending on the Node configuration. To know more, please refer to the Transaction Validator documentation.
+
 ## 2. Functionality
 
 ### 2.1. Starting the Propagation Service
@@ -82,6 +84,10 @@ The Propagation Service deals with the extended transaction format, as seen belo
 | Out-counter     | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
 | list of outputs | Transaction Output Structure                                                                           | <out-counter> qty with variable length per output |
 | nLocktime       | if non-zero and sequence numbers are < 0xFFFFFFFF: block height or timestamp when transaction is final | 4 bytes                                           |
+
+Teranode must be able to receive transactions in Extended Format (EF) from a transaction broadcasting service or other Teranode.
+
+It must be noted that Teranode will not do any re-formatting from other transaction formats into EF. I.e. Teranode is only expected to receive transactions in EF.
 
 More information on the extended tx structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
 

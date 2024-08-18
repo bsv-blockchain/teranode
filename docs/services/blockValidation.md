@@ -131,6 +131,27 @@ As part of the overall block validation, the service will validate the block dat
 
 ![block_data_validation.svg](img/plantuml/blockvalidation/block_data_validation.svg)
 
+Effectively, the following validations are performed:
+
+- The hash of the previous block must be known and valid. Teranode must always build a block on a previous block that it recognizes as the longest chain.
+
+- The Proof of Work of a block must satisfy the difficulty target (Proof of Work higher than nBits in block header).
+
+- The Merkle root of all transactions in a block must match the value of the Merkle root in the block header.
+
+- A block must include at least one transaction, which is the Coinbase transaction.
+
+- A block timestamp must not be too far in the past or the future.
+  - The block time specified in the header must be larger than the Median-Time-Past (MTP) calculated from the previous block index. MTP is calculated by taking the timestamps of the last 11 blocks and finding the median (More details in BIP113).
+  - The block time specified in the header must not be larger than the adjusted current time plus two hours (“maximum future block time”).
+
+- The first transaction in a block must be Coinbase. The transaction is Coinbase if the following requirements are satisfied:
+  - The Coinbase transaction has exactly one input.
+  - The input is null, meaning that the input’s previous hash is 0000…0000 and the input’s previous index is 0xFFFFFFFF.
+  - The Coinbase transaction must start with the serialized block height, to ensure block and transaction uniqueness.
+
+- The Coinbase transaction amount may not exceed block subsidy and all transaction fees (block reward).
+
 ### 2.3. Marking Txs as mined
 
 When a block is validated, the transactions in the block are marked as mined in the UTXO store. This is done to ensure that the UTXO store knows which block(s) the transaction is in.
