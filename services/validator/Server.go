@@ -68,17 +68,18 @@ func (v *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (v *Server) Start(ctx context.Context) error {
-	// this will block
-	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
-		validator_api.RegisterValidatorAPIServer(server, v)
-	}); err != nil {
-		return err
-	}
 
 	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
 	if err == nil && ok {
 		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
 		go v.startKafkaListener(ctx, kafkaURL)
+	}
+
+	// this will block
+	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
+		validator_api.RegisterValidatorAPIServer(server, v)
+	}); err != nil {
+		return err
 	}
 
 	return nil
