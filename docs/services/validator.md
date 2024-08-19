@@ -82,7 +82,17 @@ BlockValidation and Propagation invoke the validator process with and without ba
 
 ### 2.3. Validating the Transaction
 
-Once a Tx is received by the Validator, it is validated by the `ValidateTransaction()` function. To ensure the validity of the extended Tx, this is delegated to a BSV library: `github.com/TAAL-GmbH/arc/validator/default` (the default validator).
+For every transaction received, Teranode must validate:
+ - All inputs against the existing UTXO-set, verifying if the input(s) can be spent,
+   - Notice that if Teranode detects a double-spend, the transaction that was received first must be considered the valid transaction.
+ - Bitcoin consensus rules,
+ - Local policies (if any),
+ - whether the script execution returns `true.
+
+Teranode will consider a transaction that passes consensus rules, local policies and script validation as fully validated and fit to be included in the next possible block.
+
+New Txs are validated by the `ValidateTransaction()` function. To ensure the validity of the extended Tx, this is delegated to a BSV library: `github.com/TAAL-GmbH/arc/validator/default` (the default validator).
+
 
 We can see the exact steps being executed as part of the validation process below:
 
@@ -157,6 +167,54 @@ func (v *DefaultValidator) ValidateTransaction(tx *bt.Tx) error { //nolint:funle
 	return nil
 }
 ```
+
+The above represents an implementation of the core Teranode validation rules:
+
+- All transactions must exist and be unspent (does not apply to Coinbase transactions).
+
+- All transaction inputs must have been present in either a transaction in an ancestor block, or in a transaction in the same block that is located before the transaction being validated.
+
+- All transaction inputs must not have been spent by any transaction in ancestor blocks, or by any transaction in the same block that is not located after the transaction being validated
+
+- The length of the script (scriptSig) in the Coinbase transaction must be between 2 and (including) 100 bytes.
+
+- The transaction must be syntactically valid:
+
+- A transaction must have at least one input
+
+- A transaction must have at least one output
+
+- The amount of satoshis in all outputs must be less than or equal to the amount of satoshis in the inputs, to avoid new BSV being introduced to the network
+
+- The amount in all outputs must be between 0 and 21,000,000 BSV (2.1 * 10^15 satoshi)
+
+- The amount of all inputs must be between 0 and 21,000,000 BSV. The sum of the amount over all inputs must not be larger than 21,000,000 BSV.
+
+- A transaction must be final, meaning that either of the following conditions is met:
+
+  - The sequence number in all inputs is equal to 0xffffffff, or
+
+  - The lock time is:
+
+    - Equal to zero, or
+
+    - <500000000 and smaller than block height, or
+
+    - >=500000000 and smaller than timestamp
+
+  - Note: This means that Teranode will deem non-final transactions invalid and reject these transactions. It is up to the user to create proper non-final transactions to ensure that Teranode is aware of them.
+
+  - No output must be Pay-to-Script-Hash (P2SH)
+
+  - A new transaction must not have any output which includes P2SH, as creation of new P2SH transactions is not allowed.
+
+  - Historical P2SH transactions (if any) must still be supported by Teranode, allowing these transactions to be spent.
+
+  - A transaction must not spend frozen UTXOs (see 3.13 – Integration with Alert System)
+
+  - A node must not be able to spend a confiscated (re-assigned) transaction until 1,000 blocks after the transaction was re-assigned (confiscation maturity). The difference between block height and height at which the transaction was re-assigned must not be less than one thousand.
+
+
 
 ### 2.4. Post-validation: Updating stores and propagating the transaction
 

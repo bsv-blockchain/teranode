@@ -6,6 +6,9 @@ import (
 	"strconv"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -30,7 +33,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 	if ok {
 		var utxoStore utxo.Store
 		var blockchainClient blockchain.ClientI
-		var blockchainSubscriptionCh chan *model.Notification
+		var blockchainSubscriptionCh chan *blockchain_api.Notification
 
 		// TODO retry on connection failure
 

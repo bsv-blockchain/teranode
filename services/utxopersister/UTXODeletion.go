@@ -1,6 +1,7 @@
 package utxopersister
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 
@@ -21,13 +22,16 @@ func NewUTXODeletionFromReader(r io.Reader) (*UTXODeletion, error) {
 	// Read all the fixed size fields
 	b := make([]byte, 32+4)
 
-	n, err := io.ReadFull(r, b)
+	_, err := io.ReadFull(r, b)
 	if err != nil {
 		return nil, err
 	}
 
-	if n != 32+4 {
-		return nil, io.ErrUnexpectedEOF
+	// Check if all the bytes are zero
+	if bytes.Equal(b[:32], EOFMarker) {
+		// We return an empty UTXODeletion and io.EOF to signal the end of the stream
+		// The empty UTXODeletion indicates an EOF where the eofMarker was written
+		return &UTXODeletion{}, io.EOF
 	}
 
 	txID, err := chainhash.NewHash(b[:32])

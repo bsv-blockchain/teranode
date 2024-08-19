@@ -2,6 +2,7 @@ package filereader
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"flag"
@@ -34,6 +35,8 @@ var old bool
 
 func Start() {
 	logger := ulogger.TestLogger{}
+
+	fmt.Println()
 
 	// Define command line arguments
 	flag.BoolVar(&verbose, "verbose", false, "verbose output")
@@ -72,8 +75,6 @@ func ProcessFile(path string, logger ulogger.Logger) error {
 	if err != nil {
 		return errors.NewProcessingError("error getting reader", err)
 	}
-
-	r = bufio.NewReaderSize(r, 1024*1024)
 
 	logger.Infof("Reading file %s\n", path)
 
@@ -144,9 +145,11 @@ func verifyChain() error {
 }
 
 func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, dir string) error {
+	br := bufio.NewReaderSize(r, 1024*1024)
+
 	switch ext {
 	case "utxodiff":
-		utxodiff, err := model.NewUTXODiffFromReader(logger, r)
+		utxodiff, err := model.NewUTXODiffFromReader(logger, br)
 		if err != nil {
 			return errors.NewProcessingError("error reading utxodiff", err)
 		}
@@ -180,72 +183,127 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		fmt.Printf("UTXOSet for block hash: %v\n", filename)
 
-		for {
-			ud, err := utxopersister.NewUTXOFromReader(r)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				return errors.NewProcessingError("error reading utxo-additions", err)
-			}
+		magic, blockHash, blockHeight, previousBlockHash, err := utxopersister.GetUTXOSetHeaderFromReader(br)
 
-			if verbose {
-				fmt.Printf("%v\n", ud)
-			}
-
-			count++
+		if err != nil {
+			return errors.NewProcessingError("error reading utxo-additions header", err)
 		}
 
-		fmt.Printf("\tset contains %d UTXOs\n\n", count)
+		fmt.Printf("magic:                  %s\n", magic)
+		fmt.Printf("block hash:             %s\n", blockHash)
+		fmt.Printf("block height:           %d\n", blockHeight)
+		fmt.Printf("previous block hash:    %s\n", previousBlockHash)
+		fmt.Println()
+
+		if verbose {
+			for {
+				ud, err := utxopersister.NewUTXOWrapperFromReader(br)
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					return errors.NewProcessingError("error reading utxo-additions", err)
+				}
+
+				fmt.Printf("%v\n", ud)
+
+				count += len(ud.UTXOs)
+			}
+
+			fmt.Printf("\tset contains %d UTXO(s)\n\n", count)
+		}
+
+		if err := printFooter(r); err != nil {
+			return errors.NewProcessingError("Couldn't read footer", err)
+		}
 
 	case "utxo-additions":
 		var count int
 
 		fmt.Printf("UTXOAdditions for block hash: %v\n", filename)
 
-		for {
-			ud, err := utxopersister.NewUTXOFromReader(r)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				return errors.NewProcessingError("error reading utxo-additions", err)
-			}
-
-			if verbose {
-				fmt.Printf("%v\n", ud)
-			}
-
-			count++
+		magic, blockHash, blockHeight, err := utxopersister.GetHeaderFromReader(br)
+		if err != nil {
+			return errors.NewProcessingError("error reading utxo-additions header", err)
 		}
 
-		fmt.Printf("\tadded	 %d UTXOs\n\n", count)
+		fmt.Printf("magic:                        %s\n", magic)
+		fmt.Printf("block hash:                   %s\n", blockHash)
+		fmt.Printf("block height:                 %d\n", blockHeight)
+		fmt.Println()
+
+		if verbose {
+			for {
+				ud, err := utxopersister.NewUTXOWrapperFromReader(br)
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						if ud == nil {
+							fmt.Printf("ERROR: EOF marker not found\n")
+						} else {
+							fmt.Printf("EOF marker found\n")
+						}
+						break
+					}
+					return errors.NewProcessingError("error reading utxo-additions", err)
+				}
+
+				fmt.Printf("%v\n", ud)
+
+				count += len(ud.UTXOs)
+			}
+
+			fmt.Printf("\tadded	 %d UTXO(s)\n\n", count)
+		}
+
+		if err := printFooter(r); err != nil {
+			return errors.NewProcessingError("Couldn't read footer", err)
+		}
 
 	case "utxo-deletions":
 		var count int
 
 		fmt.Printf("UTXODeletions for block hash: %v\n", filename)
 
-		for {
-			ud, err := utxopersister.NewUTXODeletionFromReader(r)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				return errors.NewProcessingError("error reading utxo-deletions", err)
-			}
+		magic, blockHash, blockHeight, err := utxopersister.GetHeaderFromReader(br)
 
-			if verbose {
-				fmt.Printf("%v\n", ud)
-			}
-
-			count++
+		if err != nil {
+			return errors.NewProcessingError("error reading utxo-deletions header", err)
 		}
 
-		fmt.Printf("\tremoved %d UTXOs\n\n", count)
+		fmt.Printf("magic:                        %s\n", magic)
+		fmt.Printf("block hash:                   %s\n", blockHash)
+		fmt.Printf("block height:                 %d\n", blockHeight)
+		fmt.Println()
+
+		if verbose {
+			for {
+				ud, err := utxopersister.NewUTXODeletionFromReader(br)
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						if ud == nil {
+							fmt.Printf("ERROR: EOF marker not found\n")
+						} else {
+							fmt.Printf("EOF marker found\n")
+						}
+						break
+					}
+					return errors.NewProcessingError("error reading utxo-deletions", err)
+				}
+
+				fmt.Printf("%v\n", ud)
+
+				count++
+			}
+
+			fmt.Printf("\tremoved %d UTXO(s)\n\n", count)
+		}
+
+		if err := printFooter(r); err != nil {
+			return errors.NewProcessingError("Couldn't read footer", err)
+		}
 
 	case "utxoset":
-		utxoSet, err := model.NewUTXOSetFromReader(logger, r)
+		utxoSet, err := model.NewUTXOSetFromReader(logger, br)
 		if err != nil {
 			return errors.NewProcessingError("error reading utxoSet: %v\n", err)
 		}
@@ -264,18 +322,18 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 		}
 
 	case "subtree":
-		num := readSubtree(r, logger, verbose)
+		num := readSubtree(br, logger, verbose)
 		fmt.Printf("Number of transactions: %d\n", num)
 
 	case "":
 		blockHeaderBytes := make([]byte, 80)
 		// read the first 80 bytes as the block header
-		if _, err := io.ReadFull(r, blockHeaderBytes); err != nil {
+		if _, err := io.ReadFull(br, blockHeaderBytes); err != nil {
 			return errors.NewBlockInvalidError("error reading block header", err)
 		}
 
 		// read the transaction count
-		txCount, err := wire.ReadVarInt(r, 0)
+		txCount, err := wire.ReadVarInt(br, 0)
 		if err != nil {
 			return errors.NewBlockInvalidError("error reading transaction count", err)
 		}
@@ -283,7 +341,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 		fmt.Printf("\t%d transactions\n", txCount)
 
 	case "block":
-		block, err := block_model.NewBlockFromReader(r)
+		block, err := block_model.NewBlockFromReader(br)
 		if err != nil {
 			return errors.NewBlockError("error reading block: %v\n", err)
 		}
@@ -401,4 +459,49 @@ func getBlockStore(logger ulogger.Logger) blob.Store {
 	}
 
 	return blockStore
+}
+
+func printFooter(r io.Reader) error {
+	f, ok := r.(*os.File)
+	if !ok {
+		fmt.Printf("seek is not supported\n")
+		return nil
+	}
+	// The end of the file should have the EOF marker at the end (32 bytes)
+	// and the txCount uint64 and the utxoCount uint64 (each 8 bytes)
+	_, err := f.Seek(-48, 2) // From the end of the file, seek back 48 bytes
+	if err != nil {
+		return errors.NewProcessingError("error seeking to EOF marker", err)
+	}
+
+	b := make([]byte, 48)
+	if _, err := io.ReadFull(f, b); err != nil {
+		return errors.NewProcessingError("error reading EOF marker", err)
+	}
+
+	if bytes.Compare(b[0:32], utxopersister.EOFMarker) != 0 {
+		return errors.NewProcessingError("EOF marker not found")
+	}
+
+	fmt.Printf("EOF marker found\n")
+
+	txCount := binary.LittleEndian.Uint64(b[32:40])
+	utxoCount := binary.LittleEndian.Uint64(b[40:48])
+
+	fmt.Printf("record count: %16s\n", formatNumber(txCount))
+	fmt.Printf("utxo count:   %16s\n", formatNumber(utxoCount))
+
+	return nil
+}
+
+func formatNumber(n uint64) string {
+	in := fmt.Sprintf("%d", n)
+	out := make([]string, 0, len(in)+(len(in)-1)/3)
+	for i, c := range in {
+		if i > 0 && (len(in)-i)%3 == 0 {
+			out = append(out, ",")
+		}
+		out = append(out, string(c))
+	}
+	return strings.Join(out, "")
 }

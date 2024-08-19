@@ -27,7 +27,9 @@
 
 ## 1. Description
 
-The UTXO Store is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store is an internal datastore used by some of the services, such as the Asset Server, the TX Validator and the Block Assembly. The main purpose of this store is to maintain the UTXO data on behalf of other micro-services.
+The UTXO set represents the current state of ownership of all Satoshi tokens in existence. Except for Coinbase transactions, every other valid transaction spends at least one UTXO and creates zero or more new UTXOs, plus zero or more unspendable outputs. The UTXOs that are being ‘spent’ come from previously successful transactions, and these may be recorded in the current or a previous block. An unspent output may be created and spent in a few milliseconds, or it may remain unspent for decades, meaning that the unspent outputs must persist for as long as they remain unspent.
+
+The UTXO Store is responsible for tracking spendable UTXOs (the UTXO set), based on the longest _honest_ chain-tip in the network. These are UTXOs that can be used as inputs in new transactions. The UTXO Store is an internal datastore used by some of the services, such as the Asset Server, the TX Validator and the Block Assembly. The main purpose of this store is to maintain the UTXO data on behalf of other micro-services.
 
 It handles the core functionalities of the UTXO Store:
 

@@ -990,8 +990,7 @@ func (s *RpcServer) Start(ctx context.Context) error {
 	return nil
 }
 
-// NewServer returns a new instance of the rpcServer struct.
-func NewServer(logger ulogger.Logger) (*RpcServer, error) {
+func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RpcServer, error) {
 	initPrometheusMetrics()
 
 	rpc := RpcServer{
@@ -999,6 +998,7 @@ func NewServer(logger ulogger.Logger) (*RpcServer, error) {
 		requestProcessShutdown: make(chan struct{}),
 		logger:                 logger,
 		quit:                   make(chan int),
+		blockchainClient:       blockchainClient,
 	}
 
 	rpcUser, ok := gocore.Config().Get("rpc_user")
@@ -1057,14 +1057,6 @@ func NewServer(logger ulogger.Logger) (*RpcServer, error) {
 func (s *RpcServer) Init(ctx context.Context) (err error) {
 	rpcHandlers = rpcHandlersBeforeInit
 	// rand.Seed(time.Now().UnixNano())
-
-	blockchainClient, err := blockchain.NewClient(ctx, s.logger, "services/rpc")
-	if err != nil {
-		return errors.NewServiceError("error creating blockchain client", err)
-	}
-
-	s.blockchainClient = blockchainClient
 	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger)
-
 	return err
 }

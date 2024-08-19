@@ -49,23 +49,25 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 
 | Component          | Option                 | Description                           |
 |--------------------|------------------------|---------------------------------------|
-| Blockchain         | `-Blockchain=1`        | Start the Blockchain component.       |
-| Block Assembly     | `-BlockAssembly=1`     | Start the Block Assembly process.     |
-| Block Validation   | `-BlockValidation=1`   | Begin the Block Validation process.   |
-| Subtree Validation | `-SubtreeValidation=1` | Begin the Subtree Validation process. |
-| Validator          | `-Validator=1`         | Activate the Validator.               |
-| Utxo Store         | `-UtxoStore=1`         | Initiate the UTXO Store.              |
-| Tx Meta Store      | `-TxMetaStore=1`       | Start the Transaction Meta Store.     |
-| Propagation        | `-Propagation=1`       | Begin the Propagation process.        |
-| Seeder             | `-Seeder=1`            | Activate the Seeder component.        |
-| Miner              | `-Miner=1`             | Start the Miner component.            |
 | Asset Service      | `-Asset=1`             | Initiate the Asset Service.           |
-| Coinbase           | `-Coinbase=1`          | Activate the Coinbase component.      |
+| Block Assembly     | `-BlockAssembly=1`     | Start the Block Assembly process.     |
+| Blockchain         | `-Blockchain=1`        | Start the Blockchain component.       |
 | BlockPersister     | `-BlockPersister=1`    | Start the Block Persister process.    |
-| P2P                | `-P2P=1`               | Begin the P2P communication process.  |
-| Legacy             | `-Legacy=1`            | Begin the Legacy Bridge process.      |
-| RPC                | `-rpc=1`               | Begin the RPC server.                 |
+| Block Validation   | `-BlockValidation=1`   | Begin the Block Validation process.   |
+| Coinbase           | `-Coinbase=1`          | Activate the Coinbase component.      |
 | Help               | `-help=1`              | Display the help information.         |
+| Legacy             | `-Legacy=1`            | Begin the Legacy Bridge process.      |
+| Miner              | `-Miner=1`             | Start the Miner component.            |
+| P2P                | `-P2P=1`               | Begin the P2P communication process.  |
+| Propagation        | `-Propagation=1`       | Begin the Propagation process.        |
+| RPC                | `-rpc=1`               | Begin the RPC server.                 |
+| Seeder             | `-Seeder=1`            | Activate the Seeder component.        |
+| Subtree Validation | `-SubtreeValidation=1` | Begin the Subtree Validation process. |
+| Tx Meta Store      | `-TxMetaStore=1`       | Start the Transaction Meta Store.     |
+| UTXOPersister      | `-UTXOPersister=1`     | Start the UTXO Persister process.     |
+| Utxo Store         | `-UtxoStore=1`         | Initiate the UTXO Store.              |
+| Validator          | `-Validator=1`         | Activate the Validator.               |
+
 
 
 

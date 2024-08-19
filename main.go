@@ -270,12 +270,17 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		}
 	}
 
-	var err error
+	blockchainClient, err := blockchain.NewClient(ctx, logger, "main")
+	if err != nil {
+		panic(err)
+	}
+	blockchainService.SetClient(blockchainClient)
 
 	// p2p server
 	if startP2P {
 		p2pService, err := p2p.NewServer(ctx,
 			logger.New("P2P"),
+			blockchainClient,
 		)
 		if err != nil {
 			return err
@@ -320,6 +325,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			txStore,
 			subtreeStore,
 			blockStore,
+			blockchainClient,
 		)); err != nil {
 			return err
 
@@ -327,7 +333,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 	}
 
 	if startRpc {
-		rpcServer, err := rpc.NewServer(logger.New("rpc"))
+		rpcServer, err := rpc.NewServer(logger.New("rpc"), blockchainClient)
 		if err != nil {
 			return err
 
@@ -335,7 +341,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 
 		if err := sm.AddService("Rpc", rpcServer); err != nil {
 			return err
-
 		}
 	}
 
@@ -367,13 +372,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 
 		}
-	}
-
-	// should this be done globally somewhere?
-	blockchainClient, err := blockchain.NewClient(ctx, logger, "main")
-	if err != nil {
-		return err
-
 	}
 
 	if startUTXOPersister {
@@ -498,6 +496,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				txStore,
 				utxoStore,
 				validatorClient,
+				blockchainClient,
 			)); err != nil {
 				return err
 
@@ -515,8 +514,9 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			}
 
 			if err = sm.AddService("Validator", validator.NewServer(
-				logger.New("valid"),
+				logger.New("validator"),
 				utxoStore,
+				blockchainClient,
 			)); err != nil {
 				return err
 
@@ -629,15 +629,26 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		}
 	}
 
-	if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
-		logger.Errorf("[Main] failed to send RUN event [%v]", err)
-		return err
+	restoring := gocore.Config().GetBool("restoreMode", false)
+	syncingLegacy := gocore.Config().GetBool("snycLegacyMode", false)
 
+	// if we are in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
+	// if we are in the restoring mode, we need to wait for restore to complete, and manual RUN event to be sent.
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	if !restoring && !syncingLegacy {
+		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
+			logger.Errorf("[Main] failed to send RUN event [%v]", err)
+			panic(err)
+		}
 	}
 
 	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining
 	if startMiner {
-		miner, err := miner.NewMiner(ctx, logger.New("miner"))
+		miner, err := miner.NewMiner(
+			ctx,
+			logger.New("miner"),
+			blockchainClient,
+		)
 		if err != nil {
 			return err
 

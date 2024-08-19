@@ -353,6 +353,7 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 }
 
 func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte) error {
+	logger.Debugf("Starting async kafka producer for %v", kafkaURL)
 	topic := kafkaURL.Path[1:]
 	brokersUrl := strings.Split(kafkaURL.Host, ",")
 	signals := make(chan os.Signal, 1)
@@ -429,6 +430,6 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 
 	// Wait for a signal to exit
 	<-signals
-	logger.Debugf("Shutting down producer...")
+	logger.Debugf("Shutting down producer %v ...", kafkaURL)
 	return nil
 }

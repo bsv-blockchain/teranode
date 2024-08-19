@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -79,10 +81,10 @@ func (s *Server) Init(ctx context.Context) (err error) {
 // Start function
 func (s *Server) Start(ctx context.Context) error {
 	var err error
-	var ch chan *model.Notification
+	var ch chan *blockchain_api.Notification
 
 	if s.blockchainClient == nil {
-		ch = make(chan *model.Notification) // Create a dummy channel
+		ch = make(chan *blockchain_api.Notification) // Create a dummy channel
 	} else {
 		ch, err = s.blockchainClient.Subscribe(ctx, "utxo-persister")
 		if err != nil {
@@ -97,7 +99,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	duration := 1 * time.Minute
 	if s.blockchainClient == nil {
-		// We do not have a sbuscription, so we need to poll the blockchain more frequently
+		// We do not have a subscription, so we need to poll the blockchain more frequently
 		duration = 10 * time.Second
 	}
 

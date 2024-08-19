@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,12 @@ import (
 
 type Transaction struct {
 	Tx string `json:"tx"`
+}
+
+var allowedHosts = []string{
+	"localhost:19090",
+	"localhost:29090",
+	"localhost:39090",
 }
 
 // Function to call the RPC endpoint with any method and parameters, returning the response and error
@@ -600,4 +607,84 @@ func GetBestBlock(ctx context.Context, node tf.BitcoinNode) (*block_model.Block,
 		return nil, errors.NewProcessingError("Error getting block by height: %s\n", errblock)
 	}
 	return block, nil
+}
+
+func QueryPrometheusMetric(serverURL, metricName string) (float64, error) {
+
+	parsedURL, err := url.Parse(serverURL)
+	if err != nil {
+		return 0, errors.New(errors.ERR_ERROR, "invalid server URL: %v", err)
+	}
+
+	if !isAllowedHost(parsedURL.Host) {
+		return 0, errors.New(errors.ERR_ERROR, "host not allowed: %v", parsedURL.Host)
+	}
+
+	queryURL := fmt.Sprintf("%s/api/v1/query?query=%s", serverURL, metricName)
+
+	req, err := http.NewRequest("GET", queryURL, nil)
+	if err != nil {
+		return 0, errors.New(errors.ERR_ERROR, "error creating HTTP request: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, errors.New(errors.ERR_ERROR, "error sending HTTP request: %v", err)
+	}
+	if err != nil {
+		return 0, errors.New(errors.ERR_ERROR, "error querying Prometheus API: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, errors.New(errors.ERR_ERROR, "error reading Prometheus response body: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return 0, errors.New(errors.ERR_ERROR, "error unmarshaling Prometheus response: %v", err)
+	}
+
+	data, ok := result["data"].(map[string]interface{})
+	if !ok {
+		return 0, errors.New(errors.ERR_ERROR, "unexpected Prometheus response format: data field not found")
+	}
+
+	resultArray, ok := data["result"].([]interface{})
+	if !ok || len(resultArray) == 0 {
+		return 0, errors.New(errors.ERR_ERROR, "unexpected Prometheus response format: result field not found or empty")
+	}
+
+	metric, ok := resultArray[0].(map[string]interface{})
+	if !ok {
+		return 0, errors.New(errors.ERR_ERROR, "unexpected Prometheus response format: result array element is not a map")
+	}
+
+	value, ok := metric["value"].([]interface{})
+	if !ok || len(value) < 2 {
+		return 0, errors.New(errors.ERR_ERROR, "unexpected Prometheus response format: value field not found or invalid")
+	}
+
+	metricValueStr, ok := value[1].(string)
+	if !ok {
+		return 0, errors.New(errors.ERR_ERROR, "unexpected Prometheus response format: metric value is not a string")
+	}
+
+	metricValue, err := strconv.ParseFloat(metricValueStr, 64)
+	if err != nil {
+		return 0, errors.New(errors.ERR_ERROR, "error parsing Prometheus metric value: %v", err)
+	}
+
+	return metricValue, nil
+}
+
+// isAllowedHost checks if the given host is in the allowed list.
+func isAllowedHost(host string) bool {
+	for _, allowedHost := range allowedHosts {
+		if host == allowedHost {
+			return true
+		}
+	}
+	return false
 }

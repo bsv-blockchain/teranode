@@ -1,0 +1,22 @@
+@startuml
+title UTXO Persister - Service Initialization and Starting
+
+participant "UTXO Persister Server" as Server
+participant "Block Store" as BlockStore
+participant "Blockchain Client" as BlockchainClient
+participant "Blockchain Store" as BlockchainStore
+
+Server -> Server : Init()
+activate Server
+
+Server -> BlockStore : Initialize
+Server -> BlockchainClient : Initialize (if indirect mode)
+Server -> BlockchainStore : Initialize (if direct mode)
+Server -> Server : readLastHeight()
+
+deactivate Server
+
+Server -> Server : Start()
+activate Server
+Server --> Server : Start processing loop
+@enduml

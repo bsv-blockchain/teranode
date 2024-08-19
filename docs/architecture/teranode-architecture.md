@@ -9,7 +9,7 @@
 
 # Teranode (Unbounded Bitcoin Satoshi Vision) - Architecture Overview
 
-[Last Modified - 17-June-2024]
+[Last Modified - 16-August-2024]
 
 ## Index
 
@@ -91,6 +91,8 @@ Various services and components are outlined to show their interactions and func
   - **Legacy P2P Network Bridge**: This service handles the legacy peer-to-peer communications within the blockchain network. As older (legacy) nodes will not be able to directly communicate with the newer (Teranode) nodes, this service acts as a bridge between the two types of nodes.
   - **Peer-to-Peer Bootstrap Service**: This service handles node discovery, managing connections with peer nodes in the network.
   - **Coinbase Overlay Service**: This service tracks and stores the Coinbase transactions, which are the first transactions in a block that create new coins and reward miners.
+  - **Block Persister Service**: This service decorates blocks and subtrees after their integration into blocks and persists them to a separate storage.
+  - **UTXO Persister Service**: This service creates and maintains an up-to-date Unspent Transaction Output (UTXO) file set for each block in the blockchain.
 
 3. **Other Components**:
   - **Message Broker**: A middleware that facilitates communication between different services, notably between the TX Validator and associated services.
@@ -626,7 +628,7 @@ The system is designed to maintain the blockchain's integrity by ensuring that a
 
 ---
 
-### 4.9 Block Persister Service
+### 4.9. Block Persister Service
 
 The Block Persister service functions as an overlay microservice, designed to post-process blocks.
 
@@ -658,7 +660,22 @@ A more detailed diagram can be seen below, detailing the messaging mechanism bet
 
 ---
 
-### 4.10. Asset Service
+
+### 4.10. UTXO Persister Service
+
+The UTXO Persister service functions as an overlay microservice, designed to consume the output of the Block Persister files, and to derive an up to date UTXO set.
+
+![UTXO_Persister_Service_Component_Diagram.png](..%2Fservices%2Fimg%2FUTXO_Persister_Service_Component_Diagram.png)
+
+The UTXO (Unspent Transaction Output) Persister is specifically designed to maintain an up-to-date record of all unspent transaction outputs. The UTXO Persister works in tandem with the Block Persister, consuming the outputs of block processing to update the global UTXO set.
+
+At its core, the UTXO Persister is responsible for creating and maintaining UTXO set files for each block in the blockchain. It processes incoming block data, including new transactions and spent outputs for each block. These changes are then applied to the previous block's UTXO set to create an updated set for the new block. This incremental approach allows for efficient updates and queries of the blockchain's current state.
+
+The output of the UTXO persister can be used as input to initialise the UTXO set of a new Teranode instance.
+
+---
+
+### 4.11. Asset Service
 
 The Asset Service acts as an interface ("Front" or "Facade") to various data stores. It deals with several key data elements:
 
@@ -688,7 +705,7 @@ The various microservices write directly to the data stores, but the asset servi
 
 ---
 
-### 4.11. Coinbase Service
+### 4.12. Coinbase Service
 
 The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
 
@@ -718,7 +735,7 @@ In essence, the Coinbase Service operates as a straightforward Simplified Paymen
 
 ---
 
-### 4.12. Bootstrap
+### 4.13. Bootstrap
 
 The Bootstrap Service helps new nodes find peers in a Teranode BSV network. It allows nodes to register themselves and be notified about other nodes' presence, serving as a discovery service.
 
@@ -729,7 +746,7 @@ The service is implemented using the `libp2p` library, a modular network stack f
 ---
 
 
-### 4.13. P2P Legacy Service
+### 4.14. P2P Legacy Service
 
 The P2P Legacy Service is designed to facilitate communication and data exchange between traditional Bitcoin SV (BSV) nodes and the more advanced Teranode-BSV nodes.
 
@@ -745,7 +762,7 @@ This legacy P2P network is to be phased out as transaction volumes increase, for
 
 ---
 
-### 4.14. UTXO Store
+### 4.15. UTXO Store
 
 The UTXO Store service is responsible for tracking spendable UTXOs. These are UTXOs that can be used as inputs in new transactions. The UTXO Store service is primarily used by the Validator service to retrieve UTXOs when validating transactions. The main purpose of this service is to provide a quick lookup service on behalf of other micro-services (such as the Validator service).
 
@@ -753,7 +770,7 @@ The UTXO Store service is responsible for tracking spendable UTXOs. These are UT
 
 ---
 
-### 4.15. Banlist Service
+### 4.16. Banlist Service
 
 Bitcoin is an open public system that anyone can use. While most participants act in good faith, the system needs to protect itself against rogue agents. If a node is breaching the network consensus rules (a "rogue" node), it will get banned.
 

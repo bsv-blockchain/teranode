@@ -49,20 +49,16 @@ loop for each Subtree in the Block
     deactivate BlockPersister
 end
 
-BlockPersister -> FileStorage: Persist UTXODiff file  (.utxodiff) to storage
+BlockPersister -> FileStorage: Compute and Persist UTXO Deletions file  (.utxo-deletions) to storage
 
-BlockPersister -> BlockPersister: Compute UTXO Set for the block
-activate BlockPersister
-BlockPersister -> BlockPersister: Load previous UTXO Set
-BlockPersister -> BlockPersister: Apply UTXODiff to UTXO Set
-BlockPersister -> FileStorage: Write UTXO Set to file (.utxoset)
-deactivate BlockPersister
+BlockPersister -> FileStorage: Compute and Persist UTXO Additions file  (.utxo-additions) to storage
+
 
 
 deactivate BlockPersister
 deactivate BlockPersister
 
 
-left footer Last Modified On: 7-June-2024
+left footer Last Modified On: 12-August-2024
 
 @enduml

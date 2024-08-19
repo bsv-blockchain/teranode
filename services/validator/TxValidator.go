@@ -123,15 +123,16 @@ func (tv *TxValidator) checkTxSize(txSize int, policy *PolicySettings) error {
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
 
-	minOutput := uint64(0)
-	if blockHeight >= util.GenesisActivationHeight {
-		minOutput = bt.DustLimit
-	}
+	//minOutput := uint64(0)
+	//if blockHeight >= util.GenesisActivationHeight {
+	//	minOutput = bt.DustLimit
+	//}
 
 	for index, output := range tx.Outputs {
 		isData := output.LockingScript.IsData()
 		switch {
-		case !isData && (output.Satoshis > MaxSatoshis || output.Satoshis < minOutput):
+		// TODO there are transactions on-chain with 0 sat outputs WTF
+		case !isData && output.Satoshis > MaxSatoshis: // || (minOutput > 0 && output.Satoshis < minOutput)):
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
 		case isData && output.Satoshis != 0 && blockHeight >= util.GenesisActivationHeight:
 			//  This is not enforced on a consensus level, but it is a good practice to not have non 0 value op returns
@@ -170,9 +171,10 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 		total += input.PreviousTxSatoshis
 	}
 
-	if total == 0 && blockHeight >= util.GenesisActivationHeight {
-		return errors.NewTxInvalidError("transaction input total satoshis cannot be zero")
-	}
+	//if total == 0 && blockHeight >= util.GenesisActivationHeight {
+	// TODO there is a lot of shit transactions on-chain with 0 inputs and 0 outputs - WTF
+	// return errors.NewTxInvalidError("transaction input total satoshis cannot be zero")
+	//}
 
 	if total > MaxSatoshis {
 		return errors.NewTxInvalidError("transaction input total satoshis is too high")
