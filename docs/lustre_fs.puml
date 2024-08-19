@@ -24,7 +24,7 @@ RECTANGLE S3 {}
 
 BlockAssembly -- LustreFS : subtrees TTL >
 BlockValidation -- LustreFS : subtrees TTL <
-SubtreetValidation -- LustreFS : subtrees TTL >
+SubtreeValidation -- LustreFS : subtrees TTL >
 AssetService -- LustreFS : subtrees TTL <
 LustreFS -- S3 : subtrees (non-TTL) >
 @enduml
