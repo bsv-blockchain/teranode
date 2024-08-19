@@ -20,13 +20,14 @@ import (
 type File struct {
 	paths       []string
 	logger      ulogger.Logger
+	options     *options.SetOptions
 	fileTTLs    map[string]time.Time
 	fileTTLsMu  sync.Mutex
 	fileTTLsCtx context.Context
 	// mu     sync.RWMutex
 }
 
-func New(logger ulogger.Logger, paths []string) (*File, error) {
+func New(logger ulogger.Logger, paths []string, opts ...options.Options) (*File, error) {
 	logger = logger.New("file")
 
 	// create the directories if they don't exist
@@ -36,9 +37,20 @@ func New(logger ulogger.Logger, paths []string) (*File, error) {
 		}
 	}
 
+	options := options.NewSetOptions(nil, opts...)
+
+	if options.PrefixDirectory > 0 {
+		logger.Warnf("[File] prefix directory option will be ignored (only supported in S3 store)")
+	}
+
+	if options.SubDirectory != "" {
+		logger.Warnf("[File] subdirectory option will be ignored (only supported in S3 store)")
+	}
+
 	fileStore := &File{
 		paths:       paths,
 		logger:      logger,
+		options:     options,
 		fileTTLs:    make(map[string]time.Time),
 		fileTTLsCtx: context.Background(),
 	}
@@ -186,7 +198,7 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 }
 
 func (s *File) getFileNameForGet(hash []byte, opts []options.Options) (string, error) {
-	fileOptions := options.NewSetOptions(nil, opts...)
+	fileOptions := options.NewSetOptions(s.options, opts...)
 
 	var fileName string
 
@@ -208,7 +220,7 @@ func (s *File) getFileNameForGet(hash []byte, opts []options.Options) (string, e
 	return fileName, nil
 }
 func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
-	fileOptions := options.NewSetOptions(nil, opts...)
+	fileOptions := options.NewSetOptions(s.options, opts...)
 
 	var fileName string
 	if fileOptions.Filename != "" {

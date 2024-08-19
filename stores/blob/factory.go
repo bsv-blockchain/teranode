@@ -30,7 +30,7 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		store = memory.New()
 
 	case "file":
-		store, err = file.New(logger, []string{GetPathFromURL(storeUrl)})
+		store, err = file.New(logger, []string{GetPathFromURL(storeUrl)}, opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("error creating file blob store", err)
 		}
@@ -44,7 +44,7 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		// lustre://s3.com/ubsv?localDir=/data/subtrees&localPersist=s3
 		dir := storeUrl.Query().Get("localDir")
 		persistDir := storeUrl.Query().Get("localPersist")
-		store, err = lustre.New(logger, storeUrl, dir, persistDir)
+		store, err = lustre.New(logger, storeUrl, dir, persistDir, opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("error creating lustre blob store", err)
 		}
@@ -82,7 +82,7 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		}
 
 		var ttlStore Store
-		ttlStore, err = file.New(logger, localTTLStorePaths)
+		ttlStore, err = file.New(logger, localTTLStorePaths, opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("failed to create file store", err)
 		}
