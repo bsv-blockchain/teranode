@@ -162,6 +162,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	defer deferFn()
 	var spentUtxos []*utxo.Spend
 
+	v.logger.Infof("[validateInternal]: inside validateInternal, blockHeight: %d", blockHeight)
+
 	// this should be updated automatically by the utxo store
 	utxoStoreBlockHeight := v.GetBlockHeight()
 	// We do not check IsFinal for transactions before BIP113 change (block height 419328)
@@ -227,6 +229,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 		return errors.NewProcessingError("error registering tx in metaStore", err)
 	}
+
+	v.logger.Infof("[validateInternal]: will check if blockAssembly is disabled, expecting false: %v", v.blockAssemblyDisabled)
 
 	if !v.blockAssemblyDisabled {
 		parentTxHashes := make([]chainhash.Hash, len(tx.Inputs))
