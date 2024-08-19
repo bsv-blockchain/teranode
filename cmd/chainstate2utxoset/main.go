@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/btcleveldb"
@@ -440,7 +441,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			}
 
 			if (txWritten+utxosSkipped)%1_000_000 == 0 {
-				logger.Infof("Processed %d utxos, skipped %d", utxosWritten, utxosSkipped)
+				logger.Infof("Processed %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 			}
 		}
 	}
@@ -483,7 +484,19 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 		return errors.NewProcessingError("Couldn't write hash file:", err)
 	}
 
-	logger.Infof("Finished with %d transactions, %d utxos, skipped %d", txWritten, utxosWritten, utxosSkipped)
+	logger.Infof("Finished with %16s transactions, %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 
 	return nil
+}
+
+func formatNumber(n uint64) string {
+	in := fmt.Sprintf("%d", n)
+	out := make([]string, 0, len(in)+(len(in)-1)/3)
+	for i, c := range in {
+		if i > 0 && (len(in)-i)%3 == 0 {
+			out = append(out, ",")
+		}
+		out = append(out, string(c))
+	}
+	return strings.Join(out, "")
 }
