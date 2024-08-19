@@ -488,8 +488,20 @@ func printFooter(r io.Reader) error {
 	txCount := binary.LittleEndian.Uint64(b[32:40])
 	utxoCount := binary.LittleEndian.Uint64(b[40:48])
 
-	fmt.Printf("record count: %d\n", txCount)
-	fmt.Printf("utxo count: %d\n", utxoCount)
+	fmt.Printf("record count: %s\n", formatNumber(txCount))
+	fmt.Printf("utxo count:   %s\n", formatNumber(utxoCount))
 
 	return nil
+}
+
+func formatNumber(n uint64) string {
+	in := fmt.Sprintf("%d", n)
+	out := make([]string, 0, len(in)+(len(in)-1)/3)
+	for i, c := range in {
+		if i > 0 && (len(in)-i)%3 == 0 {
+			out = append(out, ",")
+		}
+		out = append(out, string(c))
+	}
+	return strings.Join(out, "")
 }
