@@ -439,7 +439,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				utxosSkipped++
 			}
 
-			if (utxosWritten+utxosSkipped)%1_000_000 == 0 {
+			if (txWritten+utxosSkipped)%1_000_000 == 0 {
 				logger.Infof("Processed %d utxos, skipped %d", utxosWritten, utxosSkipped)
 			}
 		}
