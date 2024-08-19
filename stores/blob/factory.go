@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/stores/blob/badger"
 	"github.com/bitcoin-sv/ubsv/stores/blob/batcher"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/stores/blob/localttl"
@@ -31,22 +30,9 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		store = memory.New()
 
 	case "file":
-		// TODO make this more generic, you should be able to pass in an absolute path
-		store, err = file.New(logger, "."+storeUrl.Path) // relative
+		store, err = file.New(logger, GetPathFromURL(storeUrl))
 		if err != nil {
 			return nil, errors.NewStorageError("error creating file blob store", err)
-		}
-	case "filea":
-		// TODO make this more generic, you should be able to pass in an absolute path
-		store, err = file.New(logger, storeUrl.Path) // relative
-		if err != nil {
-			return nil, errors.NewStorageError("error creating file blob store", err)
-		}
-	case "badger":
-		// TODO make this more generic, you should be able to pass in an absolute path
-		store, err = badger.New(logger, "."+storeUrl.Path) // relative
-		if err != nil {
-			return nil, errors.NewStorageError("error creating badger blob store", err)
 		}
 	case "s3":
 		store, err = s3.New(logger, storeUrl, opts...)
@@ -85,7 +71,6 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 	}
 
 	if storeUrl.Query().Get("localTTLStore") != "" {
-		ttlStoreType := storeUrl.Query().Get("localTTLStore")
 		localTTLStorePath := storeUrl.Query().Get("localTTLStorePath")
 		if localTTLStorePath == "" {
 			localTTLStorePath = "/tmp/localTTL"
@@ -97,22 +82,6 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		}
 
 		var ttlStore Store
-		if ttlStoreType == "badger" {
-			if len(localTTLStorePaths) > 1 {
-				return nil, errors.NewInvalidArgumentError("badger store only supports one path")
-			}
-			ttlStore, err = badger.New(logger, localTTLStorePath)
-			if err != nil {
-				return nil, errors.NewStorageError("failed to create badger store", err)
-			}
-		} else {
-			// default is file store
-			ttlStore, err = file.New(logger, localTTLStorePath, localTTLStorePaths)
-			if err != nil {
-				return nil, errors.NewStorageError("failed to create file store", err)
-			}
-		}
-
 		store, err = localttl.New(logger.New("localTTL"), ttlStore, store)
 		if err != nil {
 			return nil, errors.NewStorageError("failed to create localTTL store", err)
@@ -120,4 +89,11 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 	}
 
 	return
+}
+
+func GetPathFromURL(u *url.URL) string {
+	if u.Host == "." {
+		return u.Path[1:] // relative path
+	}
+	return u.Path // absolute path
 }

@@ -2,12 +2,14 @@ package file
 
 import (
 	"context"
+	"net/url"
+	"os"
+	"testing"
+
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/util/rand"
-	"os"
-	"testing"
 )
 
 var testDir = "/tmp/ubsv-tests/" + rand.String(12)
@@ -108,4 +110,22 @@ func TestFile_filename(t *testing.T) {
 
 		cleanup()
 	})
+}
+
+func TestFile_AbsoluteAndRelativePath(t *testing.T) {
+	absoluteUrl, err := url.ParseRequestURI("file:///absolute/path/to/file")
+	require.NoError(t, err)
+	require.Equal(t, "/absolute/path/to/file", GetPathFromURL(absoluteUrl))
+
+	relativeUrl, err := url.ParseRequestURI("file://./relative/path/to/file")
+	require.NoError(t, err)
+	require.Equal(t, "relative/path/to/file", GetPathFromURL(relativeUrl))
+
+}
+
+func GetPathFromURL(u *url.URL) string {
+	if u.Host == "." {
+		return u.Path[1:]
+	}
+	return u.Path
 }
