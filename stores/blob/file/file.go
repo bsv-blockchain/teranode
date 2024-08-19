@@ -26,21 +26,12 @@ type File struct {
 	// mu     sync.RWMutex
 }
 
-func New(logger ulogger.Logger, dir string, multiDirs ...[]string) (*File, error) {
+func New(logger ulogger.Logger, paths []string) (*File, error) {
 	logger = logger.New("file")
 
-	paths := []string{dir}
-	if len(multiDirs) > 0 {
-		paths = multiDirs[0]
-		// create the directories if they don't exist
-		for _, d := range multiDirs[0] {
-			if err := os.MkdirAll(d, 0755); err != nil {
-				return nil, errors.NewStorageError("failed to create directory", err)
-			}
-		}
-	} else {
-		// create directory if not exists
-		if err := os.MkdirAll(dir, 0755); err != nil {
+	// create the directories if they don't exist
+	for _, d := range paths {
+		if err := os.MkdirAll(d, 0755); err != nil {
 			return nil, errors.NewStorageError("failed to create directory", err)
 		}
 	}

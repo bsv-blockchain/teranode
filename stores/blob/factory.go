@@ -30,7 +30,7 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		store = memory.New()
 
 	case "file":
-		store, err = file.New(logger, GetPathFromURL(storeUrl))
+		store, err = file.New(logger, []string{GetPathFromURL(storeUrl)})
 		if err != nil {
 			return nil, errors.NewStorageError("error creating file blob store", err)
 		}
@@ -82,6 +82,10 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		}
 
 		var ttlStore Store
+		ttlStore, err = file.New(logger, localTTLStorePaths)
+		if err != nil {
+			return nil, errors.NewStorageError("failed to create file store", err)
+		}
 		store, err = localttl.New(logger.New("localTTL"), ttlStore, store)
 		if err != nil {
 			return nil, errors.NewStorageError("failed to create localTTL store", err)

@@ -20,7 +20,7 @@ func cleanup() {
 
 func TestFile_Get(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, testDir)
+		f, err := New(ulogger.TestLogger{}, []string{testDir})
 		require.NoError(t, err)
 
 		err = f.Set(context.Background(), []byte("key"), []byte("value"))
@@ -40,7 +40,7 @@ func TestFile_Get(t *testing.T) {
 
 func TestFile_filename(t *testing.T) {
 	t.Run("1 path", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, testDir)
+		f, err := New(ulogger.TestLogger{}, []string{testDir})
 		require.NoError(t, err)
 
 		filename := f.filename([]byte("key"))
@@ -50,7 +50,7 @@ func TestFile_filename(t *testing.T) {
 	})
 
 	t.Run("1 paths", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, testDir, []string{"/tmp/ubsv-tests1"})
+		f, err := New(ulogger.TestLogger{}, []string{"/tmp/ubsv-tests1"})
 		require.NoError(t, err)
 
 		filename := f.filename([]byte("1key"))
@@ -69,7 +69,7 @@ func TestFile_filename(t *testing.T) {
 	})
 
 	t.Run("2 paths", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, testDir, []string{"/tmp/ubsv-tests1", "/tmp/ubsv-tests2"})
+		f, err := New(ulogger.TestLogger{}, []string{"/tmp/ubsv-tests1", "/tmp/ubsv-tests2"})
 		require.NoError(t, err)
 
 		filename := f.filename([]byte("1key"))
@@ -88,7 +88,7 @@ func TestFile_filename(t *testing.T) {
 	})
 
 	t.Run("4 paths", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, testDir, []string{
+		f, err := New(ulogger.TestLogger{}, []string{
 			"/tmp/ubsv-tests1",
 			"/tmp/ubsv-tests2",
 			"/tmp/ubsv-tests3",
