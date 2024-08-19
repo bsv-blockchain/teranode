@@ -167,6 +167,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	var txWritten uint64
 	var utxosWritten uint64
 	var utxosSkipped uint64
+	var iterCount uint64
 
 	logger.Infof("Processing UTXOs...")
 
@@ -444,6 +445,8 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				logger.Infof("Processed %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 			}
 		}
+
+		iterCount++
 	}
 
 	if currentUTXOWrapper != nil {
@@ -455,6 +458,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 		txWritten++
 		utxosWritten += uint64(len(currentUTXOWrapper.UTXOs))
+		iterCount += uint64(len(currentUTXOWrapper.UTXOs))
 	}
 
 	// Write the eof marker
@@ -478,14 +482,14 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	iter.Release() // Do not defer this, want to release iterator before closing database
 
-	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), blockHash) // N.B. The 2 spaces is important for the hash to be valid
+	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), blockHash.String()+".utxo-set") // N.B. The 2 spaces is important for the hash to be valid
 	//nolint:gosec
 	if err := os.WriteFile(outFile+".sha256", []byte(hashData), 0644); err != nil {
 		return errors.NewProcessingError("Couldn't write hash file:", err)
 	}
 
 	logger.Infof("Finished with %16s transactions, %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
-
+	logger.Infof("Processed %16s keys", formatNumber(iterCount))
 	return nil
 }
 
