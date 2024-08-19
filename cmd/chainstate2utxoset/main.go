@@ -134,9 +134,9 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	bufferedWriter := bufio.NewWriter(io.MultiWriter(file, hasher))
 	defer bufferedWriter.Flush()
 
-	header, err := utxopersister.BuildUTXOSetHeaderBytes("U-S-1.0", blockHash, previousBlockHash, blockHeight)
+	header, err := utxopersister.BuildHeaderBytes("U-S-1.0", blockHash, blockHeight, previousBlockHash)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't create UTXO set header:", err)
+		return errors.NewProcessingError("Couldn't build UTXO set header:", err)
 	}
 
 	_, err = bufferedWriter.Write(header)

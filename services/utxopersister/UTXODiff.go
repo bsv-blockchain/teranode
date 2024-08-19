@@ -30,11 +30,12 @@ import (
 // - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
 // - a 32-byte hash (little endian) of the block that the data is for
 // - a 4-byte little endian height of the block
+// - for utxo-set files, a 32-byte hash (little endian) of the previous block
 
 // the footer contains at least:
 // - an EOF marker of 32 0x00 bytes
-// - the number of records in the file
-// - the number of utxos in the file (only for U-A and U-S files)
+// - the number of records in the file (uint64) - always 0 for deletions
+// - the number of utxos in the file (uint64)
 
 // For UTXO additions and the utxoset, the records are serialized UTXOs in following format:
 // - 32 bytes - txID
@@ -132,7 +133,38 @@ func GetUTXODiff(ctx context.Context, logger ulogger.Logger, store blob.Store, b
 	return ud, nil
 }
 
-func ReadHeader(reader io.Reader) (string, *chainhash.Hash, uint32, error) {
+func BuildHeaderBytes(magic string, blockHash *chainhash.Hash, blockHeight uint32, previousBlockHash ...*chainhash.Hash) ([]byte, error) {
+	// Build the file header...
+	// - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
+	// - a 32-byte hash (little endian) of the block that the data is for
+	// - a 4-byte little endian height of the block
+
+	if len(magic) > 8 {
+		return nil, errors.NewStorageError("magic number is too long")
+	}
+
+	size := 44
+	if len(previousBlockHash) > 0 {
+		size += 32
+	}
+
+	b := make([]byte, size)
+	copy(b[:8], magic)
+	copy(b[8:40], blockHash[:])
+	binary.LittleEndian.PutUint32(b[40:44], blockHeight)
+
+	if len(previousBlockHash) > 0 {
+		prev := make([]byte, 32)
+		if previousBlockHash[0] != nil {
+			copy(prev[:], previousBlockHash[0][:])
+		}
+		copy(b[44:76], prev)
+	}
+
+	return b, nil
+}
+
+func GetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint32, error) {
 	// - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
 	// - a 32-byte hash (little endian) of the block that the data is for
 	// - a 4-byte little endian height of the block
@@ -143,75 +175,43 @@ func ReadHeader(reader io.Reader) (string, *chainhash.Hash, uint32, error) {
 	}
 
 	magic := strings.TrimRight(string(b[:8]), "\x00")
-	hash, err := chainhash.NewHash(b[8:40])
+
+	blockHash, err := chainhash.NewHash(b[8:40])
 	if err != nil {
 		return "", nil, 0, errors.NewStorageError("error reading block hash", err)
 	}
-	height := binary.LittleEndian.Uint32(b[40:44])
 
-	return magic, hash, height, nil
+	blockHeight := binary.LittleEndian.Uint32(b[40:44])
+
+	return magic, blockHash, blockHeight, nil
 }
 
-func BuildHeaderBytes(magic string, blockHash *chainhash.Hash, blockHeight uint32) ([]byte, error) {
-	// Build the file header...
+func GetUTXOSetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint32, *chainhash.Hash, error) {
 	// - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
 	// - a 32-byte hash (little endian) of the block that the data is for
 	// - a 4-byte little endian height of the block
-
-	if len(magic) > 8 {
-		return nil, errors.NewStorageError("magic number is too long")
-	}
-
-	b := make([]byte, 44)
-	copy(b[:8], magic)
-	copy(b[8:40], blockHash[:])
-	binary.LittleEndian.PutUint32(b[40:44], blockHeight)
-
-	return b, nil
-}
-
-func ReadUTXOSetHeader(reader io.Reader) (string, *chainhash.Hash, *chainhash.Hash, uint32, error) {
-	// - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
-	// - a 32-byte hash (little endian) of the block that the data is for
 	// - a 32-byte hash (little endian) of the previous block
-	// - a 4-byte little endian height of the block
 	b := make([]byte, 76)
 
 	if _, err := io.ReadFull(reader, b); err != nil {
-		return "", nil, nil, 0, errors.NewStorageError("error reading header", err)
+		return "", nil, 0, nil, errors.NewStorageError("error reading header", err)
 	}
 
 	magic := strings.TrimRight(string(b[:8]), "\x00")
-	hash, err := chainhash.NewHash(b[8:40])
+
+	blockHash, err := chainhash.NewHash(b[8:40])
 	if err != nil {
-		return "", nil, nil, 0, errors.NewStorageError("error reading block hash", err)
+		return "", nil, 0, nil, errors.NewStorageError("error reading block hash", err)
 	}
-	previousHash, err := chainhash.NewHash(b[40:72])
+
+	blockHeight := binary.LittleEndian.Uint32(b[40:44])
+
+	previousBlockHash, err := chainhash.NewHash(b[44:76])
 	if err != nil {
-		return "", nil, nil, 0, errors.NewStorageError("error reading previous block hash", err)
+		return "", nil, 0, nil, errors.NewStorageError("error reading previous block hash", err)
 	}
 
-	height := binary.LittleEndian.Uint32(b[72:76])
-
-	return magic, hash, previousHash, height, nil
-}
-
-func BuildUTXOSetHeaderBytes(magic string, blockHash *chainhash.Hash, previousHash *chainhash.Hash, blockHeight uint32) ([]byte, error) {
-	// - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
-	// - a 32-byte hash (little endian) of the block that the data is for
-	// - a 32-byte hash (little endian) of the previous block
-	// - a 4-byte little endian height of the block
-
-	if len(magic) > 8 {
-		return nil, errors.NewStorageError("magic number is too long")
-	}
-
-	b := make([]byte, 44)
-	copy(b[:8], magic)
-	copy(b[8:40], blockHash[:])
-	binary.LittleEndian.PutUint32(b[40:44], blockHeight)
-
-	return b, nil
+	return magic, blockHash, blockHeight, previousBlockHash, nil
 }
 
 func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
@@ -299,8 +299,12 @@ func (ud *UTXODiff) Close() error {
 			return errors.NewStorageError("Error writing EOF marker", err)
 		}
 
-		// Write the number of deletions
+		// Write the number of transactions - always 0 for deletions
 		b := make([]byte, 8)
+		if n, err := ud.deletionsStorer.Write(b); err != nil || n != 8 {
+			return errors.NewStorageError("Error writing 0 tx count", err)
+		}
+
 		binary.LittleEndian.PutUint64(b, ud.deletionCount)
 		if n, err := ud.deletionsStorer.Write(b); err != nil || n != 8 {
 			return errors.NewStorageError("Error writing number of deletion", err)
@@ -342,7 +346,7 @@ func (ud *UTXODiff) GetUTXODeletionsReader() (io.ReadCloser, error) {
 
 func getUTXODeletionsMapFromReader(r io.Reader) (map[[32]byte][]uint32, error) {
 	// Read the header
-	magic, _, _, err := ReadHeader(r)
+	magic, _, _, err := GetHeaderFromReader(r)
 	if err != nil {
 		return nil, errors.NewStorageError("error reading header", err)
 	}
@@ -419,7 +423,7 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 	}
 	defer additionsReader.Close()
 
-	magic, _, blockHeight, err := ReadHeader(additionsReader)
+	magic, _, blockHeight, err := GetHeaderFromReader(additionsReader)
 	if err != nil {
 		return errors.NewStorageError("error reading header", err)
 	}
@@ -430,20 +434,10 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 
 	storer := filestorer.NewFileStorer(ctx, ud.logger, ud.store, ud.blockHash[:], utxosetExtension)
 
-	// Write the file header...
-	// - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
-	// - a 32-byte hash (little endian) of the block that the data is for
-	// - a 4-byte little endian height of the block
-	prev := make([]byte, 32)
-	if previousBlockHash != nil {
-		prev = previousBlockHash[:]
+	b, err := BuildHeaderBytes("U-S-1.0", &ud.blockHash, blockHeight, previousBlockHash)
+	if err != nil {
+		return errors.NewStorageError("error building utxo-set header", err)
 	}
-
-	b := make([]byte, 76)
-	copy(b[:8], "U-S-1.0")
-	copy(b[8:40], ud.blockHash[:])
-	copy(b[40:72], prev)
-	binary.LittleEndian.PutUint32(b[72:76], blockHeight)
 
 	if _, err = storer.Write(b); err != nil {
 		return errors.NewStorageError("error writing utxo-set header", err)
@@ -460,7 +454,7 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 		}
 		defer previousUTXOSetReader.Close()
 
-		magic, _, _, _, err := ReadUTXOSetHeader(previousUTXOSetReader)
+		magic, _, _, _, err := GetUTXOSetHeaderFromReader(previousUTXOSetReader)
 		if err != nil {
 			return errors.NewStorageError("error reading header", err)
 		}
