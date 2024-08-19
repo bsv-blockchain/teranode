@@ -183,7 +183,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		fmt.Printf("UTXOSet for block hash: %v\n", filename)
 
-		magic, blockHash, previousBlockHash, blockHeight, err := utxopersister.GetUTXOSetHeaderFromReader(br)
+		magic, blockHash, blockHeight, previousBlockHash, err := utxopersister.GetUTXOSetHeaderFromReader(br)
 
 		if err != nil {
 			return errors.NewProcessingError("error reading utxo-additions header", err)
@@ -191,8 +191,8 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		fmt.Printf("magic:                  %s\n", magic)
 		fmt.Printf("block hash:             %s\n", blockHash)
-		fmt.Printf("previous block hash:    %s\n", previousBlockHash)
 		fmt.Printf("block height:           %d\n", blockHeight)
+		fmt.Printf("previous block hash:    %s\n", previousBlockHash)
 		fmt.Println()
 
 		if verbose {
@@ -488,8 +488,8 @@ func printFooter(r io.Reader) error {
 	txCount := binary.LittleEndian.Uint64(b[32:40])
 	utxoCount := binary.LittleEndian.Uint64(b[40:48])
 
-	fmt.Printf("record count: %15s\n", formatNumber(txCount))
-	fmt.Printf("utxo count:   %15s\n", formatNumber(utxoCount))
+	fmt.Printf("record count: %16s\n", formatNumber(txCount))
+	fmt.Printf("utxo count:   %16s\n", formatNumber(utxoCount))
 
 	return nil
 }
