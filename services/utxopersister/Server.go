@@ -3,10 +3,11 @@ package utxopersister
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -98,7 +99,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	duration := 1 * time.Minute
 	if s.blockchainClient == nil {
-		// We do not have a sbuscription, so we need to poll the blockchain more frequently
+		// We do not have a subscription, so we need to poll the blockchain more frequently
 		duration = 10 * time.Second
 	}
 

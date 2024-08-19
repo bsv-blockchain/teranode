@@ -35,6 +35,8 @@ var old bool
 func Start() {
 	logger := ulogger.TestLogger{}
 
+	fmt.Println()
+
 	// Define command line arguments
 	flag.BoolVar(&verbose, "verbose", false, "verbose output")
 	flag.BoolVar(&verify, "verify", false, "verify all stored data")
@@ -180,8 +182,20 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		fmt.Printf("UTXOSet for block hash: %v\n", filename)
 
+		magic, blockHash, previousBlockHash, blockHeight, err := utxopersister.ReadUTXOSetHeader(r)
+
+		if err != nil {
+			return errors.NewProcessingError("error reading utxo-additions header", err)
+		}
+
+		fmt.Printf("magic:                  %s\n", magic)
+		fmt.Printf("block hash:             %s\n", blockHash)
+		fmt.Printf("previous block hash:    %s\n", previousBlockHash)
+		fmt.Printf("block height:           %d\n", blockHeight)
+		fmt.Println()
+
 		for {
-			ud, err := utxopersister.NewUTXOFromReader(r)
+			ud, err := utxopersister.NewUTXOWrapperFromReader(r)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break
@@ -193,20 +207,35 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				fmt.Printf("%v\n", ud)
 			}
 
-			count++
+			count += len(ud.UTXOs)
 		}
 
-		fmt.Printf("\tset contains %d UTXOs\n\n", count)
+		fmt.Printf("\tset contains %d UTXO(s)\n\n", count)
 
 	case "utxo-additions":
 		var count int
 
 		fmt.Printf("UTXOAdditions for block hash: %v\n", filename)
 
+		magic, blockHash, blockHeight, err := utxopersister.ReadHeader(r)
+		if err != nil {
+			return errors.NewProcessingError("error reading utxo-additions header", err)
+		}
+
+		fmt.Printf("magic:                        %s\n", magic)
+		fmt.Printf("block hash:                   %s\n", blockHash)
+		fmt.Printf("block height:                 %d\n", blockHeight)
+		fmt.Println()
+
 		for {
-			ud, err := utxopersister.NewUTXOFromReader(r)
+			ud, err := utxopersister.NewUTXOWrapperFromReader(r)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
+					if ud == nil {
+						fmt.Printf("ERROR: EOF marker not found\n")
+					} else {
+						fmt.Printf("EOF marker found\n")
+					}
 					break
 				}
 				return errors.NewProcessingError("error reading utxo-additions", err)
@@ -216,20 +245,36 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				fmt.Printf("%v\n", ud)
 			}
 
-			count++
+			count += len(ud.UTXOs)
 		}
 
-		fmt.Printf("\tadded	 %d UTXOs\n\n", count)
+		fmt.Printf("\tadded	 %d UTXO(s)\n\n", count)
 
 	case "utxo-deletions":
 		var count int
 
 		fmt.Printf("UTXODeletions for block hash: %v\n", filename)
 
+		magic, blockHash, blockHeight, err := utxopersister.ReadHeader(r)
+
+		if err != nil {
+			return errors.NewProcessingError("error reading utxo-deletions header", err)
+		}
+
+		fmt.Printf("magic:                        %s\n", magic)
+		fmt.Printf("block hash:                   %s\n", blockHash)
+		fmt.Printf("block height:                 %d\n", blockHeight)
+		fmt.Println()
+
 		for {
 			ud, err := utxopersister.NewUTXODeletionFromReader(r)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
+					if ud == nil {
+						fmt.Printf("ERROR: EOF marker not found\n")
+					} else {
+						fmt.Printf("EOF marker found\n")
+					}
 					break
 				}
 				return errors.NewProcessingError("error reading utxo-deletions", err)
@@ -242,7 +287,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 			count++
 		}
 
-		fmt.Printf("\tremoved %d UTXOs\n\n", count)
+		fmt.Printf("\tremoved %d UTXO(s)\n\n", count)
 
 	case "utxoset":
 		utxoSet, err := model.NewUTXOSetFromReader(logger, r)

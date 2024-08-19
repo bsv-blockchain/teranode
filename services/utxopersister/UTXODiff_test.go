@@ -2,17 +2,25 @@ package utxopersister
 
 import (
 	"context"
-	"io"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	// TX has 1 input and 10 outputs
+	txid  = "9797ceee1543d53db03f5cedc877f638119cddb6f2f469af70504d1e1ccecebd"
+	tx, _ = bt.NewTxFromString("010000000000000000ef01c0f6beed3f280acac9e3268b3a4b6cecac6160f84f750fdd2f8eac06284d960a000000006a47304402206b2782cc5b4a1d68d34f36df0241964bbc23eca0d2d8d698407429541993b063022016954b628894df8f6295097403148c3d7ae84097b538ab3c46cba2727f6deafd4121030ca32438b798eda7d8a818f108340a85bf77fefe24850979ac5dd7e15000ee1affffffff80746802000000001976a914f13bf914962276da063784e9e8b7ecbd59b20bf888ac0a002d3101000000001976a914954dede73fba730977b8630e3f7c93024b33795f88ac404b4c00000000001976a914e429e73ad33123c1a7248f660a162f0098fb819988ac80841e00000000001976a914df7974fdbb7890e0a608f923ef59112c475c078688ac80841e00000000001976a91422f9476db77bcad3998a9d4f96dbcaa2c9ef507288aca0860100000000001976a9143729fa58808bf6db6bf69e15adc96e0f20c26e6a88ac50c30000000000001976a91417accfc5f92836427c14299c51abbdbaedb791ce88ac204e0000000000001976a91462a4e3fab0ef92f1c130681aa657f8c858b59def88ac10270000000000001976a9149928c96c401b326f93043ce1434680ac502f487b88aca00a0000000000001976a9146ed6d5942deab79b654c1b31b86c3e62a7b5e61c88ac1528ab00000000001976a914239bae4bd2abf49a0a493b962cc0c027936b1b4788ac00000000")
+)
+
 func TestNewUTXODiff(t *testing.T) {
+	assert.Equal(t, txid, tx.TxIDChainHash().String())
+
 	// Create a random 32 byte slice
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 
@@ -24,59 +32,52 @@ func TestNewUTXODiff(t *testing.T) {
 	ud, err := NewUTXODiff(ctx, ulogger.TestLogger{}, store, &hash, 0)
 	require.NoError(t, err)
 
-	script := []byte{0x00, 0x01, 0x02, 0x03, 0x04}
+	ud.blockHeight = 10
 
-	// Add some UTXOs
-	for i := uint32(0); i < 5; i++ {
-		err = ud.add(&UTXO{&hash, i, uint64(1000 + i), 10 + i, script, false})
-		require.NoError(t, err)
-	}
+	err = ud.ProcessTx(tx)
+	require.NoError(t, err)
+
+	assert.Equal(t, uint64(1), ud.txCount)
+	assert.Equal(t, uint64(10), ud.utxoCount)
+	assert.Equal(t, uint64(1), ud.deletionCount)
 
 	// Remove some UTXOs
-	for i := uint32(3); i < 8; i++ {
-		err = ud.delete(&UTXODeletion{&hash, i})
+	for i := uint32(5); i < 10; i++ {
+		err = ud.delete(&UTXODeletion{tx.TxIDChainHash(), i})
 		require.NoError(t, err)
 	}
+	assert.Equal(t, uint64(6), ud.deletionCount)
 
 	err = ud.Close()
 	require.NoError(t, err)
 
-	d, err := ud.GetUTXODeletionsSet()
+	d, err := ud.GetUTXODeletionsMap()
 	require.NoError(t, err)
 
-	assert.Equal(t, 5, len(d))
+	assert.Equal(t, 2, len(d))
 
-	// Lookup the first utxo
-	var b2 [36]byte
-	copy(b2[:], hash[:])
-	copy(b2[32:], []byte{0x03, 0x00, 0x00, 0x00})
-
-	_, found := d[b2]
+	utxos, found := d[*tx.TxIDChainHash()]
 	assert.True(t, found)
+	assert.Equal(t, 5, len(utxos))
 
 	r, err := ud.GetUTXOAdditionsReader()
 	require.NoError(t, err)
 
 	defer r.Close()
 
-	var i uint32
+	// Read the txID
+	utxoWrapper, err := NewUTXOWrapperFromReader(r)
+	require.NoError(t, err)
 
-	for {
-		// Read the txID
-		utxo, err := NewUTXOFromReader(r)
-		if err == io.EOF {
-			break
-		}
+	assert.Equal(t, tx.TxIDChainHash().String(), utxoWrapper.TxID.String())
+	assert.Equal(t, uint32(10), utxoWrapper.Height)
+	assert.Len(t, utxoWrapper.UTXOs, 10)
 
-		require.NoError(t, err)
-		assert.Equal(t, &hash, utxo.TxID)
-		assert.Equal(t, i, utxo.Index)
-		assert.Equal(t, uint64(1000+i), utxo.Value)
-		assert.Equal(t, uint32(10+i), utxo.Height)
-		assert.Equal(t, script, utxo.Script)
-
-		i++
+	for i, utxo := range utxoWrapper.UTXOs {
+		assert.Equal(t, uint32(i), utxo.Index)
+		assert.Equal(t, tx.Outputs[i].Satoshis, utxo.Value)
+		assert.True(t, tx.Outputs[i].LockingScript.EqualsBytes(utxo.Script))
 	}
 
-	assert.Equal(t, uint32(5), i)
+	// assert.Equal(t, uint32(5), i)
 }

@@ -28,55 +28,63 @@ func TestBits(t *testing.T) {
 func TestBytesNormalTX(t *testing.T) {
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 
-	u := &UTXO{
+	uw := &UTXOWrapper{
 		TxID:     &hash,
-		Index:    12345,
-		Value:    1234567890,
 		Height:   12345,
-		Script:   []byte{0x00, 0x01, 0x02, 0x03, 0x04},
 		Coinbase: false,
+		UTXOs: []*UTXO{
+			{
+				Index:  12345,
+				Value:  1234567890,
+				Script: []byte{0x00, 0x01, 0x02, 0x03, 0x04},
+			},
+		},
 	}
 
-	b := u.Bytes()
+	b := uw.Bytes()
 	// t.Logf("b: %x", b)
 
-	assert.Len(t, b, 32+4+8+4+4+len(u.Script))
+	assert.Len(t, b, 32+4+4+4+8+4+5)
 
-	u2, err := NewUTXOFromBytes(b)
+	uw2, err := NewUTXOWrapperFromBytes(b)
 	assert.NoError(t, err)
 
-	assert.Equal(t, u.TxID, u2.TxID)
-	assert.Equal(t, u.Index, u2.Index)
-	assert.Equal(t, u.Value, u2.Value)
-	assert.Equal(t, u.Height, u2.Height)
-	assert.Equal(t, u.Script, u2.Script)
-	assert.Equal(t, u.Coinbase, u2.Coinbase)
+	assert.Equal(t, uw.TxID, uw2.TxID)
+	assert.Equal(t, uw.Height, uw2.Height)
+	assert.Equal(t, uw.Coinbase, uw2.Coinbase)
+	assert.Equal(t, uw.UTXOs[0].Index, uw2.UTXOs[0].Index)
+	assert.Equal(t, uw.UTXOs[0].Value, uw2.UTXOs[0].Value)
+	assert.Equal(t, uw.UTXOs[0].Script, uw2.UTXOs[0].Script)
 }
 
 func TestBytesCoinbaseTX(t *testing.T) {
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 
-	u := &UTXO{
+	uw := &UTXOWrapper{
 		TxID:     &hash,
-		Index:    12345,
-		Value:    1234567890,
 		Height:   12345,
-		Script:   []byte{0x00, 0x01, 0x02, 0x03, 0x04},
 		Coinbase: true,
+		UTXOs: []*UTXO{
+			{
+				Index:  12345,
+				Value:  1234567890,
+				Script: []byte{0x00, 0x01, 0x02, 0x03, 0x04},
+			},
+		},
 	}
 
-	b := u.Bytes()
+	b := uw.Bytes()
 	// t.Logf("b: %x", b)
 
-	assert.Len(t, b, 32+4+8+4+4+len(u.Script))
+	assert.Len(t, b, 32+4+4+4+8+4+5)
 
-	u2, err := NewUTXOFromBytes(b)
+	u2, err := NewUTXOWrapperFromBytes(b)
 	assert.NoError(t, err)
 
-	assert.Equal(t, u.TxID, u2.TxID)
-	assert.Equal(t, u.Index, u2.Index)
-	assert.Equal(t, u.Value, u2.Value)
-	assert.Equal(t, u.Height, u2.Height)
-	assert.Equal(t, u.Script, u2.Script)
-	assert.Equal(t, u.Coinbase, u2.Coinbase)
+	assert.Equal(t, uw.TxID, u2.TxID)
+	assert.Equal(t, uw.Height, u2.Height)
+	assert.Equal(t, uw.Coinbase, u2.Coinbase)
+	assert.Equal(t, uw.UTXOs[0].Index, u2.UTXOs[0].Index)
+	assert.Equal(t, uw.UTXOs[0].Value, u2.UTXOs[0].Value)
+	assert.Equal(t, uw.UTXOs[0].Script, u2.UTXOs[0].Script)
 }
