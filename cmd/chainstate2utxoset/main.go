@@ -482,6 +482,10 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	iter.Release() // Do not defer this, want to release iterator before closing database
 
+	if err := bufferedWriter.Flush(); err != nil {
+		return errors.NewProcessingError("Couldn't flush buffer:", err)
+	}
+
 	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), blockHash.String()+".utxo-set") // N.B. The 2 spaces is important for the hash to be valid
 	//nolint:gosec
 	if err := os.WriteFile(outFile+".sha256", []byte(hashData), 0644); err != nil {
