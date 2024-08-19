@@ -479,7 +479,7 @@ func printFooter(r io.Reader) error {
 		return errors.NewProcessingError("error reading EOF marker", err)
 	}
 
-	if bytes.Compare(b[0:32], utxopersister.EOFMarker) != 0 {
+	if bytes.Equal(b[0:32], utxopersister.EOFMarker) {
 		return errors.NewProcessingError("EOF marker not found")
 	}
 
