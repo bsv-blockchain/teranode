@@ -174,13 +174,13 @@ const (
 	// MainNet represents the main bitcoin network.
 	MainNet BitcoinNet = 0xe8f3e1e3
 
-	// TestNet represents the regression test network.
+	// TestNet represents the regression test network. No longer in use
 	TestNet BitcoinNet = 0xfabfb5da
 
-	// TestNet3 represents the test network (version 3).
+	// TestNet3 represents the test network (version 3). This is the SVNode testnet
 	TestNet3 BitcoinNet = 0xf4f3e5f4
 
-	// SimNet represents the simulation test network.
+	// SimNet represents the simulation test network. No longer in use, this is NOT STN
 	SimNet BitcoinNet = 0x12141c16
 )
 
