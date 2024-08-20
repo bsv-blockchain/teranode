@@ -54,11 +54,10 @@ func Start() {
 		os.Exit(0)
 	}
 
-	if len(flag.Args()) != 1 {
-		usage("filename or hash required")
+	var path string // If no path is provided, read from stdin
+	if len(flag.Args()) == 1 {
+		path = flag.Arg(0)
 	}
-
-	path := flag.Arg(0)
 
 	// Wrap the reader with a buffered reader
 	// read the transaction count
