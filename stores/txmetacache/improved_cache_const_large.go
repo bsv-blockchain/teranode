@@ -1,4 +1,4 @@
-//go:build largetxmetacache
+//go:build !smalltxmetacache && !testtxmetacache
 
 package txmetacache
 
