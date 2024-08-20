@@ -1,22 +1,21 @@
-////go:build e2eTest
+//go:build tnjtests
 
 // How to run this test:
 // $ unzip data.zip
 // $ cd test/functional/
 // $ `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowFairTx`
 
-package test
+package tnj
 
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
+	setup "github.com/bitcoin-sv/ubsv/test/setup"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -28,11 +27,12 @@ import (
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
 )
 
-var (
-	framework *tf.BitcoinTestFramework
-)
+type TNJLockTimeTestSuite struct {
+	setup.BitcoinTestSuite
+}
 
 func getFutureLockTime(daysAhead int) uint32 {
     now := time.Now()
@@ -40,36 +40,13 @@ func getFutureLockTime(daysAhead int) uint32 {
     return uint32(futureTime.Unix())
 }
 
-func TestMain(m *testing.M) {
-	setupBitcoinTestFramework()
-	exitCode := m.Run()
-	tearDownBitcoinTestFramework()
-	defer os.Exit(exitCode)
-}
-
-func setupBitcoinTestFramework() {
-	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
-	// framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.e2etest.override.yml"})
-	m := map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc1",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tc1",
-	}
-	if err := framework.SetupNodes(m); err != nil {
-		fmt.Printf("Error setting up nodes: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func tearDownBitcoinTestFramework() {
-	if err := framework.StopNodesWithRmVolume(); err != nil {
-		fmt.Printf("Error stopping nodes: %v\n", err)
-	}
-}
-
-func TestLocktimeFutureHeight(t *testing.T) {
+func (suite *TNJLockTimeTestSuite) TestLocktimeFutureHeight() {
+	t := suite.T()
+	framework := suite.Framework
 	ctx := context.Background()
 	url := "http://localhost:18090"
+
+	helper.GetBestBlock(ctx, framework.Nodes[0])
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
@@ -139,7 +116,6 @@ func TestLocktimeFutureHeight(t *testing.T) {
 	}
 
 	_, err = txDistributor.SendTransaction(ctx, newTx)
-	// require.Error(t, err)
 	if err != nil {
 		t.Errorf("Failed to send new transaction: %v", err)
 	}
@@ -209,12 +185,13 @@ func TestLocktimeFutureHeight(t *testing.T) {
 			assert.Equal(t, true, bl, "Test Tx was not expected to be found in the block")
 		}
 	}
-
 }
 
-func TestLocktimeFutureTimeStamp(t *testing.T) {
+func (suite *TNJLockTimeTestSuite) TestLocktimeFutureTimeStamp() {
 	ctx := context.Background()
 	url := "http://localhost:18090"
+	t := suite.T()
+	framework := suite.Framework
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
@@ -355,4 +332,8 @@ func TestLocktimeFutureTimeStamp(t *testing.T) {
 		}
 	}
 
+}
+
+func TestTNJLockTimeTestSuite(t *testing.T) {
+	suite.Run(t, new(TNJLockTimeTestSuite))
 }

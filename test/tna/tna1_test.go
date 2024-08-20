@@ -1,60 +1,46 @@
+//go:build tnatests
+
 package tna
 
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
+
 	"github.com/bitcoin-sv/ubsv/model"
-	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
+	"github.com/bitcoin-sv/ubsv/test/setup"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-var (
-	framework *tf.BitcoinTestFramework
-)
-
-//func newTx(lockTime uint32) *bt.Tx {
-//	tx := bt.NewTx()
-//	tx.LockTime = lockTime
-//	return tx
-//}
-
-func TestMain(m *testing.M) {
-	setupBitcoinTestFramework()
-	exitCode := m.Run()
-	tearDownBitcoinTestFramework()
-	defer os.Exit(exitCode)
+type TNA1TestSuite struct {
+	setup.BitcoinTestSuite
 }
 
-func setupBitcoinTestFramework() {
-	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
-	m := map[string]string{
+func (suite *TNA1TestSuite) InitSuite() {
+	suite.SettingsMap = map[string]string{
 		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tna1Test",
 		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tna1Test",
 		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tna1Test",
 	}
-	if err := framework.SetupNodes(m); err != nil {
-		fmt.Printf("Error setting up nodes: %v\n", err)
-		os.Exit(1)
-	}
 }
 
-func tearDownBitcoinTestFramework() {
-	if err := framework.StopNodes(); err != nil {
-		fmt.Printf("Error stopping nodes: %v\n", err)
-	}
-	_ = os.RemoveAll("../../data")
+func (suite *TNA1TestSuite) SetupTest() {
+	suite.InitSuite()
+	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
 }
 
-func TestBroadcastNewTxAllNodes(t *testing.T) {
+func (suite *TNA1TestSuite) TestBroadcastNewTxAllNodes() {
 	// Test setup
 	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
 	blockchainClientNode0 := framework.Nodes[0].BlockchainClient
 	var hashes []*chainhash.Hash
 	var found int
@@ -128,4 +114,8 @@ func TestBroadcastNewTxAllNodes(t *testing.T) {
 	if found == 0 {
 		t.Errorf("Test failed, no subtree found")
 	}
+}
+
+func TestTNA1TestSuite(t *testing.T) {
+	suite.Run(t, new(TNA1TestSuite))
 }

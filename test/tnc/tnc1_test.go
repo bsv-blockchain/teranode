@@ -1,14 +1,17 @@
+//go:build tnctests
+
 package tnc
 
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
-	"os"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
+
 	"github.com/bitcoin-sv/ubsv/model"
-	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
+	"github.com/bitcoin-sv/ubsv/test/setup"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -16,59 +19,27 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-var (
-	framework *tf.BitcoinTestFramework
-)
-
-//func newTx(lockTime uint32) *bt.Tx {
-//	tx := bt.NewTx()
-//	tx.LockTime = lockTime
-//	return tx
-//}
-
-func TestMain(m *testing.M) {
-	setupBitcoinTestFramework()
-	exitCode := m.Run()
-	tearDownBitcoinTestFramework()
-	defer os.Exit(exitCode)
+type TNC1TestSuite struct {
+	setup.BitcoinTestSuite
 }
 
-func setupBitcoinTestFramework() {
-	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
-	m := map[string]string{
+func (suite *TNC1TestSuite) InitSuite() {
+	suite.SettingsMap = map[string]string{
 		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tnc1Test",
 		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tnc1Test",
 		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tnc1Test",
 	}
-	if err := framework.SetupNodes(m); err != nil {
-		fmt.Printf("Error setting up nodes: %v\n", err)
-		os.Exit(1)
-	}
 }
 
-func tearDownBitcoinTestFramework() {
-	if err := framework.StopNodes(); err != nil {
-		fmt.Printf("Error stopping nodes: %v\n", err)
-	}
-	_ = os.RemoveAll("../../data")
+func (suite *TNC1TestSuite) SetupTest() {
+	suite.InitSuite()
+	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
 }
 
-// func TestCalcMerkleRootAllTxs(t *testing.T) {
-// 	ctx := context.Background()
-// 	ba0 := framework.Nodes[0].BlockassemblyClient
-// 	mc0, _ := ba0.GetMiningCandidate(ctx)
-// 	mc0.
-// 		ba1 := framework.Nodes[1].BlockassemblyClient
-// 	mc1, _ := ba1.GetMiningCandidate(ctx)
-// 	mp1 := mc1.MerkleProof
-// 	ba2 := framework.Nodes[2].BlockassemblyClient
-// 	mc2, _ := ba2.GetMiningCandidate(ctx)
-// 	mp2 := mc2.MerkleProof
-
-// }
-
-func TestCandidateContainsAllTxs(t *testing.T) {
+func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
 	node0 := framework.Nodes[0]
 	blockchainClientNode0 := node0.BlockchainClient
 	var hashes []*chainhash.Hash
@@ -143,9 +114,11 @@ func TestCandidateContainsAllTxs(t *testing.T) {
 
 }
 
-func TestCheckHashPrevBlockCandidate(t *testing.T) {
+func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
 	ctx := context.Background()
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	t := suite.T()
+	framework := suite.Framework
 	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
 	ba := framework.Nodes[0].BlockassemblyClient
 	bc := framework.Nodes[0].BlockchainClient
@@ -186,8 +159,10 @@ func TestCheckHashPrevBlockCandidate(t *testing.T) {
 	}
 }
 
-func TestCoinbaseTXAmount(t *testing.T) {
+func (suite *TNC1TestSuite) TestCoinbaseTXAmount() {
 	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
@@ -220,8 +195,10 @@ func TestCoinbaseTXAmount(t *testing.T) {
 	}
 }
 
-func TestCoinbaseTXAmount2(t *testing.T) {
+func (suite *TNC1TestSuite) TestCoinbaseTXAmount2() {
 	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
 
 	ba := framework.Nodes[0].BlockassemblyClient
 
@@ -249,12 +226,6 @@ func TestCoinbaseTXAmount2(t *testing.T) {
 	logger.Infof("Header of the best block %v", block.Header.String())
 	logger.Infof("Lenght of subtree slices %d", len(block.SubtreeSlices))
 
-	// for _, subtree := range block.SubtreeSlices {
-	// 	for _, node := range subtree.Nodes {
-	// 		fmt.Printf("Fees inside the subtrees: %d", node.Fee)
-	// 	}
-	// }
-
 	coinbaseTX := block.CoinbaseTx
 	amount := coinbaseTX.TotalOutputSatoshis()
 	logger.Infof("Amount inside block coinbase tx: %d\n", amount)
@@ -263,4 +234,8 @@ func TestCoinbaseTXAmount2(t *testing.T) {
 	if coinbaseValueBlock < amount {
 		t.Errorf("Error calculating fees")
 	}
+}
+
+func TestTNC1TestSuite(t *testing.T) {
+	suite.Run(t, new(TNC1TestSuite))
 }

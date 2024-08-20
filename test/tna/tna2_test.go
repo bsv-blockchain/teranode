@@ -1,3 +1,5 @@
+//go:build tnatests
+
 package tna
 
 import (
@@ -6,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/test/setup"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
@@ -14,11 +17,30 @@ import (
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
+	"github.com/stretchr/testify/suite"
 )
 
-func TestTxsReceivedAllNodes(t *testing.T) {
-	ctx := context.Background()
+type TNA2TestSuite struct {
+	setup.BitcoinTestSuite
+}
 
+func (suite *TNA2TestSuite) InitSuite() {
+	suite.SettingsMap = map[string]string{
+		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tna1Test",
+	}
+}
+
+func (suite *TNA2TestSuite) SetupTest() {
+	suite.InitSuite()
+	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
+}
+
+func (suite *TNA2TestSuite) TestTxsReceivedAllNodes() {
+	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
 
@@ -112,4 +134,8 @@ func TestTxsReceivedAllNodes(t *testing.T) {
 	if errTx2 != nil {
 		t.Errorf("Error Tx2 not present: %v", errTx2)
 	}
+}
+
+func TestTNA2TestSuite(t *testing.T) {
+	suite.Run(t, new(TNA2TestSuite))
 }
