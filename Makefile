@@ -18,7 +18,7 @@ ifeq ($(RACE),true)
 endif
 
 .PHONY: set_txmetacache_flag
-set_meta_flag:
+set_txmetacache_flag:
 ifeq ($(TXMETA_SMALL_TAG),true)
 	$(eval TXMETA_TAG = "smalltxmetacache")
 else ifeq ($(TXMETA_TEST_TAG),true)
