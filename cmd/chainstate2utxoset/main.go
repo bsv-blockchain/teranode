@@ -199,13 +199,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			//  type                          txid (little-endian)                      index (varint)
 
 			// txid
-			txidLE := key[1:33] // little-endian byte order
-
-			// txid - reverse byte order
-			txid := make([]byte, 0)                 // create empty byte slice (dont want to mess with txid directly)
-			for i := len(txidLE) - 1; i >= 0; i-- { // run backwards through the txid slice
-				txid = append(txid, txidLE[i]) // append each byte to the new byte slice
-			}
+			txid := key[1:33] // little-endian byte order
 
 			// vout
 			index := key[33:]
@@ -497,7 +491,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 		return errors.NewProcessingError("Couldn't write hash file:", err)
 	}
 
-	logger.Infof("FINISHED %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
+	logger.Infof("FINISHED  %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 	logger.Infof("Processed                                                            %16s utxos", formatNumber(utxosWritten2))
 	logger.Infof("Processed                                                            %16s keys", formatNumber(iterCount))
 	return nil
