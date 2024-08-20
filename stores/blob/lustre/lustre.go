@@ -32,6 +32,14 @@ type Lustre struct {
 	s3Client      s3Store
 }
 
+/**
+* Primary usage to share files between services running in a node.
+* Secondary usage to store artefacts in production.
+* Used as subtree store (subtree validation), block store (block persister).
+* No background TTL cleanup as per File store
+* The only way to expire a file is by calling SetTTL explicitly with TTL = 0
+* Has 3 layers, files in primary path, files in 'S3 persist' path and S3
+ */
 func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, opts ...options.Options) (*Lustre, error) {
 	logger = logger.New("lustre")
 

@@ -27,6 +27,11 @@ type File struct {
 	// mu     sync.RWMutex
 }
 
+/*
+* Used for dev environments as replacement for lustre.
+* Has background jobs to clean up TTL.
+* Able to specify multiple folders - files will be spread across folders based on key/hash/filename supplied.
+ */
 func New(logger ulogger.Logger, paths []string, opts ...options.Options) (*File, error) {
 	logger = logger.New("file")
 

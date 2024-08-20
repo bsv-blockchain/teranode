@@ -42,6 +42,12 @@ var (
 	cache = expiringmap.New[string, []byte](1 * time.Minute)
 )
 
+/**
+* Used in Lustre store to retrieve old files.
+* Used in Aerospike store for large transactions in production.
+* TTL managed by S3.
+* SetTTL is not implemented meaning you cannot manually expire a file.
+ */
 func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, error) {
 	logger = logger.New("s3")
 
