@@ -33,6 +33,10 @@ type File struct {
 * Able to specify multiple folders - files will be spread across folders based on key/hash/filename supplied.
  */
 func New(logger ulogger.Logger, paths []string, opts ...options.Options) (*File, error) {
+	return new(logger, paths, 1*time.Minute, opts...)
+}
+
+func new(logger ulogger.Logger, paths []string, ttlCleanerInterval time.Duration, opts ...options.Options) (*File, error) {
 	logger = logger.New("file")
 
 	// create the directories if they don't exist
@@ -49,7 +53,7 @@ func New(logger ulogger.Logger, paths []string, opts ...options.Options) (*File,
 	}
 
 	if options.SubDirectory != "" {
-		logger.Warnf("[File] subdirectory option will be ignored (only supported in S3 store)")
+		os.MkdirAll(filepath.Join(paths[0], options.SubDirectory), 0755)
 	}
 
 	fileStore := &File{
@@ -60,19 +64,23 @@ func New(logger ulogger.Logger, paths []string, opts ...options.Options) (*File,
 		fileTTLsCtx: context.Background(),
 	}
 
-	err := fileStore.loadTTLs()
+	fileTTLs, err := fileStore.loadTTLs()
 	if err != nil {
-		return nil, errors.NewStorageError("[File] failed to load ttls", err)
+		fileStore.logger.Warnf("[File] failed to load ttls: %v", err)
 	}
 
-	go fileStore.ttlCleaner(fileStore.fileTTLsCtx)
+	fileStore.fileTTLs = fileTTLs
+
+	go fileStore.ttlCleaner(fileStore.fileTTLsCtx, ttlCleanerInterval)
 
 	return fileStore, nil
 }
 
-func (s *File) loadTTLs() error {
+func (s *File) loadTTLs() (map[string]time.Time, error) {
 	s.fileTTLsMu.Lock()
 	defer s.fileTTLsMu.Unlock()
+
+	fileTTLs := make(map[string]time.Time)
 
 	for _, path := range s.paths {
 		s.logger.Infof("[File] Loading file TTLs: %s", path)
@@ -80,7 +88,7 @@ func (s *File) loadTTLs() error {
 		// get all files in the directory that end with .ttl
 		files, err := findFilesByExtension(path, ".ttl")
 		if err != nil {
-			return errors.NewStorageError("[File] failed to find ttl files", err)
+			return nil, errors.NewStorageError("[File] failed to find ttl files", err)
 		}
 
 		var ttlBytes []byte
@@ -93,7 +101,7 @@ func (s *File) loadTTLs() error {
 			// read the ttl
 			ttlBytes, err = os.ReadFile(fileName)
 			if err != nil {
-				return errors.NewStorageError("[File] failed to read ttl file", err)
+				return nil, errors.NewStorageError("[File] failed to read ttl file", err)
 			}
 
 			ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
@@ -102,21 +110,19 @@ func (s *File) loadTTLs() error {
 				continue
 			}
 
-			s.fileTTLs[fileName[:len(fileName)-4]] = ttl
+			fileTTLs[fileName[:len(fileName)-4]] = ttl
 		}
 	}
 
-	return nil
+	return fileTTLs, nil
 }
 
-func (s *File) ttlCleaner(ctx context.Context) {
+func (s *File) ttlCleaner(ctx context.Context, interval time.Duration) {
 	for {
-		time.Sleep(1 * time.Minute)
-
 		select {
 		case <-ctx.Done():
 			return
-		default:
+		case <-time.After(interval):
 			s.logger.Debugf("[File] Cleaning file TTLs")
 
 			s.fileTTLsMu.Lock()
