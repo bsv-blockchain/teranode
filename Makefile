@@ -107,7 +107,7 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 
 .PHONY: test
-test: set_race_flag set_meta_flag
+test: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
 	SETTINGS_CONTEXT=test go test -json -tags "testtxmetacache" $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
@@ -116,7 +116,7 @@ else
 endif
 
 .PHONY: longtests
-longtests: set_race_flag set_meta_flag
+longtests: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
 	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
@@ -125,7 +125,7 @@ else
 endif
 
 .PHONY: verylongtests
-verylongtests: set_race_flag set_meta_flag
+verylongtests: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
 	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -json -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
