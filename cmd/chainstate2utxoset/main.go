@@ -166,6 +166,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	var txWritten uint64
 	var utxosWritten uint64
+	var utxosWritten2 uint64
 	var utxosSkipped uint64
 	var iterCount uint64
 
@@ -437,6 +438,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					Value:  uint64(amount),
 					Script: script,
 				})
+				utxosWritten2++
 
 			default:
 				fmt.Printf("ERROR: Unknown script type: %v\n", scriptType)
@@ -493,8 +495,9 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 		return errors.NewProcessingError("Couldn't write hash file:", err)
 	}
 
-	logger.Infof("Finished with %16s transactions, %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
-	logger.Infof("Processed                        %16s keys", formatNumber(iterCount))
+	logger.Infof("FINISHED %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
+	logger.Infof("Processed                                                            %16s utxos", formatNumber(utxosWritten2))
+	logger.Infof("Processed                                                            %16s keys", formatNumber(iterCount))
 	return nil
 }
 
