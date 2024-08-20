@@ -4,8 +4,10 @@ import (
 	"encoding/hex"
 	"strings"
 
+	"github.com/bitcoin-sv/go-sdk/script"
+	interpreter_sdk "github.com/bitcoin-sv/go-sdk/script/interpreter"
+	"github.com/bitcoin-sv/go-sdk/transaction"
 	"github.com/bitcoin-sv/ubsv/errors"
-
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -99,7 +101,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	}
 
 	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	if err := tv.checkScripts(tx, blockHeight); err != nil {
+	if err := tv.checkScriptsWithSDK(tx, blockHeight); err != nil {
 		return err
 	}
 
@@ -289,4 +291,68 @@ func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
 	}
 
 	return nil
+}
+
+func (tv *TxValidator) checkScriptsWithSDK(tx *bt.Tx, blockHeight uint32) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewTxInvalidError("script execution failed: %v", r)
+		}
+	}()
+
+	sdkTx := GoBt2GoSDKTransaction(tx)
+	//sdkTx, _ := transaction.NewTransactionFromBytes(tx.Bytes())
+
+	for i, in := range tx.Inputs {
+		prevOutput := &transaction.TransactionOutput{
+			Satoshis:      in.PreviousTxSatoshis,
+			LockingScript: (*script.Script)(in.PreviousTxScript),
+		}
+
+		opts := make([]interpreter_sdk.ExecutionOptionFunc, 0, 3)
+		opts = append(opts, interpreter_sdk.WithTx(sdkTx, i, prevOutput))
+
+		if blockHeight >= util.ForkIDActivationHeight {
+			opts = append(opts, interpreter_sdk.WithForkID())
+		}
+
+		if blockHeight >= util.GenesisActivationHeight {
+			opts = append(opts, interpreter_sdk.WithAfterGenesis())
+		}
+
+		// opts = append(opts, interpreter.WithDebugger(&LogDebugger{}),
+
+		if err = interpreter_sdk.NewEngine().Execute(opts...); err != nil {
+			return errors.NewTxInvalidError("script execution error: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func GoBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
+	sdkTx := &transaction.Transaction{
+		Version:  tx.Version,
+		LockTime: tx.LockTime,
+	}
+
+	sdkTx.Inputs = make([]*transaction.TransactionInput, len(tx.Inputs))
+	for i, in := range tx.Inputs {
+		sdkTx.Inputs[i] = &transaction.TransactionInput{
+			SourceTXID:       bt.ReverseBytes(in.PreviousTxID()), // WTF
+			SourceTxOutIndex: in.PreviousTxOutIndex,
+			UnlockingScript:  (*script.Script)(in.UnlockingScript),
+			SequenceNumber:   in.SequenceNumber,
+		}
+	}
+
+	sdkTx.Outputs = make([]*transaction.TransactionOutput, len(tx.Outputs))
+	for i, out := range tx.Outputs {
+		sdkTx.Outputs[i] = &transaction.TransactionOutput{
+			Satoshis:      out.Satoshis,
+			LockingScript: (*script.Script)(out.LockingScript),
+		}
+	}
+
+	return sdkTx
 }
