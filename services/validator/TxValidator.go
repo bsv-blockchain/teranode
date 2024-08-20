@@ -323,6 +323,11 @@ func (tv *TxValidator) checkScriptsWithSDK(tx *bt.Tx, blockHeight uint32) (err e
 		// opts = append(opts, interpreter.WithDebugger(&LogDebugger{}),
 
 		if err = interpreter_sdk.NewEngine().Execute(opts...); err != nil {
+			if blockHeight < 850_000 {
+				gocore.Log("RUNTIME").Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
+				return nil
+			}
+
 			return errors.NewTxInvalidError("script execution error: %w", err)
 		}
 	}
