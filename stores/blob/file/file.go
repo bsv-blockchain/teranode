@@ -208,40 +208,33 @@ func (s *File) getFileNameForGet(hash []byte, opts []options.Options) (string, e
 	var fileName string
 
 	if fileOptions.Filename != "" {
-		fileName = fmt.Sprintf("%s/%s", s.paths[0], fileOptions.Filename)
+		if len(fileOptions.SubDirectory) > 0 && fileOptions.SubDirectory[:1] == "/" {
+			// if the subdirectory starts with a /, then it is a full path
+			fileName = filepath.Join(fileOptions.SubDirectory, fileOptions.Filename)
+		} else {
+			fileName = filepath.Join(s.paths[0], fileOptions.SubDirectory, fileOptions.Filename)
+		}
 	} else {
+		if fileOptions.SubDirectory != "" {
+			s.logger.Warnf("[File] SubDirectory %q ignored when no opt.Filename specified", fileOptions.SubDirectory)
+		}
+
 		fileName = s.filename(hash)
 	}
 
 	if fileOptions.Extension != "" {
 		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
-	}
-
-	if fileOptions.SubDirectory != "" {
-		// TODO: add subdirectory to filename, which could be a full path to the file
-		s.logger.Warnf("[File] SubDirectory set, but is not supported yet: %s", fileOptions.SubDirectory)
 	}
 
 	return fileName, nil
 }
 func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
+	fileName, err := s.getFileNameForGet(hash, opts)
+	if err != nil {
+		return "", err
+	}
+
 	fileOptions := options.NewSetOptions(s.options, opts...)
-
-	var fileName string
-	if fileOptions.Filename != "" {
-		fileName = fmt.Sprintf("%s/%s", s.paths[0], fileOptions.Filename)
-	} else {
-		fileName = s.filename(hash)
-	}
-
-	if fileOptions.Extension != "" {
-		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
-	}
-
-	if fileOptions.SubDirectory != "" {
-		// TODO: add subdirectory to filename, which could be a full path to the file
-		s.logger.Warnf("[File] SubDirectory set, but is not supported yet: %s", fileOptions.SubDirectory)
-	}
 
 	if fileOptions.TTL > 0 {
 		// write bytes to file

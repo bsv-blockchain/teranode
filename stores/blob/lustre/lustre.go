@@ -360,9 +360,24 @@ func (s *Lustre) getFileNameForPersist(filename string) string {
 }
 
 func (s *Lustre) getFileNameForGet(hash []byte, opts ...options.Options) (string, error) {
-	fileName := s.filename(hash)
-
 	fileOptions := options.NewSetOptions(s.options, opts...)
+
+	var fileName string
+
+	if fileOptions.Filename != "" {
+		if len(fileOptions.SubDirectory) > 0 && fileOptions.SubDirectory[:1] == "/" {
+			// if the subdirectory starts with a /, then it is a full path
+			fileName = filepath.Join(fileOptions.SubDirectory, fileOptions.Filename)
+		} else {
+			fileName = filepath.Join(s.paths[0], fileOptions.SubDirectory, fileOptions.Filename)
+		}
+	} else {
+		if fileOptions.SubDirectory != "" {
+			s.logger.Warnf("[Lustre] SubDirectory %q ignored when no opt.Filename specified", fileOptions.SubDirectory)
+		}
+
+		fileName = s.filename(hash)
+	}
 
 	if fileOptions.Extension != "" {
 		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
