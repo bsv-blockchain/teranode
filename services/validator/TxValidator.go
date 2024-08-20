@@ -344,10 +344,13 @@ func GoBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
 
 	sdkTx.Inputs = make([]*transaction.TransactionInput, len(tx.Inputs))
 	for i, in := range tx.Inputs {
+		// clone the bytes of the unlocking script
+		unlockingScript := make([]byte, len(*in.UnlockingScript))
+		copy(unlockingScript, *in.UnlockingScript)
 		sdkTx.Inputs[i] = &transaction.TransactionInput{
 			SourceTXID:       bt.ReverseBytes(in.PreviousTxID()), // WTF
 			SourceTxOutIndex: in.PreviousTxOutIndex,
-			UnlockingScript:  (*script.Script)(in.UnlockingScript),
+			UnlockingScript:  (*script.Script)(&unlockingScript),
 			SequenceNumber:   in.SequenceNumber,
 		}
 	}
