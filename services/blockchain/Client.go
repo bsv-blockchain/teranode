@@ -656,6 +656,19 @@ func (c *Client) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, err
 	return nil, nil
 }
 
+func (c *Client) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Restore event")
+
+	req := emptypb.Empty{}
+
+	_, err := c.client.Restore(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
 func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 
 	req := &blockchain_api.GetBlockLocatorRequest{
