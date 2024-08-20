@@ -388,6 +388,11 @@ func usage(msg string) {
 }
 
 func getReader(path string, logger ulogger.Logger) (string, string, string, io.Reader, error) {
+	if path == "" {
+		// Handle stdin
+		return "", "stdin", "", os.Stdin, nil
+	}
+
 	dir, file := filepath.Split(path)
 
 	ext := filepath.Ext(file)
