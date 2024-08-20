@@ -53,7 +53,9 @@ func new(logger ulogger.Logger, paths []string, ttlCleanerInterval time.Duration
 	}
 
 	if options.SubDirectory != "" {
-		os.MkdirAll(filepath.Join(paths[0], options.SubDirectory), 0755)
+		if err := os.MkdirAll(filepath.Join(paths[0], options.SubDirectory), 0755); err != nil {
+			return nil, errors.NewStorageError("[File] failed to create sub directory", err)
+		}
 	}
 
 	fileStore := &File{
@@ -123,32 +125,36 @@ func (s *File) ttlCleaner(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-time.After(interval):
-			s.logger.Debugf("[File] Cleaning file TTLs")
+			cleanExpiredFiles(s)
+		}
+	}
+}
 
-			s.fileTTLsMu.Lock()
-			filesToRemove := make([]string, 0, len(s.fileTTLs))
-			for fileName, ttl := range s.fileTTLs {
-				if ttl.Before(time.Now()) {
-					filesToRemove = append(filesToRemove, fileName)
-				}
-			}
-			s.fileTTLsMu.Unlock()
+func cleanExpiredFiles(s *File) {
+	s.logger.Debugf("[File] Cleaning file TTLs")
 
-			for _, fileName := range filesToRemove {
-				if err := os.Remove(fileName); err != nil {
-					s.logger.Warnf("[File] failed to remove file: %s", fileName)
-				}
-				if err := os.Remove(fileName + ".ttl"); err != nil {
-					if !os.IsNotExist(err) {
-						s.logger.Warnf("[File] failed to remove ttl file: %s", fileName+".ttl")
-					}
-				}
+	s.fileTTLsMu.Lock()
+	filesToRemove := make([]string, 0, len(s.fileTTLs))
+	for fileName, ttl := range s.fileTTLs {
+		if ttl.Before(time.Now()) {
+			filesToRemove = append(filesToRemove, fileName)
+		}
+	}
+	s.fileTTLsMu.Unlock()
 
-				s.fileTTLsMu.Lock()
-				delete(s.fileTTLs, fileName)
-				s.fileTTLsMu.Unlock()
+	for _, fileName := range filesToRemove {
+		if err := os.Remove(fileName); err != nil {
+			s.logger.Warnf("[File] failed to remove file: %s", fileName)
+		}
+		if err := os.Remove(fileName + ".ttl"); err != nil {
+			if !os.IsNotExist(err) {
+				s.logger.Warnf("[File] failed to remove ttl file: %s", fileName+".ttl")
 			}
 		}
+
+		s.fileTTLsMu.Lock()
+		delete(s.fileTTLs, fileName)
+		s.fileTTLsMu.Unlock()
 	}
 }
 
@@ -317,7 +323,7 @@ func (s *File) Get(_ context.Context, hash []byte, opts ...options.Options) ([]b
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
-		return nil, errors.NewStorageError("[File] [%s] failed to read data from file", fileName, err)
+		return nil, errors.NewStorageError("[File][Get] [%s] failed to read data from file", fileName, err)
 	}
 
 	return bytes, err
@@ -341,7 +347,7 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 	bytes := make([]byte, nrOfBytes)
 	nRead, err := file.Read(bytes)
 	if err != nil {
-		return nil, errors.NewStorageError("[File] [%s] failed to read data from file", fileName, err)
+		return nil, errors.NewStorageError("[File][GetHead] [%s] failed to read data from file", fileName, err)
 	}
 
 	return bytes[:nRead], err
@@ -359,7 +365,7 @@ func (s *File) Exists(_ context.Context, hash []byte, opts ...options.Options) (
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, errors.NewStorageError("[File] [%s] failed to read data from file", fileName, err)
+		return false, errors.NewStorageError("[File][Exists] [%s] failed to read data from file", fileName, err)
 	}
 
 	return true, nil

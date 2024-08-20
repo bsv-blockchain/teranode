@@ -226,7 +226,8 @@ func TestFile_loadTTLs(t *testing.T) {
 		require.NotContains(t, fileTTLs, f.filename(key))
 		f.fileTTLsMu.Unlock()
 
-		f.Del(ctx, key)
+		err = f.Del(ctx, key)
+		require.Error(t, err)
 	})
 }
 
@@ -317,7 +318,7 @@ func TestFile_SetFromReaderAndGetIoReader(t *testing.T) {
 		require.NoError(t, err)
 
 		key := []byte("key")
-		content := "This is test content"
+		content := "This is test reader content"
 		reader := strings.NewReader(content)
 
 		// Wrap the reader to satisfy the io.ReadCloser interface
@@ -343,7 +344,7 @@ func TestFile_GetHead(t *testing.T) {
 		require.NoError(t, err)
 
 		key := []byte("key")
-		content := "This is test content"
+		content := "This is test head content"
 		reader := strings.NewReader(content)
 
 		// Wrap the reader to satisfy the io.ReadCloser interface
@@ -367,7 +368,7 @@ func TestFile_Exists(t *testing.T) {
 		require.NoError(t, err)
 
 		key := []byte("key-exists")
-		content := "This is test content"
+		content := "This is test exists content"
 		reader := strings.NewReader(content)
 
 		// Content should not exist before setting
