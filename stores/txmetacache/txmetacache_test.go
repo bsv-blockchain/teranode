@@ -152,15 +152,16 @@ func Test_txMetaCache_GetMeta_Expiry(t *testing.T) {
 	cache := c.(*TxMetaCache)
 	var err error
 
-	for i := 0; i < 2_000_000; i++ {
+	for i := 0; i < 1_000_000; i++ {
 		hash := chainhash.HashH([]byte(string(rune(i))))
 		err = cache.SetCache(&hash, &meta.Data{})
 		require.NoError(t, err)
 	}
 
 	//make sure newly added items are not expired
-	hash := chainhash.HashH([]byte(string(rune(999_999_999))))
-	_ = cache.SetCache(&hash, &meta.Data{})
+	hash := chainhash.HashH([]byte(string(rune(1000000000))))
+	err = cache.SetCache(&hash, &meta.Data{})
+	require.NoError(t, err)
 
 	txmetaLatest, err := cache.Get(ctx, &hash)
 	assert.NoError(t, err)

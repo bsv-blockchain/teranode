@@ -18,9 +18,11 @@ ifeq ($(RACE),true)
 endif
 
 .PHONY: set_txmetacache_flag
-set_race_flag:
+set_meta_flag:
 ifeq ($(TXMETA_SMALL_TAG),true)
 	$(eval TXMETA_TAG = "smalltxmetacache")
+else ifeq ($(TXMETA_TEST_TAG),true)
+   	$(eval TXMETA_TAG = "testtxmetacache")
 else
 	$(eval TXMETA_TAG = "largetxmetacache")
 endif
@@ -105,30 +107,30 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 
 .PHONY: test
-test: set_race_flag
+test: set_race_flag set_meta_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test go test -json $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
+	SETTINGS_CONTEXT=test go test -json -tags "testtxmetacache" $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
 else
-	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc )
+	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -tags "testtxmetacache" -count=1 $$(go list ./... | grep -v playground | grep -v poc )
 endif
 
 .PHONY: longtests
-longtests: set_race_flag
+longtests: set_race_flag set_meta_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
 else
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc )
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc )
 endif
 
 .PHONY: verylongtests
-verylongtests: set_race_flag
+verylongtests: set_race_flag set_meta_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
+	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -json -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
 else
-	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc )
+	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc )
 endif
 
 .PHONY: racetest
