@@ -196,6 +196,10 @@ func (c LocalClient) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) 
 	return nil, nil
 }
 
+func (c LocalClient) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	return nil, nil
+}
+
 // GetBlockLocator returns a block locator for the latest block.
 // This function will be much faster, when moved to the server side.
 func (c LocalClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
