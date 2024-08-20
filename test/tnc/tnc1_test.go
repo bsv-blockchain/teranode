@@ -224,7 +224,7 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount2() {
 	}
 
 	logger.Infof("Header of the best block %v", block.Header.String())
-	logger.Infof("Lenght of subtree slices %d", len(block.SubtreeSlices))
+	logger.Infof("Length of subtree slices %d", len(block.SubtreeSlices))
 
 	coinbaseTX := block.CoinbaseTx
 	amount := coinbaseTX.TotalOutputSatoshis()

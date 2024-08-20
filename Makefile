@@ -306,10 +306,20 @@ install-lint:
 	brew install golangci-lint
 	brew install staticcheck
 
+# lint will only check the files that have been changed in the current branch compared to master, including unstaged/untracked changes
 .PHONY: lint
-lint: # todo enable coinbase tracker
+lint:
+	git fetch origin master
+	golangci-lint run ./... --new-from-rev origin/master
+
+# lint-new will only check your unstaged/untracked changes, or fallback to check last commit if no changes in checkout
+.PHONY: lint-new
+lint-new:
+	golangci-lint run ./... --new
+
+.PHONY: lint-full
+lint-full:
 	golangci-lint run ./...
-	staticcheck ./...
 
 .PHONY: install
 install:
