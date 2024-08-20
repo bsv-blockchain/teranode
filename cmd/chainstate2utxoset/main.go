@@ -494,7 +494,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	}
 
 	logger.Infof("Finished with %16s transactions, %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
-	logger.Infof("Processed %16s keys", formatNumber(iterCount))
+	logger.Infof("Processed                        %16s keys", formatNumber(iterCount))
 	return nil
 }
 
