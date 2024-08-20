@@ -181,8 +181,6 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 	case "utxo-set":
 		var count int
 
-		fmt.Printf("UTXOSet for block hash: %v\n", filename)
-
 		magic, blockHash, blockHeight, previousBlockHash, err := utxopersister.GetUTXOSetHeaderFromReader(br)
 
 		if err != nil {
@@ -218,14 +216,14 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 			fmt.Printf("\tset contains %d UTXO(s)\n\n", count)
 		}
 
-		if err := printFooter(r); err != nil {
-			return errors.NewProcessingError("Couldn't read footer", err)
+		if filename != "[stdin]" {
+			if err := printFooter(r); err != nil {
+				return errors.NewProcessingError("Couldn't read footer", err)
+			}
 		}
 
 	case "utxo-additions":
 		var count int
-
-		fmt.Printf("UTXOAdditions for block hash: %v\n", filename)
 
 		magic, blockHash, blockHeight, err := utxopersister.GetHeaderFromReader(br)
 		if err != nil {
@@ -260,14 +258,14 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 			fmt.Printf("\tadded	 %d UTXO(s)\n\n", count)
 		}
 
-		if err := printFooter(r); err != nil {
-			return errors.NewProcessingError("Couldn't read footer", err)
+		if filename != "[stdin]" {
+			if err := printFooter(r); err != nil {
+				return errors.NewProcessingError("Couldn't read footer", err)
+			}
 		}
 
 	case "utxo-deletions":
 		var count int
-
-		fmt.Printf("UTXODeletions for block hash: %v\n", filename)
 
 		magic, blockHash, blockHeight, err := utxopersister.GetHeaderFromReader(br)
 
@@ -303,8 +301,10 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 			fmt.Printf("\tremoved %d UTXO(s)\n\n", count)
 		}
 
-		if err := printFooter(r); err != nil {
-			return errors.NewProcessingError("Couldn't read footer", err)
+		if filename != "[stdin]" {
+			if err := printFooter(r); err != nil {
+				return errors.NewProcessingError("Couldn't read footer", err)
+			}
 		}
 
 	case "utxoset":
@@ -390,7 +390,7 @@ func usage(msg string) {
 func getReader(path string, logger ulogger.Logger) (string, string, string, io.Reader, error) {
 	if path == "" {
 		// Handle stdin
-		return "", "stdin", "", os.Stdin, nil
+		return "", "[stdin]", "", os.Stdin, nil
 	}
 
 	dir, file := filepath.Split(path)
