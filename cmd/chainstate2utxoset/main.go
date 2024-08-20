@@ -416,16 +416,8 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 						Height:   uint32(height),
 						Coinbase: coinbase == 1,
 					}
-				}
-
-				if currentUTXOWrapper.TxID.IsEqual(hash) {
-					currentUTXOWrapper.UTXOs = append(currentUTXOWrapper.UTXOs, &utxopersister.UTXO{
-						Index:  uint32(vout),
-						Value:  uint64(amount),
-						Script: script,
-					})
-				} else {
-					// Write this UTXOWrapper to the file
+				} else if !currentUTXOWrapper.TxID.IsEqual(hash) {
+					// Write the last UTXOWrapper to the file
 					_, err = bufferedWriter.Write(currentUTXOWrapper.Bytes())
 					if err != nil {
 						return errors.NewProcessingError("Couldn't write to file:")
@@ -433,8 +425,18 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					txWritten++
 					utxosWritten += uint64(len(currentUTXOWrapper.UTXOs))
 
-					currentUTXOWrapper = nil
+					currentUTXOWrapper = &utxopersister.UTXOWrapper{
+						TxID:     hash,
+						Height:   uint32(height),
+						Coinbase: coinbase == 1,
+					}
 				}
+
+				currentUTXOWrapper.UTXOs = append(currentUTXOWrapper.UTXOs, &utxopersister.UTXO{
+					Index:  uint32(vout),
+					Value:  uint64(amount),
+					Script: script,
+				})
 
 			default:
 				fmt.Printf("ERROR: Unknown script type: %v\n", scriptType)
@@ -458,7 +460,6 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 		txWritten++
 		utxosWritten += uint64(len(currentUTXOWrapper.UTXOs))
-		iterCount += uint64(len(currentUTXOWrapper.UTXOs))
 	}
 
 	// Write the eof marker
