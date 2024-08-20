@@ -185,10 +185,9 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 		// obfuscateKey (first key)
 		if prefix == 14 { // 14 = obfuscateKey
 			obfuscateKey = value
-		}
+			logger.Infof("Obfuscate key: %x (%d bytes)", obfuscateKey, len(obfuscateKey))
 
-		// utxo entry
-		if prefix == 67 { // 67 = 0x43 = C = "utxo"
+		} else if prefix == 67 { // 67 = 0x43 = C = "utxo"
 
 			// ---
 			// Key
@@ -439,7 +438,6 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					Script: script,
 				})
 				utxosWritten2++
-
 			default:
 				fmt.Printf("ERROR: Unknown script type: %v\n", scriptType)
 				utxosSkipped++
@@ -448,6 +446,10 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			if (txWritten+utxosSkipped)%1_000_000 == 0 {
 				logger.Infof("Processed %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 			}
+
+		} else {
+			logger.Errorf("Unhandled LevelDB record: %x : %x", key, value)
+
 		}
 
 		iterCount++
