@@ -38,7 +38,7 @@ func New(logger ulogger.Logger, paths []string, opts ...options.Options) (*File,
 	// create the directories if they don't exist
 	for _, d := range paths {
 		if err := os.MkdirAll(d, 0755); err != nil {
-			return nil, errors.NewStorageError("failed to create directory", err)
+			return nil, errors.NewStorageError("[File] failed to create directory", err)
 		}
 	}
 
@@ -62,7 +62,7 @@ func New(logger ulogger.Logger, paths []string, opts ...options.Options) (*File,
 
 	err := fileStore.loadTTLs()
 	if err != nil {
-		return nil, errors.NewStorageError("failed to load ttls", err)
+		return nil, errors.NewStorageError("[File] failed to load ttls", err)
 	}
 
 	go fileStore.ttlCleaner(fileStore.fileTTLsCtx)
@@ -75,12 +75,12 @@ func (s *File) loadTTLs() error {
 	defer s.fileTTLsMu.Unlock()
 
 	for _, path := range s.paths {
-		s.logger.Infof("Loading file TTLs: %s", path)
+		s.logger.Infof("[File] Loading file TTLs: %s", path)
 
 		// get all files in the directory that end with .ttl
 		files, err := findFilesByExtension(path, ".ttl")
 		if err != nil {
-			return errors.NewStorageError("failed to find ttl files", err)
+			return errors.NewStorageError("[File] failed to find ttl files", err)
 		}
 
 		var ttlBytes []byte
@@ -93,12 +93,12 @@ func (s *File) loadTTLs() error {
 			// read the ttl
 			ttlBytes, err = os.ReadFile(fileName)
 			if err != nil {
-				return errors.NewStorageError("failed to read ttl file", err)
+				return errors.NewStorageError("[File] failed to read ttl file", err)
 			}
 
 			ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
 			if err != nil {
-				s.logger.Warnf("failed to parse ttl from %s: %v", fileName, err)
+				s.logger.Warnf("[File] failed to parse ttl from %s: %v", fileName, err)
 				continue
 			}
 
@@ -117,7 +117,7 @@ func (s *File) ttlCleaner(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			s.logger.Debugf("Cleaning file TTLs")
+			s.logger.Debugf("[File] Cleaning file TTLs")
 
 			s.fileTTLsMu.Lock()
 			filesToRemove := make([]string, 0, len(s.fileTTLs))
@@ -130,11 +130,11 @@ func (s *File) ttlCleaner(ctx context.Context) {
 
 			for _, fileName := range filesToRemove {
 				if err := os.Remove(fileName); err != nil {
-					s.logger.Warnf("failed to remove file: %s", fileName)
+					s.logger.Warnf("[File] failed to remove file: %s", fileName)
 				}
 				if err := os.Remove(fileName + ".ttl"); err != nil {
 					if !os.IsNotExist(err) {
-						s.logger.Warnf("failed to remove ttl file: %s", fileName+".ttl")
+						s.logger.Warnf("[File] failed to remove ttl file: %s", fileName+".ttl")
 					}
 				}
 
@@ -163,23 +163,23 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 
 	fileName, err := s.getFileNameForSet(key, opts)
 	if err != nil {
-		return errors.NewStorageError("failed to get file name", err)
+		return errors.NewStorageError("[File] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
 	}
 
 	// write the bytes from the reader to a file with the filename
 	file, err := os.Create(fileName + ".tmp")
 	if err != nil {
-		return errors.NewStorageError("failed to create file", err)
+		return errors.NewStorageError("[File] [%s] failed to create file", fileName, err)
 	}
 	defer file.Close()
 
 	if _, err = io.Copy(file, reader); err != nil {
-		return errors.NewStorageError("failed to write data to file", err)
+		return errors.NewStorageError("[File] [%s] failed to write data to file", fileName, err)
 	}
 
 	// rename the file to remove the .tmp extension
 	if err = os.Rename(fileName+".tmp", fileName); err != nil {
-		return errors.NewStorageError("failed to rename file", err)
+		return errors.NewStorageError("[File] [%s] failed to rename file", fileName, err)
 	}
 
 	return nil
@@ -190,13 +190,13 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 
 	fileName, err := s.getFileNameForSet(hash, opts)
 	if err != nil {
-		return errors.NewStorageError("failed to get file name", err)
+		return errors.NewStorageError("[File] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
 	}
 
 	// write bytes to file
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err = os.WriteFile(fileName, value, 0644); err != nil {
-		return errors.NewStorageError("failed to write data to file", err)
+		return errors.NewStorageError("[File] [%s] failed to write data to file", fileName, err)
 	}
 
 	return nil
@@ -219,7 +219,7 @@ func (s *File) getFileNameForGet(hash []byte, opts []options.Options) (string, e
 
 	if fileOptions.SubDirectory != "" {
 		// TODO: add subdirectory to filename, which could be a full path to the file
-		s.logger.Warnf("SubDirectory set, but is not supported yet: %s", fileOptions.SubDirectory)
+		s.logger.Warnf("[File] SubDirectory set, but is not supported yet: %s", fileOptions.SubDirectory)
 	}
 
 	return fileName, nil
@@ -240,7 +240,7 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 
 	if fileOptions.SubDirectory != "" {
 		// TODO: add subdirectory to filename, which could be a full path to the file
-		s.logger.Warnf("SubDirectory set, but is not supported yet: %s", fileOptions.SubDirectory)
+		s.logger.Warnf("[File] SubDirectory set, but is not supported yet: %s", fileOptions.SubDirectory)
 	}
 
 	if fileOptions.TTL > 0 {
@@ -261,7 +261,7 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 func (s *File) SetTTL(_ context.Context, key []byte, newTtl time.Duration, opts ...options.Options) error {
 	fileName, err := s.getFileNameForSet(key, opts)
 	if err != nil {
-		return errors.NewStorageError("failed to get file name", err)
+		return errors.NewStorageError("[File] failed to get file name", err)
 	}
 
 	if newTtl == 0 {
@@ -270,7 +270,7 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTtl time.Duration, opts 
 			if errors.Is(err, os.ErrNotExist) {
 				return nil
 			}
-			return errors.NewStorageError("failed to remove ttl file", err)
+			return errors.NewStorageError("[File] failed to remove ttl file", err)
 		}
 		return nil
 	}
@@ -279,7 +279,7 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTtl time.Duration, opts 
 	ttl := time.Now().Add(newTtl)
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
-		return errors.NewStorageError("failed to write ttl to file", err)
+		return errors.NewStorageError("[File] [%s] failed to write ttl to file", fileName, err)
 	}
 	s.fileTTLsMu.Lock()
 	s.fileTTLs[fileName] = ttl
@@ -300,7 +300,7 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.Optio
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
-		return nil, errors.NewStorageError("unable to open file %q", fileName, err)
+		return nil, errors.NewStorageError("[File] [%s] unable to open file", fileName, err)
 	}
 
 	return file, nil
@@ -318,7 +318,7 @@ func (s *File) Get(_ context.Context, hash []byte, opts ...options.Options) ([]b
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
-		return nil, errors.NewStorageError("failed to read data from file", err)
+		return nil, errors.NewStorageError("[File] [%s] failed to read data from file", fileName, err)
 	}
 
 	return bytes, err
@@ -336,13 +336,13 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
-		return nil, errors.NewStorageError("failed to open file", err)
+		return nil, errors.NewStorageError("[File] [%s] failed to open file", fileName, err)
 	}
 
 	bytes := make([]byte, nrOfBytes)
 	nRead, err := file.Read(bytes)
 	if err != nil {
-		return nil, errors.NewStorageError("failed to read data from file", err)
+		return nil, errors.NewStorageError("[File] [%s] failed to read data from file", fileName, err)
 	}
 
 	return bytes[:nRead], err
@@ -360,7 +360,7 @@ func (s *File) Exists(_ context.Context, hash []byte, opts ...options.Options) (
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, errors.NewStorageError("failed to read data from file", err)
+		return false, errors.NewStorageError("[File] [%s] failed to read data from file", fileName, err)
 	}
 
 	return true, nil

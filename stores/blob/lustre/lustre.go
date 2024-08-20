@@ -114,7 +114,7 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 }
 
 func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
-	s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
+	s.logger.Debugf("[Lustre]  Set: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	fileName, err := s.getFileNameForSet(hash, opts...)
 	if err != nil {
@@ -223,7 +223,7 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.O
 }
 
 func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
-	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
+	s.logger.Debugf("[Lustre]  Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName, err := s.getFileNameForGet(hash, opts...)
 	if err != nil {
 		return nil, err

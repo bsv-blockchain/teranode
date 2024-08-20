@@ -53,23 +53,23 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 
 	maxIdleConns, err := getQueryParamInt(s3URL, "MaxIdleConns", 100)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to parse MaxIdleConns", err)
+		return nil, errors.NewConfigurationError("[S3] failed to parse MaxIdleConns", err)
 	}
 	maxIdleConnsPerHost, err := getQueryParamInt(s3URL, "MaxIdleConnsPerHost", 100)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to parse MaxIdleConnsPerHost", err)
+		return nil, errors.NewConfigurationError("[S3] failed to parse MaxIdleConnsPerHost", err)
 	}
 	idleConnTimeout, err := getQueryParamDuration(s3URL, "IdleConnTimeoutSeconds", 100, time.Second)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to parse IdleConnTimeoutSeconds", err)
+		return nil, errors.NewConfigurationError("[S3] failed to parse IdleConnTimeoutSeconds", err)
 	}
 	timeout, err := getQueryParamDuration(s3URL, "TimeoutSeconds", 30, time.Second)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to parse TimeoutSeconds", err)
+		return nil, errors.NewConfigurationError("[S3] failed to parse TimeoutSeconds", err)
 	}
 	keepAlive, err := getQueryParamDuration(s3URL, "KeepAliveSeconds", 300, time.Second)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to parse KeepAliveSeconds", err)
+		return nil, errors.NewConfigurationError("[S3] failed to parse KeepAliveSeconds", err)
 	}
 	region := s3URL.Query().Get("region")
 	subDirectory := s3URL.Query().Get("subDirectory")
@@ -153,7 +153,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	_, err := g.uploader.Upload(traceSpan.Ctx, uploadInput)
 	if err != nil {
 		traceSpan.RecordError(err)
-		return errors.NewStorageError("failed to set data from reader", err)
+		return errors.NewStorageError("[S3] [%s/%s] failed to set data from reader", g.bucket, objectKey, err)
 	}
 
 	return nil
@@ -188,7 +188,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	_, err := g.uploader.Upload(traceSpan.Ctx, uploadInput)
 	if err != nil {
 		traceSpan.RecordError(err)
-		return errors.NewStorageError("failed to set data", err)
+		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, objectKey, err)
 	}
 
 	cache.Set(*objectKey, value)
@@ -231,7 +231,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, errors.ErrNotFound
 		}
-		return nil, errors.NewStorageError("failed to get s3 data", err)
+		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get s3 data", g.bucket, objectKey, err)
 	}
 
 	return result.Body, nil
@@ -256,7 +256,7 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 	// check cache
 	cached, ok := cache.Get(*objectKey)
 	if ok {
-		g.logger.Debugf("Cache hit for: %s", *objectKey)
+		g.logger.Debugf("[S3] Cache hit for: %s", *objectKey)
 		return cached, nil
 	}
 
@@ -271,7 +271,7 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 			return nil, errors.ErrNotFound
 		}
 		traceSpan.RecordError(err)
-		return nil, errors.NewStorageError("failed to get data", err)
+		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get data", g.bucket, objectKey, err)
 	}
 
 	return buf.Bytes(), err
@@ -296,7 +296,7 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 	// check cache
 	cached, ok := cache.Get(*objectKey)
 	if ok {
-		g.logger.Debugf("Cache hit for: %s", *objectKey)
+		g.logger.Debugf("[S3] Cache hit for: %s", *objectKey)
 
 		if len(cached) < nrOfBytes {
 			return cached, nil
@@ -317,7 +317,7 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 			return nil, errors.ErrNotFound
 		}
 		traceSpan.RecordError(err)
-		return nil, errors.NewStorageError("failed to get data head", err)
+		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get data head", g.bucket, objectKey, err)
 	}
 
 	return buf.Bytes(), err
@@ -358,7 +358,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (b
 		}
 
 		traceSpan.RecordError(err)
-		return false, errors.NewStorageError("failed to check whether object exists", err)
+		return false, errors.NewStorageError("[S3] [%s/%s] failed to check whether object exists", g.bucket, objectKey, err)
 	}
 
 	return true, nil
@@ -384,7 +384,7 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 	})
 	if err != nil {
 		traceSpan.RecordError(err)
-		return errors.NewStorageError("unable to del data", err)
+		return errors.NewStorageError("[S3] [%s/%s] unable to del data", g.bucket, objectKey, err)
 	}
 
 	// do we need to wait until we can be sure that the object is deleted?
