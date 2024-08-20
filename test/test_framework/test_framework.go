@@ -54,8 +54,6 @@ func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 	}
 }
 
-// SetupNodes starts the nodes with docker-compose up operation.
-// The settings map is used to pass the environment variables to the docker-compose services.
 func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 	var testRunMode, _ = gocore.Config().Get("test_run_mode", "ci")
 	logger := b.Logger

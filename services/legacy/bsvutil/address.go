@@ -21,7 +21,7 @@ var (
 
 	// ErrUnknownAddressType describes an error where an address can not
 	// decoded as a specific address type due to the string encoding
-	// begining with an identifier byte unknown to any standard or
+	// beginning with an identifier byte unknown to any standard or
 	// registered (via chaincfg.Register) network.
 	ErrUnknownAddressType = errors.New("unknown address type")
 
@@ -177,7 +177,7 @@ func NewAddressPubKeyHash(pkHash []byte, net *chaincfg.Params) (*AddressPubKeyHa
 // newAddressPubKeyHash is the internal API to create a pubkey hash address
 // with a known leading identifier byte for a network, rather than looking
 // it up through its parameters.  This is useful when creating a new address
-// structure from a string encoding where the identifer byte is already
+// structure from a string encoding where the identifier byte is already
 // known.
 func newAddressPubKeyHash(pkHash []byte, net *chaincfg.Params) (*AddressPubKeyHash, error) {
 	// Check for a valid pubkey hash length.
@@ -216,7 +216,7 @@ func (a *AddressPubKeyHash) String() string {
 }
 
 // Hash160 returns the underlying array of the pubkey hash.  This can be useful
-// when an array is more appropiate than a slice (for example, when used as map
+// when an array is more appropriate than a slice (for example, when used as map
 // keys).
 func (a *AddressPubKeyHash) Hash160() *[ripemd160.Size]byte {
 	return &a.hash
@@ -244,7 +244,7 @@ func NewAddressScriptHashFromHash(scriptHash []byte, net *chaincfg.Params) (*Add
 // newAddressScriptHashFromHash is the internal API to create a script hash
 // address with a known leading identifier byte for a network, rather than
 // looking it up through its parameters.  This is useful when creating a new
-// address structure from a string encoding where the identifer byte is already
+// address structure from a string encoding where the identifier byte is already
 // known.
 func newAddressScriptHashFromHash(scriptHash []byte, net *chaincfg.Params) (*AddressScriptHash, error) {
 	// Check for a valid script hash length.
@@ -283,7 +283,7 @@ func (a *AddressScriptHash) String() string {
 }
 
 // Hash160 returns the underlying array of the script hash.  This can be useful
-// when an array is more appropiate than a slice (for example, when used as map
+// when an array is more appropriate than a slice (for example, when used as map
 // keys).
 func (a *AddressScriptHash) Hash160() *[ripemd160.Size]byte {
 	return &a.hash
@@ -305,7 +305,7 @@ func NewLegacyAddressPubKeyHash(pkHash []byte, net *chaincfg.Params) (*LegacyAdd
 // newLegacyAddressPubKeyHash is the internal API to create a pubkey hash address
 // with a known leading identifier byte for a network, rather than looking
 // it up through its parameters.  This is useful when creating a new address
-// structure from a string encoding where the identifer byte is already
+// structure from a string encoding where the identifier byte is already
 // known.
 func newLegacyAddressPubKeyHash(pkHash []byte, netID byte) (*LegacyAddressPubKeyHash, error) {
 	// Check for a valid pubkey hash length.
@@ -344,7 +344,7 @@ func (a *LegacyAddressPubKeyHash) String() string {
 }
 
 // Hash160 returns the underlying array of the pubkey hash.  This can be useful
-// when an array is more appropiate than a slice (for example, when used as map
+// when an array is more appropriate than a slice (for example, when used as map
 // keys).
 func (a *LegacyAddressPubKeyHash) Hash160() *[ripemd160.Size]byte {
 	return &a.hash
@@ -372,7 +372,7 @@ func NewLegacyAddressScriptHashFromHash(scriptHash []byte, net *chaincfg.Params)
 // newLegacyAddressScriptHashFromHash is the internal API to create a script hash
 // address with a known leading identifier byte for a network, rather than
 // looking it up through its parameters.  This is useful when creating a new
-// address structure from a string encoding where the identifer byte is already
+// address structure from a string encoding where the identifier byte is already
 // known.
 func newLegacyAddressScriptHashFromHash(scriptHash []byte, netID byte) (*LegacyAddressScriptHash, error) {
 	// Check for a valid script hash length.
@@ -411,7 +411,7 @@ func (a *LegacyAddressScriptHash) String() string {
 }
 
 // Hash160 returns the underlying array of the script hash.  This can be useful
-// when an array is more appropiate than a slice (for example, when used as map
+// when an array is more appropriate than a slice (for example, when used as map
 // keys).
 func (a *LegacyAddressScriptHash) Hash160() *[ripemd160.Size]byte {
 	return &a.hash

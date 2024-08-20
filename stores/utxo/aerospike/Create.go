@@ -75,10 +75,6 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	start := gocore.CurrentTime()
 	stat := gocore.NewStat("sendStoreBatch")
 
-	if s.utxoBatchSize == 0 {
-		s.utxoBatchSize = defaultUxtoBatchSize
-	}
-
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, math.MaxUint32)
@@ -200,10 +196,6 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 }
 
 func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bin) [][]*aerospike.Bin {
-	if s.utxoBatchSize == 0 {
-		s.utxoBatchSize = defaultUxtoBatchSize
-	}
-
 	var batches [][]*aerospike.Bin
 	for start := 0; start < len(utxos); start += s.utxoBatchSize {
 		end := start + s.utxoBatchSize

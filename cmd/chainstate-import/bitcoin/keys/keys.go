@@ -21,7 +21,7 @@ func DecompressPublicKey(publickey []byte) []byte { // decompressing public keys
 	// square root of y - secp256k1 is chosen so that the square root of y is y^((p+1)/4)
 	y := new(big.Int).Exp(y_sq, new(big.Int).Div(new(big.Int).Add(p, big.NewInt(1)), big.NewInt(4)), p)
 
-	// determine if the y we have caluclated is even or odd
+	// determine if the y we have calculated is even or odd
 	y_mod_2 := new(big.Int).Mod(y, big.NewInt(2))
 
 	// if prefix is even (indicating an even y value) and y is odd, use other y value

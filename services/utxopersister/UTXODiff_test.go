@@ -65,6 +65,10 @@ func TestNewUTXODiff(t *testing.T) {
 
 	defer r.Close()
 
+	magic, _, _, err := GetHeaderFromReader(r)
+	require.NoError(t, err)
+	assert.Equal(t, "U-A-1.0", magic)
+
 	// Read the txID
 	utxoWrapper, err := NewUTXOWrapperFromReader(r)
 	require.NoError(t, err)

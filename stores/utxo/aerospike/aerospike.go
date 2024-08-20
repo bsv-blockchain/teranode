@@ -24,8 +24,6 @@ import (
 	"github.com/ordishs/gocore"
 )
 
-const defaultUxtoBatchSize = 20_000
-
 var (
 	binNames = []string{
 		"spendable",
@@ -100,6 +98,10 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		return nil, err
 	}
 
+	// It's very dangerous to change this number after a node has been running for a while
+	// Do not change this value after starting, it is used to calculate the offset for the output
+	utxoBatchSize, _ := gocore.Config().GetInt("utxostore_utxoBatchSize", 1_000)
+
 	s := &Store{
 		url:                        aerospikeURL,
 		client:                     client,
@@ -108,8 +110,8 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		expiration:                 expiration,
 		logger:                     logger,
 		externalStore:              externalStore,
-		utxoBatchSize:              20_000, // Do not change this value, it is used to calculate the offset for the output
-		externalizeAllTransactions: gocore.Config().GetBool("utxo_externalizeAllTransactions", false),
+		utxoBatchSize:              utxoBatchSize,
+		externalizeAllTransactions: gocore.Config().GetBool("utxostore_externalizeAllTransactions", false),
 	}
 
 	storeBatchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
@@ -217,9 +219,5 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 }
 
 func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
-	if s.utxoBatchSize == 0 {
-		s.utxoBatchSize = defaultUxtoBatchSize
-	}
-
 	return vout % uint32(s.utxoBatchSize)
 }

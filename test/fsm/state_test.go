@@ -1,4 +1,4 @@
-////go:build e2eTest
+//go:build functional
 
 // How to run this test:
 // $ unzip data.zip
@@ -11,13 +11,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/test/setup"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -26,43 +26,14 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-var (
-	framework   *tf.BitcoinTestFramework
-	settingsMap map[string]string
-)
-
-func TestMain(m *testing.M) {
-	setupBitcoinTestFramework()
-	exitCode := m.Run()
-	tearDownBitcoinTestFramework()
-	defer os.Exit(exitCode)
+type FsmTestSuite struct {
+	setup.BitcoinTestSuite
 }
 
-func setupBitcoinTestFramework() {
-	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
-	settingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc1",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tc1",
-	}
-	if err := framework.SetupNodes(settingsMap); err != nil {
-		fmt.Printf("Error setting up nodes: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func tearDownBitcoinTestFramework() {
-	if err := framework.StopNodesWithRmVolume(); err != nil {
-		fmt.Printf("Error stopping nodes: %v\n", err)
-	}
-	err := os.RemoveAll("../../data")
-	if err != nil {
-		fmt.Printf("Error removing data directory: %v\n", err)
-	}
-}
-
-func TestNodeCatchUpState_WithStartAndStopNodes(t *testing.T) {
+func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
 	var (
@@ -137,7 +108,9 @@ func TestNodeCatchUpState_WithStartAndStopNodes(t *testing.T) {
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
 }
 
-func TestNodeCatchUpState_WithP2PSwitch(t *testing.T) {
+func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
+	t := suite.T()
+	framework := suite.Framework
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
 
@@ -215,8 +188,9 @@ func TestNodeCatchUpState_WithP2PSwitch(t *testing.T) {
 	headerNode0, _, _ := blockchainNode0.GetBestBlockHeader(ctx)
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
 }
-func TestTXCatchUpState_SendTXsToNode0(t *testing.T) {
-
+func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
+	t := suite.T()
+	framework := suite.Framework
 	url := "http://localhost:18090"
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockAssemblyNode0 := framework.Nodes[0].BlockassemblyClient
@@ -331,8 +305,9 @@ func TestTXCatchUpState_SendTXsToNode0(t *testing.T) {
 	assert.Equal(t, true, bl, "Test Tx not found in block")
 }
 
-func TestTXCatchUpState_SendTXsToNode0_and_Node1(t *testing.T) {
-
+func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
+	t := suite.T()
+	framework := suite.Framework
 	url := "http://localhost:18090"
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 
@@ -440,4 +415,8 @@ func TestTXCatchUpState_SendTXsToNode0_and_Node1(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}
 	assert.Equal(t, true, bl, "Test Tx not found in block")
+}
+
+func TestFsmTestSuite(t *testing.T) {
+	tf.RunTest(t, new(FsmTestSuite))
 }

@@ -1,4 +1,4 @@
-////go:build e2eTest
+//go:build settingstest
 
 // How to run this test manually:
 //
@@ -33,55 +33,36 @@ package test
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
+	"github.com/bitcoin-sv/ubsv/test/setup"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
 )
 
-var (
-	cluster *tf.BitcoinTestFramework
-)
-var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
-
-func TestMain(m *testing.M) {
-	setupBitcoinTestFramework()
-	exitCode := m.Run()
-	tearDownBitcoinTestFramework()
-	defer os.Exit(exitCode)
+type SettingsTestSuite struct {
+	setup.BitcoinTestSuite
 }
 
-func setupBitcoinTestFramework() {
-	cluster = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
-	m := map[string]string{
+func (suite *SettingsTestSuite) InitSuite() {
+	suite.SettingsMap = map[string]string{
 		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
 		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc2",
 		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tc1",
 	}
-	if err := cluster.SetupNodes(m); err != nil {
-		fmt.Printf("Error setting up nodes: %v\n", err)
-		os.Exit(1)
-	}
 }
 
-func tearDownBitcoinTestFramework() {
-	if err := cluster.StopNodesWithRmVolume(); err != nil {
-		fmt.Printf("Error stopping nodes: %v\n", err)
-	}
-	err := os.RemoveAll("../../data")
-	if err != nil {
-		fmt.Printf("Error removing data directory: %v\n", err)
-	}
+func (suite *SettingsTestSuite) SetupTest() {
+	suite.InitSuite()
+	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
 }
-
-func TestShouldRejectExcessiveBlockSize(t *testing.T) {
+func (suite *SettingsTestSuite) TestShouldRejectExcessiveBlockSize() {
+	t := suite.T()
+	cluster := suite.Framework
+	logger 		:= cluster.Logger
 	defer func() {
 		if r := recover(); r != nil {
 			t.Errorf("Recovered from panic: %v", r)
@@ -157,4 +138,8 @@ func TestShouldRejectExcessiveBlockSize(t *testing.T) {
 		}
 	}
 
+}
+
+func TestSettingsTestSuite(t *testing.T) {
+	suite.Run(t, new(SettingsTestSuite))
 }

@@ -200,6 +200,11 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				ud, err := utxopersister.NewUTXOWrapperFromReader(br)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
+						if ud == nil {
+							fmt.Printf("ERROR: EOF marker not found\n")
+						} else {
+							fmt.Printf("EOF marker found\n")
+						}
 						break
 					}
 					return errors.NewProcessingError("error reading utxo-additions", err)
@@ -467,9 +472,10 @@ func printFooter(r io.Reader) error {
 		fmt.Printf("seek is not supported\n")
 		return nil
 	}
+
 	// The end of the file should have the EOF marker at the end (32 bytes)
 	// and the txCount uint64 and the utxoCount uint64 (each 8 bytes)
-	_, err := f.Seek(-48, 2) // From the end of the file, seek back 48 bytes
+	_, err := f.Seek(-48, io.SeekEnd)
 	if err != nil {
 		return errors.NewProcessingError("error seeking to EOF marker", err)
 	}
@@ -479,7 +485,7 @@ func printFooter(r io.Reader) error {
 		return errors.NewProcessingError("error reading EOF marker", err)
 	}
 
-	if bytes.Compare(b[0:32], utxopersister.EOFMarker) != 0 {
+	if !bytes.Equal(b[0:32], utxopersister.EOFMarker) {
 		return errors.NewProcessingError("EOF marker not found")
 	}
 

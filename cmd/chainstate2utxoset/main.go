@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/btcleveldb"
@@ -165,7 +166,9 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	var txWritten uint64
 	var utxosWritten uint64
+	var utxosWritten2 uint64
 	var utxosSkipped uint64
+	var iterCount uint64
 
 	logger.Infof("Processing UTXOs...")
 
@@ -182,10 +185,9 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 		// obfuscateKey (first key)
 		if prefix == 14 { // 14 = obfuscateKey
 			obfuscateKey = value
-		}
+			logger.Infof("Obfuscate key: %x (%d bytes)", obfuscateKey, len(obfuscateKey))
 
-		// utxo entry
-		if prefix == 67 { // 67 = 0x43 = C = "utxo"
+		} else if prefix == 67 { // 67 = 0x43 = C = "utxo"
 
 			// ---
 			// Key
@@ -414,16 +416,8 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 						Height:   uint32(height),
 						Coinbase: coinbase == 1,
 					}
-				}
-
-				if currentUTXOWrapper.TxID.IsEqual(hash) {
-					currentUTXOWrapper.UTXOs = append(currentUTXOWrapper.UTXOs, &utxopersister.UTXO{
-						Index:  uint32(vout),
-						Value:  uint64(amount),
-						Script: script,
-					})
-				} else {
-					// Write this UTXOWrapper to the file
+				} else if !currentUTXOWrapper.TxID.IsEqual(hash) {
+					// Write the last UTXOWrapper to the file
 					_, err = bufferedWriter.Write(currentUTXOWrapper.Bytes())
 					if err != nil {
 						return errors.NewProcessingError("Couldn't write to file:")
@@ -431,18 +425,34 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					txWritten++
 					utxosWritten += uint64(len(currentUTXOWrapper.UTXOs))
 
-					currentUTXOWrapper = nil
+					currentUTXOWrapper = &utxopersister.UTXOWrapper{
+						TxID:     hash,
+						Height:   uint32(height),
+						Coinbase: coinbase == 1,
+					}
 				}
 
+				currentUTXOWrapper.UTXOs = append(currentUTXOWrapper.UTXOs, &utxopersister.UTXO{
+					Index:  uint32(vout),
+					Value:  uint64(amount),
+					Script: script,
+				})
+				utxosWritten2++
 			default:
 				fmt.Printf("ERROR: Unknown script type: %v\n", scriptType)
 				utxosSkipped++
 			}
 
-			if (utxosWritten+utxosSkipped)%1_000_000 == 0 {
-				logger.Infof("Processed %d utxos, skipped %d", utxosWritten, utxosSkipped)
+			if (txWritten+utxosSkipped)%1_000_000 == 0 {
+				logger.Infof("Processed %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 			}
+
+		} else {
+			logger.Errorf("Unhandled LevelDB record: %x : %x", key, value)
+
 		}
+
+		iterCount++
 	}
 
 	if currentUTXOWrapper != nil {
@@ -477,13 +487,30 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	iter.Release() // Do not defer this, want to release iterator before closing database
 
-	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), blockHash) // N.B. The 2 spaces is important for the hash to be valid
+	if err := bufferedWriter.Flush(); err != nil {
+		return errors.NewProcessingError("Couldn't flush buffer:", err)
+	}
+
+	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), blockHash.String()+".utxo-set") // N.B. The 2 spaces is important for the hash to be valid
 	//nolint:gosec
 	if err := os.WriteFile(outFile+".sha256", []byte(hashData), 0644); err != nil {
 		return errors.NewProcessingError("Couldn't write hash file:", err)
 	}
 
-	logger.Infof("Finished with %d transactions, %d utxos, skipped %d", txWritten, utxosWritten, utxosSkipped)
-
+	logger.Infof("FINISHED %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
+	logger.Infof("Processed                                                            %16s utxos", formatNumber(utxosWritten2))
+	logger.Infof("Processed                                                            %16s keys", formatNumber(iterCount))
 	return nil
+}
+
+func formatNumber(n uint64) string {
+	in := fmt.Sprintf("%d", n)
+	out := make([]string, 0, len(in)+(len(in)-1)/3)
+	for i, c := range in {
+		if i > 0 && (len(in)-i)%3 == 0 {
+			out = append(out, ",")
+		}
+		out = append(out, string(c))
+	}
+	return strings.Join(out, "")
 }

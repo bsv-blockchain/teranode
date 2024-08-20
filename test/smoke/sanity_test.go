@@ -1,4 +1,4 @@
-////go:build e2eTest
+//go:build functional
 
 // How to run this test:
 // $ unzip data.zip
@@ -10,13 +10,12 @@ package test
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
+	"github.com/bitcoin-sv/ubsv/test/setup"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -28,41 +27,17 @@ import (
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
 )
 
-var (
-	framework *tf.BitcoinTestFramework
-)
-
-func TestMain(m *testing.M) {
-	setupBitcoinTestFramework()
-	exitCode := m.Run()
-	tearDownBitcoinTestFramework()
-	defer os.Exit(exitCode)
+type SanityTestSuite struct {
+	setup.BitcoinTestSuite
 }
 
-func setupBitcoinTestFramework() {
-	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
-	// framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.e2etest.override.yml"})
-	m := map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc1",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tc1",
-	}
-	if err := framework.SetupNodes(m); err != nil {
-		fmt.Printf("Error setting up nodes: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func tearDownBitcoinTestFramework() {
-	if err := framework.StopNodesWithRmVolume(); err != nil {
-		fmt.Printf("Error stopping nodes: %v\n", err)
-	}
-}
-
-func TestShouldAllowFairTx(t *testing.T) {
+func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
 	url := "http://localhost:18090"
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
@@ -203,8 +178,10 @@ func TestShouldAllowFairTx(t *testing.T) {
 
 }
 
-func TestShouldAllowFairTx_UseRpc(t *testing.T) {
+func (suite *SanityTestSuite) TestShouldAllowFairTx_UseRpc() {
 	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
 	url := "http://localhost:18090"
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
@@ -349,4 +326,8 @@ func TestShouldAllowFairTx_UseRpc(t *testing.T) {
 		}
 	}
 
+}
+
+func TestSanityTestSuite(t *testing.T) {
+	suite.Run(t, new(SanityTestSuite))
 }

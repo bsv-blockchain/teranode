@@ -122,6 +122,9 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, utxoCh
 }
 
 func saveBatch(batch []*UTXO) {
+	_ = batch[0].errCh
+	_ = batch[0].utxo
+
 	// Save the batch of UTXOs
 	// store.SaveBatch(ctx, batch)
 }

@@ -372,7 +372,7 @@ func getUTXODeletionsMapFromReader(r io.Reader) (map[[32]byte][]uint32, error) {
 		var hash [32]byte
 		copy(hash[:], b[:32])
 
-		if bytes.Compare(hash[:], EOFMarker) == 0 {
+		if bytes.Equal(hash[:], EOFMarker) {
 			break
 		}
 

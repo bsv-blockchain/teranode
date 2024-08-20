@@ -1,51 +1,24 @@
+//go:build tectests
+
 package test
 
 import (
-	"fmt"
-	"os"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/blockassembly_api"
-	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
+	"github.com/bitcoin-sv/ubsv/test/setup"
+	"github.com/stretchr/testify/suite"
 )
 
-var (
-	framework   *tf.BitcoinTestFramework
-	settingsMap map[string]string
-)
-
-func TestMain(m *testing.M) {
-	setupBitcoinTestFramework()
-	exitCode := m.Run()
-	tearDownBitcoinTestFramework()
-	defer os.Exit(exitCode)
+type TECTestSuite struct {
+	setup.BitcoinTestSuite
 }
 
-func setupBitcoinTestFramework() {
-	framework = tf.NewBitcoinTestFramework([]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"})
-	settingsMap = map[string]string{
-		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tc1",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tc1",
-		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tc1",
-	}
-	if err := framework.SetupNodes(settingsMap); err != nil {
-		fmt.Printf("Error setting up nodes: %v\n", err)
-		os.Exit(1)
-	}
-}
+func (suite *TECTestSuite) TestShutDownPropagationService() {
 
-func tearDownBitcoinTestFramework() {
-	if err := framework.StopNodes(); err != nil {
-		fmt.Printf("Error stopping nodes: %v\n", err)
-	}
-	err := os.RemoveAll("../../data")
-	if err != nil {
-		fmt.Printf("Error removing data directory: %v\n", err)
-	}
-}
-
-func TestShutDownPropagationService(t *testing.T) {
-
+	t := suite.T()
+	framework := suite.Framework
+	settingsMap := suite.SettingsMap
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
 	err := framework.StartNode("ubsv-2")
@@ -57,10 +30,6 @@ func TestShutDownPropagationService(t *testing.T) {
 	if err := framework.RestartNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
-
-	//ctx := context.Background()
-	//var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	//logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
 	blockchainHealth, err := framework.Nodes[1].BlockchainClient.Health(framework.Context)
 	if err != nil {
@@ -88,7 +57,11 @@ func TestShutDownPropagationService(t *testing.T) {
 	}
 }
 
-func TestShutDownBlockAssembly(t *testing.T) {
+func (suite *TECTestSuite) TestShutDownBlockAssembly() {
+
+	t := suite.T()
+	framework := suite.Framework
+	settingsMap := suite.SettingsMap
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc2"
 	if err := framework.RestartNodes(settingsMap); err != nil {
@@ -113,7 +86,10 @@ func TestShutDownBlockAssembly(t *testing.T) {
 	}
 }
 
-func TestShutDownBlockValidation(t *testing.T) {
+func (suite *TECTestSuite) TestShutDownBlockValidation() {
+	t := suite.T()
+	framework := suite.Framework
+	settingsMap := suite.SettingsMap
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc3"
@@ -147,7 +123,10 @@ func TestShutDownBlockValidation(t *testing.T) {
 	}
 }
 
-func TestShutDownBlockchain(t *testing.T) {
+func (suite *TECTestSuite) TestShutDownBlockchain() {
+	t := suite.T()
+	framework := suite.Framework
+	settingsMap := suite.SettingsMap
 	defer func() {
 		if r := recover(); r != nil {
 			t.Errorf("Recovered from panic: %v", r)
@@ -179,7 +158,10 @@ func TestShutDownBlockchain(t *testing.T) {
 	}
 }
 
-func TestShutDownP2P(t *testing.T) {
+func (suite *TECTestSuite) TestShutDownP2P() {
+	t := suite.T()
+	framework := suite.Framework
+	settingsMap := suite.SettingsMap
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc5"
@@ -213,7 +195,10 @@ func TestShutDownP2P(t *testing.T) {
 	}
 }
 
-func TestShutDownAsset(t *testing.T) {
+func (suite *TECTestSuite) TestShutDownAsset() {
+	t := suite.T()
+	framework := suite.Framework
+	settingsMap := suite.SettingsMap
 	emptyMessage := &blockassembly_api.EmptyMessage{}
 
 	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.test.resilience.tc6"
@@ -245,4 +230,8 @@ func TestShutDownAsset(t *testing.T) {
 	if !coinbaseHealth.Ok {
 		t.Errorf("Expected coinbaseHealth to be true, but got false")
 	}
+}
+
+func TestTECTestSuite(t *testing.T) {
+	suite.Run(t, new(TECTestSuite))
 }

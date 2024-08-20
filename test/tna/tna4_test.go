@@ -1,3 +1,5 @@
+//go:build tnatests
+
 package tna
 
 import (
@@ -6,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/test/setup"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -16,11 +19,29 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
+	"github.com/stretchr/testify/suite"
 )
+type TNA4TestSuite struct {
+	setup.BitcoinTestSuite
+}
 
-func TestBroadcastPoW(t *testing.T) {
+func (suite *TNA4TestSuite) InitSuite() {
+	suite.SettingsMap = map[string]string{
+		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tna1Test",
+		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tna1Test",
+		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tna1Test",
+	}
+}
+
+func (suite *TNA4TestSuite) SetupTest() {
+	suite.InitSuite()
+	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
+}
+func (suite *TNA4TestSuite) TestBroadcastPoW() {
 	// Test setup
 	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
@@ -67,8 +88,10 @@ func TestBroadcastPoW(t *testing.T) {
 	}
 }
 
-func TestSameTxsMultipleBlocks(t *testing.T) {
+func (suite *TNA4TestSuite) TestSameTxsMultipleBlocks() {
 	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
@@ -167,9 +190,12 @@ func TestSameTxsMultipleBlocks(t *testing.T) {
 	}
 }
 
-func TestMultipleMining(t *testing.T) {
+func (suite *TNA4TestSuite) TestMultipleMining() {
 	// Test setup
 	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
+
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	var logger = ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
 
@@ -234,4 +260,8 @@ func TestMultipleMining(t *testing.T) {
 	if !blockNode2 {
 		t.Errorf("Failed to retrieve new mined block on Node2: %v", blockErr2)
 	}
+}
+
+func TestTNA4TestSuite(t *testing.T) {
+	suite.Run(t, new(TNA4TestSuite))
 }

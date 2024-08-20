@@ -10,6 +10,6 @@ repos:
     hooks:
       - id: golangci-lint
         name: Run go linter
-        entry: make lint
+        entry: golangci-lint run --new
         language: system
         types: [ go ]

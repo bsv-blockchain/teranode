@@ -565,7 +565,7 @@ end:
 	return found
 }
 
-// SetMultiKeysSingleValue stores multiple (k, v) entries for the same bucket for a single v. Appends v to the exsiting v value, doesn't overwrite.
+// SetMultiKeysSingleValue stores multiple (k, v) entries for the same bucket for a single v. Appends v to the existing v value, doesn't overwrite.
 func (b *bucketTrimmed) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hashes []uint64) { //error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -697,7 +697,7 @@ func (b *bucketPreallocated) cleanLockedMap(startingOffset int) {
 		// adjust the idx for each item, since we removed the first half of the chunks/
 		// we only take items in the second half of the chunks, i.e. after the byteOffsetRemoved
 		if int(idx) >= startingOffset {
-			// calcualte the adjusted index. We move old indexes of the items to the left by byteOffsetRemoved
+			// calculate the adjusted index. We move old indexes of the items to the left by byteOffsetRemoved
 			adjustedIdx := idx - uint64(startingOffset)
 			bmNew[k] = adjustedIdx | (b.gen << bucketSizeBits)
 		}
@@ -770,7 +770,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	}
 
 	// calculate the idx of the k-v pair to be added
-	// adjust idxNew, calcualte where the new k-v pair will end
+	// adjust idxNew, calculate where the new k-v pair will end
 	// the new k-v pair must be in the same chunk.
 	idx := b.idx
 	idxNew := idx + kvLen
@@ -823,7 +823,7 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	return nil
 }
 
-// TODO: Simplfy by removing references to generations, generations are not relevant for bucket.
+// TODO: Simplify by removing references to generations, generations are not relevant for bucket.
 // Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
 func (b *bucketPreallocated) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
 	found := false
@@ -1013,7 +1013,7 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	}
 
 	// calculate the idx of the k-v pair to be added
-	// adjust idxNew, calcualte where the new k-v pair will end
+	// adjust idxNew, calculate where the new k-v pair will end
 	// the new k-v pair must be in the same chunk.
 	idx := b.idx
 	idxNew := idx + kvLen
@@ -1110,7 +1110,7 @@ end:
 	return found
 }
 
-// SetMultiKeysSingleValue stores multiple (k, v) entries for the same bucket for a single v. Appends v to the exsiting v value, doesn't overwrite.
+// SetMultiKeysSingleValue stores multiple (k, v) entries for the same bucket for a single v. Appends v to the existing v value, doesn't overwrite.
 func (b *bucketUnallocated) SetMultiKeysSingleValue(keys [][]byte, value []byte) { //, hashes []uint64) { //error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
