@@ -46,6 +46,7 @@ service BlockchainAPI {
   rpc CatchUpTransactions(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc CatchUpBlocks(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc Restore(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  rpc LegacySync(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc GetBlockLocator(GetBlockLocatorRequest) returns (GetBlockLocatorResponse) {}
   rpc LocateBlockHeaders(LocateBlockHeadersRequest) returns (LocateBlockHeadersResponse) {}
   rpc GetBestHeightAndTime(google.protobuf.Empty) returns (GetBestHeightAndTimeResponse) {}
@@ -296,6 +297,7 @@ enum FSMEventType {
   CATCHUPTXS = 4;
   RESTORE = 5;
   LEGACYSYNC = 6;
+  UNAVAILABLE = 7;
 }
 
 // swagger:enum FSMStateType
@@ -306,7 +308,8 @@ enum FSMStateType {
   CATCHINGBLOCKS = 3;
   CATCHINGTXS = 4;
   RESTORING = 5;
-  LEGACYSYNCING =7;
+  LEGACYSYNCING =6;
+  RESOURSE_UNAVAILABLE = 7;
 }
 
 message GetBlockLocatorRequest {
