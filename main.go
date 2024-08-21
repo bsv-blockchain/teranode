@@ -584,6 +584,23 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		}
 	}
 
+	restoring := gocore.Config().GetBool("restoreMode", false)
+
+	// Currently restore state is not automated. It requires manual intervention to send the RUN event.
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	if restoring {
+		// if we are in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
+		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RESTORE); err != nil {
+			logger.Errorf("[Main] failed to send Restore event [%v]", err)
+			panic(err)
+		}
+
+		// wait for node to finish Restoring.
+		// this means node transitions to RUN state
+		// this will block
+		waitForFSMtoTransitionToRunning(blockchainClient, logger)
+	}
+
 	if startLegacy {
 		subtreeStore, err := getSubtreeStore(logger)
 		if err != nil {
@@ -633,32 +650,31 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 
 		}
-	}
 
-	restoring := gocore.Config().GetBool("restoreMode", false)
-	syncingLegacy := gocore.Config().GetBool("snycLegacyMode", false)
-
-	// Currently restore state is not automated. It requires manual intervention to send the RUN event.
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	if restoring {
-		// if we are in the restoring mode, we need to wait for restore to complete, and manual RUN event to be sent.
-		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RESTORE); err != nil {
-			logger.Errorf("[Main] failed to send Restore event [%v]", err)
-			panic(err)
-		}
-	}
-
-	if syncingLegacy {
-		// if we are in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
 		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_LEGACYSYNC); err != nil {
 			logger.Errorf("[Main] failed to send Legacy Sync event [%v]", err)
 			panic(err)
 		}
-	}
 
-	if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
-		logger.Errorf("[Main] failed to send RUN event [%v]", err)
-		// panic(err)
+		// wait for node to finish Legacy Syncing.
+		// this means node transitions to RUN state
+		// this will block
+		waitForFSMtoTransitionToRunning(blockchainClient, logger)
+	}
+	//
+	//<<<<<<< HEAD
+	//	if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
+	//		logger.Errorf("[Main] failed to send RUN event [%v]", err)
+	//		// panic(err)
+	//=======
+	// TODO: think how to move to mining after Restore and LegacySyncing modes are complete.
+	if !startLegacy && !restoring {
+		// if we are restoring or in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
+		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
+			logger.Errorf("[Main] failed to send RUN event [%v]", err)
+			panic(err)
+		}
+		//>>>>>>> 6c6d35fe (feat: handle restore and sync state entry)
 	}
 
 	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining
@@ -811,4 +827,12 @@ func waitForPostgresToStart(logger ulogger.Logger) error {
 		logger.Infof("PostgreSQL is up - ready to go!")
 		return nil
 	}
+}
+
+func waitForFSMtoTransitionToRunning(blockchainClient blockchain.ClientI, logger ulogger.Logger) {
+	for blockchainClient.GetFSMCurrentState() != blockchain_api.FSMStateType_RUNNING {
+		logger.Debugf("[Main] Waiting for FSM to transition to Running state, currently at: %v", blockchainClient.GetFSMCurrentState())
+		time.Sleep(1 * time.Second) // Wait and check again in 1 second
+	}
+
 }

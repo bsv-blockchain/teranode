@@ -15,11 +15,15 @@ import (
 // - Mining
 // - CatchingBlocks
 // - CatchingTxs
+// - Restoring
+// - ResourceUnavailable
 // The finite state machine has the following events:
 // - Run
 // - Mine
 // - CatchupBlocks
 // - CatchupTxs
+// - Restore
+// - Unavailable
 // - Stop
 func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	// Define callbacks
