@@ -138,11 +138,7 @@ func worker(ctx context.Context, store utxo.Store, utxoCh chan *utxopersister.UT
 	return func() error {
 		for {
 			select {
-			case utxoWrapper, isOpen := <-utxoCh:
-				if !isOpen {
-					return nil
-				}
-
+			case utxoWrapper := <-utxoCh:
 				if err := processUTXO(ctx, store, utxoWrapper); err != nil {
 					return err
 				}
