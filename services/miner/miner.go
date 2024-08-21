@@ -120,9 +120,13 @@ func (m *Miner) Start(ctx context.Context) error {
 	m.waitSeconds, _ = gocore.Config().GetInt("miner_waitSeconds", 30)
 
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
-	err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
-	if err != nil {
-		return errors.NewServiceError("[Main] failed to send MINE notification", err)
+
+	state := m.blockchainClient.GetFSMCurrentState()
+	if state != blockchain_api.FSMStateType_MINING {
+		err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
+		if err != nil {
+			return errors.NewServiceError("[Main] failed to send MINE notification", err)
+		}
 	}
 
 	var miningCtx context.Context
