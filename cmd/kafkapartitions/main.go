@@ -1,13 +1,13 @@
 package main
 
 import (
-	"github.com/bitcoin-sv/ubsv/errors"
 	"log"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/IBM/sarama"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/ordishs/gocore"
 )
 

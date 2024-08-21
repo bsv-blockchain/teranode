@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/errors"

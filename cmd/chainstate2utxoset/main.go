@@ -21,9 +21,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/btcsuite/goleveldb/leveldb"
-	"github.com/libsv/go-bt/v2/chainhash"
-
 	"github.com/btcsuite/goleveldb/leveldb/opt"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // bitcoin addresses
