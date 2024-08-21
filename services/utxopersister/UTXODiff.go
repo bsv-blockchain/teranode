@@ -572,3 +572,24 @@ func filterUTXOs(utxos []*UTXO, deletions map[[32]byte][]uint32, txID [32]byte) 
 	}
 	return filteredUTXOs
 }
+
+func PadUTXOsWithNil(utxos []*UTXO) []*UTXO {
+	// Determine the size of the new slice
+	var maxIndex uint32
+
+	for _, utxo := range utxos {
+		if utxo.Index > maxIndex {
+			maxIndex = utxo.Index
+		}
+	}
+
+	// Create a slice with nil values of length maxIdx+1
+	padded := make([]*UTXO, maxIndex+1)
+
+	// Place each item in its corresponding index position
+	for _, utxo := range utxos {
+		padded[utxo.Index] = utxo
+	}
+
+	return padded
+}

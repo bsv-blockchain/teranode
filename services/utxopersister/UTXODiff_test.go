@@ -85,3 +85,47 @@ func TestNewUTXODiff(t *testing.T) {
 
 	// assert.Equal(t, uint32(5), i)
 }
+
+func TestPadUTXOs(t *testing.T) {
+	utxos := make([]*UTXO, 3)
+
+	utxos[0] = &UTXO{
+		Index: uint32(0),
+		Value: uint64(0),
+	}
+
+	utxos[1] = &UTXO{
+		Index: uint32(5),
+		Value: uint64(5),
+	}
+
+	utxos[2] = &UTXO{
+		Index: uint32(11),
+		Value: uint64(11),
+	}
+
+	padded := PadUTXOsWithNil(utxos)
+
+	assert.Equal(t, 12, len(padded))
+
+	assert.Equal(t, utxos[0], padded[0])
+	assert.Nil(t, padded[1])
+	assert.Nil(t, padded[2])
+	assert.Nil(t, padded[3])
+	assert.Nil(t, padded[4])
+	assert.Equal(t, utxos[1], padded[5])
+	assert.Nil(t, padded[6])
+	assert.Nil(t, padded[7])
+	assert.Nil(t, padded[8])
+	assert.Nil(t, padded[8])
+	assert.Nil(t, padded[10])
+	assert.Equal(t, utxos[2], padded[11])
+
+	for i, u := range padded {
+		if u == nil {
+			t.Logf("%d: nil", i)
+		} else {
+			t.Logf("%d: %d", i, u.Index)
+		}
+	}
+}
