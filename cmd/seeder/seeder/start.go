@@ -38,7 +38,7 @@ func Start() {
 	flag.Parse()
 
 	ctx := context.Background()
-	logger := ulogger.NewGoCoreLogger("tnbs")
+	logger := ulogger.NewGoCoreLogger("seed")
 
 	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil || !found {
@@ -56,10 +56,7 @@ func Start() {
 
 	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, 10000)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	g, gCtx := errgroup.WithContext(ctx)
+	g, gCtx := errgroup.WithContext(context.Background())
 
 	// Create 1000 workers to process the UTXO data
 	for i := 0; i < 1000; i++ {
@@ -92,31 +89,42 @@ func Start() {
 		utxosWritten uint64
 	)
 
+OUTER:
 	for {
-		utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(reader)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				if utxoWrapper == nil {
-					logger.Errorf("EOF marker not found")
-				} else {
-					logger.Infof("EOF marker found")
-				}
+		select {
+		case <-ctx.Done():
+			logger.Infof("Context cancelled, stopping UTXO processing")
+			return
 
-				break
+		default:
+			utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(reader)
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					if utxoWrapper == nil {
+						logger.Errorf("EOF marker not found")
+					} else {
+						logger.Infof("EOF marker found")
+					}
+					break OUTER
+				}
+				logger.Errorf("Failed to read UTXO: %v", err)
+				return
 			}
 
-			logger.Errorf("Failed to read UTXO: %v", err)
+			// Attempt to send the UTXO to the channel, but only if ctx.Done() is not active
+			select {
+			case utxoWrapperCh <- utxoWrapper:
+				txWritten++
+				utxosWritten += uint64(len(utxoWrapper.UTXOs))
 
-			return
-		}
+				if txWritten%1_000_000 == 0 {
+					logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
+				}
 
-		utxoWrapperCh <- utxoWrapper
-
-		txWritten++
-		utxosWritten += uint64(len(utxoWrapper.UTXOs))
-
-		if txWritten%1_000_000 == 0 {
-			logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
+			case <-ctx.Done():
+				logger.Infof("Context cancelled while sending UTXO to channel, stopping UTXO processing")
+				return
+			}
 		}
 	}
 
