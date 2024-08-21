@@ -70,17 +70,17 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 }
 
 // GetUtxoHashes returns the utxo hashes for the outputs of a transaction.
-func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
+func GetUtxoHashes(tx *bt.Tx) ([]*chainhash.Hash, error) {
 	txChainHash := tx.TxIDChainHash()
 
-	utxoHashes := make([]chainhash.Hash, len(tx.Outputs))
+	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
 	for i, output := range tx.Outputs {
 		utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, uint32(i))
 		if utxoErr != nil {
 			return nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
 		}
 
-		utxoHashes[i] = *utxoHash
+		utxoHashes[i] = utxoHash
 	}
 
 	return utxoHashes, nil

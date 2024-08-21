@@ -4,9 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net/url"
@@ -14,6 +11,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"

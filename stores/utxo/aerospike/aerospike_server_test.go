@@ -619,7 +619,7 @@ func TestCreateWithBlockIDs(t *testing.T) {
 
 	var blockHeight uint32
 
-	txMeta, err := db.Create(context.Background(), tx, blockHeight, 1, 2, 3)
+	txMeta, err := db.Create(context.Background(), tx, blockHeight, utxo.WithBlockIDs(1, 2, 3))
 	require.NoError(t, err)
 	assert.NotNil(t, txMeta)
 

@@ -4,22 +4,19 @@ import (
 	"bufio"
 	"context"
 	"flag"
+	"io"
 	"os"
-	"time"
 
-	utxopersister_service "github.com/bitcoin-sv/ubsv/services/utxopersister"
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	utxo_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/ordishs/go-utils/batcher"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
-
-type UTXO struct {
-	utxo  *utxopersister_service.UTXO
-	errCh chan error
-}
 
 func Start() {
 	inFile := flag.String("in", "chainstate.utxo-set", "Input filename for UTXO set.")
@@ -36,13 +33,13 @@ func Start() {
 
 	logger.Infof("Using utxostore at %s", utxoStoreURL)
 
-	utxoStore, err := utxo_factory.NewStore(ctx, logger, utxoStoreURL, "seeder", false)
+	utxoStore, err := _factory.NewStore(ctx, logger, utxoStoreURL, "seeder", false)
 	if err != nil {
 		logger.Errorf("Failed to create utxostore: %v", err)
 		return
 	}
 
-	utxoWrapperCh := make(chan *utxopersister_service.UTXOWrapper, 10000)
+	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, 10000)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -51,7 +48,7 @@ func Start() {
 
 	// Create 1000 workers to process the UTXO data
 	for i := 0; i < 1000; i++ {
-		g.Go(worker(gCtx, logger, utxoStore, utxoWrapperCh))
+		g.Go(worker(gCtx, utxoStore, utxoWrapperCh))
 	}
 
 	// Read the UTXO data from the store
@@ -64,15 +61,33 @@ func Start() {
 
 	reader := bufio.NewReader(f)
 
-	for {
-		if ctx.Done() != nil {
-			break
-		}
+	magic, _, _, _, err := utxopersister.GetUTXOSetHeaderFromReader(reader)
+	if err != nil {
+		logger.Errorf("Failed to read UTXO set header: %v", err)
+		return
+	}
 
-		utxoWrapper, err := utxopersister_service.NewUTXOWrapperFromReader(reader)
+	if magic != "U-S-1.0" {
+		logger.Errorf("Invalid magic number: %s", magic)
+		return
+	}
+
+	for {
+		utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(reader)
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if utxoWrapper == nil {
+					logger.Errorf("EOF marker not found")
+				} else {
+					logger.Infof("EOF marker found")
+				}
+
+				break
+			}
+
 			logger.Errorf("Failed to read UTXO: %v", err)
-			break
+
+			return
 		}
 
 		utxoWrapperCh <- utxoWrapper
@@ -90,29 +105,18 @@ func Start() {
 	logger.Infof("All workers finished successfully")
 }
 
-func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, utxoCh chan *utxopersister_service.UTXOWrapper) func() error {
-
-	batchSize, _ := gocore.Config().GetInt("seeder_batcherSize", 256)
-	batchDurationStr, _ := gocore.Config().GetInt("seeder_batcherDurationMillis", 10)
-	batchDuration := time.Duration(batchDurationStr) * time.Millisecond
-	batcher := batcher.New[UTXO](batchSize, batchDuration, saveBatch, false)
-	_ = batcher
-
-	_ = store
-
-	_ = logger
-
+func worker(ctx context.Context, store utxo.Store, utxoCh chan *utxopersister.UTXOWrapper) func() error {
 	return func() error {
 		for {
 			select {
-			case utxo := <-utxoCh:
-				_ = utxo
-				// errCh := make(chan error)
-				// batcher.Put(&UTXOWrapper{utxo: utxo, errCh: errCh})
-				// // err := <-errCh
-				// if err != nil {
-				// 	return err
-				// }
+			case utxoWrapper, isOpen := <-utxoCh:
+				if !isOpen {
+					return nil
+				}
+
+				if err := processUTXO(ctx, store, utxoWrapper); err != nil {
+					return err
+				}
 
 			case <-ctx.Done():
 				return ctx.Err()
@@ -121,10 +125,39 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, utxoCh
 	}
 }
 
-func saveBatch(batch []*UTXO) {
-	_ = batch[0].errCh
-	_ = batch[0].utxo
+func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper) error {
+	if utxoWrapper == nil {
+		return nil
+	}
 
-	// Save the batch of UTXOs
-	// store.SaveBatch(ctx, batch)
+	tx := &bt.Tx{}
+
+	padded := utxopersister.PadUTXOsWithNil(utxoWrapper.UTXOs)
+
+	for _, u := range padded {
+		var output *bt.Output
+		if u != nil {
+			output = &bt.Output{}
+			output.Satoshis = u.Value
+			output.LockingScript = bscript.NewFromBytes(u.Script)
+		}
+
+		tx.Outputs = append(tx.Outputs, output)
+	}
+
+	if _, err := store.Create(
+		ctx,
+		tx,
+		utxoWrapper.Height,
+		utxo.WithTXID(utxoWrapper.TxID),
+		utxo.WithSetCoinbase(utxoWrapper.Coinbase),
+	); err != nil {
+		if errors.Is(err, errors.ErrTxAlreadyExists) {
+			return nil
+		}
+
+		return err
+	}
+
+	return nil
 }

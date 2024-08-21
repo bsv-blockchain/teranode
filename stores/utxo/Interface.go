@@ -44,8 +44,9 @@ type UnresolvedMetaData struct {
 type CreateOption func(*CreateOptions)
 
 type CreateOptions struct {
-	BlockIDs []uint32
-	TxID     *chainhash.Hash
+	BlockIDs   []uint32
+	TxID       *chainhash.Hash
+	IsCoinbase *bool
 }
 
 func WithBlockIDs(blockIDs ...uint32) CreateOption {
@@ -57,6 +58,12 @@ func WithBlockIDs(blockIDs ...uint32) CreateOption {
 func WithTXID(txID *chainhash.Hash) CreateOption {
 	return func(o *CreateOptions) {
 		o.TxID = txID
+	}
+}
+
+func WithSetCoinbase(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IsCoinbase = &b
 	}
 }
 

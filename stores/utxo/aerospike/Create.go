@@ -98,14 +98,12 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 	s.logger.Debugf("[STORE_BATCH] sending batch of %d txMetas", len(batch))
 
-	var hash *chainhash.Hash
 	var key *aerospike.Key
 	var binsToStore [][]*aerospike.Bin
 	var err error
 
 	for idx, bItem := range batch {
-		hash = bItem.tx.TxIDChainHash()
-		key, err = aerospike.NewKey(s.namespace, s.setName, hash[:])
+		key, err = aerospike.NewKey(s.namespace, s.setName, bItem.txHash[:])
 		if err != nil {
 			utils.SafeSend(bItem.done, err)
 			//NOOP for this record
@@ -235,7 +233,19 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 }
 
 func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool) ([][]*aerospike.Bin, error) {
-	fee, utxoHashes, err := utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
+
+	var (
+		fee        uint64
+		utxoHashes []*chainhash.Hash
+		err        error
+	)
+
+	if len(tx.Inputs) == 0 {
+		fee = 0
+		utxoHashes, err = utxo.GetUtxoHashes(tx)
+	} else {
+		fee, utxoHashes, err = utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
+	}
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
 		return nil, errors.NewProcessingError("failed to get fees and utxo hashes for %s: %v", tx.TxIDChainHash(), err)

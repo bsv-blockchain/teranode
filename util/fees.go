@@ -25,6 +25,10 @@ func GetFees(btTx *bt.Tx) (uint64, error) {
 	// 	return 0, fmt.Errorf("cannot get fees for non extended tx")
 	// }
 
+	if len(btTx.Inputs) == 0 {
+		return 0, nil
+	}
+
 	for _, input := range btTx.Inputs {
 		fees += input.PreviousTxSatoshis
 	}

@@ -86,7 +86,7 @@ func (m *Memory) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts
 	}
 
 	for _, utxoHash := range utxoHashes {
-		m.txs[*txHash].utxoMap[utxoHash] = nil
+		m.txs[*txHash].utxoMap[*utxoHash] = nil
 	}
 
 	return txMetaData, nil

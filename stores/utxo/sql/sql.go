@@ -237,11 +237,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes).Scan(&transactionId)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
+			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in postgres store (coinbase=%v):", tx.IsCoinbase(), err)
 		} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
+			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v):", tx.IsCoinbase(), sqliteErr)
 		}
-		return nil, errors.NewStorageError("Failed to insert transaction: %v", err)
+
+		return nil, errors.NewStorageError("Failed to insert transaction:", err)
 	}
 
 	// Insert the inputs...
@@ -302,7 +303,12 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	var coinbaseSpendingHeight uint32
 
-	if tx.IsCoinbase() {
+	isCoinbase := tx.IsCoinbase()
+	if options.IsCoinbase != nil {
+		isCoinbase = *options.IsCoinbase
+	}
+
+	if isCoinbase {
 		coinbaseSpendingHeight = blockHeight + 100
 	}
 
