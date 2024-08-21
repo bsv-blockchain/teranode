@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
@@ -21,6 +23,15 @@ import (
 )
 
 func Start() {
+	go func() {
+		srv := &http.Server{
+			Addr:         ":6060",
+			ReadTimeout:  time.Second * 5,
+			WriteTimeout: time.Second * 10,
+		}
+		_ = srv.ListenAndServe()
+	}()
+
 	inFile := flag.String("in", "", "Input filename for UTXO set.")
 	flag.Parse()
 
@@ -74,8 +85,10 @@ func Start() {
 		return
 	}
 
-	var txWritten uint64
-	var utxosWritten uint64
+	var (
+		txWritten    uint64
+		utxosWritten uint64
+	)
 
 	for {
 		utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(reader)
@@ -179,11 +192,14 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 func formatNumber(n uint64) string {
 	in := fmt.Sprintf("%d", n)
 	out := make([]string, 0, len(in)+(len(in)-1)/3)
+
 	for i, c := range in {
 		if i > 0 && (len(in)-i)%3 == 0 {
 			out = append(out, ",")
 		}
+
 		out = append(out, string(c))
 	}
+
 	return strings.Join(out, "")
 }
