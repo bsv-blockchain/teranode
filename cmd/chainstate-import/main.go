@@ -13,7 +13,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/btcleveldb"
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/keys"
 	"github.com/btcsuite/goleveldb/leveldb"
-
 	"github.com/btcsuite/goleveldb/leveldb/opt"
 )
 

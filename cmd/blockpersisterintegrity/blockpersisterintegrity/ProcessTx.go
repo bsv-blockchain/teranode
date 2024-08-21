@@ -2,8 +2,8 @@ package blockpersisterintegrity
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	p_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"

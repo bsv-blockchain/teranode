@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"time"
-
-	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
 
 	"github.com/bitcoin-sv/ubsv/cmd/aerospike_reader/aerospike_reader"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
