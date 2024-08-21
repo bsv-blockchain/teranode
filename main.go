@@ -274,7 +274,10 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 	if err != nil {
 		panic(err)
 	}
-	blockchainService.SetClient(blockchainClient)
+
+	if blockchainService != nil {
+		blockchainService.SetClient(blockchainClient)
+	}
 
 	// p2p server
 	if startP2P {
@@ -652,7 +655,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 
 	if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
 		logger.Errorf("[Main] failed to send RUN event [%v]", err)
-		panic(err)
+		// panic(err)
 	}
 
 	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining
