@@ -309,7 +309,7 @@ enum FSMStateType {
   CATCHINGTXS = 4;
   RESTORING = 5;
   LEGACYSYNCING =6;
-  RESOURSE_UNAVAILABLE = 7;
+  RESOURCE_UNAVAILABLE = 7;
 }
 
 message GetBlockLocatorRequest {
