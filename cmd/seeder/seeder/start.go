@@ -54,7 +54,7 @@ func Start() {
 		return
 	}
 
-	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, 10000)
+	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, 100_000)
 
 	g, gCtx := errgroup.WithContext(context.Background())
 
@@ -89,48 +89,52 @@ func Start() {
 		utxosWritten uint64
 	)
 
-OUTER:
-	for {
-		select {
-		case <-ctx.Done():
-			logger.Infof("Context cancelled, stopping UTXO processing")
-			return
-
-		default:
-			utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(reader)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					if utxoWrapper == nil {
-						logger.Errorf("EOF marker not found")
-					} else {
-						logger.Infof("EOF marker found")
-					}
-					break OUTER
-				}
-				logger.Errorf("Failed to read UTXO: %v", err)
-				return
-			}
-
-			// Attempt to send the UTXO to the channel, but only if ctx.Done() is not active
+	g.Go(func() error {
+	OUTER:
+		for {
 			select {
-			case utxoWrapperCh <- utxoWrapper:
-				txWritten++
-				utxosWritten += uint64(len(utxoWrapper.UTXOs))
+			case <-ctx.Done():
+				logger.Infof("Context cancelled, stopping UTXO processing")
+				return ctx.Err()
 
-				if txWritten%1_000_000 == 0 {
-					logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
+			default:
+				utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(reader)
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						if utxoWrapper == nil {
+							logger.Errorf("EOF marker not found")
+						} else {
+							logger.Infof("EOF marker found")
+						}
+						break OUTER
+					}
+					logger.Errorf("Failed to read UTXO: %v", err)
+					return fmt.Errorf("failed to read UTXO: %w", err)
 				}
 
-			case <-ctx.Done():
-				logger.Infof("Context cancelled while sending UTXO to channel, stopping UTXO processing")
-				return
+				// Attempt to send the UTXO to the channel, but only if ctx.Done() is not active
+				select {
+				case utxoWrapperCh <- utxoWrapper:
+					txWritten++
+					utxosWritten += uint64(len(utxoWrapper.UTXOs))
+
+					if txWritten%1_000_000 == 0 {
+						logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
+					}
+
+				case <-ctx.Done():
+					logger.Infof("Context cancelled while sending UTXO to channel, stopping UTXO processing")
+					return ctx.Err()
+				}
 			}
 		}
-	}
 
-	logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
+		logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
 
-	close(utxoWrapperCh)
+		close(utxoWrapperCh)
+
+		return nil
+	})
 
 	logger.Infof("Waiting for workers to finish")
 
