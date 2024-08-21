@@ -297,6 +297,14 @@ func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
 func (tv *TxValidator) checkScriptsWithSDK(tx *bt.Tx, blockHeight uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			// TODO - remove this when script engine is fixed
+			if rErr, ok := r.(error); ok {
+				if strings.Contains(rErr.Error(), "negative shift amount") {
+					gocore.Log("RUNTIME").Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
+					err = nil
+					return
+				}
+			}
 			err = errors.NewTxInvalidError("script execution failed: %v", r)
 		}
 	}()
