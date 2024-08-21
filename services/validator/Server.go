@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"golang.org/x/sync/errgroup"
 	"io"
 	"log"
 	"net/url"
@@ -254,6 +255,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 		prometheusInvalidTransactions.Inc()
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
+			Txid:  tx.TxIDChainHash().CloneBytes(),
 		}, status.Errorf(codes.Internal, "transaction %s is invalid: %v", tx.TxID(), err)
 	}
 
@@ -261,6 +263,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 
 	return &validator_api.ValidateTransactionResponse{
 		Valid: true,
+		Txid:  tx.TxIDChainHash().CloneBytes(),
 	}, nil
 }
 
@@ -272,22 +275,32 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	)
 	defer deferFn()
 
-	errReasons := make([]*validator_api.ValidateTransactionError, 0, len(req.GetTransactions()))
-	for _, reqItem := range req.GetTransactions() {
-		tx, err := v.ValidateTransaction(ctx, reqItem)
-		if err != nil {
-			if tx != nil {
-				errReasons = append(errReasons, &validator_api.ValidateTransactionError{
-					TxId:   tx.String(),
-					Reason: tx.Reason,
-				})
+	g, gCtx := errgroup.WithContext(ctx)
+
+	// we create a slice for all transactions we just batched, in the same order as we got them
+	errReasons := make([]string, len(req.GetTransactions()))
+
+	for idx, reqItem := range req.GetTransactions() {
+		idx, reqItem := idx, reqItem
+
+		g.Go(func() error {
+			_, err := v.ValidateTransaction(gCtx, reqItem)
+			if err != nil {
+				errReasons[idx] = err.Error()
+			} else {
+				errReasons[idx] = ""
 			}
-		}
+
+			return nil
+		})
 	}
 
+	// wait for all transactions to be validated, never returns error
+	_ = g.Wait()
+
 	return &validator_api.ValidateTransactionBatchResponse{
-		Valid:   true,
-		Reasons: errReasons,
+		Valid:  true,
+		Errors: errReasons,
 	}, nil
 }
 

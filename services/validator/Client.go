@@ -27,7 +27,6 @@ type Client struct {
 	running      *atomic.Bool
 	conn         *grpc.ClientConn
 	logger       ulogger.Logger
-	batchCh      chan *batchItem
 	batchSize    int
 	batchTimeout int
 	batcher      batcher.Batcher2[batchItem]
@@ -65,7 +64,6 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 		logger:       logger,
 		running:      &running,
 		conn:         conn,
-		batchCh:      make(chan *batchItem),
 		batchSize:    sendBatchSize,
 		batchTimeout: sendBatchTimeout,
 	}
@@ -123,13 +121,13 @@ func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) er
 	} else {
 		doneCh := make(chan error)
 		/* batch mode */
-		c.batchCh <- &batchItem{
+		c.batcher.Put(&batchItem{
 			req: &validator_api.ValidateTransactionRequest{
 				TransactionData: tx.ExtendedBytes(),
 				BlockHeight:     blockHeight,
 			},
 			done: doneCh,
-		}
+		})
 
 		return <-doneCh
 	}
@@ -157,15 +155,9 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 		return
 	}
 
-	reasonsLength := len(resp.Reasons)
-
-	if reasonsLength > 0 {
-		c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
-	}
-
 	for i, item := range batch {
-		if reasonsLength > 0 && resp.Reasons[i].Reason != "" {
-			item.done <- errors.NewError(resp.Reasons[i].Reason)
+		if resp.Errors[i] != "" {
+			item.done <- errors.NewError(resp.Errors[i])
 		} else {
 			item.done <- nil
 		}
