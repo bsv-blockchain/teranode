@@ -90,6 +90,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	}
 
 	prometheusUtxostoreCreate.Inc()
+
 	return txMeta, nil
 }
 
@@ -106,16 +107,20 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 	s.logger.Debugf("[STORE_BATCH] sending batch of %d txMetas", len(batch))
 
-	var key *aerospike.Key
-	var binsToStore [][]*aerospike.Bin
-	var err error
+	var (
+		key         *aerospike.Key
+		binsToStore [][]*aerospike.Bin
+		err         error
+	)
 
 	for idx, bItem := range batch {
 		key, err = aerospike.NewKey(s.namespace, s.setName, bItem.txHash[:])
 		if err != nil {
 			utils.SafeSend(bItem.done, err)
-			//NOOP for this record
+
+			// NOOP for this record
 			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+
 			continue
 		}
 
@@ -125,8 +130,10 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		binsToStore, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, s.externalizeAllTransactions, bItem.txHash, bItem.isCoinbase) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not get bins to store", err))
-			//NOOP for this record
+
+			// NOOP for this record
 			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+
 			continue
 		}
 
@@ -165,11 +172,12 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		batchRecords[idx] = record
 	}
 
-	batchId := s.batchId.Add(1)
+	batchID := s.batchID.Add(1)
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %w", batchId, err)
+		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %w", batchID, err)
+
 		for _, bItem := range batch {
 			utils.SafeSend(bItem.done, err)
 		}
@@ -184,8 +192,9 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].txHash.String(), idx, batchId)
+					s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].txHash.String(), idx, batchID)
 					utils.SafeSend[error](batch[idx].done, errors.NewTxAlreadyExistsError("%v already exists in store", batch[idx].txHash))
+
 					continue
 				}
 
@@ -196,7 +205,12 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 						continue
 					}
 
-					go s.storeTransactionExternally(batch[idx], binsToStore)
+					if len(batch[idx].tx.Inputs) == 0 {
+						go s.storePartialTransactionExternally(batch[idx], binsToStore)
+					} else {
+						go s.storeTransactionExternally(batch[idx], binsToStore)
+					}
+
 					continue
 				}
 
@@ -205,14 +219,12 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					continue
 				}
 
-				utils.SafeSend[error](batch[idx].done, errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].txHash.String(), idx, batchId, err))
+				utils.SafeSend[error](batch[idx].done, errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].txHash.String(), idx, batchID, err))
 			}
-		} else {
-			if len(batch[idx].tx.Outputs) <= s.utxoBatchSize {
-				// We notify the done channel that the operation was successful, except
-				// if this item was offloaded to the multi-record queue
-				utils.SafeSend(batch[idx].done, nil)
-			}
+		} else if len(batch[idx].tx.Outputs) <= s.utxoBatchSize {
+			// We notify the done channel that the operation was successful, except
+			// if this item was offloaded to the multi-record queue
+			utils.SafeSend(batch[idx].done, nil)
 		}
 	}
 
@@ -221,15 +233,19 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bin) [][]*aerospike.Bin {
 	var batches [][]*aerospike.Bin
+
 	for start := 0; start < len(utxos); start += s.utxoBatchSize {
 		end := start + s.utxoBatchSize
 		if end > len(utxos) {
 			end = len(utxos)
 		}
+
 		batchUtxos := utxos[start:end]
 
 		// Count the number of non-nil utxos in this batch
+
 		nrUtxos := 0
+
 		for _, utxo := range batchUtxos {
 			if utxo != nil {
 				nrUtxos++
@@ -241,11 +257,11 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 		batch = append(batch, aerospike.NewBin("nrUtxos", aerospike.NewIntegerValue(nrUtxos)))
 		batches = append(batches, batch)
 	}
+
 	return batches
 }
 
 func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool) ([][]*aerospike.Bin, error) {
-
 	var (
 		fee        uint64
 		utxoHashes []*chainhash.Hash
@@ -260,6 +276,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		size = tx.Size()
 		fee, utxoHashes, err = utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
 	}
+
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
 		return nil, errors.NewProcessingError("failed to get fees and utxo hashes for %s: %v", txHash, err)
@@ -270,6 +287,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	if !external {
 		// create a tx interface[] map
 		inputs = make([]interface{}, len(tx.Inputs))
+
 		for i, input := range tx.Inputs {
 			h := input.Bytes(false)
 

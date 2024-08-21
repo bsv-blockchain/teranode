@@ -45,7 +45,7 @@ type Store struct {
 	blockHeight                atomic.Uint32
 	medianBlockTime            atomic.Uint32
 	logger                     ulogger.Logger
-	batchId                    atomic.Uint64
+	batchID                    atomic.Uint64
 	storeBatcher               *batcher.Batcher2[batchStoreItem]
 	getBatcher                 *batcher.Batcher2[batchGetItem]
 	spendBatcher               *batcher.Batcher2[batchSpend]
