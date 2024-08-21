@@ -274,7 +274,10 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 	if err != nil {
 		panic(err)
 	}
-	blockchainService.SetClient(blockchainClient)
+
+	if blockchainService != nil {
+		blockchainService.SetClient(blockchainClient)
+	}
 
 	// p2p server
 	if startP2P {
