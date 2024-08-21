@@ -687,6 +687,19 @@ func (c *Client) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Emp
 	return nil, nil
 }
 
+func (c *Client) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Resource Unavailable event")
+
+	req := emptypb.Empty{}
+
+	_, err := c.client.Unavailable(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
 // Legacy Endpoints
 
 func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {

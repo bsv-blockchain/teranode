@@ -56,6 +56,7 @@ const (
 	BlockchainAPI_CatchUpBlocks_FullMethodName             = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
 	BlockchainAPI_Restore_FullMethodName                   = "/blockchain_api.BlockchainAPI/Restore"
 	BlockchainAPI_LegacySync_FullMethodName                = "/blockchain_api.BlockchainAPI/LegacySync"
+	BlockchainAPI_Unavailable_FullMethodName               = "/blockchain_api.BlockchainAPI/Unavailable"
 	BlockchainAPI_GetBlockLocator_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlockLocator"
 	BlockchainAPI_LocateBlockHeaders_FullMethodName        = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
 	BlockchainAPI_GetBestHeightAndTime_FullMethodName      = "/blockchain_api.BlockchainAPI/GetBestHeightAndTime"
@@ -102,6 +103,7 @@ type BlockchainAPIClient interface {
 	CatchUpBlocks(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Restore(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	LegacySync(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	Unavailable(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetBlockLocator(ctx context.Context, in *GetBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockLocatorResponse, error)
 	LocateBlockHeaders(ctx context.Context, in *LocateBlockHeadersRequest, opts ...grpc.CallOption) (*LocateBlockHeadersResponse, error)
 	GetBestHeightAndTime(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBestHeightAndTimeResponse, error)
@@ -453,6 +455,15 @@ func (c *blockchainAPIClient) LegacySync(ctx context.Context, in *emptypb.Empty,
 	return out, nil
 }
 
+func (c *blockchainAPIClient) Unavailable(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_Unavailable_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockchainAPIClient) GetBlockLocator(ctx context.Context, in *GetBlockLocatorRequest, opts ...grpc.CallOption) (*GetBlockLocatorResponse, error) {
 	out := new(GetBlockLocatorResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockLocator_FullMethodName, in, out, opts...)
@@ -521,6 +532,7 @@ type BlockchainAPIServer interface {
 	CatchUpBlocks(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	Restore(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	LegacySync(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
+	Unavailable(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error)
 	LocateBlockHeaders(context.Context, *LocateBlockHeadersRequest) (*LocateBlockHeadersResponse, error)
 	GetBestHeightAndTime(context.Context, *emptypb.Empty) (*GetBestHeightAndTimeResponse, error)
@@ -635,6 +647,9 @@ func (UnimplementedBlockchainAPIServer) Restore(context.Context, *emptypb.Empty)
 }
 func (UnimplementedBlockchainAPIServer) LegacySync(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method LegacySync not implemented")
+}
+func (UnimplementedBlockchainAPIServer) Unavailable(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Unavailable not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockLocator not implemented")
@@ -1291,6 +1306,24 @@ func _BlockchainAPI_LegacySync_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_Unavailable_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).Unavailable(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_Unavailable_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).Unavailable(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockchainAPI_GetBlockLocator_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetBlockLocatorRequest)
 	if err := dec(in); err != nil {
@@ -1487,6 +1520,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LegacySync",
 			Handler:    _BlockchainAPI_LegacySync_Handler,
+		},
+		{
+			MethodName: "Unavailable",
+			Handler:    _BlockchainAPI_Unavailable_Handler,
 		},
 		{
 			MethodName: "GetBlockLocator",

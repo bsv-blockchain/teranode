@@ -1023,6 +1023,22 @@ func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb
 	return nil, nil
 }
 
+func (b *Blockchain) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_UNAVAILABLE,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	b.client.StoreFSMState(b.finiteStateMachine.Current())
+
+	return nil, nil
+}
+
 // Legacy endpoints
 
 func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {

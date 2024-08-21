@@ -47,6 +47,7 @@ service BlockchainAPI {
   rpc CatchUpBlocks(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc Restore(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc LegacySync(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+  rpc Unavailable(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc GetBlockLocator(GetBlockLocatorRequest) returns (GetBlockLocatorResponse) {}
   rpc LocateBlockHeaders(LocateBlockHeadersRequest) returns (LocateBlockHeadersResponse) {}
   rpc GetBestHeightAndTime(google.protobuf.Empty) returns (GetBestHeightAndTimeResponse) {}
