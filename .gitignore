@@ -60,3 +60,5 @@ vendor
 unit-tests.xml
 *ctrf-report.json
 __debug*
+
+nohup.out
