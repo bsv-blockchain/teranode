@@ -152,7 +152,11 @@ func worker(ctx context.Context, store utxo.Store, utxoCh chan *utxopersister.UT
 	return func() error {
 		for {
 			select {
-			case utxoWrapper := <-utxoCh:
+			case utxoWrapper, isOpen := <-utxoCh:
+				if !isOpen {
+					return nil
+				}
+
 				if err := processUTXO(ctx, store, utxoWrapper); err != nil {
 					return err
 				}
@@ -182,6 +186,10 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 		}
 
 		tx.Outputs = append(tx.Outputs, output)
+	}
+
+	if gocore.Config().GetBool("skipStore", false) {
+		return nil
 	}
 
 	if _, err := store.Create(
