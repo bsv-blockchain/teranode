@@ -56,11 +56,6 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 
 	sendBatchSize, _ := gocore.Config().GetInt("validator_sendBatchSize", 0)
 	sendBatchTimeout, _ := gocore.Config().GetInt("validator_sendBatchTimeout", 100)
-	sendBatchWorkers, _ := gocore.Config().GetInt("validator_sendBatchWorkers", 1)
-
-	if sendBatchSize > 0 && sendBatchWorkers <= 0 {
-		return nil, errors.NewInvalidArgumentError("expecting validator_sendBatchWorkers > 0 when validator_sendBatchSize = %d", sendBatchSize)
-	}
 
 	running := atomic.Bool{}
 	running.Store(true)
