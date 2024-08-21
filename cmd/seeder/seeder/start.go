@@ -101,11 +101,11 @@ func Start() {
 		utxosWritten += uint64(len(utxoWrapper.UTXOs))
 
 		if txWritten%1_000_000 == 0 {
-			logger.Infof("Processed %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
+			logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
 		}
 	}
 
-	logger.Infof("FINISHED  %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
+	logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
 
 	close(utxoWrapperCh)
 
