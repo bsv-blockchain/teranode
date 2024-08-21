@@ -154,9 +154,11 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	resp, err := c.client.ValidateTransactionBatch(ctx, txBatch)
 	if err != nil {
 		c.logger.Errorf("%v", err)
+
 		for _, item := range batch {
 			item.done <- err
 		}
+
 		return
 	}
 
