@@ -424,22 +424,6 @@ func (c *Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Has
 	return resp.Ids, nil
 }
 
-func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEventType) error {
-	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
-
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: event,
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
-	resp, err := c.client.SendFSMEvent(ctx, req)
-	if err != nil {
-		return err
-	}
-	c.StoreFSMState(resp.State.String())
-	return nil
-}
-
 func (c *Client) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
 	_, err := c.client.SendNotification(ctx, notification)
 	if err != nil {
@@ -585,6 +569,8 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 	return blocks, nil
 }
 
+// FSM related endpoints
+
 func (c *Client) GetFSMCurrentState() blockchain_api.FSMStateType {
 	currentState := c.currFSMstate.Load()
 	return blockchain_api.FSMStateType(currentState)
@@ -600,29 +586,35 @@ func (c *Client) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType 
 	return currentState.State
 }
 
+func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEventType) error {
+	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
+
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: event,
+	}
+
+	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
+
+	resp, err := c.client.SendFSMEvent(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	c.StoreFSMState(resp.State.String())
+
+	return nil
+}
+
 func (c *Client) StoreFSMState(state string) {
 	c.currFSMstate.Store(blockchain_api.FSMStateType_value[state])
 }
 
-func (c *Client) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
+func (c *Client) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Run event")
 
 	req := emptypb.Empty{}
 
-	_, err := c.client.CatchUpTransactions(ctx, &req)
-	if err != nil {
-		return nil, err
-	}
-
-	return nil, nil
-}
-
-func (c *Client) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
-
-	req := emptypb.Empty{}
-
-	_, err := c.client.CatchUpBlocks(ctx, &req)
+	_, err := c.client.Run(ctx, &req)
 	if err != nil {
 		return nil, err
 	}
@@ -643,12 +635,25 @@ func (c *Client) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, er
 	return nil, nil
 }
 
-func (c *Client) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	c.logger.Infof("[Blockchain Client] Sending Run event")
+func (c *Client) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
 
 	req := emptypb.Empty{}
 
-	_, err := c.client.Run(ctx, &req)
+	_, err := c.client.CatchUpBlocks(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (c *Client) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
+
+	req := emptypb.Empty{}
+
+	_, err := c.client.CatchUpTransactions(ctx, &req)
 	if err != nil {
 		return nil, err
 	}
@@ -668,6 +673,34 @@ func (c *Client) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty,
 
 	return nil, nil
 }
+
+func (c *Client) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Legacy Sync event")
+
+	req := emptypb.Empty{}
+
+	_, err := c.client.LegacySync(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (c *Client) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	c.logger.Infof("[Blockchain Client] Sending Resource Unavailable event")
+
+	req := emptypb.Empty{}
+
+	_, err := c.client.Unavailable(ctx, &req)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+// Legacy Endpoints
 
 func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 

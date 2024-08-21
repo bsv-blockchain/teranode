@@ -872,6 +872,36 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 	}, nil
 }
 
+// FSM related endpoints
+
+func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "GetFSMCurrentState",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetFSMCurrentState),
+	)
+	defer deferFn()
+
+	var state string
+
+	if b.finiteStateMachine == nil {
+		return nil, errors.WrapGRPC(errors.NewStateInitializationError("FSM is not initialized"))
+	}
+
+	// Get the current state of the FSM
+	state = b.finiteStateMachine.Current()
+
+	// Convert the string state to FSMEventType using the map
+	enumState, ok := blockchain_api.FSMStateType_value[state]
+	if !ok {
+		// Handle the case where the state is not found in the map
+		return nil, errors.WrapGRPC(errors.NewProcessingError("invalid state: %s", state))
+	}
+
+	return &blockchain_api.GetFSMStateResponse{
+		State: blockchain_api.FSMStateType(enumState),
+	}, nil
+}
+
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
 	b.logger.Debugf("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
@@ -925,22 +955,6 @@ func (b *Blockchain) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty
 	return nil, nil
 }
 
-func (b *Blockchain) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_RESTORE,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		return nil, err
-	}
-
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
-
-	return nil, nil
-}
-
 func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	req := &blockchain_api.SendFSMEventRequest{
 		Event: blockchain_api.FSMEventType_CATCHUPBLOCKS,
@@ -970,39 +984,62 @@ func (b *Blockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) 
 		b.logger.Errorf("[Blockchain] error sending CatchUpTransactions event: %v", err)
 		return nil, err
 	}
+
 	b.logger.Infof("[Blockchain] Storing CatchUpTransactions state")
 	b.client.StoreFSMState(b.finiteStateMachine.Current())
 
 	return nil, nil
 }
 
-func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "GetFSMCurrentState",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetFSMCurrentState),
-	)
-	defer deferFn()
-
-	var state string
-
-	if b.finiteStateMachine == nil {
-		return nil, errors.WrapGRPC(errors.NewStateInitializationError("FSM is not initialized"))
+func (b *Blockchain) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_RESTORE,
 	}
 
-	// Get the current state of the FSM
-	state = b.finiteStateMachine.Current()
-
-	// Convert the string state to FSMEventType using the map
-	enumState, ok := blockchain_api.FSMStateType_value[state]
-	if !ok {
-		// Handle the case where the state is not found in the map
-		return nil, errors.WrapGRPC(errors.NewProcessingError("invalid state: %s", state))
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
 	}
 
-	return &blockchain_api.GetFSMStateResponse{
-		State: blockchain_api.FSMStateType(enumState),
-	}, nil
+	b.client.StoreFSMState(b.finiteStateMachine.Current())
+
+	return nil, nil
 }
+
+func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_LEGACYSYNC,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	b.client.StoreFSMState(b.finiteStateMachine.Current())
+
+	return nil, nil
+}
+
+func (b *Blockchain) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_UNAVAILABLE,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	b.client.StoreFSMState(b.finiteStateMachine.Current())
+
+	return nil, nil
+}
+
+// Legacy endpoints
 
 func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockLocator",
