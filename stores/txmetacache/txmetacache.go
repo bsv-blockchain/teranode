@@ -219,15 +219,28 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 	return nil
 }
 
-func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
-	txMeta, err := t.utxoStore.Create(ctx, tx, blockHeight, blockIDs...)
+func (t *TxMetaCache) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+	txMeta, err := t.utxoStore.Create(ctx, tx, blockHeight, opts...)
 	if err != nil {
 		return txMeta, err
 	}
 
+	options := &utxo.CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	var txHash *chainhash.Hash
+
+	if options.TxID != nil {
+		txHash = options.TxID
+	} else {
+		txHash = tx.TxIDChainHash()
+	}
+
 	// add to cache
 	txMeta.Tx = nil
-	_ = t.SetCache(tx.TxIDChainHash(), txMeta)
+	_ = t.SetCache(txHash, txMeta)
 
 	return txMeta, nil
 }

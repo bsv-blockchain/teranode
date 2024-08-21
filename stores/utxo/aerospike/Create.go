@@ -25,6 +25,7 @@ import (
 var placeholderKey *aerospike.Key
 
 type batchStoreItem struct {
+	txHash      *chainhash.Hash
 	tx          *bt.Tx
 	blockHeight uint32
 	blockIDs    []uint32
@@ -32,7 +33,12 @@ type batchStoreItem struct {
 	done        chan error
 }
 
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+	options := &utxo.CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
 	_, _, deferFn := tracing.StartTracing(ctx, "aerospike:Create")
 	defer deferFn()
 
@@ -44,11 +50,19 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, block
 	errCh := make(chan error)
 	defer close(errCh)
 
+	var txHash *chainhash.Hash
+	if options.TxID != nil {
+		txHash = options.TxID
+	} else {
+		txHash = tx.TxIDChainHash()
+	}
+
 	item := &batchStoreItem{
+		txHash:      txHash,
 		tx:          tx,
 		blockHeight: blockHeight,
 		lockTime:    tx.LockTime,
-		blockIDs:    blockIDs,
+		blockIDs:    options.BlockIDs,
 		done:        errCh,
 	}
 
@@ -313,7 +327,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore [][]*aerospike.Bin) {
 	if err := s.externalStore.Set(
 		context.TODO(),
-		bItem.tx.TxIDChainHash()[:],
+		bItem.txHash[:],
 		bItem.tx.Bytes(),
 		options.WithFileExtension("tx"),
 	); err != nil {
@@ -324,8 +338,6 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 	// Get a new write policy which will allow CREATE or UPDATE
 	wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
-	txid := bItem.tx.TxIDChainHash()
-
 	for i := len(binsToStore) - 1; i >= 0; i-- {
 		bins := binsToStore[i]
 
@@ -334,7 +346,7 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 			wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
 		}
 
-		keySource := uaerospike.CalculateKeySource(txid, uint32(i))
+		keySource := uaerospike.CalculateKeySource(bItem.txHash, uint32(i))
 
 		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {

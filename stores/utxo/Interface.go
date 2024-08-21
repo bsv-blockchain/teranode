@@ -41,12 +41,31 @@ type UnresolvedMetaData struct {
 	Err    error          // returned error
 }
 
+type CreateOption func(*CreateOptions)
+
+type CreateOptions struct {
+	BlockIDs []uint32
+	TxID     *chainhash.Hash
+}
+
+func WithBlockIDs(blockIDs ...uint32) CreateOption {
+	return func(o *CreateOptions) {
+		o.BlockIDs = blockIDs
+	}
+}
+
+func WithTXID(txID *chainhash.Hash) CreateOption {
+	return func(o *CreateOptions) {
+		o.TxID = txID
+	}
+}
+
 // Store is the interface for the UTXO map store
 type Store interface {
 	// CRUD functions
 	Health(ctx context.Context) (int, string, error)
 
-	Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error)
+	Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error)
 	Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error)
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 
@@ -76,9 +95,14 @@ type MockUtxostore struct{}
 func (mu *MockUtxostore) Health(ctx context.Context) (int, string, error) {
 	return 0, "Validator test", nil
 }
+func (mu *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error) {
+	options := &CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
 
-func (mu *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
 	return nil, nil
+
 }
 
 func (mu *MockUtxostore) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {

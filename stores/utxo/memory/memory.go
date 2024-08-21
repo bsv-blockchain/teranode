@@ -43,11 +43,22 @@ func (m *Memory) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
+func (m *Memory) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
-	txHash := tx.TxIDChainHash()
+	options := &utxo.CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	var txHash *chainhash.Hash
+
+	if options.TxID != nil {
+		txHash = options.TxID
+	} else {
+		txHash = tx.TxIDChainHash()
+	}
 
 	if _, ok := m.txs[*txHash]; ok {
 		return nil, errors.NewTxNotFoundError("%v not found", txHash)
@@ -60,8 +71,8 @@ func (m *Memory) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, blockI
 		utxoMap:  make(map[chainhash.Hash]*chainhash.Hash),
 	}
 
-	if len(blockIDs) > 0 {
-		m.txs[*txHash].blockIDs = blockIDs
+	if len(options.BlockIDs) > 0 {
+		m.txs[*txHash].blockIDs = options.BlockIDs
 	}
 
 	txMetaData, err := util.TxMetaDataFromTx(tx)
