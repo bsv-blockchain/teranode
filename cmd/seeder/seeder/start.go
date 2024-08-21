@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
+	// nolint:gci,gosec
 	_ "net/http/pprof"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -24,21 +24,18 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// nolint: gocognit
 func Start() {
-	go func() {
-		srv := &http.Server{
-			Addr:         ":6060",
-			ReadTimeout:  time.Second * 5,
-			WriteTimeout: time.Second * 10,
-		}
-		_ = srv.ListenAndServe()
-	}()
-
 	inFile := flag.String("in", "", "Input filename for UTXO set.")
 	flag.Parse()
 
 	ctx := context.Background()
 	logger := ulogger.NewGoCoreLogger("seed")
+
+	go func() {
+		// nolint:gosec
+		logger.Errorf("%v", http.ListenAndServe(":6060", nil))
+	}()
 
 	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil || !found {
@@ -56,11 +53,13 @@ func Start() {
 
 	channelSize, _ := gocore.Config().GetInt("channelSize", 10_000)
 
+	logger.Infof("Using channel size of %d", channelSize)
 	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, channelSize)
 
 	g, gCtx := errgroup.WithContext(context.Background())
 
 	workerCount, _ := gocore.Config().GetInt("workerCount", 1_000)
+	logger.Infof("Starting %d workers", workerCount)
 
 	for i := 0; i < workerCount; i++ {
 		g.Go(worker(gCtx, utxoStore, utxoWrapperCh))
@@ -112,7 +111,7 @@ func Start() {
 						break OUTER
 					}
 					logger.Errorf("Failed to read UTXO: %v", err)
-					return fmt.Errorf("failed to read UTXO: %w", err)
+					return errors.NewProcessingError("Failed to read UTXO:", err)
 				}
 
 				// Attempt to send the UTXO to the channel, but only if ctx.Done() is not active
