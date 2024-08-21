@@ -54,12 +54,15 @@ func Start() {
 		return
 	}
 
-	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, 100_000)
+	channelSize, _ := gocore.Config().GetInt("channelSize", 10_000)
+
+	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, channelSize)
 
 	g, gCtx := errgroup.WithContext(context.Background())
 
-	// Create 1000 workers to process the UTXO data
-	for i := 0; i < 1000; i++ {
+	workerCount, _ := gocore.Config().GetInt("workerCount", 1_000)
+
+	for i := 0; i < workerCount; i++ {
 		g.Go(worker(gCtx, utxoStore, utxoWrapperCh))
 	}
 
