@@ -593,3 +593,15 @@ func PadUTXOsWithNil(utxos []*UTXO) []*UTXO {
 
 	return padded
 }
+
+func UnpadSlice[T any](padded []*T) []*T {
+	utxos := make([]*T, 0, len(padded))
+
+	for _, utxo := range padded {
+		if utxo != nil {
+			utxos = append(utxos, utxo)
+		}
+	}
+
+	return utxos
+}

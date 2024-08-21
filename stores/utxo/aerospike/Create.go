@@ -9,6 +9,7 @@ import (
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/aerospike/aerospike-client-go/v7/types"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
@@ -26,6 +27,7 @@ var placeholderKey *aerospike.Key
 
 type batchStoreItem struct {
 	txHash      *chainhash.Hash
+	isCoinbase  bool
 	tx          *bt.Tx
 	blockHeight uint32
 	blockIDs    []uint32
@@ -57,8 +59,14 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		txHash = tx.TxIDChainHash()
 	}
 
+	isCoinbase := tx.IsCoinbase()
+	if options.IsCoinbase != nil {
+		isCoinbase = *options.IsCoinbase
+	}
+
 	item := &batchStoreItem{
 		txHash:      txHash,
+		isCoinbase:  isCoinbase,
 		tx:          tx,
 		blockHeight: blockHeight,
 		lockTime:    tx.LockTime,
@@ -114,7 +122,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		// We calculate the bin that we want to store, but we may get back lots of bin batches
 		// because we have had to split the UTXOs into multiple records
 
-		binsToStore, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, s.externalizeAllTransactions) // false is to say this is a normal record, not external.
+		binsToStore, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, s.externalizeAllTransactions, bItem.txHash, bItem.isCoinbase) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not get bins to store", err))
 			//NOOP for this record
@@ -128,18 +136,22 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			// Make this batch item a NOOP and persist all of these to be written via a queue
 			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
-			go s.storeTransactionExternally(batch[idx], binsToStore)
+			if len(batch[idx].tx.Inputs) == 0 {
+				go s.storePartialTransactionExternally(batch[idx], binsToStore)
+			} else {
+				go s.storeTransactionExternally(batch[idx], binsToStore)
+			}
 
 			continue
 		} else if s.externalizeAllTransactions {
 			// store the tx data externally, it is not in our aerospike record
 			if err = s.externalStore.Set(
 				context.Background(),
-				bItem.tx.TxIDChainHash()[:],
+				bItem.txHash[:],
 				bItem.tx.Bytes(),
 				options.WithFileExtension("tx"),
 			); err != nil {
-				utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.tx.TxIDChainHash().String(), err))
+				utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.txHash.String(), err))
 				continue
 			}
 		}
@@ -172,13 +184,13 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].tx.TxIDChainHash().String(), idx, batchId)
-					utils.SafeSend[error](batch[idx].done, errors.NewTxAlreadyExistsError("%v already exists in store", batch[idx].tx.TxIDChainHash()))
+					s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].txHash.String(), idx, batchId)
+					utils.SafeSend[error](batch[idx].done, errors.NewTxAlreadyExistsError("%v already exists in store", batch[idx].txHash))
 					continue
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, err = s.getBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, true) // true is to say this is a big record
+					binsToStore, err = s.getBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, true, batch[idx].txHash, batch[idx].isCoinbase) // true is to say this is a big record
 					if err != nil {
 						utils.SafeSend[error](batch[idx].done, errors.NewProcessingError("could not get bins to store", err))
 						continue
@@ -193,7 +205,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					continue
 				}
 
-				utils.SafeSend[error](batch[idx].done, errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].tx.TxIDChainHash().String(), idx, batchId, err))
+				utils.SafeSend[error](batch[idx].done, errors.NewStorageError("[STORE_BATCH][%s:%d] error in aerospike store batch record for tx (will retry): %d - %w", batch[idx].txHash.String(), idx, batchId, err))
 			}
 		} else {
 			if len(batch[idx].tx.Outputs) <= s.utxoBatchSize {
@@ -232,23 +244,25 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 	return batches
 }
 
-func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool) ([][]*aerospike.Bin, error) {
+func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool) ([][]*aerospike.Bin, error) {
 
 	var (
 		fee        uint64
 		utxoHashes []*chainhash.Hash
 		err        error
+		size       int
 	)
 
 	if len(tx.Inputs) == 0 {
 		fee = 0
-		utxoHashes, err = utxo.GetUtxoHashes(tx)
+		utxoHashes, err = utxo.GetUtxoHashes(tx, txHash)
 	} else {
+		size = tx.Size()
 		fee, utxoHashes, err = utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
 	}
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
-		return nil, errors.NewProcessingError("failed to get fees and utxo hashes for %s: %v", tx.TxIDChainHash(), err)
+		return nil, errors.NewProcessingError("failed to get fees and utxo hashes for %s: %v", txHash, err)
 	}
 
 	var inputs []interface{}
@@ -287,11 +301,13 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	utxos := make([]interface{}, len(tx.Outputs))
 
 	for i, output := range tx.Outputs {
-		outputs[i] = output.Bytes()
+		if output != nil {
+			outputs[i] = output.Bytes()
 
-		// store all non-zero utxos and exceptions from pre-genesis
-		if utxo.ShouldStoreOutputAsUTXO(output, blockHeight) {
-			utxos[i] = aerospike.NewBytesValue(utxoHashes[i][:])
+			// store all non-zero utxos and exceptions from pre-genesis
+			if utxo.ShouldStoreOutputAsUTXO(output, blockHeight) {
+				utxos[i] = aerospike.NewBytesValue(utxoHashes[i][:])
+			}
 		}
 	}
 
@@ -299,12 +315,12 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		aerospike.NewBin("version", aerospike.NewIntegerValue(int(tx.Version))),
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
-		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(tx.Size())),
+		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(size)),
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
 		aerospike.NewBin("isCoinbase", tx.IsCoinbase()),
 	}
 
-	if tx.IsCoinbase() {
+	if isCoinbase {
 		// TODO - verify this is correct.  You cannot spend outputs that were created in a coinbase transaction
 		// until 100 blocks have been mined on top of the block containing the coinbase transaction.
 		// Bitcoin has a 100 block coinbase maturity period and the block in which the coinbase transaction is included is block 0.
@@ -341,7 +357,67 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 		bItem.tx.Bytes(),
 		options.WithFileExtension("tx"),
 	); err != nil {
-		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.tx.TxIDChainHash().String(), err))
+		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.txHash.String(), err))
+		return
+	}
+
+	// Get a new write policy which will allow CREATE or UPDATE
+	wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+
+	for i := len(binsToStore) - 1; i >= 0; i-- {
+		bins := binsToStore[i]
+
+		if i == 0 {
+			// For the "master" record, set the write policy to CREATE_ONLY
+			wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
+		}
+
+		keySource := uaerospike.CalculateKeySource(bItem.txHash, uint32(i))
+
+		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
+		if err != nil {
+			utils.SafeSend[error](bItem.done, err)
+			return
+		}
+
+		putOps := make([]*aerospike.Operation, len(bins))
+		for i, bin := range bins {
+			putOps[i] = aerospike.PutOp(bin)
+		}
+
+		if err := s.client.PutBins(wPolicy, key, bins...); err != nil {
+			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not put bins (extended mode) to store", err))
+			return
+		}
+	}
+
+	utils.SafeSend(bItem.done, nil)
+}
+
+func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToStore [][]*aerospike.Bin) {
+	nonNilOutputs := utxopersister.UnpadSlice(bItem.tx.Outputs)
+
+	wrapper := utxopersister.UTXOWrapper{
+		TxID:     bItem.txHash,
+		Height:   bItem.blockHeight,
+		Coinbase: bItem.isCoinbase,
+		UTXOs:    make([]*utxopersister.UTXO, len(nonNilOutputs)),
+	}
+
+	for i, output := range nonNilOutputs {
+		wrapper.UTXOs[i] = &utxopersister.UTXO{
+			Value:  output.Satoshis,
+			Script: *output.LockingScript,
+		}
+	}
+
+	if err := s.externalStore.Set(
+		context.TODO(),
+		bItem.txHash[:],
+		wrapper.Bytes(),
+		options.WithFileExtension("output"),
+	); err != nil {
+		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]: %v", bItem.txHash.String(), err))
 		return
 	}
 

@@ -27,9 +27,14 @@ func TxMetaDataFromTx(tx *bt.Tx) (*meta.Data, error) {
 		ParentTxHashes: parentTxHashes,
 		BlockIDs:       make([]uint32, 0),
 		Fee:            fee,
-		SizeInBytes:    uint64(tx.Size()),
 		IsCoinbase:     tx.IsCoinbase(),
 		LockTime:       tx.LockTime,
+	}
+
+	// For partially populated utxos, we will have no inputs and possibly some nil outputs.
+	// Therefore, we do not call tx.Size() as it will panic.
+	if len(tx.Inputs) > 0 {
+		s.SizeInBytes = uint64(tx.Size())
 	}
 
 	return &s, nil

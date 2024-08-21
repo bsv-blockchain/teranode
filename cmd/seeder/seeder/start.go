@@ -10,7 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
+	utxo_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -33,7 +33,7 @@ func Start() {
 
 	logger.Infof("Using utxostore at %s", utxoStoreURL)
 
-	utxoStore, err := _factory.NewStore(ctx, logger, utxoStoreURL, "seeder", false)
+	utxoStore, err := utxo_factory.NewStore(ctx, logger, utxoStoreURL, "seeder", false)
 	if err != nil {
 		logger.Errorf("Failed to create utxostore: %v", err)
 		return
