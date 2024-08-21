@@ -22,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
+	"github.com/bitcoin-sv/ubsv/cmd/seeder/seeder"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	utxopersister_cmd "github.com/bitcoin-sv/ubsv/cmd/utxopersister/utxopersister"
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -113,6 +114,9 @@ func main() {
 		return
 	case "utxopersister.run":
 		utxopersister_cmd.Start()
+		return
+	case "seeder.run":
+		seeder.Start()
 		return
 	}
 

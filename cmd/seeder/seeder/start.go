@@ -19,7 +19,7 @@ import (
 )
 
 func Start() {
-	inFile := flag.String("in", "chainstate.utxo-set", "Input filename for UTXO set.")
+	inFile := flag.String("in", "", "Input filename for UTXO set.")
 	flag.Parse()
 
 	ctx := context.Background()
