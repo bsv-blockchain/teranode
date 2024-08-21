@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"context"
 	"flag"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
@@ -72,6 +74,9 @@ func Start() {
 		return
 	}
 
+	var txWritten uint64
+	var utxosWritten uint64
+
 	for {
 		utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(reader)
 		if err != nil {
@@ -91,7 +96,16 @@ func Start() {
 		}
 
 		utxoWrapperCh <- utxoWrapper
+
+		txWritten++
+		utxosWritten += uint64(len(utxoWrapper.UTXOs))
+
+		if txWritten%1_000_000 == 0 {
+			logger.Infof("Processed %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
+		}
 	}
+
+	logger.Infof("FINISHED  %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 
 	close(utxoWrapperCh)
 
@@ -160,4 +174,16 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 	}
 
 	return nil
+}
+
+func formatNumber(n uint64) string {
+	in := fmt.Sprintf("%d", n)
+	out := make([]string, 0, len(in)+(len(in)-1)/3)
+	for i, c := range in {
+		if i > 0 && (len(in)-i)%3 == 0 {
+			out = append(out, ",")
+		}
+		out = append(out, string(c))
+	}
+	return strings.Join(out, "")
 }
