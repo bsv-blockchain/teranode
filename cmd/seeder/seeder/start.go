@@ -40,7 +40,7 @@ func Start() {
 
 	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil || !found {
-		logger.Errorf("blockstore URL not found in config: %v", err)
+		logger.Errorf("utxostore URL not found in config: %v", err)
 		return
 	}
 
@@ -69,7 +69,6 @@ func Start() {
 
 	logger.Infof("Using channel size of %d", channelSize)
 	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, channelSize)
-	// utxoWrapperCh := make(chan *utxopersister.UTXOWrapper)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
@@ -106,8 +105,8 @@ func Start() {
 	}
 
 	var (
-		txWritten    uint64
-		utxosWritten uint64
+		txProcessed    uint64
+		utxosProcessed uint64
 	)
 
 	g.Go(func() error {
@@ -143,17 +142,17 @@ func Start() {
 					return gCtx.Err()
 
 				case utxoWrapperCh <- utxoWrapper:
-					txWritten++
-					utxosWritten += uint64(len(utxoWrapper.UTXOs))
+					txProcessed++
+					utxosProcessed += uint64(len(utxoWrapper.UTXOs))
 
-					if txWritten%1_000_000 == 0 {
-						logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
+					if txProcessed%1_000_000 == 0 {
+						logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txProcessed), formatNumber(utxosProcessed))
 					}
 				}
 			}
 		}
 
-		logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
+		logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(txProcessed), formatNumber(utxosProcessed))
 
 		return nil
 	})
@@ -173,7 +172,7 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, id int
 		select {
 		case <-ctx.Done():
 			logger.Infof("Worker %d received stop signal: %v", id, ctx.Err())
-			return ctx.Err()
+			return nil
 
 		case utxoWrapper, ok := <-utxoWrapperCh:
 			if !ok {

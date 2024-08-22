@@ -404,7 +404,18 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 		}
 
 		if err := s.client.PutBins(wPolicy, key, bins...); err != nil {
+			aErr, ok := err.(*aerospike.AerospikeError)
+			if ok {
+				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
+					s.logger.Warnf("[STORE_BATCH][%s] tx already exists, skipping", bItem.txHash.String())
+					utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("%v already exists in store", bItem.txHash))
+
+					return
+				}
+			}
+
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not put bins (extended mode) to store", err))
+
 			return
 		}
 	}
@@ -464,7 +475,18 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 		}
 
 		if err := s.client.PutBins(wPolicy, key, bins...); err != nil {
+			aErr, ok := err.(*aerospike.AerospikeError)
+			if ok {
+				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
+					s.logger.Warnf("[STORE_BATCH][%s] tx already exists, skipping", bItem.txHash.String())
+					utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("%v already exists in store", bItem.txHash))
+
+					return
+				}
+			}
+
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not put bins (extended mode) to store", err))
+
 			return
 		}
 	}
