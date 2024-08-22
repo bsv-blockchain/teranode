@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	// nolint:gci,gosec
 	_ "net/http/pprof"
@@ -29,7 +31,6 @@ func Start() {
 	inFile := flag.String("in", "", "Input filename for UTXO set.")
 	flag.Parse()
 
-	ctx := context.Background()
 	logger := ulogger.NewGoCoreLogger("seed")
 
 	go func() {
@@ -45,24 +46,42 @@ func Start() {
 
 	logger.Infof("Using utxostore at %s", utxoStoreURL)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle CTRL-C (SIGINT)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		fmt.Println("\nCTRL-C pressed. Cancelling all operations...")
+		cancel()
+	}()
+
 	utxoStore, err := utxo_factory.NewStore(ctx, logger, utxoStoreURL, "seeder", false)
 	if err != nil {
 		logger.Errorf("Failed to create utxostore: %v", err)
 		return
 	}
 
-	channelSize, _ := gocore.Config().GetInt("channelSize", 10_000)
+	// channelSize, _ := gocore.Config().GetInt("channelSize", 10_000)
 
-	logger.Infof("Using channel size of %d", channelSize)
-	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, channelSize)
+	// logger.Infof("Using channel size of %d", channelSize)
+	// utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, channelSize)
+	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper)
 
-	g, gCtx := errgroup.WithContext(context.Background())
+	g, gCtx := errgroup.WithContext(ctx)
 
 	workerCount, _ := gocore.Config().GetInt("workerCount", 1_000)
 	logger.Infof("Starting %d workers", workerCount)
 
 	for i := 0; i < workerCount; i++ {
-		g.Go(worker(gCtx, utxoStore, utxoWrapperCh))
+		workerID := i
+
+		g.Go(func() error {
+			return worker(gCtx, logger, utxoStore, workerID, utxoWrapperCh)
+		})
 	}
 
 	// Read the UTXO data from the store
@@ -92,12 +111,15 @@ func Start() {
 	)
 
 	g.Go(func() error {
+		defer close(utxoWrapperCh)
+
 	OUTER:
 		for {
 			select {
-			case <-ctx.Done():
-				logger.Infof("Context cancelled, stopping UTXO processing")
-				return ctx.Err()
+			case <-gCtx.Done():
+				// Context canceled, stop reading lines
+				logger.Infof("Context cancelled, stopping reading UTXOWrapper")
+				return gCtx.Err()
 
 			default:
 				utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(reader)
@@ -110,12 +132,16 @@ func Start() {
 						}
 						break OUTER
 					}
+
 					logger.Errorf("Failed to read UTXO: %v", err)
 					return errors.NewProcessingError("Failed to read UTXO:", err)
 				}
 
-				// Attempt to send the UTXO to the channel, but only if ctx.Done() is not active
 				select {
+				case <-gCtx.Done():
+					logger.Infof("Context cancelled while sending UTXO to channel, stopping UTXO processing")
+					return gCtx.Err()
+
 				case utxoWrapperCh <- utxoWrapper:
 					txWritten++
 					utxosWritten += uint64(len(utxoWrapper.UTXOs))
@@ -123,17 +149,11 @@ func Start() {
 					if txWritten%1_000_000 == 0 {
 						logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
 					}
-
-				case <-ctx.Done():
-					logger.Infof("Context cancelled while sending UTXO to channel, stopping UTXO processing")
-					return ctx.Err()
 				}
 			}
 		}
 
 		logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(txWritten), formatNumber(utxosWritten))
-
-		close(utxoWrapperCh)
 
 		return nil
 	})
@@ -148,21 +168,21 @@ func Start() {
 	logger.Infof("All workers finished successfully")
 }
 
-func worker(ctx context.Context, store utxo.Store, utxoCh chan *utxopersister.UTXOWrapper) func() error {
-	return func() error {
-		for {
-			select {
-			case utxoWrapper, isOpen := <-utxoCh:
-				if !isOpen {
-					return nil
-				}
+func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, id int, utxoWrapperCh <-chan *utxopersister.UTXOWrapper) error {
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Infof("Worker %d received stop signal\n", id)
+			return ctx.Err()
 
-				if err := processUTXO(ctx, store, utxoWrapper); err != nil {
-					return err
-				}
+		case utxoWrapper, ok := <-utxoWrapperCh:
+			if !ok {
+				// Channel closed, stop the worker
+				return nil
+			}
 
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := processUTXO(ctx, store, utxoWrapper); err != nil {
+				return err
 			}
 		}
 	}
