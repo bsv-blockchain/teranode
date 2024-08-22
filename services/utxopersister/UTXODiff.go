@@ -287,7 +287,7 @@ func (ud *UTXODiff) Close() error {
 		}
 
 		if err := ud.additionsStorer.Close(ctx); err != nil {
-			return errors.NewStorageError("Error flushing additions writer:", err)
+			return errors.NewStorageError("Error flushing additions writer", err)
 		}
 
 		return nil

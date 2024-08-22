@@ -134,7 +134,7 @@ func Start() {
 					}
 
 					logger.Errorf("Failed to read UTXO: %v", err)
-					return errors.NewProcessingError("Failed to read UTXO:", err)
+					return errors.NewProcessingError("Failed to read UTXO", err)
 				}
 
 				select {

@@ -242,7 +242,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v):", tx.IsCoinbase(), sqliteErr)
 		}
 
-		return nil, errors.NewStorageError("Failed to insert transaction:", err)
+		return nil, errors.NewStorageError("Failed to insert transaction", err)
 	}
 
 	// Insert the inputs...
@@ -326,7 +326,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 				} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
 					return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
 				}
-				return nil, errors.NewStorageError("Failed to insert output:", err)
+
+				return nil, errors.NewStorageError("Failed to insert output", err)
 			}
 		}
 	}

@@ -113,7 +113,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	db, err := leveldb.OpenFile(chainstate, opts)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't open LevelDB:", err)
+		return errors.NewProcessingError("Couldn't open LevelDB", err)
 	}
 	defer db.Close()
 
@@ -125,7 +125,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	file, err := os.Create(outFile)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't create file:", err)
+		return errors.NewProcessingError("Couldn't create file", err)
 	}
 	defer file.Close()
 
@@ -136,12 +136,12 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	header, err := utxopersister.BuildHeaderBytes("U-S-1.0", blockHash, blockHeight, previousBlockHash)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't build UTXO set header:", err)
+		return errors.NewProcessingError("Couldn't build UTXO set header", err)
 	}
 
 	_, err = bufferedWriter.Write(header)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't write header to file:", err)
+		return errors.NewProcessingError("Couldn't write header to file", err)
 	}
 
 	// Iterate over LevelDB keys
@@ -461,7 +461,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	// Write the eof marker
 	if _, err := bufferedWriter.Write(utxopersister.EOFMarker); err != nil {
-		return errors.NewProcessingError("Couldn't write EOF marker:", err)
+		return errors.NewProcessingError("Couldn't write EOF marker", err)
 	}
 
 	// Write the number of txs and utxos written
@@ -469,25 +469,25 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	binary.LittleEndian.PutUint64(b, txWritten)
 	if _, err := bufferedWriter.Write(b); err != nil {
-		return errors.NewProcessingError("Couldn't write tx count:", err)
+		return errors.NewProcessingError("Couldn't write tx count", err)
 	}
 
 	binary.LittleEndian.PutUint64(b, utxosWritten)
 
 	if _, err := bufferedWriter.Write(b); err != nil {
-		return errors.NewProcessingError("Couldn't write utxo count:", err)
+		return errors.NewProcessingError("Couldn't write utxo count", err)
 	}
 
 	iter.Release() // Do not defer this, want to release iterator before closing database
 
 	if err := bufferedWriter.Flush(); err != nil {
-		return errors.NewProcessingError("Couldn't flush buffer:", err)
+		return errors.NewProcessingError("Couldn't flush buffer", err)
 	}
 
 	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), blockHash.String()+".utxo-set") // N.B. The 2 spaces is important for the hash to be valid
 	//nolint:gosec
 	if err := os.WriteFile(outFile+".sha256", []byte(hashData), 0644); err != nil {
-		return errors.NewProcessingError("Couldn't write hash file:", err)
+		return errors.NewProcessingError("Couldn't write hash file", err)
 	}
 
 	logger.Infof("FINISHED  %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)

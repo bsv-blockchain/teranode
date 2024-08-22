@@ -74,13 +74,13 @@ func (f *FileStorer) Write(b []byte) (n int, err error) {
 
 func (f *FileStorer) Close(ctx context.Context) error {
 	if err := f.bufferedWriter.Flush(); err != nil {
-		return errors.NewStorageError("Error flushing writer:", err)
+		return errors.NewStorageError("Error flushing writer", err)
 	}
 
 	// f.logger.Infof("Closed buffered writer")
 
 	if err := f.writer.Close(); err != nil {
-		return errors.NewStorageError("Error closing writer:", err)
+		return errors.NewStorageError("Error closing writer", err)
 	}
 
 	// f.logger.Infof("Closed underlying writer")
