@@ -24,7 +24,7 @@ func New[T any](size int, timeout time.Duration, fn func(batch []*T), background
 		size:       size,
 		timeout:    timeout,
 		batch:      make([]*T, 0, size),
-		ch:         make(chan *T),
+		ch:         make(chan *T, size*64),
 		background: background,
 	}
 
