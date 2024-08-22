@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -82,6 +83,9 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 }
 
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
+	start := gocore.CurrentTime()
+	stat := gocore.NewStat("sendSpendBatchLua")
+
 	batchID := s.batchID.Add(1)
 	s.logger.Debugf("[SPEND_BATCH_LUA] sending lua batch %d of %d spends", batchID, len(batch))
 
@@ -134,6 +138,8 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		}
 	}
 
+	start = stat.NewStat("BatchOperate").AddTime(start)
+
 	// batchOperate may have no errors, but some of the records may have failed
 	for idx, batchRecord := range batchRecords {
 		spend := batch[idx].spend
@@ -183,6 +189,8 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			}
 		}
 	}
+
+	stat.NewStat("postBatchOperate").AddTime(start)
 }
 
 func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) {
