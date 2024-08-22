@@ -172,7 +172,7 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, id int
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Infof("Worker %d received stop signal\n", id)
+			logger.Infof("Worker %d received stop signal: %v", id, ctx.Err())
 			return ctx.Err()
 
 		case utxoWrapper, ok := <-utxoWrapperCh:
@@ -182,6 +182,7 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, id int
 			}
 
 			if err := processUTXO(ctx, store, utxoWrapper); err != nil {
+				logger.Errorf("Worker %d failed to process UTXO: %v", id, err)
 				return err
 			}
 		}
