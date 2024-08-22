@@ -222,9 +222,10 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 	defer deferFn()
 
 	storeBatcherSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 1024)
+	storeBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_storeBatcherConcurrency", 32)
 
-	g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
-	g.SetLimit(storeBatcherSize * 32)                     // we limit the number of concurrent requests, to not overload Aerospike
+	g, gCtx := errgroup.WithContext(context.Background())  // we don't want the tracing to be linked to these calls
+	g.SetLimit(storeBatcherSize * storeBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 	// create all the utxos first
 	for txHash := range txMap {
@@ -243,10 +244,11 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 	_ = g.Wait()
 
 	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
+	spendBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_spendBatcherConcurrency", 32)
 
 	// validate all the transactions in parallel
-	g, gCtx = errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
-	g.SetLimit(spendBatcherSize * 32)                    // we limit the number of concurrent requests, to not overload Aerospike
+	g, gCtx = errgroup.WithContext(context.Background())   // we don't want the tracing to be linked to these calls
+	g.SetLimit(spendBatcherSize * spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 	// validate all the transactions in parallel
 	for txHash := range txMap {
@@ -269,6 +271,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	defer deferFn()
 
 	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
+	spendBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_spendBatcherConcurrency", 32)
 
 	// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
 	// This allows us to process all the transactions in parallel. The levels indicate the number of parents in the block.
@@ -284,8 +287,8 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 			sm.validationClient.TriggerBatcher()
 		} else {
 			// process all the transactions on a certain level in parallel
-			g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
-			g.SetLimit(spendBatcherSize * 32)                     // we limit the number of concurrent requests, to not overload Aerospike
+			g, gCtx := errgroup.WithContext(context.Background())  // we don't want the tracing to be linked to these calls
+			g.SetLimit(spendBatcherSize * spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 			for txIdx := range blockTxsPerLevel[i] {
 				txIdx := txIdx
@@ -311,9 +314,10 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	defer deferFn()
 
 	outpointBatcherSize, _ := gocore.Config().GetInt("utxostore_outpointBatcherSize", 1024)
+	outpointBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_outpointBatcherConcurrency", 32)
 
-	g := errgroup.Group{}
-	g.SetLimit(outpointBatcherSize * 16) // we limit the number of concurrent requests, to not overload Aerospike
+	g, gCtx := errgroup.WithContext(ctx)                         // we don't want the tracing to be linked to these calls
+	g.SetLimit(outpointBatcherSize * outpointBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()
 
@@ -329,7 +333,7 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 			currentIdx := subtree.Length() - 1
 
 			g.Go(func() error {
-				if err := sm.extendTransaction(tx, txMap); err != nil {
+				if err := sm.extendTransaction(gCtx, tx, txMap); err != nil {
 					return fmt.Errorf("failed to extend transaction: %w", err)
 				}
 
@@ -437,7 +441,7 @@ func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Bl
 	return maxLevel, blockTxsPerLevel
 }
 
-func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]*txMapWrapper) error {
+func (sm *SyncManager) extendTransaction(ctx context.Context, tx *bt.Tx, txMap map[chainhash.Hash]*txMapWrapper) error {
 	previousOutputs := make([]*meta.PreviousOutput, 0, len(tx.Inputs))
 
 	txWrapper, found := txMap[*tx.TxIDChainHash()]
@@ -460,7 +464,7 @@ func (sm *SyncManager) extendTransaction(tx *bt.Tx, txMap map[chainhash.Hash]*tx
 		}
 	}
 
-	if err := sm.utxoStore.PreviousOutputsDecorate(sm.ctx, previousOutputs); err != nil {
+	if err := sm.utxoStore.PreviousOutputsDecorate(ctx, previousOutputs); err != nil {
 		return fmt.Errorf("failed to decorate previous outputs for tx %s: %w", tx.TxIDChainHash(), err)
 	}
 
