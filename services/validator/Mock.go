@@ -51,3 +51,4 @@ func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight
 
 	return nil
 }
+func (m *MockValidatorClient) TriggerBatcher() {}

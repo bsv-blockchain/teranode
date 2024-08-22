@@ -11,6 +11,7 @@ type Interface interface {
 	Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) error
 	GetBlockHeight() uint32
 	GetMedianBlockTime() uint32
+	TriggerBatcher()
 }
 
 var _ Interface = &MockValidator{}
@@ -31,3 +32,4 @@ func (mv *MockValidator) GetBlockHeight() uint32 {
 func (mv *MockValidator) GetMedianBlockTime() uint32 {
 	return 0
 }
+func (mv *MockValidator) TriggerBatcher() {}

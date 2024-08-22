@@ -110,6 +110,12 @@ func (c *Client) GetMedianBlockTime() uint32 {
 	return resp.MedianTime
 }
 
+func (c *Client) TriggerBatcher() {
+	if c.batchSize > 0 {
+		c.batcher.Trigger()
+	}
+}
+
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) error {
 	if c.batchSize == 0 {
 		if _, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{

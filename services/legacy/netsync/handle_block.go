@@ -217,22 +217,34 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	for i := uint32(0); i <= maxLevel; i++ {
 		_, _, deferLevelFn := tracing.StartTracing(ctx, fmt.Sprintf("validateTransactions:level:%d", i))
 
-		// process all the transactions on a certain level in parallel
-		g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
-		g.SetLimit(spendBatcherSize * 2)                      // we limit the number of concurrent requests, to not overload Aerospike
-		for txIdx := range blockTxsPerLevel[i] {
-			txIdx := txIdx
-			g.Go(func() error {
-				// send to validation, but only if the parent is not in the same block
-				_ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeight)
+		if len(blockTxsPerLevel[i]) < 10 {
+			// if we have less than 10 transactions on a certain level, we can process them immediately by triggering the batcher
+			for txIdx := range blockTxsPerLevel[i] {
+				_ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeight)
+			}
 
-				return nil
-			})
+			sm.validationClient.TriggerBatcher()
+		} else {
+			// process all the transactions on a certain level in parallel
+			g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
+			g.SetLimit(spendBatcherSize * 2)                      // we limit the number of concurrent requests, to not overload Aerospike
+
+			for txIdx := range blockTxsPerLevel[i] {
+				txIdx := txIdx
+
+				g.Go(func() error {
+					// send to validation, but only if the parent is not in the same block
+					_ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeight)
+
+					return nil
+				})
+			}
+
+			// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
+			_ = g.Wait()
+
+			deferLevelFn()
 		}
-
-		// we don't care about errors here, we are just pre-warming caches for a quicker subtree validation
-		_ = g.Wait()
-		deferLevelFn()
 	}
 }
 

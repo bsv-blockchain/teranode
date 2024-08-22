@@ -260,6 +260,10 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	return nil
 }
 
+func (v *Validator) TriggerBatcher() {
+	// Noop
+}
+
 func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Hash) (err error) {
 	for retries := 0; retries < 3; retries++ {
 		if metaErr := v.utxoStore.Delete(setSpan.Ctx, txID); metaErr != nil {
