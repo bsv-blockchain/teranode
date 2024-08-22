@@ -227,7 +227,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		} else {
 			// process all the transactions on a certain level in parallel
 			g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
-			g.SetLimit(spendBatcherSize * 2)                      // we limit the number of concurrent requests, to not overload Aerospike
+			g.SetLimit(spendBatcherSize * 32)                     // we limit the number of concurrent requests, to not overload Aerospike
 
 			for txIdx := range blockTxsPerLevel[i] {
 				txIdx := txIdx
