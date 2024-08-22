@@ -132,9 +132,10 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	ctx, _, deferFn := tracing.StartTracing(ctx, "prepareSubtrees",
 		tracing.WithLogMessage(
 			sm.logger,
-			"[prepareSubtrees][%s %d] processing subtree for block",
+			"[prepareSubtrees][%s] processing subtree for block height %d, tx count %d",
 			block.Hash().String(),
 			block.Height(),
+			len(block.Transactions()),
 		),
 	)
 	defer deferFn()
