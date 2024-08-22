@@ -102,7 +102,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	}
 
 	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	if err := tv.checkScriptsWithSDK(tx, blockHeight); err != nil {
+	if err := tv.checkScripts(tx, blockHeight); err != nil {
 		return err
 	}
 
