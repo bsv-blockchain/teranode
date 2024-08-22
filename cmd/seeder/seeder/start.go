@@ -65,11 +65,11 @@ func Start() {
 		return
 	}
 
-	// channelSize, _ := gocore.Config().GetInt("channelSize", 10_000)
+	channelSize, _ := gocore.Config().GetInt("channelSize", 10_000)
 
-	// logger.Infof("Using channel size of %d", channelSize)
-	// utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, channelSize)
-	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper)
+	logger.Infof("Using channel size of %d", channelSize)
+	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, channelSize)
+	// utxoWrapperCh := make(chan *utxopersister.UTXOWrapper)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
