@@ -76,7 +76,9 @@ func (s *File) loadTTLs() error {
 		}
 
 		var ttlBytes []byte
+
 		var ttl time.Time
+
 		for _, fileName := range files {
 			if fileName[len(fileName)-4:] != ".ttl" {
 				continue
@@ -113,6 +115,7 @@ func (s *File) ttlCleaner(ctx context.Context) {
 
 			s.fileTTLsMu.Lock()
 			filesToRemove := make([]string, 0, len(s.fileTTLs))
+
 			for fileName, ttl := range s.fileTTLs {
 				if ttl.Before(time.Now()) {
 					filesToRemove = append(filesToRemove, fileName)
@@ -122,8 +125,11 @@ func (s *File) ttlCleaner(ctx context.Context) {
 
 			for _, fileName := range filesToRemove {
 				if err := os.Remove(fileName); err != nil {
-					s.logger.Warnf("failed to remove file: %s", fileName)
+					if !os.IsNotExist(err) {
+						s.logger.Warnf("failed to remove file: %s", fileName)
+					}
 				}
+
 				if err := os.Remove(fileName + ".ttl"); err != nil {
 					if !os.IsNotExist(err) {
 						s.logger.Warnf("failed to remove ttl file: %s", fileName+".ttl")
@@ -151,6 +157,7 @@ func (s *File) Close(_ context.Context) error {
 
 func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
 	s.logger.Debugf("[File] SetFromReader: %s", utils.ReverseAndHexEncodeSlice(key))
+
 	defer reader.Close()
 
 	fileName, err := s.getFileNameForSet(key, opts)
