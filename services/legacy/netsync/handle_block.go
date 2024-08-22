@@ -8,8 +8,10 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
+	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -166,9 +168,17 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, err
 		}
 
-		maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
+		legacyMode := sm.blockchainClient.GetFSMCurrentState() == blockchain_api.FSMStateType_LEGACYSYNCING
+		legacyMode = true // force legacy mode for now
 
-		sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, blockHeight)
+		if legacyMode {
+			// in legacy sync mode, we can process transactions in a block in parallel, but in reverse order
+			// first we create all the utxos, then we spend them
+			sm.validateTransactionsLegacyMode(ctx, txMap, blockHeight)
+		} else {
+			maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
+			sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, blockHeight)
+		}
 
 		subtreeBytes, err := subtree.Serialize()
 		if err != nil {
@@ -204,6 +214,53 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	}
 
 	return subtrees, nil
+}
+
+func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactionsLegacyMode")
+	defer deferFn()
+
+	storeBatcherSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 1024)
+
+	g, gCtx := errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
+	g.SetLimit(storeBatcherSize * 32)                     // we limit the number of concurrent requests, to not overload Aerospike
+
+	// create all the utxos first
+	for txHash := range txMap {
+		txHash := txHash
+
+		g.Go(func() error {
+			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].tx, blockHeight); err != nil {
+				sm.logger.Errorf("failed to create utxo for tx %s: %s", txHash.String(), err)
+			}
+
+			return nil
+		})
+	}
+
+	// wait for all utxos to be created
+	_ = g.Wait()
+
+	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
+
+	// validate all the transactions in parallel
+	g, gCtx = errgroup.WithContext(context.Background()) // we don't want the tracing to be linked to these calls
+	g.SetLimit(spendBatcherSize * 32)                    // we limit the number of concurrent requests, to not overload Aerospike
+
+	// validate all the transactions in parallel
+	for txHash := range txMap {
+		txHash := txHash
+
+		g.Go(func() error {
+			// call the validator to validate the transaction, but skip the utxo creation
+			_ = sm.validationClient.Validate(gCtx, txMap[txHash].tx, blockHeight, validator.WithSkipUtxoCreation(true))
+
+			return nil
+		})
+	}
+
+	// wait for all the transactions to be validated
+	_ = g.Wait()
 }
 
 func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, blockHeight uint32) {

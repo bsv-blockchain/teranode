@@ -140,8 +140,11 @@ func (v *Validator) GetMedianBlockTime() uint32 {
 }
 
 // Validate validates a transaction
-func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
-	if err = v.validateInternal(ctx, tx, blockHeight); err != nil {
+func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (err error) {
+	// apply options
+	validationOptions := ProcessOptions(opts...)
+
+	if err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
 		if v.rejectedTxKafkaChan != nil {
 			startKafka := time.Now()
 			v.rejectedTxKafkaChan <- append(tx.TxIDChainHash().CloneBytes(), err.Error()...)
@@ -153,7 +156,8 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32)
 	return err
 }
 
-func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32) (err error) {
+//gocognit:ignore
+func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Validator:Validate",
 		tracing.WithParentStat(v.stats),
 		tracing.WithHistogram(prometheusTransactionValidateTotal),
@@ -207,25 +211,36 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		return errors.NewProcessingError("[Validate][%s] error spending utxos", tx.TxID(), err)
 	}
 
-	// TODO do we need to make this a 2 phase commit?
-	//      if the block assembly addition fails, the utxo should not be spendable yet
-	txMetaData, err := v.storeTxInUtxoMap(setSpan, tx, blockHeight)
-	if err != nil {
-		if errors.Is(err, errors.ErrTxAlreadyExists) {
-			// stop all processing, this transaction has already been validated and passed into the block assembly
-			// buf := make([]byte, 1024)
-			// runtime.Stack(buf, false)
+	var txMetaData *meta.Data
+	if !validationOptions.skipUtxoCreation {
+		// TODO do we need to make this a 2 phase commit?
+		//      if the block assembly addition fails, the utxo should not be spendable yet
+		txMetaData, err = v.storeTxInUtxoMap(setSpan, tx, blockHeight)
+		if err != nil {
+			if errors.Is(err, errors.ErrTxAlreadyExists) {
+				// stop all processing, this transaction has already been validated and passed into the block assembly
+				// buf := make([]byte, 1024)
+				// runtime.Stack(buf, false)
+				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
+				// v.logger.Debugf("[Validate][%s] stack: %s", tx.TxIDChainHash().String(), string(buf))
 
-			v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
-			// v.logger.Debugf("[Validate][%s] stack: %s", tx.TxIDChainHash().String(), string(buf))
-			return nil
-		}
+				return nil
+			}
 
-		v.logger.Errorf("[Validate][%s] error registering tx in metaStore: %v", tx.TxIDChainHash().String(), err)
-		if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
-			err = errors.NewProcessingError("error reversing utxo spends: %v", reverseErr, err)
+			v.logger.Errorf("[Validate][%s] error registering tx in metaStore: %v", tx.TxIDChainHash().String(), err)
+
+			if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
+				err = errors.NewProcessingError("error reversing utxo spends: %v", reverseErr, err)
+			}
+
+			return errors.NewProcessingError("error registering tx in metaStore", err)
 		}
-		return errors.NewProcessingError("error registering tx in metaStore", err)
+	} else {
+		// create the tx meta needed for the block assembly
+		txMetaData, err = util.TxMetaDataFromTx(tx)
+		if err != nil {
+			return errors.NewProcessingError("failed to get tx meta data", err)
+		}
 	}
 
 	if !v.blockAssemblyDisabled {

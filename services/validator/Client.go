@@ -116,7 +116,7 @@ func (c *Client) TriggerBatcher() {
 	}
 }
 
-func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) error {
+func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error {
 	if c.batchSize == 0 {
 		if _, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
 			TransactionData: tx.ExtendedBytes(),

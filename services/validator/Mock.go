@@ -36,7 +36,7 @@ func (m *MockValidatorClient) GetMedianBlockTime() uint32 {
 	return m.MedianBlockTime
 }
 
-func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight uint32) error {
+func (m *MockValidatorClient) Validate(_ context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error {
 	if len(m.Errors) > 0 {
 		// return error and pop of stack
 		err := m.Errors[0]
