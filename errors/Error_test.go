@@ -63,7 +63,8 @@ func Test_FmtErrorCustomError(t *testing.T) {
 
 // Test_WrapGRPC tests wrapping a custom error for gRPC.
 func Test_WrapGRPC(t *testing.T) {
-	originalErr := New(ERR_NOT_FOUND, "not found")
+	e := errors.New("test wrapped error")
+	originalErr := New(ERR_NOT_FOUND, "not found", e)
 	wrappedErr := WrapGRPC(originalErr)
 	s, ok := status.FromError(wrappedErr)
 	if !ok {
@@ -72,6 +73,24 @@ func Test_WrapGRPC(t *testing.T) {
 
 	if s.Code() != codes.Internal {
 		t.Errorf("expected gRPC code %v; got %v", codes.Internal, s.Code())
+	}
+
+	// Check if the details are correct
+	unwrapped := UnwrapGRPC(wrappedErr)
+	var uErr *Error
+	if ok = errors.As(unwrapped, &uErr); !ok {
+		t.Fatalf("expected *Error type; got %T", unwrapped)
+	}
+
+	if uErr.Code != ERR_NOT_FOUND {
+		t.Errorf("expected code %v; got %v", ERR_NOT_FOUND, uErr.Code)
+	}
+	if uErr.WrappedErr == nil {
+		t.Errorf("expected wrapped error; got nil")
+	}
+	// TODO this is not OK - why is the "0: 0: " added?
+	if uErr.WrappedErr.Error() != "0: 0: "+e.Error() {
+		t.Errorf("expected wrapped error %q; got %q", e.Error(), uErr.WrappedErr.Error())
 	}
 }
 
