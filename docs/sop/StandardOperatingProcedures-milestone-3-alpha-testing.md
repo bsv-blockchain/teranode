@@ -466,6 +466,12 @@ Where possible, BSV recommends using the Initial Data Set Installation approach.
 
 
 
+**TODO - how do we do that? **
+
+
+
+
+
 ### 4.2. Teranode Installation Types
 
 
