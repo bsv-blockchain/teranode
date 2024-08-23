@@ -24,6 +24,10 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
+	if e == nil {
+		return "<nil>"
+	}
+
 	dataMsg := ""
 	if e.Data != nil {
 		dataMsg = e.Data.Error() // Call Error() on the ErrorData
