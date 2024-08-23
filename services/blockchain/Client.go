@@ -598,12 +598,10 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 
 	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
 
-	resp, err := c.client.SendFSMEvent(ctx, req)
+	_, err := c.client.SendFSMEvent(ctx, req)
 	if err != nil {
 		return err
 	}
-
-	c.logger.Infof("[Blockchain Client] GOKHAN FSM state: %v", resp.State)
 
 	return nil
 }
