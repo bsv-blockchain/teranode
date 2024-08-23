@@ -328,19 +328,23 @@ func TestErrorString(t *testing.T) {
 	assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), failed to set data from reader [bucket:key]: 0: some error", thisErr.Error())
 }
 
+// TODO: check why NewServiceError returns error, and mmake it return our error type if possible
+// make sure Wrap and UnWrap GRPC functions treat errors as our error types
+// make sure wrapped and unwrapped errors doesn't lose any data
+// test if multiple chained errors are wrapped/unwrapped correctly
 func Test_MultipleWrapGRPC(t *testing.T) {
 	// Base error is not a GRPC error, basic error
 	baseErr := NewBlockInvalidError("block is invalid")
 	baseErr2 := New(ERR_BLOCK_INVALID, "block is invalid")
 
-	//baseErr2
+	// baseErr2
 
-	//err1 := New(ERR_NOT_FOUND, "resource not found")
-	//err2 := New(ERR_NOT_FOUND, "resource not found")
+	// err1 := New(ERR_NOT_FOUND, "resource not found")
+	// err2 := New(ERR_NOT_FOUND, "resource not found")
 
-	//if !baseErr2.Is(err2) {
+	// if !baseErr2.Is(err2) {
 	//	t.Errorf("Errors with the same code and message should be equal")
-	//}
+	// }
 
 	serviceError := NewServiceError("service error", baseErr2)
 	wrappedOnce := WrapGRPC(serviceError)
