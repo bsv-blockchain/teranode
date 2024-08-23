@@ -106,6 +106,8 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		err error
 	)
 
+	// TODO #1035 group all spends to the same record (tx) to the same call in LUA and change the LUA script to handle multiple spends
+
 	for idx, bItem := range batch {
 		keySource := uaerospike.CalculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize))
 
