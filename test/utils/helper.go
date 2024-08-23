@@ -489,6 +489,7 @@ func CreateAndSendRawTxs(ctx context.Context, node tf.BitcoinNode, count int) ([
 
 	return txHashes, nil
 }
+
 // faucetTx, err := bt.NewTxFromString(tx)
 // if err != nil {
 // 	fmt.Printf("error creating transaction from string", err)
@@ -689,32 +690,34 @@ func isAllowedHost(host string) bool {
 }
 
 func WaitForBlockHeight(url string, targetHeight int, timeout time.Duration) error {
-    ctx, cancel := context.WithTimeout(context.Background(), timeout * time.Second)
-    defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout*time.Second)
+	defer cancel()
 
-    ticker := time.NewTicker(5 * time.Second)
-    defer ticker.Stop()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
-    for {
-        select {
-        case <-ctx.Done():
-            return errors.NewError("timeout waiting for block height")
-        case <-ticker.C:
-            currentHeight, err := GetBlockHeight(url)
-			fmt.Printf("Current block height: %d\n", currentHeight)
-            if err != nil {
-                return errors.NewError("error getting block height: %v", err)
-            }
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.NewError("timeout waiting for block height")
+		case <-ticker.C:
+			currentHeight, err := GetBlockHeight(url)
 
-            if currentHeight >= targetHeight {
-                return nil
-            }
-        }
-    }
+			if err != nil {
+				return errors.NewError("error getting block height: %v", err)
+			}
+
+			if currentHeight >= targetHeight {
+				return nil
+			}
+		}
+	}
 }
 func Unzip(src, dest string) error {
 	cmd := exec.Command("unzip", src, "-d", dest)
 	err := cmd.Run()
+
 	time.Sleep(5 * time.Second)
+
 	return err
 }

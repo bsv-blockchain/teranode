@@ -35,9 +35,9 @@ type TNJLockTimeTestSuite struct {
 }
 
 func getFutureLockTime(daysAhead int) uint32 {
-    now := time.Now()
-    futureTime := now.Add(time.Duration(daysAhead*24) * time.Hour)
-    return uint32(futureTime.Unix())
+	now := time.Now()
+	futureTime := now.Add(time.Duration(daysAhead*24) * time.Hour)
+	return uint32(futureTime.Unix())
 }
 
 func (suite *TNJLockTimeTestSuite) TestLocktimeFutureHeight() {

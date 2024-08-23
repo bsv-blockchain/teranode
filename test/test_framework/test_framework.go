@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
 	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	cb "github.com/bitcoin-sv/ubsv/services/coinbase"

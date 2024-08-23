@@ -18,16 +18,92 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/test/setup"
-	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/suite"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type FsmTestSuite struct {
 	setup.BitcoinTestSuite
+}
+
+func (suite *FsmTestSuite) TestSendTxs() {
+	url := "http://localhost:18090"
+	ctx := context.Background()
+	t := suite.T()
+	framework := suite.Framework
+	blockchainNode0 := framework.Nodes[0].BlockchainClient
+	blockchainNode1 := framework.Nodes[1].BlockchainClient
+
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
+	// var hashes []chainhash.Hash
+
+	for i := 0; i < 2; i++ {
+		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
+		if err != nil {
+			t.Errorf("Failed to create and send raw txs: %v", err)
+		}
+		fmt.Printf("Hashes: %v\n", hashes)
+
+		height, _ := helper.GetBlockHeight(url)
+		baClient := framework.Nodes[0].BlockassemblyClient
+		_, err = helper.MineBlock(ctx, baClient, logger)
+		if err != nil {
+			t.Errorf("Failed to mine block: %v", err)
+		}
+
+		time.Sleep(120 * time.Second)
+
+		var o []options.Options
+		// var r io.ReadCloser
+		o = append(o, options.WithFileExtension("block"))
+		// bestBlock, _, _ := blockchainNode0.GetBestBlockHeader(framework.Context)
+		blockStore := framework.Nodes[0].Blockstore
+
+		var newHeight int
+		fmt.Println("Height before: ", height)
+		for i := 0; i < 180; i++ {
+			newHeight, _ = helper.GetBlockHeight(url)
+			if newHeight > height {
+				height = newHeight
+				fmt.Println("Testing at height: ", height)
+				mBlock, _ := blockchainNode0.GetBlockByHeight(framework.Context, uint32(newHeight))
+				r, err := blockStore.GetIoReader(framework.Context, mBlock.Hash()[:], o...)
+				if err != nil {
+					t.Errorf("error getting block reader: %v", err)
+				}
+				if err == nil {
+					allTransactionsIncluded := true
+					for _, txHash := range hashes {
+						bl, err := helper.ReadFile(framework.Context, "block", framework.Logger, r, txHash, framework.Nodes[0].BlockstoreUrl)
+						if err != nil {
+							t.Errorf("error reading block for transaction hash %v: %v", txHash, err)
+							allTransactionsIncluded = false
+							break
+						}
+						if !bl {
+							t.Errorf("Transaction hash %v not found in block at height %d", txHash, newHeight)
+							allTransactionsIncluded = false
+							break
+						}
+					}
+					if allTransactionsIncluded {
+						fmt.Printf("All transactions were successfully included and tested in the block at height (%d)\n", newHeight)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// assert.True(t, bl, "All transactions not included in the block")
+	headerNode1, _, _ := blockchainNode1.GetBestBlockHeader(ctx)
+	headerNode0, _, _ := blockchainNode0.GetBestBlockHeader(ctx)
+	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
 }
 
 func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
@@ -37,9 +113,9 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
 	var (
-		mu        sync.Mutex
-		wg        sync.WaitGroup
-		done      = make(chan struct{})
+		mu   sync.Mutex
+		wg   sync.WaitGroup
+		done = make(chan struct{})
 	)
 
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
@@ -111,14 +187,15 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 	t := suite.T()
 	framework := suite.Framework
+	settingsMap := suite.SettingsMap
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
 
 	var (
-		states    []blockchain_api.FSMStateType
-		mu        sync.Mutex
-		wg        sync.WaitGroup
-		done      = make(chan struct{})
+		states []blockchain_api.FSMStateType
+		mu     sync.Mutex
+		wg     sync.WaitGroup
+		done   = make(chan struct{})
 	)
 
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
@@ -418,5 +495,5 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
 }
 
 func TestFsmTestSuite(t *testing.T) {
-	tf.RunTest(t, new(FsmTestSuite))
+	suite.Run(t, new(FsmTestSuite))
 }
