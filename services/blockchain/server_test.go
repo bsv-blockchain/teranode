@@ -56,7 +56,8 @@ func Test_GetBlock(t *testing.T) {
 	}
 
 	block, err = ctx.server.GetBlockByHeight(context.Background(), requestHeight)
-	require.Empty(t, block)
+	require.Error(t, err, "Expected error")
+	require.Empty(t, block, "Expected block to be empty")
 
 	// unwrap the error
 	unwrappedErr = errors.UnwrapGRPC(err)

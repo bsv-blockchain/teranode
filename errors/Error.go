@@ -24,6 +24,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
+	// Error() can be called on wrapped errors, which can be nil, for example predefined errors
 	if e == nil {
 		return "<nil>"
 	}
