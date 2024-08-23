@@ -111,7 +111,12 @@ func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 
 	if err := util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "blockassembly", nil, consumerCount, true, func(msg util.KafkaMessage) error {
 		//startTime := time.Now()
-		for v.blockchainClient.GetFSMCurrentState() == blockchain_api.FSMStateType_CATCHINGTXS {
+		currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			v.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+			// TODO: how to handle it gracefully?
+		}
+		for *currentState == blockchain_api.FSMStateType_CATCHINGTXS {
 			v.logger.Debugf("[BlockAssembly] Waiting for FSM to finish catching txs")
 			time.Sleep(1 * time.Second) // Wait and check again in 1 second
 		}

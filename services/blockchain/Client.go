@@ -20,11 +20,10 @@ import (
 )
 
 type Client struct {
-	client       blockchain_api.BlockchainAPIClient
-	logger       ulogger.Logger
-	running      *atomic.Bool
-	conn         *grpc.ClientConn
-	currFSMstate atomic.Int32
+	client  blockchain_api.BlockchainAPIClient
+	logger  ulogger.Logger
+	running *atomic.Bool
+	conn    *grpc.ClientConn
 }
 
 type BestBlockHeader struct {
@@ -571,9 +570,13 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 
 // FSM related endpoints
 
-func (c *Client) GetFSMCurrentState() blockchain_api.FSMStateType {
-	currentState := c.currFSMstate.Load()
-	return blockchain_api.FSMStateType(currentState)
+func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
+	state, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+
+	return &state.State, nil
 }
 
 func (c *Client) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
@@ -600,13 +603,9 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 		return err
 	}
 
-	c.StoreFSMState(resp.State.String())
+	c.logger.Infof("[Blockchain Client] GOKHAN FSM state: %v", resp.State)
 
 	return nil
-}
-
-func (c *Client) StoreFSMState(state string) {
-	c.currFSMstate.Store(blockchain_api.FSMStateType_value[state])
 }
 
 func (c *Client) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

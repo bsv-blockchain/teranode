@@ -934,8 +934,6 @@ func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty,
 		return nil, err
 	}
 
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
-
 	return nil, nil
 }
 
@@ -950,8 +948,6 @@ func (b *Blockchain) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty
 		return nil, err
 	}
 
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
-
 	return nil, nil
 }
 
@@ -965,8 +961,6 @@ func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*empt
 		// unable to send the event, no need to update the state.
 		return nil, err
 	}
-
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
 
 	return nil, nil
 }
@@ -986,7 +980,6 @@ func (b *Blockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) 
 	}
 
 	b.logger.Infof("[Blockchain] Storing CatchUpTransactions state")
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
 
 	return nil, nil
 }
@@ -1002,8 +995,6 @@ func (b *Blockchain) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Em
 		return nil, err
 	}
 
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
-
 	return nil, nil
 }
 
@@ -1018,8 +1009,6 @@ func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb
 		return nil, err
 	}
 
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
-
 	return nil, nil
 }
 
@@ -1033,8 +1022,6 @@ func (b *Blockchain) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptyp
 		// unable to send the event, no need to update the state.
 		return nil, err
 	}
-
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
 
 	return nil, nil
 }

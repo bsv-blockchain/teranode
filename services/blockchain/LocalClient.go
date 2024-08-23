@@ -162,9 +162,10 @@ func (c LocalClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Bloc
 	return c.store.GetBlocksSubtreesNotSet(ctx)
 }
 
-func (c LocalClient) GetFSMCurrentState() blockchain_api.FSMStateType {
-	// TODO: Fix me, this is a temporary solution
-	return blockchain_api.FSMStateType_MINING
+func (c LocalClient) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
+	// TODO: Placeholder for now
+	state := blockchain_api.FSMStateType_MINING
+	return &state, nil
 }
 
 func (c LocalClient) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
@@ -172,12 +173,9 @@ func (c LocalClient) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateT
 	return blockchain_api.FSMStateType_MINING
 }
 
-func (c LocalClient) SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error {
+func (c LocalClient) SendFSMEvent(_ context.Context, _ blockchain_api.FSMEventType) error {
 	// TODO: "implement me"
 	return nil
-}
-
-func (c LocalClient) StoreFSMState(state string) {
 }
 
 func (c LocalClient) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

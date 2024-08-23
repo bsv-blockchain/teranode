@@ -830,7 +830,13 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 			// if you are at the Legacy Sync mode, tell FSM to transition to normal running.
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
 
-			if sm.blockchainClient.GetFSMCurrentState() == blockchain_api.FSMStateType_LEGACYSYNCING {
+			currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+			if err != nil {
+				// TODO: how to handle it gracefully?
+				sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+			}
+
+			if *currentState == blockchain_api.FSMStateType_LEGACYSYNCING {
 				err := sm.blockchainClient.SendFSMEvent(sm.ctx, blockchain_api.FSMEventType_RUN)
 				if err != nil {
 					return errors.NewServiceError("[Main] failed to send MINE notification", err)

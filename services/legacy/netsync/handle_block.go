@@ -169,7 +169,13 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, err
 		}
 
-		legacyMode := sm.blockchainClient.GetFSMCurrentState() == blockchain_api.FSMStateType_LEGACYSYNCING
+		currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+		if err != nil {
+			// TODO: how to handle it gracefully?
+			sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+		}
+
+		legacyMode := *currentState == blockchain_api.FSMStateType_LEGACYSYNCING
 		legacyMode = true // force legacy mode for now
 
 		if legacyMode {

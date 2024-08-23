@@ -598,7 +598,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		// wait for node to finish Restoring.
 		// this means node transitions to RUN state
 		// this will block
-		waitForFSMtoTransitionToRunning(blockchainClient, logger)
+		waitForFSMtoTransitionToRunning(ctx, blockchainClient, logger)
 	}
 
 	if startLegacy {
@@ -659,7 +659,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		// wait for node to finish Legacy Syncing.
 		// this means node transitions to RUN state
 		// this will block
-		waitForFSMtoTransitionToRunning(blockchainClient, logger)
+		waitForFSMtoTransitionToRunning(ctx, blockchainClient, logger)
 	}
 
 	// TODO: think how to move to mining after Restore and LegacySyncing modes are complete.
@@ -823,9 +823,15 @@ func waitForPostgresToStart(logger ulogger.Logger) error {
 	}
 }
 
-func waitForFSMtoTransitionToRunning(blockchainClient blockchain.ClientI, logger ulogger.Logger) {
-	for blockchainClient.GetFSMCurrentState() != blockchain_api.FSMStateType_RUNNING {
-		logger.Debugf("[Main] Waiting for FSM to transition to Running state, currently at: %v", blockchainClient.GetFSMCurrentState())
+func waitForFSMtoTransitionToRunning(ctx context.Context, blockchainClient blockchain.ClientI, logger ulogger.Logger) {
+	currentState, err := blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil {
+		// TODO: how to handle it gracefully?
+		logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+	}
+
+	for *currentState != blockchain_api.FSMStateType_RUNNING {
+		logger.Debugf("[Main] Waiting for FSM to transition to Running state, currently at: %v", currentState)
 		time.Sleep(1 * time.Second) // Wait and check again in 1 second
 	}
 }

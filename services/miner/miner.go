@@ -121,7 +121,13 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
 
-	if m.blockchainClient.GetFSMCurrentState() != blockchain_api.FSMStateType_MINING {
+	currentState, err := m.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil {
+		// TODO: how to handle it gracefully?
+		m.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+	}
+
+	if *currentState != blockchain_api.FSMStateType_MINING {
 		err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
 		if err != nil {
 			return errors.NewServiceError("[Main] failed to send MINE notification", err)
