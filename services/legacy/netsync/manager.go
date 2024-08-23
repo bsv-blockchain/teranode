@@ -773,6 +773,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	delete(state.requestedBlocks, *blockHash)
 	delete(sm.requestedBlocks, *blockHash)
 
+	// TODO: this should be only done when Legacy Sync mode is active
+	// if not in Legacy Sync mode, we need to potentially download the block,
+	// promote block to the block validation via kafka (p2p -> blockvalidation message),
+	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
 	err := sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block)
 	if err != nil {
 		log.Printf("SAO %v", err)
@@ -823,8 +827,15 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
 		if sm.current() { // used to check for isOrphan || sm.current()
-			// if you are at the Legacy Sync mode, tell FSM to transition to normal runing.
+			// if you are at the Legacy Sync mode, tell FSM to transition to normal running.
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
+
+			if sm.blockchainClient.GetFSMCurrentState() == blockchain_api.FSMStateType_LEGACYSYNCING {
+				err := sm.blockchainClient.SendFSMEvent(sm.ctx, blockchain_api.FSMEventType_RUN)
+				if err != nil {
+					return errors.NewServiceError("[Main] failed to send MINE notification", err)
+				}
+			}
 		}
 	}
 
