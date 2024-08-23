@@ -1,0 +1,473 @@
+
+x-ubsv-base: &ubsv-base
+  image: ubsv:latest
+  depends_on:
+    - postgres
+    - kafka-shared
+  networks:
+    - ubsv-network
+  volumes:
+    - ./data:/app/data
+  expose:
+    - 8081-8093
+
+x-ubsv-base-1: &ubsv-base-1
+  <<: *ubsv-base
+  container_name: ubsv-base-1
+  depends_on:
+    - kafka-shared
+    - postgres
+    - jaeger
+  networks:
+    - ubsv-network
+  environment:
+    SETTINGS_CONTEXT: docker.ss.ubsv1
+    logLevel: "DEBUG"
+    JAEGER_AGENT_HOST: jaeger
+    JAEGER_AGENT_PORT: 6831
+  volumes:
+    - ./settings_local.conf:/app/settings_local.conf
+    - ./data/ubsv1/txstore:/app/data/txstore
+    - ./data/ubsv1/subtreestore:/app/data/subtreestore
+    - ./data/ubsv1/blockstore:/app/data/blockstore
+
+networks:
+  ubsv-network:
+    name: my-ubsv-network
+
+services:
+  ubsv-builder:
+    image: ubsv:latest
+    build:
+      context: .
+      dockerfile: local.Dockerfile
+      args:
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-2db1b0e
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-2db1b0e
+    networks:
+      - ubsv-network
+    entrypoint: ["pwd"]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.22
+    container_name: jaeger
+    ports:
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "14250:14250"
+      - "14268:14268"
+      - "14269:14269"
+      - "9411:9411"
+    networks:
+      - ubsv-network
+
+  postgres:
+    container_name: postgres
+    image: postgres:latest
+    networks:
+      - ubsv-network
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: really_strong_password_change_me
+      POSTGRES_DB: postgres
+    ports:
+      - 5432:5432
+    expose:
+      - 5432
+    volumes:
+      - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./data/postgres:/var/lib/postgresql/data
+    restart: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  kafka-shared:
+    container_name: kafka-shared
+    image: vectorized/redpanda:latest
+    mem_limit: 256m
+    networks:
+      - ubsv-network
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
+      - --pandaproxy-addr 0.0.0.0:9093
+      - --advertise-pandaproxy-addr localhost:9093
+    # ports:
+    #   - 18181:8081
+    #   - 19092:9092
+    #   - 19093:9093
+
+  kafka-console-shared:
+    container_name: kafka-console-shared
+    image: docker.redpanda.com/redpandadata/console:latest
+    networks:
+      - ubsv-network
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["kafka-shared:9092"]
+          schemaRegistry:
+            enabled: true
+            urls: ["http://kafka-shared:8081"]
+    ports:
+      - "18080:8080"
+    depends_on:
+      - kafka-shared
+
+  blockchain-1:
+    <<: *ubsv-base-1
+    container_name: blockchain-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-blockchain=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: blockchain-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  p2p-1:
+    <<: *ubsv-base-1
+    container_name: p2p-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-p2p=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: p2p-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  validator-1:
+    <<: *ubsv-base-1
+    container_name: validator-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-validator=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: validator-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  propagation-1:
+    <<: *ubsv-base-1
+    container_name: propagation-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-propagation=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: propagation-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  blockassembly-1:
+    <<: *ubsv-base-1
+    container_name: blockassembly-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-blockassembly=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: blockassembly-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  subtreevalidation-1:
+    <<: *ubsv-base-1
+    container_name: subtreevalidation-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-subtreevalidation=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: subtreevalidation-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  blockvalidation-1:
+    <<: *ubsv-base-1
+    container_name: blockvalidation-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-blockvalidation=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: blockvalidation-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  asset-1:
+    <<: *ubsv-base-1
+    container_name: asset-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-asset=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: asset-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  coinbase-1:
+    <<: *ubsv-base-1
+    container_name: coinbase-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-coinbase=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: coinbase-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  miner-1:
+    <<: *ubsv-base-1
+    container_name: miner-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-miner=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: miner-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  blockpersister-1:
+    <<: *ubsv-base-1
+    container_name: blockpersister-1
+    entrypoint:
+      [
+        "/app/wait.sh",
+        "postgres",
+        "5432",
+        "0",
+        "--",
+        "/app/wait.sh",
+        "kafka-shared",
+        "9092",
+        "0",
+        "--",
+        "/app/ubsv.run",
+        "-all=0",
+        "-blockpersister=1",
+      ]
+    environment:
+      SETTINGS_CONTEXT: docker.ss.ubsv1
+      JAEGER_SERVICE_NAME: blockpersister-1
+    # ports:
+    #   - "18081-18089:8081-8089"
+    #   - "18090-18097:8090-8097"
+    #   - "19091:9091"
+    #   - "19905:9905"
+    #   - "19292:9292"
+
+  prometheus-1:
+    container_name: prometheus-1
+    image: prom/prometheus:v2.44.0
+    mem_limit: 64m
+    ports:
+      - "19090:9090"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    networks:
+      - ubsv-network
+    volumes:
+      - ./deploy/dev/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./deploy/dev/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
+    depends_on:
+      - prometheus-1

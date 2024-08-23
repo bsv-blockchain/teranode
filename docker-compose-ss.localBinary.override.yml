@@ -1,0 +1,46 @@
+services:
+
+  blockchain-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  p2p-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  validator-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  propagation-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  blockassembly-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  subtreevalidation-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  blockvalidation-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  asset-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  coinbase-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  miner-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
+  blockpersister-1:
+    volumes:
+      - ./ubsv.run:/app/ubsv.run
+
