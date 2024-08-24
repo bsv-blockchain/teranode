@@ -148,8 +148,9 @@ testall:
 nightly-tests:
 	docker compose -f docker-compose.ci.build.yml build
 	$(MAKE) install-tools
-	cd $(TEST_DIR) && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../$(REPORT_NAME)
-	cd ../..;
+
+	cd $(test_dir) && SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -v -tags $(test_tags) -json | go-ctrf-json-reporter -output ../../$(report_name) --verbose
+	# cd $(TEST_DIR) && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../$(REPORT_NAME) --verbose
 
 reset-data:
 	unzip data.zip
@@ -177,8 +178,6 @@ ifdef kill-docker
 	docker compose -f docker-compose.yml down
 endif
 ifdef test
-	# TEST_DIR := "$(firstword $(subst ., ,$(test)))"
-	# TEST_NAME := "$(word 2,$(subst ., ,$(test)))"
 	cd test/$(firstword $(subst ., ,$(test))) && \
 	SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -run $(word 2,$(subst ., ,$(test))) -v -tags $(test_tags)
 else

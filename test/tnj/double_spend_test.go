@@ -38,7 +38,7 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
 
 	var (
-		states    []blockchain_api.FSMStateType
+		states    []*blockchain_api.FSMStateType
 		lastState *blockchain_api.FSMStateType
 		mu        sync.Mutex
 		wg        sync.WaitGroup
@@ -49,6 +49,7 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 	if err := framework.RestartNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
+
 	ctx := context.Background()
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
@@ -63,8 +64,11 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 
 		baClient := framework.Nodes[0].BlockassemblyClient
 		_, err = helper.MineBlock(ctx, baClient, logger)
+
 		if err != nil {
+
 			t.Errorf("Failed to mine block: %v", err)
+
 		}
 		time.Sleep(5 * time.Second)
 	}
@@ -92,19 +96,22 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 	}
 
 	wg.Add(1)
+
 	go func() {
+
 		defer wg.Done()
 		for {
 			select {
 			case <-done:
 				return
 			default:
-				response := blockchainNode1.GetFSMCurrentState()
-				if err == nil && (lastState == nil || response != *lastState) {
+				response, err := blockchainNode1.GetFSMCurrentState(framework.Context)
+				if err == nil && (lastState == nil || response != lastState) {
 					mu.Lock()
 					states = append(states, response)
-					lastState = &response
+					lastState = response
 					mu.Unlock()
+
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
@@ -117,7 +124,8 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 
 	stateFound := false
 	for _, state := range states {
-		if state == blockchain_api.FSMStateType(3) {
+
+		if *state == blockchain_api.FSMStateType(3) {
 			stateFound = true
 			break
 		}

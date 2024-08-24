@@ -31,6 +31,7 @@ type FsmTestSuite struct {
 }
 
 func (suite *FsmTestSuite) TestSendTxs() {
+
 	url := "http://localhost:18090"
 	ctx := context.Background()
 	t := suite.T()
@@ -40,14 +41,12 @@ func (suite *FsmTestSuite) TestSendTxs() {
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
-	// var hashes []chainhash.Hash
 
 	for i := 0; i < 2; i++ {
 		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
 		if err != nil {
 			t.Errorf("Failed to create and send raw txs: %v", err)
 		}
-		fmt.Printf("Hashes: %v\n", hashes)
 
 		height, _ := helper.GetBlockHeight(url)
 		baClient := framework.Nodes[0].BlockassemblyClient
@@ -59,41 +58,45 @@ func (suite *FsmTestSuite) TestSendTxs() {
 		time.Sleep(120 * time.Second)
 
 		var o []options.Options
-		// var r io.ReadCloser
 		o = append(o, options.WithFileExtension("block"))
-		// bestBlock, _, _ := blockchainNode0.GetBestBlockHeader(framework.Context)
 		blockStore := framework.Nodes[0].Blockstore
 
 		var newHeight int
-		fmt.Println("Height before: ", height)
-		for i := 0; i < 180; i++ {
+
+		for i := 0; i < 1; i++ {
 			newHeight, _ = helper.GetBlockHeight(url)
 			if newHeight > height {
 				height = newHeight
 				fmt.Println("Testing at height: ", height)
 				mBlock, _ := blockchainNode0.GetBlockByHeight(framework.Context, uint32(newHeight))
 				r, err := blockStore.GetIoReader(framework.Context, mBlock.Hash()[:], o...)
+
 				if err != nil {
 					t.Errorf("error getting block reader: %v", err)
 				}
 				if err == nil {
+
 					allTransactionsIncluded := true
+
 					for _, txHash := range hashes {
 						bl, err := helper.ReadFile(framework.Context, "block", framework.Logger, r, txHash, framework.Nodes[0].BlockstoreUrl)
 						if err != nil {
 							t.Errorf("error reading block for transaction hash %v: %v", txHash, err)
 							allTransactionsIncluded = false
+
 							break
 						}
+
 						if !bl {
 							t.Errorf("Transaction hash %v not found in block at height %d", txHash, newHeight)
 							allTransactionsIncluded = false
+
 							break
 						}
 					}
-					if allTransactionsIncluded {
-						fmt.Printf("All transactions were successfully included and tested in the block at height (%d)\n", newHeight)
-						break
+
+					if !allTransactionsIncluded {
+						t.Errorf("All transactions not included in the block")
 					}
 				}
 			}
@@ -112,6 +115,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 	framework := suite.Framework
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
+
 	var (
 		mu   sync.Mutex
 		wg   sync.WaitGroup
@@ -135,6 +139,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 		fmt.Printf("Hashes: %v\n", hashes)
 
 		baClient := framework.Nodes[0].BlockassemblyClient
+
 		_, err = helper.MineBlock(ctx, baClient, logger)
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
@@ -147,21 +152,25 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 	}
 
 	wg.Add(1)
+
 	go func() {
+
 		defer wg.Done()
+
 		for {
 			select {
 			case <-done:
 				return
 			default:
 				response := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
+
 				mu.Lock()
 				if _, exists := stateSet[response]; !exists {
+
 					framework.Logger.Infof("New unique state: %v", response)
 					stateSet[response] = struct{}{} // Add the state to the set
 				}
 				mu.Unlock()
-				// time.Sleep(10 * time.Millisecond) // Adjust the interval as needed
 			}
 		}
 	}()
@@ -217,6 +226,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 
 		baClient := framework.Nodes[0].BlockassemblyClient
 		_, err = helper.MineBlock(ctx, baClient, logger)
+
 		if err != nil {
 			t.Errorf("Failed to mine block: %v", err)
 		}
@@ -229,11 +239,13 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 
 	wg.Add(1)
 	go func() {
+
 		defer wg.Done()
 		for {
 			select {
 			case <-done:
 				return
+
 			default:
 				response := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
 				mu.Lock()
@@ -252,6 +264,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 	wg.Wait()
 
 	stateFound := false
+
 	for state := range stateSet {
 		if state == blockchain_api.FSMStateType(3) {
 			stateFound = true
@@ -275,38 +288,39 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	// Set CatchUpTransactions State
 	_, err := blockchainNode0.CatchUpTransactions(framework.Context, &emptypb.Empty{})
 	if err != nil {
-		t.Fatalf("Failed to set state: %v", err)
+		t.Errorf("Failed to set state: %v", err)
 	}
+
 	time.Sleep(5 * time.Second)
 	fsmState := blockchainNode0.GetFSMCurrentStateForE2ETestMode()
 	assert.Equal(t, fsmState, blockchain_api.FSMStateType(4), "FSM state is not equal to 4")
 
 	state, err := blockAssemblyNode0.GetBlockAssemblyState(framework.Context)
 	if err != nil {
-		t.Fatalf("Failed to get block assembly state: %v", err)
+		t.Errorf("Failed to get block assembly state: %v", err)
 	}
 	txCountBefore := state.GetTxCount()
 
 	metricsBefore, err := helper.QueryPrometheusMetric("http://localhost:19090", "validator_processed_transactions")
 	if err != nil {
-		t.Fatalf("Failed to query prometheus metric: %v", err)
+		t.Errorf("Failed to query prometheus metric: %v", err)
 	}
 
 	hashesNode0, err := helper.CreateAndSendRawTxs(framework.Context, framework.Nodes[0], 20)
 	if err != nil {
-		t.Fatalf("Failed to create and send raw txs: %v", err)
+		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
 	// for i := 0; i < 5; i++ {
 	// 	hashesNode0, err = helper.CreateAndSendRawTxs(framework.Context, framework.Nodes[0], 10)
 	// 	if err != nil {
-	// 		t.Fatalf("Failed to create and send raw txs: %v", err)
+	// 		t.Errorf("Failed to create and send raw txs: %v", err)
 	// 	}
 	// 	fmt.Printf("Hashes: %v\n", hashesNode0)
 	// }
 
 	state, err = blockAssemblyNode0.GetBlockAssemblyState(framework.Context)
 	if err != nil {
-		t.Fatalf("Failed to get block assembly state: %v", err)
+		t.Errorf("Failed to get block assembly state: %v", err)
 	}
 	txCountAfter := state.GetTxCount()
 
@@ -317,7 +331,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 
 	metricsAfter, err := helper.QueryPrometheusMetric("http://localhost:19090", "validator_processed_transactions")
 	if err != nil {
-		t.Fatalf("Failed to query prometheus metric: %v", err)
+		t.Errorf("Failed to query prometheus metric: %v", err)
 	}
 
 	fmt.Printf("Metrics: %v\n", metricsBefore)
@@ -345,16 +359,19 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	// Set Mining State
 	_, err = blockchainNode0.Mine(framework.Context, &emptypb.Empty{})
 	if err != nil {
-		t.Fatalf("Failed to set state: %v", err)
+
+		t.Errorf("Failed to set state: %v", err)
+
 	}
 	time.Sleep(5 * time.Second)
 	fsmState = blockchainNode0.GetFSMCurrentStateForE2ETestMode()
 	assert.Equal(t, fsmState, blockchain_api.FSMStateType(2), "FSM state is not equal to 2")
 
 	var newHeight int
+
 	var bl bool
 	height, _ := helper.GetBlockHeight(url)
-	fmt.Println("Height before: ", height)
+
 	for i := 0; i < 180; i++ {
 		newHeight, _ = helper.GetBlockHeight(url)
 		if newHeight > height {
@@ -383,6 +400,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 }
 
 func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
+
 	t := suite.T()
 	framework := suite.Framework
 	url := "http://localhost:18090"
@@ -391,7 +409,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
 	// Set CatchUpTransactions State
 	_, err := blockchainNode0.CatchUpTransactions(framework.Context, &emptypb.Empty{})
 	if err != nil {
-		t.Fatalf("Failed to set state: %v", err)
+		t.Errorf("Failed to set state: %v", err)
 	}
 	time.Sleep(5 * time.Second)
 	fsmState := blockchainNode0.GetFSMCurrentStateForE2ETestMode()
@@ -399,21 +417,21 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
 
 	metricsBefore, err := helper.QueryPrometheusMetric("http://localhost:19090", "validator_processed_transactions")
 	if err != nil {
-		t.Fatalf("Failed to query prometheus metric: %v", err)
+		t.Errorf("Failed to query prometheus metric: %v", err)
 	}
 
 	hashesNode0, err := helper.CreateAndSendRawTxs(framework.Context, framework.Nodes[0], 20)
 	if err != nil {
-		t.Fatalf("Failed to create and send raw txs: %v", err)
+		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
 	hashesNode1, err := helper.CreateAndSendRawTxs(framework.Context, framework.Nodes[1], 20)
 	if err != nil {
-		t.Fatalf("Failed to create and send raw txs: %v", err)
+		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
 
 	metricsAfter, err := helper.QueryPrometheusMetric("http://localhost:19090", "validator_processed_transactions")
 	if err != nil {
-		t.Fatalf("Failed to query prometheus metric: %v", err)
+		t.Errorf("Failed to query prometheus metric: %v", err)
 	}
 
 	fmt.Printf("Metrics: %v\n", metricsBefore)
@@ -459,7 +477,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
 	// Set Mining State
 	_, err = blockchainNode0.Mine(framework.Context, &emptypb.Empty{})
 	if err != nil {
-		t.Fatalf("Failed to set state: %v", err)
+		t.Errorf("Failed to set state: %v", err)
 	}
 	time.Sleep(5 * time.Second)
 	fsmState = blockchainNode0.GetFSMCurrentStateForE2ETestMode()
