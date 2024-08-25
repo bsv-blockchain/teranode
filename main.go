@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
 	"github.com/bitcoin-sv/ubsv/cmd/chainintegrity/chainintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/filereader/filereader"
+	"github.com/bitcoin-sv/ubsv/cmd/headers/headers"
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
@@ -116,6 +117,9 @@ func main() {
 		return
 	case "seeder.run":
 		seeder.Start()
+		return
+	case "headers.run":
+		headers.Start()
 		return
 	}
 

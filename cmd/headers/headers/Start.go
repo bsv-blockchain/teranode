@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -24,12 +25,23 @@ type BlockHeader struct {
 	} `json:"tx"`
 }
 
+func usage() {
+	fmt.Println("Usage: headers -bitcoinUrl=http://user:password@localhost:8332 -start=0 -end=0")
+	os.Exit(0)
+}
+
 func Start() {
-	bitcoinURL := flag.String("bitcoinUrl", "http://user:password@localhost:8332", "Bitcoin RPC URL")
+	bitcoinURL := flag.String("bitcoinUrl", "", "Bitcoin RPC URL (http://user:password@localhost:8332)")
 	startHeight := flag.Int("start", 0, "Starting block height")
 	endHeight := flag.Int("end", 0, "Ending block height")
 
+	flag.Usage = usage
+
 	flag.Parse()
+
+	if *bitcoinURL == "" {
+		usage()
+	}
 
 	ctx := context.Background()
 	logger := ulogger.NewGoCoreLogger("head")
