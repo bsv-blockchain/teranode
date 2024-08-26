@@ -12,7 +12,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
@@ -53,6 +52,7 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	if aErr != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Get", aErr.Error()).Inc()
 		s.logger.Errorf("Failed to init new aerospike key: %v\n", aErr)
+
 		return nil, aErr
 	}
 
@@ -62,24 +62,29 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	value, aErr := s.client.Get(policy, key, binNames...)
 	if aErr != nil {
 		prometheusUtxoMapErrors.WithLabelValues("Get", aErr.Error()).Inc()
+
 		if errors.Is(aErr, aerospike.ErrKeyNotFound) {
 			return &utxo.SpendResponse{
-				Status: int(utxostore.Status_NOT_FOUND),
+				Status: int(utxo.Status_NOT_FOUND),
 			}, nil
 		}
+
 		s.logger.Errorf("Failed to get aerospike key: %v\n", aErr)
+
 		return nil, aErr
 	}
 
-	var err error
-	var spendingTxId *chainhash.Hash
+	var (
+		err          error
+		spendingTxID *chainhash.Hash
+	)
 
 	if value != nil {
 		utxos, ok := value.Bins["utxos"].([]interface{})
 		if ok {
 			b, ok := utxos[spend.Vout].([]byte)
 			if ok && len(b) == 64 {
-				spendingTxId, err = chainhash.NewHash(b[32:])
+				spendingTxID, err = chainhash.NewHash(b[32:])
 				if err != nil {
 					return nil, errors.NewProcessingError("chain hash error", err)
 				}
@@ -88,8 +93,8 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 	}
 
 	return &utxo.SpendResponse{
-		Status:       int(utxostore.CalculateUtxoStatus2(spendingTxId)),
-		SpendingTxID: spendingTxId,
+		Status:       int(utxo.CalculateUtxoStatus2(spendingTxID)),
+		SpendingTxID: spendingTxID,
 	}, nil
 }
 
@@ -102,11 +107,11 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 	if len(fields) > 0 {
 		bins = fields[0]
 	}
+
 	return s.get(ctx, hash, bins)
 }
 
 func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*meta.Data, error) {
-
 	bins = s.addAbstractedBins(bins)
 
 	done := make(chan batchGetItemData)
@@ -127,6 +132,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*me
 	} else {
 		prometheusTxMetaAerospikeMapGet.Inc()
 	}
+
 	return data.Data, data.Err
 }
 
@@ -135,12 +141,15 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
 		Version:  uint32(bins["version"].(int)),
 		LockTime: uint32(bins["locktime"].(int)),
 	}
+
 	inputInterfaces, ok := bins["inputs"].([]interface{})
 	if ok {
 		tx.Inputs = make([]*bt.Input, len(inputInterfaces))
+
 		for i, inputInterface := range inputInterfaces {
 			input := inputInterface.([]byte)
 			tx.Inputs[i] = &bt.Input{}
+
 			_, err := tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 			if err != nil {
 				return nil, errors.NewTxInvalidError("could not read input: %v", err)
@@ -151,9 +160,15 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
 	outputInterfaces, ok := bins["outputs"].([]interface{})
 	if ok {
 		tx.Outputs = make([]*bt.Output, len(outputInterfaces))
+
 		for i, outputInterface := range outputInterfaces {
+			if outputInterface == nil {
+				continue
+			}
+
 			output := outputInterface.([]byte)
 			tx.Outputs[i] = &bt.Output{}
+
 			_, err := tx.Outputs[i].ReadFrom(bytes.NewReader(output))
 			if err != nil {
 				return nil, errors.NewTxInvalidError("could not read output: %v", err)
@@ -172,23 +187,29 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 			bins = append(bins, "external")
 		}
 	}
+
 	if slices.Contains(bins, "tx") {
 		if !slices.Contains(bins, "inputs") {
 			bins = append(bins, "inputs")
 		}
+
 		if !slices.Contains(bins, "outputs") {
 			bins = append(bins, "outputs")
 		}
+
 		if !slices.Contains(bins, "version") {
 			bins = append(bins, "version")
 		}
+
 		if !slices.Contains(bins, "locktime") {
 			bins = append(bins, "locktime")
 		}
+
 		if !slices.Contains(bins, "external") {
 			bins = append(bins, "external")
 		}
 	}
+
 	return bins
 }
 
@@ -265,6 +286,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 
 			for _, key := range items[idx].Fields {
 				value := bins[key]
+
 				switch key {
 				case "tx":
 					if external {
@@ -274,18 +296,22 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 						if txErr != nil {
 							return errors.NewTxInvalidError("invalid tx: %v", txErr)
 						}
+
 						items[idx].Data.Tx = tx
 					}
+
 				case "fee":
 					fee, ok := value.(int)
 					if ok {
 						items[idx].Data.Fee = uint64(fee)
 					}
+
 				case "sizeInBytes":
 					sizeInBytes, ok := value.(int)
 					if ok {
 						items[idx].Data.SizeInBytes = uint64(sizeInBytes)
 					}
+
 				case "parentTxHashes":
 					if external {
 						items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(externalTx.Inputs))
@@ -296,19 +322,25 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 						inputInterfaces, ok := bins["inputs"].([]interface{})
 						if ok {
 							items[idx].Data.ParentTxHashes = make([]chainhash.Hash, len(inputInterfaces))
+
 							for i, inputInterface := range inputInterfaces {
 								input := inputInterface.([]byte)
 								items[idx].Data.ParentTxHashes[i] = chainhash.Hash(input[:32])
 							}
 						}
 					}
+
 				case "blockIDs":
 					temp := value.([]interface{})
+
 					var blockIDs []uint32
+
 					for _, val := range temp {
 						blockIDs = append(blockIDs, uint32(val.(int)))
 					}
+
 					items[idx].Data.BlockIDs = blockIDs
+
 				case "isCoinbase":
 					coinbaseBool, ok := value.(bool)
 					if ok {
@@ -371,6 +403,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 				item.errCh <- errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err)
 				close(item.errCh)
 			}
+
 			return
 		}
 
@@ -393,6 +426,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		if batchRecord.Err != nil {
 			batch[idx].errCh <- errors.NewProcessingError("error in aerospike map store batch record: %w", batchRecord.Err)
 			close(batch[idx].errCh)
+
 			continue
 		}
 
@@ -411,6 +445,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			if err != nil {
 				batch[idx].errCh <- errors.NewStorageError("could not get tx from external store", err)
 				close(batch[idx].errCh)
+
 				continue
 			}
 
@@ -418,14 +453,15 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			if err != nil {
 				batch[idx].errCh <- errors.NewTxInvalidError("could not read tx from reader: %w", err)
 				close(batch[idx].errCh)
+
 				continue
 			}
-
 		} else {
 			previousTx, err = s.getTxFromBins(bins)
 			if err != nil {
 				batch[idx].errCh <- errors.NewTxInvalidError("invalid tx: %v", err)
 				close(batch[idx].errCh)
+
 				continue
 			}
 		}
@@ -451,12 +487,15 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 	}
 
 	retries := 0
+
 	for {
 		if err := s.BatchDecorate(context.Background(), items); err != nil {
 			if retries < 3 {
 				retries++
+
 				s.logger.Errorf("failed to get batch of txmeta: %v", err)
 				time.Sleep(time.Duration(retries) * time.Second)
+
 				continue
 			}
 
@@ -466,6 +505,7 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 					Err: err,
 				}
 			}
+
 			return
 		}
 
