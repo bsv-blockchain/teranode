@@ -2265,6 +2265,12 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		return nil, err
 	}
 
+	// Add the peers the are defined in teranode settings...
+	addresses, found := gocore.Config().GetMulti("legacy_connect_peers", "|")
+	if found {
+		c.ConnectPeers = append(c.ConnectPeers, addresses...)
+	}
+
 	// Only setup a function to return new addresses to connect to when
 	// not running in connect-only mode.  The simulation network is always
 	// in connect-only mode since it is only intended to connect to
@@ -2332,12 +2338,6 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 
 	// Start up persistent peers.
 	permanentPeers := cfg.ConnectPeers
-
-	// Add the peers the are defined in teranode settings...
-	addresses, found := gocore.Config().GetMulti("legacy_connect_peers", "|")
-	if found {
-		permanentPeers = append(permanentPeers, addresses...)
-	}
 
 	if len(permanentPeers) == 0 {
 		permanentPeers = cfg.AddPeers
