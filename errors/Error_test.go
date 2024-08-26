@@ -334,36 +334,29 @@ func TestErrorString(t *testing.T) {
 // test if multiple chained errors are wrapped/unwrapped correctly
 func Test_MultipleWrapGRPC(t *testing.T) {
 	// Base error is not a GRPC error, basic error
-	baseErr := NewBlockInvalidError("block is invalid")
-	baseErr2 := New(ERR_BLOCK_INVALID, "block is invalid")
+	baseServiceErr := NewServiceError("block is invalid")
+	baseServiceErrWithNew := New(ERR_SERVICE_ERROR, "block is invalid")
 
-	// baseErr2
+	require.True(t, baseServiceErrWithNew.Is(baseServiceErr))
+	require.True(t, baseServiceErr.Is(baseServiceErrWithNew))
 
-	// err1 := New(ERR_NOT_FOUND, "resource not found")
-	// err2 := New(ERR_NOT_FOUND, "resource not found")
+	baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
+	baseBlockInvalidErrWithNew := New(ERR_BLOCK_INVALID, "block is invalid")
 
-	// if !baseErr2.Is(err2) {
-	//	t.Errorf("Errors with the same code and message should be equal")
-	// }
+	require.True(t, baseBlockInvalidErr.Is(baseBlockInvalidErrWithNew))
 
-	serviceError := NewServiceError("service error", baseErr2)
-	wrappedOnce := WrapGRPC(serviceError)
+	wrappedOnce := WrapGRPC(baseServiceErr)
 	wrappedTwice := WrapGRPC(wrappedOnce)
-	fmt.Println("wrapped once: ", wrappedOnce)
-	fmt.Println("wrappedTwice: ", wrappedTwice)
+	fmt.Println("service error wrapped once: ", wrappedOnce)
+	fmt.Println("service error wrapped twice: ", wrappedTwice)
 
-	serviceError = NewServiceError("service error", baseErr)
-	wrappedOnce = WrapGRPC(serviceError)
-	wrappedTwice = WrapGRPC(wrappedOnce)
-	fmt.Println("2 wrapped once: ", wrappedOnce)
-	fmt.Println("2 wrappedTwice: ", wrappedTwice)
+	fmt.Println("unwrapping twice wrapped error: ", UnwrapGRPC(wrappedTwice), "\nand this is wrapped once: ", wrappedOnce)
+	unwrappedTwiceWrappedErrorOnce := UnwrapGRPC(wrappedTwice)
 
-	//require.False(t, baseErr2.Is(serviceError))
-	//require.True(t, serviceError.Is(bas))
-	//require.True(t, baseErr2.Is(wrappedOnce))
-
-	//baseErr := New(ERR_BLOCK_INVALID, "asdasdasd")
-	//baseErr.
+	//wrappedOnce = WrapGRPC(baseBlockInvalidErrWithNew)
+	//wrappedTwice = WrapGRPC(wrappedOnce)
+	//fmt.Println("base error wrapped once: ", wrappedOnce)
+	//fmt.Println("base error  wrapped twice: ", wrappedTwice)
 
 	/*
 		serviceError := NewServiceError("service error", baseErr)

@@ -48,105 +48,105 @@ var (
 
 // errors initialization functions
 
-func NewUnknownError(message string, params ...interface{}) error {
+func NewUnknownError(message string, params ...interface{}) *Error {
 	return New(ERR_UNKNOWN, message, params...)
 }
-func NewInvalidArgumentError(message string, params ...interface{}) error {
+func NewInvalidArgumentError(message string, params ...interface{}) *Error {
 	return New(ERR_INVALID_ARGUMENT, message, params...)
 }
-func NewThresholdExceededError(message string, params ...interface{}) error {
+func NewThresholdExceededError(message string, params ...interface{}) *Error {
 	return New(ERR_THRESHOLD_EXCEEDED, message, params...)
 }
-func NewNotFoundError(message string, params ...interface{}) error {
+func NewNotFoundError(message string, params ...interface{}) *Error {
 	return New(ERR_NOT_FOUND, message, params...)
 }
-func NewProcessingError(message string, params ...interface{}) error {
+func NewProcessingError(message string, params ...interface{}) *Error {
 	return New(ERR_PROCESSING, message, params...)
 }
-func NewConfigurationError(message string, params ...interface{}) error {
+func NewConfigurationError(message string, params ...interface{}) *Error {
 	return New(ERR_CONFIGURATION, message, params...)
 }
-func NewContextError(message string, params ...interface{}) error {
+func NewContextError(message string, params ...interface{}) *Error {
 	return New(ERR_CONTEXT, message, params...)
 }
-func NewContextCanceledError(message string, params ...interface{}) error {
+func NewContextCanceledError(message string, params ...interface{}) *Error {
 	return New(ERR_CONTEXT_CANCELED, message, params...)
 }
-func NewExternalError(message string, params ...interface{}) error {
+func NewExternalError(message string, params ...interface{}) *Error {
 	return New(ERR_EXTERNAL, message, params...)
 }
-func NewError(message string, params ...interface{}) error {
+func NewError(message string, params ...interface{}) *Error {
 	return New(ERR_ERROR, message, params...)
 }
-func NewBlockNotFoundError(message string, params ...interface{}) error {
+func NewBlockNotFoundError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_NOT_FOUND, message, params...)
 }
-func NewBlockInvalidError(message string, params ...interface{}) error {
+func NewBlockInvalidError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_INVALID, message, params...)
 }
-func NewBlockExistsError(message string, params ...interface{}) error {
+func NewBlockExistsError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_EXISTS, message, params...)
 }
-func NewBlockError(message string, params ...interface{}) error {
+func NewBlockError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_ERROR, message, params...)
 }
-func NewSubtreeNotFoundError(message string, params ...interface{}) error {
+func NewSubtreeNotFoundError(message string, params ...interface{}) *Error {
 	return New(ERR_SUBTREE_NOT_FOUND, message, params...)
 }
-func NewSubtreeInvalidError(message string, params ...interface{}) error {
+func NewSubtreeInvalidError(message string, params ...interface{}) *Error {
 	return New(ERR_SUBTREE_INVALID, message, params...)
 }
-func NewSubtreeError(message string, params ...interface{}) error {
+func NewSubtreeError(message string, params ...interface{}) *Error {
 	return New(ERR_SUBTREE_ERROR, message, params...)
 }
-func NewTxNotFoundError(message string, params ...interface{}) error {
+func NewTxNotFoundError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_NOT_FOUND, message, params...)
 }
-func NewTxInvalidError(message string, params ...interface{}) error {
+func NewTxInvalidError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_INVALID, message, params...)
 }
-func NewTxInvalidDoubleSpendError(message string, params ...interface{}) error {
+func NewTxInvalidDoubleSpendError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_INVALID_DOUBLE_SPEND, message, params...)
 }
-func NewTxAlreadyExistsError(message string, params ...interface{}) error {
+func NewTxAlreadyExistsError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_ALREADY_EXISTS, message, params...)
 }
-func NewTxError(message string, params ...interface{}) error {
+func NewTxError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_ERROR, message, params...)
 }
-func NewServiceUnavailableError(message string, params ...interface{}) error {
+func NewServiceUnavailableError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_UNAVAILABLE, message, params...)
 }
-func NewServiceNotStartedError(message string, params ...interface{}) error {
+func NewServiceNotStartedError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_NOT_STARTED, message, params...)
 }
-func NewServiceError(message string, params ...interface{}) error {
+func NewServiceError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_ERROR, message, params...)
 }
-func NewStorageUnavailableError(message string, params ...interface{}) error {
+func NewStorageUnavailableError(message string, params ...interface{}) *Error {
 	return New(ERR_STORAGE_UNAVAILABLE, message, params...)
 }
-func NewStorageNotStartedError(message string, params ...interface{}) error {
+func NewStorageNotStartedError(message string, params ...interface{}) *Error {
 	return New(ERR_STORAGE_NOT_STARTED, message, params...)
 }
-func NewStorageError(message string, params ...interface{}) error {
+func NewStorageError(message string, params ...interface{}) *Error {
 	return New(ERR_STORAGE_ERROR, message, params...)
 }
-func NewCoinbaseMissingBlockHeightError(message string, params ...interface{}) error {
+func NewCoinbaseMissingBlockHeightError(message string, params ...interface{}) *Error {
 	return New(ERR_COINBASE_MISSING_BLOCK_HEIGHT, message, params...)
 }
-func NewSpentError(message string, params ...interface{}) error {
+func NewSpentError(message string, params ...interface{}) *Error {
 	return New(ERR_SPENT, message, params...)
 }
-func NewLockTimeError(message string, params ...interface{}) error {
+func NewLockTimeError(message string, params ...interface{}) *Error {
 	return New(ERR_LOCKTIME, message, params...)
 }
-func NewNonFinalError(message string, params ...interface{}) error {
+func NewNonFinalError(message string, params ...interface{}) *Error {
 	return New(ERR_NON_FINAL, message, params...)
 }
-func NewStateInitializationError(message string, params ...interface{}) error {
+func NewStateInitializationError(message string, params ...interface{}) *Error {
 	return New(ERR_STATE_INITIALIZATION, message, params...)
 }
-func NewStateErrorError(message string, params ...interface{}) error {
+func NewStateErrorError(message string, params ...interface{}) *Error {
 	return New(ERR_STATE_ERROR, message, params...)
 }
