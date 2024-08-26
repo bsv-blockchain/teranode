@@ -186,6 +186,20 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	if err != nil {
 		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %w", batchID, err)
 
+		aErr, ok := err.(*aerospike.AerospikeError)
+		if ok {
+			if aErr.ResultCode == types.KEY_EXISTS_ERROR {
+				// we want to return a tx already exists error on this case
+				// this should only be called with 1 record
+				err = errors.NewTxAlreadyExistsError("%v already exists in store", batch[0].txHash)
+				for _, bItem := range batch {
+					utils.SafeSend(bItem.done, err)
+				}
+
+				return
+			}
+		}
+
 		for _, bItem := range batch {
 			utils.SafeSend(bItem.done, err)
 		}

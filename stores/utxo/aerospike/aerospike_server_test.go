@@ -11,16 +11,14 @@ import (
 	"os"
 	"testing"
 
+	"github.com/aerospike/aerospike-client-go/v7"
+	aero "github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
-	"github.com/aerospike/aerospike-client-go/v7"
-	aero "github.com/aerospike/aerospike-client-go/v7"
-	"github.com/bitcoin-sv/ubsv/util/uaerospike"
-
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
@@ -811,7 +809,7 @@ func TestBigOPReturn(t *testing.T) {
 	db, err = New(ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
-	f, err := os.Open("testdata/d51051ebcd649ab7a02de85f130b55c357c514ee5f911da9a8dc3bd2ead750ac.bin")
+	f, err := os.Open("testdata/d51051ebcd649ab7a02de85f130b55c357c514ee5f911da9a8dc3bd2ead750ac.hex")
 	require.NoError(t, err)
 	defer f.Close()
 
