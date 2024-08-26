@@ -5,6 +5,7 @@ package aerospike
 import (
 	"sync"
 
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -15,6 +16,11 @@ var (
 	prometheusUtxoMapReset  prometheus.Counter
 	prometheusUtxoMapDelete prometheus.Counter
 	prometheusUtxoMapErrors *prometheus.CounterVec
+
+	prometheusUtxoCreateBatch     prometheus.Histogram
+	prometheusUtxoCreateBatchSize prometheus.Histogram
+	prometheusUtxoSpendBatch      prometheus.Histogram
+	prometheusUtxoSpendBatchSize  prometheus.Histogram
 
 	prometheusTxMetaAerospikeMapGet       prometheus.Counter
 	prometheusUtxostoreCreate             prometheus.Counter
@@ -146,6 +152,38 @@ func _initPrometheusMetrics() {
 		[]string{
 			"function", //function raising the error
 			"error",    // error returned
+		},
+	)
+
+	prometheusUtxoCreateBatch = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "aerospike_utxo_create_batch",
+			Help:    "Duration of utxo create batch",
+			Buckets: util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusUtxoCreateBatchSize = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "aerospike_utxo_create_batch_size",
+			Help:    "Size of utxo create batch",
+			Buckets: util.MetricsBucketsSizeSmall,
+		},
+	)
+
+	prometheusUtxoSpendBatch = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "aerospike_utxo_spend_batch",
+			Help:    "Duration of utxo spend batch",
+			Buckets: util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusUtxoSpendBatchSize = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "aerospike_utxo_spend_batch_size",
+			Help:    "Size of utxo spend batch",
+			Buckets: util.MetricsBucketsSizeSmall,
 		},
 	)
 }

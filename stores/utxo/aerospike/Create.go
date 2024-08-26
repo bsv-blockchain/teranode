@@ -5,6 +5,7 @@ package aerospike
 import (
 	"context"
 	"math"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/aerospike/aerospike-client-go/v7/types"
@@ -19,7 +20,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
-	"github.com/ordishs/gocore"
 )
 
 // Used for NOOP batch operations
@@ -95,8 +95,16 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 }
 
 func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
-	start := gocore.CurrentTime()
-	stat := gocore.NewStat("sendStoreBatch")
+	start := time.Now()
+	_, stat, deferFn := tracing.StartTracing(context.Background(), "sendStoreBatch",
+		tracing.WithParentStat(stat),
+		tracing.WithHistogram(prometheusUtxoCreateBatch),
+	)
+
+	defer func() {
+		prometheusUtxoCreateBatchSize.Observe(float64(len(batch)))
+		deferFn()
+	}()
 
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
