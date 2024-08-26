@@ -99,7 +99,7 @@ func (c *Centrifuge) Init(ctx context.Context) (err error) {
 func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 	c.logger.Infof("[AssetService] Centrifuge service starting")
 
-	err := c.startP2PListener()
+	err := c.startP2PListener(ctx)
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func (c *Centrifuge) Start(ctx context.Context, addr string) error {
 	return nil
 }
 
-func (c *Centrifuge) startP2PListener() error {
+func (c *Centrifuge) startP2PListener(ctx context.Context) error {
 	p2pServerAddress, _ := gocore.Config().Get("p2p_httpAddress", "localhost:9906")
 
 	u := url.URL{Scheme: "ws", Host: p2pServerAddress, Path: "/p2p-ws"}
@@ -139,10 +139,27 @@ func (c *Centrifuge) startP2PListener() error {
 	var clientConnected atomic.Bool
 
 	go func() {
-		for {
+		c.connect(ctx, u, &client, &clientConnected)
+	}()
+
+	go func() {
+		c.readMessages(ctx, &client, &clientConnected)
+	}()
+
+	return nil
+}
+
+func (c *Centrifuge) connect(ctx context.Context, u url.URL, client *atomic.Pointer[websocket.Conn], clientConnected *atomic.Bool) {
+	for {
+		select {
+		case <-ctx.Done():
+			c.logger.Infof("[Centrifuge] p2p client shutting down")
+			return
+		default:
 			if !clientConnected.Load() {
 				c.logger.Infof("[Centrifuge] dialing p2p server at: %s", u.String())
 				websocketClient, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+
 				if err != nil {
 					c.logger.Errorf("[Centrifuge] error dialing p2p server: %v", err)
 					client.Store(nil)
@@ -156,13 +173,20 @@ func (c *Centrifuge) startP2PListener() error {
 			// retrying in 1 second
 			time.Sleep(1 * time.Second)
 		}
-	}()
+	}
+}
 
-	go func() {
-		for {
+func (c *Centrifuge) readMessages(ctx context.Context, client *atomic.Pointer[websocket.Conn], clientConnected *atomic.Bool) {
+	for {
+		select {
+		case <-ctx.Done():
+			c.logger.Infof("[Centrifuge] p2p client shutting down")
+			return
+		default:
 			webSocketClient := client.Load()
 			if webSocketClient != nil {
 				_, message, err := webSocketClient.ReadMessage()
+
 				if err != nil {
 					c.logger.Debugf("[Centrifuge] error reading p2p server message: %v", err)
 					time.Sleep(1 * time.Second)
@@ -188,9 +212,7 @@ func (c *Centrifuge) startP2PListener() error {
 				time.Sleep(1 * time.Second)
 			}
 		}
-	}()
-
-	return nil
+	}
 }
 
 func (c *Centrifuge) _(ctx context.Context, addr string) error {
