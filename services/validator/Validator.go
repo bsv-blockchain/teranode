@@ -51,6 +51,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		logger: logger,
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
+			logger: logger,
 		},
 		utxoStore:      store,
 		blockAssembler: ba,
