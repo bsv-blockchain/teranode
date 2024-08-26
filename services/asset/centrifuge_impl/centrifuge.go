@@ -138,13 +138,9 @@ func (c *Centrifuge) startP2PListener(ctx context.Context) error {
 	var client atomic.Pointer[websocket.Conn]
 	var clientConnected atomic.Bool
 
-	go func() {
-		c.connect(ctx, u, &client, &clientConnected)
-	}()
+	go c.connect(ctx, u, &client, &clientConnected)
 
-	go func() {
-		c.readMessages(ctx, &client, &clientConnected)
-	}()
+	go c.readMessages(ctx, &client, &clientConnected)
 
 	return nil
 }
