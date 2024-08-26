@@ -48,10 +48,10 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string) (
 
 	// create directory if not exists
 	if err = os.MkdirAll(dir, 0755); err != nil {
-		return nil, errors.NewStorageError("failed to create directory", err)
+		return nil, errors.NewStorageError("failed to create main lustre directory: %s", dir, err)
 	}
 	if err = os.MkdirAll(filepath.Clean(dir+"/"+persistDir), 0755); err != nil {
-		return nil, errors.NewStorageError("failed to create directory", err)
+		return nil, errors.NewStorageError("failed to create persist lustre directory: %s", dir+"/"+persistDir, err)
 	}
 
 	return lustreStore, nil
