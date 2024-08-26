@@ -49,24 +49,22 @@ func (e *Error) Error() string {
 }
 
 // Is reports whether error codes match.
-func (e *Error) Is(target error) bool {
+func (e *Error) Is(target *Error) bool {
 	if e == nil {
 		return false
 	}
 
-	var ue *Error
-	if errors.As(target, &ue) {
-		if e.Code == ue.Code {
-			return true
-		}
+	fmt.Println("\nChecking e: ", e.Error(), ", with code:", e.Code, "\ntarget: ", target.Error(), ", with code:", target.Code)
 
-		if e.WrappedErr == nil {
-			return false
-		}
+	//var ue *Error
+
+	if e.Code == target.Code {
+		return true
 	}
 
-	// process, storage, block not found, tx_missing
-	// errors.Is(storage, err) true
+	if e.WrappedErr == nil {
+		return false
+	}
 
 	// Unwrap the current error and recursively call Is on the unwrapped error
 	if unwrapped := errors.Unwrap(e); unwrapped != nil {
@@ -204,12 +202,17 @@ func UnwrapGRPC(err *Error) *Error {
 	// Attempt to extract and return detailed UBSVError if present
 	for _, detail := range st.Details() {
 		var ubsvErr TError
+		fmt.Println("Starting to go through details")
 		if err := anypb.UnmarshalTo(detail.(*anypb.Any), &ubsvErr, proto.UnmarshalOptions{}); err == nil {
-			if ubsvErr.WrappedError != "" {
-				return New(ubsvErr.Code, ubsvErr.Message, fmt.Errorf(ubsvErr.WrappedError))
-			} else {
-				return New(ubsvErr.Code, ubsvErr.Message)
-			}
+			fmt.Println("Unmarshalled ubsv error, Code: ", ubsvErr.Code, ",  Message: ", ubsvErr.Message, ", Wrapped Error:", ubsvErr.WrappedError)
+			//if ubsvErr.WrappedError != "" {
+			//	foundErr := New(ubsvErr.Code, ubsvErr.Message, ubsvErr.WrappedError)
+			//	fmt.Println("since wrapped error is not nil, returning new error with wrapped error: ", foundErr.Error())
+			//	return foundErr
+			//} else {
+			//	return New(ubsvErr.Code, ubsvErr.Message)
+			//}
+			return New(ubsvErr.Code, ubsvErr.Message, ubsvErr.WrappedError)
 		}
 	}
 
