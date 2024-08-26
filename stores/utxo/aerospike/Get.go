@@ -17,13 +17,14 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"golang.org/x/exp/slices"
 )
 
 var (
-	stat = gocore.NewStat("Aerospike")
-
+	stat                        = gocore.NewStat("Aerospike")
+	externalTxCache             = expiringmap.New[chainhash.Hash, *bt.Tx](1 * time.Minute)
 	previousOutputsDecorateStat = stat.NewStat("PreviousOutputsDecorate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
 )
 
@@ -432,34 +433,13 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		bins := batchRecord.Record.Bins
 
-		previousTx := &bt.Tx{}
+		var previousTx *bt.Tx
 
 		external, ok := bins["external"].(bool)
 		if ok && external {
-			// Get the raw transaction from the externalStore...
-			reader, err := s.externalStore.GetIoReader(
-				context.TODO(),
-				batch[idx].outpoint.PreviousTxID[:],
-				options.WithFileExtension("tx"),
-			)
-			if err != nil {
-				// Try to get the data from an output file instead
-				reader, err = s.externalStore.GetIoReader(
-					context.TODO(),
-					batch[idx].outpoint.PreviousTxID[:],
-					options.WithFileExtension("output"),
-				)
-				if err != nil {
-					batch[idx].errCh <- errors.NewStorageError("could not get tx from external store", err)
-					close(batch[idx].errCh)
-
-					continue
-				}
-			}
-
-			_, err = previousTx.ReadFrom(reader)
-			if err != nil {
-				batch[idx].errCh <- errors.NewTxInvalidError("could not read tx from reader: %w", err)
+			previousTxHash := batch[idx].outpoint.PreviousTxID
+			if previousTx, err = s.getTxFromExternalStore(previousTxHash); err != nil {
+				batch[idx].errCh <- err
 				close(batch[idx].errCh)
 
 				continue
@@ -482,6 +462,42 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	prometheusTxMetaAerospikeMapGetMulti.Inc()
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
+}
+
+func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, error) {
+	// Check the cache first
+	if tx, ok := externalTxCache.Get(previousTxHash); ok {
+		return tx, nil
+	}
+
+	// Get the raw transaction from the externalStore...
+	reader, err := s.externalStore.GetIoReader(
+		context.TODO(),
+		previousTxHash[:],
+		options.WithFileExtension("tx"),
+	)
+	if err != nil {
+		// Try to get the data from an output file instead
+		reader, err = s.externalStore.GetIoReader(
+			context.TODO(),
+			previousTxHash[:],
+			options.WithFileExtension("output"),
+		)
+		if err != nil {
+			return nil, errors.NewStorageError("could not get tx from external store", err)
+		}
+	}
+
+	tx := &bt.Tx{}
+
+	if _, err = tx.ReadFrom(reader); err != nil {
+		return nil, errors.NewTxInvalidError("could not read tx from reader: %w", err)
+	}
+
+	// Cache the tx
+	externalTxCache.Set(previousTxHash, tx)
+
+	return tx, nil
 }
 
 func (s *Store) sendGetBatch(batch []*batchGetItem) {
