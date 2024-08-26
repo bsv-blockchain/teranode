@@ -2,6 +2,7 @@ package validator
 
 import (
 	"encoding/hex"
+	"log"
 	"strings"
 
 	"github.com/bitcoin-sv/go-sdk/script"
@@ -13,6 +14,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
+	"github.com/ordishs/gocore"
 )
 
 var (
@@ -40,7 +42,15 @@ var (
 var validatorFunc func(*TxValidator, *bt.Tx, uint32) error
 
 func init() {
-	validatorFunc = checkScripts
+	if gocore.Config().GetBool("validator_useSDKInterpreter", false) {
+		log.Println("Using go-sdk script validation")
+
+		validatorFunc = checkScriptsWithSDK
+	} else {
+		log.Println("Using generic go-bt script validation")
+
+		validatorFunc = checkScripts
+	}
 }
 
 type TxValidator struct {

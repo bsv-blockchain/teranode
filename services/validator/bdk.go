@@ -4,6 +4,7 @@ package validator
 
 import (
 	"encoding/hex"
+	"log"
 	"os"
 
 	"github.com/bitcoin-sv/bdk/module/gobdk/config"
@@ -14,6 +15,7 @@ import (
 
 func init() {
 	// Set the validator function to use the go-bdk script validation
+	log.Println("Using go-bdk script validation")
 	validatorFunc = checkScriptsWithGoBDK
 }
 
