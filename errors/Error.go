@@ -159,36 +159,44 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	}
 }
 
-func WrapGRPC(err error) error {
+func WrapGRPC(err *Error) *Error {
 	if err == nil {
 		return nil
 	}
 
-	var uErr *Error
-	if errors.As(err, &uErr) {
-		details, _ := anypb.New(&TError{
-			Code:         uErr.Code,
-			Message:      uErr.Message,
-			WrappedError: uErr.WrappedErr.Error(),
-		})
-		st := status.New(ErrorCodeToGRPCCode(uErr.Code), uErr.Message)
-		st, err := st.WithDetails(details)
-		if err != nil {
-			return status.New(codes.Internal, "error adding details to gRPC status").Err()
-		}
+	// If the error is already a *Error, wrap it with gRPC details
+	details, _ := anypb.New(&TError{
+		Code:         err.Code,
+		Message:      err.Message,
+		WrappedError: err.WrappedErr.Error(),
+	})
 
-		return st.Err()
+	st := status.New(ErrorCodeToGRPCCode(err.Code), err.Message)
+	st, detailsErr := st.WithDetails(details)
+	if detailsErr != nil {
+		// the following should not be used.
+		return &Error{
+			// TODO: add a specific error code for this case, and check it when it is used
+			Code:       ERR_ERROR,
+			Message:    "error adding details to the error's gRPC status",
+			WrappedErr: err,
+		}
 	}
 
-	return status.New(ErrorCodeToGRPCCode(ErrUnknown.Code), ErrUnknown.Message).Err()
+	// if GPRC error is successfully created
+	return &Error{
+		Code:       err.Code,
+		Message:    err.Message,
+		WrappedErr: st.Err(),
+	}
 }
 
-func UnwrapGRPC(err error) error {
+func UnwrapGRPC(err *Error) *Error {
 	if err == nil {
 		return nil
 	}
 
-	st, ok := status.FromError(err)
+	st, ok := status.FromError(err.WrappedErr)
 	if !ok {
 		return err // Not a gRPC status error
 	}
