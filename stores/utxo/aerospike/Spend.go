@@ -7,14 +7,15 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -83,8 +84,16 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 }
 
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
-	start := gocore.CurrentTime()
-	stat := gocore.NewStat("sendSpendBatchLua")
+	start := time.Now()
+	_, stat, deferFn := tracing.StartTracing(context.Background(), "sendSpendBatchLua",
+		tracing.WithParentStat(stat),
+		tracing.WithHistogram(prometheusUtxoSpendBatch),
+	)
+
+	defer func() {
+		prometheusUtxoSpendBatchSize.Observe(float64(len(batch)))
+		deferFn()
+	}()
 
 	batchID := s.batchID.Add(1)
 	s.logger.Debugf("[SPEND_BATCH_LUA] sending lua batch %d of %d spends", batchID, len(batch))

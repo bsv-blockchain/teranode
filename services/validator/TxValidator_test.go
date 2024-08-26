@@ -3,12 +3,13 @@ package validator
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/libsv/go-bt/v2"
-	"github.com/stretchr/testify/require"
 	"strings"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type args struct {
@@ -49,8 +50,9 @@ func TestTxValidator_checkScripts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tv := &TxValidator{
 				policy: policy,
+				logger: ulogger.TestLogger{},
 			}
-			tt.wantErr(t, tv.checkScripts(tt.args.tx, tt.args.blockHeight), fmt.Sprintf("checkScriptsWithSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
+			tt.wantErr(t, checkScripts(tv, tt.args.tx, tt.args.blockHeight), fmt.Sprintf("checkScriptsWithSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
 	}
 }
@@ -61,8 +63,9 @@ func TestTxValidator_checkScriptsWithSDK(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			tv := &TxValidator{
 				policy: policy,
+				logger: ulogger.TestLogger{},
 			}
-			tt.wantErr(t, tv.checkScriptsWithSDK(tt.args.tx, tt.args.blockHeight), fmt.Sprintf("checkScriptsWithSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
+			tt.wantErr(t, checkScriptsWithSDK(tv, tt.args.tx, tt.args.blockHeight), fmt.Sprintf("checkScriptsWithSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
 	}
 }
@@ -74,9 +77,10 @@ func Test_Tx(t *testing.T) {
 
 	txV := &TxValidator{
 		policy: NewPolicySettings(),
+		logger: ulogger.TestLogger{},
 	}
 
-	err := txV.checkScriptsWithSDK(tx, 720899)
+	err := checkScriptsWithSDK(txV, tx, 720899)
 	require.NoError(t, err)
 
 	txBytes := tx.ExtendedBytes()
@@ -91,7 +95,7 @@ func Test_Tx(t *testing.T) {
 
 	assert.Equal(t, hex.EncodeToString(tx.Bytes()), hex.EncodeToString(txE.Bytes()))
 
-	err = txV.checkScriptsWithSDK(txE, 729000)
+	err = checkScriptsWithSDK(txV, txE, 729000)
 	require.NoError(t, err)
 
 	assert.Equal(t, tx.TxID(), txE.TxID())
