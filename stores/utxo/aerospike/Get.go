@@ -267,19 +267,29 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 			external, ok := bins["external"].(bool)
 			if ok && external {
 				// Get the raw transaction from the externalStore...
+
+				// The file extension will be .tx for the raw transaction if this is a "IBD'ed" node
+				// otherwise for seeded nodes, it will be .output
+				ext := "output"
+
+				inputInterfaces, ok := bins["inputs"].([]interface{})
+				if ok && len(inputInterfaces) > 0 {
+					ext = "tx"
+				}
+
 				reader, err := s.externalStore.GetIoReader(
 					context.TODO(),
 					items[idx].Hash[:],
-					options.WithFileExtension("tx"),
+					options.WithFileExtension(ext),
 				)
 				if err != nil {
-					items[idx].Err = errors.NewStorageError("could not get tx from external store", err)
+					items[idx].Err = errors.NewStorageError("could not get %s from external store", ext, err)
 					continue
 				}
 
 				_, err = externalTx.ReadFrom(reader)
 				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not read tx from reader", err)
+					items[idx].Err = errors.NewTxInvalidError("could not read %s from reader", ext, err)
 					continue
 				}
 			}
@@ -437,13 +447,23 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		external, ok := bins["external"].(bool)
 		if ok && external {
 			// Get the raw transaction from the externalStore...
+
+			// The file extension will be .tx for the raw transaction if this is a "IBD'ed" node
+			// otherwise for seeded nodes, it will be .output
+			ext := "output"
+
+			inputInterfaces, ok := bins["inputs"].([]interface{})
+			if ok && len(inputInterfaces) > 0 {
+				ext = "tx"
+			}
+
 			reader, err := s.externalStore.GetIoReader(
 				context.TODO(),
 				batch[idx].outpoint.PreviousTxID[:],
-				options.WithFileExtension("tx"),
+				options.WithFileExtension(ext),
 			)
 			if err != nil {
-				batch[idx].errCh <- errors.NewStorageError("could not get tx from external store", err)
+				batch[idx].errCh <- errors.NewStorageError("could not get %s from external store", ext, err)
 				close(batch[idx].errCh)
 
 				continue
@@ -451,7 +471,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 			_, err = previousTx.ReadFrom(reader)
 			if err != nil {
-				batch[idx].errCh <- errors.NewTxInvalidError("could not read tx from reader: %w", err)
+				batch[idx].errCh <- errors.NewTxInvalidError("could not read %s from reader: %w", ext, err)
 				close(batch[idx].errCh)
 
 				continue
