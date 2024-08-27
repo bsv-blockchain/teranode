@@ -221,6 +221,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		}
 	}()
 
+	if gocore.Config().GetBool("use_datadog_profiler", false) {
+		deferFn := datadogProfiler()
+		defer deferFn()
+	}
+
 	prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint")
 	if ok && prometheusEndpoint != "" {
 		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)

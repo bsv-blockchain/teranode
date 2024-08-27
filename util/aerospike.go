@@ -69,6 +69,9 @@ func GetAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		logger.Infof("[AEROSPIKE] Reusing aerospike client: %v", url.Host)
 	}
 
+	// increase buffer size to 256MB for large records
+	aerospike.MaxBufferSize = 1024 * 1024 * 256 // 256MB
+
 	return client, nil
 }
 
@@ -314,6 +317,8 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 	aerospikeStatsRefresh, _ := gocore.Config().GetInt("aerospike_statsRefresh", 5)
 	aerospikeStatsRefreshInterval := time.Duration(aerospikeStatsRefresh) * time.Second
 
+	client.EnableMetrics(nil)
+
 	go func() {
 		for {
 			if !client.IsConnected() {
@@ -364,7 +369,7 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 						case float64:
 							aerospikePrometheusMetrics[prometheusKey].Add(subStat)
 						default:
-							logger.Errorf("Unknown type for aerospike stat %s: %T", subKey, subStat)
+							logger.Debugf("Unknown type for aerospike stat %s: %T", subKey, subStat)
 						}
 					}
 				default:

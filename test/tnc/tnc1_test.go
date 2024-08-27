@@ -76,14 +76,6 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 		t.Errorf("Failed to send txs with distributor: %v", errTXs)
 	}
 
-	if len(hashes) > 0 {
-		fmt.Println("First element of hashes:", hashes[0])
-	} else {
-		t.Errorf("No subtrees detected: cannot calculate Merkleproofs")
-	}
-
-	fmt.Println("num of subtrees:", len(hashes))
-
 	mc0, err0 := helper.GetMiningCandidate(ctx, framework.Nodes[0].BlockassemblyClient, logger)
 	mc1, err1 := helper.GetMiningCandidate(ctx, framework.Nodes[1].BlockassemblyClient, logger)
 	mc2, err2 := helper.GetMiningCandidate(ctx, framework.Nodes[2].BlockassemblyClient, logger)
@@ -95,6 +87,14 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 	fmt.Println(mp0)
 	fmt.Println(mp1)
 	fmt.Println(mp2)
+
+	if len(hashes) > 0 {
+		fmt.Println("First element of hashes:", hashes[0])
+	} else {
+		t.Errorf("No subtrees detected: cannot calculate Merkleproofs")
+	}
+
+	fmt.Println("num of subtrees:", len(hashes))
 
 	if mp0 != mp1 || mp1 != mp2 {
 		t.Errorf("Merkle proofs are different")

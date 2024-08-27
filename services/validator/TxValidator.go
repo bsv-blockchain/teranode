@@ -2,12 +2,14 @@ package validator
 
 import (
 	"encoding/hex"
+	"log"
 	"strings"
 
 	"github.com/bitcoin-sv/go-sdk/script"
 	interpreter_sdk "github.com/bitcoin-sv/go-sdk/script/interpreter"
 	"github.com/bitcoin-sv/go-sdk/transaction"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -37,8 +39,23 @@ var (
 	}
 )
 
+var validatorFunc func(*TxValidator, *bt.Tx, uint32) error
+
+func init() {
+	if gocore.Config().GetBool("validator_useSDKInterpreter", false) {
+		log.Println("Using go-sdk script validation")
+
+		validatorFunc = checkScriptsWithSDK
+	} else {
+		log.Println("Using generic go-bt script validation")
+
+		validatorFunc = checkScripts
+	}
+}
+
 type TxValidator struct {
 	policy *PolicySettings
+	logger ulogger.Logger
 }
 
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error {
@@ -102,7 +119,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	}
 
 	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	if err := tv.checkScripts(tx, blockHeight); err != nil {
+	if err := validatorFunc(tv, tx, blockHeight); err != nil {
 		return err
 	}
 
@@ -245,13 +262,13 @@ func (tv *TxValidator) pushDataCheck(tx *bt.Tx) error {
 	return nil
 }
 
-func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
+func checkScripts(tv *TxValidator, tx *bt.Tx, blockHeight uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// TODO - remove this when script engine is fixed
 			if rErr, ok := r.(error); ok {
 				if strings.Contains(rErr.Error(), "negative shift amount") {
-					gocore.Log("RUNTIME").Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
+					tv.logger.Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
 					err = nil
 					return
 				}
@@ -283,7 +300,7 @@ func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
 			// TODO - in the interests of completeing the IBD, we should not fail the node on script errors
 			// and instead log them and continue. This is a temporary measure until we can fix the script engine
 			if blockHeight < 800_000 {
-				gocore.Log("RUNTIME").Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
+				tv.logger.Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
 				return nil
 			}
 
@@ -294,13 +311,13 @@ func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
 	return nil
 }
 
-func (tv *TxValidator) checkScriptsWithSDK(tx *bt.Tx, blockHeight uint32) (err error) {
+func checkScriptsWithSDK(tv *TxValidator, tx *bt.Tx, blockHeight uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// TODO - remove this when script engine is fixed
 			if rErr, ok := r.(error); ok {
 				if strings.Contains(rErr.Error(), "negative shift amount") {
-					gocore.Log("RUNTIME").Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
+					tv.logger.Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
 					err = nil
 					return
 				}
@@ -333,7 +350,7 @@ func (tv *TxValidator) checkScriptsWithSDK(tx *bt.Tx, blockHeight uint32) (err e
 
 		if err = interpreter_sdk.NewEngine().Execute(opts...); err != nil {
 			if blockHeight < 850_000 {
-				gocore.Log("RUNTIME").Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
+				tv.logger.Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
 				return nil
 			}
 

@@ -4,15 +4,12 @@ import (
 	"context"
 
 	"github.com/opentracing/opentracing-go"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
 type Span struct {
-	Ctx               context.Context
-	span              opentracing.Span
-	otSpan            trace.Span
+	Ctx  context.Context
+	span opentracing.Span
+	// otSpan            trace.Span
 	opentracingActive bool
 	otelActive        bool
 }
@@ -28,10 +25,10 @@ func Start(ctx context.Context, name string) Span {
 	}
 
 	// check whether otel is active
-	span.otelActive = otel.Tracer("") != nil
-	if span.otelActive {
-		span.Ctx, span.otSpan = otel.Tracer("").Start(span.Ctx, "PeerHandler:HandleBlock")
-	}
+	//  span.otelActive = otel.Tracer("") != nil
+	//  if span.otelActive {
+	//	  span.Ctx, span.otSpan = otel.Tracer("").Start(span.Ctx, "PeerHandler:HandleBlock")
+	//  }
 
 	return span
 }
@@ -41,9 +38,10 @@ func (s *Span) SetTag(key, value string) {
 		s.span.SetTag(key, value)
 	}
 
-	if s.otelActive {
-		s.otSpan.SetAttributes(attribute.String(key, value))
-	}
+	//  if s.otelActive {
+	//	  s.otSpan.SetAttributes(attribute.String(key, value))
+	//  }
+
 }
 
 func (s *Span) RecordError(err error) {
@@ -52,9 +50,10 @@ func (s *Span) RecordError(err error) {
 		s.span.LogKV("error", err)
 	}
 
-	if s.otelActive {
-		s.otSpan.RecordError(err)
-	}
+	//  if s.otelActive {
+	//	  s.otSpan.RecordError(err)
+	//  }
+
 }
 
 func (s *Span) Finish() {
@@ -62,7 +61,6 @@ func (s *Span) Finish() {
 		s.span.Finish()
 	}
 
-	if s.otelActive {
-		s.otSpan.End()
-	}
+	//  if s.otelActive {
+	//	  s.otSpan.End()
 }
