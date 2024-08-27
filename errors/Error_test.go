@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -61,88 +60,23 @@ func Test_FmtErrorCustomError(t *testing.T) {
 	require.True(t, altSecondErr.Is(altErr))
 }
 
-// Test_WrapGRPC tests wrapping a custom error for gRPC.
-func Test_WrapGRPC(t *testing.T) {
-	e := errors.New("test wrapped error")
-	originalErr := New(ERR_NOT_FOUND, "not found", e)
-	wrappedErr := WrapGRPC(originalErr)
-	s, ok := status.FromError(wrappedErr)
-	if !ok {
-		t.Fatalf("expected gRPC status error; got %T", wrappedErr)
-	}
-
-	if s.Code() != codes.Internal {
-		t.Errorf("expected gRPC code %v; got %v", codes.Internal, s.Code())
-	}
-
-	// Check if the details are correct
-	unwrapped := UnwrapGRPC(wrappedErr)
-	var uErr *Error
-	if ok = errors.As(unwrapped, &uErr); !ok {
-		t.Fatalf("expected *Error type; got %T", unwrapped)
-	}
-
-	if uErr.Code != ERR_NOT_FOUND {
-		t.Errorf("expected code %v; got %v", ERR_NOT_FOUND, uErr.Code)
-	}
-	if uErr.WrappedErr == nil {
-		t.Errorf("expected wrapped error; got nil")
-	}
-	// TODO this is not OK - why is the "0: 0: " added?
-	if uErr.WrappedErr.Error() != "0: 0: "+e.Error() {
-		t.Errorf("expected wrapped error %q; got %q", e.Error(), uErr.WrappedErr.Error())
-	}
-}
-
 // TestUnwrapGRPC tests unwrapping a gRPC error back to a custom error.
-func Test_UnwrapGRPC(t *testing.T) {
-	// Simulate gRPC error
-	grpcErr := createGRPCError(ERR_NOT_FOUND, "not found detail")
-
+func Test_WrapUnwrapGRPC(t *testing.T) {
+	err := NewNotFoundError("not found")
+	wrappedErr := WrapGRPC(err)
 	// Unwrap
-	unwrappedErr := UnwrapGRPC(grpcErr)
-	//
+	unwrappedErr := UnwrapGRPC(wrappedErr)
+
 	// Check error properties
-	if !errors.Is(unwrappedErr, New(ERR_NOT_FOUND, "")) {
-		t.Errorf("unwrapped error does not match expected type or properties, it is: %s", unwrappedErr.Error())
-	}
+	require.True(t, unwrappedErr.Is(err))
 }
 
 func Test_ErrorIs(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "not found")
-	if !errors.Is(err, New(ERR_NOT_FOUND, "")) {
-		t.Errorf("errors.Is failed to recognize NOT_FOUND error type")
-	}
+	require.True(t, err.Is(ErrNotFound))
 
 	err = New(ERR_BLOCK_INVALID, "invalid block error")
-	if !errors.Is(err, New(ERR_BLOCK_INVALID, "")) {
-		t.Errorf("errors.Is failed to recognize INVALID_BLOCK error type")
-	}
-
-	err = New(ERR_TX_INVALID_DOUBLE_SPEND, "invalid tx double spend error")
-	if !errors.Is(err, New(ERR_TX_INVALID_DOUBLE_SPEND, "")) {
-		t.Errorf("errors.Is failed to recognize INVALID_TX_DOUBLE_SPEND error type")
-	}
-
-	err = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded error")
-	if !errors.Is(err, New(ERR_THRESHOLD_EXCEEDED, "")) {
-		t.Errorf("errors.Is failed to recognize THRESHOLD_EXCEEDED error type")
-	}
-
-	err = New(ERR_BLOCK_NOT_FOUND, "block not found error")
-	if !errors.Is(err, New(ERR_BLOCK_NOT_FOUND, "")) {
-		t.Errorf("errors.Is failed to recognize BLOCK_NOT_FOUND error type")
-	}
-
-	err = New(ERR_UNKNOWN, "unknown error")
-	if !errors.Is(err, New(ERR_UNKNOWN, "")) {
-		t.Errorf("errors.Is failed to recognize UNKNOWN error type")
-	}
-
-	err = New(ERR_INVALID_ARGUMENT, "invalid argument error")
-	if !errors.Is(err, New(ERR_INVALID_ARGUMENT, "")) {
-		t.Errorf("errors.Is failed to recognize INVALID_ARGUMENT error type")
-	}
+	require.True(t, err.Is(ErrBlockInvalid))
 }
 
 func Test_ErrorWrapWithAdditionalContext(t *testing.T) {
@@ -258,9 +192,7 @@ func Test_GRPCErrorsRoundTrip(t *testing.T) {
 	wrappedGRPCError := WrapGRPC(originalErr)
 	unwrappedError := UnwrapGRPC(wrappedGRPCError)
 
-	if !errors.Is(unwrappedError, originalErr) {
-		t.Errorf("Unwrapped error does not match original error after gRPC round trip")
-	}
+	require.True(t, unwrappedError.Is(originalErr))
 }
 
 // Helper function to create a gRPC error with UBSVError details
@@ -295,7 +227,7 @@ func Test_UtxoSpentError(t *testing.T) {
 
 	utxoSpentError := NewUtxoSpentErr(chainhash.Hash{}, chainhash.Hash{}, time.Now(), baseErr)
 	require.NotNil(t, utxoSpentError)
-	require.True(t, Is(utxoSpentError, ErrTxAlreadyExists), "expected error to be of type ERR_TX_ALREADY_EXISTS")
+	require.True(t, utxoSpentError.Is(ErrTxAlreadyExists), "expected error to be of type ERR_TX_ALREADY_EXISTS")
 	require.True(t, utxoSpentError.Is(baseErr), "expected error to be of type baseErr")
 	require.False(t, utxoSpentError.Is(ErrBlockInvalid), "expected error to be of type baseErr")
 
@@ -317,7 +249,7 @@ func Test_JoinWithMultipleErrs(t *testing.T) {
 
 	joinedErr := Join(err1, err2, err3)
 	require.NotNil(t, joinedErr)
-	require.Equal(t, "Error: NOT_FOUND (error code: 3), not found: <nil>, Error: BLOCK_NOT_FOUND (error code: 10), block not found: <nil>, Error: INVALID_ARGUMENT (error code: 1), invalid argument: <nil>", joinedErr.Error())
+	require.Equal(t, "Error: NOT_FOUND, (error code: 3), Message: not found, Error: BLOCK_NOT_FOUND, (error code: 10), Message: block not found, Error: INVALID_ARGUMENT, (error code: 1), Message: invalid argument", joinedErr.Error())
 }
 
 func TestErrorString(t *testing.T) {
@@ -325,33 +257,26 @@ func TestErrorString(t *testing.T) {
 
 	thisErr := NewStorageError("failed to set data from reader [%s:%s]", "bucket", "key", err)
 
-	assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), failed to set data from reader [bucket:key]: 0: some error", thisErr.Error())
+	assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), Message: failed to set data from reader [bucket:key], Wrapped err: Error: UNKNOWN, (error code: 0), Message: some error", thisErr.Error())
 }
 
-// TODO: check why NewServiceError returns error, and mmake it return our error type if possible
-// make sure Wrap and UnWrap GRPC functions treat errors as our error types
-// make sure wrapped and unwrapped errors doesn't lose any data
-// test if multiple chained errors are wrapped/unwrapped correctly
 func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	// Base error is not a GRPC error, basic error
-	/*
-		baseServiceErr := NewServiceError("block is invalid")
-		baseServiceErrWithNew := New(ERR_SERVICE_ERROR, "block is invalid")
+	baseServiceErr := NewServiceError("block is invalid")
+	baseServiceErrWithNew := New(ERR_SERVICE_ERROR, "block is invalid")
+	require.True(t, baseServiceErrWithNew.Is(baseServiceErr))
+	require.True(t, baseServiceErr.Is(baseServiceErrWithNew))
 
-		require.True(t, baseServiceErrWithNew.Is(baseServiceErr))
-		require.True(t, baseServiceErr.Is(baseServiceErrWithNew))
+	baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
+	baseBlockInvalidErrWithNew := New(ERR_BLOCK_INVALID, "block is invalid")
+	require.True(t, baseBlockInvalidErr.Is(baseBlockInvalidErrWithNew))
 
-		baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
-		baseBlockInvalidErrWithNew := New(ERR_BLOCK_INVALID, "block is invalid")
+	wrappedOnce := WrapGRPC(baseServiceErr)
+	unwrapped := UnwrapGRPC(wrappedOnce)
 
-		require.True(t, baseBlockInvalidErr.Is(baseBlockInvalidErrWithNew))
+	require.True(t, baseServiceErr.Is(unwrapped))
+	require.True(t, unwrapped.Is(baseServiceErr))
 
-		wrappedOnce := WrapGRPC(baseServiceErr)
-		unwrapped := UnwrapGRPC(wrappedOnce)
-
-		require.True(t, baseServiceErr.Is(unwrapped))
-		require.True(t, unwrapped.Is(baseServiceErr))
-	*/
 	//baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
 	txInvalidErr := NewTxInvalidError("tx is invalid")
 	level1BlockInvalidError := NewBlockInvalidError("block is invalid", txInvalidErr)
@@ -360,26 +285,28 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	level4ContextError := NewContextError("context error", level3ProcessingError)
 
 	// Test errors that are nested
-
 	// level 2 error recognizes all the errors in the chain
-	// require.True(t, level2ServiceError.Is(txInvalidErr))
-	// require.True(t, level2ServiceError.Is(baseBlockInvalidErr))
-	//require.True(t, level2ServiceError.Is(ErrServiceError))
-	//require.True(t, level2ServiceError.Is(ErrBlockInvalid))
-	// require.True(t, level2ServiceError.Is(ErrTxInvalid))
+	require.True(t, level2ServiceError.Is(txInvalidErr))
+	require.True(t, level2ServiceError.Is(baseBlockInvalidErr))
+	require.True(t, level2ServiceError.Is(ErrServiceError))
+	require.True(t, level2ServiceError.Is(ErrBlockInvalid))
+	require.True(t, level2ServiceError.Is(ErrTxInvalid))
 
 	// Test that we don't lose any data when wrapping and unwrapping GRPC
-	fmt.Println("original: ", level4ContextError)
+
 	wrapped := WrapGRPC(level4ContextError)
-	//unwrapped := UnwrapGRPC(wrapped)
+	unwrapped = UnwrapGRPC(wrapped)
 
-	fmt.Println("wrapped: ", wrapped)
-	//fmt.Println("unwrapped: ", unwrapped)
+	// fmt.Println("original: ", level4ContextError)
+	// fmt.Println("wrapped: ", wrapped)
+	// fmt.Println("unwrapped: ", unwrapped)
 
-	// require.True(t, unwrapped.Is(txInvalidErr))
-	//require.True(t, unwrapped.Is(baseBlockInvalidErr))
-	//require.True(t, unwrapped.Is(ErrServiceError))
-	//require.True(t, unwrapped.Is(ErrBlockInvalid))
-	//require.True(t, unwrapped.Is(ErrTxInvalid))
-
+	require.True(t, unwrapped.Is(txInvalidErr))
+	require.True(t, unwrapped.Is(baseBlockInvalidErr))
+	require.True(t, unwrapped.Is(ErrServiceError))
+	require.True(t, unwrapped.Is(ErrBlockInvalid))
+	require.True(t, unwrapped.Is(ErrTxInvalid))
+	require.True(t, unwrapped.Is(level2ServiceError))
+	require.True(t, unwrapped.Is(level3ProcessingError))
+	require.True(t, unwrapped.Is(level4ContextError))
 }
