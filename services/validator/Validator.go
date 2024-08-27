@@ -438,6 +438,11 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spe
 }
 
 func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "extendTransaction",
+		tracing.WithHistogram(prometheusTransactionValidate),
+	)
+	defer deferFn()
+
 	if tx.IsCoinbase() {
 		return nil
 	}
