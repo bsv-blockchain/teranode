@@ -18,8 +18,8 @@ import (
 	"syscall"
 
 	"github.com/bitcoin-sv/ubsv/cmd/bitcoin2utxoset/bitcoin"
-	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/btcleveldb"
-	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/keys"
+	"github.com/bitcoin-sv/ubsv/cmd/bitcoin2utxoset/bitcoin/btcleveldb"
+	"github.com/bitcoin-sv/ubsv/cmd/bitcoin2utxoset/bitcoin/keys"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/ulogger"
