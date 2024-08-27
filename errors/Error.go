@@ -3,6 +3,7 @@ package errors
 import (
 	"errors"
 	"fmt"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/protoadapt"
 	"google.golang.org/protobuf/types/known/anypb"
 	reflect "reflect"
@@ -36,16 +37,16 @@ func (e *Error) Error() string {
 
 	if e.WrappedErr == nil {
 		if dataMsg == "" {
-			return fmt.Sprintf("%d: %v", e.Code, e.Message)
+			return fmt.Sprintf("Error: %s, (error code: %d), Message: %v", e.Code.Enum(), e.Code, e.Message)
 		}
 		return fmt.Sprintf("%d: %v, data: %s", e.Code, e.Message, dataMsg)
 	}
 
 	if dataMsg == "" {
-		return fmt.Sprintf("Error: %s (error code: %d), %v: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
+		return fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
 	}
 
-	return fmt.Sprintf("Error: %s (error code: %d), %v: %v, data: %s", e.Code.Enum(), e.Code, e.Message, e.WrappedErr, dataMsg)
+	return fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v, Data: %s", e.Code.Enum(), e.Code, e.Message, e.WrappedErr, dataMsg)
 }
 
 // Is reports whether error codes match.
@@ -53,10 +54,6 @@ func (e *Error) Is(target *Error) bool {
 	if e == nil {
 		return false
 	}
-
-	fmt.Println("\nChecking e: ", e.Error(), ", with code:", e.Code, "\ntarget: ", target.Error(), ", with code:", target.Code)
-
-	//var ue *Error
 
 	if e.Code == target.Code {
 		return true
@@ -143,91 +140,103 @@ func New(code ERR, message string, params ...interface{}) *Error {
 
 	// Check if the code exists in the ErrorConstants enum
 	if _, ok := ERR_name[int32(code)]; !ok {
-		return &Error{
-			Code:       code,
-			Message:    "invalid error code",
-			WrappedErr: wErr,
+		returnErr := &Error{
+			Code:    code,
+			Message: "invalid error code",
 		}
+		if wErr != nil {
+			returnErr.WrappedErr = wErr
+		}
+		return returnErr
 	}
 
-	return &Error{
-		Code:       code,
-		Message:    message,
-		WrappedErr: wErr,
+	returnErr := &Error{
+		Code:    code,
+		Message: message,
+		//WrappedErr: wErr,
 	}
+	if wErr != nil {
+		returnErr.WrappedErr = wErr
+	}
+	// fmt.Println("code exists: ", code, ", message: ", message, ", return err: ", returnErr.Error())
+	return returnErr
 }
 
-func WrapGRPC(err *Error) *Error {
+func WrapGRPC(err error) *Error {
 	if err == nil {
 		return nil
 	}
 
-	// If the error is already a *Error, wrap it with gRPC details
-	//details, _ := anypb.New(&TError{
-	//	Code:         err.Code,
-	//	Message:      err.Message,
-	//	WrappedError: err.WrappedErr.Error(),
-	//})
-
-	var wrappedErrDetails []protoadapt.MessageV1
-	// add every wrapped error one by one
-	// var errors []*Error
-	//errors = append(errors, err)
-	if err.WrappedErr != nil {
-		currWrappedErr := err.WrappedErr
-		for currWrappedErr != nil {
-			if err, ok := currWrappedErr.(*Error); ok {
-				details, _ := anypb.New(&TError{
-					Code:    err.Code,
-					Message: err.Message,
-				})
-				wrappedErrDetails = append(wrappedErrDetails, details)
-				// errors = append(errors, err)
-
-				// exit the loop if the wrapped error is set to <nil>
-				if err.WrappedErr.Error() == "<nil>" {
-					currWrappedErr = nil
-				} else {
+	if castedErr, ok := err.(*Error); ok {
+		var wrappedErrDetails []protoadapt.MessageV1
+		// If the error is already a *Error, wrap it with gRPC details
+		details, _ := anypb.New(&TError{
+			Code:    castedErr.Code,
+			Message: castedErr.Message,
+		})
+		wrappedErrDetails = append(wrappedErrDetails, details)
+		// add every wrapped error one by one
+		// var errors []*Error
+		//errors = append(errors, err)
+		if castedErr.WrappedErr != nil {
+			currWrappedErr := castedErr.WrappedErr
+			for currWrappedErr != nil {
+				if err, ok := currWrappedErr.(*Error); ok {
+					details, _ := anypb.New(&TError{
+						Code:    err.Code,
+						Message: err.Message,
+					})
+					wrappedErrDetails = append(wrappedErrDetails, details)
 					currWrappedErr = err.WrappedErr
+				} else if err, ok := currWrappedErr.(error); ok {
+					details, _ := anypb.New(&TError{
+						Code:    ERR_ERROR,
+						Message: err.Error(),
+					})
+					wrappedErrDetails = append(wrappedErrDetails, details)
+					currWrappedErr = nil
 				}
-
-			} else if err, ok := currWrappedErr.(error); ok {
-				details, _ := anypb.New(&TError{
-					Code:    ERR_ERROR,
-					Message: err.Error(),
-				})
-				wrappedErrDetails = append(wrappedErrDetails, details)
-				//errors = append(errors, &Error{
-				//	Code:    ERR_ERROR,
-				//	Message: err.Error(),
-				//})
-				// exit loop
-				currWrappedErr = nil
 			}
 		}
-	}
-	for i := 0; i < len(wrappedErrDetails); i++ {
-		// fmt.Println("Adding error to the details: ", errors[i].Error())
-		fmt.Println("Details for the error is: ", wrappedErrDetails[i])
+		// for i := 0; i < len(wrappedErrDetails); i++ {
+		//	fmt.Println("Details for the error is: ", wrappedErrDetails[i])
+		// }
+
+		st := status.New(ErrorCodeToGRPCCode(castedErr.Code), castedErr.Message)
+		st, detailsErr := st.WithDetails(wrappedErrDetails...)
+		if detailsErr != nil {
+			// the following should not be used.
+			return &Error{
+				// TODO: add grpc construction error type
+				Code:       ERR_ERROR,
+				Message:    "error adding details to the error's gRPC status",
+				WrappedErr: err,
+			}
+		}
+
+		return &Error{
+			Code:       castedErr.Code,
+			Message:    castedErr.Message,
+			WrappedErr: st.Err(),
+		}
 	}
 
-	st := status.New(ErrorCodeToGRPCCode(err.Code), err.Message)
-	st, detailsErr := st.WithDetails(wrappedErrDetails...)
-	if detailsErr != nil {
-		// the following should not be used.
+	// If the error is not a *Error, but error, wrap it with gRPC details
+	st, ok := status.FromError(err)
+	if !ok {
 		return &Error{
-			// TODO: add grpc construction error type
 			Code:       ERR_ERROR,
-			Message:    "error adding details to the error's gRPC status",
+			Message:    "error creating error wrapped with gRPC details",
 			WrappedErr: err,
 		}
 	}
 
 	return &Error{
-		Code:       err.Code,
-		Message:    err.Message,
+		Code:       ERR_ERROR,
+		Message:    err.Error(),
 		WrappedErr: st.Err(),
 	}
+
 }
 
 func UnwrapGRPC(err *Error) *Error {
@@ -240,64 +249,30 @@ func UnwrapGRPC(err *Error) *Error {
 		return err // Not a gRPC status error
 	}
 
-	/*
-		//	var ubsvErr TError
-		var finalErr *Error
-		var currErr *Error
-		var ubsvErr TError
-		// Attempt to extract and return detailed UBSVError if present
-		if len(st.Details()) > 0 {
-			// get the detail
-			detail := st.Details()[0]
-
-			if err := anypb.UnmarshalTo(detail.(*anypb.Any), &ubsvErr, proto.UnmarshalOptions{}); err == nil {
-				fmt.Println("Unmarshalled ubsv error, Code: ", ubsvErr.Code, ",  Message: ", ubsvErr.Message, ", Wrapped Error:", ubsvErr.WrappedError)
-				// Traverse through details, convert to errors separately
-				// don't construct the error until the end
-
-				for ubsvErr.WrappedError != "" {
-
-				}
-				//if ubsvErr.WrappedError == "" {
-				lastErr := &Error{
-					Code:       ubsvErr.Code,
-					Message:    ubsvErr.Message,
-					WrappedErr: nil,
-				}
-				// Add last error to the latest error chain
-				//currErr.WrappedErr = lastErr
-
-				//}
-
-				//return New(ubsvErr.Code, ubsvErr.Message, ubsvErr.WrappedError)
-			}
+	var prevErr *Error
+	var currErr *Error
+	//var toBeWrappedErr *Error
+	for i := len(st.Details()) - 1; i >= 0; i-- {
+		// Cast the protoadapt.MessageV1 to *anypb.Any, which is what we need to unmarshal
+		detail := st.Details()[i]
+		detailAny, ok := detail.(*anypb.Any)
+		if !ok {
+			fmt.Println("This should not happen, detail is not of type anypb.Any")
+			continue // If the detail isn't of the expected type, skip it
 		}
-	*/
-	//fmt.Println("Starting to go through details, current detail is: ", detail)
-	//fmt.Println("All details , size of details:", len(st.Details()), " details are: ", st.Details())
 
-	//if ubsvErr.WrappedError != "" {
-	//	foundErr := New(ubsvErr.Code, ubsvErr.Message, ubsvErr.WrappedError)
-	//	fmt.Println("since wrapped error is not nil, returning new error with wrapped error: ", foundErr.Error())
-	//	return foundErr
-	//} else {
-	//	return New(ubsvErr.Code, ubsvErr.Message)
-	//}
-
-	// Fallback: Map common gRPC status codes to custom error codes
-	switch st.Code() {
-	case codes.NotFound:
-		return New(ERR_NOT_FOUND, st.Message())
-	case codes.InvalidArgument:
-		return New(ERR_INVALID_ARGUMENT, st.Message())
-	case codes.ResourceExhausted:
-		return New(ERR_THRESHOLD_EXCEEDED, st.Message())
-	case codes.Unknown:
-		return New(ErrUnknown.Code, st.Message())
-	default:
-		// For unhandled cases, return ErrUnknown with the original gRPC error message
-		return New(ErrUnknown.Code, st.Message())
+		var customDetails TError
+		if err := anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
+			currErr = New(customDetails.Code, customDetails.Message)
+			// if we moved up higher in the hierarchy
+			if prevErr != nil {
+				currErr.WrappedErr = prevErr
+			}
+			prevErr = currErr
+		}
 	}
+
+	return currErr
 }
 
 // ErrorCodeToGRPCCode maps your application-specific error codes to gRPC status codes.
