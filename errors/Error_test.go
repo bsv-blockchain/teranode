@@ -10,7 +10,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -309,4 +309,73 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	require.True(t, unwrapped.Is(level2ServiceError))
 	require.True(t, unwrapped.Is(level3ProcessingError))
 	require.True(t, unwrapped.Is(level4ContextError))
+}
+
+func Test_UnwrapGRPCWithStandardError(t *testing.T) {
+	// Create a simple gRPC error with a standard error message
+	grpcErr := status.Error(codes.InvalidArgument, "Invalid argument provided")
+
+	// Unwrap the gRPC error using the UnwrapGRPC function
+	unwrapped := UnwrapGRPC(grpcErr)
+
+	// Ensure that the unwrapped error is not nil
+	require.NotNil(t, unwrapped)
+
+	// Check that the unwrapped error contains the correct message and code
+	require.Equal(t, ERR_ERROR, unwrapped.Code)
+	require.Equal(t, "rpc error: code = InvalidArgument desc = Invalid argument provided", unwrapped.Message)
+
+	// Test with a different gRPC status code
+	grpcErrNotFound := status.Error(codes.NotFound, "Resource not found")
+
+	// Unwrap the gRPC error using the UnwrapGRPC function
+	unwrappedNotFound := UnwrapGRPC(grpcErrNotFound)
+
+	// Ensure that the unwrapped error is not nil
+	require.NotNil(t, unwrappedNotFound)
+
+	// Check that the unwrapped error contains the correct message and code
+	require.Equal(t, ERR_ERROR, unwrappedNotFound.Code)
+	require.Equal(t, "rpc error: code = NotFound desc = Resource not found", unwrappedNotFound.Message)
+}
+
+func Test_UnwrapGRPCWithStandardKENError(t *testing.T) {
+	// Create a standard error
+	standardErr := fmt.Errorf("invalid argument provided")
+	grpcErr := status.Error(codes.InvalidArgument, standardErr.Error())
+
+	// Wrap the standard error using WrapGRPC
+	wrappedErr := WrapGRPC(grpcErr)
+	// fmt.Println("WrapGRPC returned: ", wrappedErr)
+
+	// Unwrap the gRPC error using the UnwrapGRPC function
+	unwrapped := UnwrapGRPC(wrappedErr)
+
+	// Ensure that the unwrapped error is not nil
+	require.NotNil(t, unwrapped)
+
+	// Check that the unwrapped error contains the correct message and code
+	require.Equal(t, ERR_ERROR, unwrapped.Code)
+	require.Equal(t, "rpc error: code = InvalidArgument desc = Invalid argument provided", unwrapped.Message)
+
+	// Ensure that the unwrapped error is recognized as equivalent to the original standard error
+	//require.True(t, unwrapped.Is(standardErr))
+
+	// Test with a different gRPC status code and message
+	standardErrResourceExhausted := fmt.Errorf("Resource exhausted")
+	grpcErr = status.Error(codes.ResourceExhausted, standardErrResourceExhausted.Error())
+	wrappedErrResourceExhausted := WrapGRPC(grpcErr)
+
+	// Unwrap the gRPC error using the UnwrapGRPC function
+	unwrappedResourceExhausted := UnwrapGRPC(wrappedErrResourceExhausted)
+
+	// Ensure that the unwrapped error is not nil
+	require.NotNil(t, unwrappedResourceExhausted)
+
+	// Check that the unwrapped error contains the correct message and code
+	require.Equal(t, ERR_ERROR, unwrappedResourceExhausted.Code)
+	require.Equal(t, "rpc error: code = ResourceExhausted desc = Resource exhausted", unwrappedResourceExhausted.Message)
+
+	// Ensure that the unwrapped error is recognized as equivalent to the original standard error
+	//require.True(t, unwrappedNotFound.Is(standardErrNotFound))
 }

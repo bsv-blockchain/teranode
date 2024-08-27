@@ -40,6 +40,7 @@ func (s *Span) SetTag(key, value string) {
 	if s.opentracingActive {
 		s.span.SetTag(key, value)
 	}
+
 	if s.otelActive {
 		s.otSpan.SetAttributes(attribute.String(key, value))
 	}
@@ -50,6 +51,7 @@ func (s *Span) RecordError(err error) {
 		s.span.SetTag("error", true)
 		s.span.LogKV("error", err)
 	}
+
 	if s.otelActive {
 		s.otSpan.RecordError(err)
 	}
@@ -59,6 +61,7 @@ func (s *Span) Finish() {
 	if s.opentracingActive {
 		s.span.Finish()
 	}
+
 	if s.otelActive {
 		s.otSpan.End()
 	}

@@ -192,10 +192,13 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.O
 					}
 					return fileReader, nil
 				}
+
 				return nil, errors.NewStorageError("[%s] unable to open file", fileName, err)
 			}
+
 			return file, nil
 		}
+
 		return nil, errors.NewStorageError("[%s] unable to open file", fileName, err)
 	}
 
