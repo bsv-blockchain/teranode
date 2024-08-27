@@ -10,12 +10,14 @@ import (
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
@@ -470,18 +472,22 @@ func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, e
 		return tx, nil
 	}
 
+	ext := "tx"
+
 	// Get the raw transaction from the externalStore...
 	reader, err := s.externalStore.GetIoReader(
 		context.TODO(),
 		previousTxHash[:],
-		options.WithFileExtension("tx"),
+		options.WithFileExtension(ext),
 	)
 	if err != nil {
 		// Try to get the data from an output file instead
+		ext = "outputs"
+
 		reader, err = s.externalStore.GetIoReader(
 			context.TODO(),
 			previousTxHash[:],
-			options.WithFileExtension("output"),
+			options.WithFileExtension(ext),
 		)
 		if err != nil {
 			return nil, errors.NewStorageError("could not get tx from external store", err)
@@ -490,8 +496,30 @@ func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, e
 
 	tx := &bt.Tx{}
 
-	if _, err = tx.ReadFrom(reader); err != nil {
-		return nil, errors.NewTxInvalidError("could not read tx from reader: %w", err)
+	if ext == "tx" {
+		if _, err = tx.ReadFrom(reader); err != nil {
+			return nil, errors.NewTxInvalidError("could not read tx from reader: %w", err)
+		}
+	} else {
+		var uw *utxopersister.UTXOWrapper
+
+		uw, err := utxopersister.NewUTXOWrapperFromReader(reader)
+		if err != nil {
+			return nil, errors.NewTxInvalidError("could not read outputs from reader: %w", err)
+		}
+
+		utxos := utxopersister.PadUTXOsWithNil(uw.UTXOs)
+
+		tx.Outputs = make([]*bt.Output, len(utxos))
+
+		for _, u := range uw.UTXOs {
+			s := bscript.NewFromBytes(u.Script)
+
+			tx.Outputs[u.Index] = &bt.Output{
+				Satoshis:      u.Value,
+				LockingScript: s,
+			}
+		}
 	}
 
 	// Cache the tx

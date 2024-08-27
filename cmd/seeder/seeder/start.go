@@ -31,6 +31,11 @@ func Start() {
 	inFile := flag.String("in", "", "Input filename for UTXO set.")
 	flag.Parse()
 
+	if *inFile == "" {
+		fmt.Println("Please provide an input file (-in)")
+		return
+	}
+
 	logger := ulogger.NewGoCoreLogger("seed")
 
 	go func() {

@@ -1,12 +1,14 @@
-package main
+package bitcoin2utxoset
 
 import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,6 +17,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/bitcoin-sv/ubsv/cmd/bitcoin2utxoset/bitcoin"
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/btcleveldb"
 	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/keys"
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -41,69 +44,107 @@ import (
 // parsing flags from command line
 // Check OS type for file-handler limitations
 
-func main() {
+type BlockHeader struct {
+	Hash              string `json:"hash"`
+	Height            int    `json:"height"`
+	PreviousBlockHash string `json:"previousblockhash"`
+}
+
+func Start() {
+	logger := ulogger.NewGoCoreLogger("b2utxo")
+
 	// Command Line Options (Flags)
-	chainstate := flag.String("db", "", "Location of bitcoin chainstate db.")         // chainstate folder
-	outputDir := flag.String("outputDir", "", "Output directory for UTXO set.")       // output directory
-	blockHash := flag.String("blockHash", "", "Block hash for the UTXO set.")         // block hash
-	blockHeight := flag.Uint("blockHeight", 0, "Block height for the UTXO set.")      // block height
-	previousBlockHash := flag.String("previousBlockHash", "", "Previous block hash.") // previous block hash
-	flag.Parse()                                                                      // execute command line parsing for all declared flags
+	blockchainDir := flag.String("bitcoinDir", "", "Location of bitcoin data")  // chainstate folder
+	outputDir := flag.String("outputDir", "", "Output directory for UTXO set.") // output directory
+	flag.Parse()
+
+	if *blockchainDir == "" {
+		logger.Errorf("The 'bitcoinDir' flag is mandatory.")
+		os.Exit(1)
+	}
+
+	// Check the bitcoinDir exists
+	if _, err := os.Stat(*blockchainDir); os.IsNotExist(err) {
+		logger.Errorf("Couldn't find", *blockchainDir)
+		os.Exit(1)
+	}
+
+	chainstate := filepath.Join(*blockchainDir, "chainstate")
+
+	// Check chainstate LevelDB folder exists
+	if _, err := os.Stat(chainstate); os.IsNotExist(err) {
+		logger.Errorf("Couldn't find %s: %v", chainstate, err)
+		os.Exit(1)
+	}
+
+	index := filepath.Join(*blockchainDir, "blocks/index")
+
+	// Check index LevelDB folder exists
+	if _, err := os.Stat(index); os.IsNotExist(err) {
+		logger.Errorf("Couldn't find %s: %v", index, err)
+		os.Exit(1)
+	}
+
+	if *outputDir == "" {
+		logger.Errorf("The 'outputDir' flag is mandatory.")
+		os.Exit(1)
+	}
 
 	// Check if OS type is Mac OS, then increase ulimit -n to 4096 filehandler during runtime and reset to 1024 at the end
 	// Mac OS standard is 1024
 	// Linux standard is already 4096 which is also "max" for more edit etc/security/limits.conf
 	if runtime.GOOS == "darwin" {
 		cmd2 := exec.Command("ulimit", "-n", "4096")
+
 		fmt.Println("setting ulimit 4096")
+
 		_, err := cmd2.Output()
 		if err != nil {
 			fmt.Printf("setting new ulimit failed with %s\n", err)
 		}
+
 		defer exec.Command("ulimit", "-n", "1024")
 	}
 
-	logger := ulogger.NewGoCoreLogger("cs2utxo")
-
-	// Check chainstate LevelDB folder exists
-	if _, err := os.Stat(*chainstate); os.IsNotExist(err) {
-		logger.Errorf("Couldn't find %s", chainstate)
-		os.Exit(1)
+	indexDB, err := bitcoin.NewIndexDB(index)
+	if err != nil {
+		logger.Errorf("Could not open index: %v", err)
+		return
 	}
 
-	outFile := filepath.Join(*outputDir, *blockHash+".utxo-set")
+	defer indexDB.Close()
+
+	height, err := indexDB.GetLastHeight()
+	if err != nil {
+		logger.Errorf("Could not get last height: %v", err)
+		return
+	}
+
+	bestBlock, err := indexDB.WriteHeadersToFile(*outputDir, height)
+	if err != nil {
+		logger.Errorf("Could not write headers: %v", err)
+		return
+	}
+
+	outFile := filepath.Join(*outputDir, bestBlock.Hash.String()+".utxo-set")
 
 	if _, err := os.Stat(outFile); err == nil {
 		logger.Errorf("Output file %s already exists. Please delete and try again", outFile)
-		os.Exit(1)
+		return
 	}
 
-	bh, err := chainhash.NewHashFromStr(*blockHash)
-	if err != nil {
-		logger.Errorf("Invalid block hash: %v", err)
-		os.Exit(1)
-	}
-
-	ph, err := chainhash.NewHashFromStr(*previousBlockHash)
-	if err != nil {
-		logger.Errorf("Invalid previous block hash: %v", err)
-		os.Exit(1)
-	}
-
-	if err := runImport(logger, *chainstate, outFile, bh, uint32(*blockHeight), ph); err != nil {
+	if err := runImport(logger, chainstate, outFile, bestBlock.Hash, uint32(bestBlock.Height), bestBlock.BlockHeader.HashPrevBlock); err != nil {
 		logger.Errorf("%v", err)
-		os.Exit(1)
+		return
 	}
-
-	os.Exit(0)
 }
 
 func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHash *chainhash.Hash, blockHeight uint32, previousBlockHash *chainhash.Hash) error {
-
 	// Select bitcoin chainstate leveldb folder
 	// open leveldb without compression to avoid corrupting the database for bitcoin
 	opts := &opt.Options{
 		Compression: opt.NoCompression,
+		ReadOnly:    true,
 	}
 	// https://bitcoin.stackexchange.com/questions/52257/chainstate-leveldb-corruption-after-reading-from-the-database
 	// https://github.com/syndtr/goleveldb/issues/61
@@ -415,6 +456,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					if err != nil {
 						return errors.NewProcessingError("Couldn't write to file:")
 					}
+
 					txWritten++
 					utxosWritten += uint64(len(currentUTXOWrapper.UTXOs))
 
@@ -433,16 +475,18 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				utxosWritten2++
 			default:
 				fmt.Printf("ERROR: Unknown script type: %v\n", scriptType)
+
 				utxosSkipped++
 			}
 
 			if (txWritten+utxosSkipped)%1_000_000 == 0 {
 				logger.Infof("Processed %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 			}
+		} else if prefix == 66 { // 66 = 0x42
+			// Ignore
 
 		} else {
 			logger.Errorf("Unhandled LevelDB record: %x : %x", key, value)
-
 		}
 
 		iterCount++
@@ -506,4 +550,28 @@ func formatNumber(n uint64) string {
 		out = append(out, string(c))
 	}
 	return strings.Join(out, "")
+}
+
+func GetBlockHeaderByHeight(height int) (*BlockHeader, error) {
+	url := fmt.Sprintf("https://api.whatsonchain.com/v1/bsv/main/block/%d/header", height)
+
+	// Make the GET request
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("error making GET request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Check if the request was successful
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	// Decode the JSON response into the BlockInfo struct
+	var bh BlockHeader
+	if err := json.NewDecoder(resp.Body).Decode(&bh); err != nil {
+		return nil, fmt.Errorf("error decoding response: %v", err)
+	}
+
+	return &bh, nil
 }

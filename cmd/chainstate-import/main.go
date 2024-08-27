@@ -52,7 +52,7 @@ func main() {
 
 	// Check chainstate LevelDB folder exists
 	if _, err := os.Stat(*chainstate); os.IsNotExist(err) {
-		fmt.Println("Couldn't find", *chainstate)
+		fmt.Println("Couldn't find %s: %v", *chainstate, err)
 		return
 	}
 

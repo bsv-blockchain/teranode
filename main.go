@@ -14,11 +14,11 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/cmd/aerospike_reader/aerospike_reader"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
+	"github.com/bitcoin-sv/ubsv/cmd/bitcoin2utxoset/bitcoin2utxoset"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
 	"github.com/bitcoin-sv/ubsv/cmd/chainintegrity/chainintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/filereader/filereader"
-	"github.com/bitcoin-sv/ubsv/cmd/headers/headers"
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
@@ -118,8 +118,8 @@ func main() {
 	case "seeder.run":
 		seeder.Start()
 		return
-	case "headers.run":
-		headers.Start()
+	case "bitcoin2utxoset.run":
+		bitcoin2utxoset.Start()
 		return
 	}
 

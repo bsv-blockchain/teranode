@@ -452,21 +452,26 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 		TxID:     bItem.txHash,
 		Height:   bItem.blockHeight,
 		Coinbase: bItem.isCoinbase,
-		UTXOs:    make([]*utxopersister.UTXO, len(nonNilOutputs)),
+		UTXOs:    make([]*utxopersister.UTXO, 0, len(nonNilOutputs)),
 	}
 
-	for i, output := range nonNilOutputs {
-		wrapper.UTXOs[i] = &utxopersister.UTXO{
+	for i, output := range bItem.tx.Outputs {
+		if output == nil {
+			continue
+		}
+
+		wrapper.UTXOs = append(wrapper.UTXOs, &utxopersister.UTXO{
+			Index:  uint32(i),
 			Value:  output.Satoshis,
 			Script: *output.LockingScript,
-		}
+		})
 	}
 
 	if err := s.externalStore.Set(
 		context.TODO(),
 		bItem.txHash[:],
 		wrapper.Bytes(),
-		options.WithFileExtension("output"),
+		options.WithFileExtension("outputs"),
 	); err != nil {
 		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]: %v", bItem.txHash.String(), err))
 		return
