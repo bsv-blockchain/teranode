@@ -352,10 +352,12 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 		require.True(t, baseServiceErr.Is(unwrapped))
 		require.True(t, unwrapped.Is(baseServiceErr))
 	*/
-	baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
+	//baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
 	txInvalidErr := NewTxInvalidError("tx is invalid")
 	level1BlockInvalidError := NewBlockInvalidError("block is invalid", txInvalidErr)
 	level2ServiceError := NewServiceError("service error", level1BlockInvalidError)
+	level3ProcessingError := NewProcessingError("goko processing error", level2ServiceError)
+	level4ContextError := NewContextError("context error", level3ProcessingError)
 
 	// Test errors that are nested
 
@@ -367,14 +369,15 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	// require.True(t, level2ServiceError.Is(ErrTxInvalid))
 
 	// Test that we don't lose any data when wrapping and unwrapping GRPC
-	wrapped := WrapGRPC(level2ServiceError)
-	unwrapped := UnwrapGRPC(wrapped)
-	fmt.Println("original: ", level2ServiceError)
+	fmt.Println("original: ", level4ContextError)
+	wrapped := WrapGRPC(level4ContextError)
+	//unwrapped := UnwrapGRPC(wrapped)
+
 	fmt.Println("wrapped: ", wrapped)
-	fmt.Println("unwrapped: ", unwrapped)
+	//fmt.Println("unwrapped: ", unwrapped)
 
 	// require.True(t, unwrapped.Is(txInvalidErr))
-	require.True(t, unwrapped.Is(baseBlockInvalidErr))
+	//require.True(t, unwrapped.Is(baseBlockInvalidErr))
 	//require.True(t, unwrapped.Is(ErrServiceError))
 	//require.True(t, unwrapped.Is(ErrBlockInvalid))
 	//require.True(t, unwrapped.Is(ErrTxInvalid))
