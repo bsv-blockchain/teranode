@@ -356,7 +356,7 @@ func Test_UnwrapGRPCWithStandardKENError(t *testing.T) {
 
 	// Check that the unwrapped error contains the correct message and code
 	require.Equal(t, ERR_ERROR, unwrapped.Code)
-	require.Equal(t, "rpc error: code = InvalidArgument desc = Invalid argument provided", unwrapped.Message)
+	require.Equal(t, "rpc error: code = InvalidArgument desc = invalid argument provided", unwrapped.Message)
 
 	// Ensure that the unwrapped error is recognized as equivalent to the original standard error
 	//require.True(t, unwrapped.Is(standardErr))
