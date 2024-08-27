@@ -38,7 +38,7 @@ type baTestItems struct {
 func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
 	return items.blockchainClient.AddBlock(context.Background(), &model.Block{
 		Header:           blockHeader,
-		CoinbaseTx:       &bt.Tx{},
+		CoinbaseTx:       &bt.Tx{Inputs: []*bt.Input{{}}},
 		TransactionCount: 1,
 		Subtrees:         []*chainhash.Hash{},
 	}, "")

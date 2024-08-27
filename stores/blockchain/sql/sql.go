@@ -377,6 +377,9 @@ func (s *SQL) ResetBlocksCache(ctx context.Context) error {
 	s.logger.Warnf("Reset")
 	defer s.logger.Warnf("Reset completed")
 
+	// empty the cache
+	s.blocksCache.RebuildBlockchain(nil, nil)
+
 	bestBlockHeader, _, err := s.GetBestBlockHeader(ctx)
 	if err != nil {
 		return err
@@ -389,6 +392,7 @@ func (s *SQL) ResetBlocksCache(ctx context.Context) error {
 		return err
 	}
 
+	//re-fill the cache with data from the db
 	s.blocksCache.RebuildBlockchain(blockHeaders, blockHeaderMetas)
 
 	return nil
