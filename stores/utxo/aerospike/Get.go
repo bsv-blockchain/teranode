@@ -399,6 +399,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	// Create a batch of records to read, with a max size of the batch
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batch))
+	batchRecordHashes := make([]chainhash.Hash, 0, len(batch))
 
 	// we de-dupe the txs we need to lookup, since we may have multiple outpoints for the same tx
 	// this is done by using a map of txHashes
@@ -422,8 +423,9 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		bins := []string{"version", "locktime", "inputs", "outputs", "external"}
 		record := aerospike.NewBatchRead(policy, key, bins)
 
-		// Add to batch
+		// Add to batch records
 		batchRecords = append(batchRecords, record)
+		batchRecordHashes = append(batchRecordHashes, txHash)
 	}
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
@@ -432,16 +434,20 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			item.errCh <- errors.NewStorageError("error in aerospike map store batch records: %w", err)
 			close(item.errCh)
 		}
+
+		return
 	}
 
 	txs := make(map[chainhash.Hash]*bt.Tx, len(batchRecords))
+	txErrors := make(map[chainhash.Hash]error)
 
 	// Process the batch records
 	for idx, batchRecordIfc := range batchRecords {
+		previousTxHash := batchRecordHashes[idx]
+
 		batchRecord := batchRecordIfc.BatchRec()
 		if batchRecord.Err != nil {
-			batch[idx].errCh <- errors.NewProcessingError("error in aerospike map store batch record: %w", batchRecord.Err)
-			close(batch[idx].errCh)
+			txErrors[previousTxHash] = errors.NewProcessingError("error in aerospike map store batch record: %w", batchRecord.Err)
 
 			continue
 		}
@@ -452,31 +458,32 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		external, ok := bins["external"].(bool)
 		if ok && external {
-			previousTxHash := batch[idx].outpoint.PreviousTxID
 			if previousTx, err = s.getTxFromExternalStore(previousTxHash); err != nil {
-				batch[idx].errCh <- err
-				close(batch[idx].errCh)
+				txErrors[previousTxHash] = err
 
 				continue
 			}
 		} else {
 			previousTx, err = s.getTxFromBins(bins)
 			if err != nil {
-				batch[idx].errCh <- errors.NewTxInvalidError("invalid tx: %v", err)
-				close(batch[idx].errCh)
+				txErrors[previousTxHash] = errors.NewTxInvalidError("invalid tx: %v", err)
 
 				continue
 			}
 		}
 
-		txs[*previousTx.TxIDChainHash()] = previousTx
+		txs[previousTxHash] = previousTx
 	}
 
 	// Now we have all the txs, we can decorate the outpoints
 	for _, batchItem := range batch {
 		previousTx := txs[batchItem.outpoint.PreviousTxID]
 		if previousTx == nil {
-			batchItem.errCh <- errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID)
+			if err, ok := txErrors[batchItem.outpoint.PreviousTxID]; ok {
+				batchItem.errCh <- err
+			} else {
+				batchItem.errCh <- errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID)
+			}
 			close(batchItem.errCh)
 
 			continue
