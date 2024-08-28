@@ -32,11 +32,11 @@ func checkScriptsWithGoBDK(tv *TxValidator, tx *bt.Tx, blockHeight uint32) error
 	settings := config.LoadSetting(
 		config.LoadScriptConfig(),
 	)
-	flags := uint(0)
 
-	tv.logger.Infof("Golang module version : %+v", settings)
+	tv.logger.Debugf("Golang BDK module version : %+v", settings)
 
 	for i, in := range tx.Inputs {
+		flags := goscript.ScriptVerificationFlags(*in.PreviousTxScript, true)
 		if v := goscript.Verify(*in.UnlockingScript, *in.PreviousTxScript, true, flags, tx.Bytes(), i, in.PreviousTxSatoshis); v != 0 {
 			tv.logger.Warnf("Invalid script in go-bdk: %d: %+v", v, struct {
 				uScript     string
