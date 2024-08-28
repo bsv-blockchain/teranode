@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/bitcoin-sv/go-sdk/chainhash"
 	"github.com/bitcoin-sv/go-sdk/script"
 	interpreter_sdk "github.com/bitcoin-sv/go-sdk/script/interpreter"
 	"github.com/bitcoin-sv/go-sdk/transaction"
@@ -372,8 +373,10 @@ func GoBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
 		// clone the bytes of the unlocking script
 		unlockingScript := make([]byte, len(*in.UnlockingScript))
 		copy(unlockingScript, *in.UnlockingScript)
+
+		sourceTxHash := chainhash.Hash(in.PreviousTxID())
 		sdkTx.Inputs[i] = &transaction.TransactionInput{
-			SourceTXID:       bt.ReverseBytes(in.PreviousTxID()), // WTF
+			SourceTXID:       &sourceTxHash,
 			SourceTxOutIndex: in.PreviousTxOutIndex,
 			UnlockingScript:  (*script.Script)(&unlockingScript),
 			SequenceNumber:   in.SequenceNumber,
