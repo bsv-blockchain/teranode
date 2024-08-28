@@ -2329,6 +2329,26 @@ Check your Grafana `UBSV Service Overview` dashboard:
 
 
 
+### 8.2 Recovery Procedures
+
+
+
+#### 8.2.1. Third Party Component Failure
+
+
+
+Teranode is highly dependent on its third party dependencies. Postgres, Kafka and Aerospike are critical for Teranode operations, and the node cannot work without them.
+
+
+
+If a third party service fails, you must restore its functionality. Once it is back, please restart Teranode cleanly, as per the instructions in the Section 6 of this document.
+
+
+
+
+
+
+
 ------
 
 
