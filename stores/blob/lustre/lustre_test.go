@@ -274,7 +274,20 @@ func TestFile_filename(t *testing.T) {
 		assert.Equal(t, "/tmp/ubsv-tests/79656b", filename)
 		persistFilename := f.getFileNameForPersist(filename)
 		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b", persistFilename)
+
+		filename, err = f.getFileNameForGet([]byte("key"), options.WithFileName("filename-1234"))
+		assert.NoError(t, err)
+		assert.Equal(t, "/tmp/ubsv-tests/filename-1234", filename)
+
+		filename, err = f.getFileNameForGet([]byte("key"), options.WithFileName("filename-1234"), options.WithSubDirectory("./data/"))
+		assert.NoError(t, err)
+		assert.Equal(t, "/tmp/ubsv-tests/data/filename-1234", filename)
+
+		filename, err = f.getFileNameForGet([]byte("key"), options.WithFileName("filename-1234"), options.WithSubDirectory("/data/"))
+		assert.NoError(t, err)
+		assert.Equal(t, "/data/filename-1234", filename)
 	})
+
 	t.Run("getFileNameForGet with extension", func(t *testing.T) {
 		s3Client := NewS3Store()
 		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
