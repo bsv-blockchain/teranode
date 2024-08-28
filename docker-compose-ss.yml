@@ -149,7 +149,9 @@ services:
     environment:
       SETTINGS_CONTEXT: docker.ss.ubsv1
       JAEGER_SERVICE_NAME: blockchain-1
-    # ports:
+    ports:
+      - "8082:8082"
+      - "8087:8087"
     #   - "18081-18089:8081-8089"
     #   - "18090-18097:8090-8097"
     #   - "19091:9091"
@@ -352,7 +354,8 @@ services:
     environment:
       SETTINGS_CONTEXT: docker.ss.ubsv1
       JAEGER_SERVICE_NAME: asset-1
-    # ports:
+    ports:
+      - "8090:8090"
     #   - "18081-18089:8081-8089"
     #   - "18090-18097:8090-8097"
     #   - "19091:9091"
