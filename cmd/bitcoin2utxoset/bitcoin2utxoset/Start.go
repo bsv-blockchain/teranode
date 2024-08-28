@@ -4,11 +4,9 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -54,8 +52,14 @@ func Start() {
 	logger := ulogger.NewGoCoreLogger("b2utxo")
 
 	// Command Line Options (Flags)
-	blockchainDir := flag.String("bitcoinDir", "", "Location of bitcoin data")  // chainstate folder
-	outputDir := flag.String("outputDir", "", "Output directory for UTXO set.") // output directory
+	blockchainDir := flag.String("bitcoinDir", "", "Location of bitcoin data")          // chainstate folder
+	outputDir := flag.String("outputDir", "", "Output directory for UTXO set.")         // output directory
+	skipHeaders := flag.Bool("skipHeaders", false, "Skip processing headers")           // skip headers
+	skipUTXOs := flag.Bool("skipUTXOs", false, "Skip processing UTXOs")                 // skip UTXOs
+	blockHashStr := flag.String("blockHash", "", "Block hash to start from")            // block hash
+	previousBlockHashStr := flag.String("previousBlockHash", "", "Previous block hash") // previous block hash
+	blockHeightUint := flag.Uint("blockHeight", 0, "Block height to start from")        // block height
+
 	flag.Parse()
 
 	if *blockchainDir == "" {
@@ -106,36 +110,75 @@ func Start() {
 		defer exec.Command("ulimit", "-n", "1024")
 	}
 
-	indexDB, err := bitcoin.NewIndexDB(index)
-	if err != nil {
-		logger.Errorf("Could not open index: %v", err)
-		return
+	var (
+		blockHash         *chainhash.Hash
+		previousBlockHash *chainhash.Hash
+		blockHeight       uint32
+		err               error
+	)
+
+	if *skipHeaders {
+		if *blockHashStr == "" || *previousBlockHashStr == "" || *blockHeightUint == 0 {
+			logger.Errorf("The 'blockHash', 'previousBlockHash', and 'blockHeight' flags are mandatory when skipping headers.")
+			return
+		}
+
+		blockHash, err = chainhash.NewHashFromStr(*blockHashStr)
+		if err != nil {
+			logger.Errorf("Could not parse block hash: %v", err)
+			return
+		}
+
+		previousBlockHash, err = chainhash.NewHashFromStr(*previousBlockHashStr)
+		if err != nil {
+			logger.Errorf("Could not parse previous block hash: %v", err)
+			return
+		}
+
+		// nolint:gosec
+		blockHeight = uint32(*blockHeightUint)
+	} else {
+		indexDB, err := bitcoin.NewIndexDB(index)
+		if err != nil {
+			logger.Errorf("Could not open index: %v", err)
+			return
+		}
+
+		defer indexDB.Close()
+
+		height, err := indexDB.GetLastHeight()
+		if err != nil {
+			logger.Errorf("Could not get last height: %v", err)
+			return
+		}
+
+		bestBlock, err := indexDB.WriteHeadersToFile(*outputDir, height)
+		if err != nil {
+			logger.Errorf("Could not write headers: %v", err)
+			return
+		}
+
+		if int(bestBlock.Height) != height {
+			logger.Warnf("Height mismatch: last height was %d, scanned height was %d", height, bestBlock.Height)
+		}
+
+		blockHash = bestBlock.Hash
+		previousBlockHash = bestBlock.BlockHeader.HashPrevBlock
+		blockHeight = bestBlock.Height
 	}
 
-	defer indexDB.Close()
+	if !*skipUTXOs {
+		outFile := filepath.Join(*outputDir, blockHash.String()+".utxo-set")
 
-	height, err := indexDB.GetLastHeight()
-	if err != nil {
-		logger.Errorf("Could not get last height: %v", err)
-		return
-	}
+		if _, err := os.Stat(outFile); err == nil {
+			logger.Errorf("Output file %s already exists. Please delete and try again", outFile)
+			return
+		}
 
-	bestBlock, err := indexDB.WriteHeadersToFile(*outputDir, height)
-	if err != nil {
-		logger.Errorf("Could not write headers: %v", err)
-		return
-	}
-
-	outFile := filepath.Join(*outputDir, bestBlock.Hash.String()+".utxo-set")
-
-	if _, err := os.Stat(outFile); err == nil {
-		logger.Errorf("Output file %s already exists. Please delete and try again", outFile)
-		return
-	}
-
-	if err := runImport(logger, chainstate, outFile, bestBlock.Hash, uint32(bestBlock.Height), bestBlock.BlockHeader.HashPrevBlock); err != nil {
-		logger.Errorf("%v", err)
-		return
+		if err := runImport(logger, chainstate, outFile, blockHash, blockHeight, previousBlockHash); err != nil {
+			logger.Errorf("%v", err)
+			return
+		}
 	}
 }
 
@@ -194,21 +237,24 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	// Catch signals that interrupt the script so that we can close the database safely (hopefully not corrupting it)
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
 	go func() { // goroutine
 		<-c // receive from channel
 
-		// iter.Release() // release database iterator
-		bufferedWriter.Flush() // flush buffered writer
-		file.Close()           // close file
-		db.Close()             // close database
-		os.Exit(0)             // exit
+		_ = bufferedWriter.Flush() // flush buffered writer
+		_ = file.Close()           // close file
+		_ = db.Close()             // close database
+
+		os.Exit(0)
 	}()
 
-	var txWritten uint64
-	var utxosWritten uint64
-	var utxosWritten2 uint64
-	var utxosSkipped uint64
-	var iterCount uint64
+	var (
+		txWritten     uint64
+		utxosWritten  uint64
+		utxosWritten2 uint64
+		utxosSkipped  uint64
+		iterCount     uint64
+	)
 
 	logger.Infof("Processing UTXOs...")
 
@@ -222,23 +268,17 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 		// first byte in key indicates the type of key we've got for leveldb
 		prefix := key[0]
 
-		// obfuscateKey (first key)
-		if prefix == 14 { // 14 = obfuscateKey
+		switch prefix {
+		// 14 = obfuscateKey (first key)
+		case 14:
 			obfuscateKey = value
 			logger.Infof("Obfuscate key: %x (%d bytes)", obfuscateKey, len(obfuscateKey))
 
-		} else if prefix == 67 { // 67 = 0x43 = C = "utxo"
+		case 66: // 66 = 0x42
+			// Ignore
 
-			// ---
-			// Key
-			// ---
-
-			//      430000155b9869d56c66d9e86e3c01de38e3892a42b99949fe109ac034fff6583900
-			//      <><--------------------------------------------------------------><>
-			//      /                               |                                  \
-			//  type                          txid (little-endian)                      index (varint)
-
-			// txid
+		// 67 = 0x43 = C = "utxo"
+		case 67:
 			txid := key[1:33] // little-endian byte order
 
 			// vout
@@ -266,6 +306,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 			// XOR the value with the obfuscateKey (xor each byte) to de-obfuscate the value
 			var xor []byte // create a byte slice to hold the xor results
+
 			for i := range value {
 				result := value[i] ^ obfuscateKeyExtended[i]
 				xor = append(xor, result)
@@ -445,6 +486,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				}
 
 				if currentUTXOWrapper == nil {
+					// nolint:gosec
 					currentUTXOWrapper = &utxopersister.UTXOWrapper{
 						TxID:     hash,
 						Height:   uint32(height),
@@ -460,6 +502,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					txWritten++
 					utxosWritten += uint64(len(currentUTXOWrapper.UTXOs))
 
+					// nolint:gosec
 					currentUTXOWrapper = &utxopersister.UTXOWrapper{
 						TxID:     hash,
 						Height:   uint32(height),
@@ -467,6 +510,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					}
 				}
 
+				// nolint:gosec
 				currentUTXOWrapper.UTXOs = append(currentUTXOWrapper.UTXOs, &utxopersister.UTXO{
 					Index:  uint32(vout),
 					Value:  uint64(amount),
@@ -482,10 +526,8 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			if (txWritten+utxosSkipped)%1_000_000 == 0 {
 				logger.Infof("Processed %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 			}
-		} else if prefix == 66 { // 66 = 0x42
-			// Ignore
 
-		} else {
+		default:
 			logger.Errorf("Unhandled LevelDB record: %x : %x", key, value)
 		}
 
@@ -512,6 +554,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	b := make([]byte, 8)
 
 	binary.LittleEndian.PutUint64(b, txWritten)
+
 	if _, err := bufferedWriter.Write(b); err != nil {
 		return errors.NewProcessingError("Couldn't write tx count", err)
 	}
@@ -537,41 +580,45 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	logger.Infof("FINISHED  %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 	logger.Infof("Processed                                     %16s utxos", formatNumber(utxosWritten2))
 	logger.Infof("Processed                                     %16s keys", formatNumber(iterCount))
+
 	return nil
 }
 
 func formatNumber(n uint64) string {
 	in := fmt.Sprintf("%d", n)
 	out := make([]string, 0, len(in)+(len(in)-1)/3)
+
 	for i, c := range in {
 		if i > 0 && (len(in)-i)%3 == 0 {
 			out = append(out, ",")
 		}
+
 		out = append(out, string(c))
 	}
+
 	return strings.Join(out, "")
 }
 
-func GetBlockHeaderByHeight(height int) (*BlockHeader, error) {
-	url := fmt.Sprintf("https://api.whatsonchain.com/v1/bsv/main/block/%d/header", height)
+// func GetBlockHeaderByHeight(height int) (*BlockHeader, error) {
+// 	url := fmt.Sprintf("https://api.whatsonchain.com/v1/bsv/main/block/%d/header", height)
 
-	// Make the GET request
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("error making GET request: %v", err)
-	}
-	defer resp.Body.Close()
+// 	// Make the GET request
+// 	resp, err := http.Get(url)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("error making GET request: %v", err)
+// 	}
+// 	defer resp.Body.Close()
 
-	// Check if the request was successful
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
+// 	// Check if the request was successful
+// 	if resp.StatusCode != http.StatusOK {
+// 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+// 	}
 
-	// Decode the JSON response into the BlockInfo struct
-	var bh BlockHeader
-	if err := json.NewDecoder(resp.Body).Decode(&bh); err != nil {
-		return nil, fmt.Errorf("error decoding response: %v", err)
-	}
+// 	// Decode the JSON response into the BlockInfo struct
+// 	var bh BlockHeader
+// 	if err := json.NewDecoder(resp.Body).Decode(&bh); err != nil {
+// 		return nil, fmt.Errorf("error decoding response: %v", err)
+// 	}
 
-	return &bh, nil
-}
+// 	return &bh, nil
+// }

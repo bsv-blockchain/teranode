@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -24,16 +23,9 @@ const (
 	BlockHaveUndo = 16
 )
 
-type BlockIndex struct {
-	Hash        *chainhash.Hash    `json:"hash"`
-	Height      uint32             `json:"height"`
-	TxCount     uint64             `json:"txCount"`
-	BlockHeader *model.BlockHeader `json:"blockHeader"`
-}
-
-func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*BlockIndex, error) {
+func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxopersister.BlockIndex, error) {
 	// Slice to store block information
-	blocks := make([]*BlockIndex, 0, heightHint)
+	blocks := make([]*utxopersister.BlockIndex, 0, heightHint)
 
 	// Iterate over the block headers in the LevelDB
 	iter := in.db.NewIterator(util.BytesPrefix([]byte("b")), nil)
@@ -135,7 +127,7 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*BlockI
 	return bestBlock, nil
 }
 
-func DeserializeBlockIndex(data []byte) (*BlockIndex, error) {
+func DeserializeBlockIndex(data []byte) (*utxopersister.BlockIndex, error) {
 	var (
 		pos int
 	)
@@ -176,41 +168,10 @@ func DeserializeBlockIndex(data []byte) (*BlockIndex, error) {
 		return nil, err
 	}
 
-	return &BlockIndex{
+	return &utxopersister.BlockIndex{
 		//nolint:gosec
 		Height:      uint32(height),
 		TxCount:     uint64(txs),
 		BlockHeader: bh,
 	}, nil
-}
-
-func (bi *BlockIndex) Serialise(writer io.Writer) error {
-	if _, err := writer.Write(bi.Hash[:]); err != nil {
-		return err
-	}
-
-	var heightBytes [4]byte
-	binary.LittleEndian.PutUint32(heightBytes[:], uint32(bi.Height))
-
-	if _, err := writer.Write(heightBytes[:]); err != nil {
-		return err
-	}
-
-	var TxCountBytes [8]byte
-	binary.LittleEndian.PutUint64(TxCountBytes[:], uint64(bi.TxCount))
-
-	if _, err := writer.Write(TxCountBytes[:]); err != nil {
-		return err
-	}
-
-	return bi.BlockHeader.ToWireBlockHeader().Serialize(writer)
-}
-
-func (bi *BlockIndex) String() string {
-	b, err := json.MarshalIndent(bi, "", "	")
-	if err != nil {
-		return fmt.Sprintf("ERROR unmarshal: %v", err)
-	}
-
-	return string(b) + "\n"
 }
