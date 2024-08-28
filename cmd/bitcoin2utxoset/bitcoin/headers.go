@@ -191,11 +191,11 @@ func DeserializeBlockIndex(data []byte) (*utxopersister.BlockIndex, error) {
 		pos += i
 	}
 
-	if len(data[pos:]) != 80 {
+	if len(data[pos:]) < 80 {
 		return nil, errors.NewProcessingError("block header length is less than 80")
 	}
 
-	bh, err := model.NewBlockHeaderFromBytes(data[pos:])
+	bh, err := model.NewBlockHeaderFromBytes(data[pos : pos+80])
 	if err != nil {
 		return nil, err
 	}
