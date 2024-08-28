@@ -130,6 +130,9 @@ func TestFile_filename(t *testing.T) {
 		filename = f.filename([]byte("4key"))
 		assert.Equal(t, "/tmp/ubsv-tests1/79656b34", filename)
 
+		err = f.Close(context.Background())
+		require.NoError(t, err)
+
 		cleanup()
 	})
 
