@@ -285,16 +285,16 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts .
 						}
 						return nil, errors.NewStorageError("[Lustre][GetHead] [%s] unable to open S3 file", fileName, err)
 					}
-					return bytes, nil
+					return bytes[:nrOfBytes], nil
 				}
 				return nil, errors.NewStorageError("[Lustre][GetHead] [%s] failed to read data from persist file", fileName, err)
 			}
-			return bytes, nil
+			return bytes[:nrOfBytes], nil
 		}
 		return nil, errors.NewStorageError("[Lustre][GetHead] [%s] failed to read data from file", fileName, err)
 	}
 
-	return bytes, err
+	return bytes[:nrOfBytes], err
 }
 
 func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {

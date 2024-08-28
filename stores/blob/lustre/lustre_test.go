@@ -1,7 +1,9 @@
 package lustre
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/url"
 	"os"
 	"testing"
@@ -28,8 +30,11 @@ func TestFile_Get(t *testing.T) {
 
 		value, err := f.Get(context.Background(), []byte("key"))
 		require.NoError(t, err)
-
 		require.Equal(t, []byte("value"), value)
+
+		value, err = f.GetHead(context.Background(), []byte("key"), 3)
+		require.NoError(t, err)
+		require.Equal(t, []byte("val"), value)
 
 		err = f.Del(context.Background(), []byte("key"))
 		require.NoError(t, err)
@@ -48,6 +53,73 @@ func TestFile_Get(t *testing.T) {
 		value, err := f.Get(context.Background(), []byte("key"))
 		require.NoError(t, err)
 		require.Equal(t, []byte("value"), value)
+
+		info, err := os.Stat(filename)
+		require.NoError(t, err)
+		require.Equal(t, info.Name(), "79656b")
+
+		_, err = os.Stat(persistFilename)
+		require.Error(t, err)
+
+		err = f.SetTTL(context.Background(), []byte("key"), 0)
+		require.NoError(t, err)
+
+		// file should still be there, we copy it
+		_, err = os.Stat(filename)
+		require.NoError(t, err)
+
+		// file should have been persisted - moved to the persists directory
+		info, err = os.Stat(persistFilename)
+		require.NoError(t, err)
+		require.Equal(t, info.Name(), "79656b")
+
+		value, err = f.Get(context.Background(), []byte("key"))
+		require.NoError(t, err)
+		require.Equal(t, []byte("value"), value)
+
+		err = f.Del(context.Background(), []byte("key"))
+		require.NoError(t, err)
+	})
+}
+
+func TestFile_GetFromReader(t *testing.T) {
+	t.Run("test", func(t *testing.T) {
+		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests-reader", "persist")
+		require.NoError(t, err)
+
+		err = f.Set(context.Background(), []byte("key"), []byte("value"))
+		require.NoError(t, err)
+
+		value, err := f.Get(context.Background(), []byte("key"))
+		require.NoError(t, err)
+
+		require.Equal(t, []byte("value"), value)
+
+		err = f.Del(context.Background(), []byte("key"))
+		require.NoError(t, err)
+	})
+
+	t.Run("ttl", func(t *testing.T) {
+		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests-reader", "persist")
+		require.NoError(t, err)
+
+		filename := "/tmp/ubsv-tests-reader/79656b"
+		persistFilename := "/tmp/ubsv-tests-reader/persist/79656b"
+
+		value := []byte("value")
+		byteReader := bytes.NewReader(value)   // Create a bytes.Reader from []byte
+		readCloser := io.NopCloser(byteReader) // Wrap the bytes.Reader with io.NopCloser
+		err = f.SetFromReader(context.Background(), []byte("key"), readCloser, options.WithTTL(1*time.Minute))
+		require.NoError(t, err)
+
+		reader, err := f.GetIoReader(context.Background(), []byte("key"))
+		require.NoError(t, err)
+		require.NotNil(t, reader)
+
+		readValue := make([]byte, len(value))
+		_, err = reader.Read(readValue)
+		require.NoError(t, err)
+		require.Equal(t, []byte("value"), readValue)
 
 		info, err := os.Stat(filename)
 		require.NoError(t, err)
