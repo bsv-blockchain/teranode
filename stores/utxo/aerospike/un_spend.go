@@ -7,12 +7,11 @@ import (
 	"math"
 	"strings"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/util/uaerospike"
-
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 )
 
 func (s *Store) UnSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
@@ -26,6 +25,7 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return errors.NewStorageError("timeout un-spending %d of %d utxos", i, len(spends))
 			}
+
 			return errors.NewStorageError("context cancelled un-spending %d of %d utxos", i, len(spends))
 		default:
 			if spend != nil {
@@ -33,7 +33,9 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 				if spend.SpendingTxID != nil {
 					txID = spend.SpendingTxID.String()
 				}
+
 				s.logger.Warnf("un-spending utxo %s of tx %s:%d, spending tx: %s", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, txID)
+
 				if err = s.unSpendLua(spend); err != nil {
 					// just return the raw error, should already be wrapped
 					return err

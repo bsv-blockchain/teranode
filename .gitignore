@@ -63,3 +63,6 @@ __debug*
 
 nohup.out
 external/
+
+stores/utxo/aerospike/testdata/337e211af7bcf90470ead4f92910b2990b635dcab8414bf5849f3b1e25800b0c.hex
+stores/utxo/aerospike/testdata/337e211af7bcf90470ead4f92910b2990b635dcab8414bf5849f3b1e25800b0c_extended.hex

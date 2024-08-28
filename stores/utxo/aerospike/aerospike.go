@@ -6,23 +6,24 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/url"
 	"strconv"
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-
 	"github.com/aerospike/aerospike-client-go/v7"
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/ordishs/gocore"
 )
+
+const MaxTxSizeInStoreInBytes = 32 * 1024
 
 var (
 	binNames = []string{
@@ -101,6 +102,9 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	// It's very dangerous to change this number after a node has been running for a while
 	// Do not change this value after starting, it is used to calculate the offset for the output
 	utxoBatchSize, _ := gocore.Config().GetInt("utxostore_utxoBatchSize", 128)
+	if utxoBatchSize < 1 || utxoBatchSize > math.MaxUint32 {
+		return nil, errors.NewInvalidArgumentError("utxoBatchSize must be between 1 and %d", math.MaxUint32)
+	}
 
 	s := &Store{
 		url:                        aerospikeURL,
