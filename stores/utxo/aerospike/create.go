@@ -36,9 +36,9 @@ type batchStoreItem struct {
 }
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
-	options := &utxo.CreateOptions{}
+	createOptions := &utxo.CreateOptions{}
 	for _, opt := range opts {
-		opt(options)
+		opt(createOptions)
 	}
 
 	_, _, deferFn := tracing.StartTracing(ctx, "aerospike:Create")
@@ -53,15 +53,15 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	defer close(errCh)
 
 	var txHash *chainhash.Hash
-	if options.TxID != nil {
-		txHash = options.TxID
+	if createOptions.TxID != nil {
+		txHash = createOptions.TxID
 	} else {
 		txHash = tx.TxIDChainHash()
 	}
 
 	isCoinbase := tx.IsCoinbase()
-	if options.IsCoinbase != nil {
-		isCoinbase = *options.IsCoinbase
+	if createOptions.IsCoinbase != nil {
+		isCoinbase = *createOptions.IsCoinbase
 	}
 
 	item := &batchStoreItem{
@@ -70,7 +70,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		tx:          tx,
 		blockHeight: blockHeight,
 		lockTime:    tx.LockTime,
-		blockIDs:    options.BlockIDs,
+		blockIDs:    createOptions.BlockIDs,
 		done:        errCh,
 	}
 

@@ -4,15 +4,14 @@ import (
 	"context"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-	"github.com/bitcoin-sv/ubsv/util/retry"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -159,12 +158,12 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 
 //gocognit:ignore
 func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
-	txID := tx.TxID()
+	txHash := tx.TxIDChainHash()
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Validator:Validate",
 		tracing.WithParentStat(v.stats),
 		tracing.WithHistogram(prometheusTransactionValidateTotal),
-		tracing.WithDebugLogMessage(v.logger, "[Validator:Validate] called for %s", txID),
-		tracing.WithTag("txid", txID),
+		tracing.WithDebugLogMessage(v.logger, "[Validator:Validate] called for %s", txHash),
+		tracing.WithTag("txid", txHash.String()),
 	)
 	defer deferFn()
 	var spentUtxos []*utxo.Spend
@@ -181,16 +180,16 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 		// this function should be moved into go-bt
 		if err := util.IsTransactionFinal(tx, utxoStoreBlockHeight+1, utxoStoreMedianBlockTime); err != nil {
-			return errors.NewNonFinalError("[Validate][%s] transaction is not final", txID, err)
+			return errors.NewNonFinalError("[Validate][%s] transaction is not final", txHash, err)
 		}
 	}
 
 	if tx.IsCoinbase() {
-		return errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
+		return errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txHash)
 	}
 
-	if err = v.validateTransaction(ctx, tx, blockHeight); err != nil {
-		return errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
+	if err = v.validateTransaction(ctx, tx, txHash, blockHeight); err != nil {
+		return errors.NewProcessingError("[Validate][%s] error validating transaction", txHash, err)
 	}
 
 	// decouple the tracing context to not cancel the context when finalize the block assembly
@@ -210,8 +209,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// this will reverse the spends if there is an error
 	// TODO make this stricter, checking whether this utxo was already spent by the same tx and return early if so
 	//      do not allow any utxo be spent more than once
-	if spentUtxos, err = v.spendUtxos(setSpan, tx, blockHeight); err != nil {
-		return errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
+	if spentUtxos, err = v.spendUtxos(setSpan, tx, txHash, blockHeight); err != nil {
+		return errors.NewProcessingError("[Validate][%s] error spending utxos", txHash, err)
 	}
 
 	var txMetaData *meta.Data
@@ -224,13 +223,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				// stop all processing, this transaction has already been validated and passed into the block assembly
 				// buf := make([]byte, 1024)
 				// runtime.Stack(buf, false)
-				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
+				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txHash, err)
 				// v.logger.Debugf("[Validate][%s] stack: %s", tx.TxIDChainHash().String(), string(buf))
 
 				return nil
 			}
 
-			v.logger.Errorf("[Validate][%s] error registering tx in metaStore: %v", txID, err)
+			v.logger.Errorf("[Validate][%s] error registering tx in metaStore: %v", txHash, err)
 
 			if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
 				err = errors.NewProcessingError("error reversing utxo spends: %v", reverseErr, err)
@@ -326,7 +325,7 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHei
 	return data, nil
 }
 
-func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight uint32) ([]*utxo.Spend, error) {
+func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, txHash *chainhash.Hash, blockHeight uint32) ([]*utxo.Spend, error) {
 	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "spendUtxos",
 		tracing.WithHistogram(prometheusTransactionSpendUtxos),
 	)
@@ -339,9 +338,6 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 
 	var err error
 	var hash *chainhash.Hash
-
-	// check the utxos
-	txIDChainHash := tx.TxIDChainHash()
 
 	spends := make([]*utxo.Spend, len(tx.Inputs))
 
@@ -361,7 +357,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 			TxID:         input.PreviousTxIDChainHash(),
 			Vout:         input.PreviousTxOutIndex,
 			UTXOHash:     hash,
-			SpendingTxID: txIDChainHash,
+			SpendingTxID: txHash,
 		}
 	}
 
@@ -374,12 +370,12 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 		if errors.Is(err, errors.ErrSpent) {
 			// remove the spending tx from the block assembly and freeze it
 			// TODO implement freezing in utxo store
-			if err := v.blockAssembler.RemoveTx(ctx, txIDChainHash); err != nil {
+			if err := v.blockAssembler.RemoveTx(ctx, txHash); err != nil {
 				v.logger.Errorf("validator: UTXO Store remove tx failed: %v", err)
 			}
 		}
 
-		return nil, errors.NewProcessingError("validator: UTXO Store spend failed for %s", tx.TxIDChainHash().String(), err)
+		return nil, errors.NewProcessingError("validator: UTXO Store spend failed for %s", txHash, err)
 	}
 
 	return spends, nil
@@ -468,7 +464,7 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32) error {
+func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, txHash *chainhash.Hash, blockHeight uint32) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
 	)
@@ -484,11 +480,11 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	if !util.IsExtended(tx, blockHeight) {
 		err := v.extendTransaction(ctx, tx)
 		if err != nil {
-			return errors.NewProcessingError("can't extend transaction %s", tx.TxIDChainHash(), err)
+			return errors.NewProcessingError("can't extend transaction %s", txHash, err)
 		}
 	}
 
-	return v.txValidator.ValidateTransaction(tx, blockHeight)
+	return v.txValidator.ValidateTransaction(tx, txHash, blockHeight)
 }
 
 func feesToBtFeeQuote(minMiningFee float64) *bt.FeeQuote {

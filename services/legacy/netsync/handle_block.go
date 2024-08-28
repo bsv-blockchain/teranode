@@ -373,10 +373,12 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 	)
 	defer deferFn()
 
-	// Create a map of all transactions in the block
-	txMap := make(map[chainhash.Hash]*txMapWrapper)
+	blockTransactions := block.Transactions()
 
-	for _, wireTx := range block.Transactions() {
+	// Create a map of all transactions in the block
+	txMap := make(map[chainhash.Hash]*txMapWrapper, len(blockTransactions))
+
+	for _, wireTx := range blockTransactions {
 		txHash := *wireTx.Hash()
 
 		// Serialize the tx
@@ -394,9 +396,6 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 		if !tx.IsCoinbase() {
 			txMap[txHash] = &txMapWrapper{tx: tx}
 		}
-
-		// check if has parents in the block
-
 	}
 
 	return txMap, nil

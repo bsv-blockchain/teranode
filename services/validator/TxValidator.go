@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/bitcoin-sv/go-sdk/chainhash"
+	sdkchainhash "github.com/bitcoin-sv/go-sdk/chainhash"
 	"github.com/bitcoin-sv/go-sdk/script"
 	interpreter_sdk "github.com/bitcoin-sv/go-sdk/script/interpreter"
 	"github.com/bitcoin-sv/go-sdk/transaction"
@@ -15,6 +15,7 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
@@ -38,6 +39,8 @@ var (
 		"6974a4c575c661a918e50d735852c29541a3263dcc4ff46bf90eb9f8f0ec485e": {}, // spending of weird OP_SHIFT script causing panic
 		"65cbf31895f6cab997e6c3688b2263808508adc69bcc9054eef5efac6f7895d3": {}, //
 	}
+
+	txWhitelistHashes = map[[32]byte]struct{}{}
 )
 
 var validatorFunc func(*TxValidator, *bt.Tx, uint32) error
@@ -52,6 +55,11 @@ func init() {
 
 		validatorFunc = checkScripts
 	}
+
+	for k := range txWhitelist {
+		hash, _ := chainhash.NewHashFromStr(k)
+		txWhitelistHashes[*hash] = struct{}{}
+	}
 }
 
 type TxValidator struct {
@@ -59,8 +67,8 @@ type TxValidator struct {
 	logger ulogger.Logger
 }
 
-func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error {
-	if _, ok := txWhitelist[tx.TxIDChainHash().String()]; ok {
+func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, txHash *chainhash.Hash, blockHeight uint32) error {
+	if _, ok := txWhitelistHashes[*txHash]; ok {
 		return nil
 	}
 
@@ -374,7 +382,7 @@ func GoBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
 		unlockingScript := make([]byte, len(*in.UnlockingScript))
 		copy(unlockingScript, *in.UnlockingScript)
 
-		sourceTxHash := chainhash.Hash(in.PreviousTxID())
+		sourceTxHash := sdkchainhash.Hash(in.PreviousTxID())
 		sdkTx.Inputs[i] = &transaction.TransactionInput{
 			SourceTXID:       &sourceTxHash,
 			SourceTxOutIndex: in.PreviousTxOutIndex,
