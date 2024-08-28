@@ -1,11 +1,13 @@
 package aerospike
 
 import (
+	"context"
 	"os"
 	"testing"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,4 +98,34 @@ func TestStore_getBinsToStore(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, bins)
 	})
+}
+
+func BenchmarkStore_Create(b *testing.B) {
+	initPrometheusMetrics()
+
+	// read hex file from os
+	txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+	require.NoError(b, err)
+
+	tx, err := bt.NewTxFromString(string(txHex))
+	require.NoError(b, err)
+
+	s := &Store{
+		utxoBatchSize: 100,
+	}
+
+	sendStoreBatch := func(batch []*batchStoreItem) {
+		// do nothing
+		for _, item := range batch {
+			item.done <- nil
+		}
+	}
+	s.storeBatcher = batcher.New[batchStoreItem](100, 1, sendStoreBatch, true)
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err = s.Create(context.Background(), tx, 0)
+		require.NoError(b, err)
+	}
 }
