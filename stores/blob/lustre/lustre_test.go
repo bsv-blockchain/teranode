@@ -150,6 +150,8 @@ func TestFile_GetFromReader(t *testing.T) {
 		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests-reader", "persist")
 		require.NoError(t, err)
 
+		s3Client.Set(nil, fs.ErrNotExist)
+
 		err = f.Set(context.Background(), []byte("key"), []byte("value"))
 		require.NoError(t, err)
 
@@ -160,12 +162,16 @@ func TestFile_GetFromReader(t *testing.T) {
 
 		err = f.Del(context.Background(), []byte("key"))
 		require.NoError(t, err)
+
+		_ = os.RemoveAll("/tmp/ubsv-tests-reader")
 	})
 
 	t.Run("ttl", func(t *testing.T) {
 		s3Client := NewS3Store()
 		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests-reader", "persist")
 		require.NoError(t, err)
+
+		s3Client.Set(nil, fs.ErrNotExist)
 
 		filename := "/tmp/ubsv-tests-reader/79656b"
 		persistFilename := "/tmp/ubsv-tests-reader/persist/79656b"
@@ -223,6 +229,8 @@ func TestFile_GetFromReader(t *testing.T) {
 		// cleanup
 		err = f.Del(context.Background(), []byte("key"))
 		require.NoError(t, err)
+
+		_ = os.RemoveAll("/tmp/ubsv-tests-reader")
 	})
 }
 
@@ -231,6 +239,8 @@ func TestFile_filename(t *testing.T) {
 		s3Client := NewS3Store()
 		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
+
+		s3Client.Set(nil, fs.ErrNotExist)
 
 		filename := f.filename([]byte("key"))
 		assert.Equal(t, "/tmp/ubsv-tests/79656b", filename)
@@ -242,6 +252,8 @@ func TestFile_filename(t *testing.T) {
 		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
 
+		s3Client.Set(nil, fs.ErrNotExist)
+
 		filename, err := f.getFileNameForGet([]byte("key"))
 		assert.NoError(t, err)
 		assert.Equal(t, "/tmp/ubsv-tests/79656b", filename)
@@ -252,6 +264,8 @@ func TestFile_filename(t *testing.T) {
 		s3Client := NewS3Store()
 		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
+
+		s3Client.Set(nil, fs.ErrNotExist)
 
 		filename, err := f.getFileNameForGet([]byte("key"), options.WithFileExtension("meta"))
 		assert.NoError(t, err)
