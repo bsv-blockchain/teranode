@@ -16,7 +16,7 @@ env:
 jobs:
   # Get version tag
   get_tag:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Determine deployment tag
         id: deployment_tag
@@ -66,7 +66,7 @@ jobs:
       repo: ubsv
       tag: ${{ needs.get_tag.outputs.deployment_tag }}
   deploy_to_operator:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: [ create_manifest ]
     if: startsWith(github.event.ref, 'refs/tags/v')
     steps:

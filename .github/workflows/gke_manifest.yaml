@@ -18,7 +18,7 @@ on:
 jobs:
   build_manifest:
     name: Deploy EKS
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     strategy: # This will cause the workflow to terminate if any job fails
       fail-fast: true
     outputs:
