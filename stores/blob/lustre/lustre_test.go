@@ -28,6 +28,10 @@ func TestFile_Get(t *testing.T) {
 		err = f.Set(context.Background(), []byte("key"), []byte("value"))
 		require.NoError(t, err)
 
+		exists, err := f.Exists(context.Background(), []byte("key"))
+		require.NoError(t, err)
+		require.True(t, exists)
+
 		value, err := f.Get(context.Background(), []byte("key"))
 		require.NoError(t, err)
 		require.Equal(t, []byte("value"), value)
