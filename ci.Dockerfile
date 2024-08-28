@@ -70,7 +70,7 @@ COPY --from=0 /app/settings.conf .
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
   ln -s libsecp256k1.so.0.0.0 libsecp256k1.so
 
-ENV LD_LIBRARY_PATH=.
+ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 
 # Set the entrypoint to the library
 #ENTRYPOINT ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./ubsv.run", "--"]
