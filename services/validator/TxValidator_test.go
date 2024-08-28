@@ -117,7 +117,7 @@ func TestGoBt2GoSDKTransaction(t *testing.T) {
 		txBytes := largeTx.Bytes()
 		sdkTx := GoBt2GoSDKTransaction(largeTx)
 
-		assert.Equal(t, largeTx.TxID(), sdkTx.TxID())
+		assert.Equal(t, largeTx.TxID(), sdkTx.TxID().String())
 		assert.Equal(t, txBytes, sdkTx.Bytes())
 	})
 }
