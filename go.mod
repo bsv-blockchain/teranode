@@ -21,7 +21,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.16.21
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.54.3
 	//github.com/bitcoin-sv/bdk/module/gobdk v0.0.0-00010101000000-000000000000
-	github.com/bitcoin-sv/go-sdk v1.0.0
+	github.com/bitcoin-sv/go-sdk v1.1.0
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
 	github.com/centrifugal/centrifuge v0.33.2
@@ -80,13 +80,12 @@ require (
 	golang.org/x/time v0.5.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.34.2
+	gopkg.in/DataDog/dd-trace-go.v1 v1.67.0
 	k8s.io/api v0.29.3
 	k8s.io/apimachinery v0.30.1
 	k8s.io/client-go v0.29.3
 	modernc.org/sqlite v1.28.0
 )
-
-require gopkg.in/DataDog/dd-trace-go.v1 v1.67.0
 
 require (
 	dario.cat/mergo v1.0.0 // indirect
