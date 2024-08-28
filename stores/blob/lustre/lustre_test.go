@@ -71,10 +71,26 @@ func TestFile_Get(t *testing.T) {
 		filename := "/tmp/ubsv-tests/79656b"
 		persistFilename := "/tmp/ubsv-tests/persist/79656b"
 
+		// should not exist
+		exists, err := f.Exists(context.Background(), []byte("key"))
+		require.NoError(t, err)
+		require.False(t, exists)
+
+		// should fail
+		value, err := f.Get(context.Background(), []byte("key"))
+		require.Error(t, err)
+		require.Nil(t, value)
+
+		// should fail
+		value, err = f.GetHead(context.Background(), []byte("key"), 3)
+		require.Error(t, err)
+		require.Nil(t, value)
+
+		// create the file
 		err = f.Set(context.Background(), []byte("key"), []byte("value"), options.WithTTL(1*time.Minute))
 		require.NoError(t, err)
 
-		value, err := f.Get(context.Background(), []byte("key"))
+		value, err = f.Get(context.Background(), []byte("key"))
 		require.NoError(t, err)
 		require.Equal(t, []byte("value"), value)
 
@@ -96,6 +112,15 @@ func TestFile_Get(t *testing.T) {
 		info, err = os.Stat(persistFilename)
 		require.NoError(t, err)
 		require.Equal(t, info.Name(), "79656b")
+
+		// should exist
+		exists, err = f.Exists(context.Background(), []byte("key"))
+		require.NoError(t, err)
+		require.True(t, exists)
+
+		// remove from base dir, force logic to look in persist folder
+		err = os.Remove(filename)
+		require.NoError(t, err)
 
 		value, err = f.Get(context.Background(), []byte("key"))
 		require.NoError(t, err)
@@ -130,13 +155,20 @@ func TestFile_GetFromReader(t *testing.T) {
 		filename := "/tmp/ubsv-tests-reader/79656b"
 		persistFilename := "/tmp/ubsv-tests-reader/persist/79656b"
 
+		// should not exist
+		reader, err := f.GetIoReader(context.Background(), []byte("key"))
+		require.Error(t, err)
+		require.Nil(t, reader)
+
+		// create the file
 		value := []byte("value")
 		byteReader := bytes.NewReader(value)   // Create a bytes.Reader from []byte
 		readCloser := io.NopCloser(byteReader) // Wrap the bytes.Reader with io.NopCloser
 		err = f.SetFromReader(context.Background(), []byte("key"), readCloser, options.WithTTL(1*time.Minute))
 		require.NoError(t, err)
 
-		reader, err := f.GetIoReader(context.Background(), []byte("key"))
+		// should exist
+		reader, err = f.GetIoReader(context.Background(), []byte("key"))
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 
@@ -159,15 +191,21 @@ func TestFile_GetFromReader(t *testing.T) {
 		_, err = os.Stat(filename)
 		require.NoError(t, err)
 
+		// remove from base dir, force logic to look in persist folder
+		err = os.Remove(filename)
+		require.NoError(t, err)
+
 		// file should have been persisted - moved to the persists directory
 		info, err = os.Stat(persistFilename)
 		require.NoError(t, err)
 		require.Equal(t, info.Name(), "79656b")
 
-		value, err = f.Get(context.Background(), []byte("key"))
+		// should exist
+		reader, err = f.GetIoReader(context.Background(), []byte("key"))
 		require.NoError(t, err)
-		require.Equal(t, []byte("value"), value)
+		require.NotNil(t, reader)
 
+		// cleanup
 		err = f.Del(context.Background(), []byte("key"))
 		require.NoError(t, err)
 	})
