@@ -376,15 +376,9 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 	for _, wireTx := range blockTransactions {
 		txHash := *wireTx.Hash()
 
-		// Serialize the tx
-		var txBytes bytes.Buffer
-		if err := wireTx.MsgTx().Serialize(&txBytes); err != nil {
-			return nil, fmt.Errorf("could not serialize msgTx: %w", err)
-		}
-
-		tx, err := bt.NewTxFromBytes(txBytes.Bytes())
+		tx, err := WireTxToGoBtTx(wireTx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create bt.Tx: %w", err)
+			return nil, fmt.Errorf("failed to convert wire.Tx to bt.Tx: %w", err)
 		}
 
 		// don't add the coinbase to the txMap, we cannot process it anyway
@@ -480,4 +474,35 @@ func (sm *SyncManager) extendTransaction(ctx context.Context, tx *bt.Tx, txMap m
 		tx.Inputs[po.Idx].PreviousTxScript = bscript.NewFromBytes(po.LockingScript)
 	}
 	return nil
+}
+
+// WireTxToGoBtTx converts a wire.Tx to a bt.Tx
+// This does not use the bytes methods, but directly uses the fields of the wire.Tx
+func WireTxToGoBtTx(wireTx *bsvutil.Tx) (*bt.Tx, error) {
+	wTx := wireTx.MsgTx()
+
+	tx := &bt.Tx{
+		Version:  uint32(wTx.Version),
+		LockTime: wTx.LockTime,
+	}
+
+	tx.Inputs = make([]*bt.Input, len(wTx.TxIn))
+	for i, in := range wTx.TxIn {
+		tx.Inputs[i] = &bt.Input{
+			UnlockingScript:    bscript.NewFromBytes(in.SignatureScript),
+			PreviousTxOutIndex: in.PreviousOutPoint.Index,
+			SequenceNumber:     in.Sequence,
+		}
+		_ = tx.Inputs[i].PreviousTxIDAdd(&in.PreviousOutPoint.Hash)
+	}
+
+	tx.Outputs = make([]*bt.Output, len(wTx.TxOut))
+	for i, out := range wTx.TxOut {
+		tx.Outputs[i] = &bt.Output{
+			Satoshis:      uint64(out.Value),
+			LockingScript: bscript.NewFromBytes(out.PkScript),
+		}
+	}
+
+	return tx, nil
 }
