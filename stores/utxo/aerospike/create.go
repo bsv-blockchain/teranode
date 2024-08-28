@@ -137,9 +137,9 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 		external := s.externalizeAllTransactions
 
+		// also check whether the tx is too big and needs to be stored externally
 		var size int
 
-		// also check whether the tx is too big and needs to be stored externally
 		if len(batch[idx].tx.Inputs) == 0 {
 			// This is a partial transaction, and we calculate the size of the outputs only
 			for _, output := range batch[idx].tx.Outputs {
@@ -179,11 +179,24 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 			continue
 		} else if external {
+			var size int
+
+			if len(batch[idx].tx.Inputs) == 0 {
+				// This is a partial transaction, and we calculate the size of the outputs only
+				for _, output := range batch[idx].tx.Outputs {
+					if output != nil {
+						size += len(output.Bytes())
+					}
+				}
+			} else {
+				size = bItem.tx.Size()
+			}
+
 			// store the tx data externally, it is not in our aerospike record
 			if err = s.externalStore.Set(
 				context.Background(),
 				bItem.txHash[:],
-				bItem.tx.Bytes(),
+				size,
 				options.WithFileExtension("tx"),
 			); err != nil {
 				utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.txHash.String(), err))
