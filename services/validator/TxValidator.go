@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	sdkchainhash "github.com/bitcoin-sv/go-sdk/chainhash"
+	"github.com/bitcoin-sv/go-sdk/chainhash"
 	"github.com/bitcoin-sv/go-sdk/script"
 	interpreter_sdk "github.com/bitcoin-sv/go-sdk/script/interpreter"
 	"github.com/bitcoin-sv/go-sdk/transaction"
@@ -15,7 +15,6 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
@@ -57,7 +56,7 @@ func init() {
 	}
 
 	for k := range txWhitelist {
-		hash, _ := chainhash.NewHashFromStr(k)
+		hash, _ := chainhash.NewHashFromHex(k)
 		txWhitelistHashes[*hash] = struct{}{}
 	}
 }
@@ -67,8 +66,8 @@ type TxValidator struct {
 	logger ulogger.Logger
 }
 
-func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, txHash *chainhash.Hash, blockHeight uint32) error {
-	if _, ok := txWhitelistHashes[*txHash]; ok {
+func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error {
+	if _, ok := txWhitelist[tx.TxIDChainHash().String()]; ok {
 		return nil
 	}
 
@@ -382,7 +381,7 @@ func GoBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
 		unlockingScript := make([]byte, len(*in.UnlockingScript))
 		copy(unlockingScript, *in.UnlockingScript)
 
-		sourceTxHash := sdkchainhash.Hash(in.PreviousTxID())
+		sourceTxHash := chainhash.Hash(in.PreviousTxID())
 		sdkTx.Inputs[i] = &transaction.TransactionInput{
 			SourceTXID:       &sourceTxHash,
 			SourceTxOutIndex: in.PreviousTxOutIndex,

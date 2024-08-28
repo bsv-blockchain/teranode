@@ -4,7 +4,7 @@ go 1.22.6
 
 toolchain go1.23.0
 
-replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.8
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.10
 
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
 

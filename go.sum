@@ -775,8 +775,8 @@ github.com/opentracing/opentracing-go v1.1.0/go.mod h1:UkNAQd3GIcIGf0SeVgPpRdFSt
 github.com/opentracing/opentracing-go v1.2.0 h1:uEJPy/1a5RIPAJ0Ov+OIO8OxWu77jEv+1B0VhjKrZUs=
 github.com/opentracing/opentracing-go v1.2.0/go.mod h1:GxEUsuufX4nBwe+T+Wl9TAgYrxe9dPLANfrWvHYVTgc=
 github.com/openzipkin/zipkin-go v0.1.1/go.mod h1:NtoC/o8u3JlF1lSlyPNswIbeQH9bJTmOf0Erfk+hxe8=
-github.com/ordishs/go-bt/v2 v2.2.8 h1:2OVIQUu6YQQpRMUfwaGA8Ckrh0U0Du6icxT2xB39r6I=
-github.com/ordishs/go-bt/v2 v2.2.8/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
+github.com/ordishs/go-bt/v2 v2.2.10 h1:m4DURy+H5wPsA8jtqpOn5YelZ2QOoQ2Ce3RlR2B0qzg=
+github.com/ordishs/go-bt/v2 v2.2.10/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
 github.com/ordishs/go-utils v1.0.51 h1:XgBphXkjoUxRdahzyNRpQ5NnB96ygkggIqqzX6ruaFo=
 github.com/ordishs/go-utils v1.0.51/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
 github.com/ordishs/gocore v1.0.64 h1:Tw/fLwMNQwDahNN6mlwpdcyU5l6WIXgmLKy5n4xNNJY=

@@ -13,7 +13,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -239,7 +238,7 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 		txHash := txHash
 
 		g.Go(func() error {
-			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].tx, blockHeight, utxo.WithTXID(&txHash)); err != nil {
+			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].tx, blockHeight); err != nil {
 				sm.logger.Errorf("failed to create utxo for tx %s: %s", txHash.String(), err)
 			}
 
@@ -394,6 +393,7 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 
 		// don't add the coinbase to the txMap, we cannot process it anyway
 		if !tx.IsCoinbase() {
+			tx.SetTxHash(&txHash)
 			txMap[txHash] = &txMapWrapper{tx: tx}
 		}
 	}

@@ -134,7 +134,7 @@ func BenchmarkValidateTransaction(b *testing.B) {
 
 	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = txV.ValidateTransaction(tx, tx.TxIDChainHash(), 740975)
+			_ = txV.ValidateTransaction(tx, 740975)
 		}
 	})
 }
@@ -154,7 +154,7 @@ func BenchmarkValidateTransactionSDK(b *testing.B) {
 
 	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			_ = txV.ValidateTransaction(tx, tx.TxIDChainHash(), 740975)
+			_ = txV.ValidateTransaction(tx, 740975)
 		}
 	})
 }
