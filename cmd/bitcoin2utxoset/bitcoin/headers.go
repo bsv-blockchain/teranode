@@ -79,6 +79,10 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 			continue
 		}
 
+		if blockIndex.TxCount == 0 {
+			continue
+		}
+
 		blockIndex.Hash = blockHash
 
 		blocks = append(blocks, blockIndex)
@@ -89,7 +93,7 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 	}
 
 	// Sort the slice by block height
-	sort.Slice(blocks, func(i, j int) bool {
+	sort.SliceStable(blocks, func(i, j int) bool {
 		return blocks[i].Height < blocks[j].Height
 	})
 
@@ -164,7 +168,9 @@ func DeserializeBlockIndex(data []byte) (*utxopersister.BlockIndex, error) {
 		pos int
 	)
 
-	_, i := DecodeVarIntForIndex(data[pos:])
+	val, i := DecodeVarIntForIndex(data[pos:])
+	_ = val
+	// fmt.Printf("Val 1: %d\n", val)
 	pos += i
 
 	height, i := DecodeVarIntForIndex(data[pos:])
@@ -177,23 +183,33 @@ func DeserializeBlockIndex(data []byte) (*utxopersister.BlockIndex, error) {
 	pos += i
 
 	if status&(BlockHaveData|BlockHaveUndo) != 0 {
-		_, i = DecodeVarIntForIndex(data[pos:])
+		val, i = DecodeVarIntForIndex(data[pos:])
+		_ = val
+		// fmt.Printf("Val 2: %d\n", val)
 		pos += i
 	}
 
 	if status&BlockHaveData != 0 {
-		_, i = DecodeVarIntForIndex(data[pos:])
+		val, i = DecodeVarIntForIndex(data[pos:])
+		_ = val
+		// fmt.Printf("Val 3: %d\n", val)
 		pos += i
 	}
 
 	if status&BlockHaveUndo != 0 {
-		_, i = DecodeVarIntForIndex(data[pos:])
+		val, i = DecodeVarIntForIndex(data[pos:])
+		_ = val
+		// fmt.Printf("Val 4: %d\n", val)
 		pos += i
 	}
 
 	if len(data[pos:]) < 80 {
 		return nil, errors.NewProcessingError("block header length is less than 80")
 	}
+
+	// fmt.Printf("Height: %d\n", height)
+	// fmt.Printf("Tx count: %d\n", txs)
+	// fmt.Printf("Block header: %x\n", data[pos:pos+80])
 
 	bh, err := model.NewBlockHeaderFromBytes(data[pos : pos+80])
 	if err != nil {
