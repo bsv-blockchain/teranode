@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -238,7 +239,7 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 		txHash := txHash
 
 		g.Go(func() error {
-			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].tx, blockHeight); err != nil {
+			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].tx, blockHeight, utxo.WithTXID(&txHash)); err != nil {
 				sm.logger.Errorf("failed to create utxo for tx %s: %s", txHash.String(), err)
 			}
 
