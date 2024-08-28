@@ -179,15 +179,27 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 			continue
 		} else if external {
-			// store the tx data externally, it is not in our aerospike record
-			if err = s.externalStore.Set(
-				context.Background(),
-				bItem.txHash[:],
-				bItem.tx.Bytes(),
-				options.WithFileExtension("tx"),
-			); err != nil {
-				utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.txHash.String(), err))
-				continue
+			if len(batch[idx].tx.Inputs) == 0 {
+				if err := s.externalStore.Set(
+					context.Background(),
+					bItem.txHash[:],
+					wrapper.Bytes(),
+					options.WithFileExtension("outputs"),
+				); err != nil {
+					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]: %v", bItem.txHash.String(), err))
+					return
+				}
+			} else {
+				// store the tx data externally, it is not in our aerospike record
+				if err = s.externalStore.Set(
+					context.Background(),
+					bItem.txHash[:],
+					bItem.tx.Bytes(),
+					options.WithFileExtension("tx"),
+				); err != nil {
+					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.txHash.String(), err))
+					continue
+				}
 			}
 		}
 
