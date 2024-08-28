@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"net/url"
+	"io/fs"
 	"os"
 	"testing"
 	"time"
@@ -16,14 +16,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	s3Url, _ = url.Parse("s3://s3.com/ubsv-test-bucket")
-)
-
 func TestFile_Get(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests", "persist")
+
+		s3Client := NewS3Store()
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
+
+		s3Client.Set(nil, fs.ErrNotExist)
 
 		// should not exist
 		exists, err := f.Exists(context.Background(), []byte("key"))
@@ -65,8 +65,11 @@ func TestFile_Get(t *testing.T) {
 	})
 
 	t.Run("ttl", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests", "persist")
+		s3Client := NewS3Store()
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
+
+		s3Client.Set(nil, fs.ErrNotExist)
 
 		filename := "/tmp/ubsv-tests/79656b"
 		persistFilename := "/tmp/ubsv-tests/persist/79656b"
@@ -122,18 +125,29 @@ func TestFile_Get(t *testing.T) {
 		err = os.Remove(filename)
 		require.NoError(t, err)
 
+		// remove from persist dir, force logic to use S3
+		// err = os.Remove(persistFilename)
+		// require.NoError(t, err)
+		err = f.Del(context.Background(), []byte("key"))
+		require.NoError(t, err)
+
+		// still not there because our mock is still returning fs.ErrNotExist
+		value, err = f.Get(context.Background(), []byte("key"))
+		require.Error(t, err)
+		require.Nil(t, value)
+
+		s3Client.Set([]byte("value"), nil)
+
 		value, err = f.Get(context.Background(), []byte("key"))
 		require.NoError(t, err)
 		require.Equal(t, []byte("value"), value)
-
-		err = f.Del(context.Background(), []byte("key"))
-		require.NoError(t, err)
 	})
 }
 
 func TestFile_GetFromReader(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests-reader", "persist")
+		s3Client := NewS3Store()
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests-reader", "persist")
 		require.NoError(t, err)
 
 		err = f.Set(context.Background(), []byte("key"), []byte("value"))
@@ -149,7 +163,8 @@ func TestFile_GetFromReader(t *testing.T) {
 	})
 
 	t.Run("ttl", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests-reader", "persist")
+		s3Client := NewS3Store()
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests-reader", "persist")
 		require.NoError(t, err)
 
 		filename := "/tmp/ubsv-tests-reader/79656b"
@@ -213,7 +228,8 @@ func TestFile_GetFromReader(t *testing.T) {
 
 func TestFile_filename(t *testing.T) {
 	t.Run("filename", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests", "persist")
+		s3Client := NewS3Store()
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
 
 		filename := f.filename([]byte("key"))
@@ -222,7 +238,8 @@ func TestFile_filename(t *testing.T) {
 		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b", persistFilename)
 	})
 	t.Run("getFileNameForGet", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests", "persist")
+		s3Client := NewS3Store()
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
 
 		filename, err := f.getFileNameForGet([]byte("key"))
@@ -232,7 +249,8 @@ func TestFile_filename(t *testing.T) {
 		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b", persistFilename)
 	})
 	t.Run("getFileNameForGet with extension", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, s3Url, "/tmp/ubsv-tests", "persist")
+		s3Client := NewS3Store()
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
 
 		filename, err := f.getFileNameForGet([]byte("key"), options.WithFileExtension("meta"))
@@ -241,4 +259,36 @@ func TestFile_filename(t *testing.T) {
 		persistFilename := f.getFileNameForPersist(filename)
 		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b.meta", persistFilename)
 	})
+}
+
+func NewS3Store() *s3StoreMock {
+	return &s3StoreMock{}
+}
+
+type s3StoreMock struct {
+	value []byte
+	err   error
+}
+
+func (s *s3StoreMock) Set(value []byte, err error) {
+	s.value = value
+	s.err = err
+}
+
+func (s *s3StoreMock) Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error) {
+	return s.value, s.err
+}
+
+func (s *s3StoreMock) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
+	if s.value == nil {
+		return nil, s.err
+	}
+	return io.NopCloser(bytes.NewReader(s.value)), s.err
+}
+
+func (s *s3StoreMock) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
+	if s.value == nil {
+		return false, s.err
+	}
+	return true, s.err
 }

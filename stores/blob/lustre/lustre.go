@@ -44,10 +44,17 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, o
 	logger = logger.New("lustre")
 
 	logger.Infof("Creating lustre store s3 Url: %s, dir: %s, persistDir: %s", s3Url, dir, persistDir)
+
 	s3Client, err := s3.New(logger, s3Url)
 	if err != nil {
 		return nil, errors.NewStorageError("[Lustre] failed to create s3 client", err)
 	}
+
+	return NewLustreStore(logger, s3Client, dir, persistDir, opts...)
+}
+
+func NewLustreStore(logger ulogger.Logger, s3Client s3Store, dir string, persistDir string, opts ...options.Options) (*Lustre, error) {
+	logger = logger.New("lustre")
 
 	options := options.NewSetOptions(nil, opts...)
 
@@ -68,10 +75,10 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, o
 	}
 
 	// create directory if not exists
-	if err = os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, errors.NewStorageError("[Lustre] failed to create main lustre directory: %s", dir, err)
 	}
-	if err = os.MkdirAll(filepath.Clean(dir+"/"+persistDir), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Clean(dir+"/"+persistDir), 0755); err != nil {
 		return nil, errors.NewStorageError("[Lustre] failed to create persist lustre directory: %s", dir+"/"+persistDir, err)
 	}
 
@@ -215,13 +222,13 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.O
 					return fileReader, nil
 				}
 
-        return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] unable to open persist file", fileName, err)
+				return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] unable to open persist file", fileName, err)
 			}
 
 			return file, nil
 		}
 
-    return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] unable to open file", fileName, err)
+		return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] unable to open file", fileName, err)
 	}
 
 	return file, nil
