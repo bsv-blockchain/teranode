@@ -31,9 +31,10 @@ import (
 const stdin = "[stdin]"
 
 var (
-	verbose bool
-	verify  bool
-	old     bool
+	verbose      bool
+	verify       bool
+	checkHeights bool
+	old          bool
 )
 
 func Start() {
@@ -44,6 +45,7 @@ func Start() {
 	// Define command line arguments
 	flag.BoolVar(&verbose, "verbose", false, "verbose output")
 	flag.BoolVar(&verify, "verify", false, "verify all stored data")
+	flag.BoolVar(&checkHeights, "check", false, "check heights in utxo headers")
 	flag.BoolVar(&old, "old", false, "old format")
 
 	flag.Usage = func() { usage("") }
@@ -323,7 +325,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 				fmt.Printf("%v\n", uh)
 
-				if verify {
+				if checkHeights {
 					if lastHeight != 0 && lastHeight != uh.Height-1 {
 						fmt.Printf("height mismatch: %d -> %d\n", lastHeight, uh.Height)
 					}

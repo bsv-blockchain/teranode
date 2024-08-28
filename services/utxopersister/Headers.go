@@ -1,6 +1,7 @@
 package utxopersister
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -45,6 +46,12 @@ func NewUTXOHeaderFromReader(reader io.Reader) (*BlockIndex, error) {
 	hash := &chainhash.Hash{}
 	if n, err := io.ReadFull(reader, hash[:]); err != nil || n != 32 {
 		return nil, errors.NewProcessingError("Expected 32 bytes, got %d", n, err)
+	}
+
+	if bytes.Equal(hash[:], EOFMarker) {
+		// We return an empty BlockIndex and io.EOF to signal the end of the stream
+		// The empty BlockIndex indicates an EOF where the eofMarker was written
+		return &BlockIndex{}, io.EOF
 	}
 
 	var heightBytes [4]byte
