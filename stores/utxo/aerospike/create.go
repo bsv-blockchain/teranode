@@ -180,14 +180,36 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			continue
 		} else if external {
 			if len(batch[idx].tx.Inputs) == 0 {
+				nonNilOutputs := utxopersister.UnpadSlice(bItem.tx.Outputs)
+
+				wrapper := utxopersister.UTXOWrapper{
+					TxID:     bItem.txHash,
+					Height:   bItem.blockHeight,
+					Coinbase: bItem.isCoinbase,
+					UTXOs:    make([]*utxopersister.UTXO, 0, len(nonNilOutputs)),
+				}
+
+				for i, output := range bItem.tx.Outputs {
+					if output == nil {
+						continue
+					}
+
+					// nolint: gosec
+					wrapper.UTXOs = append(wrapper.UTXOs, &utxopersister.UTXO{
+						Index:  uint32(i),
+						Value:  output.Satoshis,
+						Script: *output.LockingScript,
+					})
+				}
+
 				if err := s.externalStore.Set(
-					context.Background(),
+					context.TODO(),
 					bItem.txHash[:],
 					wrapper.Bytes(),
 					options.WithFileExtension("outputs"),
 				); err != nil {
 					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]: %v", bItem.txHash.String(), err))
-					return
+					continue
 				}
 			} else {
 				// store the tx data externally, it is not in our aerospike record
