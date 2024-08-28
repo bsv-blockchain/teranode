@@ -59,6 +59,7 @@ func Start() {
 	blockHashStr := flag.String("blockHash", "", "Block hash to start from")            // block hash
 	previousBlockHashStr := flag.String("previousBlockHash", "", "Previous block hash") // previous block hash
 	blockHeightUint := flag.Uint("blockHeight", 0, "Block height to start from")        // block height
+	dumpRecords := flag.Int("dumpRecords", 0, "Dump records from index")                // dump records
 
 	flag.Parse()
 
@@ -149,6 +150,11 @@ func Start() {
 		height, err := indexDB.GetLastHeight()
 		if err != nil {
 			logger.Errorf("Could not get last height: %v", err)
+			return
+		}
+
+		if *dumpRecords > 0 {
+			indexDB.DumpRecords(*dumpRecords)
 			return
 		}
 

@@ -23,6 +23,28 @@ const (
 	BlockHaveUndo = 16
 )
 
+func (in *IndexDB) DumpRecords(count int) {
+	// Iterate over the block headers in the LevelDB
+	iter := in.db.NewIterator(util.BytesPrefix([]byte("b")), nil)
+	defer iter.Release()
+
+	var i int
+
+	for iter.Next() {
+		key := iter.Key()
+		value := iter.Value()
+
+		fmt.Printf("Key %d: %x\n", i, key)
+		fmt.Printf("Value: %x\n\n", value)
+
+		i++
+
+		if i == count {
+			break
+		}
+	}
+}
+
 func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxopersister.BlockIndex, error) {
 	// Slice to store block information
 	blocks := make([]*utxopersister.BlockIndex, 0, heightHint)
