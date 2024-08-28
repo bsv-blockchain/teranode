@@ -21,7 +21,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.16.21
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.54.3
 	github.com/bitcoin-sv/bdk/module/gobdk v0.0.0-20240828110818-f5e6a0cbf7e2
-	github.com/bitcoin-sv/go-sdk v1.1.0
+	github.com/bitcoin-sv/go-sdk v1.1.1
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
 	github.com/centrifugal/centrifuge v0.33.2
