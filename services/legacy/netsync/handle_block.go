@@ -24,11 +24,6 @@ import (
 )
 
 func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, block *bsvutil.Block) error {
-	if block.Hash().String() == "0000000000000000037a2d6e18b515f606d25b9d7baea47c6e519825cd763734" {
-		sm.logger.Warnf("skipping block 0000000000000000037a2d6e18b515f606d25b9d7baea47c6e519825cd763734 as already processed")
-		return nil
-	}
-
 	// Make sure we have the correct height for this block before continuing
 	var blockHeight uint32
 
@@ -45,7 +40,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}
 
 	ctx, _, deferFn := tracing.StartTracing(ctx, "HandleBlockDirect",
-		tracing.WithDebugLogMessage(
+		tracing.WithLogMessage(
 			sm.logger,
 			"[HandleBlockDirect][%s %d] processing block found from peer %s",
 			block.Hash().String(),
