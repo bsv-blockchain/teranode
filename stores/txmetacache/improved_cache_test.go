@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"runtime"
-	"runtime/pprof"
 	"testing"
 	"time"
 
@@ -41,9 +39,9 @@ func TestImprovedCache_SetGetTest(t *testing.T) {
 
 func TestImprovedCache_SetGetTestUnallocated(t *testing.T) {
 	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
-	util.SkipVeryLongTests(t)
+	//util.SkipVeryLongTests(t)
 	// initialize improved cache with 1MB capacity
-	cache, _ := NewImprovedCache(256*1024*1024, types.Unallocated)
+	cache, _ := NewImprovedCache(1*1024*1024, types.Unallocated)
 	err := cache.Set([]byte("key"), []byte("value"))
 	require.NoError(t, err)
 	dst := make([]byte, 0)
@@ -52,8 +50,8 @@ func TestImprovedCache_SetGetTestUnallocated(t *testing.T) {
 }
 func TestImprovedCache_GetBigKV(t *testing.T) {
 	// skip due to size requirements of the cache, use cache size / 1024 and number of buckets / 1024 for testing
-	util.SkipVeryLongTests(t)
-	cache, _ := NewImprovedCache(256*1024*1024, types.Unallocated)
+	//util.SkipVeryLongTests(t)
+	cache, _ := NewImprovedCache(1*1024*1024, types.Unallocated)
 	key, value := make([]byte, (1*1024)), make([]byte, (1*1024))
 	binary.LittleEndian.PutUint64(key, uint64(0))
 	hash := chainhash.Hash(key)
@@ -180,20 +178,19 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 	var err error
 	numberOfKeys := 1_000 * bucketsCount
 
-	// cache size : 128 * 1024 * 1024 bytes -> 128 MB // 128 GB in the Scaling
-	// number of buckets: 8 // 8 * 1024 = 8192 in the scaling
-	// bucket size: 128 MB / 8 = 16 MB per bucket // 128 GB / (8*1024) = 16 MB per bucket
+	// cache size : 128 * 1024 * 1024 bytes -> 128 MB
+	// number of buckets: 8
+	// bucket size: 128 MB / 8 = 16 MB per bucket
 	// chunk size: 4 KB
 	// 16 MB / 4 KB = 4096 chunks per bucket
 
-	// f, _ := os.Create("mem.prof")
-	// defer f.Close()
+	fmt.Println("bucketsCount:", bucketsCount, ", numberOfKeys:", numberOfKeys)
 
-	f, err := os.Create("mem2.prof")
-	if err != nil {
-		t.Fatalf("could not create memory profile: %v", err)
-	}
-	defer f.Close()
+	//f, err := os.Create("mem.prof")
+	//if err != nil {
+	//	t.Fatalf("could not create memory profile: %v", err)
+	//}
+	//defer f.Close()
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -234,10 +231,10 @@ func TestImprovedCache_SetMulti(t *testing.T) {
 		require.Equal(t, allValues[i], dst)
 	}
 
-	err = pprof.WriteHeapProfile(f)
-	if err != nil {
-		t.Fatalf("could not write memory profile: %v", err)
-	}
+	//err = pprof.WriteHeapProfile(f)
+	//if err != nil {
+	//	t.Fatalf("could not write memory profile: %v", err)
+	//}
 
 	//var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -256,9 +253,9 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 	var err error
 	numberOfKeys := 4_000_000
 
-	// cache size : 128 * 1024 * 1024 bytes -> 128 MB // 128 GB in the Scaling
-	// number of buckets: 8 // 8 * 1024 = 8192 in the scaling
-	// bucket size: 128 MB / 8 = 16 MB per bucket // 128 GB / (8*1024) = 16 MB per bucket
+	// cache size : 128 * 1024 * 1024 bytes -> 128 MB
+	// number of buckets: 8
+	// bucket size: 128 MB / 8 = 16 MB per bucket
 	// chunk size: 4 KB
 	// 16 MB / 4 KB = 4096 chunks per bucket
 	// 4096 bytes / 68 bytes = 60 key-value pairs per chunk
@@ -304,24 +301,20 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses(t *testing.T) {
 }
 
 func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
-	// skipping this test, because config is not suitable for it.
-	// It is necessary to keep the test for manual inspection with suitable config.
-	util.SkipVeryLongTests(t)
-
-	cache, _ := NewImprovedCache(4*1024, types.Trimmed)
+	cache, _ := NewImprovedCache(128*1024, types.Trimmed)
 	allKeys := make([][]byte, 0)
 	allValues := make([][]byte, 0)
 	var err error
-	numberOfKeys := 300
+	numberOfKeys := 2000
 
-	// cache size : 4 KB
-	// 4 buckets
-	// bucket size: 4 KB / 4 = 1 KB
-	// chunk size: 2 * 128 = 256 bytes
-	// 1 KB / 256 bytes = 4 chunks per bucket
-	// 256 bytes / 68  = 3 key-value pairs per chunk
-	// 3 * 4 = 12 key-value pairs per bucket
-	// 12 * 4 = 48 key-value pairs per cache
+	// cache size : 128 KB
+	// 8 buckets
+	// bucket size: 128 KB / 8 = 16 KB per bucket
+	// chunk size: 4 KB
+	// 16 KB / 4 KB = 4 chunks per bucket
+	// 4 KB / 68  = 60 key-value pairs per chunk
+	// 60 * 4 = 240 key-value pairs per bucket
+	// 240 * 8 = 1920 key-value pairs per cache
 
 	for i := 0; i < numberOfKeys; i++ {
 		key := make([]byte, 32)
@@ -354,7 +347,6 @@ func TestImprovedCache_TestSetMultiWithExpectedMisses_Small(t *testing.T) {
 	require.Equal(t, s.TotalElementsAdded, uint64(len(allKeys)))
 	require.Equal(t, uint64(errCounter)+s.EntriesCount, uint64(len(allKeys)))
 
-	// t.Log("Stats, total map size:", s.TotalMapSize)
 	t.Log("Stats, current elements size: ", s.EntriesCount)
 	t.Log("Stats, total elements added: ", s.TotalElementsAdded)
 }

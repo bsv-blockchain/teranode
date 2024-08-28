@@ -49,6 +49,8 @@ jobs:
   smoketest:
     name: smoketest
     runs-on: ubsv-runner
+    env:
+      GITHUB_ACTIONS: true
     steps:
       # Setup Docker Buildx
       - name: Set up Docker Buildx
@@ -78,7 +80,7 @@ jobs:
           go-version: "1.21.0"
 
       - name: Run Smoke tests
-        run: settings_context=docker.ci.tc1.run make smoketests
+        run: settings_context=docker.ci.tc1.run make smoketests no-reset=1
         continue-on-error: false
 
   sonarqube:

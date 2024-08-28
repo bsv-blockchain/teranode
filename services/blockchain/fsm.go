@@ -15,11 +15,15 @@ import (
 // - Mining
 // - CatchingBlocks
 // - CatchingTxs
+// - Restoring
+// - ResourceUnavailable
 // The finite state machine has the following events:
 // - Run
 // - Mine
 // - CatchupBlocks
 // - CatchupTxs
+// - Restore
+// - Unavailable
 // - Stop
 func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	// Define callbacks
@@ -63,6 +67,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 					blockchain_api.FSMStateType_RUNNING.String(),
 					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+					blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String(),
 				},
 				Dst: blockchain_api.FSMStateType_MINING.String(),
 			},
@@ -102,8 +107,21 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 					blockchain_api.FSMStateType_MINING.String(),
 					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+					blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String(),
 				},
 				Dst: blockchain_api.FSMStateType_STOPPED.String(),
+			},
+			{
+				Name: blockchain_api.FSMEventType_UNAVAILABLE.String(),
+				Src: []string{
+					blockchain_api.FSMStateType_RUNNING.String(),
+					blockchain_api.FSMStateType_MINING.String(),
+					blockchain_api.FSMStateType_CATCHINGTXS.String(),
+					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+					blockchain_api.FSMStateType_RESTORING.String(),
+					blockchain_api.FSMStateType_LEGACYSYNCING.String(),
+				},
+				Dst: blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String(),
 			},
 		},
 		callbacks,

@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"io"
 	"log"
 	"net/url"
@@ -13,6 +11,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
@@ -109,7 +111,12 @@ func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 
 	if err := util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "blockassembly", nil, consumerCount, true, func(msg util.KafkaMessage) error {
 		//startTime := time.Now()
-		for v.blockchainClient.GetFSMCurrentState() == blockchain_api.FSMStateType_CATCHINGTXS {
+		currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			v.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+			// TODO: how to handle it gracefully?
+		}
+		for *currentState == blockchain_api.FSMStateType_CATCHINGTXS {
 			v.logger.Debugf("[BlockAssembly] Waiting for FSM to finish catching txs")
 			time.Sleep(1 * time.Second) // Wait and check again in 1 second
 		}
@@ -254,6 +261,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 		prometheusInvalidTransactions.Inc()
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
+			Txid:  tx.TxIDChainHash().CloneBytes(),
 		}, status.Errorf(codes.Internal, "transaction %s is invalid: %v", tx.TxID(), err)
 	}
 
@@ -261,6 +269,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 
 	return &validator_api.ValidateTransactionResponse{
 		Valid: true,
+		Txid:  tx.TxIDChainHash().CloneBytes(),
 	}, nil
 }
 
@@ -272,22 +281,32 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 	)
 	defer deferFn()
 
-	errReasons := make([]*validator_api.ValidateTransactionError, 0, len(req.GetTransactions()))
-	for _, reqItem := range req.GetTransactions() {
-		tx, err := v.ValidateTransaction(ctx, reqItem)
-		if err != nil {
-			if tx != nil {
-				errReasons = append(errReasons, &validator_api.ValidateTransactionError{
-					TxId:   tx.String(),
-					Reason: tx.Reason,
-				})
+	g, gCtx := errgroup.WithContext(ctx)
+
+	// we create a slice for all transactions we just batched, in the same order as we got them
+	errReasons := make([]string, len(req.GetTransactions()))
+
+	for idx, reqItem := range req.GetTransactions() {
+		idx, reqItem := idx, reqItem
+
+		g.Go(func() error {
+			_, err := v.ValidateTransaction(gCtx, reqItem)
+			if err != nil {
+				errReasons[idx] = err.Error()
+			} else {
+				errReasons[idx] = ""
 			}
-		}
+
+			return nil
+		})
 	}
 
+	// wait for all transactions to be validated, never returns error
+	_ = g.Wait()
+
 	return &validator_api.ValidateTransactionBatchResponse{
-		Valid:   true,
-		Reasons: errReasons,
+		Valid:  true,
+		Errors: errReasons,
 	}, nil
 }
 

@@ -4,37 +4,65 @@ import (
 	"bufio"
 	"context"
 	"flag"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
-	"time"
+	"os/signal"
+	"strings"
+	"syscall"
 
-	utxopersister_service "github.com/bitcoin-sv/ubsv/services/utxopersister"
+	// nolint:gci,gosec
+	_ "net/http/pprof"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxo_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/ordishs/go-utils/batcher"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
 
-type UTXO struct {
-	utxo  *utxopersister_service.UTXO
-	errCh chan error
-}
-
+// nolint: gocognit
 func Start() {
-	inFile := flag.String("in", "chainstate.utxo-set", "Input filename for UTXO set.")
+	inFile := flag.String("in", "", "Input filename for UTXO set.")
 	flag.Parse()
 
-	ctx := context.Background()
-	logger := ulogger.NewGoCoreLogger("tnbs")
+	if *inFile == "" {
+		fmt.Println("Please provide an input file (-in)")
+		return
+	}
+
+	logger := ulogger.NewGoCoreLogger("seed")
+
+	go func() {
+		// nolint:gosec
+		logger.Errorf("%v", http.ListenAndServe(":6060", nil))
+	}()
 
 	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil || !found {
-		logger.Errorf("blockstore URL not found in config: %v", err)
+		logger.Errorf("utxostore URL not found in config: %v", err)
 		return
 	}
 
 	logger.Infof("Using utxostore at %s", utxoStoreURL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Handle CTRL-C (SIGINT)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		fmt.Println("\nCTRL-C pressed. Cancelling all operations...")
+		cancel()
+	}()
 
 	utxoStore, err := utxo_factory.NewStore(ctx, logger, utxoStoreURL, "seeder", false)
 	if err != nil {
@@ -42,16 +70,22 @@ func Start() {
 		return
 	}
 
-	utxoWrapperCh := make(chan *utxopersister_service.UTXOWrapper, 10000)
+	channelSize, _ := gocore.Config().GetInt("channelSize", 10_000)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	logger.Infof("Using channel size of %d", channelSize)
+	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, channelSize)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Create 1000 workers to process the UTXO data
-	for i := 0; i < 1000; i++ {
-		g.Go(worker(gCtx, logger, utxoStore, utxoWrapperCh))
+	workerCount, _ := gocore.Config().GetInt("workerCount", 1_000)
+	logger.Infof("Starting %d workers", workerCount)
+
+	for i := 0; i < workerCount; i++ {
+		workerID := i
+
+		g.Go(func() error {
+			return worker(gCtx, logger, utxoStore, workerID, utxoWrapperCh)
+		})
 	}
 
 	// Read the UTXO data from the store
@@ -64,21 +98,69 @@ func Start() {
 
 	reader := bufio.NewReader(f)
 
-	for {
-		if ctx.Done() != nil {
-			break
-		}
-
-		utxoWrapper, err := utxopersister_service.NewUTXOWrapperFromReader(reader)
-		if err != nil {
-			logger.Errorf("Failed to read UTXO: %v", err)
-			break
-		}
-
-		utxoWrapperCh <- utxoWrapper
+	magic, _, _, _, err := utxopersister.GetUTXOSetHeaderFromReader(reader)
+	if err != nil {
+		logger.Errorf("Failed to read UTXO set header: %v", err)
+		return
 	}
 
-	close(utxoWrapperCh)
+	if magic != "U-S-1.0" {
+		logger.Errorf("Invalid magic number: %s", magic)
+		return
+	}
+
+	var (
+		txProcessed    uint64
+		utxosProcessed uint64
+	)
+
+	g.Go(func() error {
+		defer close(utxoWrapperCh)
+
+	OUTER:
+		for {
+			select {
+			case <-gCtx.Done():
+				// Context canceled, stop reading lines
+				logger.Infof("Context cancelled, stopping reading UTXOWrapper")
+				return gCtx.Err()
+
+			default:
+				utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(reader)
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						if utxoWrapper == nil {
+							logger.Errorf("EOF marker not found")
+						} else {
+							logger.Infof("EOF marker found")
+						}
+						break OUTER
+					}
+
+					logger.Errorf("Failed to read UTXO: %v", err)
+					return errors.NewProcessingError("Failed to read UTXO", err)
+				}
+
+				select {
+				case <-gCtx.Done():
+					logger.Infof("Context cancelled while sending UTXO to channel, stopping UTXO processing")
+					return gCtx.Err()
+
+				case utxoWrapperCh <- utxoWrapper:
+					txProcessed++
+					utxosProcessed += uint64(len(utxoWrapper.UTXOs))
+
+					if txProcessed%1_000_000 == 0 {
+						logger.Infof("Processed %16s transactions with %16s utxos", formatNumber(txProcessed), formatNumber(utxosProcessed))
+					}
+				}
+			}
+		}
+
+		logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(txProcessed), formatNumber(utxosProcessed))
+
+		return nil
+	})
 
 	logger.Infof("Waiting for workers to finish")
 
@@ -90,41 +172,79 @@ func Start() {
 	logger.Infof("All workers finished successfully")
 }
 
-func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, utxoCh chan *utxopersister_service.UTXOWrapper) func() error {
+func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, id int, utxoWrapperCh <-chan *utxopersister.UTXOWrapper) error {
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Infof("Worker %d received stop signal: %v", id, ctx.Err())
+			return nil
 
-	batchSize, _ := gocore.Config().GetInt("seeder_batcherSize", 256)
-	batchDurationStr, _ := gocore.Config().GetInt("seeder_batcherDurationMillis", 10)
-	batchDuration := time.Duration(batchDurationStr) * time.Millisecond
-	batcher := batcher.New[UTXO](batchSize, batchDuration, saveBatch, false)
-	_ = batcher
+		case utxoWrapper, ok := <-utxoWrapperCh:
+			if !ok {
+				// Channel closed, stop the worker
+				return nil
+			}
 
-	_ = store
-
-	_ = logger
-
-	return func() error {
-		for {
-			select {
-			case utxo := <-utxoCh:
-				_ = utxo
-				// errCh := make(chan error)
-				// batcher.Put(&UTXOWrapper{utxo: utxo, errCh: errCh})
-				// // err := <-errCh
-				// if err != nil {
-				// 	return err
-				// }
-
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := processUTXO(ctx, store, utxoWrapper); err != nil {
+				logger.Errorf("Worker %d failed to process UTXO: %v", id, err)
+				return err
 			}
 		}
 	}
 }
 
-func saveBatch(batch []*UTXO) {
-	_ = batch[0].errCh
-	_ = batch[0].utxo
+func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper) error {
+	if utxoWrapper == nil {
+		return nil
+	}
 
-	// Save the batch of UTXOs
-	// store.SaveBatch(ctx, batch)
+	tx := &bt.Tx{}
+
+	padded := utxopersister.PadUTXOsWithNil(utxoWrapper.UTXOs)
+
+	for _, u := range padded {
+		var output *bt.Output
+		if u != nil {
+			output = &bt.Output{}
+			output.Satoshis = u.Value
+			output.LockingScript = bscript.NewFromBytes(u.Script)
+		}
+
+		tx.Outputs = append(tx.Outputs, output)
+	}
+
+	if gocore.Config().GetBool("skipStore", false) {
+		return nil
+	}
+
+	if _, err := store.Create(
+		ctx,
+		tx,
+		utxoWrapper.Height,
+		utxo.WithTXID(utxoWrapper.TxID),
+		utxo.WithSetCoinbase(utxoWrapper.Coinbase),
+	); err != nil {
+		if errors.Is(err, errors.ErrTxAlreadyExists) {
+			return nil
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+func formatNumber(n uint64) string {
+	in := fmt.Sprintf("%d", n)
+	out := make([]string, 0, len(in)+(len(in)-1)/3)
+
+	for i, c := range in {
+		if i > 0 && (len(in)-i)%3 == 0 {
+			out = append(out, ",")
+		}
+
+		out = append(out, string(c))
+	}
+
+	return strings.Join(out, "")
 }

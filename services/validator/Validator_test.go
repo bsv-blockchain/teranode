@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"testing"
 	"time"
 
@@ -86,6 +87,7 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		logger: ulogger.TestLogger{},
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
+			logger: ulogger.TestLogger{},
 		},
 		utxoStore:           utxoStore,
 		blockAssembler:      BlockAssemblyStore{},
@@ -117,6 +119,7 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		logger: ulogger.TestLogger{},
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
+			logger: ulogger.TestLogger{},
 		},
 		utxoStore:           utxoStore,
 		blockAssembler:      nil,
@@ -156,6 +159,7 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 	v := &Validator{
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
+			logger: ulogger.TestLogger{},
 		},
 	}
 
@@ -183,6 +187,7 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 	v := &Validator{
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
+			logger: ulogger.TestLogger{},
 		},
 	}
 
@@ -210,6 +215,7 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	v := &Validator{
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
+			logger: ulogger.TestLogger{},
 		},
 	}
 
@@ -265,6 +271,7 @@ func TestValidateTransactions(t *testing.T) {
 		v := &Validator{
 			txValidator: TxValidator{
 				policy: NewPolicySettings(),
+				logger: ulogger.TestLogger{},
 			},
 		}
 
@@ -292,6 +299,7 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 	v := &Validator{
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
+			logger: ulogger.TestLogger{},
 		},
 	}
 
@@ -319,6 +327,7 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 	v := &Validator{
 		txValidator: TxValidator{
 			policy: NewPolicySettings(),
+			logger: ulogger.TestLogger{},
 		},
 	}
 
@@ -362,4 +371,23 @@ func (s BlockAssemblyStore) Store(ctx context.Context, hash *chainhash.Hash, fee
 
 func (s BlockAssemblyStore) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
+}
+
+func Benchmark_validateInternal(b *testing.B) {
+	txF65eHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9.bin")
+	require.NoError(b, err)
+	tx, err := bt.NewTxFromBytes(txF65eHex)
+	require.NoError(b, err)
+
+	v := &Validator{
+		txValidator: TxValidator{
+			policy: NewPolicySettings(),
+			logger: ulogger.TestLogger{},
+		},
+	}
+
+	for i := 0; i < b.N; i++ {
+		err = v.validateTransaction(context.Background(), tx, 740975)
+		require.NoError(b, err)
+	}
 }

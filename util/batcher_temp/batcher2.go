@@ -12,6 +12,7 @@ type Batcher2[T any] struct {
 	timeout    time.Duration
 	batch      []*T
 	ch         chan *T
+	triggerCh  chan struct{}
 	background bool
 }
 
@@ -24,7 +25,8 @@ func New[T any](size int, timeout time.Duration, fn func(batch []*T), background
 		size:       size,
 		timeout:    timeout,
 		batch:      make([]*T, 0, size),
-		ch:         make(chan *T),
+		ch:         make(chan *T, size*64),
+		triggerCh:  make(chan struct{}),
 		background: background,
 	}
 
@@ -37,6 +39,11 @@ func New[T any](size int, timeout time.Duration, fn func(batch []*T), background
 // the batch will be processed.
 func (b *Batcher2[T]) Put(item *T) {
 	b.ch <- item
+}
+
+// Trigger will force the batch to be processed immediately.
+func (b *Batcher2[T]) Trigger() {
+	b.triggerCh <- struct{}{}
 }
 
 func (b *Batcher2[T]) worker() {
@@ -52,6 +59,9 @@ func (b *Batcher2[T]) worker() {
 				}
 
 			case <-expire:
+				goto saveBatch
+
+			case <-b.triggerCh:
 				goto saveBatch
 			}
 		}

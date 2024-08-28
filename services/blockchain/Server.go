@@ -872,88 +872,7 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 	}, nil
 }
 
-func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
-	b.logger.Debugf("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
-
-	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
-	if err != nil {
-		return nil, err
-	}
-	state := b.finiteStateMachine.Current()
-
-	// Log the state immediately after storing it
-	b.logger.Infof("[Blockchain Server] state immediately after storing: %v", state)
-
-	resp := &blockchain_api.GetFSMStateResponse{
-		State: blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[state]),
-	}
-
-	b.logger.Debugf("[Blockchain Server] FSM current state: %v", b.finiteStateMachine.Current(), ", response: %v", resp)
-	return resp, nil
-}
-
-func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_RUN,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		return nil, err
-	}
-
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
-	return nil, nil
-}
-
-func (b *Blockchain) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_MINE,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		return nil, err
-	}
-
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
-	return nil, nil
-}
-
-func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_CATCHUPBLOCKS,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		return nil, err
-	}
-
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
-	return nil, nil
-}
-
-func (b *Blockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_CATCHUPTXS,
-	}
-
-	b.logger.Infof("[Blockchain] sending CatchUpTransactions event")
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		b.logger.Errorf("[Blockchain] error sending CatchUpTransactions event: %v", err)
-		return nil, err
-	}
-	b.logger.Infof("[Blockchain] Storing CatchUpTransactions state")
-	b.client.StoreFSMState(b.finiteStateMachine.Current())
-	return nil, nil
-}
+// FSM related endpoints
 
 func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "GetFSMCurrentState",
@@ -982,6 +901,132 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 		State: blockchain_api.FSMStateType(enumState),
 	}, nil
 }
+
+func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
+	b.logger.Debugf("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
+
+	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
+	if err != nil {
+		return nil, err
+	}
+	state := b.finiteStateMachine.Current()
+
+	// Log the state immediately after storing it
+	b.logger.Infof("[Blockchain Server] state immediately after storing: %v", state)
+
+	resp := &blockchain_api.GetFSMStateResponse{
+		State: blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[state]),
+	}
+
+	b.logger.Debugf("[Blockchain Server] FSM current state: %v", b.finiteStateMachine.Current(), ", response: %v", resp)
+
+	return resp, nil
+}
+
+func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_RUN,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (b *Blockchain) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_MINE,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_CATCHUPBLOCKS,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (b *Blockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_CATCHUPTXS,
+	}
+
+	b.logger.Infof("[Blockchain] sending CatchUpTransactions event")
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		b.logger.Errorf("[Blockchain] error sending CatchUpTransactions event: %v", err)
+		return nil, err
+	}
+
+	b.logger.Infof("[Blockchain] Storing CatchUpTransactions state")
+
+	return nil, nil
+}
+
+func (b *Blockchain) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_RESTORE,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_LEGACYSYNC,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (b *Blockchain) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	req := &blockchain_api.SendFSMEventRequest{
+		Event: blockchain_api.FSMEventType_UNAVAILABLE,
+	}
+
+	_, err := b.SendFSMEvent(ctx, req)
+	if err != nil {
+		// unable to send the event, no need to update the state.
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+// Legacy endpoints
 
 func (b *Blockchain) GetBlockLocator(ctx context.Context, req *blockchain_api.GetBlockLocatorRequest) (*blockchain_api.GetBlockLocatorResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockLocator",

@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	framework   *tf.BitcoinTestFramework
+	framework *tf.BitcoinTestFramework
 )
 
 func SetupBitcoinTestFramework(composeFiles []string, settingsMap map[string]string) (*tf.BitcoinTestFramework, error) {

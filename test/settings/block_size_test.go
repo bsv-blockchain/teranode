@@ -62,7 +62,7 @@ func (suite *SettingsTestSuite) SetupTest() {
 func (suite *SettingsTestSuite) TestShouldRejectExcessiveBlockSize() {
 	t := suite.T()
 	cluster := suite.Framework
-	logger 		:= cluster.Logger
+	logger := cluster.Logger
 	defer func() {
 		if r := recover(); r != nil {
 			t.Errorf("Recovered from panic: %v", r)

@@ -287,7 +287,7 @@ func (ud *UTXODiff) Close() error {
 		}
 
 		if err := ud.additionsStorer.Close(ctx); err != nil {
-			return errors.NewStorageError("Error flushing additions writer:", err)
+			return errors.NewStorageError("Error flushing additions writer", err)
 		}
 
 		return nil
@@ -571,4 +571,37 @@ func filterUTXOs(utxos []*UTXO, deletions map[[32]byte][]uint32, txID [32]byte) 
 		return utxos
 	}
 	return filteredUTXOs
+}
+
+func PadUTXOsWithNil(utxos []*UTXO) []*UTXO {
+	// Determine the size of the new slice
+	var maxIndex uint32
+
+	for _, utxo := range utxos {
+		if utxo.Index > maxIndex {
+			maxIndex = utxo.Index
+		}
+	}
+
+	// Create a slice with nil values of length maxIdx+1
+	padded := make([]*UTXO, maxIndex+1)
+
+	// Place each item in its corresponding index position
+	for _, utxo := range utxos {
+		padded[utxo.Index] = utxo
+	}
+
+	return padded
+}
+
+func UnpadSlice[T any](padded []*T) []*T {
+	utxos := make([]*T, 0, len(padded))
+
+	for _, utxo := range padded {
+		if utxo != nil {
+			utxos = append(utxos, utxo)
+		}
+	}
+
+	return utxos
 }

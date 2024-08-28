@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
 	"github.com/sercand/kuberesolver/v5"
@@ -17,14 +18,18 @@ import (
 	"google.golang.org/grpc/resolver"
 )
 
+type batchItem struct {
+	req  *validator_api.ValidateTransactionRequest
+	done chan error
+}
 type Client struct {
 	client       validator_api.ValidatorAPIClient
 	running      *atomic.Bool
 	conn         *grpc.ClientConn
 	logger       ulogger.Logger
-	batchCh      chan *validator_api.ValidateTransactionRequest
 	batchSize    int
 	batchTimeout int
+	batcher      batcher.Batcher2[batchItem]
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
@@ -50,11 +55,6 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 
 	sendBatchSize, _ := gocore.Config().GetInt("validator_sendBatchSize", 0)
 	sendBatchTimeout, _ := gocore.Config().GetInt("validator_sendBatchTimeout", 100)
-	sendBatchWorkers, _ := gocore.Config().GetInt("validator_sendBatchWorkers", 1)
-
-	if sendBatchSize > 0 && sendBatchWorkers <= 0 {
-		return nil, errors.NewInvalidArgumentError("expecting validator_sendBatchWorkers > 0 when validator_sendBatchSize = %d", sendBatchSize)
-	}
 
 	running := atomic.Bool{}
 	running.Store(true)
@@ -64,15 +64,16 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 		logger:       logger,
 		running:      &running,
 		conn:         conn,
-		batchCh:      make(chan *validator_api.ValidateTransactionRequest),
 		batchSize:    sendBatchSize,
 		batchTimeout: sendBatchTimeout,
 	}
 
 	if sendBatchSize > 0 {
-		for i := 0; i < sendBatchWorkers; i++ {
-			go client.batchWorker(ctx)
+		sendBatch := func(batch []*batchItem) {
+			client.sendBatchToValidator(ctx, batch)
 		}
+		duration := time.Duration(sendBatchTimeout) * time.Millisecond
+		client.batcher = *batcher.New[batchItem](sendBatchSize, duration, sendBatch, true)
 	}
 
 	return client, nil
@@ -109,61 +110,62 @@ func (c *Client) GetMedianBlockTime() uint32 {
 	return resp.MedianTime
 }
 
-func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32) error {
-	if c.batchSize == 0 {
+func (c *Client) TriggerBatcher() {
+	if c.batchSize > 0 {
+		c.batcher.Trigger()
+	}
+}
 
+func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error {
+	if c.batchSize == 0 {
 		if _, err := c.client.ValidateTransaction(ctx, &validator_api.ValidateTransactionRequest{
 			TransactionData: tx.ExtendedBytes(),
 			BlockHeight:     blockHeight,
 		}); err != nil {
 			return errors.UnwrapGRPC(err)
 		}
-
 	} else {
-
+		doneCh := make(chan error)
 		/* batch mode */
-		c.batchCh <- &validator_api.ValidateTransactionRequest{
-			TransactionData: tx.ExtendedBytes(),
-			BlockHeight:     blockHeight,
-		}
+		c.batcher.Put(&batchItem{
+			req: &validator_api.ValidateTransactionRequest{
+				TransactionData: tx.ExtendedBytes(),
+				BlockHeight:     blockHeight,
+			},
+			done: doneCh,
+		})
 
+		return <-doneCh
 	}
 
 	return nil
 }
 
-func (c *Client) batchWorker(ctx context.Context) {
-	duration := time.Duration(c.batchTimeout) * time.Millisecond
-	ringBuffer := make([]*validator_api.ValidateTransactionRequest, c.batchSize)
-	i := 0
-	for {
-		select {
-		case req := <-c.batchCh:
-			ringBuffer[i] = req
-			i++
-			if i == c.batchSize {
-				c.sendBatchToValidator(ctx, ringBuffer)
-				i = 0
-			}
-		case <-time.After(duration):
-			if i > 0 {
-				c.sendBatchToValidator(ctx, ringBuffer[:i])
-				i = 0
-			}
-		}
+func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
+	requests := make([]*validator_api.ValidateTransactionRequest, 0, len(batch))
+	for _, item := range batch {
+		requests = append(requests, item.req)
 	}
-}
-
-func (c *Client) sendBatchToValidator(ctx context.Context, batch []*validator_api.ValidateTransactionRequest) {
 	txBatch := &validator_api.ValidateTransactionBatchRequest{
-		Transactions: batch,
+		Transactions: requests,
 	}
+
 	resp, err := c.client.ValidateTransactionBatch(ctx, txBatch)
 	if err != nil {
 		c.logger.Errorf("%v", err)
+
+		for _, item := range batch {
+			item.done <- err
+		}
+
 		return
 	}
-	if len(resp.Reasons) > 0 {
-		c.logger.Errorf("batch send to validator returned %d failed transactions from %d batch", len(resp.Reasons), len(batch))
+
+	for i, item := range batch {
+		if resp.Errors[i] != "" {
+			item.done <- errors.NewError(resp.Errors[i])
+		} else {
+			item.done <- nil
+		}
 	}
 }

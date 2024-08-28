@@ -18,7 +18,6 @@ import (
 var availableDatabases = map[string]func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error){}
 
 func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, source string, startBlockchainListener ...bool) (utxo.Store, error) {
-
 	var port int
 	var err error
 

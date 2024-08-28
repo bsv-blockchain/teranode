@@ -2,6 +2,7 @@ package utxo
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libsv/go-bt/v2/bscript"
 
@@ -70,17 +71,24 @@ func GetFeesAndUtxoHashes(ctx context.Context, tx *bt.Tx, blockHeight uint32) (u
 }
 
 // GetUtxoHashes returns the utxo hashes for the outputs of a transaction.
-func GetUtxoHashes(tx *bt.Tx) ([]chainhash.Hash, error) {
-	txChainHash := tx.TxIDChainHash()
+func GetUtxoHashes(tx *bt.Tx, txHash ...*chainhash.Hash) ([]*chainhash.Hash, error) {
+	var txChainHash *chainhash.Hash
+	if len(txHash) > 0 {
+		txChainHash = txHash[0]
+	} else {
+		txChainHash = tx.TxIDChainHash()
+	}
 
-	utxoHashes := make([]chainhash.Hash, len(tx.Outputs))
+	utxoHashes := make([]*chainhash.Hash, len(tx.Outputs))
 	for i, output := range tx.Outputs {
-		utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, uint32(i))
-		if utxoErr != nil {
-			return nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
-		}
+		if output != nil {
+			utxoHash, utxoErr := util.UTXOHashFromOutput(txChainHash, output, uint32(i))
+			if utxoErr != nil {
+				return nil, errors.NewProcessingError("error getting output utxo hash: %s", utxoErr)
+			}
 
-		utxoHashes[i] = *utxoHash
+			utxoHashes[i] = utxoHash
+		}
 	}
 
 	return utxoHashes, nil

@@ -576,10 +576,10 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = request.Height
 
-	// TODO - check if hardcoding "legacy" is OK
 	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("failed block validation ProcessBlock [%s]", block.String(), err))
+		// error from processBlockFound is already wrapped
+		return nil, err
 	}
 
 	return &blockvalidation_api.EmptyMessage{}, nil

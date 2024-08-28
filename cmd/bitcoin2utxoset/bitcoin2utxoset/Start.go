@@ -1,4 +1,4 @@
-package main
+package bitcoin2utxoset
 
 import (
 	"bufio"
@@ -15,15 +15,15 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/btcleveldb"
-	"github.com/bitcoin-sv/ubsv/cmd/chainstate-import/bitcoin/keys"
+	"github.com/bitcoin-sv/ubsv/cmd/bitcoin2utxoset/bitcoin"
+	"github.com/bitcoin-sv/ubsv/cmd/bitcoin2utxoset/bitcoin/btcleveldb"
+	"github.com/bitcoin-sv/ubsv/cmd/bitcoin2utxoset/bitcoin/keys"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/btcsuite/goleveldb/leveldb"
-	"github.com/libsv/go-bt/v2/chainhash"
-
 	"github.com/btcsuite/goleveldb/leveldb/opt"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 // bitcoin addresses
@@ -42,69 +42,158 @@ import (
 // parsing flags from command line
 // Check OS type for file-handler limitations
 
-func main() {
+type BlockHeader struct {
+	Hash              string `json:"hash"`
+	Height            int    `json:"height"`
+	PreviousBlockHash string `json:"previousblockhash"`
+}
+
+func Start() {
+	logger := ulogger.NewGoCoreLogger("b2utxo")
+
 	// Command Line Options (Flags)
-	chainstate := flag.String("db", "", "Location of bitcoin chainstate db.")         // chainstate folder
-	outputDir := flag.String("outputDir", "", "Output directory for UTXO set.")       // output directory
-	blockHash := flag.String("blockHash", "", "Block hash for the UTXO set.")         // block hash
-	blockHeight := flag.Uint("blockHeight", 0, "Block height for the UTXO set.")      // block height
-	previousBlockHash := flag.String("previousBlockHash", "", "Previous block hash.") // previous block hash
-	flag.Parse()                                                                      // execute command line parsing for all declared flags
+	blockchainDir := flag.String("bitcoinDir", "", "Location of bitcoin data")          // chainstate folder
+	outputDir := flag.String("outputDir", "", "Output directory for UTXO set.")         // output directory
+	skipHeaders := flag.Bool("skipHeaders", false, "Skip processing headers")           // skip headers
+	skipUTXOs := flag.Bool("skipUTXOs", false, "Skip processing UTXOs")                 // skip UTXOs
+	blockHashStr := flag.String("blockHash", "", "Block hash to start from")            // block hash
+	previousBlockHashStr := flag.String("previousBlockHash", "", "Previous block hash") // previous block hash
+	blockHeightUint := flag.Uint("blockHeight", 0, "Block height to start from")        // block height
+	dumpRecords := flag.Int("dumpRecords", 0, "Dump records from index")                // dump records
+
+	flag.Parse()
+
+	if *blockchainDir == "" {
+		logger.Errorf("The 'bitcoinDir' flag is mandatory.")
+		os.Exit(1)
+	}
+
+	// Check the bitcoinDir exists
+	if _, err := os.Stat(*blockchainDir); os.IsNotExist(err) {
+		logger.Errorf("Couldn't find", *blockchainDir)
+		os.Exit(1)
+	}
+
+	chainstate := filepath.Join(*blockchainDir, "chainstate")
+
+	// Check chainstate LevelDB folder exists
+	if _, err := os.Stat(chainstate); os.IsNotExist(err) {
+		logger.Errorf("Couldn't find %s: %v", chainstate, err)
+		os.Exit(1)
+	}
+
+	index := filepath.Join(*blockchainDir, "blocks/index")
+
+	// Check index LevelDB folder exists
+	if _, err := os.Stat(index); os.IsNotExist(err) {
+		logger.Errorf("Couldn't find %s: %v", index, err)
+		os.Exit(1)
+	}
+
+	if *outputDir == "" {
+		logger.Errorf("The 'outputDir' flag is mandatory.")
+		os.Exit(1)
+	}
 
 	// Check if OS type is Mac OS, then increase ulimit -n to 4096 filehandler during runtime and reset to 1024 at the end
 	// Mac OS standard is 1024
 	// Linux standard is already 4096 which is also "max" for more edit etc/security/limits.conf
 	if runtime.GOOS == "darwin" {
 		cmd2 := exec.Command("ulimit", "-n", "4096")
+
 		fmt.Println("setting ulimit 4096")
+
 		_, err := cmd2.Output()
 		if err != nil {
 			fmt.Printf("setting new ulimit failed with %s\n", err)
 		}
+
 		defer exec.Command("ulimit", "-n", "1024")
 	}
 
-	logger := ulogger.NewGoCoreLogger("cs2utxo")
+	var (
+		blockHash         *chainhash.Hash
+		previousBlockHash *chainhash.Hash
+		blockHeight       uint32
+		err               error
+	)
 
-	// Check chainstate LevelDB folder exists
-	if _, err := os.Stat(*chainstate); os.IsNotExist(err) {
-		logger.Errorf("Couldn't find %s", chainstate)
-		os.Exit(1)
+	if *skipHeaders {
+		if *blockHashStr == "" || *previousBlockHashStr == "" || *blockHeightUint == 0 {
+			logger.Errorf("The 'blockHash', 'previousBlockHash', and 'blockHeight' flags are mandatory when skipping headers.")
+			return
+		}
+
+		blockHash, err = chainhash.NewHashFromStr(*blockHashStr)
+		if err != nil {
+			logger.Errorf("Could not parse block hash: %v", err)
+			return
+		}
+
+		previousBlockHash, err = chainhash.NewHashFromStr(*previousBlockHashStr)
+		if err != nil {
+			logger.Errorf("Could not parse previous block hash: %v", err)
+			return
+		}
+
+		// nolint:gosec
+		blockHeight = uint32(*blockHeightUint)
+	} else {
+		indexDB, err := bitcoin.NewIndexDB(index)
+		if err != nil {
+			logger.Errorf("Could not open index: %v", err)
+			return
+		}
+
+		defer indexDB.Close()
+
+		height, err := indexDB.GetLastHeight()
+		if err != nil {
+			logger.Errorf("Could not get last height: %v", err)
+			return
+		}
+
+		if *dumpRecords > 0 {
+			indexDB.DumpRecords(*dumpRecords)
+			return
+		}
+
+		bestBlock, err := indexDB.WriteHeadersToFile(*outputDir, height)
+		if err != nil {
+			logger.Errorf("Could not write headers: %v", err)
+			return
+		}
+
+		if int(bestBlock.Height) != height {
+			logger.Warnf("Height mismatch: last height was %d, scanned height was %d", height, bestBlock.Height)
+		}
+
+		blockHash = bestBlock.Hash
+		previousBlockHash = bestBlock.BlockHeader.HashPrevBlock
+		blockHeight = bestBlock.Height
 	}
 
-	outFile := filepath.Join(*outputDir, *blockHash+".utxo-set")
+	if !*skipUTXOs {
+		outFile := filepath.Join(*outputDir, blockHash.String()+".utxo-set")
 
-	if _, err := os.Stat(outFile); err == nil {
-		logger.Errorf("Output file %s already exists. Please delete and try again", outFile)
-		os.Exit(1)
+		if _, err := os.Stat(outFile); err == nil {
+			logger.Errorf("Output file %s already exists. Please delete and try again", outFile)
+			return
+		}
+
+		if err := runImport(logger, chainstate, outFile, blockHash, blockHeight, previousBlockHash); err != nil {
+			logger.Errorf("%v", err)
+			return
+		}
 	}
-
-	bh, err := chainhash.NewHashFromStr(*blockHash)
-	if err != nil {
-		logger.Errorf("Invalid block hash: %v", err)
-		os.Exit(1)
-	}
-
-	ph, err := chainhash.NewHashFromStr(*previousBlockHash)
-	if err != nil {
-		logger.Errorf("Invalid previous block hash: %v", err)
-		os.Exit(1)
-	}
-
-	if err := runImport(logger, *chainstate, outFile, bh, uint32(*blockHeight), ph); err != nil {
-		logger.Errorf("%v", err)
-		os.Exit(1)
-	}
-
-	os.Exit(0)
 }
 
 func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHash *chainhash.Hash, blockHeight uint32, previousBlockHash *chainhash.Hash) error {
-
 	// Select bitcoin chainstate leveldb folder
 	// open leveldb without compression to avoid corrupting the database for bitcoin
 	opts := &opt.Options{
 		Compression: opt.NoCompression,
+		ReadOnly:    true,
 	}
 	// https://bitcoin.stackexchange.com/questions/52257/chainstate-leveldb-corruption-after-reading-from-the-database
 	// https://github.com/syndtr/goleveldb/issues/61
@@ -114,7 +203,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	db, err := leveldb.OpenFile(chainstate, opts)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't open LevelDB:", err)
+		return errors.NewProcessingError("Couldn't open LevelDB", err)
 	}
 	defer db.Close()
 
@@ -126,7 +215,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	file, err := os.Create(outFile)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't create file:", err)
+		return errors.NewProcessingError("Couldn't create file", err)
 	}
 	defer file.Close()
 
@@ -137,12 +226,12 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	header, err := utxopersister.BuildHeaderBytes("U-S-1.0", blockHash, blockHeight, previousBlockHash)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't build UTXO set header:", err)
+		return errors.NewProcessingError("Couldn't build UTXO set header", err)
 	}
 
 	_, err = bufferedWriter.Write(header)
 	if err != nil {
-		return errors.NewProcessingError("Couldn't write header to file:", err)
+		return errors.NewProcessingError("Couldn't write header to file", err)
 	}
 
 	// Iterate over LevelDB keys
@@ -154,21 +243,24 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	// Catch signals that interrupt the script so that we can close the database safely (hopefully not corrupting it)
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
 	go func() { // goroutine
 		<-c // receive from channel
 
-		// iter.Release() // release database iterator
-		bufferedWriter.Flush() // flush buffered writer
-		file.Close()           // close file
-		db.Close()             // close database
-		os.Exit(0)             // exit
+		_ = bufferedWriter.Flush() // flush buffered writer
+		_ = file.Close()           // close file
+		_ = db.Close()             // close database
+
+		os.Exit(0)
 	}()
 
-	var txWritten uint64
-	var utxosWritten uint64
-	var utxosWritten2 uint64
-	var utxosSkipped uint64
-	var iterCount uint64
+	var (
+		txWritten     uint64
+		utxosWritten  uint64
+		utxosWritten2 uint64
+		utxosSkipped  uint64
+		iterCount     uint64
+	)
 
 	logger.Infof("Processing UTXOs...")
 
@@ -182,30 +274,18 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 		// first byte in key indicates the type of key we've got for leveldb
 		prefix := key[0]
 
-		// obfuscateKey (first key)
-		if prefix == 14 { // 14 = obfuscateKey
+		switch prefix {
+		// 14 = obfuscateKey (first key)
+		case 14:
 			obfuscateKey = value
 			logger.Infof("Obfuscate key: %x (%d bytes)", obfuscateKey, len(obfuscateKey))
 
-		} else if prefix == 67 { // 67 = 0x43 = C = "utxo"
+		case 66: // 66 = 0x42
+			// Ignore
 
-			// ---
-			// Key
-			// ---
-
-			//      430000155b9869d56c66d9e86e3c01de38e3892a42b99949fe109ac034fff6583900
-			//      <><--------------------------------------------------------------><>
-			//      /                               |                                  \
-			//  type                          txid (little-endian)                      index (varint)
-
-			// txid
-			txidLE := key[1:33] // little-endian byte order
-
-			// txid - reverse byte order
-			txid := make([]byte, 0)                 // create empty byte slice (dont want to mess with txid directly)
-			for i := len(txidLE) - 1; i >= 0; i-- { // run backwards through the txid slice
-				txid = append(txid, txidLE[i]) // append each byte to the new byte slice
-			}
+		// 67 = 0x43 = C = "utxo"
+		case 67:
+			txid := key[1:33] // little-endian byte order
 
 			// vout
 			index := key[33:]
@@ -232,6 +312,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 			// XOR the value with the obfuscateKey (xor each byte) to de-obfuscate the value
 			var xor []byte // create a byte slice to hold the xor results
+
 			for i := range value {
 				result := value[i] ^ obfuscateKeyExtended[i]
 				xor = append(xor, result)
@@ -411,6 +492,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				}
 
 				if currentUTXOWrapper == nil {
+					// nolint:gosec
 					currentUTXOWrapper = &utxopersister.UTXOWrapper{
 						TxID:     hash,
 						Height:   uint32(height),
@@ -422,9 +504,11 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					if err != nil {
 						return errors.NewProcessingError("Couldn't write to file:")
 					}
+
 					txWritten++
 					utxosWritten += uint64(len(currentUTXOWrapper.UTXOs))
 
+					// nolint:gosec
 					currentUTXOWrapper = &utxopersister.UTXOWrapper{
 						TxID:     hash,
 						Height:   uint32(height),
@@ -432,6 +516,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 					}
 				}
 
+				// nolint:gosec
 				currentUTXOWrapper.UTXOs = append(currentUTXOWrapper.UTXOs, &utxopersister.UTXO{
 					Index:  uint32(vout),
 					Value:  uint64(amount),
@@ -440,6 +525,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				utxosWritten2++
 			default:
 				fmt.Printf("ERROR: Unknown script type: %v\n", scriptType)
+
 				utxosSkipped++
 			}
 
@@ -447,9 +533,8 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				logger.Infof("Processed %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
 			}
 
-		} else {
+		default:
 			logger.Errorf("Unhandled LevelDB record: %x : %x", key, value)
-
 		}
 
 		iterCount++
@@ -468,49 +553,78 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 	// Write the eof marker
 	if _, err := bufferedWriter.Write(utxopersister.EOFMarker); err != nil {
-		return errors.NewProcessingError("Couldn't write EOF marker:", err)
+		return errors.NewProcessingError("Couldn't write EOF marker", err)
 	}
 
 	// Write the number of txs and utxos written
 	b := make([]byte, 8)
 
 	binary.LittleEndian.PutUint64(b, txWritten)
+
 	if _, err := bufferedWriter.Write(b); err != nil {
-		return errors.NewProcessingError("Couldn't write tx count:", err)
+		return errors.NewProcessingError("Couldn't write tx count", err)
 	}
 
 	binary.LittleEndian.PutUint64(b, utxosWritten)
 
 	if _, err := bufferedWriter.Write(b); err != nil {
-		return errors.NewProcessingError("Couldn't write utxo count:", err)
+		return errors.NewProcessingError("Couldn't write utxo count", err)
 	}
 
 	iter.Release() // Do not defer this, want to release iterator before closing database
 
 	if err := bufferedWriter.Flush(); err != nil {
-		return errors.NewProcessingError("Couldn't flush buffer:", err)
+		return errors.NewProcessingError("Couldn't flush buffer", err)
 	}
 
 	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), blockHash.String()+".utxo-set") // N.B. The 2 spaces is important for the hash to be valid
 	//nolint:gosec
 	if err := os.WriteFile(outFile+".sha256", []byte(hashData), 0644); err != nil {
-		return errors.NewProcessingError("Couldn't write hash file:", err)
+		return errors.NewProcessingError("Couldn't write hash file", err)
 	}
 
-	logger.Infof("FINISHED %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
-	logger.Infof("Processed                                                            %16s utxos", formatNumber(utxosWritten2))
-	logger.Infof("Processed                                                            %16s keys", formatNumber(iterCount))
+	logger.Infof("FINISHED  %16s transactions with %16s utxos, skipped %d", formatNumber(txWritten), formatNumber(utxosWritten), utxosSkipped)
+	logger.Infof("Processed                                     %16s utxos", formatNumber(utxosWritten2))
+	logger.Infof("Processed                                     %16s keys", formatNumber(iterCount))
+
 	return nil
 }
 
 func formatNumber(n uint64) string {
 	in := fmt.Sprintf("%d", n)
 	out := make([]string, 0, len(in)+(len(in)-1)/3)
+
 	for i, c := range in {
 		if i > 0 && (len(in)-i)%3 == 0 {
 			out = append(out, ",")
 		}
+
 		out = append(out, string(c))
 	}
+
 	return strings.Join(out, "")
 }
+
+// func GetBlockHeaderByHeight(height int) (*BlockHeader, error) {
+// 	url := fmt.Sprintf("https://api.whatsonchain.com/v1/bsv/main/block/%d/header", height)
+
+// 	// Make the GET request
+// 	resp, err := http.Get(url)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("error making GET request: %v", err)
+// 	}
+// 	defer resp.Body.Close()
+
+// 	// Check if the request was successful
+// 	if resp.StatusCode != http.StatusOK {
+// 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+// 	}
+
+// 	// Decode the JSON response into the BlockInfo struct
+// 	var bh BlockHeader
+// 	if err := json.NewDecoder(resp.Body).Decode(&bh); err != nil {
+// 		return nil, fmt.Errorf("error decoding response: %v", err)
+// 	}
+
+// 	return &bh, nil
+// }

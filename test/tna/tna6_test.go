@@ -10,6 +10,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/suite"
 )
+
 type TNA6TestSuite struct {
 	setup.BitcoinTestSuite
 }

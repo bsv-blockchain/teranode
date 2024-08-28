@@ -10,15 +10,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/util"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/bitcoin-sv/ubsv/util/p2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"

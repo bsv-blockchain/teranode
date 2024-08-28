@@ -394,13 +394,19 @@ func (s *mockStore) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (
 func (s *mockStore) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
-func (s *mockStore) GetFSMCurrentState() blockchain_api.FSMStateType {
+func (s *mockStore) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *mockStore) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *mockStore) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *mockStore) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
 	panic("not implemented")
 }
 func (s *mockStore) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
-	panic("not implemented")
-}
-func (s *mockStore) StoreFSMState(state string) {
 	panic("not implemented")
 }
 

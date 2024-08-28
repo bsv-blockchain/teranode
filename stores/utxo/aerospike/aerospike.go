@@ -45,7 +45,7 @@ type Store struct {
 	blockHeight                atomic.Uint32
 	medianBlockTime            atomic.Uint32
 	logger                     ulogger.Logger
-	batchId                    atomic.Uint64
+	batchID                    atomic.Uint64
 	storeBatcher               *batcher.Batcher2[batchStoreItem]
 	getBatcher                 *batcher.Batcher2[batchGetItem]
 	spendBatcher               *batcher.Batcher2[batchSpend]
@@ -100,7 +100,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 
 	// It's very dangerous to change this number after a node has been running for a while
 	// Do not change this value after starting, it is used to calculate the offset for the output
-	utxoBatchSize, _ := gocore.Config().GetInt("utxostore_utxoBatchSize", 1_000)
+	utxoBatchSize, _ := gocore.Config().GetInt("utxostore_utxoBatchSize", 128)
 
 	s := &Store{
 		url:                        aerospikeURL,

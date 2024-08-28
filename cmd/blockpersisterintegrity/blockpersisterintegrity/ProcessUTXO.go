@@ -3,6 +3,7 @@ package blockpersisterintegrity
 import (
 	"bytes"
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	p_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"

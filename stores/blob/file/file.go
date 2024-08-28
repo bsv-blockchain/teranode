@@ -94,7 +94,9 @@ func (s *File) loadTTLs() (map[string]time.Time, error) {
 		}
 
 		var ttlBytes []byte
+
 		var ttl time.Time
+
 		for _, fileName := range files {
 			if fileName[len(fileName)-4:] != ".ttl" {
 				continue
@@ -144,7 +146,9 @@ func cleanExpiredFiles(s *File) {
 
 	for _, fileName := range filesToRemove {
 		if err := os.Remove(fileName); err != nil {
-			s.logger.Warnf("[File] failed to remove file: %s", fileName)
+      if !os.IsNotExist(err) {
+			  s.logger.Warnf("[File] failed to remove file: %s", fileName)
+      }
 		}
 		if err := os.Remove(fileName + ".ttl"); err != nil {
 			if !os.IsNotExist(err) {
@@ -171,6 +175,7 @@ func (s *File) Close(_ context.Context) error {
 
 func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
 	s.logger.Debugf("[File] SetFromReader: %s", utils.ReverseAndHexEncodeSlice(key))
+
 	defer reader.Close()
 
 	fileName, err := s.getFileNameForSet(key, opts)

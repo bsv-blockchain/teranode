@@ -202,11 +202,15 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					})
 				} else {
 					// check if current state is mining
-					state := b.blockchainClient.GetFSMCurrentState()
+					currentState, err := b.blockchainClient.GetFSMCurrentState(ctx)
+					if err != nil {
+						// TODO: how to handle it gracefully?
+						b.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+					}
 
-					b.logger.Debugf("[BlockAssembler] current state: %s", state)
+					b.logger.Debugf("[BlockAssembler] FSM current state: %s", *currentState)
 
-					if state == blockchain_api.FSMStateType_MINING {
+					if *currentState == blockchain_api.FSMStateType_MINING {
 						miningCandidate, subtrees, err := b.getMiningCandidate()
 						utils.SafeSend(responseCh, &miningCandidateResponse{
 							miningCandidate: miningCandidate,

@@ -21,6 +21,7 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/suite"
 )
+
 type TNA4TestSuite struct {
 	setup.BitcoinTestSuite
 }

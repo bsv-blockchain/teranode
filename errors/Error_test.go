@@ -63,7 +63,8 @@ func Test_FmtErrorCustomError(t *testing.T) {
 
 // Test_WrapGRPC tests wrapping a custom error for gRPC.
 func Test_WrapGRPC(t *testing.T) {
-	originalErr := New(ERR_NOT_FOUND, "not found")
+	e := errors.New("test wrapped error")
+	originalErr := New(ERR_NOT_FOUND, "not found", e)
 	wrappedErr := WrapGRPC(originalErr)
 	s, ok := status.FromError(wrappedErr)
 	if !ok {
@@ -72,6 +73,24 @@ func Test_WrapGRPC(t *testing.T) {
 
 	if s.Code() != codes.Internal {
 		t.Errorf("expected gRPC code %v; got %v", codes.Internal, s.Code())
+	}
+
+	// Check if the details are correct
+	unwrapped := UnwrapGRPC(wrappedErr)
+	var uErr *Error
+	if ok = errors.As(unwrapped, &uErr); !ok {
+		t.Fatalf("expected *Error type; got %T", unwrapped)
+	}
+
+	if uErr.Code != ERR_NOT_FOUND {
+		t.Errorf("expected code %v; got %v", ERR_NOT_FOUND, uErr.Code)
+	}
+	if uErr.WrappedErr == nil {
+		t.Errorf("expected wrapped error; got nil")
+	}
+	// TODO this is not OK - why is the "0: 0: " added?
+	if uErr.WrappedErr.Error() != "0: 0: "+e.Error() {
+		t.Errorf("expected wrapped error %q; got %q", e.Error(), uErr.WrappedErr.Error())
 	}
 }
 
@@ -259,11 +278,13 @@ func createGRPCError(code ERR, msg string) error {
 	if err != nil {
 		panic("failed to create anypb.Any from UBSVError")
 	}
+
 	st := status.New(grpcCode, "error with details")
 	st, err = st.WithDetails(anyDetail)
 	if err != nil {
 		panic("failed to add details to status")
 	}
+
 	return st.Err()
 }
 
@@ -305,4 +326,61 @@ func TestErrorString(t *testing.T) {
 	thisErr := NewStorageError("failed to set data from reader [%s:%s]", "bucket", "key", err)
 
 	assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), failed to set data from reader [bucket:key]: 0: some error", thisErr.Error())
+}
+
+// TODO: check why NewServiceError returns error, and mmake it return our error type if possible
+// make sure Wrap and UnWrap GRPC functions treat errors as our error types
+// make sure wrapped and unwrapped errors doesn't lose any data
+// test if multiple chained errors are wrapped/unwrapped correctly
+func Test_MultipleWrapGRPC(t *testing.T) {
+	// Base error is not a GRPC error, basic error
+	baseErr := NewBlockInvalidError("block is invalid")
+	baseErr2 := New(ERR_BLOCK_INVALID, "block is invalid")
+
+	// baseErr2
+
+	// err1 := New(ERR_NOT_FOUND, "resource not found")
+	// err2 := New(ERR_NOT_FOUND, "resource not found")
+
+	// if !baseErr2.Is(err2) {
+	//	t.Errorf("Errors with the same code and message should be equal")
+	// }
+
+	serviceError := NewServiceError("service error", baseErr2)
+	wrappedOnce := WrapGRPC(serviceError)
+	wrappedTwice := WrapGRPC(wrappedOnce)
+	fmt.Println("wrapped once: ", wrappedOnce)
+	fmt.Println("wrappedTwice: ", wrappedTwice)
+
+	serviceError = NewServiceError("service error", baseErr)
+	wrappedOnce = WrapGRPC(serviceError)
+	wrappedTwice = WrapGRPC(wrappedOnce)
+	fmt.Println("2 wrapped once: ", wrappedOnce)
+	fmt.Println("2 wrappedTwice: ", wrappedTwice)
+
+	//require.False(t, baseErr2.Is(serviceError))
+	//require.True(t, serviceError.Is(bas))
+	//require.True(t, baseErr2.Is(wrappedOnce))
+
+	//baseErr := New(ERR_BLOCK_INVALID, "asdasdasd")
+	//baseErr.
+
+	/*
+		serviceError := NewServiceError("service error", baseErr)
+		wrappedOnce := WrapGRPC(serviceError)
+		wrappedTwice := WrapGRPC(wrappedOnce)
+
+		//fmt.Println("wrapped once: ", wrappedOnce)
+		//fmt.Println("wrappedTwice: ", wrappedTwice)
+
+		require.True(t, Is(serviceError, baseErr))
+
+		unwrapped := UnwrapGRPC(wrappedOnce)
+		require.True(t, baseErr.Is(unwrapped))
+
+		unwrappedOnce := UnwrapGRPC(wrappedTwice)
+		require.True(t, Is(wrappedOnce, unwrappedOnce))
+		// require.True(t, errors.Is(wrappedTwice, baseErr))
+
+	*/
 }

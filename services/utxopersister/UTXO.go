@@ -76,7 +76,7 @@ func NewUTXOWrapperFromReader(r io.Reader) (*UTXOWrapper, error) {
 
 	n, err := io.ReadFull(r, b1)
 	if err != nil {
-		return nil, errors.NewStorageError("failed to read txid:", err)
+		return nil, errors.NewStorageError("failed to read txid", err)
 	}
 
 	if n != 32 {
@@ -98,8 +98,9 @@ func NewUTXOWrapperFromReader(r io.Reader) (*UTXOWrapper, error) {
 	// Read the encoded height/coinbase + number of UTXOs
 	b2 := make([]byte, 8)
 	n, err = io.ReadFull(r, b2)
+
 	if err != nil {
-		return nil, errors.NewStorageError("failed to read height and number of utxos:", err)
+		return nil, errors.NewStorageError("failed to read height and number of utxos", err)
 	}
 
 	if n != 8 {

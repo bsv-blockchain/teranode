@@ -9,16 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
-
 	"github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
-
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 var aerospikeConnectionMutex sync.Mutex
@@ -42,6 +39,9 @@ var writeExitFastOnExhaustedConnectionPool bool
 var batchTotalTimeout time.Duration
 var batchSocketTimeout time.Duration
 var batchAllowInlineSSD bool
+var batchMaxRetries int
+var batchSleepBetweenRetries time.Duration
+var batchSleepMultiplier float64
 var concurrentNodes int
 
 var aerospikePrometheusMetrics = map[string]prometheus.Counter{}
@@ -68,6 +68,9 @@ func GetAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 	} else {
 		logger.Infof("[AEROSPIKE] Reusing aerospike client: %v", url.Host)
 	}
+
+	// increase buffer size to 256MB for large records
+	aerospike.MaxBufferSize = 1024 * 1024 * 512 // 512MB
 
 	return client, nil
 }
@@ -137,24 +140,18 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		if err != nil {
 			return nil, err
 		}
-		writeSleepBetweenRetries, err = getQueryDuration(writePolicyUrl, "SleepBetweenRetries", aerospike.NewPolicy().SleepBetweenRetries, logger)
+		writeSleepBetweenRetries, err = getQueryDuration(writePolicyUrl, "SleepBetweenRetries", aerospike.NewWritePolicy(0, 0).SleepBetweenRetries, logger)
 		if err != nil {
 			return nil, err
 		}
-		// TODO - remove the next line when this variable is actually used
-		_ = writeSleepBetweenRetries
-		writeSleepMultiplier, err = getQueryFloat64(writePolicyUrl, "SleepMultiplier", aerospike.NewPolicy().SleepMultiplier, logger)
+		writeSleepMultiplier, err = getQueryFloat64(writePolicyUrl, "SleepMultiplier", aerospike.NewWritePolicy(0, 0).SleepMultiplier, logger)
 		if err != nil {
 			return nil, err
 		}
-		// TODO - remove the next line when this variable is actually used
-		_ = writeSleepMultiplier
 		writeExitFastOnExhaustedConnectionPool, err = getQueryBool(writePolicyUrl, "ExitFastOnExhaustedConnectionPool", aerospike.NewPolicy().ExitFastOnExhaustedConnectionPool, logger)
 		if err != nil {
 			return nil, err
 		}
-		// TODO - remove the next line when this variable is actually used
-		_ = writeExitFastOnExhaustedConnectionPool
 
 		// batching stuff
 		batchPolicyUrl, err, found := gocore.Config().GetURL("aerospike_batchPolicy")
@@ -170,7 +167,18 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 		if err != nil {
 			return nil, err
 		}
-
+		batchMaxRetries, err = getQueryInt(batchPolicyUrl, "MaxRetries", aerospike.NewBatchPolicy().MaxRetries, logger)
+		if err != nil {
+			return nil, err
+		}
+		batchSleepMultiplier, err = getQueryFloat64(batchPolicyUrl, "SleepMultiplier", aerospike.NewBatchPolicy().SleepMultiplier, logger)
+		if err != nil {
+			return nil, err
+		}
+		batchSleepBetweenRetries, err = getQueryDuration(batchPolicyUrl, "SleepBetweenRetries", aerospike.NewBatchPolicy().SleepBetweenRetries, logger)
+		if err != nil {
+			return nil, err
+		}
 		batchSocketTimeout, err = getQueryDuration(batchPolicyUrl, "SocketTimeout", aerospike.NewBatchPolicy().SocketTimeout, logger)
 		if err != nil {
 			return nil, err
@@ -309,6 +317,8 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 	aerospikeStatsRefresh, _ := gocore.Config().GetInt("aerospike_statsRefresh", 5)
 	aerospikeStatsRefreshInterval := time.Duration(aerospikeStatsRefresh) * time.Second
 
+	client.EnableMetrics(nil)
+
 	go func() {
 		for {
 			if !client.IsConnected() {
@@ -359,7 +369,7 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 						case float64:
 							aerospikePrometheusMetrics[prometheusKey].Add(subStat)
 						default:
-							logger.Errorf("Unknown type for aerospike stat %s: %T", subKey, subStat)
+							logger.Debugf("Unknown type for aerospike stat %s: %T", subKey, subStat)
 						}
 					}
 				default:
@@ -540,9 +550,9 @@ func GetAerospikeWritePolicy(generation, expiration uint32, options ...Aerospike
 	writePolicy.MaxRetries = writeMaxRetries
 	writePolicy.TotalTimeout = writeTimeout
 	writePolicy.SocketTimeout = writeSocketTimeout
-	writePolicy.SleepBetweenRetries = readSleepBetweenRetries
-	writePolicy.SleepMultiplier = readSleepMultiplier
-	writePolicy.ExitFastOnExhaustedConnectionPool = readExitFastOnExhaustedConnectionPool
+	writePolicy.SleepBetweenRetries = writeSleepBetweenRetries
+	writePolicy.SleepMultiplier = writeSleepMultiplier
+	writePolicy.ExitFastOnExhaustedConnectionPool = writeExitFastOnExhaustedConnectionPool
 	writePolicy.CommitLevel = aerospike.COMMIT_ALL // strong consistency
 
 	// Apply the provided options
@@ -564,6 +574,9 @@ func GetAerospikeBatchPolicy() *aerospike.BatchPolicy {
 	batchPolicy.SocketTimeout = batchSocketTimeout
 	batchPolicy.AllowInlineSSD = batchAllowInlineSSD
 	batchPolicy.ConcurrentNodes = concurrentNodes
+	batchPolicy.MaxRetries = batchMaxRetries
+	batchPolicy.SleepBetweenRetries = batchSleepBetweenRetries
+	batchPolicy.SleepMultiplier = batchSleepMultiplier
 
 	return batchPolicy
 }

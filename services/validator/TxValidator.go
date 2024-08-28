@@ -2,12 +2,15 @@ package validator
 
 import (
 	"encoding/hex"
+	"log"
 	"strings"
 
+	"github.com/bitcoin-sv/go-sdk/chainhash"
 	"github.com/bitcoin-sv/go-sdk/script"
 	interpreter_sdk "github.com/bitcoin-sv/go-sdk/script/interpreter"
 	"github.com/bitcoin-sv/go-sdk/transaction"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -33,11 +36,27 @@ var (
 		"6e1d88f10e829fa2dd9691ef5cf9550ba6f0eed51d676f1b74df3fa894fe7035": {}, // spending of weird OP_SHIFT script causing panic
 		"7562141b4a26e2482f43e9e123222579c8c9f704d465aacf11ed041a85d2e50d": {}, // spending of weird OP_SHIFT script causing panic
 		"6974a4c575c661a918e50d735852c29541a3263dcc4ff46bf90eb9f8f0ec485e": {}, // spending of weird OP_SHIFT script causing panic
+		"65cbf31895f6cab997e6c3688b2263808508adc69bcc9054eef5efac6f7895d3": {}, //
 	}
 )
 
+var validatorFunc func(*TxValidator, *bt.Tx, uint32) error
+
+func init() {
+	if gocore.Config().GetBool("validator_useSDKInterpreter", false) {
+		log.Println("Using go-sdk script validation")
+
+		validatorFunc = checkScriptsWithSDK
+	} else {
+		log.Println("Using generic go-bt script validation")
+
+		validatorFunc = checkScripts
+	}
+}
+
 type TxValidator struct {
 	policy *PolicySettings
+	logger ulogger.Logger
 }
 
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error {
@@ -101,7 +120,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	}
 
 	// 12) The unlocking scripts for each input must validate against the corresponding output locking scripts
-	if err := tv.checkScriptsWithSDK(tx, blockHeight); err != nil {
+	if err := validatorFunc(tv, tx, blockHeight); err != nil {
 		return err
 	}
 
@@ -244,13 +263,13 @@ func (tv *TxValidator) pushDataCheck(tx *bt.Tx) error {
 	return nil
 }
 
-func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
+func checkScripts(tv *TxValidator, tx *bt.Tx, blockHeight uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			// TODO - remove this when script engine is fixed
 			if rErr, ok := r.(error); ok {
 				if strings.Contains(rErr.Error(), "negative shift amount") {
-					gocore.Log("RUNTIME").Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
+					tv.logger.Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
 					err = nil
 					return
 				}
@@ -282,7 +301,7 @@ func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
 			// TODO - in the interests of completeing the IBD, we should not fail the node on script errors
 			// and instead log them and continue. This is a temporary measure until we can fix the script engine
 			if blockHeight < 800_000 {
-				gocore.Log("RUNTIME").Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
+				tv.logger.Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
 				return nil
 			}
 
@@ -293,9 +312,17 @@ func (tv *TxValidator) checkScripts(tx *bt.Tx, blockHeight uint32) (err error) {
 	return nil
 }
 
-func (tv *TxValidator) checkScriptsWithSDK(tx *bt.Tx, blockHeight uint32) (err error) {
+func checkScriptsWithSDK(tv *TxValidator, tx *bt.Tx, blockHeight uint32) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
+			// TODO - remove this when script engine is fixed
+			if rErr, ok := r.(error); ok {
+				if strings.Contains(rErr.Error(), "negative shift amount") {
+					tv.logger.Errorf("negative shift amount for tx %s: %v", tx.TxIDChainHash().String(), rErr)
+					err = nil
+					return
+				}
+			}
 			err = errors.NewTxInvalidError("script execution failed: %v", r)
 		}
 	}()
@@ -324,7 +351,7 @@ func (tv *TxValidator) checkScriptsWithSDK(tx *bt.Tx, blockHeight uint32) (err e
 
 		if err = interpreter_sdk.NewEngine().Execute(opts...); err != nil {
 			if blockHeight < 850_000 {
-				gocore.Log("RUNTIME").Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
+				tv.logger.Errorf("script execution error for tx %s: %v", tx.TxIDChainHash().String(), err)
 				return nil
 			}
 
@@ -343,10 +370,15 @@ func GoBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
 
 	sdkTx.Inputs = make([]*transaction.TransactionInput, len(tx.Inputs))
 	for i, in := range tx.Inputs {
+		// clone the bytes of the unlocking script
+		unlockingScript := make([]byte, len(*in.UnlockingScript))
+		copy(unlockingScript, *in.UnlockingScript)
+
+		sourceTxHash := chainhash.Hash(in.PreviousTxID())
 		sdkTx.Inputs[i] = &transaction.TransactionInput{
-			SourceTXID:       bt.ReverseBytes(in.PreviousTxID()), // WTF
+			SourceTXID:       &sourceTxHash,
 			SourceTxOutIndex: in.PreviousTxOutIndex,
-			UnlockingScript:  (*script.Script)(in.UnlockingScript),
+			UnlockingScript:  (*script.Script)(&unlockingScript),
 			SequenceNumber:   in.SequenceNumber,
 		}
 	}

@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
 	"os"
 	"path"
 	"strconv"
 	"strings"
 	"time"
 
-	_ "net/http/pprof" //nolint:gosec // Import for pprof, only enabled via CLI flag
-
 	"github.com/bitcoin-sv/ubsv/cmd/aerospike_reader/aerospike_reader"
 	"github.com/bitcoin-sv/ubsv/cmd/bare/bare"
+	"github.com/bitcoin-sv/ubsv/cmd/bitcoin2utxoset/bitcoin2utxoset"
 	"github.com/bitcoin-sv/ubsv/cmd/blockassembly_blaster/blockassembly_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/blockchainstatus/blockchainstatus"
 	"github.com/bitcoin-sv/ubsv/cmd/chainintegrity/chainintegrity"
@@ -22,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/propagation_blaster/propagation_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
+	"github.com/bitcoin-sv/ubsv/cmd/seeder/seeder"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	utxopersister_cmd "github.com/bitcoin-sv/ubsv/cmd/utxopersister/utxopersister"
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -113,6 +114,12 @@ func main() {
 		return
 	case "utxopersister.run":
 		utxopersister_cmd.Start()
+		return
+	case "seeder.run":
+		seeder.Start()
+		return
+	case "bitcoin2utxoset.run":
+		bitcoin2utxoset.Start()
 		return
 	}
 
@@ -214,6 +221,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		}
 	}()
 
+	if gocore.Config().GetBool("use_datadog_profiler", false) {
+		deferFn := datadogProfiler()
+		defer deferFn()
+	}
+
 	prometheusEndpoint, ok := gocore.Config().Get("prometheusEndpoint")
 	if ok && prometheusEndpoint != "" {
 		logger.Infof("Starting prometheus endpoint on %s", prometheusEndpoint)
@@ -274,7 +286,10 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 	if err != nil {
 		panic(err)
 	}
-	blockchainService.SetClient(blockchainClient)
+
+	if blockchainService != nil {
+		blockchainService.SetClient(blockchainClient)
+	}
 
 	// p2p server
 	if startP2P {
@@ -578,6 +593,23 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		}
 	}
 
+	restoring := gocore.Config().GetBool("restoreMode", false)
+
+	// Currently restore state is not automated. It requires manual intervention to send the RUN event.
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	if restoring {
+		// if we are in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
+		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RESTORE); err != nil {
+			logger.Errorf("[Main] failed to send Restore event [%v]", err)
+			panic(err)
+		}
+
+		// wait for node to finish Restoring.
+		// this means node transitions to RUN state
+		// this will block
+		waitForFSMtoTransitionToRunning(ctx, blockchainClient, logger)
+	}
+
 	if startLegacy {
 		subtreeStore, err := getSubtreeStore(logger)
 		if err != nil {
@@ -627,18 +659,24 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 
 		}
+
+		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_LEGACYSYNC); err != nil {
+			logger.Errorf("[Main] failed to send Legacy Sync event [%v]", err)
+			panic(err)
+		}
+
+		// wait for node to finish Legacy Syncing.
+		// this means node transitions to RUN state
+		// this will block
+		waitForFSMtoTransitionToRunning(ctx, blockchainClient, logger)
 	}
 
-	restoring := gocore.Config().GetBool("restoreMode", false)
-	syncingLegacy := gocore.Config().GetBool("snycLegacyMode", false)
-
-	// if we are in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
-	// if we are in the restoring mode, we need to wait for restore to complete, and manual RUN event to be sent.
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	if !restoring && !syncingLegacy {
+	// TODO: think how to move to mining after Restore and LegacySyncing modes are complete.
+	if !startLegacy && !restoring {
+		// if we are restoring or in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
 		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
 			logger.Errorf("[Main] failed to send RUN event [%v]", err)
-			panic(err)
+			// panic(err)
 		}
 	}
 
@@ -791,5 +829,18 @@ func waitForPostgresToStart(logger ulogger.Logger) error {
 		_ = conn.Close()
 		logger.Infof("PostgreSQL is up - ready to go!")
 		return nil
+	}
+}
+
+func waitForFSMtoTransitionToRunning(ctx context.Context, blockchainClient blockchain.ClientI, logger ulogger.Logger) {
+	currentState, err := blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil {
+		// TODO: how to handle it gracefully?
+		logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+	}
+
+	for *currentState != blockchain_api.FSMStateType_RUNNING {
+		logger.Debugf("[Main] Waiting for FSM to transition to Running state, currently at: %v", currentState)
+		time.Sleep(1 * time.Second) // Wait and check again in 1 second
 	}
 }

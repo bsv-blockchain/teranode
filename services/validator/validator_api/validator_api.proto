@@ -33,7 +33,8 @@ message ValidateTransactionRequest {
 // swagger:model ValidateTransactionResponse
 message ValidateTransactionResponse {
   bool valid = 1;
-  string reason = 2;
+  bytes txid = 2;
+  string reason = 3;
 }
 
 // swagger:model ValidateTransactionBatchRequest
@@ -41,16 +42,10 @@ message ValidateTransactionBatchRequest {
   repeated ValidateTransactionRequest transactions = 1;
 }
 
-// swagger:model ValidateTransactionError
-message ValidateTransactionError {
-  string txId = 1;
-  string reason = 2;
-}
-
 // swagger:model ValidateTransactionBatchResponse
 message ValidateTransactionBatchResponse {
   bool valid = 1;
-  repeated ValidateTransactionError reasons = 2;
+  repeated string errors = 2;
 }
 
 // swagger:model GetBlockHeightResponse

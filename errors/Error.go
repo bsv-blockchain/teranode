@@ -24,6 +24,11 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
+	// Error() can be called on wrapped errors, which can be nil, for example predefined errors
+	if e == nil {
+		return "<nil>"
+	}
+
 	dataMsg := ""
 	if e.Data != nil {
 		dataMsg = e.Data.Error() // Call Error() on the ErrorData
@@ -162,8 +167,9 @@ func WrapGRPC(err error) error {
 	var uErr *Error
 	if errors.As(err, &uErr) {
 		details, _ := anypb.New(&TError{
-			Code:    uErr.Code,
-			Message: uErr.Message,
+			Code:         uErr.Code,
+			Message:      uErr.Message,
+			WrappedError: uErr.WrappedErr.Error(),
 		})
 		st := status.New(ErrorCodeToGRPCCode(uErr.Code), uErr.Message)
 		st, err := st.WithDetails(details)
@@ -191,7 +197,11 @@ func UnwrapGRPC(err error) error {
 	for _, detail := range st.Details() {
 		var ubsvErr TError
 		if err := anypb.UnmarshalTo(detail.(*anypb.Any), &ubsvErr, proto.UnmarshalOptions{}); err == nil {
-			return New(ubsvErr.Code, ubsvErr.Message)
+			if ubsvErr.WrappedError != "" {
+				return New(ubsvErr.Code, ubsvErr.Message, fmt.Errorf(ubsvErr.WrappedError))
+			} else {
+				return New(ubsvErr.Code, ubsvErr.Message)
+			}
 		}
 	}
 

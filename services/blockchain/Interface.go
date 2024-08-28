@@ -41,14 +41,16 @@ type ClientI interface {
 	GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error)
 
 	// FSM related endpoints
-	GetFSMCurrentState() blockchain_api.FSMStateType
+	GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error)
 	GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType
 	SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
-	StoreFSMState(state string)
 	Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 	Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-	CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 	CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
+	CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
+	Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
+	LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
+	Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 
 	// new legacy endpoints
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error)
@@ -182,13 +184,10 @@ func (s *MockBlockchain) SetBlockSubtreesSet(ctx context.Context, blockHash *cha
 func (s *MockBlockchain) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
 	panic("not implemented")
 }
-func (s *MockBlockchain) GetFSMCurrentState() blockchain_api.FSMStateType {
+func (s *MockBlockchain) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
-	panic("not implemented")
-}
-func (s *MockBlockchain) StoreFSMState(state string) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
@@ -201,6 +200,15 @@ func (s *MockBlockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Emp
 	panic("not implemented")
 }
 func (s *MockBlockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error {

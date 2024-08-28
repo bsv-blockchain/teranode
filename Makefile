@@ -18,9 +18,11 @@ ifeq ($(RACE),true)
 endif
 
 .PHONY: set_txmetacache_flag
-set_race_flag:
+set_txmetacache_flag:
 ifeq ($(TXMETA_SMALL_TAG),true)
 	$(eval TXMETA_TAG = "smalltxmetacache")
+else ifeq ($(TXMETA_TEST_TAG),true)
+   	$(eval TXMETA_TAG = "testtxmetacache")
 else
 	$(eval TXMETA_TAG = "largetxmetacache")
 endif
@@ -108,27 +110,27 @@ install-tools:
 test: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test go test -json $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
+	SETTINGS_CONTEXT=test go test -json -tags "testtxmetacache" $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
 else
-	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -count=1 $$(go list ./... | grep -v playground | grep -v poc )
+	SETTINGS_CONTEXT=test go test $(RACE_FLAG) -tags "testtxmetacache" -count=1 $$(go list ./... | grep -v playground | grep -v poc )
 endif
 
 .PHONY: longtests
 longtests: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -json -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
 else
-	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc )
+	SETTINGS_CONTEXT=test LONG_TESTS=1 go test -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc )
 endif
 
 .PHONY: verylongtests
 verylongtests: set_race_flag
 ifeq ($(USE_JSON_REPORTER),true)
 	$(MAKE) install-tools
-	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -json -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
+	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -json -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc ) | go-ctrf-json-reporter -output ctrf-report.json
 else
-	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -tags fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc )
+	SETTINGS_CONTEXT=test VERY_LONG_TESTS=1 LONG_TESTS=1 go test -tags "testtxmetacache",fulltest $(RACE_FLAG) -count=1 -coverprofile=coverage.out $$(go list ./... | grep -v playground | grep -v poc )
 endif
 
 .PHONY: racetest
@@ -146,8 +148,9 @@ testall:
 nightly-tests:
 	docker compose -f docker-compose.ci.build.yml build
 	$(MAKE) install-tools
-	cd $(TEST_DIR) && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../$(REPORT_NAME)
-	cd ../..;
+
+	cd $(test_dir) && SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -v -tags $(test_tags) -json | go-ctrf-json-reporter -output ../../$(report_name) --verbose
+	# cd $(TEST_DIR) && SETTINGS_CONTEXT=docker.ci go test -json | go-ctrf-json-reporter -output ../../$(REPORT_NAME) --verbose
 
 reset-data:
 	unzip data.zip
@@ -175,8 +178,6 @@ ifdef kill-docker
 	docker compose -f docker-compose.yml down
 endif
 ifdef test
-	# TEST_DIR := "$(firstword $(subst ., ,$(test)))"
-	# TEST_NAME := "$(word 2,$(subst ., ,$(test)))"
 	cd test/$(firstword $(subst ., ,$(test))) && \
 	SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -run $(word 2,$(subst ., ,$(test))) -v -tags $(test_tags)
 else

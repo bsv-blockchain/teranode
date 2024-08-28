@@ -180,7 +180,12 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	return 0, details, nil
 }
 
-func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, blockIDs ...uint32) (*meta.Data, error) {
+func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+	options := &utxo.CreateOptions{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:Create")
 	defer deferFn()
 
@@ -222,14 +227,22 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, block
 
 	var transactionId int
 
-	err = txn.QueryRowContext(ctx, q, tx.TxIDChainHash()[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes).Scan(&transactionId)
+	var txHash *chainhash.Hash
+	if options.TxID != nil {
+		txHash = options.TxID
+	} else {
+		txHash = tx.TxIDChainHash()
+	}
+
+	err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes).Scan(&transactionId)
 	if err != nil {
 		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
+			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in postgres store (coinbase=%v):", tx.IsCoinbase(), err)
 		} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
+			return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v):", tx.IsCoinbase(), sqliteErr)
 		}
-		return nil, errors.NewStorageError("Failed to insert transaction: %v", err)
+
+		return nil, errors.NewStorageError("Failed to insert transaction", err)
 	}
 
 	// Insert the inputs...
@@ -290,28 +303,36 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, block
 
 	var coinbaseSpendingHeight uint32
 
-	if tx.IsCoinbase() {
+	isCoinbase := tx.IsCoinbase()
+	if options.IsCoinbase != nil {
+		isCoinbase = *options.IsCoinbase
+	}
+
+	if isCoinbase {
 		coinbaseSpendingHeight = blockHeight + 100
 	}
 
 	for i, output := range tx.Outputs {
-		utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), output, uint32(i))
-		if err != nil {
-			return nil, err
-		}
-
-		_, err = txn.ExecContext(ctx, q, transactionId, i, output.LockingScript, output.Satoshis, coinbaseSpendingHeight, utxoHash[:], nil)
-		if err != nil {
-			if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
-				return nil, errors.NewTxAlreadyExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
-			} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
-				return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
+		if output != nil {
+			utxoHash, err := util.UTXOHashFromOutput(txHash, output, uint32(i))
+			if err != nil {
+				return nil, err
 			}
-			return nil, errors.NewStorageError("Failed to insert output: %v", err)
+
+			_, err = txn.ExecContext(ctx, q, transactionId, i, output.LockingScript, output.Satoshis, coinbaseSpendingHeight, utxoHash[:], nil)
+			if err != nil {
+				if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
+					return nil, errors.NewTxAlreadyExistsError("Transaction already exists in postgres store (coinbase=%v): %v", tx.IsCoinbase(), err)
+				} else if sqliteErr, ok := err.(*sqlite.Error); ok && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE {
+					return nil, errors.NewTxAlreadyExistsError("Transaction already exists in sqlite store (coinbase=%v): %v", tx.IsCoinbase(), sqliteErr)
+				}
+
+				return nil, errors.NewStorageError("Failed to insert output", err)
+			}
 		}
 	}
 
-	if len(blockIDs) > 0 {
+	if len(options.BlockIDs) > 0 {
 		// Insert the block_ids...
 		q = `
 			INSERT INTO block_ids (
@@ -323,7 +344,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, block
 			)
 		`
 
-		for _, blockID := range blockIDs {
+		for _, blockID := range options.BlockIDs {
 			_, err = txn.ExecContext(ctx, q, transactionId, blockID)
 			if err != nil {
 				if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23505" {
