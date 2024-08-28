@@ -114,7 +114,7 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 	bufferedWriter := bufio.NewWriter(io.MultiWriter(file, hasher))
 	defer bufferedWriter.Flush()
 
-	header, err := utxopersister.BuildHeaderBytes("U-H-1.0", bestBlock.Hash, uint32(bestBlock.Height), bestBlock.BlockHeader.HashPrevBlock)
+	header, err := utxopersister.BuildHeaderBytes("U-H-1.0", bestBlock.Hash, bestBlock.Height)
 	if err != nil {
 		return nil, errors.NewProcessingError("Couldn't build UTXO set header", err)
 	}

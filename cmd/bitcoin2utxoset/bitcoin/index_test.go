@@ -76,3 +76,20 @@ func TestRecord137(t *testing.T) {
 	assert.Equal(t, uint32(9521), bi.Height)
 	assert.Equal(t, hashStr, bi.BlockHeader.String())
 }
+
+func TestRecord0000000000000000093d722ea52a23d599f1cacad9498dcab07d800cc4509054(t *testing.T) {
+	hashStr := "0000000000000000093d722ea52a23d599f1cacad9498dcab07d800cc4509054"
+
+	b, err := hex.DecodeString("af949350b3b962801d57ad7d85e6dcce3cfacd824e00e02332ac37fcce8ebbc48273c7782e3cd56dc63a3208eeabb443040000000000000000aee57815cf86c83c0df538b6557bcadd92d9bf830e5c1a9ba37032c825ee55fb40e3cd66924b0d18206119a089e31014c908b6913f6926207f8cbd07351d0be948c76a459f8d00ab9b24bcf58eac000000000000")
+	require.NoError(t, err)
+
+	assert.Len(t, b, 141)
+
+	bi, err := DeserializeBlockIndex(b)
+	require.NoError(t, err)
+
+	// t.Logf("Height: %d", bi.Height)
+
+	assert.Equal(t, uint32(859490), bi.Height)
+	assert.Equal(t, hashStr, bi.BlockHeader.String())
+}

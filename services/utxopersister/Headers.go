@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -42,32 +43,32 @@ func (bi *BlockIndex) Serialise(writer io.Writer) error {
 
 func NewUTXOHeaderFromReader(reader io.Reader) (*BlockIndex, error) {
 	hash := &chainhash.Hash{}
-	if _, err := io.ReadFull(reader, hash[:]); err != nil {
-		return nil, err
+	if n, err := io.ReadFull(reader, hash[:]); err != nil || n != 32 {
+		return nil, errors.NewProcessingError("Expected 32 bytes, got %d", n, err)
 	}
 
 	var heightBytes [4]byte
-	if _, err := io.ReadFull(reader, heightBytes[:]); err != nil {
-		return nil, err
+	if n, err := io.ReadFull(reader, heightBytes[:]); err != nil || n != 4 {
+		return nil, errors.NewProcessingError("Expected 4 bytes, got %d", n, err)
 	}
 
 	height := binary.LittleEndian.Uint32(heightBytes[:])
 
 	var txCountBytes [8]byte
-	if _, err := io.ReadFull(reader, txCountBytes[:]); err != nil {
-		return nil, err
+	if n, err := io.ReadFull(reader, txCountBytes[:]); err != nil || n != 8 {
+		return nil, errors.NewProcessingError("Expected 8 bytes, got %d", n, err)
 	}
 
 	txCount := binary.LittleEndian.Uint64(txCountBytes[:])
 
 	var header [80]byte
-	if _, err := io.ReadFull(reader, header[:]); err != nil {
-		return nil, err
+	if n, err := io.ReadFull(reader, header[:]); err != nil || n != 80 {
+		return nil, errors.NewProcessingError("Expected 80 bytes, got %d", n, err)
 	}
 
 	blockHeader, err := model.NewBlockHeaderFromBytes(header[:])
 	if err != nil {
-		return nil, err
+		return nil, errors.NewProcessingError("Error creating block header from bytes", err)
 	}
 
 	return &BlockIndex{
