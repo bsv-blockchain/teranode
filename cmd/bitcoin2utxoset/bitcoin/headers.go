@@ -34,8 +34,18 @@ func (in *IndexDB) DumpRecords(count int) {
 		key := iter.Key()
 		value := iter.Value()
 
-		fmt.Printf("Key %d: %x\n", i, key)
-		fmt.Printf("Value: %x\n\n", value)
+		var hashStr string
+
+		hash, err := chainhash.NewHash(key[1:])
+		if err != nil {
+			hashStr = err.Error()
+		} else {
+			hashStr = hash.String()
+		}
+
+		fmt.Printf("Key %d (%d): %x\n", i, len(key), key)
+		fmt.Printf("Hash: %s\n", hashStr)
+		fmt.Printf("Value (%d): %x\n\n", len(value), value)
 
 		i++
 
