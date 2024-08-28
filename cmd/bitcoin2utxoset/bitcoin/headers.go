@@ -34,8 +34,18 @@ func (in *IndexDB) DumpRecords(count int) {
 		key := iter.Key()
 		value := iter.Value()
 
-		fmt.Printf("Key %d: %x\n", i, key)
-		fmt.Printf("Value: %x\n\n", value)
+		var hashStr string
+
+		hash, err := chainhash.NewHash(key[1:])
+		if err != nil {
+			hashStr = err.Error()
+		} else {
+			hashStr = hash.String()
+		}
+
+		fmt.Printf("Key %d (%d): %x\n", i, len(key), key)
+		fmt.Printf("Hash: %s\n", hashStr)
+		fmt.Printf("Value (%d): %x\n\n", len(value), value)
 
 		i++
 
@@ -69,6 +79,10 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 			continue
 		}
 
+		if blockIndex.TxCount == 0 {
+			continue
+		}
+
 		blockIndex.Hash = blockHash
 
 		blocks = append(blocks, blockIndex)
@@ -79,7 +93,7 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 	}
 
 	// Sort the slice by block height
-	sort.Slice(blocks, func(i, j int) bool {
+	sort.SliceStable(blocks, func(i, j int) bool {
 		return blocks[i].Height < blocks[j].Height
 	})
 
@@ -100,7 +114,7 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 	bufferedWriter := bufio.NewWriter(io.MultiWriter(file, hasher))
 	defer bufferedWriter.Flush()
 
-	header, err := utxopersister.BuildHeaderBytes("U-H-1.0", bestBlock.Hash, bestBlock.Height, bestBlock.BlockHeader.HashPrevBlock)
+	header, err := utxopersister.BuildHeaderBytes("U-H-1.0", bestBlock.Hash, bestBlock.Height)
 	if err != nil {
 		return nil, errors.NewProcessingError("Couldn't build UTXO set header", err)
 	}
@@ -154,7 +168,9 @@ func DeserializeBlockIndex(data []byte) (*utxopersister.BlockIndex, error) {
 		pos int
 	)
 
-	_, i := DecodeVarIntForIndex(data[pos:])
+	val, i := DecodeVarIntForIndex(data[pos:])
+	_ = val
+	// fmt.Printf("Val 1: %d\n", val)
 	pos += i
 
 	height, i := DecodeVarIntForIndex(data[pos:])
@@ -167,25 +183,35 @@ func DeserializeBlockIndex(data []byte) (*utxopersister.BlockIndex, error) {
 	pos += i
 
 	if status&(BlockHaveData|BlockHaveUndo) != 0 {
-		_, i = DecodeVarIntForIndex(data[pos:])
+		val, i = DecodeVarIntForIndex(data[pos:])
+		_ = val
+		// fmt.Printf("Val 2: %d\n", val)
 		pos += i
 	}
 
 	if status&BlockHaveData != 0 {
-		_, i = DecodeVarIntForIndex(data[pos:])
+		val, i = DecodeVarIntForIndex(data[pos:])
+		_ = val
+		// fmt.Printf("Val 3: %d\n", val)
 		pos += i
 	}
 
 	if status&BlockHaveUndo != 0 {
-		_, i = DecodeVarIntForIndex(data[pos:])
+		val, i = DecodeVarIntForIndex(data[pos:])
+		_ = val
+		// fmt.Printf("Val 4: %d\n", val)
 		pos += i
 	}
 
-	if len(data[pos:]) != 80 {
+	if len(data[pos:]) < 80 {
 		return nil, errors.NewProcessingError("block header length is less than 80")
 	}
 
-	bh, err := model.NewBlockHeaderFromBytes(data[pos:])
+	// fmt.Printf("Height: %d\n", height)
+	// fmt.Printf("Tx count: %d\n", txs)
+	// fmt.Printf("Block header: %x\n", data[pos:pos+80])
+
+	bh, err := model.NewBlockHeaderFromBytes(data[pos : pos+80])
 	if err != nil {
 		return nil, err
 	}

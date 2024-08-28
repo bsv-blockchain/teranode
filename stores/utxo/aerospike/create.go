@@ -135,7 +135,14 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		// We calculate the bin that we want to store, but we may get back lots of bin batches
 		// because we have had to split the UTXOs into multiple records
 
-		binsToStore, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, s.externalizeAllTransactions, bItem.txHash, bItem.isCoinbase) // false is to say this is a normal record, not external.
+		external := s.externalizeAllTransactions
+
+		// also check whether the tx is too big and needs to be stored externally
+		if bItem.tx.Size() > MaxTxSizeInStoreInBytes {
+			external = true
+		}
+
+		binsToStore, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, external, bItem.txHash, bItem.isCoinbase) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not get bins to store", err))
 
@@ -158,7 +165,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			}
 
 			continue
-		} else if s.externalizeAllTransactions {
+		} else if external {
 			// store the tx data externally, it is not in our aerospike record
 			if err = s.externalStore.Set(
 				context.Background(),
@@ -184,9 +191,10 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %w", batchID, err)
+		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchID, err)
 
-		aErr, ok := err.(*aerospike.AerospikeError)
+		var aErr *aerospike.AerospikeError
+		ok := errors.As(err, &aErr)
 		if ok {
 			if aErr.ResultCode == types.KEY_EXISTS_ERROR {
 				// we want to return a tx already exists error on this case
@@ -290,6 +298,10 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		err        error
 		size       int
 	)
+
+	if len(tx.Outputs) == 0 {
+		return nil, errors.NewProcessingError("tx %s has no outputs", txHash)
+	}
 
 	if len(tx.Inputs) == 0 {
 		fee = 0

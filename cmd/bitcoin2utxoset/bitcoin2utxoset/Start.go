@@ -147,14 +147,14 @@ func Start() {
 
 		defer indexDB.Close()
 
-		height, err := indexDB.GetLastHeight()
-		if err != nil {
-			logger.Errorf("Could not get last height: %v", err)
+		if *dumpRecords > 0 {
+			indexDB.DumpRecords(*dumpRecords)
 			return
 		}
 
-		if *dumpRecords > 0 {
-			indexDB.DumpRecords(*dumpRecords)
+		height, err := indexDB.GetLastHeight()
+		if err != nil {
+			logger.Errorf("Could not get last height: %v", err)
 			return
 		}
 

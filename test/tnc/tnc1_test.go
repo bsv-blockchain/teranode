@@ -35,6 +35,7 @@ func (suite *TNC1TestSuite) SetupTest() {
 	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
 }
 
+// TNC-1.1
 func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 	ctx := context.Background()
 	t := suite.T()
@@ -113,6 +114,7 @@ func (suite *TNC1TestSuite) TestCandidateContainsAllTxs() {
 
 }
 
+// TNC-1.2
 func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
 	ctx := context.Background()
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
@@ -158,6 +160,7 @@ func (suite *TNC1TestSuite) TestCheckHashPrevBlockCandidate() {
 	}
 }
 
+// TNC-1.3-TC-01
 func (suite *TNC1TestSuite) TestCoinbaseTXAmount() {
 	ctx := context.Background()
 	t := suite.T()
@@ -194,6 +197,7 @@ func (suite *TNC1TestSuite) TestCoinbaseTXAmount() {
 	}
 }
 
+// TNC-1.3-TC-02
 func (suite *TNC1TestSuite) TestCoinbaseTXAmount2() {
 	ctx := context.Background()
 	t := suite.T()

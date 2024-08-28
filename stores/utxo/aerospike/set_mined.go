@@ -27,8 +27,10 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 		if err != nil {
 			return errors.NewProcessingError("aerospike NewKey error", err)
 		}
+
 		op := aerospike.ListAppendOp("blockIDs", blockID)
 		record := aerospike.NewBatchWrite(policy, key, op)
+
 		// Add to batch
 		batchRecords[idx] = record
 	}
@@ -40,9 +42,11 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 
 	prometheusTxMetaAerospikeMapSetMinedBatch.Inc()
 
-	okUpdates := 0
 	var errs error
+
+	okUpdates := 0
 	nrErrors := 0
+
 	for idx, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
 		if err != nil {
@@ -51,7 +55,9 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 				// the tx Meta does not exist anymore, so we do not have to set the mined status
 				continue
 			}
+
 			errs = errors.NewStorageError("aerospike batchRecord error: %s", hashes[idx].String(), errors.Join(errs, err))
+
 			nrErrors++
 		} else {
 			okUpdates++

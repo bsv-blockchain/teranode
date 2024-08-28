@@ -92,9 +92,10 @@ jobs:
 
       - name: Deploy to Operator
         run: |
-          kubectl patch -n t1 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.ref_name }}"}}';
-          kubectl patch -n t2 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.ref_name }}"}}';
-          kubectl patch -n t3 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{ github.ref_name }}"}}';
+          kubectl patch -n t1 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{github.ref_name}}"}}';
+          kubectl patch -n t2 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{github.ref_name}}"}}';
+          kubectl patch -n t3 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{github.ref_name}}"}}';
+          kubectl patch -n tx-blasters --type=merge deployment tx-blaster -p '{"spec":{"template":{"spec":{"containers":[{"name":"tx-blaster","image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{github.ref_name}}"}]}}}}'
   notify_on_failure:
     runs-on: ubuntu-latest
     if: always()
