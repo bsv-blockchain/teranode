@@ -137,8 +137,21 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 		external := s.externalizeAllTransactions
 
+		var size int
+
 		// also check whether the tx is too big and needs to be stored externally
-		if bItem.tx.Size() > MaxTxSizeInStoreInBytes {
+		if len(batch[idx].tx.Inputs) == 0 {
+			// This is a partial transaction, and we calculate the size of the outputs only
+			for _, output := range batch[idx].tx.Outputs {
+				if output != nil {
+					size += len(output.Bytes())
+				}
+			}
+		} else {
+			size = batch[idx].tx.Size()
+		}
+
+		if size > MaxTxSizeInStoreInBytes {
 			external = true
 		}
 

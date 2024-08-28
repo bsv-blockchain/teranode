@@ -37,6 +37,16 @@ var (
 	old          bool
 )
 
+func usage(msg string) {
+	if msg != "" {
+		fmt.Printf("Error: %s\n\n", msg)
+	}
+
+	fmt.Printf("Usage: filereader [-verbose] [-check] <filename | hash>.[block | subtree | utxoset | utxodiff] | -verify [-old]\n\n")
+
+	os.Exit(1)
+}
+
 func Start() {
 	logger := ulogger.TestLogger{}
 
@@ -464,16 +474,6 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 	}
 
 	return nil
-}
-
-func usage(msg string) {
-	if msg != "" {
-		fmt.Printf("Error: %s\n\n", msg)
-	}
-
-	fmt.Printf("Usage: filereader [-verbose] <filename | hash>.[block | subtree | utxoset | utxodiff] | -verify [-old]\n\n")
-
-	os.Exit(1)
 }
 
 func getReader(path string, logger ulogger.Logger) (string, string, string, io.Reader, error) {
