@@ -42,9 +42,10 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	ctx, _, deferFn := tracing.StartTracing(ctx, "HandleBlockDirect",
 		tracing.WithLogMessage(
 			sm.logger,
-			"[HandleBlockDirect][%s %d] processing block found from peer %s",
+			"[HandleBlockDirect][%s %d] %d txs, peer %s",
 			block.Hash().String(),
 			blockHeight,
+			len(block.Transactions()),
 			peer.String(),
 		),
 		tracing.WithTag("blockHash", block.Hash().String()),
