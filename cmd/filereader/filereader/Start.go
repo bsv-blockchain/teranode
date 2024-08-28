@@ -235,7 +235,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 		}
 
 		if filename != stdin {
-			if err := printFooter(r); err != nil {
+			if err := printFooter(r, "utxo"); err != nil {
 				return errors.NewProcessingError("Couldn't read footer", err)
 			}
 		}
@@ -281,7 +281,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 		}
 
 		if filename != stdin {
-			if err := printFooter(r); err != nil {
+			if err := printFooter(r, "utxo"); err != nil {
 				return errors.NewProcessingError("Couldn't read footer", err)
 			}
 		}
@@ -302,6 +302,8 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 			fmt.Println()
 		}
 
+		var lastHeight uint32
+
 		if verbose {
 			for {
 				uh, err := utxopersister.NewUTXOHeaderFromReader(br)
@@ -321,6 +323,14 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 				fmt.Printf("%v\n", uh)
 
+				if verify {
+					if lastHeight != 0 && lastHeight != uh.Height-1 {
+						fmt.Printf("height mismatch: %d -> %d\n", lastHeight, uh.Height)
+					}
+
+					lastHeight = uh.Height
+				}
+
 				count++
 			}
 
@@ -328,7 +338,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 		}
 
 		if filename != stdin {
-			if err := printFooter(r); err != nil {
+			if err := printFooter(r, "tx"); err != nil {
 				return errors.NewProcessingError("Couldn't read footer", err)
 			}
 		}
@@ -375,7 +385,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 		}
 
 		if filename != stdin {
-			if err := printFooter(r); err != nil {
+			if err := printFooter(r, "utxo"); err != nil {
 				return errors.NewProcessingError("Couldn't read footer", err)
 			}
 		}
@@ -551,7 +561,7 @@ func getBlockStore(logger ulogger.Logger) blob.Store {
 	return blockStore
 }
 
-func printFooter(r io.Reader) error {
+func printFooter(r io.Reader, label string) error {
 	f, ok := r.(*os.File)
 	if !ok {
 		fmt.Printf("seek is not supported\n")
@@ -580,7 +590,7 @@ func printFooter(r io.Reader) error {
 	utxoCount := binary.LittleEndian.Uint64(b[40:48])
 
 	fmt.Printf("record count: %16s\n", formatNumber(txCount))
-	fmt.Printf("utxo count:   %16s\n", formatNumber(utxoCount))
+	fmt.Printf("%s count:   %16s\n", label, formatNumber(utxoCount))
 
 	return nil
 }

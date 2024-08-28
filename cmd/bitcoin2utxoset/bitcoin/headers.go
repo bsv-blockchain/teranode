@@ -124,14 +124,18 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 		return nil, errors.NewProcessingError("Couldn't write header to file", err)
 	}
 
-	var txWritten uint64
+	var (
+		recordCount uint64
+		txCount     uint64
+	)
 
 	for _, block := range blocks {
 		if err := block.Serialise(bufferedWriter); err != nil {
 			return nil, errors.NewProcessingError("Couldn't write header to file", err)
 		}
 
-		txWritten++
+		recordCount++
+		txCount += block.TxCount
 	}
 
 	// Write the eof marker
@@ -142,7 +146,13 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 	// Write the number of txs and utxos written
 	b := make([]byte, 8)
 
-	binary.LittleEndian.PutUint64(b, txWritten)
+	binary.LittleEndian.PutUint64(b, recordCount)
+
+	if _, err := bufferedWriter.Write(b); err != nil {
+		return nil, errors.NewProcessingError("Couldn't write tx count", err)
+	}
+
+	binary.LittleEndian.PutUint64(b, txCount)
 
 	if _, err := bufferedWriter.Write(b); err != nil {
 		return nil, errors.NewProcessingError("Couldn't write tx count", err)
