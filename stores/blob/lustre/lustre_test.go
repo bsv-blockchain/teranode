@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"testing"
 	"time"
@@ -167,6 +168,8 @@ func TestFile_GetFromReader(t *testing.T) {
 	})
 
 	t.Run("ttl", func(t *testing.T) {
+		_ = os.RemoveAll("/tmp/ubsv-tests-reader")
+
 		s3Client := NewS3Store()
 		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests-reader", "persist")
 		require.NoError(t, err)
@@ -226,6 +229,18 @@ func TestFile_GetFromReader(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, reader)
 
+		// re-set TTL to positive number, should move file back to base dir
+		err = f.SetTTL(context.Background(), []byte("key"), 12*time.Hour)
+		require.NoError(t, err)
+
+		// file should still be there, we copy it
+		_, err = os.Stat(filename)
+		require.NoError(t, err)
+
+		// file should have been rempved from persisted folder
+		_, err = os.Stat(persistFilename)
+		require.Error(t, err)
+
 		// cleanup
 		err = f.Del(context.Background(), []byte("key"))
 		require.NoError(t, err)
@@ -273,6 +288,18 @@ func TestFile_filename(t *testing.T) {
 		persistFilename := f.getFileNameForPersist(filename)
 		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b.meta", persistFilename)
 	})
+}
+
+func TestFile_New(t *testing.T) {
+	url, err := url.ParseRequestURI("lustre://s3.com/ubsv?localDir=/data/subtrees&localPersist=s3")
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, url, "data", "persist")
+	require.NoError(t, err)
+	require.NotNil(t, store)
+
+	err = store.Close(context.Background())
+	require.NoError(t, err)
 }
 
 func NewS3Store() *s3StoreMock {
