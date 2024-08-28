@@ -235,7 +235,7 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 }
 
 func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) error {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "createUtxos")
+	_, _, deferFn := tracing.StartTracing(ctx, "createUtxos")
 	defer deferFn()
 
 	storeBatcherSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 1024)
@@ -270,7 +270,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 }
 
 func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions")
+	_, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions")
 	defer deferFn()
 
 	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
