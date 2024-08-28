@@ -78,6 +78,7 @@ func NewLustreStore(logger ulogger.Logger, s3Client s3Store, dir string, persist
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, errors.NewStorageError("[Lustre] failed to create main lustre directory: %s", dir, err)
 	}
+
 	if err := os.MkdirAll(filepath.Clean(dir+"/"+persistDir), 0755); err != nil {
 		return nil, errors.NewStorageError("[Lustre] failed to create persist lustre directory: %s", dir+"/"+persistDir, err)
 	}
@@ -95,6 +96,7 @@ func (s *Lustre) Close(_ context.Context) error {
 
 func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
 	s.logger.Debugf("[Lustre] SetFromReader: %s", utils.ReverseAndHexEncodeSlice(key))
+
 	defer reader.Close()
 
 	fileName, err := s.getFileNameForSet(key, opts...)
@@ -216,6 +218,7 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.O
 						if errors.Is(err, os.ErrNotExist) {
 							return nil, errors.ErrNotFound
 						}
+
 						return nil, errors.NewStorageError("[Lustre][GetIoReader] [%s] unable to open S3 file", fileName, err)
 					}
 
@@ -236,6 +239,7 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.O
 
 func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
 	s.logger.Debugf("[Lustre]  Get: %s", utils.ReverseAndHexEncodeSlice(hash))
+
 	fileName, err := s.getFileNameForGet(hash, opts...)
 	if err != nil {
 		return nil, err
@@ -255,14 +259,19 @@ func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 						if errors.Is(err, os.ErrNotExist) {
 							return nil, errors.ErrNotFound
 						}
+
 						return nil, errors.NewStorageError("[Lustre][Get] [%s] unable to open S3 file", fileName, err)
 					}
+
 					return bytes, nil
 				}
+
 				return nil, errors.NewStorageError("[Lustre][Get] [%s] failed to read data from persist file", fileName, err)
 			}
+
 			return bytes, nil
 		}
+
 		return nil, errors.NewStorageError("[Lustre][Get] [%s] failed to read data from file", fileName, err)
 	}
 
@@ -271,6 +280,7 @@ func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 
 func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
+
 	fileName, err := s.getFileNameForGet(hash, opts...)
 	if err != nil {
 		return nil, err
@@ -290,14 +300,19 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts .
 						if errors.Is(err, os.ErrNotExist) {
 							return nil, errors.ErrNotFound
 						}
+
 						return nil, errors.NewStorageError("[Lustre][GetHead] [%s] unable to open S3 file", fileName, err)
 					}
+
 					return bytes[:nrOfBytes], nil
 				}
+
 				return nil, errors.NewStorageError("[Lustre][GetHead] [%s] failed to read data from persist file", fileName, err)
 			}
+
 			return bytes[:nrOfBytes], nil
 		}
+
 		return nil, errors.NewStorageError("[Lustre][GetHead] [%s] failed to read data from file", fileName, err)
 	}
 
@@ -323,14 +338,19 @@ func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options)
 						if errors.Is(err, os.ErrNotExist) {
 							return false, nil
 						}
+
 						return false, errors.NewStorageError("[Lustre] failed to read data from S3 file", err)
 					}
+
 					return exists, nil
 				}
+
 				return false, errors.NewStorageError("[Lustre] failed to read data from persist file", err)
 			}
+
 			return true, nil
 		}
+
 		return false, errors.NewStorageError("[Lustre] failed to read data from file", err)
 	}
 
@@ -339,6 +359,7 @@ func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options)
 
 func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.Options) error {
 	s.logger.Debugf("[Lustre] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
+
 	fileName, err := s.getFileNameForGet(hash, opts...)
 	if err != nil {
 		return err

@@ -137,6 +137,7 @@ func cleanExpiredFiles(s *File) {
 
 	s.fileTTLsMu.Lock()
 	filesToRemove := make([]string, 0, len(s.fileTTLs))
+
 	for fileName, ttl := range s.fileTTLs {
 		if ttl.Before(time.Now()) {
 			filesToRemove = append(filesToRemove, fileName)
@@ -146,10 +147,11 @@ func cleanExpiredFiles(s *File) {
 
 	for _, fileName := range filesToRemove {
 		if err := os.Remove(fileName); err != nil {
-      if !os.IsNotExist(err) {
-			  s.logger.Warnf("[File] failed to remove file: %s", fileName)
-      }
+			if !os.IsNotExist(err) {
+				s.logger.Warnf("[File] failed to remove file: %s", fileName)
+			}
 		}
+
 		if err := os.Remove(fileName + ".ttl"); err != nil {
 			if !os.IsNotExist(err) {
 				s.logger.Warnf("[File] failed to remove ttl file: %s", fileName+".ttl")
@@ -204,7 +206,6 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 
 func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	// s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
-
 	fileName, err := s.getFileNameForSet(hash, opts)
 	if err != nil {
 		return errors.NewStorageError("[File] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
@@ -260,6 +261,7 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 		if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
 			return "", errors.NewStorageError("failed to write ttl to file", err)
 		}
+
 		s.fileTTLsMu.Lock()
 		s.fileTTLs[fileName] = ttl
 		s.fileTTLsMu.Unlock()
@@ -268,29 +270,32 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 	return fileName, nil
 }
 
-func (s *File) SetTTL(_ context.Context, key []byte, newTtl time.Duration, opts ...options.Options) error {
+func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts ...options.Options) error {
 	fileName, err := s.getFileNameForSet(key, opts)
 	if err != nil {
 		return errors.NewStorageError("[File] failed to get file name", err)
 	}
 
-	if newTtl == 0 {
+	if newTTL == 0 {
 		// delete the ttl file
 		if err := os.Remove(fileName + ".ttl"); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return nil
 			}
+
 			return errors.NewStorageError("[File] failed to remove ttl file", err)
 		}
+
 		return nil
 	}
 
 	// write bytes to file
-	ttl := time.Now().Add(newTtl)
+	ttl := time.Now().Add(newTTL)
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
 		return errors.NewStorageError("[File] [%s] failed to write ttl to file", fileName, err)
 	}
+
 	s.fileTTLsMu.Lock()
 	s.fileTTLs[fileName] = ttl
 	s.fileTTLsMu.Unlock()
@@ -305,11 +310,12 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.Optio
 	}
 
 	file, err := os.Open(fileName)
-	//file, err := directio.OpenFile(fileName, os.O_RDONLY, 0644)
+	// file, err := directio.OpenFile(fileName, os.O_RDONLY, 0644)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
+
 		return nil, errors.NewStorageError("[File] [%s] unable to open file", fileName, err)
 	}
 
@@ -319,6 +325,7 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.Optio
 func (s *File) Get(_ context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName, err := s.getFileNameForGet(hash, opts)
+
 	if err != nil {
 		return nil, err
 	}
@@ -328,6 +335,7 @@ func (s *File) Get(_ context.Context, hash []byte, opts ...options.Options) ([]b
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
+
 		return nil, errors.NewStorageError("[File][Get] [%s] failed to read data from file", fileName, err)
 	}
 
@@ -337,6 +345,7 @@ func (s *File) Get(_ context.Context, hash []byte, opts ...options.Options) ([]b
 func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName, err := s.getFileNameForGet(hash, opts)
+
 	if err != nil {
 		return nil, err
 	}
@@ -346,11 +355,13 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.ErrNotFound
 		}
+
 		return nil, errors.NewStorageError("[File] [%s] failed to open file", fileName, err)
 	}
 
 	bytes := make([]byte, nrOfBytes)
 	nRead, err := file.Read(bytes)
+
 	if err != nil {
 		return nil, errors.NewStorageError("[File][GetHead] [%s] failed to read data from file", fileName, err)
 	}
@@ -361,6 +372,7 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 func (s *File) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
 	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName, err := s.getFileNameForGet(hash, opts)
+
 	if err != nil {
 		return false, err
 	}
@@ -370,6 +382,7 @@ func (s *File) Exists(_ context.Context, hash []byte, opts ...options.Options) (
 		if os.IsNotExist(err) {
 			return false, nil
 		}
+
 		return false, errors.NewStorageError("[File][Exists] [%s] failed to read data from file", fileName, err)
 	}
 
@@ -379,12 +392,14 @@ func (s *File) Exists(_ context.Context, hash []byte, opts ...options.Options) (
 func (s *File) Del(_ context.Context, hash []byte, opts ...options.Options) error {
 	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName, err := s.getFileNameForGet(hash, opts)
+
 	if err != nil {
 		return err
 	}
 
 	// remove ttl file, if exists
 	_ = os.Remove(fileName + ".ttl")
+
 	return os.Remove(fileName)
 }
 
@@ -396,13 +411,16 @@ func (s *File) filename(hash []byte) string {
 
 func findFilesByExtension(root, ext string) ([]string, error) {
 	var a []string
+
 	err := filepath.WalkDir(root, func(s string, d fs.DirEntry, e error) error {
 		if e != nil {
 			return e
 		}
+
 		if filepath.Ext(d.Name()) == ext {
 			a = append(a, s)
 		}
+
 		return nil
 	})
 	if err != nil {

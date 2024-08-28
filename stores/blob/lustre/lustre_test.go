@@ -283,6 +283,7 @@ func (s *s3StoreMock) GetIoReader(ctx context.Context, key []byte, opts ...optio
 	if s.value == nil {
 		return nil, s.err
 	}
+
 	return io.NopCloser(bytes.NewReader(s.value)), s.err
 }
 
@@ -290,5 +291,6 @@ func (s *s3StoreMock) Exists(ctx context.Context, key []byte, opts ...options.Op
 	if s.value == nil {
 		return false, s.err
 	}
+
 	return true, s.err
 }

@@ -55,22 +55,27 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 	if err != nil {
 		return nil, errors.NewConfigurationError("[S3] failed to parse MaxIdleConns", err)
 	}
+
 	maxIdleConnsPerHost, err := getQueryParamInt(s3URL, "MaxIdleConnsPerHost", 100)
 	if err != nil {
 		return nil, errors.NewConfigurationError("[S3] failed to parse MaxIdleConnsPerHost", err)
 	}
+
 	idleConnTimeout, err := getQueryParamDuration(s3URL, "IdleConnTimeoutSeconds", 100, time.Second)
 	if err != nil {
 		return nil, errors.NewConfigurationError("[S3] failed to parse IdleConnTimeoutSeconds", err)
 	}
+
 	timeout, err := getQueryParamDuration(s3URL, "TimeoutSeconds", 30, time.Second)
 	if err != nil {
 		return nil, errors.NewConfigurationError("[S3] failed to parse TimeoutSeconds", err)
 	}
+
 	keepAlive, err := getQueryParamDuration(s3URL, "KeepAliveSeconds", 300, time.Second)
 	if err != nil {
 		return nil, errors.NewConfigurationError("[S3] failed to parse KeepAliveSeconds", err)
 	}
+
 	region := s3URL.Query().Get("region")
 	subDirectory := s3URL.Query().Get("subDirectory")
 
@@ -118,6 +123,7 @@ func (g *S3) Close(_ context.Context) error {
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Close").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(context.Background(), "s3:Close")
 	defer traceSpan.Finish()
 
@@ -128,8 +134,10 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	start := gocore.CurrentTime()
 	defer func() {
 		_ = reader.Close()
+
 		gocore.NewStat("prop_store_s3", true).NewStat("SetFromReader").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:SetFromReader")
 	defer traceSpan.Finish()
 
@@ -164,6 +172,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Set").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:Set")
 	defer traceSpan.Finish()
 
@@ -201,6 +210,7 @@ func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("SetTTL").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:SetTTL")
 	defer traceSpan.Finish()
 
@@ -213,6 +223,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetIoReader").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
@@ -231,6 +242,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, errors.ErrNotFound
 		}
+
 		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get s3 data", g.bucket, objectKey, err)
 	}
 
@@ -241,8 +253,8 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
-		// g.logger.Warnf("[S3][%s] Getting object from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
@@ -266,11 +278,14 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 			Bucket: aws.String(g.bucket),
 			Key:    objectKey,
 		})
+
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, errors.ErrNotFound
 		}
+
 		traceSpan.RecordError(err)
+
 		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get data", g.bucket, objectKey, err)
 	}
 
@@ -281,8 +296,8 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetHead").AddTime(start)
-		// g.logger.Warnf("[S3][%s] Getting object head from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:GetHead")
 	defer traceSpan.Finish()
 
@@ -312,11 +327,14 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 			Key:    objectKey,
 			Range:  aws.String(fmt.Sprintf("bytes=0-%d", nrOfBytes-1)),
 		})
+
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, errors.ErrNotFound
 		}
+
 		traceSpan.RecordError(err)
+
 		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get data head", g.bucket, objectKey, err)
 	}
 
@@ -328,6 +346,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (b
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Exists").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:Exists")
 	defer traceSpan.Finish()
 
@@ -358,6 +377,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (b
 		}
 
 		traceSpan.RecordError(err)
+
 		return false, errors.NewStorageError("[S3] [%s/%s] failed to check whether object exists", g.bucket, objectKey, err)
 	}
 
@@ -369,6 +389,7 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Del").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()
 
@@ -401,9 +422,11 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 }
 
 func (g *S3) getObjectKey(hash []byte, o *options.SetOptions) *string {
-	var key string
-	var prefix string
-	var ext string
+	var (
+		key    string
+		prefix string
+		ext    string
+	)
 
 	if o.Extension != "" {
 		ext = "." + o.Extension
@@ -424,7 +447,9 @@ func getQueryParamInt(url *url.URL, key string, defaultValue int) (int, error) {
 	if value == "" {
 		return defaultValue, nil
 	}
+
 	result, err := strconv.Atoi(value)
+
 	return result, err
 }
 
@@ -433,6 +458,8 @@ func getQueryParamDuration(url *url.URL, key string, defaultValue int, duration 
 	if value == "" {
 		return time.Duration(defaultValue) * duration, nil
 	}
+
 	result, err := strconv.Atoi(value)
+
 	return time.Duration(result) * duration, err
 }

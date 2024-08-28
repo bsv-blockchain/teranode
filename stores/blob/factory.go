@@ -19,8 +19,8 @@ import (
 
 // NewStore
 // TODO add options to all stores
-func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options) (store Store, err error) {
-	switch storeUrl.Scheme {
+func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.Options) (store Store, err error) {
+	switch storeURL.Scheme {
 	case "null":
 		store, err = null.New(logger)
 		if err != nil {
@@ -30,31 +30,32 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		store = memory.New()
 
 	case "file":
-		store, err = file.New(logger, []string{GetPathFromURL(storeUrl)}, opts...)
+		store, err = file.New(logger, []string{GetPathFromURL(storeURL)}, opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("error creating file blob store", err)
 		}
 	case "s3":
-		store, err = s3.New(logger, storeUrl, opts...)
+		store, err = s3.New(logger, storeURL, opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("error creating s3 blob store", err)
 		}
 	case "lustre":
 		// storeUrl is an s3 url
 		// lustre://s3.com/ubsv?localDir=/data/subtrees&localPersist=s3
-		dir := storeUrl.Query().Get("localDir")
-		persistDir := storeUrl.Query().Get("localPersist")
-		store, err = lustre.New(logger, storeUrl, dir, persistDir, opts...)
+		dir := storeURL.Query().Get("localDir")
+		persistDir := storeURL.Query().Get("localPersist")
+		store, err = lustre.New(logger, storeURL, dir, persistDir, opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("error creating lustre blob store", err)
 		}
 	default:
-		return nil, errors.NewStorageError("unknown store type: %s", storeUrl.Scheme)
+		return nil, errors.NewStorageError("unknown store type: %s", storeURL.Scheme)
 	}
 
-	if storeUrl.Query().Get("batch") == "true" {
+	if storeURL.Query().Get("batch") == "true" {
 		sizeInBytes := int64(4 * 1024 * 1024) // 4MB
-		sizeString := storeUrl.Query().Get("sizeInBytes")
+
+		sizeString := storeURL.Query().Get("sizeInBytes")
 		if sizeString != "" {
 			sizeInBytes, err = strconv.ParseInt(sizeString, 10, 64)
 			if err != nil {
@@ -63,15 +64,15 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		}
 
 		writeKeys := false
-		if storeUrl.Query().Get("writeKeys") == "true" {
+		if storeURL.Query().Get("writeKeys") == "true" {
 			writeKeys = true
 		}
 
 		store = batcher.New(logger, store, int(sizeInBytes), writeKeys)
 	}
 
-	if storeUrl.Query().Get("localTTLStore") != "" {
-		localTTLStorePath := storeUrl.Query().Get("localTTLStorePath")
+	if storeURL.Query().Get("localTTLStore") != "" {
+		localTTLStorePath := storeURL.Query().Get("localTTLStorePath")
 		if localTTLStorePath == "" {
 			localTTLStorePath = "/tmp/localTTL"
 		}
@@ -82,10 +83,12 @@ func NewStore(logger ulogger.Logger, storeUrl *url.URL, opts ...options.Options)
 		}
 
 		var ttlStore Store
+
 		ttlStore, err = file.New(logger, localTTLStorePaths, opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("failed to create file store", err)
 		}
+
 		store, err = localttl.New(logger.New("localTTL"), ttlStore, store)
 		if err != nil {
 			return nil, errors.NewStorageError("failed to create localTTL store", err)
@@ -99,5 +102,6 @@ func GetPathFromURL(u *url.URL) string {
 	if u.Host == "." {
 		return u.Path[1:] // relative path
 	}
+
 	return u.Path // absolute path
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -162,20 +161,20 @@ func TestFile_filename(t *testing.T) {
 }
 
 func TestFile_AbsoluteAndRelativePath(t *testing.T) {
-	absoluteUrl, err := url.ParseRequestURI("file:///absolute/path/to/file")
+	absoluteURL, err := url.ParseRequestURI("file:///absolute/path/to/file")
 	require.NoError(t, err)
-	require.Equal(t, "/absolute/path/to/file", GetPathFromURL(absoluteUrl))
+	require.Equal(t, "/absolute/path/to/file", GetPathFromURL(absoluteURL))
 
-	relativeUrl, err := url.ParseRequestURI("file://./relative/path/to/file")
+	relativeURL, err := url.ParseRequestURI("file://./relative/path/to/file")
 	require.NoError(t, err)
-	require.Equal(t, "relative/path/to/file", GetPathFromURL(relativeUrl))
-
+	require.Equal(t, "relative/path/to/file", GetPathFromURL(relativeURL))
 }
 
 func GetPathFromURL(u *url.URL) string {
 	if u.Host == "." {
 		return u.Path[1:]
 	}
+
 	return u.Path
 }
 
@@ -217,6 +216,7 @@ func TestFile_loadTTLs(t *testing.T) {
 
 		f.fileTTLsMu.Lock()
 		fileTTLs = f.fileTTLs
+
 		require.NoError(t, err)
 		require.Contains(t, fileTTLs, f.filename(key))
 		f.fileTTLsMu.Unlock()
@@ -225,6 +225,7 @@ func TestFile_loadTTLs(t *testing.T) {
 
 		f.fileTTLsMu.Lock()
 		fileTTLs = f.fileTTLs
+
 		require.NoError(t, err)
 		require.NotContains(t, fileTTLs, f.filename(key))
 		f.fileTTLsMu.Unlock()
@@ -240,12 +241,15 @@ func TestFile_ConcurrentAccess(t *testing.T) {
 		require.NoError(t, err)
 
 		var wg sync.WaitGroup
+
 		concurrency := 100
 
 		for i := 0; i < concurrency; i++ {
 			wg.Add(1)
+
 			go func(i int) {
 				defer wg.Done()
+
 				key := []byte(fmt.Sprintf("key-%d", i))
 				value := []byte(fmt.Sprintf("value-%d", i))
 
@@ -276,7 +280,7 @@ func TestFile_SetWithSubdirectoryOptionIgnored(t *testing.T) {
 
 		// Construct the expected file path in the subdirectory
 		expectedDir := filepath.Join(testDir, subDir)
-		expectedFilePath := filepath.Join(expectedDir, string(f.filename(key)))
+		expectedFilePath := filepath.Join(expectedDir, f.filename(key))
 
 		// Check if the file was NOT created in the subdirectory (it is supposed to be ignored)
 		_, err = os.Stat(expectedFilePath)
@@ -335,7 +339,7 @@ func TestFile_SetFromReaderAndGetIoReader(t *testing.T) {
 		require.NoError(t, err)
 
 		// Read all the content from the storedReader
-		storedContent, err := ioutil.ReadAll(storedReader)
+		storedContent, err := io.ReadAll(storedReader)
 		require.NoError(t, err)
 		require.Equal(t, content, string(storedContent))
 	})
