@@ -52,7 +52,7 @@ require (
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-utils v1.0.51
-	github.com/ordishs/gocore v1.0.64
+	github.com/ordishs/gocore v1.0.65
 	github.com/prometheus/client_golang v1.19.1
 	github.com/quic-go/quic-go v0.38.2
 	github.com/rs/zerolog v1.32.0
