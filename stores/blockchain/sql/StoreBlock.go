@@ -9,7 +9,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain/work"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	sqlite_errors "github.com/bitcoin-sv/ubsv/util/sqlite"
-
 	"github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -23,7 +22,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	newBlockId, height, err := s.storeBlock(ctx, block, peerID)
+	newBlockID, height, err := s.storeBlock(ctx, block, peerID)
 	if err != nil {
 		return 0, height, err
 	}
@@ -34,7 +33,8 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 	}
 
 	meta := &model.BlockHeaderMeta{
-		ID:          uint32(newBlockId),
+		// nolint: gosec
+		ID:          uint32(newBlockID),
 		Height:      height,
 		TxCount:     block.TransactionCount,
 		SizeInBytes: block.SizeInBytes,
@@ -49,23 +49,26 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 			s.logger.Errorf("error clearing caches: %v", err)
 		}
 	}
+
 	s.ResetResponseCache()
 
-	return newBlockId, height, nil
+	return newBlockID, height, nil
 }
 
 func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string) (uint64, uint32, error) {
-	var err error
-	var previousBlockId uint64
-	var previousChainWork []byte
-	var previousHeight uint32
-	var height uint32
-	previousBlockInvalid := false
+	var (
+		err                  error
+		previousBlockID      uint64
+		previousChainWork    []byte
+		previousHeight       uint32
+		height               uint32
+		previousBlockInvalid bool
+	)
 
 	q := `
 		INSERT INTO blocks (
 		 parent_id
-         ,version
+    ,version
 	  ,hash
 	  ,previous_hash
 	  ,merkle_root
@@ -79,16 +82,21 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		,subtree_count
 		,subtrees
 		,peer_id
-        ,coinbase_tx
+    ,coinbase_tx
 		,invalid
 	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17)
 		RETURNING id
 	`
 
-	coinbaseTxID := block.CoinbaseTx.TxID()
+	var coinbaseTxID string
+
+	if block.CoinbaseTx != nil {
+		coinbaseTxID = block.CoinbaseTx.TxID()
+	}
+
 	if coinbaseTxID == "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b" {
 		// genesis block
-		previousBlockId = 0
+		previousBlockID = 0
 		previousChainWork = make([]byte, 32)
 		previousHeight = 0
 		height = 0
@@ -96,7 +104,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		// genesis block has a different insert statement, because it has no parent
 		q = `
 			INSERT INTO blocks (
-			id
+			 id
 			,parent_id
 			,version
 			,hash
@@ -129,7 +137,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 			WHERE b.hash = $1
 		`
 		if err = s.db.QueryRowContext(ctx, qq, block.Header.HashPrevBlock[:]).Scan(
-			&previousBlockId,
+			&previousBlockID,
 			&previousChainWork,
 			&previousHeight,
 			&previousBlockInvalid,
@@ -141,21 +149,23 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		}
 		height = previousHeight + 1
 
-		// Check that the coinbase transaction includes the correct block height for all
-		// blocks that are version 2 or higher.
-		// BIP34 - Block number 227,835 (timestamp 2013-03-24 15:49:13 GMT) was the last version 1 block.
-		if block.Header.Version > 1 {
-			blockHeight, err := block.ExtractCoinbaseHeight()
-			if err != nil {
-				if height < 227835 {
-					s.logger.Warnf("failed to extract coinbase height for block %s: %v", block.Hash(), err)
-				} else {
-					return 0, 0, err
+		if block.CoinbaseTx != nil {
+			// Check that the coinbase transaction includes the correct block height for all
+			// blocks that are version 2 or higher.
+			// BIP34 - Block number 227,835 (timestamp 2013-03-24 15:49:13 GMT) was the last version 1 block.
+			if block.Header.Version > 1 {
+				blockHeight, err := block.ExtractCoinbaseHeight()
+				if err != nil {
+					if height < 227835 {
+						s.logger.Warnf("failed to extract coinbase height for block %s: %v", block.Hash(), err)
+					} else {
+						return 0, 0, err
+					}
 				}
-			}
 
-			if height >= 227835 && blockHeight != uint32(height) {
-				return 0, 0, errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
+				if height >= 227835 && blockHeight != height {
+					return 0, 0, errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
+				}
 			}
 		}
 	}
@@ -191,7 +201,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 	_ = blockHeader2
 
 	rows, err := s.db.QueryContext(ctx, q,
-		previousBlockId,
+		previousBlockID,
 		block.Header.Version,
 		block.Hash().CloneBytes(),
 		block.Header.HashPrevBlock.CloneBytes(),
@@ -233,12 +243,12 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		return 0, 0, errors.NewBlockExistsError("block already exists: %s", block.Hash())
 	}
 
-	var newBlockId uint64
-	if err = rows.Scan(&newBlockId); err != nil {
+	var newBlockID uint64
+	if err = rows.Scan(&newBlockID); err != nil {
 		return 0, 0, errors.NewStorageError("failed to scan new block id", err)
 	}
 
-	return newBlockId, height, nil
+	return newBlockID, height, nil
 }
 
 func getCumulativeChainWork(chainWork *chainhash.Hash, block *model.Block) (*chainhash.Hash, error) {
