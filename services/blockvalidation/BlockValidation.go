@@ -579,6 +579,7 @@ CheckParentMined:
 	if len(disableOptimisticMining) > 0 {
 		// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
 		useOptimisticMining = useOptimisticMining && !disableOptimisticMining[0]
+		u.logger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
 	}
 
 	var optimisticMiningWg sync.WaitGroup
