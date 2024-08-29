@@ -269,9 +269,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					s.logger.Warnf("[STORE_BATCH][%s:%d] tx already exists in batch %d, skipping", batch[idx].txHash.String(), idx, batchID)
 					utils.SafeSend[error](batch[idx].done, errors.NewTxAlreadyExistsError("%v already exists in store", batch[idx].txHash))
-
 					continue
 				}
 
@@ -488,7 +486,6 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					s.logger.Warnf("[STORE_BATCH][%s] tx already exists, skipping", bItem.txHash.String())
 					utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("%v already exists in store", bItem.txHash))
 
 					return
@@ -564,7 +561,6 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					s.logger.Warnf("[STORE_BATCH][%s] tx already exists, skipping", bItem.txHash.String())
 					utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("%v already exists in store", bItem.txHash))
 
 					return
