@@ -3,8 +3,9 @@ package k8sresolver
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/jellydator/ttlcache/v3"
@@ -63,7 +64,7 @@ func (s *serviceClient) Resolve(ctx context.Context, host string, port string) (
 
 	ep, err := s.k8s.CoreV1().Endpoints(s.namespace).Get(ctx, host, metav1.GetOptions{})
 	if err != nil {
-		return eps, errors.NewServiceError("k8s resolver: failed to fetch service endpoint: %s", err)
+		return eps, errors.NewServiceError("k8s resolver: failed to fetch service endpoint: %s", host, err)
 	}
 
 	for _, v := range ep.Subsets {
