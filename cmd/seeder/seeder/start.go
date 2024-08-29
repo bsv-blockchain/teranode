@@ -17,7 +17,9 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
+	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxo_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -121,7 +123,81 @@ func Start() {
 	}
 }
 
-func processHeaders(ctx context.Context, logger ulogger.Logger, utxoFile string) error {
+func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile string) error {
+	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
+	if err != nil || !found {
+		logger.Fatalf("Failed to get blockchain store URL")
+	}
+
+	blockchainStore, err := blockchain.NewStore(logger, blockchainStoreURL)
+	if err != nil {
+		logger.Fatalf("Failed to create blockchain client: %v", err)
+	}
+
+	_, meta, err := blockchainStore.GetBestBlockHeader(ctx)
+	if err != nil {
+		logger.Fatalf("Failed to get best block header: %v", err)
+	}
+
+	_ = meta
+
+	f, err := os.Open(headersFile)
+	if err != nil {
+		return errors.NewStorageError("Failed to open file", err)
+	}
+	defer f.Close()
+
+	reader := bufio.NewReader(f)
+
+	magic, _, _, err := utxopersister.GetHeaderFromReader(reader)
+	if err != nil {
+		return errors.NewProcessingError("Failed to read UTXO set header", err)
+	}
+
+	if magic != "U-H-1.0" {
+		return errors.NewProcessingError("Invalid magic number: %s", magic)
+	}
+
+	var (
+		headersProcessed uint64
+		txCount          uint64
+	)
+
+	for {
+		header, err := utxopersister.NewUTXOHeaderFromReader(reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if header == nil {
+					logger.Errorf("EOF marker not found")
+				} else {
+					logger.Infof("EOF marker found")
+				}
+
+				break
+			}
+
+			return errors.NewProcessingError("Failed to read UTXO", err)
+		}
+
+		block := &model.Block{
+			Header:           header.BlockHeader,
+			TransactionCount: header.TxCount,
+			Height:           header.Height,
+		}
+
+		_, _, err = blockchainStore.StoreBlock(ctx, block, "headers")
+		if err != nil {
+			return errors.NewProcessingError("Failed to add block", err)
+		}
+
+		headersProcessed++
+		txCount += header.TxCount
+
+		fmt.Printf("Processed block %d\n", header.Height)
+	}
+
+	logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(headersProcessed), formatNumber(txCount))
+
 	return nil
 }
 
