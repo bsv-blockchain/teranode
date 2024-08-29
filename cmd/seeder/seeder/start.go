@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -26,31 +27,64 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+var (
+	inputDir    string
+	hash        string
+	skipHeaders bool
+	skipUTXOs   bool
+)
+
+func usage(msg string) {
+	if msg != "" {
+		fmt.Printf("Error: %s\n\n", msg)
+	}
+
+	fmt.Printf("Usage: seeder -inputDir <folder> -hash <hash> [-skipHeaders] [-skipUTXOs]\n\n")
+
+	os.Exit(1)
+}
+
 // nolint: gocognit
 func Start() {
-	inFile := flag.String("in", "", "Input filename for UTXO set.")
+	flag.StringVar(&inputDir, "inputDir", "", "Input directory for UTXO set and headers.")
+	flag.StringVar(&hash, "hash", "", "Hash of the UTXO set / headers to process.")
+	flag.BoolVar(&skipHeaders, "skipHeaders", false, "Skip processing headers.")
+	flag.BoolVar(&skipUTXOs, "skipUTXOs", false, "Skip processing UTXOs.")
+
+	flag.Usage = func() { usage("") }
+
 	flag.Parse()
 
-	if *inFile == "" {
-		fmt.Println("Please provide an input file (-in)")
-		return
+	if inputDir == "" {
+		usage("Please provide an inputDir")
+	}
+
+	if hash == "" {
+		usage("Please provide a hash")
+	}
+
+	var (
+		headerFile string
+		utxoFile   string
+	)
+
+	if !skipHeaders {
+		// Check the headers file exists
+		headerFile = filepath.Join(inputDir, hash+".utxo-headers")
+		if _, err := os.Stat(headerFile); os.IsNotExist(err) {
+			usage(fmt.Sprintf("Headers file %s does not exist", headerFile))
+		}
+	}
+
+	if !skipUTXOs {
+		// Check the UTXO file exists
+		utxoFile = filepath.Join(inputDir, hash+".utxo-set")
+		if _, err := os.Stat(utxoFile); os.IsNotExist(err) {
+			usage(fmt.Sprintf("UTXO file %s does not exist", utxoFile))
+		}
 	}
 
 	logger := ulogger.NewGoCoreLogger("seed")
-
-	go func() {
-		// nolint:gosec
-		logger.Errorf("%v", http.ListenAndServe(":6060", nil))
-	}()
-
-	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
-	if err != nil || !found {
-		logger.Errorf("utxostore URL not found in config: %v", err)
-		return
-	}
-
-	logger.Infof("Using utxostore at %s", utxoStoreURL)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -64,10 +98,44 @@ func Start() {
 		cancel()
 	}()
 
+	// Start http server for the profiler
+	go func() {
+		// nolint:gosec
+		logger.Errorf("%v", http.ListenAndServe(":6060", nil))
+	}()
+
+	if !skipHeaders {
+		// Process the headers
+		if err := processHeaders(ctx, logger, headerFile); err != nil {
+			logger.Errorf("Failed to process headers: %v", err)
+			return
+		}
+	}
+
+	if !skipUTXOs {
+		// Process the UTXOs
+		if err := processUTXOs(ctx, logger, utxoFile); err != nil {
+			logger.Errorf("Failed to process UTXOs: %v", err)
+			return
+		}
+	}
+}
+
+func processHeaders(ctx context.Context, logger ulogger.Logger, utxoFile string) error {
+	return nil
+}
+
+func processUTXOs(ctx context.Context, logger ulogger.Logger, utxoFile string) error {
+	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
+	if err != nil || !found {
+		return errors.NewConfigurationError("utxostore URL not found in config", err)
+	}
+
+	logger.Infof("Using utxostore at %s", utxoStoreURL)
+
 	utxoStore, err := utxo_factory.NewStore(ctx, logger, utxoStoreURL, "seeder", false)
 	if err != nil {
-		logger.Errorf("Failed to create utxostore: %v", err)
-		return
+		return errors.NewStorageError("Failed to create utxostore", err)
 	}
 
 	channelSize, _ := gocore.Config().GetInt("channelSize", 10_000)
@@ -89,10 +157,9 @@ func Start() {
 	}
 
 	// Read the UTXO data from the store
-	f, err := os.Open(*inFile)
+	f, err := os.Open(utxoFile)
 	if err != nil {
-		logger.Errorf("Failed to open file: %v", err)
-		return
+		return errors.NewStorageError("Failed to open file", err)
 	}
 	defer f.Close()
 
@@ -100,13 +167,11 @@ func Start() {
 
 	magic, _, _, _, err := utxopersister.GetUTXOSetHeaderFromReader(reader)
 	if err != nil {
-		logger.Errorf("Failed to read UTXO set header: %v", err)
-		return
+		return errors.NewProcessingError("Failed to read UTXO set header", err)
 	}
 
 	if magic != "U-S-1.0" {
-		logger.Errorf("Invalid magic number: %s", magic)
-		return
+		return errors.NewProcessingError("Invalid magic number: %s", magic)
 	}
 
 	var (
@@ -165,11 +230,12 @@ func Start() {
 	logger.Infof("Waiting for workers to finish")
 
 	if err := g.Wait(); err != nil {
-		logger.Errorf("Error in worker: %v", err)
-		return
+		return errors.NewProcessingError("Error in worker", err)
 	}
 
 	logger.Infof("All workers finished successfully")
+
+	return nil
 }
 
 func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store, id int, utxoWrapperCh <-chan *utxopersister.UTXOWrapper) error {
