@@ -473,11 +473,6 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	)
 	defer deferFn()
 
-	basicSpan := tracing.Start(ctx, "BasicValidation")
-	defer func() {
-		basicSpan.Finish()
-	}()
-
 	// 0) Check whether we have a complete transaction in extended format, with all input information
 	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis
 	if !util.IsExtended(tx, blockHeight) {

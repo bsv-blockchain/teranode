@@ -158,3 +158,23 @@ func BenchmarkValidateTransactionSDK(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkValidateTransactionSDK2(b *testing.B) {
+	gocore.Config().Set("validator_useSDKInterpreter", "true")
+
+	txV := &TxValidator{
+		policy: NewPolicySettings(),
+		logger: ulogger.TestLogger{},
+	}
+
+	txHex, err := os.ReadFile("./testdata/f568c66631de7b5842ebae84594cee00f7864132828997d09441fc2a937e9fab.hex")
+	require.NoError(b, err)
+	tx, err := bt.NewTxFromString(string(txHex))
+	require.NoError(b, err)
+
+	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = txV.ValidateTransaction(tx, 740975)
+		}
+	})
+}
