@@ -179,6 +179,11 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile stri
 			return errors.NewProcessingError("Failed to read UTXO", err)
 		}
 
+		if header.Height == 0 {
+			// The genesis block is already in the store
+			continue
+		}
+
 		block := &model.Block{
 			Header:           header.BlockHeader,
 			TransactionCount: header.TxCount,
