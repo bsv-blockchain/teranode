@@ -62,6 +62,7 @@ RUN ln -s ubsv.run aerospike_reader.run
 RUN ln -s ubsv.run utxopersister.run
 RUN ln -s ubsv.run seeder.run
 RUN ln -s ubsv.run bitcoin2utxoset.run
+RUN ln -s ubsv.run settings.run
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
   ln -s libsecp256k1.so.0.0.0 libsecp256k1.so

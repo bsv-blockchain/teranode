@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/s3_blaster/s3_blaster"
 	"github.com/bitcoin-sv/ubsv/cmd/s3inventoryintegrity/s3inventoryintegrity"
 	"github.com/bitcoin-sv/ubsv/cmd/seeder/seeder"
+	"github.com/bitcoin-sv/ubsv/cmd/settings/settings"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
 	utxopersister_cmd "github.com/bitcoin-sv/ubsv/cmd/utxopersister/utxopersister"
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -120,6 +121,9 @@ func main() {
 		return
 	case "bitcoin2utxoset.run":
 		bitcoin2utxoset.Start()
+		return
+	case "settings.run":
+		settings.Start()
 		return
 	}
 
