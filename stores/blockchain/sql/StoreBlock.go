@@ -28,7 +28,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 	}
 
 	var miner string
-	if block.CoinbaseTx.OutputCount() != 0 {
+	if block.CoinbaseTx != nil && block.CoinbaseTx.OutputCount() != 0 {
 		miner = block.CoinbaseTx.Outputs[0].LockingScript.String()
 	}
 
