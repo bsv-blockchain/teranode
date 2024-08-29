@@ -1204,7 +1204,8 @@ func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logg
 				// skip coinbase
 				continue
 			}
-			binary.BigEndian.PutUint64(subtree.Nodes[nodeIdx].Hash.CloneBytes(), n64)
+
+			n64 = binary.BigEndian.Uint64(subtree.Nodes[nodeIdx].Hash[:])
 			filter.Add(n64)
 		}
 	}
