@@ -718,18 +718,27 @@ CheckParentMined:
 		u.logger.Infof("[ValidateBlock][%s] update subtrees TTL DONE", block.Hash().String())
 	}()
 
-	go func() {
-		/// create bloom filter for the block and store
+	if useOptimisticMining {
+		// run the bloom filter creation in the background
+		go func() {
+			/// create bloom filter for the block and store
+			u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block in background", block.Hash().String())
+			// TODO: for the next phase, consider re-building the bloom filter in the background when node restarts.
+			// currently, if the node restarts, the bloom filter is not re-built and the node will not be able to validate transactions properly,
+			// since there are no bloom filters. This is a temporary solution to get the node up and running.
+			//
+			// Options are:
+			//   1. Re-build the bloom filter in the background when the node restarts
+			//   2. after creating the bloom filter, record it in the storage, and delete it after it expires.
+			u.createAppendBloomFilter(callerSpan.Ctx, block)
+			u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
+		}()
+	} else {
+		// create bloom filter for the block and wait for it
 		u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block", block.Hash().String())
-		// TODO: for the next phase, consider re-building the bloom filter in the background when node restarts.
-		// currently, if the node restarts, the bloom filter is not re-built and the node will not be able to validate transactions properly,
-		// since there are no bloom filters. This is a temporary solution to get the node up and running.
-		// Opitons are:
-		// 1. Re-build the bloom filter in the background when the node restarts
-		// 2. after creating the bloom filter, record it in the storage, and delete it after it expires.
 		u.createAppendBloomFilter(callerSpan.Ctx, block)
 		u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
-	}()
+	}
 
 	return nil
 }
