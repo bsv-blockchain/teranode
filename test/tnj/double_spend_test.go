@@ -138,7 +138,7 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
 }
 
-// func (suite *TNJTestSuite) TestRejectDoubleSpend() {
+// func (suite *TNJDoubleSpendTestSuite) TestRejectDoubleSpend() {
 // 	t := suite.T()
 // 	framework := suite.Framework
 // 	settingsMap := suite.SettingsMap
@@ -234,7 +234,7 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 
 // 	headerNode1, _, _ := blockchainNode1.GetBestBlockHeader(ctx)
 // 	headerNode0, _, _ := blockchainNode0.GetBestBlockHeader(ctx)
-// 	assert.Equal(t, headerNod//e0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
+// 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
 // }
 
 func TestTNJDoubleSpendTestSuite(t *testing.T) {

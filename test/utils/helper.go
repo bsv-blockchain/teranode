@@ -490,6 +490,43 @@ func CreateAndSendRawTxs(ctx context.Context, node tf.BitcoinNode, count int) ([
 	return txHashes, nil
 }
 
+func UseCoinbaseUtxo(ctx context.Context, node tf.BitcoinNode, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
+	nilHash := chainhash.Hash{}
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+
+	output := coinbaseTx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      coinbaseTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	err := newTx.FromUTXOs(utxo)
+
+	if err != nil {
+		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
+	}
+
+	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Error adding output to transaction: %w", err)
+	}
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Error filling transaction inputs: %w", err)
+	}
+
+	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Failed to send new transaction: %w", err)
+	}
+
+	return *newTx.TxIDChainHash(), nil
+}
+
 // faucetTx, err := bt.NewTxFromString(tx)
 // if err != nil {
 // 	fmt.Printf("error creating transaction from string", err)
@@ -559,6 +596,7 @@ func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulo
 	}
 
 	fmt.Printf("Transaction sent: %s %v\n", tx.TxIDChainHash(), len(tx.Outputs))
+	fmt.Printf("TxOut: %v\n", tx.Outputs[0].Satoshis)
 
 	utxo := &bt.UTXO{
 		TxIDHash:      tx.TxIDChainHash(),
@@ -569,13 +607,16 @@ func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulo
 
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
+
 	if err != nil {
 		return false, errors.NewProcessingError("Error adding UTXO to transaction: %s\n", err)
 	}
 
-	if fees != defaultSathosis {
-		defaultSathosis = fees
+	if fees != 0 {
+		defaultSathosis -= defaultSathosis
 	}
+
+	fmt.Println("Default Sathosis: ", defaultSathosis)
 
 	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, defaultSathosis)
 	if err != nil {
@@ -713,6 +754,28 @@ func WaitForBlockHeight(url string, targetHeight int, timeout time.Duration) err
 		}
 	}
 }
+
+func CheckIfTxExistsInBlock(ctx context.Context, store blob.Store, storeURL *url.URL, block []byte, blockHeight uint32, tx chainhash.Hash, logger ulogger.Logger) (bool, error) {
+	var o []options.Options
+	o = append(o, options.WithFileExtension("block"))
+	r, err := store.GetIoReader(ctx, block, o...)
+
+	if err != nil {
+		return false, errors.NewProcessingError("error getting block reader: %v", err)
+	}
+
+	if err == nil {
+		if bl, err := ReadFile(ctx, "block", logger, r, tx, storeURL); err != nil {
+			return false, errors.NewProcessingError("error reading block: %v", err)
+		} else {
+			logger.Infof("Block at height (%d): was tested for the test Tx\n", blockHeight)
+			return bl, nil
+		}
+	}
+
+	return false, nil
+}
+
 func Unzip(src, dest string) error {
 	cmd := exec.Command("unzip", src, "-d", dest)
 	err := cmd.Run()
