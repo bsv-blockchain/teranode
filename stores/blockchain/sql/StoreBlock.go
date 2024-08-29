@@ -200,6 +200,11 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 	blockHeader2 := block.Header
 	_ = blockHeader2
 
+	var coinbaseBytes []byte
+	if block.CoinbaseTx != nil {
+		coinbaseBytes = block.CoinbaseTx.Bytes()
+	}
+
 	rows, err := s.db.QueryContext(ctx, q,
 		previousBlockID,
 		block.Header.Version,
@@ -216,7 +221,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		len(block.Subtrees),
 		subtreeBytes,
 		peerID,
-		block.CoinbaseTx.Bytes(),
+		coinbaseBytes,
 		previousBlockInvalid,
 	)
 	if err != nil {
