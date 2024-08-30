@@ -402,7 +402,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 		if b.Header.Timestamp <= b.medianTimestamp {
 			// TODO fix this for test mode when generating lots of blocks quickly
 			//return false, errors.NewProcessingError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
-			logger.Errorf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
+			logger.Warnf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
 		}
 	}
 	// 4. Check that the coinbase transaction is valid (reward checked later).
