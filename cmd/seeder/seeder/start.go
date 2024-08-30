@@ -219,14 +219,14 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, utxoFile string) e
 		return errors.NewStorageError("Failed to create utxostore", err)
 	}
 
-	channelSize, _ := gocore.Config().GetInt("channelSize", 10_000)
+	channelSize, _ := gocore.Config().GetInt("channelSize", 1000)
 
 	logger.Infof("Using channel size of %d", channelSize)
 	utxoWrapperCh := make(chan *utxopersister.UTXOWrapper, channelSize)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	workerCount, _ := gocore.Config().GetInt("workerCount", 1_000)
+	workerCount, _ := gocore.Config().GetInt("workerCount", 500)
 	logger.Infof("Starting %d workers", workerCount)
 
 	for i := 0; i < workerCount; i++ {

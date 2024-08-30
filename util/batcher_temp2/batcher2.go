@@ -13,7 +13,7 @@ func WithMaxItems[T any](n int) Option[T] {
 	return func(b *Batcher2[T]) {
 		b.maxItems = n
 		b.batch = make([]*T, 0, n)
-		b.ch = make(chan *ItemWithSize[T], n*64)
+		b.ch = make(chan *itemWithSize[T], n*64)
 	}
 }
 
@@ -41,7 +41,7 @@ func WithBackground[T any](background bool) Option[T] {
 	}
 }
 
-type ItemWithSize[T any] struct {
+type itemWithSize[T any] struct {
 	item *T
 	size int
 }
@@ -53,7 +53,7 @@ type Batcher2[T any] struct {
 	currentBytes int // Current size in bytes of the batch
 	timeout      time.Duration
 	batch        []*T
-	ch           chan *ItemWithSize[T]
+	ch           chan *itemWithSize[T]
 	triggerCh    chan struct{}
 	background   bool
 }
@@ -73,16 +73,11 @@ func New[T any](options ...Option[T]) *Batcher2[T] {
 
 	// Ensure channels are initialized with default sizes if not set
 	if b.maxItems > 0 && cap(b.ch) == 0 {
-		b.ch = make(chan *ItemWithSize[T], b.maxItems*64)
+		b.ch = make(chan *itemWithSize[T], b.maxItems*64)
 	}
 
 	if len(b.batch) == 0 && b.maxItems > 0 {
 		b.batch = make([]*T, 0, b.maxItems)
-	}
-
-	if b.timeout == 0 {
-		// Set timeout large enough to not trigger
-		b.timeout = 24 * time.Hour
 	}
 
 	if b.fn == nil {
@@ -104,7 +99,7 @@ func (b *Batcher2[T]) Put(item *T, payloadSize ...int) {
 		size = payloadSize[0]
 	}
 
-	b.ch <- &ItemWithSize[T]{
+	b.ch <- &itemWithSize[T]{
 		item: item,
 		size: size,
 	}
@@ -117,38 +112,42 @@ func (b *Batcher2[T]) Trigger() {
 
 func (b *Batcher2[T]) worker() {
 	for {
-		expire := time.After(b.timeout)
+		var expire <-chan time.Time
+		if b.timeout > 0 {
+			expire = time.After(b.timeout)
+		}
 
-		for {
-			select {
-			case itemWithSize := <-b.ch:
-				b.batch = append(b.batch, itemWithSize.item)
-				b.currentBytes += itemWithSize.size
+		select {
+		case itemWithSize := <-b.ch:
+			b.batch = append(b.batch, itemWithSize.item)
+			b.currentBytes += itemWithSize.size
 
-				// Check if either size or maxBytes are exceeded
-				if len(b.batch) == b.maxItems || b.currentBytes >= b.maxBytes {
-					goto saveBatch
+			// Check if either size or maxBytes are exceeded
+			if len(b.batch) >= b.maxItems || b.currentBytes >= b.maxBytes {
+				b.triggerCh <- struct{}{}
+			}
+
+		case <-expire: // Only included if timeout > 0
+			b.triggerCh <- struct{}{}
+
+		case <-b.triggerCh:
+			if len(b.batch) > 0 {
+				batch := b.batch
+
+				if b.background {
+					go b.processBatch(batch)
+				} else {
+					b.processBatch(batch)
 				}
 
-			case <-expire:
-				goto saveBatch
-
-			case <-b.triggerCh:
-				goto saveBatch
+				// Clear batch after processing
+				b.batch = make([]*T, 0, b.maxItems)
+				b.currentBytes = 0 // Reset the current size
 			}
-		}
-	saveBatch:
-		if len(b.batch) > 0 {
-			batch := b.batch
-
-			if b.background {
-				go b.fn(batch)
-			} else {
-				b.fn(batch)
-			}
-
-			b.batch = make([]*T, 0, b.maxItems)
-			b.currentBytes = 0 // Reset the current size
 		}
 	}
+}
+
+func (b *Batcher2[T]) processBatch(batch []*T) {
+	b.fn(batch)
 }
