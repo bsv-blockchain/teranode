@@ -134,12 +134,12 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile stri
 		logger.Fatalf("Failed to create blockchain client: %v", err)
 	}
 
-	_, meta, err := blockchainStore.GetBestBlockHeader(ctx)
-	if err != nil {
-		logger.Fatalf("Failed to get best block header: %v", err)
-	}
+	// _, meta, err := blockchainStore.GetBestBlockHeader(ctx)
+	// if err != nil {
+	// 	logger.Fatalf("Failed to get best block header: %v", err)
+	// }
 
-	_ = meta
+	// _ = meta
 
 	f, err := os.Open(headersFile)
 	if err != nil {
