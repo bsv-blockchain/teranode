@@ -5,7 +5,7 @@
 package legacy
 
 import (
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 )
 
@@ -50,10 +50,10 @@ var testNet3Params = params{
 
 // simNetParams contains parameters specific to the simulation test network
 // (wire.SimNet).
-var simNetParams = params{
-	Params:  &chaincfg.SimNetParams,
-	rpcPort: "18556",
-}
+// var simNetParams = params{
+// 	Params:  &chaincfg.SimNetParams,
+// 	rpcPort: "18556",
+// }
 
 // netName returns the name used when referring to a bitcoin network.  At the
 // time of writing, bsvd currently places blocks for testnet version 3 in the

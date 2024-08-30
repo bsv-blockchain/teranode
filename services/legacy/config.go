@@ -6,10 +6,6 @@ package legacy
 
 import (
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
-	"github.com/bitcoin-sv/ubsv/services/legacy/version"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/btcsuite/go-socks/socks"
 	"math"
 	"net"
 	"net/url"
@@ -18,6 +14,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/ubsv/services/legacy/version"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/btcsuite/go-socks/socks"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
@@ -370,12 +371,12 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		numNets++
 		activeNetParams = &regressionNetParams
 	}
-	if cfg.SimNet {
-		numNets++
-		// Also disable dns seeding on the simulation test network.
-		activeNetParams = &simNetParams
-		cfg.DisableDNSSeed = true
-	}
+	// if cfg.SimNet {
+	// 	numNets++
+	// 	// Also disable dns seeding on the simulation test network.
+	// 	activeNetParams = &simNetParams
+	// 	cfg.DisableDNSSeed = true
+	// }
 	if numNets > 1 {
 		str := "%s: The testnet, regtest, segnet, and simnet params " +
 			"can't be used together -- choose one of the four"

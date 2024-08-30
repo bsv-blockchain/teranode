@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/looplab/fsm"
 	"github.com/ordishs/go-utils"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -48,6 +50,7 @@ type Blockchain struct {
 	notifications      chan *blockchain_api.Notification
 	newBlock           chan struct{}
 	difficulty         *Difficulty
+	chainParams        *chaincfg.Params
 	blockKafkaProducer util.KafkaProducerI
 	stats              *gocore.Stat
 	finiteStateMachine *fsm.FSM
@@ -60,9 +63,14 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 
 	initPrometheusMetrics()
 
-	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
+	network, _ := gocore.Config().Get("network", "mainnet")
 
-	d, err := NewDifficulty(store, logger, difficultyAdjustmentWindow)
+	params, err := chaincfg.GetChainParams(network)
+	if err != nil {
+		logger.Fatalf("Unknown network: %s", network)
+	}
+
+	d, err := NewDifficulty(store, logger, params)
 	if err != nil {
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}
@@ -79,6 +87,7 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 		notifications:     make(chan *blockchain_api.Notification, 100),
 		newBlock:          make(chan struct{}, 10),
 		difficulty:        d,
+		chainParams:       params,
 		stats:             gocore.NewStat("blockchain"),
 	}, nil
 }
@@ -454,13 +463,16 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 		tracing.WithHistogram(prometheusBlockchainGetNextWorkRequired),
 	)
 	defer deferFn()
-
 	var nBits *model.NBit
-	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
+
+	bytesLittleEndian := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bytesLittleEndian, b.chainParams.PowLimitBits)
+	defaultNbits, _ := model.NewNBitFromSlice(bytesLittleEndian)
+	b.logger.Debugf("default nBits: %s", defaultNbits.String())
 
 	if b.difficulty == nil {
 		b.logger.Debugf("difficulty is null")
-		nBits, _ = model.NewNBitFromString(nBitsString)
+		nBits = defaultNbits
 	} else {
 
 		hash, err := chainhash.NewHash(request.BlockHash)
@@ -473,12 +485,12 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 			return nil, errors.WrapGRPC(err)
 		}
 
-		nBitsp, err := b.difficulty.GetNextWorkRequired(ctx, blockHeader, meta.Height)
+		nBitsp, err := b.difficulty.CalcNextWorkRequired(ctx, blockHeader, meta.Height)
 		if err == nil {
 			nBits = nBitsp
 		} else {
 			b.logger.Debugf("error in GetNextWorkRequired: %v", err)
-			nBits, _ = model.NewNBitFromString(nBitsString)
+			nBits = defaultNbits
 		}
 
 		b.logger.Debugf("difficulty adjustment. Difficulty set to %s", nBits.String())

@@ -8,9 +8,9 @@ import (
 	"encoding/hex"
 	"errors"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/base58"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -553,14 +553,10 @@ func paramsFromNetID(netID byte) *chaincfg.Params {
 		return &chaincfg.TestNet3Params
 	case chaincfg.RegressionNetParams.LegacyPubKeyHashAddrID:
 		return &chaincfg.RegressionNetParams
-	case chaincfg.SimNetParams.LegacyPubKeyHashAddrID:
-		return &chaincfg.SimNetParams
 	case chaincfg.TestNet3Params.LegacyScriptHashAddrID:
 		return &chaincfg.TestNet3Params
 	case chaincfg.RegressionNetParams.LegacyScriptHashAddrID:
 		return &chaincfg.RegressionNetParams
-	case chaincfg.SimNetParams.LegacyScriptHashAddrID:
-		return &chaincfg.SimNetParams
 	default:
 		return &chaincfg.MainNetParams
 	}

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -42,4 +43,5 @@ type Store interface {
 	GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error)
 	// legacy endpoints
 	LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error)
+	ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*file.File, error)
 }

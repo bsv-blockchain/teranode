@@ -11,9 +11,9 @@ import (
 
 	"math/rand/v2"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )

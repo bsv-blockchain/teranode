@@ -13,10 +13,10 @@ import (
 
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/netsync"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"

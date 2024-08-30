@@ -4,6 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"log"
+	"math"
+	"runtime"
+	"sync"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -17,13 +20,14 @@ import (
 
 func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningSolution, error) {
 	// Create a new coinbase transaction
-
 	arbitraryText, _ := gocore.Config().Get("coinbase_arbitrary_text", "/TERANODE/")
 
 	coinbasePrivKeys, found := gocore.Config().GetMulti("miner_wallet_private_keys", "|")
 	if !found {
 		log.Fatal(errors.NewConfigurationError("miner_wallet_private_keys not found in config"))
 	}
+
+	multiThreaded := gocore.Config().GetBool("miner_multi_threaded", false)
 
 	walletAddresses := make([]string, len(coinbasePrivKeys))
 
@@ -62,46 +66,72 @@ func Mine(ctx context.Context, candidate *model.MiningCandidate) (*model.MiningS
 	previousHash, _ := chainhash.NewHash(candidate.PreviousHash)
 	merkleRootHash, _ := chainhash.NewHash(merkleRoot)
 
-	var nonce uint32
-	var blockHash *chainhash.Hash
+	nBits, _ := model.NewNBitFromSlice(candidate.NBits)
 
-miningLoop:
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, nil
-		default:
-			nBits, _ := model.NewNBitFromSlice(candidate.NBits)
-			blockHeader := model.BlockHeader{
-				Version:        candidate.Version,
-				HashPrevBlock:  previousHash,
-				HashMerkleRoot: merkleRootHash,
-				Timestamp:      candidate.Time,
-				Bits:           *nBits,
-				Nonce:          nonce,
-			}
-
-			var headerValid bool
-
-			headerValid, blockHash, _ = blockHeader.HasMetTargetDifficulty()
-			if headerValid { // header is valid if the hash is less than the target
-				break miningLoop
-			}
-
-			nonce++
-		}
+	// to mine with more hashpower
+	numThreads := 1
+	if multiThreaded {
+		numThreads = runtime.NumCPU()
 	}
-	return &model.MiningSolution{
-		Id:        candidate.Id,
-		Nonce:     nonce,
-		Time:      candidate.Time,
-		Coinbase:  coinbaseTx.Bytes(),
-		Version:   candidate.Version,
-		BlockHash: blockHash.CloneBytes(),
-	}, nil
-	// m.logger.Infof("submitting mining solution: %s", utils.ReverseAndHexEncodeSlice(candidate.Id))
-	// err = m.blockAssemblyClient.SubmitMiningSolution(context.Background(), candidate.Id, coinbaseTx.Bytes(), candidate.Time, nonce, 1)
-	// if err != nil {
-	// 	m.logger.Errorf("Error submitting mining solution: %v", err)
-	// }
+
+	log.Printf("Mining with %d threads", numThreads)
+	nonceStep := uint32(math.MaxUint32 / numThreads)
+	solutionCh := make(chan *model.MiningSolution)
+	errCh := make(chan error)
+
+	var wg sync.WaitGroup
+
+	wg.Add(numThreads)
+
+	for i := 0; i < numThreads; i++ {
+		go func(threadID int) {
+			defer wg.Done()
+			startNonce := uint32(threadID) * nonceStep
+			endNonce := startNonce + nonceStep
+
+			for nonce := startNonce; nonce < endNonce; nonce++ {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					blockHeader := model.BlockHeader{
+						Version:        candidate.Version,
+						HashPrevBlock:  previousHash,
+						HashMerkleRoot: merkleRootHash,
+						Timestamp:      candidate.Time,
+						Bits:           *nBits,
+						Nonce:          nonce,
+					}
+
+					headerValid, blockHash, _ := blockHeader.HasMetTargetDifficulty()
+					if headerValid {
+						solutionCh <- &model.MiningSolution{
+							Id:        candidate.Id,
+							Nonce:     nonce,
+							Time:      candidate.Time,
+							Coinbase:  coinbaseTx.Bytes(),
+							Version:   candidate.Version,
+							BlockHash: blockHash.CloneBytes(),
+						}
+						return
+					}
+				}
+			}
+		}(i)
+	}
+
+	go func() {
+		wg.Wait()
+		close(solutionCh)
+		close(errCh)
+	}()
+
+	select {
+	case solution := <-solutionCh:
+		return solution, nil
+	case err := <-errCh:
+		return nil, err
+	case <-ctx.Done():
+		return nil, nil
+	}
 }

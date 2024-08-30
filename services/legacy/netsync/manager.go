@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+
 	"log"
 	"math/rand/v2"
 	"net"
@@ -15,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -22,7 +24,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	peerpkg "github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"

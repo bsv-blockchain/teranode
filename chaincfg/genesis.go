@@ -170,3 +170,28 @@ var simNetGenesisBlock = wire.MsgBlock{
 	},
 	Transactions: []*wire.MsgTx{&genesisCoinbaseTx},
 }
+
+// stnGenesisHash is the hash of the first block in the block chain for the
+// stn network.
+var stnGenesisHash = chainhash.Hash([chainhash.HashSize]byte{ // Make go vet happy.
+	0x43, 0x49, 0x7f, 0xd7, 0xf8, 0x26, 0x95, 0x71,
+	0x08, 0xf4, 0xa3, 0x0f, 0xd9, 0xce, 0xc3, 0xae,
+	0xba, 0x79, 0x97, 0x20, 0x84, 0xe9, 0x0e, 0xad,
+	0x01, 0xea, 0x33, 0x09, 0x00, 0x00, 0x00, 0x00,
+})
+
+var stnGenesisMerkleRoot = genesisMerkleRoot
+
+// regTestGenesisBlock defines the genesis block of the block chain which serves
+// as the public transaction ledger for the regression test network.
+var stnGenesisBlock = wire.MsgBlock{
+	Header: wire.BlockHeader{
+		Version:    1,
+		PrevBlock:  chainhash.Hash{},         // 0000000000000000000000000000000000000000000000000000000000000000
+		MerkleRoot: regTestGenesisMerkleRoot, // 4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b
+		Timestamp:  time.Unix(1296688602, 0), // 2011-02-02 23:16:42 +0000 UTC
+		Bits:       0x1d00ffff,               // 545259519 [7fffff0000000000000000000000000000000000000000000000000000000000]
+		Nonce:      0x0a5bac18,               // 414098458
+	},
+	Transactions: []*wire.MsgTx{&genesisCoinbaseTx},
+}

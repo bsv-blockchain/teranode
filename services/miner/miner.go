@@ -244,7 +244,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	}
 
 	if solution == nil {
-		return errors.NewProcessingError("no solution found for %s", candidateId)
+		return errors.NewProcessingError("mine: no solution found for %s", candidateId)
 	}
 
 	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
@@ -340,7 +340,7 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 			return errors.NewProcessingError("error mining block on %s", candidateId, err)
 		}
 		if solution == nil {
-			return errors.NewProcessingError("no solution found for %s", candidateId)
+			return errors.NewProcessingError("mineBlocks: no solution found for %s", candidateId)
 		}
 
 		// Define retry delays

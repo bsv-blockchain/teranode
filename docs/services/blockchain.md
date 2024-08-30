@@ -470,13 +470,15 @@ This service uses several `gocore` configuration settings. Here's a list of thes
 - **Blockchain Store URL (`blockchain_store`)**: The URL for connecting to the blockchain data store. Essential for the service's ability to access and store block data.
 - **gRPC Listen Address (`blockchain_grpcListenAddress`)**: Specifies the address and port the blockchain service's gRPC server listens on, enabling RPC calls for blockchain operations.
 - **Kafka Brokers URL (`kafka_blocksFinalConfig`)**: Configuration for connecting to Kafka brokers, used for publishing new block notifications.
-- **Difficulty Adjustment Window (`difficulty_adjustment_window`)**: Defines the number of blocks considered for calculating difficulty adjustments, impacting how the network responds to changes in block production rates.
 - **Difficulty Adjustment Flag (`difficulty_adjustment`)**: Enables or disables dynamic difficulty adjustments, allowing for a static difficulty for networks that do not require frequent adjustments.
-- **Proof of Work Limit (`difficulty_pow_limit`)**: Sets the upper limit for the proof of work calculations, ensuring that difficulty adjustments do not make the mining process infeasibly hard.
-- **Initial Difficulty (`mining_n_bits`)**: The starting difficulty target for mining, relevant for network startups or when special difficulty rules apply.
 
 ### Operational Settings
 - **Max Retries (`blockchain_maxRetries`)**: The maximum number of attempts to connect to the blockchain service, ensuring resilience against temporary connectivity issues.
 - **Retry Sleep Duration (`blockchain_retrySleep`)**: The wait time between retry attempts for connecting to the blockchain service, providing a back-off mechanism to reduce load during outages.
 - **Initial Blocks Count (`mine_initial_blocks_count`)**: Specifies the number of blocks that should be mined at the initial difficulty level, useful for network startups or testing environments.
+
+### Removed settings
+- **Difficulty Adjustment Window (`difficulty_adjustment_window`)**: Defines the number of blocks considered for calculating difficulty adjustments, impacting how the network responds to changes in block production rates.
 - **Target Time per Block (`difficulty_target_time_per_block`)**: The desired time interval between blocks, guiding the difficulty adjustment process to maintain a steady block production rate.
+- **Proof of Work Limit (`difficulty_pow_limit`)**: Sets the upper limit for the proof of work calculations, ensuring that difficulty adjustments do not make the mining process infeasibly hard.
+- **Initial Difficulty (`mining_n_bits`)**: The starting difficulty target for mining, relevant for network startups or when special difficulty rules apply.

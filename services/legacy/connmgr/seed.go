@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 )
 
