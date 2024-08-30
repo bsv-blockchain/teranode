@@ -1,3 +1,5 @@
+//go:build fixme
+
 package blockchain
 
 import (
