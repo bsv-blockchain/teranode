@@ -2,10 +2,11 @@ package propagation
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -69,9 +70,10 @@ func (ps *DumbPropagationServer) Stop(_ context.Context) error {
 
 func (ps *DumbPropagationServer) HealthGRPC(_ context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
 	prometheusHealth.Observe(0)
+
 	return &propagation_api.HealthResponse{
 		Ok:        true,
-		Timestamp: uint32(time.Now().Unix()),
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 
@@ -121,6 +123,7 @@ func (ps *DumbPropagationServer) startHTTPServer(ctx context.Context, listenAddr
 
 	go func() {
 		ps.logger.Infof("[propagation] HTTP service listening on %s", listenAddr)
+
 		if err := e.Start(listenAddr); err != nil {
 			ps.logger.Errorf("HTTP server failed [%s]", err)
 		}

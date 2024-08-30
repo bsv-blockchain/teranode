@@ -21,7 +21,7 @@ message EmptyMessage {}
 message HealthResponse {
   bool ok = 1;
   string details = 2;
-  uint32 timestamp = 3;
+  int64 timestamp = 3;
 }
 
 // swagger:model GetRequest
