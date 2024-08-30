@@ -1,6 +1,7 @@
 package blockchain
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
@@ -24,17 +25,21 @@ func TestCalcNextRequiredDifficulty(t *testing.T) {
 	// 826223 - 1704738 582
 
 	// use bits from block 826077 (826223-146)
+	firstChainwork, _ := hex.DecodeString("0000000000000000000000000000000000000000014fde7d78624764b6ccdabe")
 	bits, _ := model.NewNBitFromString("1808f160")
 	firstBlockHeader := &model.SuitableBlock{
-		NBits: bits.CloneBytes(),
-		Time:  1704647484, // 2024-01-07 17:11:24
+		NBits:     bits.CloneBytes(),
+		Time:      1704647484, // 2024-01-07 17:11:24
+		ChainWork: firstChainwork,
 	}
 
 	// use bits from block 826221
+	lastChainwork, _ := hex.DecodeString("0000000000000000000000000000000000000000014fed76720f0d10e72bb02d")
 	bits, _ = model.NewNBitFromString("1809dd97")
 	lastBlockHeader := &model.SuitableBlock{
-		NBits: bits.CloneBytes(),
-		Time:  1704738369, // 2024-01-08 18:26:09
+		NBits:     bits.CloneBytes(),
+		Time:      1704738369, // 2024-01-08 18:26:09
+		ChainWork: lastChainwork,
 	}
 	// duration 90885
 	// expected from block 826224 - 180a39ef
@@ -65,26 +70,35 @@ func TestCalculateDifficulty(t *testing.T) {
 	fBits, _ := model.NewNBitFromString("18087ed7")
 	lBits, _ := model.NewNBitFromString("1807e0fb")
 	eBits, _ := model.NewNBitFromString("1807e0fb")
+	firstChainwork, _ := hex.DecodeString("000000000000000000000000000000000000000001483b3cc42a76ae3dc13792")
+	lastChainwork, _ := hex.DecodeString("0000000000000000000000000000000000000000014844e5fe3b17bb6cc37242")
+	fChainwork, _ := hex.DecodeString("000000000000000000000000000000000000000001501afbca95079fb5778bf0")
+	lChainwork, _ := hex.DecodeString("000000000000000000000000000000000000000001502c8676de0c7026ad2fb3")
+
 	tests := map[string]struct {
 		firstBlockHeader model.SuitableBlock
 		lastBlockHeader  model.SuitableBlock
 		expected         model.NBit
 	}{
 		"block #800000": {firstBlockHeader: model.SuitableBlock{
-			NBits: firstBits.CloneBytes(), // 800000
-			Time:  1688957834,
+			NBits:     firstBits.CloneBytes(), // 800000
+			Time:      1688957834,
+			ChainWork: firstChainwork,
 		}, lastBlockHeader: model.SuitableBlock{ // 800144
-			NBits: lastBits.CloneBytes(),
-			Time:  1689046071,
+			NBits:     lastBits.CloneBytes(),
+			Time:      1689046071,
+			ChainWork: lastChainwork,
 		}, expected: *expectedBits, // 800146
 		// expected     180f6077
 		},
 		"block #826768": {firstBlockHeader: model.SuitableBlock{
-			NBits: fBits.CloneBytes(), // 826623
-			Time:  1704972003,
+			NBits:     fBits.CloneBytes(), // 826623
+			Time:      1704972003,
+			ChainWork: fChainwork,
 		}, lastBlockHeader: model.SuitableBlock{ // 826767
-			NBits: lBits.CloneBytes(),
-			Time:  1705054404,
+			NBits:     lBits.CloneBytes(),
+			Time:      1705054404,
+			ChainWork: lChainwork,
 		}, expected: *eBits}, // 826768
 		// expected    180783a0
 	}
