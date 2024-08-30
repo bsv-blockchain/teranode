@@ -810,15 +810,15 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	var err error
 
 	// create a bloom filter for the block
-	bbf := &model.BlockBloomFilter{}
+	bbf := &model.BlockBloomFilter{
+		CreationTime: time.Now(),
+		BlockHash:    block.Hash(),
+	}
 	bbf.Filter, err = block.NewOptimizedBloomFilter(ctx, u.logger, u.subtreeStore)
 	if err != nil {
 		u.logger.Errorf("[createAppendBloomFilter][%s] failed to create bloom filter: %s", block.Hash().String(), err)
 		return
 	}
-
-	bbf.CreationTime = time.Now()
-	bbf.BlockHash = block.Hash()
 
 	// prune older bloom filters
 	u.recentBlocksBloomFiltersMu.Lock()

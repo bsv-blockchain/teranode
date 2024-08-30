@@ -837,7 +837,7 @@ LOOP:
 					}
 
 					if (retries % 10) == 0 {
-						u.logger.Infof("[catchup][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: %v - %v", fromBlock.Hash().String(), retries, blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock))
+						u.logger.Infof("[catchup][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: validated %v - bloom filters %v", fromBlock.Hash().String(), retries, blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock))
 					}
 
 					time.Sleep(1 * time.Second)
