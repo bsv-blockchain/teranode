@@ -592,14 +592,9 @@ func (c *Client) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType 
 func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEventType) error {
 	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
 
-	req := &blockchain_api.SendFSMEventRequest{
+	if _, err := c.client.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{
 		Event: event,
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
-
-	_, err := c.client.SendFSMEvent(ctx, req)
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 

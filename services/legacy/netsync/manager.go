@@ -8,8 +8,6 @@ import (
 	"bytes"
 	"container/list"
 	"context"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-
 	"log"
 	"math/rand/v2"
 	"net"
@@ -20,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
@@ -827,9 +826,9 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
 		if sm.current() { // used to check for isOrphan || sm.current()
-			// if you are at the Legacy Sync mode, tell FSM to transition to normal running.
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
 
+			// if you are at the Legacy Sync mode, tell FSM to transition to normal running.
 			currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 			if err != nil {
 				// TODO: how to handle it gracefully?
@@ -837,8 +836,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 			}
 
 			if *currentState == blockchain_api.FSMStateType_LEGACYSYNCING {
-				err := sm.blockchainClient.SendFSMEvent(sm.ctx, blockchain_api.FSMEventType_RUN)
-				if err != nil {
+				if err = sm.blockchainClient.SendFSMEvent(sm.ctx, blockchain_api.FSMEventType_RUN); err != nil {
 					return errors.NewServiceError("[Main] failed to send MINE notification", err)
 				}
 			}

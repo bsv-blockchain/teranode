@@ -165,14 +165,14 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, err
 		}
 
+		// TODO move this into a convenience function in the blockchain client
 		currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 		if err != nil {
 			// TODO: how to handle it gracefully?
 			sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
 		}
 
-		legacyMode := *currentState == blockchain_api.FSMStateType_LEGACYSYNCING
-		legacyMode = true // force legacy mode for now
+		legacyMode := currentState != nil && *currentState == blockchain_api.FSMStateType_LEGACYSYNCING
 
 		if legacyMode {
 			// in legacy sync mode, we can process transactions in a block in parallel, but in reverse order
@@ -234,6 +234,9 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 	return nil
 }
 
+// createUtxos creates all the utxos for the transactions in the block in parallel
+// before any spending is done. This only occurs in legacy mode when we assume the
+// block is valid.
 func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) error {
 	_, _, deferFn := tracing.StartTracing(ctx, "createUtxos")
 	defer deferFn()
@@ -269,6 +272,8 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 	return nil
 }
 
+// preValidateTransactions pre-validates all the transactions in the block before
+// sending them to subtree validation.
 func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) {
 	_, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions")
 	defer deferFn()
@@ -297,6 +302,9 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 	_ = g.Wait()
 }
 
+// validateTransactions validates all the transactions in the block in parallel
+// per level. This is done to speed up subtree validation later on.
+// The levels indicate the number of parents in the block.
 func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, blockHeight uint32) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactions")
 	defer deferFn()

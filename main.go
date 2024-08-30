@@ -615,6 +615,13 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 	}
 
 	if startLegacy {
+		// if we are starting the legacy service, we need to wait for legacy service to send RUN event to start
+		// node's normal operation.
+		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_LEGACYSYNC); err != nil {
+			logger.Errorf("[Main] failed to send Legacy Sync event [%v]", err)
+			panic(err)
+		}
+
 		subtreeStore, err := getSubtreeStore(logger)
 		if err != nil {
 			return err
@@ -662,11 +669,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		)); err != nil {
 			return err
 
-		}
-
-		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_LEGACYSYNC); err != nil {
-			logger.Errorf("[Main] failed to send Legacy Sync event [%v]", err)
-			panic(err)
 		}
 
 		// wait for node to finish Legacy Syncing.
