@@ -35,6 +35,7 @@ var (
 	verify       bool
 	checkHeights bool
 	old          bool
+	useStore     bool
 )
 
 func usage(msg string) {
@@ -42,7 +43,7 @@ func usage(msg string) {
 		fmt.Printf("Error: %s\n\n", msg)
 	}
 
-	fmt.Printf("Usage: filereader [-verbose] [-check] <filename | hash>.[block | subtree | utxoset | utxodiff] | -verify [-old]\n\n")
+	fmt.Printf("Usage: filereader [-verbose] [-check] [-useStore] <filename | hash>.[block | subtree | utxoset | utxodiff] | -verify [-old]\n\n")
 
 	os.Exit(1)
 }
@@ -57,6 +58,7 @@ func Start() {
 	flag.BoolVar(&verify, "verify", false, "verify all stored data")
 	flag.BoolVar(&checkHeights, "check", false, "check heights in utxo headers")
 	flag.BoolVar(&old, "old", false, "old format")
+	flag.BoolVar(&useStore, "useStore", false, "use store")
 
 	flag.Usage = func() { usage("") }
 
@@ -495,9 +497,12 @@ func getReader(path string, logger ulogger.Logger) (string, string, string, io.R
 		ext = ext[1:]
 	}
 
-	hash, err := chainhash.NewHashFromStr(fileWithoutExtension)
+	if useStore {
+		hash, err := chainhash.NewHashFromStr(fileWithoutExtension)
+		if err != nil {
+			return "", "", "", nil, errors.NewProcessingError("error parsing hash", err)
+		}
 
-	if dir == "" && err == nil {
 		store := getBlockStore(logger)
 
 		r, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension(ext))
