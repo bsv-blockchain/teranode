@@ -368,7 +368,7 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 		ctx,
 		tx,
 		utxoWrapper.Height,
-		utxo.WithTXID(utxoWrapper.TxID),
+		utxo.WithTXID(&utxoWrapper.TxID),
 		utxo.WithSetCoinbase(utxoWrapper.Coinbase),
 	); err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {

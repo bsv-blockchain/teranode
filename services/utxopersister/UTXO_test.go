@@ -29,7 +29,7 @@ func TestBytesNormalTX(t *testing.T) {
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 
 	uw := &UTXOWrapper{
-		TxID:     &hash,
+		TxID:     hash,
 		Height:   12345,
 		Coinbase: false,
 		UTXOs: []*UTXO{
@@ -61,7 +61,7 @@ func TestBytesCoinbaseTX(t *testing.T) {
 	hash := chainhash.HashH([]byte{0x00, 0x01, 0x02, 0x03, 0x04})
 
 	uw := &UTXOWrapper{
-		TxID:     &hash,
+		TxID:     hash,
 		Height:   12345,
 		Coinbase: true,
 		UTXOs: []*UTXO{

@@ -183,7 +183,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				nonNilOutputs := utxopersister.UnpadSlice(bItem.tx.Outputs)
 
 				wrapper := utxopersister.UTXOWrapper{
-					TxID:     bItem.txHash,
+					TxID:     *bItem.txHash,
 					Height:   bItem.blockHeight,
 					Coinbase: bItem.isCoinbase,
 					UTXOs:    make([]*utxopersister.UTXO, 0, len(nonNilOutputs)),
@@ -505,7 +505,7 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 	nonNilOutputs := utxopersister.UnpadSlice(bItem.tx.Outputs)
 
 	wrapper := utxopersister.UTXOWrapper{
-		TxID:     bItem.txHash,
+		TxID:     *bItem.txHash,
 		Height:   bItem.blockHeight,
 		Coinbase: bItem.isCoinbase,
 		UTXOs:    make([]*utxopersister.UTXO, 0, len(nonNilOutputs)),

@@ -494,7 +494,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 				if currentUTXOWrapper == nil {
 					// nolint:gosec
 					currentUTXOWrapper = &utxopersister.UTXOWrapper{
-						TxID:     hash,
+						TxID:     *hash,
 						Height:   uint32(height),
 						Coinbase: coinbase == 1,
 					}
@@ -510,7 +510,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 
 					// nolint:gosec
 					currentUTXOWrapper = &utxopersister.UTXOWrapper{
-						TxID:     hash,
+						TxID:     *hash,
 						Height:   uint32(height),
 						Coinbase: coinbase == 1,
 					}
