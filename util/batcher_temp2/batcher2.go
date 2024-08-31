@@ -124,27 +124,32 @@ func (b *Batcher2[T]) worker() {
 
 			// Check if either size or maxBytes are exceeded
 			if len(b.batch) >= b.maxItems || b.currentBytes >= b.maxBytes {
-				b.triggerCh <- struct{}{}
+				b.triggerHandler()
 			}
 
 		case <-expire: // Only included if timeout > 0
-			b.triggerCh <- struct{}{}
+			b.triggerHandler()
 
 		case <-b.triggerCh:
-			if len(b.batch) > 0 {
-				batch := b.batch
-
-				if b.background {
-					go b.processBatch(batch)
-				} else {
-					b.processBatch(batch)
-				}
-
-				// Clear batch after processing
-				b.batch = make([]*T, 0, b.maxItems)
-				b.currentBytes = 0 // Reset the current size
-			}
+			b.triggerHandler()
 		}
+	}
+}
+
+func (b *Batcher2[T]) triggerHandler() {
+	if len(b.batch) > 0 {
+		batch := b.batch
+
+		// Process the batch
+		if b.background {
+			go b.processBatch(batch)
+		} else {
+			b.processBatch(batch)
+		}
+
+		// Clear batch after processing
+		b.batch = make([]*T, 0, b.maxItems)
+		b.currentBytes = 0 // Reset the current size
 	}
 }
 
