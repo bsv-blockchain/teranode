@@ -149,5 +149,5 @@ func (b *Batcher2[T]) worker() {
 }
 
 func (b *Batcher2[T]) processBatch(batch []*T) {
-	b.fn(batch)
+	go b.fn(batch)
 }
