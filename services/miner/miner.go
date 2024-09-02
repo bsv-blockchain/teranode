@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -128,7 +129,8 @@ func (m *Miner) Start(ctx context.Context) error {
 	}
 
 	if *currentState != blockchain_api.FSMStateType_MINING {
-		err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
+		//err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
+		_, err := m.blockchainClient.Mine(ctx, &emptypb.Empty{})
 		if err != nil {
 			return errors.NewServiceError("[Main] failed to send MINE notification", err)
 		}
