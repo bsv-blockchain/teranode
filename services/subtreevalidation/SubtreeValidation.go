@@ -163,6 +163,9 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	if err != nil {
 		return nil, err
 	}
+	if !tx.IsExtended() {
+		return nil, errors.NewTxInvalidError("tx is not extended")
+	}
 
 	return tx, nil
 }
