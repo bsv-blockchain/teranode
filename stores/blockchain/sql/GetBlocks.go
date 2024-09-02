@@ -72,6 +72,7 @@ func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numb
 	var coinbaseTx []byte
 	var height uint32
 	var nBits []byte
+
 	for rows.Next() {
 		block := &model.Block{
 			Header: &model.BlockHeader{},
@@ -108,9 +109,11 @@ func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numb
 		block.TransactionCount = transactionCount
 		block.SizeInBytes = sizeInBytes
 
-		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+		if coinbaseTx != nil {
+			block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
+			if err != nil {
+				return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+			}
 		}
 
 		err = block.SubTreesFromBytes(subtreeBytes)

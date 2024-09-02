@@ -20,8 +20,9 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 	defer deferFn()
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
-	cacheId := chainhash.HashH([]byte(fmt.Sprintf("GetLastNBlocks-%d-%t-%d", n, includeOrphans, fromHeight)))
-	cached := s.responseCache.Get(cacheId)
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetLastNBlocks-%d-%t-%d", n, includeOrphans, fromHeight)))
+
+	cached := s.responseCache.Get(cacheID)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().([]*model.BlockInfo); ok && cacheData != nil {
 			s.logger.Debugf("GetLastNBlocks cache hit")
@@ -154,20 +155,22 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 
 		info.BlockHeader = header.Bytes()
 
-		coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
-		}
+		if coinbaseBytes != nil {
+			coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
+			if err != nil {
+				return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+			}
 
-		// Add up the sum of the coinbase tx outputs.
-		info.CoinbaseValue = 0
-		for _, output := range coinbaseTx.Outputs {
-			info.CoinbaseValue += output.Satoshis
-		}
+			// Add up the sum of the coinbase tx outputs.
+			info.CoinbaseValue = 0
+			for _, output := range coinbaseTx.Outputs {
+				info.CoinbaseValue += output.Satoshis
+			}
 
-		info.Miner, err = util.ExtractCoinbaseMiner(coinbaseTx)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to extract miner", err)
+			info.Miner, err = util.ExtractCoinbaseMiner(coinbaseTx)
+			if err != nil {
+				return nil, errors.NewProcessingError("failed to extract miner", err)
+			}
 		}
 
 		info.SeenAt = timestamppb.New(seenAt.Time)
@@ -175,7 +178,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		blockInfos = append(blockInfos, info)
 	}
 
-	s.responseCache.Set(cacheId, blockInfos, s.cacheTTL)
+	s.responseCache.Set(cacheID, blockInfos, s.cacheTTL)
 
 	return blockInfos, nil
 }

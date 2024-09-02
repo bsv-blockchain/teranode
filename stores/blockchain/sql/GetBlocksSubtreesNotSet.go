@@ -99,9 +99,11 @@ func (s *SQL) getBlocksWithQuery(ctx context.Context, q string) ([]*model.Block,
 		block.TransactionCount = transactionCount
 		block.SizeInBytes = sizeInBytes
 
-		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+		if coinbaseTx != nil {
+			block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
+			if err != nil {
+				return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+			}
 		}
 
 		err = block.SubTreesFromBytes(subtreeBytes)
