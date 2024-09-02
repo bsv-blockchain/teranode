@@ -9,15 +9,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func Test_Batcher2(t *testing.T) {
-	t.Run("Test_Batcher2", func(t *testing.T) {
-
-	})
-}
-
-type batchStoreItem struct {
-	// TODO
-}
+type batchStoreItem struct{}
 
 func Benchmark_Batcher2(b *testing.B) {
 	b.Run("Benchmark_Batcher2", func(b *testing.B) {
@@ -28,15 +20,17 @@ func Benchmark_Batcher2(b *testing.B) {
 		batchSize := 100
 
 		storeBatcher := New[batchStoreItem](
+			sendStoreBatch,
 			WithMaxItems[batchStoreItem](batchSize),
 			WithTimeout[batchStoreItem](100*time.Millisecond),
-			WithBatchFunc[batchStoreItem](sendStoreBatch),
 			WithBackground[batchStoreItem](true),
 		)
 
 		expectedItems := 1_000_000
 		expectedBatches := math.Ceil(float64(expectedItems) / float64(batchSize))
+
 		g := errgroup.Group{}
+
 		g.Go(func() error {
 			for <-batchSent {
 				expectedBatches--
@@ -58,6 +52,49 @@ func Benchmark_Batcher2(b *testing.B) {
 	})
 }
 
+func Test_Batcher2Defaults(t *testing.T) {
+	batchItemCount := make(chan int)
+
+	sendStoreBatch := func(batch []*batchStoreItem) {
+		batchItemCount <- len(batch)
+	}
+
+	storeBatcher := New[batchStoreItem](
+		sendStoreBatch,
+	)
+
+	go func() {
+		storeBatcher.Put(&batchStoreItem{})
+	}()
+
+	count := <-batchItemCount
+
+	assert.Equal(t, 1, count)
+}
+
+func Test_Batcher2With2Items(t *testing.T) {
+	batchItemCount := make(chan int)
+
+	sendStoreBatch := func(batch []*batchStoreItem) {
+		batchItemCount <- len(batch)
+	}
+
+	storeBatcher := New[batchStoreItem](
+		sendStoreBatch,
+		WithMaxItems[batchStoreItem](3),
+	)
+
+	go func() {
+		storeBatcher.Put(&batchStoreItem{})
+		storeBatcher.Put(&batchStoreItem{})
+		storeBatcher.Put(&batchStoreItem{})
+	}()
+
+	count := <-batchItemCount
+
+	assert.Equal(t, 3, count)
+}
+
 func Test_Batcher2MaxBytes(t *testing.T) {
 	batchItemCount := make(chan int)
 
@@ -69,9 +106,9 @@ func Test_Batcher2MaxBytes(t *testing.T) {
 	maxBytes := 2000
 
 	storeBatcher := New[batchStoreItem](
+		sendStoreBatch,
 		WithMaxItems[batchStoreItem](batchSize),
 		WithMaxBytes[batchStoreItem](maxBytes),
-		WithBatchFunc[batchStoreItem](sendStoreBatch),
 		WithBackground[batchStoreItem](true),
 	)
 
@@ -88,33 +125,33 @@ func Test_Batcher2_Trigger(t *testing.T) {
 	batchItemCount := make(chan int)
 
 	sendStoreBatch := func(batch []*batchStoreItem) {
-		//TODO: The test fails if we don't sleep here. It seems that the batch is not processed immediately
-		time.Sleep(500 * time.Millisecond)
 		batchItemCount <- len(batch)
 	}
 
-	batchSize := 100
-	maxBytes := 2000
-	timeout := 500 * time.Millisecond
+	batchSize := 50
 
 	storeBatcher := New[batchStoreItem](
-		WithMaxItems[batchStoreItem](batchSize),
-		WithMaxBytes[batchStoreItem](maxBytes),
-		WithTimeout[batchStoreItem](timeout),
-		WithBatchFunc[batchStoreItem](sendStoreBatch),
+		sendStoreBatch,
+		WithMaxItems[batchStoreItem](batchSize+1),
 		WithBackground[batchStoreItem](true),
 	)
 
-	// Add items to the batch
-	for i := 0; i < batchSize/2; i++ {
-		storeBatcher.Put(&batchStoreItem{})
-	}
+	go func() {
+		// Add items to the batch
+		for i := 0; i < batchSize; i++ {
+			storeBatcher.Put(&batchStoreItem{})
+		}
 
-	// Trigger processing manually
-	storeBatcher.Trigger()
+		// We need to wait for the batcher to process these 50 items before we send the trigger.
+		// This is because the trigger channel is in the same select block as the Put channel.
+		time.Sleep(10 * time.Millisecond)
+
+		// Trigger processing manually
+		storeBatcher.Trigger()
+	}()
 
 	// We should have at least 1 batch processed immediately
 	count := <-batchItemCount
 
-	assert.Equal(t, batchSize/2, count, "Trigger did not force immediate batch processing")
+	assert.Equal(t, batchSize, count, "Trigger did not force immediate batch processing")
 }
