@@ -85,7 +85,7 @@ func WithDebugLogMessage(logger ulogger.Logger, message string, args ...interfac
 }
 
 func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level string, args []interface{}) {
-	if s.Logger == nil {
+	if s.Logger == nil && logger != nil {
 		// duplicate the logger so that the skip frame is correct
 		s.Logger = logger.Duplicate(ulogger.WithSkipFrame(1))
 	}
