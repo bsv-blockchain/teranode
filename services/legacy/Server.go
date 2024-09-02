@@ -2,10 +2,10 @@ package legacy
 
 import (
 	"context"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -117,6 +117,12 @@ func (s *Server) Init(ctx context.Context) error {
 
 // Start function
 func (s *Server) Start(ctx context.Context) error {
+	// Tell FSM that we are in legacy sync, so it will transition to LegacySync state
+	_, err := s.blockchainClient.LegacySync(ctx, &emptypb.Empty{})
+	if err != nil {
+		s.logger.Errorf("[Legacy Server] failed to send Legacy Sync event to the FSM [%v]", err)
+	}
+
 	s.server.Start()
 
 	go func() {

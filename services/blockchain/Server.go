@@ -108,19 +108,17 @@ func (b *Blockchain) Start(ctx context.Context) error {
 
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	// GOKHAN: CHANGED FOR CENTRAL FSM MANAGEMENT
-	// Currently restore state is not automated. It requires manual intervention to send the RUN event.
 	// TODO: think if we can automate transition to RUN state after restore is complete.
+	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
 	if fsmStateRestore {
-		// if we are in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
+		// Send Restore event to FSM
 		_, err := b.Restore(ctx, &emptypb.Empty{})
 		if err != nil {
 			b.logger.Errorf("[Blockchain Server] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
 		}
 
-		// wait for node to finish Restoring.
-		// this means node transitions to RUN state
+		// Wait for node to finish Restoring.
+		// this means FSM got a RUN event and transitioned to RUN state
 		// this will block
 		_ = b.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
 	}
@@ -973,6 +971,8 @@ func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty,
 		// unable to send the event, no need to update the state.
 		return nil, err
 	}
+
+	// Check if we are ready to mine, by checking if Miner is subscribed to the blockchain
 
 	return nil, nil
 }

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"log"
 	"math/rand/v2"
@@ -829,18 +830,13 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 		if sm.current() { // used to check for isOrphan || sm.current()
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
 
-			// if you are at the Legacy Sync mode, tell FSM to transition to normal running.
-			currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+			// Since we are current, we can tell FSM to transition to RUN
+			// Blockchain client will checkl if miner is registered, if so it will send Mine event, and FSM will transition to Mine
+			_, err = sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{})
 			if err != nil {
-				// TODO: how to handle it gracefully?
-				sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+				sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
 			}
-
-			if *currentState == blockchain_api.FSMStateType_LEGACYSYNCING {
-				if err = sm.blockchainClient.SendFSMEvent(sm.ctx, blockchain_api.FSMEventType_RUN); err != nil {
-					return errors.NewServiceError("[Main] failed to send MINE notification", err)
-				}
-			}
+			//}
 		}
 	}
 
@@ -1099,6 +1095,14 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		if invVects[i].Type == wire.InvTypeBlock {
 			lastBlock = i
 			break
+		}
+	}
+
+	// If we are current, send a RUN event to the FSM
+	if sm.current() {
+		_, err := sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{})
+		if err != nil {
+			sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
 		}
 	}
 
