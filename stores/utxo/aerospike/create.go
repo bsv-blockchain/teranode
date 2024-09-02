@@ -216,7 +216,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				if err = s.externalStore.Set(
 					context.Background(),
 					bItem.txHash[:],
-					bItem.tx.Bytes(),
+					bItem.tx.ExtendedBytes(),
 					options.WithFileExtension("tx"),
 				); err != nil {
 					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.txHash.String(), err))
@@ -349,6 +349,9 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	}
 
 	if len(tx.Inputs) == 0 {
+		if !tx.IsCoinbase() {
+			return nil, errors.NewProcessingError("tx %s has no inputs. Only a coinbase tx has no inputs", txHash)
+		}
 		fee = 0
 		utxoHashes, err = utxo.GetUtxoHashes(tx, txHash)
 	} else {
@@ -451,7 +454,7 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 	if err := s.externalStore.Set(
 		context.TODO(),
 		bItem.txHash[:],
-		bItem.tx.Bytes(),
+		bItem.tx.ExtendedBytes(),
 		options.WithFileExtension("tx"),
 	); err != nil {
 		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.txHash.String(), err))
