@@ -122,7 +122,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 		// wait for node to finish Restoring.
 		// this means node transitions to RUN state
 		// this will block
-		b.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING, &emptypb.Empty{})
+		_ = b.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
 	}
 
 	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
@@ -933,6 +933,14 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	}, nil
 }
 
+func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targetState blockchain_api.FSMStateType) error {
+	for b.finiteStateMachine.Current() != targetState.String() {
+		b.logger.Debugf("[Blocckhain Server] Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
+		time.Sleep(1 * time.Second) // Wait and check again in 1 second
+	}
+	return nil
+}
+
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
 	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
@@ -1042,13 +1050,6 @@ func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb
 	}
 
 	return nil, nil
-}
-
-func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targetState blockchain_api.FSMStateType, _ *emptypb.Empty) {
-	for b.finiteStateMachine.Current() != targetState.String() {
-		b.logger.Debugf("[Blocckhain Server] Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
-		time.Sleep(1 * time.Second) // Wait and check again in 1 second
-	}
 }
 
 func (b *Blockchain) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {

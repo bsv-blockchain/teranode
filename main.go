@@ -661,7 +661,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		// wait for node to finish Legacy Syncing.
 		// this means node transitions to RUN state
 		// this will block
-		waitForFSMtoTransitionToRunning(ctx, blockchainClient, logger)
+		// waitForFSMtoTransitionToRunning(ctx, blockchainClient, logger)
 	}
 
 	// GOKHAN: CHANGED FOR CENTRAL FSM MANAGEMENT

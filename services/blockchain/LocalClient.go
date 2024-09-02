@@ -168,6 +168,10 @@ func (c LocalClient) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMS
 	return &state, nil
 }
 
+func (c LocalClient) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
+	panic("not implemented")
+}
+
 func (c LocalClient) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
 	// TODO: Fix me, this is a temporary solution
 	return blockchain_api.FSMStateType_MINING

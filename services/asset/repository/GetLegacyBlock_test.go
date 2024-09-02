@@ -406,6 +406,10 @@ func (s *mockStore) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb
 func (s *mockStore) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
 	panic("not implemented")
 }
+func (s *mockStore) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
+	panic("not implemented")
+}
+
 func (s *mockStore) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
 	panic("not implemented")
 }
