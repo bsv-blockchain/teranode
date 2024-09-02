@@ -155,7 +155,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 
 		info.BlockHeader = header.Bytes()
 
-		if coinbaseBytes != nil {
+		if len(coinbaseBytes) > 0 {
 			coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
 			if err != nil {
 				return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)

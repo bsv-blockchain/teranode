@@ -121,7 +121,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	block.TransactionCount = transactionCount
 	block.SizeInBytes = sizeInBytes
 
-	if coinbaseTx != nil {
+	if len(coinbaseTx) > 0 {
 		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
 		if err != nil {
 			return nil, 0, errors.NewStorageError("failed to convert coinbaseTx", err)

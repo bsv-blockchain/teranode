@@ -91,7 +91,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		return nil, nil, errors.NewStorageError("failed to convert hashMerkleRoot", err)
 	}
 
-	if coinbaseBytes != nil {
+	if len(coinbaseBytes) > 0 {
 		coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
 		if err != nil {
 			return nil, nil, errors.NewStorageError("failed to convert coinbaseTx", err)

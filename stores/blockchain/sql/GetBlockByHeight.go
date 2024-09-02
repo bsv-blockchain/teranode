@@ -125,7 +125,7 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 	block.TransactionCount = transactionCount
 	block.SizeInBytes = sizeInBytes
 
-	if coinbaseTx != nil {
+	if len(coinbaseTx) > 0 {
 		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
 		if err != nil {
 			return nil, errors.NewInvalidArgumentError("failed to convert coinbaseTx", err)
