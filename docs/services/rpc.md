@@ -2,6 +2,8 @@
 
 ## Index
 
+## Index
+
 1. [Introduction](#1-introduction)
 - [Supported RPC Commands](#supported-rpc-commands)
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
@@ -19,6 +21,12 @@
   - [Steps:](#steps)
   - [Outputs:](#outputs)
 - [3.7. Command Send Raw Transaction](#37-command---send-raw-transaction)
+  - [Function Overview](#function-overview)
+  - [Process Flow](#process-flow)
+- [3.8. Command Submit Mining Solution](#38-command---submit-mining-solution)
+  - [Function Overview](#function-overview)
+  - [Process Flow](#process-flow)
+- [3.9. Command Get Mining Candidate](#39-command---get-mining-candidate)
   - [Function Overview](#function-overview)
   - [Process Flow](#process-flow)
 4. [Technology](#4-technology)
@@ -268,6 +276,67 @@ The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-sign
 
 6. **Success Response**:
   - If the transaction is successfully broadcast, the function returns a success response, which might include the transaction ID or a success message.
+
+
+### 3.8. Command - Submit Mining Solution
+
+The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining solution to the network. This command allows miners to propose a potential new block to be added to the blockchain.
+
+#### Function Overview
+
+- **Purpose**: To submit a mining solution, which represents a potential new block, for validation and inclusion in the blockchain.
+- **Parameters**:
+  - `cmd`: Contains the JSON string of the mining solution and any command-specific parameters.
+  - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling.
+- **Return Value**:
+  - On success: Returns `nil`, indicating that the mining solution was successfully submitted.
+  - On failure: Returns an error detailing why the mining solution could not be processed or submitted.
+
+#### Process Flow
+
+![rpc-submit-mining-solution.svg](img/plantuml/rpc/rpc-submit-mining-solution.svg)
+
+
+1. **Command Parsing**:
+  - The function receives a command (`btcjson.SubmitMiningSolutionCmd`) which includes a JSON string representing the mining solution.
+
+2. **JSON Unmarshaling**:
+  - Attempts to unmarshal the JSON string into a `model.MiningSolution` struct.
+  - If unmarshaling fails, it returns an error, indicating that the JSON string was malformed or incompatible with the expected structure.
+
+3. **Solution Submission**:
+  - Calls the `SubmitMiningSolution` method on the `blockAssemblyClient` to submit the mining solution to the Block Assembly.
+  - The Block Assembly validates the solution and, if successful, propagates it to other nodes in the network.
+  - If submission fails, it returns an error indicating why the solution was rejected (e.g., invalid solution, network errors).
+
+### 3.9. Command - Get Mining Candidate
+
+The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candidate block for mining. This command allows miners to obtain the necessary information to attempt mining a new block.
+
+#### Function Overview
+
+- **Purpose**: To request a mining candidate, which represents a potential new block template, from the node.
+- **Parameters**:
+  - The function doesn't take any specific parameters from the RPC call.
+  - `closeChan`: A channel that signals the function to close and stop processing, used for graceful shutdowns and interruption handling (not directly used in this implementation).
+- **Return Value**:
+  - On success: Returns a mining candidate object (`mc`) containing the necessary information for mining.
+  - On failure: Returns an error detailing why the mining candidate could not be retrieved.
+
+#### Process Flow
+
+![rpc-get-mining-solution.svg](img/plantuml/rpc/rpc-get-mining-solution.svg)
+
+1. **Mining Candidate Retrieval**:
+  - Calls the `GetMiningCandidate` method on the `blockAssemblyClient` to retrieve a mining candidate.
+  - The Block Assembly generates the latest block template from the blockchain's current state.
+
+2. **Error Handling**:
+  - If the retrieval fails, the function returns the error to the caller.
+
+3. **Response**:
+  - If successful, the function returns the mining candidate object (`mc`).
+
 
 
 ## 4. Technology
