@@ -56,6 +56,13 @@ func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, params *
 func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *model.BlockHeader, bestBlockHeight uint32) (*model.NBit, error) {
 	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
 
+	if gocore.Config().GetBool("mine_initial_blocks", false) && bestBlockHeight < uint32(initialBlockCount) {
+		// set to start difficulty
+		d.logger.Debugf("mining initial blocks")
+
+		return d.nBits, nil
+	}
+
 	d.logger.Debugf("++++++GetNextWorkRequired++++++ bestBlockHeader.Hash: %s", bestBlockHeader.Hash().String())
 	// If regest or simnet we don't adjust the difficulty
 	if d.chainParams.NoDifficultyAdjustment {
@@ -78,9 +85,9 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 	if d.chainParams.ReduceMinDifficulty {
 		// Return minimum difficulty when more than the desired
 		// amount of time has elapsed without mining a block.
-		reductionTime := uint32(d.chainParams.MinDiffReductionTime /
-			time.Second)
-		allowMinTime := bestBlockHeader.Timestamp + reductionTime
+		reductionTime := d.chainParams.MinDiffReductionTime.Seconds()
+
+		allowMinTime := bestBlockHeader.Timestamp + uint32(reductionTime)
 		if now.Unix() > int64(allowMinTime) {
 			bytesLittleEndian := make([]byte, 4)
 			binary.LittleEndian.PutUint32(bytesLittleEndian, d.chainParams.PowLimitBits)
@@ -127,20 +134,14 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 		// 	// set to start difficulty
 
 		// 	return d.nBits, nil
-
-	}
-
-	if gocore.Config().GetBool("mine_initial_blocks", false) && bestBlockHeight < uint32(initialBlockCount) {
-		// set to start difficulty
-		d.logger.Debugf("mining initial blocks")
-
-		return d.nBits, nil
 	}
 
 	lastSuitableBlock, err := d.store.GetSuitableBlock(ctx, bestBlockHeader.Hash())
 	if err != nil {
-		return nil, errors.NewStorageError("error getting suitable block: %v", err)
+		return nil,
+			errors.NewStorageError("error getting suitable block: %v", err)
 	}
+
 	if lastSuitableBlock == nil {
 		return nil, errors.NewProcessingError("lastSuitableBlock is nil", nil)
 	}
@@ -154,14 +155,10 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 	if err != nil {
 		return nil, errors.NewStorageError("error getting suitable block", err)
 	}
+
 	if firstSuitableBlock == nil {
 		return d.nBits, nil
 	}
-
-	fh := chainhash.Hash(firstSuitableBlock.Hash)
-	lh := chainhash.Hash(lastSuitableBlock.Hash)
-	d.logger.Debugf("firstSuitableBlock hash: %s", fh.String())
-	d.logger.Debugf("lastSuitableBlock hash: %s", lh.String())
 
 	// nBits, err := d.computeTarget(&model.BlockHeader{
 	// 	Bits:      *bits1,
@@ -250,19 +247,14 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 		duration = 72 * int64(d.chainParams.TargetTimePerBlock.Seconds())
 	}
 
-	d.logger.Debugf("duration: %d", duration)
 	// Calculate the projected work by multiplying the current work by the target time per block (in seconds).
 	projectedWork := new(big.Int).Mul(work, big.NewInt(int64(d.chainParams.TargetTimePerBlock.Seconds())))
-	d.logger.Debugf("projectedWork: %s", projectedWork.String())
 	// Divide the projected work by the actual time duration between the blocks to get the adjusted work.
 	pw := new(big.Int).Div(projectedWork, big.NewInt(duration))
-	d.logger.Debugf("pw: %s", pw.String())
 	// Calculate 2^256, which is the maximum possible value in a 256-bit space (used for Bitcoin's difficulty target).
 	e := new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil)
-	d.logger.Debugf("e: %s", e.String())
 	// Subtract the adjusted work from 2^256 to get the new numerator for the target calculation.
 	nt := new(big.Int).Sub(e, pw)
-	d.logger.Debugf("nt: %s", nt.String())
 	// Calculate the new target by dividing the result by the adjusted work. This gives the new difficulty target.
 	newTarget := new(big.Int).Div(nt, pw)
 
@@ -273,45 +265,8 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	}
 	nBitsUint := BigToCompact(newTarget)
 	nb, _ := model.NewNBitFromSlice(uint32ToBytes(nBitsUint))
-	d.logger.Debugf("computeTarget - returning new target: %s", newTarget.String())
 	return nb, nil
 }
-
-// func (d *Difficulty) oldComputeTarget(suitableFirstBlock *model.BlockHeader, suitableLastBlock *model.BlockHeader) (*model.NBit, error) {
-// 	// If no difficulty adjustment is required, return the previous nbits
-// 	if !d.difficultyAdjustment {
-// 		d.logger.Debugf("no difficulty adjustment")
-// 		return &suitableLastBlock.Bits, nil
-// 	}
-
-// 	// Calculate the actual duration (in seconds) taken to mine the blocks between the first and last blocks
-// 	duration := int64(suitableLastBlock.Timestamp - suitableFirstBlock.Timestamp)
-// 	// In order to avoid difficulty cliffs, we bound the amplitude of the
-// 	// adjustement we are going to do.
-// 	if duration > 288*int64(d.chainParams.TargetTimePerBlock.Seconds()) {
-// 		duration = 288 * int64(d.chainParams.TargetTimePerBlock.Seconds())
-// 	} else if duration < 72*int64(d.chainParams.TargetTimePerBlock.Seconds()) {
-// 		duration = 72 * int64(d.chainParams.TargetTimePerBlock.Seconds())
-// 	}
-
-// 	// Calculate the new target based on the ratio of actual to expected duration
-// 	actualDuration := big.NewInt(duration)
-// 	// Calculate the expected duration for mining the blocks in the difficulty adjustment window
-// 	expectedDuration := big.NewInt(int64(d.chainParams.TargetTimePerBlock.Seconds() * DifficultyAdjustmentWindow))
-
-// 	// Calculate the new target by multiplying the last block's target with the ratio of actual to expected duration
-// 	newTarget := new(big.Int).Mul(suitableLastBlock.Bits.CalculateTarget(), actualDuration)
-// 	newTarget.Div(newTarget, expectedDuration)
-
-// 	if newTarget.Cmp(d.chainParams.PowLimit) > 0 {
-// 		d.logger.Debugf("new target would be above pow limit, set to pow limit")
-// 		newTarget.Set(d.chainParams.PowLimit)
-// 	}
-
-// 	nBitsUint := BigToCompact(newTarget)
-// 	nb, _ := model.NewNBitFromSlice(uint32ToBytes(nBitsUint))
-// 	return nb, nil
-// }
 
 // BigToCompact converts a whole number N to a compact representation using
 // an unsigned 32-bit number.  The compact representation only provides 23 bits
