@@ -330,10 +330,15 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		subtreeHashes[i] = subtreeHash[:]
 	}
 
+	var coinbaseBytes []byte
+	if block.CoinbaseTx != nil {
+		coinbaseBytes = block.CoinbaseTx.Bytes()
+	}
+
 	return &blockchain_api.GetBlockResponse{
 		Header:           block.Header.Bytes(),
 		Height:           height,
-		CoinbaseTx:       block.CoinbaseTx.Bytes(),
+		CoinbaseTx:       coinbaseBytes,
 		SubtreeHashes:    subtreeHashes,
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
@@ -390,10 +395,15 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 		subtreeHashes[i] = subtreeHash[:]
 	}
 
+	var coinbaseBytes []byte
+	if block.CoinbaseTx != nil {
+		coinbaseBytes = block.CoinbaseTx.Bytes()
+	}
+
 	return &blockchain_api.GetBlockResponse{
 		Header:           block.Header.Bytes(),
 		Height:           request.Height,
-		CoinbaseTx:       block.CoinbaseTx.Bytes(),
+		CoinbaseTx:       coinbaseBytes,
 		SubtreeHashes:    subtreeHashes,
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
