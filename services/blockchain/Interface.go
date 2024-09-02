@@ -39,6 +39,7 @@ type ClientI interface {
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 	GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error)
+	SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error)
 
 	// FSM related endpoints
 	GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error)
@@ -183,6 +184,9 @@ func (s *MockBlockchain) SetBlockSubtreesSet(ctx context.Context, blockHash *cha
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {

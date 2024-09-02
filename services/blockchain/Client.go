@@ -568,6 +568,15 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 	return blocks, nil
 }
 
+func (c *Client) SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error) {
+	_, err := c.client.SetMinerServiceStarted(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
 // FSM related endpoints
 
 func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
