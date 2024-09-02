@@ -386,6 +386,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			blockStore,
 			subtreeStore,
 			utxoStore,
+			blockchainClient,
 		)); err != nil {
 			return err
 
@@ -475,6 +476,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			txStore,
 			utxoStore,
 			validatorClient,
+			blockchainClient,
 		)); err != nil {
 			return err
 
@@ -657,22 +659,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 
 		}
-
-		// wait for node to finish Legacy Syncing.
-		// this means node transitions to RUN state
-		// this will block
-		// waitForFSMtoTransitionToRunning(ctx, blockchainClient, logger)
 	}
-
-	// GOKHAN: CHANGED FOR CENTRAL FSM MANAGEMENT
-	// TODO: think how to move to mining after Restore and LegacySyncing modes are complete.
-	//if !startLegacy && !fsmStateRestore {
-	//	// if we are restoring or in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
-	//	if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
-	//		logger.Errorf("[Main] failed to send RUN event [%v]", err)
-	//		// panic(err)
-	//	}
-	//}
 
 	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining
 	if startMiner {

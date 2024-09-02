@@ -387,6 +387,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
+
 	httpAddress, ok := gocore.Config().Get("blockvalidation_httpListenAddress")
 	if ok {
 		err := u.httpServer(ctx, httpAddress)

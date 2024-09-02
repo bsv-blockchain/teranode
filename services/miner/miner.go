@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"math/rand"
 	"net/http"
@@ -15,7 +16,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/retry"
@@ -94,6 +94,14 @@ func (m *Miner) Init(ctx context.Context) error {
 }
 
 func (m *Miner) Start(ctx context.Context) error {
+	// Don't start the miner until node reaches the RUNNING state
+	// This is particularly relevant when node is doing initial sync with legacy server
+	// This is to avoid mining on a stale chain
+	// This will block
+	_ = m.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+
+	// Continue starting the miner as node is in RUNNING state
+
 	listenAddress, ok := gocore.Config().Get("miner_httpListenAddress")
 	if !ok {
 		return errors.NewConfigurationError("[Miner] No miner_httpListenAddress specified")
@@ -122,18 +130,23 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
 
-	currentState, err := m.blockchainClient.GetFSMCurrentState(ctx)
-	if err != nil {
-		// TODO: how to handle it gracefully?
-		m.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
-	}
+	// currentState, err := m.blockchainClient.GetFSMCurrentState(ctx)
+	// if err != nil {
+	//	 // TODO: how to handle it gracefully?
+	//	 m.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+	// }
 
-	if *currentState != blockchain_api.FSMStateType_MINING {
-		//err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
-		_, err := m.blockchainClient.Mine(ctx, &emptypb.Empty{})
-		if err != nil {
-			return errors.NewServiceError("[Main] failed to send MINE notification", err)
-		}
+	// if *currentState != blockchain_api.FSMStateType_MINING {
+	// err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
+	_, err := m.blockchainClient.Mine(ctx, &emptypb.Empty{})
+	if err != nil {
+		m.logger.Errorf("[Miner] Failed to send FSM event: %s", err)
+	}
+	// }
+
+	_, err = m.blockchainClient.SetMinerServiceStarted(ctx)
+	if err != nil {
+		m.logger.Errorf("[Miner] Failed to set miner service started: %s", err)
 	}
 
 	var miningCtx context.Context

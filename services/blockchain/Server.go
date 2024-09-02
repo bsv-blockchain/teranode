@@ -107,23 +107,6 @@ func (b *Blockchain) Init(_ context.Context) error {
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
 
-	// Check if we need to Restore. If so, move FSM to the Restore state
-	// Restore will block and wait for RUN event to be manually sent
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
-		// Send Restore event to FSM
-		_, err := b.Restore(ctx, &emptypb.Empty{})
-		if err != nil {
-			b.logger.Errorf("[Blockchain Server] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
-		}
-
-		// Wait for node to finish Restoring.
-		// this means FSM got a RUN event and transitioned to RUN state
-		// this will block
-		_ = b.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
-	}
-
 	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
 	if err == nil && ok {
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
@@ -684,6 +667,21 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 		source:       req.Source,
 	}
 
+	// check if all services have started, and legacy sync will not be starting
+	// miner is not subscribing to the blockchain, services that subscribe are:
+	// blockassembler, utxo-persister, blockvalidation, assetService, coinbase, p2p
+	if len(b.subscribers) == 6 {
+		startLegacy := gocore.Config().GetBool("startLegacy", false)
+		if !startLegacy {
+			// if legacy will not be started but all other services are subscribed (blockassembler, utxo-persister, blockvalidation, assetService, coinbase, p2p)
+			// send RUN event to FSM
+			_, err := b.Run(ctx, &emptypb.Empty{})
+			if err != nil {
+				b.logger.Errorf("[Blockchain Server] failed to send RUN event [%v], this should not happen, FSM will continue without Running", err)
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -939,7 +937,7 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 
 func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targetState blockchain_api.FSMStateType) error {
 	for b.finiteStateMachine.Current() != targetState.String() {
-		b.logger.Debugf("[Blocckhain Server] Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
+		b.logger.Debugf("Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
 		time.Sleep(1 * time.Second) // Wait and check again in 1 second
 	}
 	return nil
@@ -978,7 +976,19 @@ func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty,
 		return nil, err
 	}
 
+	// TODO: decide to keep it or not. Currently, it does not affect the execution since LegacySync mode is activated only in the beginning.
+	// There are some potential cases that we want the node to start mining immediately when Miner Service is started.
+	// In this case, FSM should transition from Running State to Mining State, immediately.
+	// Such potential cases are:
+	// For Legacy Sync, in the future node may enter to Legacy Sync state. After it is done it recovers to Running State.
 	// Check if we are ready to mine, by checking if Miner is subscribed to the blockchain
+	if b.minerServiceStarted {
+		_, err = b.Mine(ctx, &emptypb.Empty{})
+		if err != nil {
+			// unable to send the event, no need to update the state.
+			return nil, err
+		}
+	}
 
 	return nil, nil
 }

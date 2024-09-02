@@ -2,6 +2,8 @@ package asset
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -95,6 +97,25 @@ func (v *Server) Init(ctx context.Context) (err error) {
 // Start function
 func (v *Server) Start(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
+
+	// Check if we need to Restore. If so, move FSM to the Restore state
+	// Restore will block and wait for RUN event to be manually sent
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
+	if fsmStateRestore {
+		// Send Restore event to FSM
+		_, err := v.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		if err != nil {
+			v.logger.Errorf("[Asset] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
+		}
+
+		// Wait for node to finish Restoring.
+		// this means FSM got a RUN event and transitioned to RUN state
+		// this will block
+		v.logger.Infof("[Asset] Node is restoring, waiting for FSM to transition to Running state")
+		_ = v.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		v.logger.Infof("[Asset] Node finished restoring and has transitioned to Running state, continuing to start Asset service")
+	}
 
 	if v.httpServer != nil {
 		g.Go(func() error {
