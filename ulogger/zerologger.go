@@ -15,8 +15,9 @@ import (
 
 type ZLoggerWrapper struct {
 	zerolog.Logger
-	service string
-	w       io.Writer
+	service   string
+	w         io.Writer
+	skipFrame int
 }
 
 func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
@@ -31,7 +32,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 
 	var z *ZLoggerWrapper
 	if gocore.Config().GetBool("PRETTY_LOGS", true) {
-		z = prettyZeroLogger(opts.writer, service)
+		z = prettyZeroLogger(service, opts)
 	} else {
 		z = &ZLoggerWrapper{
 			zerolog.New(opts.writer).With().
@@ -40,6 +41,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 				Logger(),
 			service,
 			opts.writer,
+			opts.skip,
 		}
 	}
 
@@ -49,7 +51,7 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 	return z
 }
 
-func prettyZeroLogger(writer io.Writer, service string) *ZLoggerWrapper {
+func prettyZeroLogger(service string, opts *Options) *ZLoggerWrapper {
 	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
 	output := zerolog.ConsoleWriter{
 		Out:        os.Stdout,
@@ -137,7 +139,8 @@ func prettyZeroLogger(writer io.Writer, service string) *ZLoggerWrapper {
 			Timestamp().
 			Logger(),
 		service,
-		writer,
+		opts.writer,
+		opts.skip,
 	}
 }
 
@@ -159,6 +162,27 @@ func (z *ZLoggerWrapper) New(service string, options ...Option) Logger {
 	}
 
 	return NewZeroLogger(service, o...)
+}
+
+func (z *ZLoggerWrapper) Duplicate(options ...Option) Logger {
+	newLogger := &ZLoggerWrapper{z.Logger, z.service, z.w, z.skipFrame}
+
+	defaultOpts := DefaultOptions()
+	opts := DefaultOptions()
+
+	for _, o := range options {
+		o(opts)
+	}
+
+	if opts.logLevel != defaultOpts.logLevel {
+		newLogger.SetLogLevel(opts.logLevel)
+	}
+
+	if opts.skip != defaultOpts.skip {
+		newLogger.skipFrame = opts.skip
+	}
+
+	return newLogger
 }
 
 func (z *ZLoggerWrapper) SetLogLevel(logLevel string) {
@@ -198,28 +222,28 @@ func (z *ZLoggerWrapper) LogLevel() int {
 }
 
 func (z *ZLoggerWrapper) Debugf(format string, args ...interface{}) {
-	z.Logger.Debug().Msgf(format, args...)
+	z.Logger.Debug().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
 }
 
 func (z *ZLoggerWrapper) Infof(format string, args ...interface{}) {
-	z.Logger.Info().Msgf(format, args...)
+	z.Logger.Info().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
 }
 
 func (z *ZLoggerWrapper) Warnf(format string, args ...interface{}) {
-	z.Logger.Warn().Msgf(format, args...)
+	z.Logger.Warn().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
 }
 
 func (z *ZLoggerWrapper) Errorf(format string, args ...interface{}) {
-	z.Logger.Error().Msgf(format, args...)
+	z.Logger.Error().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
 }
 
 func (z *ZLoggerWrapper) Fatalf(format string, args ...interface{}) {
-	z.Logger.Fatal().Msgf(format, args...)
+	z.Logger.Fatal().CallerSkipFrame(z.skipFrame).Msgf(format, args...)
 }
 
 // Output duplicates the current logger and sets w as its output.
 func (z *ZLoggerWrapper) Output(w io.Writer) *ZLoggerWrapper {
-	return &ZLoggerWrapper{z.Logger.Output(w), z.service, w}
+	return &ZLoggerWrapper{z.Logger.Output(w), z.service, w, z.skipFrame}
 }
 
 // With creates a child logger with the field added to its context.

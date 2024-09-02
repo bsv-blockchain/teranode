@@ -23,6 +23,7 @@ type Logger interface {
 	Errorf(format string, args ...interface{})
 	Fatalf(format string, args ...interface{})
 	New(service string, options ...Option) Logger
+	Duplicate(options ...Option) Logger
 }
 
 func New(service string, options ...Option) Logger {
