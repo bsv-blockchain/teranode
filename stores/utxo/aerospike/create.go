@@ -219,7 +219,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					bItem.tx.ExtendedBytes(),
 					options.WithFileExtension("tx"),
 				); err != nil {
-					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.txHash.String(), err))
+					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
 					continue
 				}
 			}
@@ -238,7 +238,6 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchID, err)
 
 		var aErr *aerospike.AerospikeError
 		ok := errors.As(err, &aErr)
@@ -254,6 +253,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				return
 			}
 		}
+		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchID, err)
 
 		for _, bItem := range batch {
 			utils.SafeSend(bItem.done, err)
@@ -457,7 +457,7 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 		bItem.tx.ExtendedBytes(),
 		options.WithFileExtension("tx"),
 	); err != nil {
-		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]: %v", bItem.txHash.String(), err))
+		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
 		return
 	}
 
