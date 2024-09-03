@@ -254,7 +254,7 @@ func (r *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (
 	// read root hash
 	_, err = chainhash.NewHash(buf.Next(32))
 	if err != nil {
-		return nil, 0, errors.NewProcessingError("unable to read root hash: %v", err)
+		return nil, 0, errors.NewProcessingError("unable to read root hash", err)
 	}
 
 	// read fees

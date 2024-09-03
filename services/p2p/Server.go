@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -279,7 +280,9 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	localValidator := gocore.Config().GetBool("useLocalValidator", false)
-	if !localValidator {
+	if localValidator {
+		s.logger.Infof("[p2p] Using local validator")
+	} else {
 		s.validatorClient, err = validator.NewClient(ctx, s.logger)
 		if err != nil {
 			return errors.NewServiceError("could not create validator client [%w]", err)

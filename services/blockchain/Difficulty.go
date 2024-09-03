@@ -98,7 +98,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 	lastSuitableBlock, err := d.store.GetSuitableBlock(ctx, bestBlockHeader.Hash())
 	if err != nil {
 		return nil,
-			errors.NewStorageError("error getting suitable block: %v", err)
+			errors.NewStorageError("error getting suitable block", err)
 	}
 
 	if lastSuitableBlock == nil {

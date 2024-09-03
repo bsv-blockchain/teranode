@@ -11,9 +11,6 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"io"
 	"log"
 	"math/big"
@@ -23,6 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
@@ -353,6 +354,8 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 
 	localValidator := gocore.Config().GetBool("useLocalValidator", false)
 	if localValidator {
+		ps.logger.Infof("[propagation] Using local validator")
+
 		blockHeight := ps.validator.GetBlockHeight()
 		if blockHeight == 0 {
 			err = errors.NewProcessingError("error getting blockHeight from validator: 0")

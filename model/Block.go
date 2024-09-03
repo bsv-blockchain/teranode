@@ -326,7 +326,7 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 				// TODO - this should only be done when we are loading legacy blocks
 				log.Printf("WARN: Block height not found in coinbase for block %s", block.Hash().String())
 			} else {
-				return nil, errors.NewBlockInvalidError("error extracting coinbase height for block %s: %v", block.Hash(), err)
+				return nil, errors.NewBlockInvalidError("error extracting coinbase height for block %s", block.Hash(), err)
 			}
 		}
 	}
@@ -558,7 +558,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 					if errors.Is(err, errors.ErrTxAlreadyExists) {
 						return errors.NewBlockInvalidError("[BLOCK][%s] duplicate transaction %s", b.Hash().String(), subtreeNode.Hash.String())
 					}
-					return errors.NewStorageError("[BLOCK][%s] error adding transaction %s to txMap: %v", b.Hash().String(), subtreeNode.Hash.String(), err)
+					return errors.NewStorageError("[BLOCK][%s] error adding transaction %s to txMap", b.Hash().String(), subtreeNode.Hash.String(), err)
 				}
 			}
 
@@ -749,7 +749,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	}
 
 	if err := g.Wait(); err != nil {
-		return errors.NewBlockInvalidError("[BLOCK][%s] error validating transaction order: %v", b.Hash().String(), err)
+		return errors.NewBlockInvalidError("[BLOCK][%s] error validating transaction order", b.Hash().String(), err)
 	}
 
 	return nil

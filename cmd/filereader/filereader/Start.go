@@ -407,7 +407,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 	case "utxoset":
 		utxoSet, err := model.NewUTXOSetFromReader(logger, br)
 		if err != nil {
-			return errors.NewProcessingError("error reading utxoSet: %v\n", err)
+			return errors.NewProcessingError("error reading utxoSet", err)
 		}
 
 		fmt.Printf("UTXOSet block hash: %v\n", utxoSet.BlockHash)
@@ -445,7 +445,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 	case "block":
 		block, err := block_model.NewBlockFromReader(br)
 		if err != nil {
-			return errors.NewBlockError("error reading block: %v\n", err)
+			return errors.NewBlockError("error reading block", err)
 		}
 
 		if verify {

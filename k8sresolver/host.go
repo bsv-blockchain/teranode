@@ -58,5 +58,5 @@ func parseTarget(target, defaultPort string) (host, port string, err error) {
 		// target doesn't have port
 		return host, port, nil
 	}
-	return "", "", errors.NewConfigurationError("invalid target address %v, error info: %v", target, err)
+	return "", "", errors.NewConfigurationError("invalid target address %v, error info", target, err)
 }

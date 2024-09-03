@@ -172,7 +172,7 @@ func readTxFromReader(body io.Reader) (tx *bt.Tx, err error) {
 			case error:
 				err = x
 			default:
-				err = errors.NewUnknownError("unknown panic: %v", r)
+				err = errors.NewUnknownError("unknown panic", r)
 			}
 		}
 	}()
