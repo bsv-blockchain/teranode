@@ -4,6 +4,7 @@
 ## Index
 
 
+
 1. [Introduction](#1-introduction)
 - [1.1. Go Errors](#11-go-errors)
 - [1.2. Go Errors Best Practices](#12-go-errors---best-practices)
@@ -13,10 +14,28 @@
 - [2.1. Error Handling Strategy](#21-error-handling-strategy)
 - [2.2. Sentinel Errors in Teranode](#22-sentinel-errors-in-teranode)
 - [2.3. Error Wrapping in Teranode](#23-error-wrapping-in-teranode)
+   - [Error Creation and Wrapping](#error-creation-and-wrapping)
+   - [Unwrapping Errors](#unwrapping-errors)
+   - [Best Practices for Error Wrapping](#best-practices-for-error-wrapping)
 - [2.4. gRPC Error Wrapping in Teranode](#24-grpc-error-wrapping-in-teranode)
-- [2.5. Extra Data](#26-extra-data)
-- [2.6. Error Protobuf](#27-error-protobuf)
-- [2.7. Unit Tests](#28-unit-tests)
+   - [Converting Teranode Errors to gRPC Errors](#converting-teranode-errors-to-grpc-errors)
+   - [Converting gRPC Errors back to Teranode Errors](#converting-grpc-errors-back-to-teranode-errors)
+   - [Practical Example](#practical-example)
+   - [Best Practices](#best-practices)
+- [2.5. Extra Data in Error Handling](#25-extra-data-in-error-handling)
+   - [Error Structure](#error-structure)
+   - [Purpose and Usage](#purpose-and-usage)
+   - [Example Implementation](#example-implementation)
+   - [Type Assertions with Extra Data](#type-assertions-with-extra-data)
+   - [Usage Example](#usage-example)
+   - [Best Practices](#best-practices)
+- [2.6. Error Protobuf](#26-error-protobuf)
+   - [Error Protocol Definition](#error-protocol-definition)
+   - [Key Components](#key-components)
+   - [Purpose and Benefits](#purpose-and-benefits)
+   - [Integration with Teranode's Error Handling](#integration-with-teranodes-error-handling)
+   - [Best Practices](#best-practices)
+- [2.7. Unit Tests](#27-unit-tests)
 
 
 ## 1. Introduction
@@ -170,14 +189,13 @@ Benefits of Wrapping Errors:
 
 ## 2. Error Handling in Teranode
 
-
 ### 2.1. Error Handling Strategy
 
-Teranode follows a structured error handling strategy that combines the use of sentinel errors and error wrapping to ensure clear, consistent, and traceable error handling throughout the application.
+Teranode follows a structured error handling strategy that combines the use of predefined error types, error wrapping, and consistent error creation patterns. This approach ensures clear, consistent, and traceable error handling throughout the application.
 
-The `errors/Error.go` file contains the definition of sentinel errors and wrapping / unwrapping functions used across the application.
+The `errors/Error.go` file contains the core error type definition and functions for creating, wrapping, and unwrapping errors. The `errors/Error_types.go` file defines specific error types and provides functions for creating these errors.
 
-An error is defined as a struct containing a code error, a message, an optional wrapped error and an optional extra data (`Data`) .
+An error in Teranode is defined as a struct containing an error code, a message, an optional wrapped error, and optional extra data:
 
 ```go
 type Error struct {
@@ -188,71 +206,144 @@ type Error struct {
 }
 ```
 
+The `ERR` type is an enum defined in the `error.proto` file, providing a standardized set of error codes across the system.
+
+Teranode emphasizes the use of specific error creation functions for different error types. These functions are defined in `Error_types.go` and follow a naming convention of `New<ErrorType>Error`. For example:
+
+```go
+func NewStorageError(message string, params ...interface{}) error {
+    return New(ERR_STORAGE_ERROR, message, params...)
+}
+```
+
+These functions automatically handle error wrapping when an existing error is passed as the last parameter. They also support sprintf-style formatting for the error message. For instance:
+
+```go
+err := errors.NewStorageError("failed to store block: %s", blockHash, existingErr)
+```
+
+This approach allows for consistent error creation, automatic error wrapping, and formatted error messages, enhancing the overall error handling strategy in Teranode.
+
 ### 2.2. Sentinel Errors in Teranode
 
-As mentioned in previous sections, sentinel errors are predefined errors that serve as fixed references for common error conditions. They are an integral part of the Teranode error handling strategy, providing a standard and efficient way to recognize and manage common specific error scenarios.
+Sentinel errors are predefined errors that serve as fixed references for common error conditions. They provide a standard and efficient way to recognize and manage common specific error scenarios.
 
 **Code Example:**
 
-Here we can see how the sentinel errors are defined in the `errors/Error_types.go` file:
+The sentinel errors are defined in the `errors/Error_types.go` file, along with corresponding functions to create these errors:
 
 ```go
 package errors
 
 var (
-    ErrNotFound             = New(ERR_NOT_FOUND, "not found")
-    ErrInvalidArgument      = New(ERR_INVALID_ARGUMENT, "invalid argument")
-    ErrThresholdExceeded    = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
+    ErrUnknown             = New(ERR_UNKNOWN, "unknown error")
+    ErrInvalidArgument     = New(ERR_INVALID_ARGUMENT, "invalid argument")
+    ErrThresholdExceeded   = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
+    ErrNotFound            = New(ERR_NOT_FOUND, "not found")
     // Other sentinel errors follow...
 )
+
+func NewUnknownError(message string, params ...interface{}) error {
+    return New(ERR_UNKNOWN, message, params...)
+}
+
+func NewInvalidArgumentError(message string, params ...interface{}) error {
+    return New(ERR_INVALID_ARGUMENT, message, params...)
+}
+
+func NewThresholdExceededError(message string, params ...interface{}) error {
+    return New(ERR_THRESHOLD_EXCEEDED, message, params...)
+}
+
+func NewNotFoundError(message string, params ...interface{}) error {
+    return New(ERR_NOT_FOUND, message, params...)
+}
+
+// Other error creation functions follow...
 ```
 
-Each sentinel error is created using a `New` function which ensures that each error has a unique code and a message that describes the error succinctly.
+Each sentinel error is created using the `New` function, ensuring that each error has a unique code and a succinct message. The new error creation functions allow for more flexible error creation with custom messages and automatic error wrapping.
 
-
-These sentinel errors are particularly useful for error comparisons and decision-making in the Teranode business logic. By comparing the returned errors to these predefined values, functions can determine the next steps without ambiguity.
+The sentinel errors are useful for error comparisons and decision-making in the Teranode business logic. By comparing returned errors to these predefined values, functions can determine the next steps without ambiguity.
 
 **How to Use Example:**
 
-When a function encounters an error, it can return one of these predefined errors. Here’s an example of how a function might use sentinel errors:
+When a function encounters an error, it can use the new error creation functions. Here's an example of how a function might use these errors:
 
 ```go
-func fetchData(id string) (*Data, error) {
-    if id == "" {
-        return nil, ErrInvalidArgument
-    }
-    data, found := database.Find(id)
-    if !found {
-        return nil, ErrNotFound
-    }
-    return data, nil
+package main
+
+import (
+	"fmt"
+	"errors"
+	"github.com/your-project/errors" // Import your custom errors package
+)
+
+// Data represents a simple data structure
+type Data struct {
+	ID string
 }
 
-// In another part of the application, you can check the error:
-data, err := fetchData("")
-if err != nil {
-    if errors.Is(err, ErrInvalidArgument) {
-        fmt.Println("Invalid ID provided.")
-    } else if errors.Is(err, ErrNotFound) {
-        fmt.Println("Data not found.")
-    } else {
-        fmt.Println("An unexpected error occurred:", err)
-    }
+// fetchData simulates fetching data and returning different types of errors
+func fetchData(id string) (*Data, error) {
+	if id == "" {
+		return nil, errors.NewInvalidArgumentError("empty ID provided")
+	}
+	if id == "notfound" {
+		return nil, errors.NewNotFoundError("data not found for ID: %s", id)
+	}
+	// Simulate a wrapped error
+	if id == "dberror" {
+		dbErr := fmt.Errorf("database connection failed")
+		return nil, errors.NewStorageError("failed to fetch data", dbErr)
+	}
+	return &Data{ID: id}, nil
+}
+
+func main() {
+	// Example usage
+	ids := []string{"", "notfound", "dberror", "validid"}
+
+	for _, id := range ids {
+		data, err := fetchData(id)
+		if err != nil {
+			// Use errors.Is to check for specific error types
+			if errors.Is(err, errors.ErrInvalidArgument) {
+				fmt.Printf("Invalid argument error: %v\n", err)
+			} else if errors.Is(err, errors.ErrNotFound) {
+				fmt.Printf("Not found error: %v\n", err)
+			} else if errors.Is(err, errors.ErrStorageError) {
+				fmt.Printf("Storage error: %v\n", err)
+
+				// Use errors.As to get more details about the error
+				var storageErr *errors.Error
+				if errors.As(err, &storageErr) {
+					fmt.Printf("Storage error details - Code: %v, Message: %s\n",
+						storageErr.Code, storageErr.Message)
+					if storageErr.WrappedErr != nil {
+						fmt.Printf("Wrapped error: %v\n", storageErr.WrappedErr)
+					}
+				}
+			} else {
+				fmt.Printf("Unknown error: %v\n", err)
+			}
+		} else {
+			fmt.Printf("Data fetched successfully: %v\n", data)
+		}
+		fmt.Println()
+	}
 }
 ```
 
-In this example, `fetchData` checks if the provided ID is empty and uses `ErrInvalidArgument` to indicate this problem. The calling code then checks the type of error using `errors.Is`, which simplifies handling specific errors accordingly.
-
-
 ### 2.3. Error Wrapping in Teranode
 
-Error wrapping in Teranode allows to create nested errors and propagate them through the different layers of the application. This allows an error to carry its history along with new context, effectively creating a chain of errors that leads back to the original issue.
+Error wrapping in Teranode enables the creation of nested errors and their propagation through different layers of the application. This mechanism allows an error to carry its history along with new context, effectively creating a chain of errors that leads back to the original issue.
 
-By maintaining a trail of errors, developers can trace back through the execution flow to understand what led to the error.
-Additionally, different layers of the application can decide how to handle errors based on their type and origin.
+By maintaining a trail of errors, developers can trace back through the execution flow to understand what led to the error. Additionally, different layers of the application can decide how to handle errors based on their type and origin.
+
+#### Error Creation and Wrapping
 
 The `New` function in Teranode's error package creates and returns a pointer to an `Error` struct, which includes fields for the error code, a message, and an optional wrapped error.
-
 
 ```go
 func New(code ERR, message string, params ...interface{}) *Error {
@@ -262,7 +353,6 @@ func New(code ERR, message string, params ...interface{}) *Error {
     if len(params) > 0 {
         if err, ok := params[len(params)-1].(*Error); ok {
             wErr = err
-            //data = err.Data
             params = params[:len(params)-1]
         }
     }
@@ -289,13 +379,13 @@ func New(code ERR, message string, params ...interface{}) *Error {
 }
 ```
 
-1. The function `New` takes an error code, a message, and a variadic `params` slice which may include one error that needs to be wrapped.
+The `New` function operates as follows:
 
-2. If the last parameter in `params` is an error, it is treated as the error to be wrapped. This error is then stored in the `WrappedErr` field of the `Error` struct, and any other parameters are used to format the error message.
+1. It takes an error code, a message, and a variadic `params` slice which may include one error to be wrapped.
+2. If the last parameter in `params` is an error, it's treated as the error to be wrapped. This error is stored in the `WrappedErr` field of the `Error` struct.
+3. Any additional parameters are used to format the message string using `fmt.Sprintf`, allowing for dynamic message content based on runtime values.
 
-3. If there are additional parameters (other than the error to be wrapped), they are used to format the message string using `fmt.Sprintf`, allowing dynamic message content based on runtime values.
-
-Here is a practical example of using the `New` function to create and wrap errors:
+Here's a practical example of using the `New` function to create and wrap errors:
 
 ```go
 func someOperation() error {
@@ -310,8 +400,9 @@ func someOperation() error {
 
 In this scenario, `someOperation` calls another function and wraps any error returned by this function with additional context, using the custom `New` function.
 
+#### Unwrapping Errors
 
-The `Unwrap` method in the `Error` structure returns the error that was wrapped within the current error, if any.
+The `Unwrap` method in the `Error` structure returns the error that was wrapped within the current error, if any:
 
 ```go
 func (e *Error) Unwrap() error {
@@ -319,11 +410,9 @@ func (e *Error) Unwrap() error {
 }
 ```
 
-This method allows the use of Go's built-in `errors.Unwrap` function to continue unwrapping through multiple layers of nested wrapped errors, should there be more than one.
+This method allows the use of Go's built-in `errors.Unwrap` function to continue unwrapping through multiple layers of nested wrapped errors.
 
-To effectively utilize the unwrapping functionality, you can use a loop or a conditional check to explore the chain of errors. Here’s an example that demonstrates how to use the `Unwrap` method to trace back through wrapped errors:
-
-**Practical Example:**
+To effectively utilize the unwrapping functionality, developers can use a loop or a conditional check to explore the chain of errors. Here's an example that demonstrates how to use the `Unwrap` method to trace back through wrapped errors:
 
 ```go
 // Assuming `someOperation` returns an error that may be wrapped multiple times
@@ -339,23 +428,22 @@ for err != nil {
 }
 ```
 
-In this example, `errors.Unwrap` is used in a loop to keep unwrapping the error until no more wrapped errors are found, effectively reaching the original error. This approach is particularly useful when you need to diagnose an issue and understand the sequence of errors that led to the final state.
+In this example, `errors.Unwrap` is used in a loop to keep unwrapping the error until no more wrapped errors are found, effectively reaching the original error. This approach is particularly useful when diagnosing an issue and understanding the sequence of errors that led to the final state.
 
-Best Practices:
+#### Best Practices for Error Wrapping
 
-1. Unwrap errors only when necessary. For example, if you're handling specific error types differently, unwrap errors until you find the type you're looking for.
+1. Unwrap errors only when necessary. For example, when handling specific error types differently, unwrap errors until finding the type you're looking for.
 2. Always log or monitor the full error chain before unwrapping in production environments to preserve the context and details of what went wrong.
-
-
+3. Use error wrapping to add context at each layer of the application, making it easier to trace the flow of execution that led to an error.
+4. When wrapping errors, include relevant information that might help in debugging, but be cautious not to include sensitive data.
 
 ### 2.4. gRPC Error Wrapping in Teranode
 
+As a distributed system utilizing gRPC, Teranode implements a robust mechanism for wrapping and unwrapping errors to ensure consistent error handling practices when errors cross service boundaries.
 
-When working with distributed systems that utilize gRPC, errors generated by one service must be communicated effectively to other services. Wrapping and unwrapping errors for gRPC enables Teranode to maintain consistent error handling practices even when errors cross service boundaries.
+#### Converting Teranode Errors to gRPC Errors
 
-This involves converting the custom error types of Teranode into gRPC-compatible errors, which use the `status` package from `google.golang.org/grpc`.
-
-The wrapping of gRPC errors can be seen in the `WrapGRPC` function within the `Error.go`.
+The `WrapGRPC` function in `Error.go` is responsible for converting Teranode's custom error types into gRPC-compatible errors. This function uses the `status` package from `google.golang.org/grpc` to create gRPC status errors.
 
 ```go
 package errors
@@ -365,9 +453,6 @@ import (
     "google.golang.org/grpc/status"
     "google.golang.org/protobuf/types/known/anypb"
 )
-
-...
-...
 
 func WrapGRPC(err error) error {
     if err == nil {
@@ -391,12 +476,19 @@ func WrapGRPC(err error) error {
 }
 ```
 
-`WrapGRPC` converts an internal Teranode error into a gRPC `status`, embedding additional details as needed. This allows the receiving service to understand not only the nature of the error but also to receive contextual metadata.
+The `WrapGRPC` function performs the following steps:
+1. If the input error is nil, it returns nil.
+2. It attempts to cast the error to Teranode's custom `Error` type.
+3. If successful, it creates a new `TError` (likely a protobuf message) with the error's code and message.
+4. It then creates a new gRPC status with the corresponding gRPC code and message.
+5. The `TError` is added as a detail to the gRPC status.
+6. If the error is not a Teranode `Error`, it creates a generic "unknown" gRPC error.
 
+This process allows the receiving service to understand not only the nature of the error but also to receive contextual metadata.
 
-When a Teranode service receives a gRPC error, it needs to convert it back into an internal error format. This process, known as unwrapping, involves extracting information from the gRPC error and reconstructing the original Teranode error as closely as possible.
+#### Converting gRPC Errors back to Teranode Errors
 
-The unwrapping of gRPC errors can be seen in the `UnwrapGRPC` function within the `Error.go`.
+When a Teranode service receives a gRPC error, it needs to convert it back into an internal error format. The `UnwrapGRPC` function in `Error.go` handles this process:
 
 ```go
 package errors
@@ -406,9 +498,6 @@ import (
     "google.golang.org/protobuf/proto"
     "google.golang.org/protobuf/types/known/anypb"
 )
-
-...
-...
 
 func UnwrapGRPC(err error) error {
     if err == nil {
@@ -431,36 +520,55 @@ func UnwrapGRPC(err error) error {
 }
 ```
 
-`UnwrapGRPC` checks if the error is a gRPC status error, extracts details embedded in the status, and attempts to reconstruct a Teranode-specific error using these details.
+The `UnwrapGRPC` function:
+1. Checks if the input is a gRPC status error.
+2. If it is, it iterates through the error details.
+3. It attempts to unmarshal each detail into a `TError`.
+4. If successful, it creates a new Teranode `Error` with the extracted code and message.
+5. If no matching detail is found, it creates a generic "unknown" Teranode error.
 
-Note: for this to be effective, a clear mapping between Teranode error codes and gRPC status codes must be maintained, in order to ensure that error meanings are preserved across service boundaries.
+This process allows Teranode to reconstruct its internal error types from gRPC errors, preserving error context across service boundaries.
 
-Just to see an end to end an example of wrapping and unwrapping gRPC errors, when the Blockchain Server.go receives a gRPC request to provide a block (`GetBlock`), it may encounter an error while processing the request. This error is then wrapped into a gRPC status error before being returned to the client.
+#### Practical Example
+
+Here's an end-to-end example of how gRPC error wrapping and unwrapping works in Teranode:
+
+1. In the Blockchain Server, when processing a `GetBlock` request:
 
 ```go
-	blockHash, err := chainhash.NewHash(request.Hash)
-    if err != nil {
-        return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
-    }
+blockHash, err := chainhash.NewHash(request.Hash)
+if err != nil {
+    return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
+}
 ```
 
-This is then interpreted by the Client (`GetBlock` in the Blockchain `Client.go`) as follows:
+2. In the Blockchain Client, when handling the response:
 
 ```go
-	resp, err := c.client.GetBlock(ctx, &blockchain_api.GetBlockRequest{
-		Hash: blockHash[:],
-	})
-	if err != nil {
-		return nil, errors.UnwrapGRPC(err)
-	}
+resp, err := c.client.GetBlock(ctx, &blockchain_api.GetBlockRequest{
+   Hash: blockHash[:],
+})
+if err != nil {
+   return nil, errors.UnwrapGRPC(err)
+}
 ```
 
-From this point on, the service invoking the blockchain client can handle the error as a Teranode error, even though it was originally delivered as a gRPC error.
+In this example, if an error occurs in the server, it's wrapped as a gRPC error before being sent to the client. The client then unwraps the gRPC error, allowing it to handle the error as a standard Teranode error.
 
+#### Best Practices
 
-### 2.5. Extra Data
+1. Maintain a clear mapping between Teranode error codes and gRPC status codes to ensure error meanings are preserved across service boundaries.
+2. Always wrap errors before sending them across gRPC boundaries, and unwrap them when receiving.
+3. Include relevant error details when wrapping, but be cautious about including sensitive information.
+4. Handle unwrapping errors gracefully, accounting for the possibility that the received error might not be a properly wrapped Teranode error.
 
-As we saw before, a Teranode error is represented by the following struct:
+### 2.5. Extra Data in Error Handling
+
+Teranode's error handling system includes a feature for attaching additional contextual information to errors. This is implemented through the `Data` field in the `Error` struct.
+
+#### Error Structure
+
+The Teranode error is represented by the following struct:
 
 ```go
 type Error struct {
@@ -471,7 +579,7 @@ type Error struct {
 }
 ```
 
-The `Data` field in the `Error` struct is an interface type `ErrData`. This interface is defined as follows:
+The `Data` field is of type `ErrData`, which is an interface defined as:
 
 ```go
 type ErrData interface {
@@ -479,14 +587,22 @@ type ErrData interface {
 }
 ```
 
-This means that any type that implements the `Error()` method (returns a string) can be used as the `Data` field in the `Error` struct. The purpose of having a `Data` field in the error struct is to allow attaching additional contextual information or payload to the error.
-Notice how this is different from a wrapped error.
+This design allows any type that implements the `Error()` method to be used as the `Data` field, providing flexibility in attaching various types of contextual information to errors.
 
-We can see an example here:
+#### Purpose and Usage
 
+The `Data` field serves two main purposes:
+
+1. It allows attaching additional contextual information or payload to the error.
+2. It enables type assertions for more specific error handling.
+
+This is distinct from wrapped errors, which are used for error chaining and preserving the error stack.
+
+#### Example Implementation
+
+Here's an example of how to use the `Data` field:
 
 ```go
-
 type UtxoSpentErrData struct {
     Hash           chainhash.Hash
     SpendingTxHash chainhash.Hash
@@ -498,31 +614,32 @@ func (e *UtxoSpentErrData) Error() string {
 }
 
 func NewUtxoSpentErr(txID chainhash.Hash, spendingTxID chainhash.Hash, t time.Time, err error) *Error {
+    // Create a new error
+    e := New(ERR_TX_ALREADY_EXISTS, "utxoSpentErrStruct.Error()", err)
 
-	// 1 - Create a new error
-	e := New(ERR_TX_ALREADY_EXISTS, "utxoSpentErrStruct.Error()", err)
-
-	// 2 - Create a second error, to be used for the Data field
+    // Create the extra data
     utxoSpentErrStruct := &UtxoSpentErrData{
         Hash:           txID,
         SpendingTxHash: spendingTxID,
         Time:           t,
     }
 
-	// 3 - Attach the data to the original error
-	e.Data = utxoSpentErrStruct
+    // Attach the data to the error
+    e.Data = utxoSpentErrStruct
 
-	return e
+    return e
 }
 ```
 
-In this example, we can see:
-* In the `NewUtxoSpentErr` function, a new custom error (`*Error`) is created using the `New` function, together with a `ERR_TX_ALREADY_EXISTS` sentinel code.
-* To provide a more descriptive error, a new `UtxoSpentErrData` struct is created.
-* The `Data` field of the error (`e.Data`) is set to the `utxoSpentErrStruct`, attaching the UtxoSpentErrData to the error.
+In this example:
+1. `UtxoSpentErrData` is a custom struct that implements the `ErrData` interface.
+2. `NewUtxoSpentErr` creates a new `Error` with a sentinel code `ERR_TX_ALREADY_EXISTS`.
+3. It then creates a `UtxoSpentErrData` struct with specific transaction details.
+4. Finally, it attaches this struct to the `Data` field of the error.
 
+#### Type Assertions with Extra Data
 
-The `Data` field is not only used to attach additional context to the error but also in the `errors.As` method for error type assertions.
+The `Data` field is also used in the `errors.As` method for error type assertions:
 
 ```go
 func (e *Error) As(target interface{}) bool {
@@ -539,29 +656,116 @@ func (e *Error) As(target interface{}) bool {
 }
 ```
 
-Here, if the `Data` field of the error (`e.Data`) is not `nil`, it checks if the `Data` implements the `error` interface. If it does, it calls `errors.As(data, target)`, attempting to assign the `Data` to the target.
+This implementation allows for type assertions on the `Data` field, enabling more specific error handling based on the extra data attached to the error.
 
-An example:
+#### Usage Example
+
+Here's how you might use this in practice:
 
 ```go
 baseErr := New(ERR_ERROR, "invalid tx error")
-
 utxoSpentError := NewUtxoSpentErr(chainhash.Hash{}, chainhash.Hash{}, time.Now(), baseErr)
 
 var spentErr *UtxoSpentErrData
-
-require.True(t, utxoSpentError.As(&spentErr))
+if errors.As(utxoSpentError, &spentErr) {
+    // Handle the specific UTXO spent error
+    fmt.Printf("UTXO %s was spent by %s at %s\n", spentErr.Hash, spentErr.SpendingTxHash, spentErr.Time)
+} else {
+    // Handle other types of errors
+    fmt.Println("An error occurred:", utxoSpentError)
+}
 ```
 
-So, in the context of the `NewUtxoSpentErr` function example, the `Data` field, which contains `utxoSpentErrStruct`, is used both for attaching context to the error and for performing type assertions using `errors.As`. This ensures that if the caller of this function needs to extract specific details about the error, it can do so by using `errors.As` on the error returned by `NewUtxoSpentErr`.
+In this example, `errors.As` is used to check if the error contains `UtxoSpentErrData`. If it does, you can access the specific details of the UTXO spent error.
+
+#### Best Practices
+
+1. Use the `Data` field to attach structured, relevant information to errors when additional context is needed.
+2. Implement the `ErrData` interface for custom error data structures to ensure compatibility with Teranode's error system.
+3. Utilize `errors.As` for type assertions when handling errors, to access specific error data when available.
 
 ### 2.6. Error Protobuf
 
-`error.proto` defines a protocol buffer message for error handling in Teranode. This file specifies the structure of error messages, including error codes and messages, using the Protobuf language.
+Teranode uses Protocol Buffers (protobuf) to define a standardized structure for error messages. This approach ensures consistency in error handling across different services within the Teranode ecosystem.
 
-The `enum ERR` defines an enumeration of possible error codes with explicit values (e.g., `UNKNOWN = 0; INVALID_ARGUMENT = 1;`). These enums help standardize error handling across different Teranode services that interact with each other.
+#### Error Protocol Definition
 
-Use `protoc-gen-go` to compile the proto file.
+The `error.proto` file defines the structure of error messages using the Protocol Buffers language. Here's an example of what this file might look like:
+
+```protobuf
+syntax = "proto3";
+
+package teranode.errors;
+
+option go_package = "github.com/teranode/errors";
+
+// TError represents a Teranode error
+message TError {
+  ERR code = 1;
+  string message = 2;
+  string wrapped_error = 3;
+}
+
+// ERR enumerates all possible error codes in Teranode
+enum ERR {
+  UNKNOWN = 0;
+  INVALID_ARGUMENT = 1;
+  NOT_FOUND = 2;
+  ALREADY_EXISTS = 3;
+  PERMISSION_DENIED = 4;
+  UNAUTHENTICATED = 5;
+  RESOURCE_EXHAUSTED = 6;
+  FAILED_PRECONDITION = 7;
+  ABORTED = 8;
+  INTERNAL = 9;
+  UNAVAILABLE = 10;
+  // ... other error codes ...
+}
+```
+
+#### Key Components
+
+1. **TError Message**: This defines the structure of a Teranode error, including:
+    - `code`: An error code from the ERR enum.
+    - `message`: A string describing the error.
+    - `wrapped_error`: A string representation of any wrapped errors.
+
+2. **ERR Enum**: This enumerates all possible error codes in Teranode. Each error type is assigned a unique integer value, starting from 0. This enumeration helps standardize error codes across different services.
+
+#### Purpose and Benefits
+
+1. **Standardization**: By defining error structures in protobuf, Teranode ensures that all services use a consistent error format.
+
+2. **Language Agnostic**: Protobuf definitions can be compiled into multiple programming languages, allowing services written in different languages to communicate using the same error structure.
+
+3. **Versioning**: Protobuf supports versioning, making it easier to evolve the error structure over time without breaking backward compatibility.
+
+4. **Efficiency**: Protobuf messages are serialized into a compact binary format, which is more efficient for network transmission compared to text-based formats like JSON.
+
+#### Integration with Teranode's Error Handling
+
+The generated Go code is integrated with Teranode's error handling system. For example, in the `WrapGRPC` function:
+
+```go
+func WrapGRPC(err error) error {
+    // ...
+    details, _ := anypb.New(&TError{
+        Code:    uErr.Code,
+        Message: uErr.Message,
+    })
+    // ...
+}
+```
+
+Here, `TError` is the generated struct from the protobuf definition, used to create a gRPC error with standardized details.
+
+#### Best Practices
+
+1. Keep the `error.proto` file updated as new error types are introduced or existing ones are modified.
+2. Ensure that all services use the latest version of the compiled protobuf definitions.
+3. When adding new fields to the `TError` message, use new field numbers to maintain backward compatibility.
+4. Document the meaning and appropriate use of each error code in the `ERR` enum.
+
 
 ### 2.7. Unit Tests
 
