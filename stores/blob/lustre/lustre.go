@@ -2,10 +2,12 @@ package lustre
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -74,10 +76,10 @@ func NewLustreStore(logger ulogger.Logger, s3Client s3Store, dir string, persist
 	}
 
 	lustreStore := &Lustre{
-		paths:         []string{dir},
+		paths:         []string{dir + "/"},
 		logger:        logger,
 		options:       options,
-		persistSubDir: filepath.Clean(persistDir) + "/",
+		persistSubDir: persistDir + "/",
 		s3Client:      s3Client,
 	}
 
@@ -86,8 +88,9 @@ func NewLustreStore(logger ulogger.Logger, s3Client s3Store, dir string, persist
 		return nil, errors.NewStorageError("[Lustre] failed to create main lustre directory: %s", dir, err)
 	}
 
-	if err := os.MkdirAll(filepath.Clean(dir+"/"+persistDir), 0755); err != nil {
-		return nil, errors.NewStorageError("[Lustre] failed to create persist lustre directory: %s", dir+"/"+persistDir, err)
+	persistPath := path.Join(dir, persistDir)
+	if err := os.MkdirAll(persistPath, 0755); err != nil {
+		return nil, errors.NewStorageError("[Lustre] failed to create persist lustre directory: %s", persistPath, err)
 	}
 
 	return lustreStore, nil
@@ -108,23 +111,32 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 
 	fileName, err := s.getFileNameForSet(key, opts...)
 	if err != nil {
-		return errors.NewStorageError("[Lustre] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
+		return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
+	}
+
+	if _, err := os.Stat(fileName); err == nil {
+		return errors.NewTxAlreadyExistsError("[Lustre][SetFromReader] [%s] already exists in store", fileName)
 	}
 
 	// write the bytes from the reader to a file with the filename
 	file, err := os.Create(fileName + ".tmp")
 	if err != nil {
-		return errors.NewStorageError("[Lustre] [%s] failed to create file", fileName, err)
+		return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to create file", fileName, err)
 	}
 	defer file.Close()
 
-	if _, err = io.Copy(file, reader); err != nil {
-		return errors.NewStorageError("[Lustre] [%s] failed to write data to file", fileName, err)
+	if _, err := io.Copy(file, reader); err != nil {
+		return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to write data to file", fileName, err)
 	}
 
 	// rename the file to the final name
-	if err = os.Rename(fileName+".tmp", fileName); err != nil {
-		return errors.NewStorageError("[Lustre] [%s] failed to rename file from tmp", fileName, err)
+	if err := os.Rename(fileName+".tmp", fileName); err != nil {
+		if _, err := os.Stat(fileName); err == nil {
+			// there is another thread/process creating the same Tx at the same time!!!!
+			return errors.NewTxAlreadyExistsError("[Lustre][Set] [%s] already exists in store", fileName)
+		}
+
+		return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to rename file from tmp", fileName, err)
 	}
 
 	return nil
@@ -135,18 +147,27 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 
 	fileName, err := s.getFileNameForSet(hash, opts...)
 	if err != nil {
-		return errors.NewStorageError("[Lustre] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
+		return errors.NewStorageError("[Lustre][Set] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
+	}
+
+	if _, err := os.Stat(fileName); err == nil {
+		return errors.NewTxAlreadyExistsError("[Lustre][Set] [%s] already exists in store", fileName)
 	}
 
 	// write bytes to file
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err = os.WriteFile(fileName+".tmp", value, 0644); err != nil {
-		return errors.NewStorageError("[Lustre] [%s] failed to write data to file", fileName, err)
+	if err := os.WriteFile(fileName+".tmp", value, 0644); err != nil {
+		return errors.NewStorageError("[Lustre][Set] [%s] failed to write data to file", fileName, err)
 	}
 
 	// rename the file to the final name
-	if err = os.Rename(fileName+".tmp", fileName); err != nil {
-		return errors.NewStorageError("[Lustre] [%s] failed to rename file from tmp", fileName, err)
+	if err := os.Rename(fileName+".tmp", fileName); err != nil {
+		if _, err := os.Stat(fileName); err == nil {
+			// there is another thread/process creating the same Tx at the same time!!!!
+			return errors.NewTxAlreadyExistsError("[Lustre][Set] [%s] already exists in store", fileName)
+		}
+
+		return errors.NewStorageError("[Lustre][Set] [%s] failed to rename file from tmp", fileName, err)
 	}
 
 	return nil
@@ -255,10 +276,11 @@ func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 	bytes, err := os.ReadFile(fileName)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			s.logger.Warnf("[Lustre][Get] [%s] file not found in local dir: %v", fileName, err)
 			// check the persist sub dir
 			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
 			if err != nil {
-				// s.logger.Warnf("[Lustre][Get] [%s] file not found in subtree temp dir: %v", fileName, err)
+				s.logger.Warnf("[Lustre][Get] [%s] file not found in persist dir: %v", fileName, err)
 				if errors.Is(err, os.ErrNotExist) && s.s3Client != nil {
 					// check s3
 					bytes, err = s.s3Client.Get(ctx, hash, opts...)
@@ -386,7 +408,7 @@ func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.Options) er
 func (s *Lustre) filename(hash []byte) string {
 	// determine path to use, based on the first byte of the hash and the number of paths
 	path := s.paths[hash[0]%byte(len(s.paths))]
-	return fmt.Sprintf("%s/%x", path, bt.ReverseBytes(hash))
+	return filepath.Join(path, hex.EncodeToString(bt.ReverseBytes(hash)))
 }
 
 func (s *Lustre) getFileNameForPersist(filename string) string {
@@ -394,9 +416,13 @@ func (s *Lustre) getFileNameForPersist(filename string) string {
 	// add the persist dir before the file in the filepath
 	fileParts := strings.Split(filename, string(os.PathSeparator))
 	fileParts[len(fileParts)-1] = s.persistSubDir + fileParts[len(fileParts)-1]
+	if fileParts[0] == "" {
+		fileParts[0] = "/"
+	}
 
 	// clean the paths
-	return filepath.Clean("/" + filepath.Join(fileParts...))
+	// return filepath.Clean(filepath.Join(fileParts...))
+	return filepath.Join(fileParts...)
 }
 
 func (s *Lustre) getFileNameForGet(hash []byte, opts ...options.Options) (string, error) {
