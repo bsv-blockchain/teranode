@@ -1276,6 +1276,7 @@ out:
 				}
 
 			case *txMsg:
+				// TODO - if we are in Legacy Sync mode, should we ignore this message?
 				sm.handleTxMsg(msg)
 				if msg.reply != nil {
 					msg.reply <- struct{}{}
