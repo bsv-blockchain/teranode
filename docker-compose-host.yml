@@ -155,10 +155,6 @@ services:
   tx-blaster-1:
     <<: *ubsv-base
     container_name: tx-blaster-1
-    depends_on:
-      - ubsv-1
-      - ubsv-2
-      - ubsv-3
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv1"
       BLASTER_ARGS: "-workers=2"

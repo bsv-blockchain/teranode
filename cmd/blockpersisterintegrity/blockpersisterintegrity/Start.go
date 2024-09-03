@@ -172,6 +172,7 @@ func (l VerboseLogger) SetLogLevel(level string) {}
 func (l VerboseLogger) New(service string, options ...ulogger.Option) ulogger.Logger {
 	return VerboseLogger{}
 }
+func (l VerboseLogger) Duplicate(options ...ulogger.Option) ulogger.Logger { return VerboseLogger{} }
 func (l VerboseLogger) Debugf(format string, args ...interface{}) {
 	fmt.Printf(format, args...)
 }

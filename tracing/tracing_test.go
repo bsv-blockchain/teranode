@@ -20,6 +20,7 @@ func newLineLogger() *lineLogger {
 func (l *lineLogger) New(service string, options ...ulogger.Option) ulogger.Logger {
 	return nil
 }
+func (l *lineLogger) Duplicate(options ...ulogger.Option) ulogger.Logger { return l }
 func (l *lineLogger) LogLevel() int {
 	return 0
 }

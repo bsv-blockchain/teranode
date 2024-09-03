@@ -121,7 +121,11 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	storeBatchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
 	storeBatchDurationStr, _ := gocore.Config().GetInt("utxostore_storeBatcherDurationMillis", 10)
 	storeBatchDuration := time.Duration(storeBatchDurationStr) * time.Millisecond
-	s.storeBatcher = batcher.New[batchStoreItem](storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
+	if storeBatchSize > 1 {
+		s.storeBatcher = batcher.New[batchStoreItem](storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
+	} else {
+		s.logger.Warnf("Store batch size is set to %d, store batching is disabled", storeBatchSize)
+	}
 
 	getBatchSize, _ := gocore.Config().GetInt("utxostore_getBatcherSize", 1024)
 	getBatchDurationStr, _ := gocore.Config().GetInt("utxostore_getBatcherDurationMillis", 10)

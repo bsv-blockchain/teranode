@@ -1,0 +1,17 @@
+@startuml
+participant "Blockchain Service" as Blockchain
+participant "Kafka" as Kafka
+participant "Block Persister Service" as BlockPersister
+database "File Storage" as FileStorage
+
+Blockchain -> Kafka: Emit Kafka Block Notification
+Kafka -> BlockPersister: Notify Block Received
+BlockPersister -> FileStorage: Process new block files
+FileStorage --> BlockPersister
+
+
+
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

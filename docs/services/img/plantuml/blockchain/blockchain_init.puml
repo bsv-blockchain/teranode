@@ -18,6 +18,6 @@ end
 Service --> Client: Server started
 deactivate Service
 
-left footer Last Modified On: 24-Jan-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

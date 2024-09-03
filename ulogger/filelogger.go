@@ -8,10 +8,11 @@ import (
 )
 
 type FileLogger struct {
-	service  string
-	logLevel int
-	writer   io.Writer
-	logFile  *os.File
+	service   string
+	logLevel  int
+	writer    io.Writer
+	logFile   *os.File
+	skipFrame int
 }
 
 // Log levels
@@ -37,10 +38,11 @@ func NewFileLogger(service string, options ...Option) *FileLogger {
 	}
 
 	return &FileLogger{
-		service:  service,
-		logLevel: parseLogLevel(opts.logLevel),
-		writer:   opts.writer,
-		logFile:  file,
+		service:   service,
+		logLevel:  parseLogLevel(opts.logLevel),
+		writer:    opts.writer,
+		logFile:   file,
+		skipFrame: opts.skip,
 	}
 }
 
@@ -89,6 +91,35 @@ func (fl *FileLogger) New(service string, options ...Option) Logger {
 		writer:   fl.writer,
 		logFile:  fl.logFile,
 	}
+}
+
+func (fl *FileLogger) Duplicate(options ...Option) Logger {
+	// Create a new FileLogger with the same log file
+	newLogger := &FileLogger{
+		service:   fl.service,
+		logLevel:  fl.logLevel,
+		writer:    fl.writer,
+		logFile:   fl.logFile,
+		skipFrame: fl.skipFrame,
+	}
+
+	defaultOpts := DefaultOptions()
+	opts := DefaultOptions()
+
+	for _, o := range options {
+		o(opts)
+	}
+
+	// apply any options that are not the default, to the new logger
+	if opts.logLevel != defaultOpts.logLevel {
+		newLogger.SetLogLevel(opts.logLevel)
+	}
+
+	if opts.skip != defaultOpts.skip {
+		newLogger.skipFrame = opts.skip
+	}
+
+	return newLogger
 }
 
 func logMessage(logFile *os.File, _, level, format string, args ...interface{}) {

@@ -6,6 +6,7 @@ import (
 
 type GoCoreLogger struct {
 	*gocore.Logger
+	skipFrame int
 }
 
 func NewGoCoreLogger(service string, options ...Option) *GoCoreLogger {
@@ -23,13 +24,40 @@ func NewGoCoreLogger(service string, options ...Option) *GoCoreLogger {
 	//	panic("GoCoreLogger only supports stdout")
 	//}
 
-	return &GoCoreLogger{gocore.Log(service, gocore.NewLogLevelFromString(opts.logLevel))}
+	return &GoCoreLogger{gocore.Log(service, gocore.NewLogLevelFromString(opts.logLevel)), opts.skip}
 }
 
 func (g *GoCoreLogger) New(service string, options ...Option) Logger {
+	opts := DefaultOptions()
+	for _, o := range options {
+		o(opts)
+	}
+
 	return &GoCoreLogger{
 		gocore.Log(service, g.Logger.GetLogLevel()),
+		opts.skip,
 	}
+}
+
+func (g *GoCoreLogger) Duplicate(options ...Option) Logger {
+	newLogger := &GoCoreLogger{g.Logger, g.skipFrame}
+
+	defaultOpts := DefaultOptions()
+	opts := DefaultOptions()
+
+	for _, o := range options {
+		o(opts)
+	}
+
+	if opts.logLevel != defaultOpts.logLevel {
+		newLogger.SetLogLevel(opts.logLevel)
+	}
+
+	if opts.skip != defaultOpts.skip {
+		newLogger.skipFrame = opts.skip
+	}
+
+	return newLogger
 }
 
 func (g *GoCoreLogger) SetLogLevel(_ string) {
