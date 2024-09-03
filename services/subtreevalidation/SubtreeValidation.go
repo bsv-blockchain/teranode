@@ -432,6 +432,10 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeMetaBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("meta"))
 	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
 	if err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			u.logger.Infof("[validateSubtreeInternal][%s] subtree meta already exists in store", v.SubtreeHash.String())
+			return nil
+		}
 		return errors.NewStorageError("[validateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String(), err)
 	}
 
@@ -449,6 +453,10 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("subtree"))
 	stat.NewStat("8. storeSubtree").AddTime(start)
 	if err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			u.logger.Infof("[validateSubtreeInternal][%s] subtree already exists in store", v.SubtreeHash.String())
+			return nil
+		}
 		return errors.NewStorageError("[validateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String(), err)
 	}
 

@@ -208,7 +208,11 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					wrapper.Bytes(),
 					options.WithFileExtension("outputs"),
 				); err != nil {
-					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]: %v", bItem.txHash.String(), err))
+					if errors.Is(err, errors.ErrBlobAlreadyExists) {
+						utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("error writing output to external store [%s]", bItem.txHash.String(), err))
+					} else {
+						utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]", bItem.txHash.String(), err))
+					}
 					continue
 				}
 			} else {
@@ -219,7 +223,11 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					bItem.tx.ExtendedBytes(),
 					options.WithFileExtension("tx"),
 				); err != nil {
-					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+					if errors.Is(err, errors.ErrBlobAlreadyExists) {
+						utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("error writing output to external store [%s]", bItem.txHash.String(), err))
+					} else {
+						utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+					}
 					continue
 				}
 			}
@@ -457,7 +465,11 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 		bItem.tx.ExtendedBytes(),
 		options.WithFileExtension("tx"),
 	); err != nil {
-		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+		} else {
+			utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+		}
 		return
 	}
 
@@ -532,7 +544,11 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 		wrapper.Bytes(),
 		options.WithFileExtension("outputs"),
 	); err != nil {
-		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]: %v", bItem.txHash.String(), err))
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("error writing output to external store [%s]", bItem.txHash.String(), err))
+		} else {
+			utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]", bItem.txHash.String(), err))
+		}
 		return
 	}
 

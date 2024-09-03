@@ -115,7 +115,7 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 	}
 
 	if _, err := os.Stat(fileName); err == nil {
-		return errors.NewTxAlreadyExistsError("[Lustre][SetFromReader] [%s] already exists in store", fileName)
+		return errors.NewBlobAlreadyExistsError("[Lustre][SetFromReader] [%s] already exists in store", fileName)
 	}
 
 	// write the bytes from the reader to a file with the filename
@@ -133,7 +133,7 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 	if err := os.Rename(fileName+".tmp", fileName); err != nil {
 		if _, err := os.Stat(fileName); err == nil {
 			// there is another thread/process creating the same Tx at the same time!!!!
-			return errors.NewTxAlreadyExistsError("[Lustre][Set] [%s] already exists in store", fileName)
+			return errors.NewBlobAlreadyExistsError("[Lustre][Set] [%s] already exists in store", fileName)
 		}
 
 		return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to rename file from tmp", fileName, err)
@@ -151,7 +151,7 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 	}
 
 	if _, err := os.Stat(fileName); err == nil {
-		return errors.NewTxAlreadyExistsError("[Lustre][Set] [%s] already exists in store", fileName)
+		return errors.NewBlobAlreadyExistsError("[Lustre][Set] [%s] already exists in store", fileName)
 	}
 
 	// write bytes to file
@@ -164,7 +164,7 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 	if err := os.Rename(fileName+".tmp", fileName); err != nil {
 		if _, err := os.Stat(fileName); err == nil {
 			// there is another thread/process creating the same Tx at the same time!!!!
-			return errors.NewTxAlreadyExistsError("[Lustre][Set] [%s] already exists in store", fileName)
+			return errors.NewBlobAlreadyExistsError("[Lustre][Set] [%s] already exists in store", fileName)
 		}
 
 		return errors.NewStorageError("[Lustre][Set] [%s] failed to rename file from tmp", fileName, err)

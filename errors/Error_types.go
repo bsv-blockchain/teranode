@@ -44,6 +44,7 @@ var (
 	ErrContext                    = New(ERR_CONTEXT_ERROR, "context cancelled")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
+	ErrBlobAlreadyExists          = New(ERR_BLOB_ALREADY_EXISTS, "blob already exists")
 )
 
 // errors initialization functions
@@ -149,4 +150,7 @@ func NewStateInitializationError(message string, params ...interface{}) error {
 }
 func NewStateErrorError(message string, params ...interface{}) error {
 	return New(ERR_STATE_ERROR, message, params...)
+}
+func NewBlobAlreadyExistsError(message string, params ...interface{}) error {
+	return New(ERR_BLOB_ALREADY_EXISTS, message, params...)
 }
