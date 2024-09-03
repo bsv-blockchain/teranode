@@ -2,6 +2,7 @@ package legacy
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
@@ -144,12 +145,12 @@ func (s *Server) Start(ctx context.Context) error {
 		s.logger.Errorf("[Legacy Server] failed to send Legacy Sync event to the FSM [%v]", err)
 	}
 
-	s.server.Start()
-
 	go func() {
 		<-ctx.Done()
-		s.server.Stop()
+		_ = s.server.Stop()
 	}()
+
+	s.server.Start()
 
 	return nil
 }
