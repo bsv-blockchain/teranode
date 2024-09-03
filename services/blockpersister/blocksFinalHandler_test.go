@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"io"
 	"os"
 	"testing"
@@ -195,7 +196,9 @@ func TestBlock(t *testing.T) {
 
 	blockStore := memory.New()
 
-	persister := New(context.Background(), ulogger.TestLogger{}, blockStore, subtreeStore, mockStore)
+	blockchainClient := &blockchain.LocalClient{}
+
+	persister := New(context.Background(), ulogger.TestLogger{}, blockStore, subtreeStore, mockStore, blockchainClient)
 
 	var block model.Block
 

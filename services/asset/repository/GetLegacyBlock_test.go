@@ -367,6 +367,9 @@ func (s *mockStore) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhas
 func (s *mockStore) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
 	panic("not implemented")
 }
+func (s *mockStore) SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
 func (s *mockStore) SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error {
 	panic("not implemented")
 }
@@ -406,6 +409,10 @@ func (s *mockStore) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb
 func (s *mockStore) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
 	panic("not implemented")
 }
+func (s *mockStore) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
+	panic("not implemented")
+}
+
 func (s *mockStore) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
 	panic("not implemented")
 }

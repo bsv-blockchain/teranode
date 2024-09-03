@@ -85,7 +85,9 @@ func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation
 
 	validatorClient := &validator.MockValidatorClient{TxMetaStore: txMetaStore}
 
-	subtreeValidationServer := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
+	blockchainClient := &blockchain.LocalClient{}
+
+	subtreeValidationServer := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
 	if err := subtreeValidationServer.Init(context.Background()); err != nil {
 		panic(err)
 	}
@@ -678,5 +680,3 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 	t.Logf("Error received as expected: %s", err.Error())
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
-
-

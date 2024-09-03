@@ -2,6 +2,9 @@ package subtreevalidation
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"net/url"
 	"runtime"
 	"strconv"
@@ -42,6 +45,7 @@ type Server struct {
 	stats                             *gocore.Stat
 	prioritySubtreeCheckActiveMap     map[string]bool
 	prioritySubtreeCheckActiveMapLock sync.Mutex
+	blockchainClient                  blockchain.ClientI
 }
 
 func New(
@@ -51,6 +55,7 @@ func New(
 	txStore blob.Store,
 	utxoStore utxo.Store,
 	validatorClient validator.Interface,
+	blockchainClient blockchain.ClientI,
 ) *Server {
 
 	maxMerkleItemsPerSubtree, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1024)
@@ -69,6 +74,7 @@ func New(
 		stats:                             gocore.NewStat("subtreevalidation"),
 		prioritySubtreeCheckActiveMap:     map[string]bool{},
 		prioritySubtreeCheckActiveMapLock: sync.Mutex{},
+		blockchainClient:                  blockchainClient,
 	}
 
 	// create a caching tx meta store
@@ -94,6 +100,26 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
+
+	// Check if we need to Restore. If so, move FSM to the Restore state
+	// Restore will block and wait for RUN event to be manually sent
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
+	if fsmStateRestore {
+		// Send Restore event to FSM
+		_, err := u.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		if err != nil {
+			u.logger.Errorf("[Subtreevalidation] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
+		}
+
+		// Wait for node to finish Restoring.
+		// this means FSM got a RUN event and transitioned to RUN state
+		// this will block
+		u.logger.Infof("[Subtreevalidation] Node is restoring, waiting for FSM to transition to Running state")
+		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		u.logger.Infof("[Subtreevalidation] Node finished restoring and has transitioned to Running state, continuing to start Subtreevalidation service")
+	}
+
 	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err == nil && ok {
 		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.

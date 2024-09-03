@@ -568,6 +568,15 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 	return blocks, nil
 }
 
+func (c *Client) SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error) {
+	_, err := c.client.SetMinerServiceStarted(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
 // FSM related endpoints
 
 func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
@@ -577,6 +586,16 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMSta
 	}
 
 	return &state.State, nil
+}
+
+func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState blockchain_api.FSMStateType) error {
+	_, err := c.client.WaitFSMToTransitionToGivenState(ctx, &blockchain_api.WaitFSMToTransitionRequest{
+		State: targetState})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (c *Client) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {

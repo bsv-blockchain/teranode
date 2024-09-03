@@ -11,6 +11,9 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"io"
 	"log"
 	"math/big"
@@ -53,16 +56,18 @@ type PropagationServer struct {
 	txStore            blob.Store
 	validator          validator.Interface
 	validatorKafkaChan chan []byte
+	blockchainClient   blockchain.ClientI
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface) *PropagationServer {
+func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI) *PropagationServer {
 	initPrometheusMetrics()
 
 	return &PropagationServer{
-		logger:    logger,
-		txStore:   txStore,
-		validator: validatorClient,
+		logger:           logger,
+		txStore:          txStore,
+		validator:        validatorClient,
+		blockchainClient: blockchainClient,
 	}
 }
 
@@ -77,6 +82,25 @@ func (ps *PropagationServer) Init(_ context.Context) (err error) {
 
 // Start function
 func (ps *PropagationServer) Start(ctx context.Context) (err error) {
+	// Check if we need to Restore. If so, move FSM to the Restore state
+	// Restore will block and wait for RUN event to be manually sent
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
+	if fsmStateRestore {
+		// Send Restore event to FSM
+		_, err := ps.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		if err != nil {
+			ps.logger.Errorf("[Faucet] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
+		}
+
+		// Wait for node to finish Restoring.
+		// this means FSM got a RUN event and transitioned to RUN state
+		// this will block
+		ps.logger.Infof("[Faucet] Node is restoring, waiting for FSM to transition to Running state")
+		_ = ps.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		ps.logger.Infof("[Faucet] Node finished restoring and has transitioned to Running state, continuing to start Faucet service")
+	}
+
 	ipv6Addresses, ok := gocore.Config().Get("ipv6_addresses")
 	if ok {
 		err = ps.StartUDP6Listeners(ctx, ipv6Addresses)
@@ -117,10 +141,10 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	//  kafka channel setup
 	validatortxsKafkaURL, _, found := gocore.Config().GetURL("kafka_validatortxsConfig")
 	if !found {
-		return errors.New(errors.ERR_CONFIGURATION, "kafka_validatortxsConfig not found, validator channel configuration is required")
+		return errors.New(errors.ERR_CONFIGURATION, "kafka_validatortxs Config not found, validator channel configuration is required")
 	}
 
-	ps.logger.Infof("[Validator] connecting to kafka for sending txs at %s", validatortxsKafkaURL)
+	ps.logger.Infof("[Propagation Server] connecting to kafka for sending txs at %s", validatortxsKafkaURL)
 
 	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
 	if workers > 0 {

@@ -39,9 +39,11 @@ type ClientI interface {
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 	GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error)
+	SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error)
 
 	// FSM related endpoints
 	GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error)
+	WaitForFSMtoTransitionToGivenState(context.Context, blockchain_api.FSMStateType) error
 	GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType
 	SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
 	Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
@@ -184,7 +186,13 @@ func (s *MockBlockchain) SetBlockSubtreesSet(ctx context.Context, blockHash *cha
 func (s *MockBlockchain) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
 	panic("not implemented")
 }
+func (s *MockBlockchain) SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error) {
+	panic("not implemented")
+}
 func (s *MockBlockchain) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {

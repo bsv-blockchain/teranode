@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -14,7 +16,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/retry"
@@ -93,6 +94,34 @@ func (m *Miner) Init(ctx context.Context) error {
 }
 
 func (m *Miner) Start(ctx context.Context) error {
+	// Check if we need to Restore. If so, move FSM to the Restore state
+	// Restore will block and wait for RUN event to be manually sent
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
+	if fsmStateRestore {
+		// Send Restore event to FSM
+		_, err := m.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		if err != nil {
+			m.logger.Errorf("[Miner] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
+		}
+
+		// Wait for node to finish Restoring.
+		// this means FSM got a RUN event and transitioned to RUN state
+		// this will block
+		m.logger.Infof("[Miner] Node is restoring, waiting for FSM to transition to Running state")
+		_ = m.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		m.logger.Infof("[Miner] Node finished restoring and has transitioned to Running state, continuing to start Faucet service")
+	}
+
+	// Don't start the miner until node reaches the RUNNING state
+	// This is particularly relevant when node is doing initial sync with legacy server
+	// This is to avoid mining on a stale chain
+	// This will block
+	m.logger.Infof("[Miner] Miner is waiting for FSM to transition to Running state")
+	_ = m.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+
+	// Continue starting the miner as node is in the RUNNING state
+
 	listenAddress, ok := gocore.Config().Get("miner_httpListenAddress")
 	if !ok {
 		return errors.NewConfigurationError("[Miner] No miner_httpListenAddress specified")
@@ -121,17 +150,23 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
 
-	currentState, err := m.blockchainClient.GetFSMCurrentState(ctx)
-	if err != nil {
-		// TODO: how to handle it gracefully?
-		m.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
-	}
+	// currentState, err := m.blockchainClient.GetFSMCurrentState(ctx)
+	// if err != nil {
+	//	 // TODO: how to handle it gracefully?
+	//	 m.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+	// }
 
-	if *currentState != blockchain_api.FSMStateType_MINING {
-		err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
-		if err != nil {
-			return errors.NewServiceError("[Main] failed to send MINE notification", err)
-		}
+	// if *currentState != blockchain_api.FSMStateType_MINING {
+	// err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
+	_, err := m.blockchainClient.Mine(ctx, &emptypb.Empty{})
+	if err != nil {
+		m.logger.Errorf("[Miner] Failed to send FSM event: %s", err)
+	}
+	// }
+
+	_, err = m.blockchainClient.SetMinerServiceStarted(ctx)
+	if err != nil {
+		m.logger.Errorf("[Miner] Failed to set miner service started: %s", err)
 	}
 
 	var miningCtx context.Context

@@ -39,8 +39,10 @@ service BlockchainAPI {
   rpc GetBlocksMinedNotSet(google.protobuf.Empty) returns (GetBlocksMinedNotSetResponse) {}
   rpc SetBlockSubtreesSet(SetBlockSubtreesSetRequest) returns (google.protobuf.Empty) {}
   rpc GetBlocksSubtreesNotSet(google.protobuf.Empty) returns (GetBlocksSubtreesNotSetResponse) {}
+  rpc SetMinerServiceStarted(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc SendFSMEvent(SendFSMEventRequest) returns (GetFSMStateResponse) {}
   rpc GetFSMCurrentState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
+  rpc WaitFSMToTransitionToGivenState(WaitFSMToTransitionRequest) returns (google.protobuf.Empty) {}
   rpc Run(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc Mine(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc CatchUpTransactions(google.protobuf.Empty) returns (google.protobuf.Empty) {}
@@ -281,6 +283,11 @@ message GetBlocksSubtreesNotSetResponse {
 
 // swagger:model GetFSMStateResponse
 message GetFSMStateResponse {
+  FSMStateType state = 1;
+}
+
+// swagger:model WaitFSMToTransitionRequest
+message WaitFSMToTransitionRequest {
   FSMStateType state = 1;
 }
 

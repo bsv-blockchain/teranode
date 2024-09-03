@@ -30,7 +30,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
@@ -387,6 +386,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			blockStore,
 			subtreeStore,
 			utxoStore,
+			blockchainClient,
 		)); err != nil {
 			return err
 
@@ -476,6 +476,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			txStore,
 			utxoStore,
 			validatorClient,
+			blockchainClient,
 		)); err != nil {
 			return err
 
@@ -557,6 +558,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 	if startFaucet {
 		if err = sm.AddService("Faucet", faucet.New(
 			logger.New("faucet"),
+			blockchainClient,
 		)); err != nil {
 			return err
 
@@ -589,38 +591,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 					logger.New("prop"),
 					txStore,
 					validatorClient,
+					blockchainClient,
 				)); err != nil {
 					return err
 
 				}
 			}
-		}
-	}
-
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	fsmStateLegacy := gocore.Config().GetBool("fsm_state_legacy", false)
-
-	// Currently restore state is not automated. It requires manual intervention to send the RUN event.
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	if fsmStateRestore {
-		// if we are in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
-		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RESTORE); err != nil {
-			logger.Errorf("[Main] failed to send Restore event [%v]", err)
-			panic(err)
-		}
-
-		// wait for node to finish Restoring.
-		// this means node transitions to RUN state
-		// this will block
-		waitForFSMtoTransitionToRunning(ctx, blockchainClient, logger)
-	}
-
-	if startLegacy || fsmStateLegacy {
-		// if we are starting the legacy service, or forcing the node to start in legacy mode we need to wait for
-		// legacy service to send RUN event to start node's normal operation.
-		if err = blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_LEGACYSYNC); err != nil {
-			logger.Errorf("[Main] failed to send Legacy Sync event [%v]", err)
-			panic(err)
 		}
 	}
 
@@ -672,20 +648,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		)); err != nil {
 			return err
 
-		}
-
-		// wait for node to finish Legacy Syncing.
-		// this means node transitions to RUN state
-		// this will block
-		waitForFSMtoTransitionToRunning(ctx, blockchainClient, logger)
-	}
-
-	// TODO: think how to move to mining after Restore and LegacySyncing modes are complete.
-	if !startLegacy && !fsmStateRestore {
-		// if we are restoring or in the LegacySyncing mode, we need to wait for legacy service to send RUN event to start node's normal operation.
-		if err := blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_RUN); err != nil {
-			logger.Errorf("[Main] failed to send RUN event [%v]", err)
-			// panic(err)
 		}
 	}
 
@@ -838,18 +800,5 @@ func waitForPostgresToStart(logger ulogger.Logger) error {
 		_ = conn.Close()
 		logger.Infof("PostgreSQL is up - ready to go!")
 		return nil
-	}
-}
-
-func waitForFSMtoTransitionToRunning(ctx context.Context, blockchainClient blockchain.ClientI, logger ulogger.Logger) {
-	currentState, err := blockchainClient.GetFSMCurrentState(ctx)
-	if err != nil {
-		// TODO: how to handle it gracefully?
-		logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
-	}
-
-	for *currentState != blockchain_api.FSMStateType_RUNNING {
-		logger.Debugf("[Main] Waiting for FSM to transition to Running state, currently at: %v", currentState)
-		time.Sleep(1 * time.Second) // Wait and check again in 1 second
 	}
 }

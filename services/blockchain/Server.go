@@ -39,22 +39,23 @@ type subscriber struct {
 // Blockchain type carries the logger within it
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	addBlockChan       chan *blockchain_api.AddBlockRequest
-	store              blockchain_store.Store
-	subtreeStore       blob.Store
-	utxoStore          utxo.Store
-	logger             ulogger.Logger
-	newSubscriptions   chan subscriber
-	deadSubscriptions  chan subscriber
-	subscribers        map[subscriber]bool
-	notifications      chan *blockchain_api.Notification
-	newBlock           chan struct{}
-	difficulty         *Difficulty
-	chainParams        *chaincfg.Params
-	blockKafkaProducer util.KafkaProducerI
-	stats              *gocore.Stat
-	finiteStateMachine *fsm.FSM
-	client             ClientI
+	addBlockChan        chan *blockchain_api.AddBlockRequest
+	store               blockchain_store.Store
+	subtreeStore        blob.Store
+	utxoStore           utxo.Store
+	logger              ulogger.Logger
+	newSubscriptions    chan subscriber
+	deadSubscriptions   chan subscriber
+	subscribers         map[subscriber]bool
+	notifications       chan *blockchain_api.Notification
+	newBlock            chan struct{}
+	difficulty          *Difficulty
+	chainParams         *chaincfg.Params
+	blockKafkaProducer  util.KafkaProducerI
+	stats               *gocore.Stat
+	finiteStateMachine  *fsm.FSM
+	client              ClientI
+	minerServiceStarted bool
 }
 
 // New will return a server instance with the logger stored within it
@@ -142,7 +143,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 
 			case s := <-b.newSubscriptions:
 				b.subscribers[s] = true
-				b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
+			//	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
 
 			case s := <-b.deadSubscriptions:
 				delete(b.subscribers, s)
@@ -676,6 +677,27 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 		source:       req.Source,
 	}
 
+	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", req.Source, len(b.subscribers))
+
+	// check if all services have started, services that subscribe are:
+	// blockassembler, utxo-persister, blockvalidation, coinbase, p2p = 5 subscribers
+	// if we already have 4, and now got the 5th, we can send RUN event to FSM
+	numberOfCurrentSubscribers := len(b.subscribers) + 1
+	if numberOfCurrentSubscribers == 5 {
+		b.logger.Infof("[Blockchain] All services have subscribed, sending RUN event to FSM")
+		// if legacy server will not be started, send RUN event to FSM
+		// else we will wait Legacy server to start and send RUN event to FSM
+		startLegacy := gocore.Config().GetBool("startLegacy", false)
+		if !startLegacy {
+			// if legacy will not be started but all other services are subscribed (blockassembler, utxo-persister, blockvalidation, assetService, coinbase, p2p)
+			// send RUN event to FSM
+			_, err := b.Run(ctx, &emptypb.Empty{})
+			if err != nil {
+				b.logger.Errorf("[Blockchain Server] failed to send RUN event [%v], this should not happen, FSM will continue without Running", err)
+			}
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -894,6 +916,11 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 	}, nil
 }
 
+func (b *Blockchain) SetMinerServiceStarted(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	b.minerServiceStarted = true
+	return nil, nil
+}
+
 // FSM related endpoints
 
 func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
@@ -924,11 +951,20 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	}, nil
 }
 
+func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targetState blockchain_api.FSMStateType) error {
+	for b.finiteStateMachine.Current() != targetState.String() {
+		b.logger.Debugf("Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
+		time.Sleep(1 * time.Second) // Wait and check again in 1 second
+	}
+	return nil
+}
+
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
-	b.logger.Debugf("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
+	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
 	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
 	if err != nil {
+		b.logger.Debugf("[Blockchain Server] Error sending event to FSM, state has not changed.")
 		return nil, err
 	}
 	state := b.finiteStateMachine.Current()
@@ -940,7 +976,7 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 		State: blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[state]),
 	}
 
-	b.logger.Debugf("[Blockchain Server] FSM current state: %v", b.finiteStateMachine.Current(), ", response: %v", resp)
+	b.logger.Infof("[Blockchain Server] FSM current state: %v, response: %v", b.finiteStateMachine.Current(), resp)
 
 	return resp, nil
 }
@@ -954,6 +990,20 @@ func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty,
 	if err != nil {
 		// unable to send the event, no need to update the state.
 		return nil, err
+	}
+
+	// TODO: decide to keep it or not. Currently, it does not affect the execution since LegacySync mode is activated only in the beginning.
+	// There are some potential cases that we want the node to start mining immediately when Miner Service is started.
+	// In this case, FSM should transition from Running State to Mining State, immediately.
+	// Such potential cases are:
+	// For Legacy Sync, in the future node may enter to Legacy Sync state. After it is done it recovers to Running State.
+	// Check if we are ready to mine, by checking if Miner is subscribed to the blockchain
+	if b.minerServiceStarted {
+		_, err = b.Mine(ctx, &emptypb.Empty{})
+		if err != nil {
+			// unable to send the event, no need to update the state.
+			return nil, err
+		}
 	}
 
 	return nil, nil

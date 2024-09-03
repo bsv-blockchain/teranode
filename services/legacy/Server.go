@@ -2,10 +2,11 @@ package legacy
 
 import (
 	"context"
-
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -117,6 +118,32 @@ func (s *Server) Init(ctx context.Context) error {
 
 // Start function
 func (s *Server) Start(ctx context.Context) error {
+
+	// Check if we need to Restore. If so, move FSM to the Restore state
+	// Restore will block and wait for RUN event to be manually sent
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
+	if fsmStateRestore {
+		// Send Restore event to FSM
+		_, err := s.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		if err != nil {
+			s.logger.Errorf("[Legacy Server] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
+		}
+
+		// Wait for node to finish Restoring.
+		// this means FSM got a RUN event and transitioned to RUN state
+		// this will block
+		s.logger.Infof("[Legacy Server] Node is restoring, waiting for FSM to transition to Running state")
+		_ = s.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		s.logger.Infof("[Legacy Server] Node finished restoring and has transitioned to Running state, continuing to start Legacy service")
+	}
+
+	// Tell FSM that we are in legacy sync, so it will transition to LegacySync state
+	_, err := s.blockchainClient.LegacySync(ctx, &emptypb.Empty{})
+	if err != nil {
+		s.logger.Errorf("[Legacy Server] failed to send Legacy Sync event to the FSM [%v]", err)
+	}
+
 	s.server.Start()
 
 	go func() {

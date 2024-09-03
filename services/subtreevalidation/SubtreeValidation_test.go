@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"os"
 	"runtime/pprof"
 	"testing"
@@ -47,7 +48,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 	t.Run("validateSubtree - smoke test", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+		txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 		defer deferFunc()
 
 		subtree, err := util.NewTreeByLeafCount(4)
@@ -83,7 +84,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			httpmock.NewBytesResponder(200, nodeBytes),
 		)
 
-		blockValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
+		blockValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
 
 		v := ValidateSubtree{
 			SubtreeHash:   *subtree.RootHash(),
@@ -112,7 +113,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 // 	})
 // }
 
-func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store, func()) {
+func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store, blockchain.ClientI, func()) {
 	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
 	httpmock.Activate()
 	httpmock.RegisterResponder(
@@ -133,7 +134,9 @@ func setup() (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store
 
 	validatorClient := &validator.MockValidatorClient{TxMetaStore: utxoStore}
 
-	return utxoStore, validatorClient, txStore, subtreeStore, func() {
+	blockchainClient := &blockchain.LocalClient{}
+
+	return utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, func() {
 		httpmock.DeactivateAndReset()
 	}
 }
@@ -143,10 +146,10 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	util.SkipVeryLongTests(t)
 	initPrometheusMetrics()
 
-	txMetaStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+	txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 	defer deferFunc()
 
-	blockValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient)
+	blockValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
 	blockValidation.utxoStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
 
 	numberOfItems := 1_024 * 1_024
@@ -203,7 +206,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	initPrometheusMetrics()
 
-	utxoStore, validatorClient, txStore, subtreeStore, deferFunc := setup()
+	utxoStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 	defer deferFunc()
 
 	subtree, err := util.NewTreeByLeafCount(1)
@@ -219,7 +222,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 		httpmock.NewBytesResponder(200, nodeBytes),
 	)
 
-	subtreeValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, utxoStore, validatorClient)
+	subtreeValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient)
 
 	// Create a mock context
 	ctx := context.Background()
