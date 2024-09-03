@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"io"
 	"log"
 	"net/url"
@@ -71,6 +72,25 @@ func (v *Server) Init(ctx context.Context) (err error) {
 // Start function
 func (v *Server) Start(ctx context.Context) error {
 
+	// Check if we need to Restore. If so, move FSM to the Restore state
+	// Restore will block and wait for RUN event to be manually sent
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
+	if fsmStateRestore {
+		// Send Restore event to FSM
+		_, err := v.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		if err != nil {
+			v.logger.Errorf("[Validator] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
+		}
+
+		// Wait for node to finish Restoring.
+		// this means FSM got a RUN event and transitioned to RUN state
+		// this will block
+		v.logger.Infof("[Validator] Node is restoring, waiting for FSM to transition to Running state")
+		_ = v.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		v.logger.Infof("[Validator] Node finished restoring and has transitioned to Running state, continuing to start Transaction Validator service")
+	}
+
 	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
 	if err == nil && ok {
 		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
@@ -113,31 +133,31 @@ func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 		//startTime := time.Now()
 		currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
 		if err != nil {
-			v.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+			v.logger.Errorf("[Validator] Failed to get current state: %s", err)
 			// TODO: how to handle it gracefully?
 		}
 		for *currentState == blockchain_api.FSMStateType_CATCHINGTXS {
-			v.logger.Debugf("[BlockAssembly] Waiting for FSM to finish catching txs")
+			v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
 			time.Sleep(1 * time.Second) // Wait and check again in 1 second
 		}
 
 		data, err := NewTxValidationDataFromBytes(msg.Message.Value)
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
+			v.logger.Errorf("[Validator] Failed to decode kafka message: %s", err)
 			return err
 		}
 
 		tx, err := bt.NewTxFromBytes(data.Tx)
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[ProcessTransaction] failed to parse transaction from bytes: %w", err)
+			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
 			return err
 		}
 
 		if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil {
 			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[BlockAssembly] Invalid tx: %s", err)
+			v.logger.Errorf("[Validator] Invalid tx: %s", err)
 			return err
 		}
 
@@ -145,7 +165,7 @@ func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 		//prometheusTransactionDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 		return nil
 	}); err != nil {
-		v.logger.Errorf("[BlockAssembly] failed to start Kafka listener: %s", err)
+		v.logger.Errorf("[Validator] failed to start Kafka listener: %s", err)
 	}
 }
 

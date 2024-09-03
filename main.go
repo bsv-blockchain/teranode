@@ -558,6 +558,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 	if startFaucet {
 		if err = sm.AddService("Faucet", faucet.New(
 			logger.New("faucet"),
+			blockchainClient,
 		)); err != nil {
 			return err
 
@@ -590,6 +591,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 					logger.New("prop"),
 					txStore,
 					validatorClient,
+					blockchainClient,
 				)); err != nil {
 					return err
 
@@ -597,18 +599,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			}
 		}
 	}
-
-	// fsmStateLegacy := gocore.Config().GetBool("fsm_state_legacy", false)
-
-	// GOKHAN: CHANGED FOR CENTRAL FSM MANAGEMENT
-	//if startLegacy || fsmStateLegacy {
-	// if we are starting the legacy service, or forcing the node to start in legacy mode we need to wait for
-	// legacy service to send RUN event to start node's normal operation.
-	// if err = blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_LEGACYSYNC); err != nil {
-	//	logger.Errorf("[Main] failed to send Legacy Sync event [%v]", err)
-	//	panic(err)
-	//}
-	//}
 
 	if startLegacy {
 		subtreeStore, err := getSubtreeStore(logger)
