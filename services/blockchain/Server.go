@@ -682,21 +682,21 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	// check if all services have started, services that subscribe are:
 	// blockassembler, utxo-persister, blockvalidation, coinbase, p2p = 5 subscribers
 	// if we already have 4, and now got the 5th, we can send RUN event to FSM
-	numberOfCurrentSubscribers := len(b.subscribers) + 1
-	if numberOfCurrentSubscribers == 5 {
-		b.logger.Infof("[Blockchain] All services have subscribed, sending RUN event to FSM")
-		// if legacy server will not be started, send RUN event to FSM
-		// else we will wait Legacy server to start and send RUN event to FSM
-		startLegacy := gocore.Config().GetBool("startLegacy", false)
-		if !startLegacy {
-			// if legacy will not be started but all other services are subscribed (blockassembler, utxo-persister, blockvalidation, assetService, coinbase, p2p)
-			// send RUN event to FSM
-			_, err := b.Run(ctx, &emptypb.Empty{})
-			if err != nil {
-				b.logger.Errorf("[Blockchain Server] failed to send RUN event [%v], this should not happen, FSM will continue without Running", err)
-			}
-		}
-	}
+	//numberOfCurrentSubscribers := len(b.subscribers) + 1
+	//if numberOfCurrentSubscribers == 5 {
+	//	b.logger.Infof("[Blockchain] All services have subscribed, sending RUN event to FSM")
+	//	// if legacy server will not be started, send RUN event to FSM
+	//	// else we will wait Legacy server to start and send RUN event to FSM
+	//	startLegacy := gocore.Config().GetBool("startLegacy", false)
+	//	if !startLegacy {
+	//		// if legacy will not be started but all other services are subscribed (blockassembler, utxo-persister, blockvalidation, assetService, coinbase, p2p)
+	//		// send RUN event to FSM
+	//		_, err := b.Run(ctx, &emptypb.Empty{})
+	//		if err != nil {
+	//			b.logger.Errorf("[Blockchain Server] failed to send RUN event [%v], this should not happen, FSM will continue without Running", err)
+	//		}
+	//	}
+	//}
 
 	for {
 		select {
