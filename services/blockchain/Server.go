@@ -143,7 +143,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 
 			case s := <-b.newSubscriptions:
 				b.subscribers[s] = true
-				b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
+			//	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
 
 			case s := <-b.deadSubscriptions:
 				delete(b.subscribers, s)
@@ -667,10 +667,16 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 		source:       req.Source,
 	}
 
-	// check if all services have started, and legacy sync will not be starting
-	// miner is not subscribing to the blockchain, services that subscribe are:
-	// blockassembler, utxo-persister, blockvalidation, assetService, coinbase, p2p
-	if len(b.subscribers) == 6 {
+	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", req.Source, len(b.subscribers))
+
+	// check if all services have started, services that subscribe are:
+	// blockassembler, utxo-persister, blockvalidation, coinbase, p2p = 5 subscribers
+	// if we already have 4, and now got the 5th, we can send RUN event to FSM
+	numberOfCurrentSubscribers := len(b.subscribers) + 1
+	if numberOfCurrentSubscribers == 5 {
+		b.logger.Infof("[Blockchain] All services have subscribed, sending RUN event to FSM")
+		// if legacy server will not be started, send RUN event to FSM
+		// else we will wait Legacy server to start and send RUN event to FSM
 		startLegacy := gocore.Config().GetBool("startLegacy", false)
 		if !startLegacy {
 			// if legacy will not be started but all other services are subscribed (blockassembler, utxo-persister, blockvalidation, assetService, coinbase, p2p)
