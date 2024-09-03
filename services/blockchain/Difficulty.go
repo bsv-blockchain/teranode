@@ -63,7 +63,6 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 		return d.nBits, nil
 	}
 
-	d.logger.Debugf("++++++GetNextWorkRequired++++++ bestBlockHeader.Hash: %s", bestBlockHeader.Hash().String())
 	// If regest or simnet we don't adjust the difficulty
 	if d.chainParams.NoDifficultyAdjustment {
 		return &bestBlockHeader.Bits, nil
@@ -94,46 +93,6 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 			nBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
 			return nBits, nil
 		}
-
-		// Special difficulty rule for testnet:
-		// If the new block's timestamp is more than 2* 10 minutes then allow
-		// mining of a min-difficulty block.
-
-		// thresholdSeconds := 2 * uint32(d.chainParams.TargetTimePerBlock.Seconds())
-		// duration := uint32(now.Unix()) - bestBlockHeader.Timestamp
-
-		// durationVal := int64(duration / uint32(time.Second))
-		// adjustmentFactor := big.NewInt(d.chainParams.RetargetAdjustmentFactor)
-		//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
-		// randomOffset := rand.Int31n(21) - 10
-
-		// if uint32(now.Unix())-bestBlockHeader.Timestamp > 2*uint32(d.targetTimePerBlock) {
-		// d.logger.Debugf("timeDifference: %d", duration)
-		// d.logger.Debugf("bestBlockHeader.Hash().String(): %s", bestBlockHeader.Hash().String())
-
-		// if d.lastSlowBlockHash != nil {
-		// 	d.logger.Debugf("d.lastSlowBlockHash: %s", d.lastSlowBlockHash.String())
-		// }
-		// The test network rules allow minimum difficulty blocks after more
-		// than twice the desired amount of time needed to generate a block has
-		// elapsed.
-		// if d.chainParams.ReduceMinDifficulty {
-		// 	reductionTime := int64(d.chainParams.MinDiffReductionTime /
-		// 		time.Second)
-		// 	if durationVal > reductionTime {
-		// 		bytesLittleEndian := make([]byte, 4)
-		// 		binary.LittleEndian.PutUint32(bytesLittleEndian, d.chainParams.PowLimitBits)
-		// 		nBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
-		// 		d.lastSlowBlockHash = bestBlockHeader.Hash()
-		// 		return nBits, nil
-		// 	}
-		// }
-		// if timeDifference > thresholdSeconds+uint32(randomOffset) && (d.lastSlowBlockHash != bestBlockHeader.Hash()) {
-		// 	d.logger.Debugf("applying special difficulty rule")
-		// 	d.lastSlowBlockHash = bestBlockHeader.Hash()
-		// 	// set to start difficulty
-
-		// 	return d.nBits, nil
 	}
 
 	lastSuitableBlock, err := d.store.GetSuitableBlock(ctx, bestBlockHeader.Hash())
@@ -160,19 +119,10 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 		return d.nBits, nil
 	}
 
-	// nBits, err := d.computeTarget(&model.BlockHeader{
-	// 	Bits:      *bits1,
-	// 	Timestamp: firstSuitableBlock.Time,
-	// }, &model.BlockHeader{
-	// 	Bits:      *bits2,
-	// 	Timestamp: lastSuitableBlock.Time,
-	// })
 	nBits, err := d.computeTarget(firstSuitableBlock, lastSuitableBlock)
 	if err != nil {
 		return nil, errors.NewProcessingError("error calculating next required difficulty", err)
 	}
-
-	d.logger.Debugf("CalculateNextWorkRequired: returning nBits: %+v", nBits)
 
 	return nBits, nil
 }

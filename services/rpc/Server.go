@@ -92,7 +92,7 @@ var (
 	}
 )
 
-type commandHandler func(context.Context, *RpcServer, interface{}, <-chan struct{}) (interface{}, error)
+type commandHandler func(context.Context, *RPCServer, interface{}, <-chan struct{}) (interface{}, error)
 
 // rpcHandlers maps RPC command strings to appropriate handler functions.
 // This is set by init because help references rpcHandlers and thus causes
@@ -284,7 +284,9 @@ func internalRPCError(errStr, context string) *btcjson.RPCError {
 	if context != "" {
 		logStr = context + ": " + errStr
 	}
+
 	fmt.Print(logStr)
+
 	return btcjson.NewRPCError(btcjson.ErrRPCInternal.Code, errStr)
 }
 
@@ -307,7 +309,7 @@ func rpcDecodeHexError(gotHex string) *btcjson.RPCError {
 
 // handleUnimplemented is the handler for commands that should ultimately be
 // supported but are not yet implemented.
-func handleUnimplemented(ctx context.Context, s *RpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+func handleUnimplemented(ctx context.Context, s *RPCServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
 	s.logger.Debugf("handling unimplemented command")
 	return nil, ErrRPCUnimplemented
 }
@@ -315,7 +317,7 @@ func handleUnimplemented(ctx context.Context, s *RpcServer, cmd interface{}, clo
 // handleAskWallet is the handler for commands that are recognized as valid, but
 // are unable to answer correctly since it involves wallet state.
 // These commands will be implemented in bsvwallet.
-func handleAskWallet(ctx context.Context, s *RpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+func handleAskWallet(ctx context.Context, s *RPCServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
 	return nil, ErrRPCNoWallet
 }
 
@@ -492,18 +494,19 @@ func handleAskWallet(ctx context.Context, s *RpcServer, cmd interface{}, closeCh
 // }
 
 // handleStop implements the stop command.
-func handleStop(_ context.Context, s *RpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+func handleStop(_ context.Context, s *RPCServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
 	select {
 	case s.requestProcessShutdown <- struct{}{}:
 	default:
 	}
+
 	return "bsvd stopping.", nil
 }
 
 // handleVersion implements the version command.
 //
 // NOTE: This is a btcsuite extension ported from github.com/decred/dcrd.
-func handleVersion(_ context.Context, s *RpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+func handleVersion(_ context.Context, s *RPCServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
 	result := map[string]btcjson.VersionResult{
 		"btcdjsonrpcapi": {
 			VersionString: jsonrpcSemverString,
@@ -512,11 +515,12 @@ func handleVersion(_ context.Context, s *RpcServer, cmd interface{}, closeChan <
 			Patch:         jsonrpcSemverPatch,
 		},
 	}
+
 	return result, nil
 }
 
-// RpcServer provides a concurrent safe RPC server to a chain server.
-type RpcServer struct {
+// RPCServer provides a concurrent safe RPC server to a chain server.
+type RPCServer struct {
 	started                int32
 	shutdown               int32
 	authsha                [sha256.Size]byte
@@ -538,16 +542,19 @@ type RpcServer struct {
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
 // for the given request and response status code.  This function was lifted and
 // adapted from the standard library HTTP server code since it's not exported.
-func (s *RpcServer) httpStatusLine(req *http.Request, code int) string {
+func (s *RPCServer) httpStatusLine(req *http.Request, code int) string {
 	// Fast path:
 	key := code
 	proto11 := req.ProtoAtLeast(1, 1)
+
 	if !proto11 {
 		key = -key
 	}
+
 	s.statusLock.RLock()
 	line, ok := s.statusLines[key]
 	s.statusLock.RUnlock()
+
 	if ok {
 		return line
 	}
@@ -557,10 +564,13 @@ func (s *RpcServer) httpStatusLine(req *http.Request, code int) string {
 	if proto11 {
 		proto = "HTTP/1.1"
 	}
+
 	codeStr := strconv.Itoa(code)
 	text := http.StatusText(code)
+
 	if text != "" {
 		line = proto + " " + codeStr + " " + text + "\r\n"
+
 		s.statusLock.Lock()
 		s.statusLines[key] = line
 		s.statusLock.Unlock()
@@ -575,7 +585,7 @@ func (s *RpcServer) httpStatusLine(req *http.Request, code int) string {
 // writeHTTPResponseHeaders writes the necessary response headers prior to
 // writing an HTTP body given a request to use for protocol negotiation, headers
 // to write, a status code, and a writer.
-func (s *RpcServer) writeHTTPResponseHeaders(req *http.Request, headers http.Header, code int, w io.Writer) error {
+func (s *RPCServer) writeHTTPResponseHeaders(req *http.Request, headers http.Header, code int, w io.Writer) error {
 	_, err := io.WriteString(w, s.httpStatusLine(req, code))
 	if err != nil {
 		return err
@@ -587,28 +597,30 @@ func (s *RpcServer) writeHTTPResponseHeaders(req *http.Request, headers http.Hea
 	}
 
 	_, err = io.WriteString(w, "\r\n")
+
 	return err
 }
 
 // Stop is used by server.go to stop the rpc listener.
-func (s *RpcServer) Stop(ctx context.Context) error {
-
+func (s *RPCServer) Stop(ctx context.Context) error {
 	if atomic.AddInt32(&s.shutdown, 1) != 1 {
 		s.logger.Infof("RPC server is already in the process of shutting down")
 		return nil
 	}
+
 	s.logger.Warnf("RPC server shutting down")
 
 	close(s.quit)
 	s.wg.Wait()
 	s.logger.Infof("RPC server shutdown complete")
+
 	return nil
 }
 
 // RequestedProcessShutdown returns a channel that is sent to when an authorized
 // RPC client requests the process to shutdown.  If the request can not be read
 // immediately, it is dropped.
-func (s *RpcServer) RequestedProcessShutdown() <-chan struct{} {
+func (s *RPCServer) RequestedProcessShutdown() <-chan struct{} {
 	return s.requestProcessShutdown
 }
 
@@ -616,15 +628,17 @@ func (s *RpcServer) RequestedProcessShutdown() <-chan struct{} {
 // adding another client would exceed the maximum allow RPC clients.
 //
 // This function is safe for concurrent access.
-func (s *RpcServer) limitConnections(w http.ResponseWriter, remoteAddr string) bool {
+func (s *RPCServer) limitConnections(w http.ResponseWriter, remoteAddr string) bool {
 	if int(atomic.LoadInt32(&s.numClients)+1) > s.rpcMaxClients {
 		s.logger.Infof("Max RPC clients exceeded [%d] - "+
 			"disconnecting client %s", s.rpcMaxClients,
 			remoteAddr)
 		http.Error(w, "503 Too busy.  Try again later.",
 			http.StatusServiceUnavailable)
+
 		return true
 	}
+
 	return false
 }
 
@@ -633,7 +647,7 @@ func (s *RpcServer) limitConnections(w http.ResponseWriter, remoteAddr string) b
 // limits and are tracked separately.
 //
 // This function is safe for concurrent access.
-func (s *RpcServer) incrementClients() {
+func (s *RPCServer) incrementClients() {
 	atomic.AddInt32(&s.numClients, 1)
 }
 
@@ -642,7 +656,7 @@ func (s *RpcServer) incrementClients() {
 // limits and are tracked separately.
 //
 // This function is safe for concurrent access.
-func (s *RpcServer) decrementClients() {
+func (s *RPCServer) decrementClients() {
 	atomic.AddInt32(&s.numClients, -1)
 }
 
@@ -657,9 +671,10 @@ func (s *RpcServer) decrementClients() {
 // the second bool return value specifies whether the user can change the state
 // of the server (true) or whether the user is limited (false). The second is
 // always false if the first is.
-func (s *RpcServer) checkAuth(r *http.Request, require bool) (bool, bool, error) {
+func (s *RPCServer) checkAuth(r *http.Request, require bool) (bool, bool, error) {
 	authhdr := r.Header["Authorization"]
-	if len(authhdr) <= 0 {
+
+	if len(authhdr) == 0 {
 		if require {
 			s.logger.Warnf("RPC authentication failure from %s", r.RemoteAddr)
 			return false, false, errors.NewServiceError("auth failure")
@@ -685,6 +700,7 @@ func (s *RpcServer) checkAuth(r *http.Request, require bool) (bool, bool, error)
 
 	// Request's auth doesn't match either user
 	s.logger.Warnf("RPC authentication failure from %s", r.RemoteAddr)
+
 	return false, false, errors.NewServiceError("auth failure")
 }
 
@@ -702,21 +718,25 @@ type parsedRPCCmd struct {
 // command and runs the appropriate handler to reply to the command.  Any
 // commands which are not recognized or not implemented will return an error
 // suitable for use in replies.
-func (s *RpcServer) standardCmdResult(ctx context.Context, cmd *parsedRPCCmd, closeChan <-chan struct{}) (interface{}, error) {
+func (s *RPCServer) standardCmdResult(ctx context.Context, cmd *parsedRPCCmd, closeChan <-chan struct{}) (interface{}, error) {
 	handler, ok := rpcHandlers[cmd.method]
 	if ok {
 		goto handled
 	}
+
 	_, ok = rpcAskWallet[cmd.method]
+
 	if ok {
 		handler = handleAskWallet
 		goto handled
 	}
+
 	_, ok = rpcUnimplemented[cmd.method]
 	if ok {
 		handler = handleUnimplemented
 		goto handled
 	}
+
 	return nil, btcjson.ErrRPCMethodNotFound
 handled:
 
@@ -738,7 +758,6 @@ func parseCmd(request *btcjson.Request) *parsedRPCCmd {
 		// produce a method not found RPC error.
 		if jerr, ok := err.(btcjson.Error); ok &&
 			jerr.ErrorCode == btcjson.ErrUnregisteredMethod {
-
 			parsedCmd.err = btcjson.ErrRPCMethodNotFound
 			return &parsedCmd
 		}
@@ -747,10 +766,12 @@ func parseCmd(request *btcjson.Request) *parsedRPCCmd {
 		// cause, so produce the equivalent RPC error.
 		parsedCmd.err = btcjson.NewRPCError(
 			btcjson.ErrRPCInvalidParams.Code, err.Error())
+
 		return &parsedCmd
 	}
 
 	parsedCmd.cmd = cmd
+
 	return &parsedCmd
 }
 
@@ -759,6 +780,7 @@ func parseCmd(request *btcjson.Request) *parsedRPCCmd {
 // the type *btcjson.RPCError to the appropriate type as needed.
 func createMarshalledReply(id, result interface{}, replyErr error) ([]byte, error) {
 	var jsonErr *btcjson.RPCError
+
 	if replyErr != nil {
 		if jErr, ok := replyErr.(*btcjson.RPCError); ok {
 			jsonErr = jErr
@@ -771,9 +793,7 @@ func createMarshalledReply(id, result interface{}, replyErr error) ([]byte, erro
 }
 
 // jsonRPCRead handles reading and responding to RPC messages.
-func (s *RpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin bool) {
-	s.logger.Debugf("jsonRPCRead")
-
+func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin bool) {
 	if atomic.LoadInt32(&s.shutdown) != 0 {
 		return
 	}
@@ -781,10 +801,12 @@ func (s *RpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 	// Read and close the JSON-RPC request body from the caller.
 	body, err := io.ReadAll(r.Body)
 	r.Body.Close()
+
 	if err != nil {
 		errCode := http.StatusBadRequest
 		http.Error(w, fmt.Sprintf("%d error reading JSON message: %v",
 			errCode, err), errCode)
+
 		return
 	}
 
@@ -798,32 +820,45 @@ func (s *RpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 	if !ok {
 		errMsg := "webserver doesn't support hijacking"
 		s.logger.Warnf(errMsg)
+
 		errCode := http.StatusInternalServerError
 		http.Error(w, strconv.Itoa(errCode)+" "+errMsg, errCode)
+
 		return
 	}
+
 	conn, buf, err := hj.Hijack()
+
 	if err != nil {
 		s.logger.Warnf("Failed to hijack HTTP connection: %v", err)
+
 		errCode := http.StatusInternalServerError
+
 		http.Error(w, strconv.Itoa(errCode)+" "+err.Error(), errCode)
+
 		return
 	}
+
 	defer conn.Close()
 	defer buf.Flush()
 	// conn.SetReadDeadline(timeZeroVal)
 
 	// Attempt to parse the raw body into a JSON-RPC request.
 	var responseID interface{}
+
 	var jsonErr error
+
 	var result interface{}
+
 	var request btcjson.Request
+
 	if err := json.Unmarshal(body, &request); err != nil {
 		jsonErr = &btcjson.RPCError{
 			Code:    btcjson.ErrRPCParse.Code,
 			Message: "Failed to parse request: " + err.Error(),
 		}
 	}
+
 	s.logger.Debugf("request: %v", request)
 
 	if jsonErr == nil {
@@ -858,6 +893,7 @@ func (s *RpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 		// Setup a close notifier.  Since the connection is hijacked,
 		// the CloseNotifer on the ResponseWriter is not available.
 		closeChan := make(chan struct{}, 1)
+
 		go func() {
 			_, err := conn.Read(make([]byte, 1))
 			if err != nil {
@@ -900,6 +936,7 @@ func (s *RpcServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 		s.logger.Errorf("Error writing HTTPResponseHeaders: %v", err)
 		return
 	}
+
 	if _, err := buf.Write(msg); err != nil {
 		s.logger.Errorf("Failed to write marshalled reply: %v", err)
 	}
@@ -917,7 +954,7 @@ func jsonAuthFail(w http.ResponseWriter) {
 }
 
 // Start is used by server.go to start the rpc listener.
-func (s *RpcServer) Start(ctx context.Context) error {
+func (s *RPCServer) Start(ctx context.Context) error {
 	if atomic.AddInt32(&s.started, 1) != 1 {
 		return nil
 	}
@@ -946,6 +983,7 @@ func (s *RpcServer) Start(ctx context.Context) error {
 	*/
 
 	s.logger.Infof("Starting RPC server")
+
 	rpcServeMux := http.NewServeMux()
 	httpServer := &http.Server{
 		Handler: rpcServeMux,
@@ -954,11 +992,11 @@ func (s *RpcServer) Start(ctx context.Context) error {
 		// handshake within the allowed timeframe.
 		ReadTimeout: time.Second * rpcAuthTimeoutSeconds,
 	}
-	rpcServeMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		s.logger.Debugf("HandleFunc")
 
+	rpcServeMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "close")
 		w.Header().Set("Content-Type", "application/json")
+
 		r.Close = true
 
 		// Limit the number of connections to max allowed.
@@ -970,6 +1008,7 @@ func (s *RpcServer) Start(ctx context.Context) error {
 		s.incrementClients()
 		defer s.decrementClients()
 		_, isAdmin, err := s.checkAuth(r, true)
+
 		if err != nil {
 			jsonAuthFail(w)
 			return
@@ -981,6 +1020,7 @@ func (s *RpcServer) Start(ctx context.Context) error {
 
 	for _, listener := range s.listeners {
 		s.wg.Add(1)
+
 		go func(listener net.Listener) {
 			defer s.wg.Done() // Ensure wg.Done() is called when the goroutine exits.
 
@@ -1010,13 +1050,14 @@ func (s *RpcServer) Start(ctx context.Context) error {
 	s.wg.Wait()
 
 	s.logger.Infof("All servers have shut down gracefully.")
+
 	return nil
 }
 
-func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RpcServer, error) {
+func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RPCServer, error) {
 	initPrometheusMetrics()
 
-	rpc := RpcServer{
+	rpc := RPCServer{
 		statusLines:            make(map[int]string),
 		requestProcessShutdown: make(chan struct{}),
 		logger:                 logger,
@@ -1028,14 +1069,18 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Rpc
 	if !ok {
 		logger.Warnf("rpc_user not set in config")
 	}
+
 	rpcPass, ok := gocore.Config().Get("rpc_pass")
+
 	if !ok {
 		logger.Warnf("rpc_pass not set in config")
 	}
+
 	rpcLimitUser, ok := gocore.Config().Get("rpc_limit_user")
 	if !ok {
 		logger.Warnf("rpc_limit_user not set in config")
 	}
+
 	rpcLimitPass, ok := gocore.Config().Get("rpc_limit_pass")
 	if !ok {
 		logger.Warnf("rpc_limit_pass not set in config")
@@ -1046,6 +1091,7 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Rpc
 		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
 		rpc.authsha = sha256.Sum256([]byte(auth))
 	}
+
 	if rpcLimitUser != "" && rpcLimitPass != "" {
 		login := rpcLimitUser + ":" + rpcLimitPass
 		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
@@ -1057,29 +1103,29 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Rpc
 	if !ok {
 		logger.Warnf("rpc_max_clients not set in config")
 	}
-	rpc.rpcQuirks = gocore.Config().GetBool("rpc_quirks", true)
-	if !ok {
-		logger.Warnf("rpc_max_clients not set in config")
-	}
 
-	rpcListenerUrl, ok := gocore.Config().Get("rpc_listener_url")
+	rpc.rpcQuirks = gocore.Config().GetBool("rpc_quirks", true)
+
+	rpcListenerURL, ok := gocore.Config().Get("rpc_listener_url")
 	if !ok {
 		return nil, errors.NewConfigurationError("rpc_listener_url not set in config")
 	}
 
-	listener, err := net.Listen("tcp", rpcListenerUrl)
+	listener, err := net.Listen("tcp", rpcListenerURL)
 	if err != nil {
 		fmt.Println("Error listening:", err)
 		os.Exit(1)
 	}
+
 	rpc.listeners = append(rpc.listeners, listener)
 
 	return &rpc, nil
 }
 
-func (s *RpcServer) Init(ctx context.Context) (err error) {
+func (s *RPCServer) Init(ctx context.Context) (err error) {
 	rpcHandlers = rpcHandlersBeforeInit
 	// rand.Seed(time.Now().UnixNano())
 	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger)
+
 	return err
 }

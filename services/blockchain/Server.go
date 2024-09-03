@@ -110,6 +110,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
 	if err == nil && ok {
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
+
 		if _, b.blockKafkaProducer, err = util.ConnectToKafka(blocksKafkaURL); err != nil {
 			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
 		}
@@ -126,6 +127,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				return
 			case notification := <-b.notifications:
 				start := gocore.CurrentTime()
+
 				func() {
 					b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
 
@@ -209,9 +211,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				b.logger.Errorf("[Blockchain] failed to start http server: %v", err)
 			}
 		}()
-
 	}
-
 	// this will block
 	if err := util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
@@ -474,12 +474,12 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 		tracing.WithHistogram(prometheusBlockchainGetNextWorkRequired),
 	)
 	defer deferFn()
+
 	var nBits *model.NBit
 
 	bytesLittleEndian := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bytesLittleEndian, b.chainParams.PowLimitBits)
 	defaultNbits, _ := model.NewNBitFromSlice(bytesLittleEndian)
-	b.logger.Debugf("default nBits: %s", defaultNbits.String())
 
 	if b.difficulty == nil {
 		b.logger.Debugf("difficulty is null")
@@ -682,8 +682,8 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	// check if all services have started, services that subscribe are:
 	// blockassembler, utxo-persister, blockvalidation, coinbase, p2p = 5 subscribers
 	// if we already have 4, and now got the 5th, we can send RUN event to FSM
-	//numberOfCurrentSubscribers := len(b.subscribers) + 1
-	//if numberOfCurrentSubscribers == 5 {
+	// numberOfCurrentSubscribers := len(b.subscribers) + 1
+	// if numberOfCurrentSubscribers == 5 {
 	//	b.logger.Infof("[Blockchain] All services have subscribed, sending RUN event to FSM")
 	//	// if legacy server will not be started, send RUN event to FSM
 	//	// else we will wait Legacy server to start and send RUN event to FSM

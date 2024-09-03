@@ -26,7 +26,7 @@ import (
 )
 
 // handleGetBlock implements the getblock command.
-func handleGetBlock(ctx context.Context, s *RpcServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBlock",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBlock),
@@ -138,7 +138,7 @@ func handleGetBlock(ctx context.Context, s *RpcServer, cmd interface{}, _ <-chan
 }
 
 // handleGetBestBlockHash implements the getbestblockhash command.
-func handleGetBestBlockHash(ctx context.Context, s *RpcServer, _ interface{}, _ <-chan struct{}) (interface{}, error) {
+func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBestBlockHash",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetBestBlockHash),
@@ -156,7 +156,7 @@ func handleGetBestBlockHash(ctx context.Context, s *RpcServer, _ interface{}, _ 
 }
 
 // handleCreateRawTransaction handles createrawtransaction commands.
-func handleCreateRawTransaction(ctx context.Context, s *RpcServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleCreateRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleCreateRawTransaction),
@@ -178,6 +178,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RpcServer, cmd interface
 	// Add all transaction inputs to a new transaction after performing
 	// some validity checks.
 	mtx := wire.NewMsgTx(wire.TxVersion)
+
 	for _, input := range c.Inputs {
 		txHash, err := chainhash.NewHashFromStr(input.Txid)
 		if err != nil {
@@ -186,6 +187,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RpcServer, cmd interface
 
 		prevOut := wire.NewOutPoint(txHash, input.Vout)
 		txIn := wire.NewTxIn(prevOut, []byte{})
+
 		if c.LockTime != nil && *c.LockTime != 0 {
 			txIn.Sequence = wire.MaxTxInSequenceNum - 1
 		}
@@ -226,6 +228,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RpcServer, cmd interface
 				Message: `Invalid address or key`,
 			}
 		}
+
 		if !addr.IsForNet(&chaincfg.MainNetParams) {
 			return nil, &btcjson.RPCError{
 				Code: btcjson.ErrRPCInvalidAddressOrKey,
@@ -265,11 +268,12 @@ func handleCreateRawTransaction(ctx context.Context, s *RpcServer, cmd interface
 	if err != nil {
 		return nil, err
 	}
+
 	return mtxHex, nil
 }
 
 // handleSendRawTransaction implements the sendrawtransaction command.
-func handleSendRawTransaction(ctx context.Context, s *RpcServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleSendRawTransaction",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleSendRawTransaction),
@@ -284,6 +288,7 @@ func handleSendRawTransaction(ctx context.Context, s *RpcServer, cmd interface{}
 		hexStr = "0" + hexStr
 	}
 	serializedTx, err := hex.DecodeString(hexStr)
+
 	if err != nil {
 		return nil, rpcDecodeHexError(hexStr)
 	}
@@ -316,7 +321,7 @@ func handleSendRawTransaction(ctx context.Context, s *RpcServer, cmd interface{}
 }
 
 // handleGenerate handles generate commands.
-func handleGenerate(ctx context.Context, s *RpcServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	c := cmd.(*btcjson.GenerateCmd)
 	_, _, deferFn := tracing.StartTracing(ctx, "handleGenerate",
 		tracing.WithParentStat(RPCStat),
@@ -402,7 +407,7 @@ func handleGenerate(ctx context.Context, s *RpcServer, cmd interface{}, _ <-chan
 	return nil, nil
 }
 
-func handleGetMiningCandidate(ctx context.Context, s *RpcServer, _ interface{}, _ <-chan struct{}) (interface{}, error) {
+func handleGetMiningCandidate(ctx context.Context, s *RPCServer, _ interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetMiningCandidate",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGetMiningCandidate),
@@ -415,10 +420,37 @@ func handleGetMiningCandidate(ctx context.Context, s *RpcServer, _ interface{}, 
 		return nil, err
 	}
 
-	return mc, nil
+	// Create a map to hold the fields as JSON
+	pb := chainhash.Hash{}
+
+	err = pb.SetBytes(mc.PreviousHash)
+	if err != nil {
+		return nil, err
+	}
+
+	reversedBits := bt.ReverseBytes(mc.NBits)
+
+	merkleProofStrings := make([]string, len(mc.MerkleProof))
+
+	for _, hash := range mc.MerkleProof { //
+		merkleProofStrings = append(merkleProofStrings, hex.EncodeToString(hash))
+	}
+
+	jsonMap := map[string]interface{}{
+		"id":            hex.EncodeToString(mc.Id),
+		"prevhash":      pb.String(),
+		"coinbaseValue": mc.CoinbaseValue,
+		"version":       mc.Version,
+		"nBits":         hex.EncodeToString(reversedBits),
+		"time":          mc.Time,
+		"height":        mc.Height,
+		"merkleProof":   merkleProofStrings,
+	}
+
+	return jsonMap, nil
 }
 
-func handleSubmitMiningSolution(ctx context.Context, s *RpcServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleSubmitMiningSolution",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleSubmitMiningSolution),
