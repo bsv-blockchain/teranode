@@ -39,7 +39,7 @@ type ClientI interface {
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 	GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error)
-	SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error)
+	// SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error)
 
 	// FSM related endpoints
 	GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error)
@@ -47,7 +47,7 @@ type ClientI interface {
 	GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType
 	SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
 	Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-	Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
+	// Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 	CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 	CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 	Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)

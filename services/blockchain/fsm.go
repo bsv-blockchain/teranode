@@ -61,16 +61,16 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				},
 				Dst: blockchain_api.FSMStateType_RUNNING.String(),
 			},
-			{
-				Name: blockchain_api.FSMEventType_MINE.String(),
-				Src: []string{
-					blockchain_api.FSMStateType_RUNNING.String(),
-					blockchain_api.FSMStateType_CATCHINGTXS.String(),
-					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
-					blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String(),
-				},
-				Dst: blockchain_api.FSMStateType_MINING.String(),
-			},
+			//{
+			//	Name: blockchain_api.FSMEventType_MINE.String(),
+			//	Src: []string{
+			//		blockchain_api.FSMStateType_RUNNING.String(),
+			//		blockchain_api.FSMStateType_CATCHINGTXS.String(),
+			//		blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
+			//		blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String(),
+			//	},
+			//	Dst: blockchain_api.FSMStateType_MINING.String(),
+			//},
 			{
 				Name: blockchain_api.FSMEventType_LEGACYSYNC.String(),
 				Src: []string{
@@ -88,14 +88,14 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 			{
 				Name: blockchain_api.FSMEventType_CATCHUPBLOCKS.String(),
 				Src: []string{
-					blockchain_api.FSMStateType_MINING.String(),
+					blockchain_api.FSMStateType_RUNNING.String(),
 				},
 				Dst: blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 			},
 			{
 				Name: blockchain_api.FSMEventType_CATCHUPTXS.String(),
 				Src: []string{
-					blockchain_api.FSMStateType_MINING.String(),
+					blockchain_api.FSMStateType_RUNNING.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 				},
 				Dst: blockchain_api.FSMStateType_CATCHINGTXS.String(),
@@ -104,7 +104,6 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Name: blockchain_api.FSMEventType_STOP.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
-					blockchain_api.FSMStateType_MINING.String(),
 					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 					blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String(),
@@ -115,7 +114,6 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Name: blockchain_api.FSMEventType_UNAVAILABLE.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
-					blockchain_api.FSMStateType_MINING.String(),
 					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 					blockchain_api.FSMStateType_RESTORING.String(),
