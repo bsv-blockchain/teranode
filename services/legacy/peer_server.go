@@ -1989,6 +1989,8 @@ func (s *server) Start() {
 		s.wg.Add(1)
 		go s.upnpUpdateThread()
 	}
+
+	s.WaitForShutdown()
 }
 
 // Stop gracefully shuts down the server by stopping and disconnecting all
