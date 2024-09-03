@@ -87,15 +87,22 @@ jobs:
           # kubectl already installed
           kubectl version --client
           rm -rf ~/.kube
+          
+
+      - name: Deploy to Test Net
+        run: |
           aws eks update-kubeconfig --name aws-ubsv-playground --region eu-central-1
           kubectl cluster-info
-
-      - name: Deploy to Operator
-        run: |
           kubectl patch -n t1 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{github.ref_name}}"}}';
           kubectl patch -n t2 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{github.ref_name}}"}}';
           kubectl patch -n t3 --type=merge clusters.teranode.bsvblockchain.org cluster-sample -p '{"spec":{"image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{github.ref_name}}"}}';
-          kubectl patch -n tx-blasters --type=merge deployment tx-blaster -p '{"spec":{"template":{"spec":{"containers":[{"name":"tx-blaster","image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:${{github.ref_name}}"}]}}}}'
+          kubectl patch -n tx-blasters deployment tx-blaster --type='strategic' -p '{"spec":{"template":{"spec":{"containers":[{"name":"tx-blaster","image":"434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:'"${{github.ref_name}}"'"}]}}}}'
+# todo fix when we have the proper rbac for github
+#      - name: Deploy to Main Net
+#        run: |
+#          aws eks update-kubeconfig --name main-net --region eu-west-1
+#          kubectl cluster-info
+
   notify_on_failure:
     runs-on: ubuntu-latest
     if: always()
