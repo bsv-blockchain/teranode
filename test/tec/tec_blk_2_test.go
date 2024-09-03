@@ -1,4 +1,4 @@
-////go:build tecblk2test
+//go:build tecblk2test
 
 package test
 
