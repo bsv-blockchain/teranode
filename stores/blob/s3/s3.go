@@ -145,6 +145,14 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 
 	objectKey := g.getObjectKey(key, o)
 
+	// Check if the object already exists
+	if _, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    objectKey,
+	}); err == nil {
+		return errors.NewBlobAlreadyExistsError("[S3][SetFromReader] [%s] already exists in store", objectKey)
+	}
+
 	// g.logger.Warnf("[S3][%s] Setting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	uploadInput := &s3.PutObjectInput{
@@ -158,8 +166,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 		uploadInput.Expires = &expires
 	}
 
-	_, err := g.uploader.Upload(traceSpan.Ctx, uploadInput)
-	if err != nil {
+	if _, err := g.uploader.Upload(traceSpan.Ctx, uploadInput); err != nil {
 		traceSpan.RecordError(err)
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data from reader", g.bucket, objectKey, err)
 	}
@@ -180,6 +187,14 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 
 	objectKey := g.getObjectKey(key, o)
 
+	// Check if the object already exists
+	if _, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    objectKey,
+	}); err == nil {
+		return errors.NewBlobAlreadyExistsError("[S3][Set] [%s] already exists in store", objectKey)
+	}
+
 	buf := bytes.NewBuffer(value)
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(g.bucket),
@@ -194,8 +209,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 		uploadInput.Expires = &expires
 	}
 
-	_, err := g.uploader.Upload(traceSpan.Ctx, uploadInput)
-	if err != nil {
+	if _, err := g.uploader.Upload(traceSpan.Ctx, uploadInput); err != nil {
 		traceSpan.RecordError(err)
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, objectKey, err)
 	}
