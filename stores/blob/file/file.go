@@ -182,23 +182,27 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 
 	fileName, err := s.getFileNameForSet(key, opts)
 	if err != nil {
-		return errors.NewStorageError("[File] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
+	}
+
+	if _, err := os.Stat(fileName); err == nil {
+		return errors.NewBlobAlreadyExistsError("[File][SetFromReader] [%s] already exists in store", fileName)
 	}
 
 	// write the bytes from the reader to a file with the filename
 	file, err := os.Create(fileName + ".tmp")
 	if err != nil {
-		return errors.NewStorageError("[File] [%s] failed to create file", fileName, err)
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to create file", fileName, err)
 	}
 	defer file.Close()
 
 	if _, err = io.Copy(file, reader); err != nil {
-		return errors.NewStorageError("[File] [%s] failed to write data to file", fileName, err)
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write data to file", fileName, err)
 	}
 
 	// rename the file to remove the .tmp extension
 	if err = os.Rename(fileName+".tmp", fileName); err != nil {
-		return errors.NewStorageError("[File] [%s] failed to rename file", fileName, err)
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to rename file", fileName, err)
 	}
 
 	return nil
@@ -208,13 +212,17 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 	// s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
 	fileName, err := s.getFileNameForSet(hash, opts)
 	if err != nil {
-		return errors.NewStorageError("[File] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
+		return errors.NewStorageError("[File][Set] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
+	}
+
+	if _, err := os.Stat(fileName); err == nil {
+		return errors.NewBlobAlreadyExistsError("[File][Set] [%s] already exists in store", fileName)
 	}
 
 	// write bytes to file
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err = os.WriteFile(fileName, value, 0644); err != nil {
-		return errors.NewStorageError("[File] [%s] failed to write data to file", fileName, err)
+		return errors.NewStorageError("[File][Set] [%s] failed to write data to file", fileName, err)
 	}
 
 	return nil
