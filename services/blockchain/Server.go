@@ -212,6 +212,17 @@ func (b *Blockchain) Start(ctx context.Context) error {
 			}
 		}()
 	}
+
+	testingInDockerWithoutLegacyServer := gocore.Config().GetBool("testing_in_docker_without_legacy_server", false)
+
+	if testingInDockerWithoutLegacyServer {
+		b.logger.Infof("[Blockchain] Testing in docker without legacy server")
+		_, err = b.Run(ctx, &emptypb.Empty{})
+		if err != nil {
+			b.logger.Errorf("[Blockchain] failed to send RUN event in docker environment: %v", err)
+		}
+	}
+
 	// this will block
 	if err := util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
@@ -679,25 +690,6 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 
 	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", req.Source, len(b.subscribers))
 
-	// check if all services have started, services that subscribe are:
-	// blockassembler, utxo-persister, blockvalidation, coinbase, p2p = 5 subscribers
-	// if we already have 4, and now got the 5th, we can send RUN event to FSM
-	// numberOfCurrentSubscribers := len(b.subscribers) + 1
-	// if numberOfCurrentSubscribers == 5 {
-	//	b.logger.Infof("[Blockchain] All services have subscribed, sending RUN event to FSM")
-	//	// if legacy server will not be started, send RUN event to FSM
-	//	// else we will wait Legacy server to start and send RUN event to FSM
-	//	startLegacy := gocore.Config().GetBool("startLegacy", false)
-	//	if !startLegacy {
-	//		// if legacy will not be started but all other services are subscribed (blockassembler, utxo-persister, blockvalidation, assetService, coinbase, p2p)
-	//		// send RUN event to FSM
-	//		_, err := b.Run(ctx, &emptypb.Empty{})
-	//		if err != nil {
-	//			b.logger.Errorf("[Blockchain Server] failed to send RUN event [%v], this should not happen, FSM will continue without Running", err)
-	//		}
-	//	}
-	//}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -970,7 +962,7 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	state := b.finiteStateMachine.Current()
 
 	// Log the state immediately after storing it
-	b.logger.Infof("[Blockchain Server] state immediately after storing: %v", state)
+	// b.logger.Infof("[Blockchain Server] state immediately after storing: %v", state)
 
 	resp := &blockchain_api.GetFSMStateResponse{
 		State: blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[state]),
