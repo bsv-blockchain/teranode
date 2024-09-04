@@ -19,14 +19,14 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 )
 
-var testDir = "/tmp/ubsv-tests/" + rand.String(12)
-
-func cleanup() {
+func cleanup(testDir string) {
 	_ = os.RemoveAll(testDir)
 }
 
 func TestFile_GetWithAbsolutePath(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
+		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+
 		f, err := New(ulogger.TestLogger{}, []string{testDir})
 		require.NoError(t, err)
 
@@ -49,7 +49,7 @@ func TestFile_GetWithAbsolutePath(t *testing.T) {
 		err = f.Del(context.Background(), []byte("key"))
 		require.NoError(t, err)
 
-		cleanup()
+		cleanup(testDir)
 	})
 }
 
@@ -85,13 +85,14 @@ func TestFile_GetWithRelativePath(t *testing.T) {
 
 func TestFile_filename(t *testing.T) {
 	t.Run("1 path", func(t *testing.T) {
+		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
 		f, err := New(ulogger.TestLogger{}, []string{testDir})
 		require.NoError(t, err)
 
 		filename := f.filename([]byte("key"))
 		assert.Equal(t, testDir+"/79656b", filename)
 
-		cleanup()
+		cleanup(testDir)
 	})
 
 	t.Run("1 paths", func(t *testing.T) {
@@ -110,7 +111,7 @@ func TestFile_filename(t *testing.T) {
 		filename = f.filename([]byte("4key"))
 		assert.Equal(t, "/tmp/ubsv-tests1/79656b34", filename)
 
-		cleanup()
+		cleanup("/tmp/ubsv-tests1")
 	})
 
 	t.Run("2 paths", func(t *testing.T) {
@@ -132,7 +133,8 @@ func TestFile_filename(t *testing.T) {
 		err = f.Close(context.Background())
 		require.NoError(t, err)
 
-		cleanup()
+		cleanup("/tmp/ubsv-tests1")
+		cleanup("/tmp/ubsv-tests2")
 	})
 
 	t.Run("4 paths", func(t *testing.T) {
@@ -155,8 +157,6 @@ func TestFile_filename(t *testing.T) {
 
 		filename = f.filename([]byte("4key"))
 		assert.Equal(t, "/tmp/ubsv-tests1/79656b34", filename)
-
-		cleanup()
 	})
 }
 
@@ -197,6 +197,8 @@ func TestFile_NewWithInvalidDirectory(t *testing.T) {
 
 func TestFile_loadTTLs(t *testing.T) {
 	t.Run("load TTLs", func(t *testing.T) {
+		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+
 		key := []byte("key")
 		value := []byte("value")
 		ttl := 1 * time.Second
@@ -237,6 +239,8 @@ func TestFile_loadTTLs(t *testing.T) {
 
 func TestFile_ConcurrentAccess(t *testing.T) {
 	t.Run("concurrent set and get", func(t *testing.T) {
+		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+
 		f, err := New(ulogger.TestLogger{}, []string{testDir})
 		require.NoError(t, err)
 
@@ -268,6 +272,8 @@ func TestFile_ConcurrentAccess(t *testing.T) {
 
 func TestFile_SetWithSubdirectoryOptionIgnored(t *testing.T) {
 	t.Run("subdirectory usage", func(t *testing.T) {
+		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+
 		subDir := "subdir"
 		f, err := New(ulogger.TestLogger{}, []string{testDir}, options.WithSubDirectory(subDir))
 		require.NoError(t, err)
@@ -290,6 +296,8 @@ func TestFile_SetWithSubdirectoryOptionIgnored(t *testing.T) {
 
 func TestFile_SetWithSubdirectoryOption(t *testing.T) {
 	t.Run("subdirectory usage", func(t *testing.T) {
+		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+
 		subDir := "subdir"
 		f, err := New(ulogger.TestLogger{}, []string{testDir}, options.WithSubDirectory(subDir))
 		require.NoError(t, err)
@@ -321,6 +329,8 @@ func (rc readCloser) Close() error {
 
 func TestFile_SetFromReaderAndGetIoReader(t *testing.T) {
 	t.Run("set content from reader", func(t *testing.T) {
+		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+
 		f, err := New(ulogger.TestLogger{}, []string{testDir})
 		require.NoError(t, err)
 
@@ -347,6 +357,8 @@ func TestFile_SetFromReaderAndGetIoReader(t *testing.T) {
 
 func TestFile_GetHead(t *testing.T) {
 	t.Run("get head of content", func(t *testing.T) {
+		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+
 		f, err := New(ulogger.TestLogger{}, []string{testDir})
 		require.NoError(t, err)
 
@@ -371,6 +383,8 @@ func TestFile_GetHead(t *testing.T) {
 
 func TestFile_Exists(t *testing.T) {
 	t.Run("check if content exists", func(t *testing.T) {
+		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+
 		f, err := New(ulogger.TestLogger{}, []string{testDir})
 		require.NoError(t, err)
 
