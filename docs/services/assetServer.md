@@ -12,25 +12,20 @@
 - [3.4. Txs](#34-txs)
 - [3.5. UTXOs](#35-utxos)
 4. [Use Cases](#4-use-cases)
-- [4.1. gRPC](#41-grpc)
-- [4.1.1. getBlock(), getBestBlockHeader(), getBlockHeaders()](#411-getblock-getbestblockheader-getblockheaders)
-- [4.1.2. Subtree Get()](#412-subtree-get)
-- [4.1.3. Subtree Set() and SetTTL()](#413-subtree-set-and-setttl)
-- [4.1.5. Subscribe to notifications](#415-subscribe-to-notifications)
-- [4.2. HTTP and Websockets](#42-http-and-websockets)
-- [4.2.1. getTransaction() and getTransactions()](#421-gettransaction-and-gettransactions)
-- [4.2.2. GetTransactionMeta()](#422-gettransactionmeta)
-- [4.2.3. GetSubtree()](#423-getsubtree)
-- [4.2.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#424-getblockheaders-getblockheader-and-getbestblockheader)
-- [4.2.5. GetBlock() and GetLastNBlocks()](#425-getblock-and-getlastnblocks)
-- [4.2.6. GetUTXO() and GetUTXOsByTXID()](#426-getutxo-and-getutxosbytxid)
-- [4.2.7. Websocket Subscriptions](#427-websocket-subscriptions)
-5. [gRPC Protobuf Definitions](#5-grpc-protobuf-definitions)
-6. [Technology](#6-technology)
-7. [Directory Structure and Main Files](#7-directory-structure-and-main-files)
-8. [How to run](#8-how-to-run)
-- [8.1. How to run](#81-how-to-run)
-- [8.2  Configuration options (settings flags)](#82--configuration-options-settings-flags)
+- [4.1. HTTP and Websockets](#41-http-and-websockets)
+- [4.1.1. getTransaction() and getTransactions()](#411-gettransaction-and-gettransactions)
+- [4.1.2. GetTransactionMeta()](#412-gettransactionmeta)
+- [4.1.3. GetSubtree()](#413-getsubtree)
+- [4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#414-getblockheaders-getblockheader-and-getbestblockheader)
+- [4.1.5. GetBlock() and GetLastNBlocks()](#415-getblock-and-getlastnblocks)
+- [4.1.6. GetUTXO() and GetUTXOsByTXID()](#416-getutxo-and-getutxosbytxid)
+- [4.1.7. Websocket Subscriptions](#417-websocket-subscriptions)
+5. [Technology](#5-technology)
+6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
+7. [How to run](#7-how-to-run)
+- [7.1. How to run](#71-how-to-run)
+- [7.2  Configuration options (settings flags)](#72--configuration-options-settings-flags)
+
 
 ## 1. Description
 
@@ -48,12 +43,10 @@ The Asset Service acts as an interface ("Front" or "Facade") to various data sto
 - **Unspent Transaction Outputs (UTXO)**.
 
 
-The server uses both HTTP and gRPC as communication protocols:
+The server uses HTTP as communication protocol:
 
 - **HTTP**: A ubiquitous protocol that allows the server to be accessible from the web, enabling other nodes or clients to interact with the server using standard web requests.
 
-
-- **gRPC**: Allowing for efficient communication between nodes, particularly suited for microservices communication in the Teranode distributed network.
 
 The server being externally accessible implies that it is designed to communicate with other nodes and external clients across the network, to share blockchain data or synchronize states.
 
@@ -65,7 +58,7 @@ Finally, the Asset Service also offers a WebSocket interface, allowing clients t
 
 ![Asset_Server_System_Context_Diagram.png](img/Asset_Server_System_Context_Diagram.png)
 
-The Asset Server provides data to other Teranode components over gRPC. It also provides data to external clients over HTTP / Websockets, such as the Teranode UI Dashboard.
+The Asset Server provides data to other Teranode components over HTTP. It also provides data to external clients over HTTP / Websockets, such as the Teranode UI Dashboard.
 
 All data is retrieved from other Teranode services / stores.
 
@@ -144,6 +137,31 @@ Here's a table documenting the structure of the `Subtree` type:
 
 Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
 
+Note - For subtree files in the `subtree-store` S3 buckets, each subtree has a size of 48MB.
+
+##### Subtree Composition
+
+Each subtree consists of:
+- hash: 32 bytes
+- fees: 4 bytes
+- sizeInBytes: 4 bytes
+- numberOfLeaves: 4 bytes
+- subtreeHeight: 4 bytes
+
+##### Calculation:
+```
+1024 * 1024 * (32 + 4 + 4 + 4 + 4) = 48MB
+```
+
+##### Data Transfer Between Nodes
+
+However - only 32MB is transferred between the nodes. Each subtree transfer includes:
+
+- hash: 32 bytes
+```
+1024 * 1024 * (32) = 32MB
+```
+
 ### 3.4. Txs
 
 This refers to the extended transaction format, as seen below:
@@ -201,66 +219,33 @@ More information on the UTXO structure and purpose can be found in the [Architec
 
 ## 4. Use Cases
 
-### 4.1. gRPC
-
-The Asset Service exposes the following gRPC methods:
-
-### 4.1.1. getBlock(), getBestBlockHeader(), getBlockHeaders()
-
-![asset_server_grpc_get_block.svg](img/plantuml/assetserver/asset_server_grpc_get_block.svg)
-
-### 4.1.2. Subtree Get()
-
-![asset_server_grpc_get_subtree.svg](img/plantuml/assetserver/asset_server_grpc_get_subtree.svg)
-
-### 4.1.3. Subtree Set() and SetTTL()
-
-The Asset Server also permits to store subtrees and to update their retention TTL in the Subtree (Blob) Store.
-
-![asset_server_grpc_set_subtree.svg](img/plantuml/assetserver/asset_server_grpc_set_subtree.svg)
-
-- The **New Subtree Scenario** shows the process of setting a new subtree in the Blob Subtree Store via the Block Assembly Server, Remote TTL, Asset Client, and Asset Server.
-
-- The **Clear Subtree TTL Scenario** illustrates the sequence of operations involved in submitting a mining solution, which includes removing the TTL (Time To Live) for subtrees associated with a block. This process involves iterating over each subtree in the block and setting the TTL through the Remote TTL, Asset Client, Asset Server, and the Blob Subtree Store.
-
-### 4.1.5. Subscribe to notifications
-
-![asset_server_grpc_subscribe_notifications.svg](img/plantuml/assetserver/asset_server_grpc_subscribe_notifications.svg)
-
-1. The Coinbase service initiates a subscription through the Asset Client. We expect to receive **Block, MiningOn, and Subtree** notifications.
-   * In all cases, a (block or subtree) hash is sent out. The Coinbase service can then request the full block or subtree from the Asset Server.
-   * In the current implementation, there is no difference between Block and MiningOn messages, as they are both hashed blocks.
-2. The Asset Server tracks the subscriber in the Subscriber Database.
-3. The Asset Server subscribes to the Blockchain Client, which sends back notifications for Block, MiningOn, and Subtree messages.
-4. Independently, the Blockchain Server adds a block and sends notifications (Block and MiningOn) to the Asset Server, which then forwards these to the Coinbase service.
-5. Concurrently, the Block Assembly Server, upon initialization and adding a new subtree, sends a Subtree notification to the Asset Server (via the Blockchain subscription), which again forwards it to the Coinbase service.
-
-
-### 4.2. HTTP and Websockets
+### 4.1. HTTP and Websockets
 
 The Asset Service exposes the following HTTP and Websocket methods:
 
-### 4.2.1. getTransaction() and getTransactions()
+### 4.1.1. getTransaction() and getTransactions()
 
 ![asset_server_http_get_transaction.svg](img/plantuml/assetserver/asset_server_http_get_transaction.svg)
 
-### 4.2.2. GetTransactionMeta()
+### 4.1.2. GetTransactionMeta()
 
 ![asset_server_http_get_transaction_meta.svg](img/plantuml/assetserver/asset_server_http_get_transaction_meta.svg)
 
-### 4.2.3. GetSubtree()
+### 4.1.3. GetSubtree()
 
 ![asset_server_http_get_subtree.svg](img/plantuml/assetserver/asset_server_http_get_subtree.svg)
 
-### 4.2.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()
+### 4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()
 
 ![asset_server_http_get_block_header.svg](img/plantuml/assetserver/asset_server_http_get_block_header.svg)
 
-### 4.2.5. GetBlock() and GetLastNBlocks()
+### 4.1.5. GetBlock() and GetLastNBlocks()
 
 ![asset_server_http_get_block.svg](img/plantuml/assetserver/asset_server_http_get_block.svg)
 
-### 4.2.6. GetUTXO() and GetUTXOsByTXID()
+The server also provides a legacy `/rest/hash/:hash.bin` endpoint for retrieving raw block data by hash. This is a deprecated legacy endpoint that might not have support in future versions.
+
+### 4.1.6. GetUTXO() and GetUTXOsByTXID()
 
 ![asset_server_http_get_utxo.svg](img/plantuml/assetserver/asset_server_http_get_utxo.svg)
 
@@ -269,7 +254,7 @@ The Asset Service exposes the following HTTP and Websocket methods:
 
 * For getting UTXOs by a transaction ID (/utxos/:hash/json), the HTTP Server requests transaction meta data from the UTXO Store using a transaction hash. Then for each output in the transaction, it queries the UtxoStore to get UTXO data for the corresponding output hash.
 
-### 4.2.7. Websocket Subscriptions
+### 4.1.7. Websocket Subscriptions
 
 The `HandleWebSocket(c)` (`services/asset/http_impl/HandleWebsocket.go`) function sets up a WebSocket server for handling real-time notifications. It involves managing client connections, broadcasting messages (including periodic pings), and handling client disconnections.
 
@@ -290,13 +275,20 @@ The `HandleWebSocket(c)` (`services/asset/http_impl/HandleWebsocket.go`) functio
 
 ![asset_webserver_websocket.svg](img/plantuml/assetserver/asset_webserver_websocket.svg)
 
-Notice that the notifications are the same notifications sent by the gRPC subscriber (see [Subscribe to notifications](#415-subscribe-to-notifications-)) - i.e. `Subtree`, `Block`, `MiningOn`.
+To better understand the specific notifications being sent over the Websocket, we can go into the detail here:
 
-## 5. gRPC Protobuf Definitions
+![asset_server_websocket_subscribe_notifications.svg](img/plantuml/assetserver/asset_server_websocket_subscribe_notifications.svg)
 
-The Asset Service uses gRPC for communication between nodes. The  protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/assetProto.md).
+1. The Asset Client subscribes to the Coinbase service. The Asset client expects to receive **Block, MiningOn, and Subtree** notifications.
+    * In all cases, a (block or subtree) hash is sent out. The Coinbase service can then request the full block or subtree from the Asset Server.
+    * In the current implementation, there is no difference between Block and MiningOn messages, as they are both hashed blocks.
+2. The Asset Server tracks the subscriber in the Subscriber Database.
+3. The Asset Server subscribes to the Blockchain Client, which sends back notifications for Block, MiningOn, and Subtree messages.
+4. Independently, the Blockchain Server adds a block (received from either the Block Assembly or Block Validation Services) and sends notifications (Block and MiningOn) to the Asset Server, which then forwards these to the Coinbase service.
+5. Concurrently, the Block Assembly Server, upon initialization and adding a new subtree, sends a Subtree notification to the Asset Server (via the Blockchain subscription), which again forwards it to the Coinbase service.
 
-## 6. Technology
+
+## 5. Technology
 
 Key technologies involved:
 
@@ -304,44 +296,33 @@ Key technologies involved:
     - A statically typed, compiled language known for its simplicity and efficiency, especially in concurrent operations and networked services.
     - The primary language used for implementing the service's logic.
 
-2. **gRPC (Google Remote Procedure Call)**:
-    - A high-performance, open-source framework developed by Google.
-    - Used for inter-service communication, enabling the server to efficiently communicate with connected clients or nodes.
-    - Supports features like streaming requests and responses and robust error handling.
-
-3. **Protobuf (Protocol Buffers)**:
-    - A language-neutral, platform-neutral, extensible mechanism for serializing structured data, developed by Google.
-    - Used in conjunction with gRPC for defining service methods and message formats.
-
-4. **HTTP/HTTPS Protocols**:
+2. **HTTP/HTTPS Protocols**:
     - HTTP for transferring data over the web. HTTPS adds a layer of security with SSL/TLS encryption.
     - Used for communication between clients and the server, and for serving web pages or APIs.
 
-5. **Echo Web Framework**:
+3. **Echo Web Framework**:
     - A high-performance, extensible, minimalist Go web framework.
     - Used for handling HTTP requests and routing, including upgrading HTTP connections to WebSocket connections.
     - Library: github.com/labstack/echo
 
-6. **WebSocket Protocol**:
+4. **WebSocket Protocol**:
     - A TCP-based protocol that provides full-duplex communication channels over a single connection.
     - Used for real-time data transfer between clients and the server, particularly useful for continuously updating the state of the network to connected clients.
     - Library: github.com/gorilla/websocket
 
-8. **JSON (JavaScript Object Notation)**:
+5. **JSON (JavaScript Object Notation)**:
     - A lightweight data-interchange format, easy for humans to read and write, and easy for machines to parse and generate.
     - Used for structuring data sent to and from clients, especially in contexts where WebSocket or HTTP is used.
 
 
-## 7. Directory Structure and Main Files
+## 6. Directory Structure and Main Files
 
 ```
 ./services/asset
-├── Client.go                  # gRPC Client functions for the Asset Service.
 ├── Interface.go               # Defines the interface for an asset peer.
 ├── Peer.go                    # Defines a Peer and manages peer-related functionalities.
 ├── Server.go                  # Server logic for the Asset Service.
 ├── asset_api                  # API definitions and generated files.
-├── grpc_impl                  # Implementation of the service using gRPC, used by the Server.go.
 ├── http_impl                  # Implementation of the service using HTTP.
 │   ├── GetBestBlockHeader.go  # Logic to retrieve the best block header.
 │   ├── GetBlock.go            # Logic to retrieve a specific block.
@@ -365,9 +346,9 @@ Key technologies involved:
 ```
 
 
-## 8. How to run
+## 7. How to run
 
-### 8.1. How to run
+### 7.1. How to run
 
 To run the Asset Server locally, you can execute the following command:
 
@@ -378,44 +359,48 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Asset=1
 Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the Asset Server locally.
 
 
-### 8.2  Configuration options (settings flags)
+### 7.2  Configuration options (settings flags)
 
-1. **General Configuration**
-    - `asset_maxRetries`: The maximum number of retry attempts for connecting to the Asset Service.
-        - Example: `asset_maxRetries=3`
-    - `asset_retrySleep`: The sleep duration (in milliseconds) between retry attempts for connecting to the Asset Service.
-        - Example: `asset_retrySleep=1000`
-    - `use_open_tracing`: Enables or disables OpenTracing for the service.
-        - Example: `use_open_tracing=true`
-    - `use_prometheus_grpc_metrics`: Enables or disables Prometheus metrics for gRPC calls.
-        - Example: `use_prometheus_grpc_metrics=true`
+1. **HTTP Server Configuration**
+   - `asset_httpListenAddress`: Address for the Asset Service to listen for HTTP requests.
+      - Example: `asset_httpListenAddress=:8090`
+   - `asset_httpAddress`: URL of the Asset Service HTTP server.
+      - Example: `asset_httpAddress=http://localhost:8090`
+   - `securityLevelHTTP`: Determines the security level for HTTP communication. `0` for HTTP, `1` for HTTPS.
+      - Example: `securityLevelHTTP=1`
+   - `server_certFile`: Path to the SSL certificate file for HTTPS.
+      - Example: `server_certFile=/path/to/cert.pem`
+   - `server_keyFile`: Path to the SSL key file for HTTPS.
+      - Example: `server_keyFile=/path/to/key.pem`
+   - `http_sign_response`: Enables or disables signing of HTTP responses.
+      - Example: `http_sign_response=true`
+   - `asset_apiPrefix`: Specifies the API prefix for HTTP routes.
+      - Example: `asset_apiPrefix=/api/v1`
 
-2. **gRPC and HTTP Server Configuration**
-    - `asset_grpcListenAddress`: Address for the Asset Service to listen for gRPC requests.
-        - Example: `asset_grpcListenAddress=:8091`
-    - `asset_httpListenAddress`: Address for the Asset Service to listen for HTTP requests.
-        - Example: `asset_httpListenAddress=:8090`
-    - `securityLevelHTTP`: Determines the security level for HTTP communication. `0` for HTTP, `1` for HTTPS.
-        - Example: `securityLevelHTTP=1`
-    - `server_certFile`: Path to the SSL certificate file for HTTPS.
-        - Example: `server_certFile=/path/to/cert.pem`
-    - `server_keyFile`: Path to the SSL key file for HTTPS.
-        - Example: `server_keyFile=/path/to/key.pem`
+2. **Centrifuge Configuration**
+   - `asset_centrifugeListenAddress`: Specifies the listen address for the Centrifuge service integration.
+      - Example: `asset_centrifugeListenAddress=:8101`
 
-3. **Service Discovery and Peer Configuration**
-    - `feature_libP2P`: Enables or disables the libP2P feature for peer-to-peer network communication.
-        - Example: `feature_libP2P=false`
-    - `feature_bootstrap`: Enables or disables the bootstrap feature for discovering peers.
-        - Example: `feature_bootstrap=true`
-    - `clientName`: Specifies the client name for identification purposes.
-        - Example: `clientName=AssetClient`
+3. **P2P Configuration**
+   - `p2p_httpAddress`: HTTP address for P2P communication.
+      - Example: `p2p_httpAddress=localhost:9906`
+   - `p2p_private_key`: Private key for P2P communication.
+      - Example: `p2p_private_key=<your-private-key>`
 
-4. **Repository and Storage Configuration**
-    - `txmeta_store_asset-service`: Connection string or configuration for the transaction metadata storage used by the Asset Service.
-        - Example: `txmeta_store_asset-service=aerospike://localhost:3000`
+4. **UTXO Store Configuration**
+   - `utxostore`: URL for the UTXO store.
+      - Example: `utxostore=http://localhost:8080`
 
-5. **Miscellaneous Settings**
-    - `asset_apiPrefix`: Specifies the API prefix for HTTP routes.
-        - Example: `asset_apiPrefix=/api/v1`
-    - `asset_centrifugeListenAddress`: Specifies the listen address for the Centrifuge service integration.
-        - Example: `asset_centrifugeListenAddress=:8101`
+5. **Coinbase Configuration**
+   - `coinbase_grpcAddress`: gRPC address for the Coinbase service.
+      - Example: `coinbase_grpcAddress=localhost:50051`
+
+6. **Block Validation Configuration**
+   - `blockvalidation_processTxMetaUsingStore_BatchSize`: Batch size for processing transaction metadata.
+      - Example: `blockvalidation_processTxMetaUsingStore_BatchSize=1024`
+   - `blockvalidation_processTxMetaUsingStor_Concurrency`: Concurrency level for processing transaction metadata.
+      - Example: `blockvalidation_processTxMetaUsingStor_Concurrency=4`
+
+7. **Debugging Configuration**
+   - `ECHO_DEBUG`: Enables or disables debug mode for the Echo framework.
+      - Example: `ECHO_DEBUG=true`
