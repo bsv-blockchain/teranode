@@ -40,6 +40,13 @@ func (m *Memory) Close(_ context.Context) error {
 func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
 	defer reader.Close()
 
+	// for consistency with other stores, check if the blob already exists and throw BlobAlreadyExistsError if it does
+	if exists, err := m.Exists(ctx, key); err != nil {
+		return err
+	} else if exists {
+		return errors.NewBlobAlreadyExistsError("blob already exists")
+	}
+
 	b, err := io.ReadAll(reader)
 	if err != nil {
 		return errors.NewStorageError("failed to read data from reader", err)
@@ -48,10 +55,17 @@ func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 	return m.Set(ctx, key, b, opts...)
 }
 
-func (m *Memory) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
+func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...options.Options) error {
 	setOptions := options.NewSetOptions(nil, opts...)
 
 	storeKey := hashKey(hash, setOptions.Extension)
+
+	// for consistency with other stores, check if the blob already exists and throw BlobAlreadyExistsError if it does
+	if exists, err := m.Exists(ctx, hash); err != nil {
+		return err
+	} else if exists {
+		return errors.NewBlobAlreadyExistsError("blob already exists")
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

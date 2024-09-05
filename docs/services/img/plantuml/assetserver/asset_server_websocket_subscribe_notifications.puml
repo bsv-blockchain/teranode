@@ -1,0 +1,67 @@
+@startuml
+participant "WebSocket Client" as Client
+participant "Asset Server\n(WebSocket)" as Server
+database "Subscriber DB" as SubDB
+participant "Coinbase Service" as Coinbase
+participant "Blockchain Client" as BlockchainClient
+participant "Blockchain Server" as BlockchainServer
+participant "Block Assembly Server" as BlockAssemblyServer
+
+== WebSocket Connection & Subscription ==
+Server -> Server: Init
+Server -> Coinbase: Subscribe(ctx, "")
+Server -> BlockchainClient: Subscribe()
+
+
+Client -> Server: Connect to WebSocket
+activate Server
+Server -> SubDB: Track subscriber
+activate BlockchainClient
+
+== Block Addition and Notification ==
+BlockchainServer -> BlockchainServer: AddBlock()
+BlockchainServer -> BlockchainClient: Send Notification Block, MiningOn
+BlockchainClient -> Server: Send Notification Block, MiningOn
+activate Server
+Server --> Coinbase: Notification Block, MiningOn
+Server -> SubDB: Get all subscribers
+SubDB --> Server: Subscriber list
+loop For Each Subscriber
+    Server -> Client: Send Notification
+end
+deactivate Server
+
+== Subtree Creation and Notification ==
+BlockAssemblyServer -> BlockAssemblyServer: init() - New Subtree
+BlockAssemblyServer -> BlockchainServer: Send Notification Subtree
+BlockchainServer -> BlockchainClient: Send Notification Subtree
+BlockchainClient -> Server: Send Notification Subtree
+activate Server
+Server --> Coinbase: Notification Subtree
+Server -> SubDB: Get all subscribers
+SubDB --> Server: Subscriber list
+loop For Each Subscriber
+    Server -> Client: Send Notification
+end
+deactivate Server
+
+== Periodic Ping ==
+Server -> Server: Send periodic ping
+activate Server
+Server -> SubDB: Get all subscribers
+SubDB --> Server: Subscriber list
+loop For Each Subscriber
+    Server -> Client: Send Ping
+end
+deactivate Server
+
+== Client Disconnection ==
+Client -> Server: Disconnect WebSocket
+activate Server
+Server -> SubDB: Remove client
+deactivate Server
+
+deactivate BlockchainClient
+
+footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml
