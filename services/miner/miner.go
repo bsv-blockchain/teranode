@@ -150,25 +150,6 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
 
-	// currentState, err := m.blockchainClient.GetFSMCurrentState(ctx)
-	// if err != nil {
-	//	 // TODO: how to handle it gracefully?
-	//	 m.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
-	// }
-
-	// if *currentState != blockchain_api.FSMStateType_MINING {
-	// err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
-	//_, err := m.blockchainClient.Mine(ctx, &emptypb.Empty{})
-	//if err != nil {
-	//	m.logger.Errorf("[Miner] Failed to send FSM event: %s", err)
-	//}
-	// }
-
-	//_, err = m.blockchainClient.SetMinerServiceStarted(ctx)
-	//if err != nil {
-	//	m.logger.Errorf("[Miner] Failed to set miner service started: %s", err)
-	//}
-
 	var miningCtx context.Context
 	var cancel context.CancelFunc
 

@@ -432,7 +432,6 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 // levels are determined by the number of parents in the block
 func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block,
 	txMap map[chainhash.Hash]*txMapWrapper) (uint32, map[uint32][]*bt.Tx) {
-
 	ctx, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel")
 	defer deferFn()
 

@@ -103,7 +103,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				},
 				Dst: blockchain_api.FSMStateType_STOPPED.String(),
 			},
-			//{
+			// {
 			//	Name: blockchain_api.FSMEventType_UNAVAILABLE.String(),
 			//	Src: []string{
 			//		blockchain_api.FSMStateType_RUNNING.String(),
@@ -113,7 +113,7 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 			//		blockchain_api.FSMStateType_LEGACYSYNCING.String(),
 			//	},
 			//	Dst: blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String(),
-			//},
+			// },
 		},
 		callbacks,
 		//fsm.Callbacks{},
