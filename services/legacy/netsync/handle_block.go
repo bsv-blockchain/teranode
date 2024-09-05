@@ -370,8 +370,25 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 		if txWrapper, found := txMap[txHash]; found {
 			tx := txWrapper.tx
 			txSize := uint64(tx.Size())
+			tx.Size()
 
-			if err := subtree.AddNode(txHash, 0, txSize); err != nil {
+			// Calculate the fees of this transaction
+			// We don't need to check for coinbase transactions, as they have no inputs
+			fee := uint64(0)
+
+			if !tx.IsCoinbase() {
+				// Calculate the fees of this transaction
+				// We don't need to check for coinbase transactions, as they have no inputs
+				for _, input := range tx.Inputs {
+					fee += input.PreviousTxSatoshis
+				}
+
+				for _, output := range tx.Outputs {
+					fee -= output.Satoshis
+				}
+			}
+
+			if err := subtree.AddNode(txHash, fee, txSize); err != nil {
 				return errors.NewTxError("failed to add node (%s) to subtree", txHash, err)
 			}
 			// we need to match the indexes of the subtree and the tx data in subtreeData
