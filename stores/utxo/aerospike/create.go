@@ -213,6 +213,9 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					} else {
 						utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]", bItem.txHash.String(), err))
 					}
+
+					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+
 					continue
 				}
 			} else {
@@ -228,6 +231,9 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					} else {
 						utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
 					}
+
+					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+
 					continue
 				}
 			}
