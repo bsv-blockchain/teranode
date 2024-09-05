@@ -20,6 +20,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/stores/blockchain/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxo_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -190,7 +191,13 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile stri
 			Height:           header.Height,
 		}
 
-		_, _, err = blockchainStore.StoreBlock(ctx, block, "headers")
+		_, _, err = blockchainStore.StoreBlock(
+			ctx,
+			block,
+			"headers",
+			options.WithMinedSet(true),
+			options.WithSubtreesSet(true),
+		)
 		if err != nil {
 			return errors.NewProcessingError("Failed to add block", err)
 		}
@@ -370,6 +377,7 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 		utxoWrapper.Height,
 		utxo.WithTXID(&utxoWrapper.TxID),
 		utxo.WithSetCoinbase(utxoWrapper.Coinbase),
+		utxo.WithBlockIDs(0),
 	); err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			return nil

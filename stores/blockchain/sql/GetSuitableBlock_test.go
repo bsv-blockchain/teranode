@@ -28,10 +28,10 @@ func Test_getMedianBlock(t *testing.T) {
 }
 
 func TestSQL_GetSuitableBlock(t *testing.T) {
-	storeUrl, err := url.Parse("sqlitememory:///")
+	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
-	s, err := New(ulogger.TestLogger{}, storeUrl)
+	s, err := New(ulogger.TestLogger{}, storeURL)
 	require.NoError(t, err)
 
 	_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -47,5 +47,4 @@ func TestSQL_GetSuitableBlock(t *testing.T) {
 	require.NoError(t, err)
 	// suitable block should be block3
 	require.Equal(t, block2.Hash()[:], suitableBlock.Hash)
-
 }

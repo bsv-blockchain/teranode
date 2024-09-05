@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -16,8 +17,11 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var id int
-	var parentId int
+	var (
+		id       int
+		parentID int
+	)
+
 	q := `WITH RECURSIVE block_chain AS (
 		SELECT
 			id,
@@ -67,6 +71,7 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil // TODO should this be an ErrNotFound error?
 		}
+
 		return nil, errors.NewStorageError("failed to get suitableBlock", err)
 	}
 	defer rows.Close()
@@ -79,7 +84,7 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 		if err = rows.Scan(
 			&id,
 			&suitableBlock.Hash,
-			&parentId,
+			&parentID,
 			&suitableBlock.NBits,
 			&suitableBlock.Height,
 			&suitableBlock.Time,
@@ -87,6 +92,7 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 		); err != nil {
 			return nil, errors.NewStorageError("failed to scan row", err)
 		}
+
 		suitableBlockCandidates = append(suitableBlockCandidates, suitableBlock)
 	}
 
@@ -95,19 +101,22 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 	}
 	// we have 3 candidates - now sort them by time and choose the median
 	b := getMedianBlock(suitableBlockCandidates)
+
 	return b, nil
 }
 
 func getMedianBlock(blocks []*model.SuitableBlock) *model.SuitableBlock {
-
 	if blocks[0].Time > blocks[2].Time {
 		blocks[0], blocks[2] = blocks[2], blocks[0]
 	}
+
 	if blocks[0].Time > blocks[1].Time {
 		blocks[0], blocks[1] = blocks[1], blocks[0]
 	}
+
 	if blocks[1].Time > blocks[2].Time {
 		blocks[1], blocks[2] = blocks[2], blocks[1]
 	}
+
 	return blocks[1]
 }

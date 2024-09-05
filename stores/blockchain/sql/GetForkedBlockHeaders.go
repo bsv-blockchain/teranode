@@ -18,6 +18,7 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 	if err != nil {
 		return nil, nil, errors.NewStorageError("error in GetBlockHeaders", err)
 	}
+
 	if headers != nil {
 		return headers, metas, nil
 	}
@@ -64,18 +65,24 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 		LIMIT $2
 	`
 	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return blockHeaders, blockHeaderMetas, nil
 		}
+
 		return nil, nil, errors.NewStorageError("failed to get headers", err)
 	}
+
 	defer rows.Close()
 
-	var hashPrevBlock []byte
-	var hashMerkleRoot []byte
-	var nBits []byte
-	var insertedAt CustomTime
+	var (
+		hashPrevBlock  []byte
+		hashMerkleRoot []byte
+		nBits          []byte
+		insertedAt     CustomTime
+	)
+
 	for rows.Next() {
 		blockHeader := &model.BlockHeader{}
 		blockHeaderMeta := &model.BlockHeaderMeta{}
@@ -105,6 +112,7 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 		if err != nil {
 			return nil, nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
 		}
+
 		blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 		if err != nil {
 			return nil, nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)

@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -15,6 +16,7 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	if err != nil {
 		return errors.NewStorageError("error checking block exists: %v", err)
 	}
+
 	if !exists {
 		return errors.NewStorageError("block %s does not exist", blockHash.String())
 	}
@@ -32,6 +34,7 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	if err := s.ResetBlocksCache(ctx); err != nil {
 		return errors.NewStorageError("error clearing caches", err)
 	}
+
 	s.ResetResponseCache()
 
 	return nil

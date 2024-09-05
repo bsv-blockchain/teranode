@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -16,6 +17,7 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 	if err != nil {
 		return 0, errors.NewStorageError("error in GetBlockHeight", err)
 	}
+
 	if meta != nil {
 		return meta.Height, nil
 	}
@@ -38,6 +40,7 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, errors.NewStorageError("error in GetBlockHeight", err)
 		}
+
 		return 0, err
 	}
 

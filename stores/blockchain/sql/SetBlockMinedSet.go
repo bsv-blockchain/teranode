@@ -15,6 +15,7 @@ func (s *SQL) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) e
 		SET mined_set = true
 		WHERE hash = $1
 	`
+
 	res, err := s.db.ExecContext(ctx, q, blockHash.CloneBytes())
 	if err != nil {
 		return errors.NewStorageError("error updating block mined_set", err)

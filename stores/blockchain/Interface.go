@@ -6,6 +6,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
+	"github.com/bitcoin-sv/ubsv/stores/blockchain/options"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -16,7 +17,7 @@ type Store interface {
 	GetDBEngine() util.SQLEngine
 	GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error)
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error)
-	GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlockss uint32) ([]*model.Block, error)
+	GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error)
 	GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
 	GetBlockStats(ctx context.Context) (*model.BlockStats, error)
 	GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error)
@@ -25,7 +26,7 @@ type Store interface {
 	GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error)
 	GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error)
 	GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error)
-	StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, uint32, error)
+	StoreBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error)
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)

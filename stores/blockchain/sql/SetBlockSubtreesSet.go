@@ -15,6 +15,7 @@ func (s *SQL) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash
 		SET subtrees_set = true
 		WHERE hash = $1
 	`
+
 	res, err := s.db.ExecContext(ctx, q, blockHash.CloneBytes())
 	if err != nil {
 		return errors.NewStorageError("error updating block subtrees_set", err)

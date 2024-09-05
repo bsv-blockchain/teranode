@@ -115,11 +115,13 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 	blockInfos := make([]*model.BlockInfo, 0)
 
 	for rows.Next() {
-		var hashPrevBlock []byte
-		var hashMerkleRoot []byte
-		var coinbaseBytes []byte
-		var nBits []byte
-		var seenAt CustomTime
+		var (
+			hashPrevBlock  []byte
+			hashMerkleRoot []byte
+			coinbaseBytes  []byte
+			nBits          []byte
+			seenAt         CustomTime
+		)
 
 		header := &model.BlockHeader{}
 		info := &model.BlockInfo{}
@@ -205,16 +207,21 @@ func (ct *CustomTime) Scan(value interface{}) error {
 		if err != nil {
 			return err
 		}
+
 		ct.Time = t
+
 		return nil
 	case string:
 		t, err := time.Parse(SQLiteTimestampFormat, v)
 		if err != nil {
 			return err
 		}
+
 		ct.Time = t
+
 		return nil
 	}
+
 	return errors.NewProcessingError("unsupported type: %T", value)
 }
 

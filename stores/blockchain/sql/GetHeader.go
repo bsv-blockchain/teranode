@@ -18,6 +18,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 	if err != nil {
 		return nil, errors.NewStorageError("error in GetHeader: %w", err)
 	}
+
 	if header != nil {
 		return header, nil
 	}
@@ -39,9 +40,11 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 
 	blockHeader := &model.BlockHeader{}
 
-	var hashPrevBlock []byte
-	var hashMerkleRoot []byte
-	var nBits []byte
+	var (
+		hashPrevBlock  []byte
+		hashMerkleRoot []byte
+		nBits          []byte
+	)
 
 	if err := s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
 		&blockHeader.Version,
@@ -55,6 +58,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 			// add not found error in error chain
 			return nil, errors.NewStorageError("error in Header", errors.ErrNotFound)
 		}
+
 		return nil, errors.NewStorageError("error in Header", err)
 	}
 
@@ -62,6 +66,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
 	}
+
 	blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)

@@ -16,6 +16,7 @@ func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, 
 
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
+
 	var pastHash []byte
 
 	q := `WITH RECURSIVE ChainBlocks AS (
@@ -59,11 +60,14 @@ func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, 
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewStorageError("can't get hash %d before block %s", depth, hash.String(), errors.ErrNotFound)
 		}
+
 		return nil, errors.NewStorageError("can't get hash %d before block %s", depth, hash.String(), err)
 	}
+
 	ph, err := chainhash.NewHash(pastHash)
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to convert pastHash", err)
 	}
+
 	return ph, nil
 }

@@ -7,7 +7,6 @@ import (
 )
 
 func (s *SQL) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error) {
-
 	q := `
     SELECT hash FROM blocks
 	WHERE inserted_at >='%s' AND inserted_at <= '%s'
@@ -27,16 +26,19 @@ func (s *SQL) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) (
 
 	// blocks := make([]*model.Block, 0)
 	hashes := make([][]byte, 0)
+
 	for rows.Next() {
 		// block := &model.Block{}
 		hash := []byte{}
 		err := rows.Scan(
 			&hash,
 		)
+
 		if err != nil {
 			fmt.Printf("Error scanning row: %v\n", err)
 			return nil, err
 		}
+
 		hashes = append(hashes, hash)
 	}
 

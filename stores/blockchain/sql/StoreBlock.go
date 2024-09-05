@@ -7,6 +7,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/work"
+	"github.com/bitcoin-sv/ubsv/stores/blockchain/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	sqlite_errors "github.com/bitcoin-sv/ubsv/util/sqlite"
 	"github.com/lib/pq"
@@ -15,14 +16,14 @@ import (
 	"modernc.org/sqlite"
 )
 
-func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, uint32, error) {
+func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:StoreBlock")
 	defer deferFn()
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	newBlockID, height, err := s.storeBlock(ctx, block, peerID)
+	newBlockID, height, err := s.storeBlock(ctx, block, peerID, opts...)
 	if err != nil {
 		return 0, height, err
 	}
@@ -55,7 +56,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string)
 	return newBlockID, height, nil
 }
 
-func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string) (uint64, uint32, error) {
+func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error) {
 	var (
 		err                  error
 		previousBlockID      uint64
@@ -64,6 +65,12 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		height               uint32
 		previousBlockInvalid bool
 	)
+
+	// Apply options
+	storeBlockOptions := options.StoreBlockOptions{}
+	for _, opt := range opts {
+		opt(&storeBlockOptions)
+	}
 
 	q := `
 		INSERT INTO blocks (
@@ -84,7 +91,9 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		,peer_id
     ,coinbase_tx
 		,invalid
-	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17)
+		,mined_set
+		,subtrees_set
+	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
 		RETURNING id
 	`
 
@@ -145,8 +154,10 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 			if errors.Is(err, sql.ErrNoRows) {
 				return 0, 0, errors.NewStorageError("error storing block %s as previous block %s not found", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
 			}
+
 			return 0, 0, err
 		}
+
 		height = previousHeight + 1
 
 		if block.CoinbaseTx != nil {
@@ -179,6 +190,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 	if err != nil {
 		return 0, 0, errors.NewProcessingError("failed to convert chain work hash", err)
 	}
+
 	cumulativeChainWork, err := getCumulativeChainWork(chainWorkHash, block)
 	if err != nil {
 		return 0, 0, errors.NewProcessingError("failed to calculate cumulative chain work", err)
@@ -186,15 +198,17 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 
 	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 	hashMerkleRoot, _ := chainhash.NewHashFromStr("0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098")
-	nbits, _ := model.NewNBitFromString("1d00ffff")
+	nBits, _ := model.NewNBitFromString("1d00ffff")
+
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  hashPrevBlock,
 		HashMerkleRoot: hashMerkleRoot,
 		Timestamp:      1231469665,
-		Bits:           *nbits,
+		Bits:           *nBits,
 		Nonce:          2573394689,
 	}
+
 	_ = blockHeader
 
 	blockHeader2 := block.Header
@@ -223,6 +237,8 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string)
 		peerID,
 		coinbaseBytes,
 		previousBlockInvalid,
+		storeBlockOptions.MinedSet,
+		storeBlockOptions.SubtreesSet,
 	)
 	if err != nil {
 		// check whether this is a postgres exists constraint error

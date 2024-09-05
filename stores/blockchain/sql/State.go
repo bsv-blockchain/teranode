@@ -19,8 +19,11 @@ func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
 		WHERE key = $1
 	`
 
-	var data []byte
-	var err error
+	var (
+		data []byte
+		err  error
+	)
+
 	if err = s.db.QueryRowContext(ctx, q, key).Scan(
 		&data,
 	); err != nil {
@@ -38,6 +41,7 @@ func (s *SQL) SetState(ctx context.Context, key string, data []byte) error {
 	defer cancel()
 
 	var q string
+
 	currentState, _ := s.GetState(ctx, key)
 	if currentState != nil {
 		q = `

@@ -12,10 +12,10 @@ import (
 
 func TestSQL_InvalidateBlock(t *testing.T) {
 	t.Run("empty - error", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		err = s.InvalidateBlock(context.Background(), block2.Hash())
@@ -23,10 +23,10 @@ func TestSQL_InvalidateBlock(t *testing.T) {
 	})
 
 	t.Run("Block invalidated", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		err = s.insertGenesisTransaction(ulogger.TestLogger{})
@@ -44,9 +44,11 @@ func TestSQL_InvalidateBlock(t *testing.T) {
 		err = s.InvalidateBlock(context.Background(), block3.Hash())
 		require.NoError(t, err)
 
-		var id int
-		var height uint32
-		var invalid bool
+		var (
+			id      int
+			height  uint32
+			invalid bool
+		)
 
 		err = s.db.QueryRowContext(context.Background(),
 			"SELECT id, height, invalid FROM blocks WHERE hash = $1",
@@ -77,10 +79,10 @@ func TestSQL_InvalidateBlock(t *testing.T) {
 	})
 
 	t.Run("Blocks invalidated", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		err = s.insertGenesisTransaction(ulogger.TestLogger{})
@@ -95,14 +97,16 @@ func TestSQL_InvalidateBlock(t *testing.T) {
 		_, _, err = s.StoreBlock(context.Background(), block3, "")
 		require.NoError(t, err)
 
-		//err = dumpDBData(t, err, s)
+		// err = dumpDBData(t, err, s)
 
 		err = s.InvalidateBlock(context.Background(), block2.Hash())
 		require.NoError(t, err)
 
-		var id int
-		var height uint32
-		var invalid bool
+		var (
+			id      int
+			height  uint32
+			invalid bool
+		)
 
 		err = s.db.QueryRowContext(context.Background(),
 			"SELECT id, height, invalid FROM blocks WHERE hash = $1",
@@ -138,20 +142,20 @@ func TestSQL_InvalidateBlock(t *testing.T) {
 	})
 }
 
-//func dumpDBData(t *testing.T, err error, s *SQL) error {
-//	// get and print all the data in the db
-//	rows, err := s.db.QueryContext(context.Background(), "SELECT id, hash, height, invalid FROM blocks")
-//	require.NoError(t, err)
-//	defer rows.Close()
-//
-//	for rows.Next() {
-//		var id int
-//		var hash []byte
-//		var height uint32
-//		var invalid bool
-//		err = rows.Scan(&id, &hash, &height, &invalid)
-//		require.NoError(t, err)
-//		t.Logf("id: %d, hash: %x, height: %d, invalid: %t", id, hash, height, invalid)
-//	}
-//	return err
-//}
+// func dumpDBData(t *testing.T, err error, s *SQL) error {
+// 	// get and print all the data in the db
+// 	rows, err := s.db.QueryContext(context.Background(), "SELECT id, hash, height, invalid FROM blocks")
+// 	require.NoError(t, err)
+// 	defer rows.Close()
+
+// 	for rows.Next() {
+// 		var id int
+// 		var hash []byte
+// 		var height uint32
+// 		var invalid bool
+// 		err = rows.Scan(&id, &hash, &height, &invalid)
+// 		require.NoError(t, err)
+// 		t.Logf("id: %d, hash: %x, height: %d, invalid: %t", id, hash, height, invalid)
+// 	}
+// 	return err
+// }
