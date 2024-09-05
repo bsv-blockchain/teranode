@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"log"
@@ -1138,7 +1139,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		// Ignore unsupported inventory types.
 		switch iv.Type {
 		case wire.InvTypeBlock:
-		case wire.InvTypeTx:
+		// case wire.InvTypeTx: // SAO TODO - temporarily ignore transactions
 		default:
 			continue
 		}
