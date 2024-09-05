@@ -39,23 +39,22 @@ type subscriber struct {
 // Blockchain type carries the logger within it
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	addBlockChan        chan *blockchain_api.AddBlockRequest
-	store               blockchain_store.Store
-	subtreeStore        blob.Store
-	utxoStore           utxo.Store
-	logger              ulogger.Logger
-	newSubscriptions    chan subscriber
-	deadSubscriptions   chan subscriber
-	subscribers         map[subscriber]bool
-	notifications       chan *blockchain_api.Notification
-	newBlock            chan struct{}
-	difficulty          *Difficulty
-	chainParams         *chaincfg.Params
-	blockKafkaProducer  util.KafkaProducerI
-	stats               *gocore.Stat
-	finiteStateMachine  *fsm.FSM
-	client              ClientI
-	minerServiceStarted bool
+	addBlockChan       chan *blockchain_api.AddBlockRequest
+	store              blockchain_store.Store
+	subtreeStore       blob.Store
+	utxoStore          utxo.Store
+	logger             ulogger.Logger
+	newSubscriptions   chan subscriber
+	deadSubscriptions  chan subscriber
+	subscribers        map[subscriber]bool
+	notifications      chan *blockchain_api.Notification
+	newBlock           chan struct{}
+	difficulty         *Difficulty
+	chainParams        *chaincfg.Params
+	blockKafkaProducer util.KafkaProducerI
+	stats              *gocore.Stat
+	finiteStateMachine *fsm.FSM
+	client             ClientI
 }
 
 // New will return a server instance with the logger stored within it
@@ -908,11 +907,6 @@ func (b *Blockchain) GetBlocksSubtreesNotSet(ctx context.Context, _ *emptypb.Emp
 	}, nil
 }
 
-func (b *Blockchain) SetMinerServiceStarted(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	b.minerServiceStarted = true
-	return nil, nil
-}
-
 // FSM related endpoints
 
 func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
@@ -976,34 +970,6 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	req := &blockchain_api.SendFSMEventRequest{
 		Event: blockchain_api.FSMEventType_RUN,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		return nil, err
-	}
-
-	// TODO: decide to keep it or not. Currently, it does not affect the execution since LegacySync mode is activated only in the beginning.
-	// There are some potential cases that we want the node to start mining immediately when Miner Service is started.
-	// In this case, FSM should transition from Running State to Mining State, immediately.
-	// Such potential cases are:
-	// For Legacy Sync, in the future node may enter to Legacy Sync state. After it is done it recovers to Running State.
-	// Check if we are ready to mine, by checking if Miner is subscribed to the blockchain
-	if b.minerServiceStarted {
-		_, err = b.Mine(ctx, &emptypb.Empty{})
-		if err != nil {
-			// unable to send the event, no need to update the state.
-			return nil, err
-		}
-	}
-
-	return nil, nil
-}
-
-func (b *Blockchain) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_MINE,
 	}
 
 	_, err := b.SendFSMEvent(ctx, req)

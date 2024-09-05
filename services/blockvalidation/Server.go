@@ -192,8 +192,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					u.logger.Infof("[BlockValidation Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 
-					// start mining
-					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_MINE)
+					// catched up, ready to mine, send RUN event
+					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_RUN)
 					if err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to send MINE event [%v]", err)
 					}

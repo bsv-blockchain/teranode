@@ -39,12 +39,12 @@ service BlockchainAPI {
   rpc GetBlocksMinedNotSet(google.protobuf.Empty) returns (GetBlocksMinedNotSetResponse) {}
   rpc SetBlockSubtreesSet(SetBlockSubtreesSetRequest) returns (google.protobuf.Empty) {}
   rpc GetBlocksSubtreesNotSet(google.protobuf.Empty) returns (GetBlocksSubtreesNotSetResponse) {}
-  rpc SetMinerServiceStarted(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+ // rpc SetMinerServiceStarted(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc SendFSMEvent(SendFSMEventRequest) returns (GetFSMStateResponse) {}
   rpc GetFSMCurrentState(google.protobuf.Empty) returns (GetFSMStateResponse) {}
   rpc WaitFSMToTransitionToGivenState(WaitFSMToTransitionRequest) returns (google.protobuf.Empty) {}
   rpc Run(google.protobuf.Empty) returns (google.protobuf.Empty) {}
-  rpc Mine(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+//  rpc Mine(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc CatchUpTransactions(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc CatchUpBlocks(google.protobuf.Empty) returns (google.protobuf.Empty) {}
   rpc Restore(google.protobuf.Empty) returns (google.protobuf.Empty) {}
@@ -300,7 +300,7 @@ message SendFSMEventRequest {
 enum FSMEventType {
   STOP = 0;
   RUN = 1;
-  MINE = 2;
+  // MINE = 2;
   CATCHUPBLOCKS = 3;
   CATCHUPTXS = 4;
   RESTORE = 5;
@@ -312,7 +312,7 @@ enum FSMEventType {
 enum FSMStateType {
   STOPPED = 0;
   RUNNING = 1;
-  MINING = 2;
+  // MINING = 2;
   CATCHINGBLOCKS = 3;
   CATCHINGTXS = 4;
   RESTORING = 5;
