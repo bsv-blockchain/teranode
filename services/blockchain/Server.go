@@ -55,7 +55,6 @@ type Blockchain struct {
 	stats              *gocore.Stat
 	finiteStateMachine *fsm.FSM
 	client             ClientI
-	// minerServiceStarted bool
 }
 
 // New will return a server instance with the logger stored within it
