@@ -52,11 +52,13 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, o
 
 	logger.Infof("Creating lustre store s3 Url: %s, dir: %s, persistDir: %s", s3Url, dir, persistDir)
 
-	if s3Url != nil {
+	if s3Url != nil && s3Url.Host != "" && s3Url.Path != "" {
 		s3Client, err = s3.New(logger, s3Url)
 		if err != nil {
 			return nil, errors.NewStorageError("[Lustre] failed to create s3 client", err)
 		}
+	} else {
+		logger.Warnf("[Lustre] S3 URL (host and path) is not provided, S3 client will not be created")
 	}
 
 	return NewLustreStore(logger, s3Client, dir, persistDir, opts...)
