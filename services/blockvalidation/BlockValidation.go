@@ -548,27 +548,25 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 	}
 
-	if gocore.Config().GetBool("blockvalidation_skipCheckParentMined", false) {
-	CheckParentMined:
-		for {
-			select {
-			case <-ctx.Done():
-				return errors.NewContextCanceledError("[ValidateBlock][%s] context cancelled", block.Hash().String())
-			default:
-				parentBlockMined, err := u.isParentMined(ctx, block.Header)
-				if err != nil {
-					u.logger.Errorf("[BlockValidation:start][%s] failed isParentMined: %s", block.Hash().String(), err)
-					time.Sleep(1 * time.Second)
-					continue CheckParentMined
-				}
+CheckParentMined:
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.NewContextCanceledError("[ValidateBlock][%s] context cancelled", block.Hash().String())
+		default:
+			parentBlockMined, err := u.isParentMined(ctx, block.Header)
+			if err != nil {
+				u.logger.Errorf("[BlockValidation:start][%s] failed isParentMined: %s", block.Hash().String(), err)
+				time.Sleep(1 * time.Second)
+				continue CheckParentMined
+			}
 
-				if !parentBlockMined {
-					u.logger.Warnf("[BlockValidation:start][%s] parent block not mined yet, retrying", block.Hash().String())
-					time.Sleep(delay)
-					delay = min(2*delay, maxDelay) // Increase delay, ensuring it does not exceed maxDelay
-				} else {
-					break CheckParentMined
-				}
+			if !parentBlockMined {
+				u.logger.Warnf("[BlockValidation:start][%s] parent block not mined yet, retrying", block.Hash().String())
+				time.Sleep(delay)
+				delay = min(2*delay, maxDelay) // Increase delay, ensuring it does not exceed maxDelay
+			} else {
+				break CheckParentMined
 			}
 		}
 	}

@@ -610,3 +610,19 @@ func Benchmark_NewBlockFromBytes(b *testing.B) {
 		_, _ = NewBlockFromBytes(blockBytesForBenchmark)
 	}
 }
+
+func TestT(t *testing.T) {
+	tx := &bt.Tx{}
+
+	b := tx.Bytes()
+
+	tx2, err := bt.NewTxFromBytes(b)
+	require.NoError(t, err)
+
+	assert.Equal(t, tx, tx2)
+	// t.Logf("%x", tx.Bytes())
+	// t.Logf("%x", tx2.Bytes())
+
+	assert.True(t, tx.TxIDChainHash().Equal(*emptyTX.TxIDChainHash()))
+	assert.True(t, tx2.TxIDChainHash().Equal(*emptyTX.TxIDChainHash()))
+}
