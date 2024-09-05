@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -182,9 +183,6 @@ func (s *MockBlockchain) SetBlockSubtreesSet(ctx context.Context, blockHash *cha
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
-	panic("not implemented")
-}
-func (s *MockBlockchain) SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {

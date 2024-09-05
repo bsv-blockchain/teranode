@@ -3,10 +3,11 @@ package repository
 import (
 	"context"
 	"encoding/binary"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"io"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -365,9 +366,6 @@ func (s *mockStore) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhas
 	panic("not implemented")
 }
 func (s *mockStore) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
-	panic("not implemented")
-}
-func (s *mockStore) SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error) {
 	panic("not implemented")
 }
 func (s *mockStore) SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error {

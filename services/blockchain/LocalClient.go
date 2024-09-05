@@ -3,8 +3,9 @@ package blockchain
 import (
 	"context"
 
-	"google.golang.org/protobuf/types/known/emptypb"
 	"time"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 
@@ -160,10 +161,6 @@ func (c LocalClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainha
 
 func (c LocalClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
 	return c.store.GetBlocksSubtreesNotSet(ctx)
-}
-
-func (c LocalClient) SetMinerServiceStarted(ctx context.Context) (*emptypb.Empty, error) {
-	panic("not implemented")
 }
 
 func (c LocalClient) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
