@@ -17,6 +17,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestFile_NilS3(t *testing.T) {
+	t.Run("no s3", func(t *testing.T) {
+		var s3Client s3Store
+		require.Nil(t, s3Client)
+
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
+		require.NoError(t, err)
+
+		// should not exist
+		exists, err := f.Exists(context.Background(), []byte("key"))
+		require.NoError(t, err)
+		require.False(t, exists)
+
+		// should fail
+		value, err := f.Get(context.Background(), []byte("key"))
+		require.Error(t, err)
+		require.Nil(t, value)
+
+		// should fail
+		value, err = f.GetHead(context.Background(), []byte("key"), 3)
+		require.Error(t, err)
+		require.Nil(t, value)
+
+		// create the file
+		err = f.Set(context.Background(), []byte("key"), []byte("value"))
+		require.NoError(t, err)
+
+		// should exist
+		exists, err = f.Exists(context.Background(), []byte("key"))
+		require.NoError(t, err)
+		require.True(t, exists)
+
+		// should succeed
+		value, err = f.Get(context.Background(), []byte("key"))
+		require.NoError(t, err)
+		require.Equal(t, []byte("value"), value)
+
+		// should succeed
+		value, err = f.GetHead(context.Background(), []byte("key"), 3)
+		require.NoError(t, err)
+		require.Equal(t, []byte("val"), value)
+
+		// cleanup
+		err = f.Del(context.Background(), []byte("key"))
+		require.NoError(t, err)
+	})
+}
+
 func TestFile_Get(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
 

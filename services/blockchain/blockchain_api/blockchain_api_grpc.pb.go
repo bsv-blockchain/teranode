@@ -48,12 +48,10 @@ const (
 	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
 	BlockchainAPI_SetBlockSubtreesSet_FullMethodName             = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
 	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
-	BlockchainAPI_SetMinerServiceStarted_FullMethodName          = "/blockchain_api.BlockchainAPI/SetMinerServiceStarted"
 	BlockchainAPI_SendFSMEvent_FullMethodName                    = "/blockchain_api.BlockchainAPI/SendFSMEvent"
 	BlockchainAPI_GetFSMCurrentState_FullMethodName              = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
 	BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName = "/blockchain_api.BlockchainAPI/WaitFSMToTransitionToGivenState"
 	BlockchainAPI_Run_FullMethodName                             = "/blockchain_api.BlockchainAPI/Run"
-	BlockchainAPI_Mine_FullMethodName                            = "/blockchain_api.BlockchainAPI/Mine"
 	BlockchainAPI_CatchUpTransactions_FullMethodName             = "/blockchain_api.BlockchainAPI/CatchUpTransactions"
 	BlockchainAPI_CatchUpBlocks_FullMethodName                   = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
 	BlockchainAPI_Restore_FullMethodName                         = "/blockchain_api.BlockchainAPI/Restore"
@@ -97,12 +95,10 @@ type BlockchainAPIClient interface {
 	GetBlocksMinedNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksMinedNotSetResponse, error)
 	SetBlockSubtreesSet(ctx context.Context, in *SetBlockSubtreesSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetBlocksSubtreesNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksSubtreesNotSetResponse, error)
-	SetMinerServiceStarted(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	SendFSMEvent(ctx context.Context, in *SendFSMEventRequest, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	GetFSMCurrentState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	WaitFSMToTransitionToGivenState(ctx context.Context, in *WaitFSMToTransitionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Run(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	Mine(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	CatchUpTransactions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	CatchUpBlocks(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Restore(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
@@ -400,16 +396,6 @@ func (c *blockchainAPIClient) GetBlocksSubtreesNotSet(ctx context.Context, in *e
 	return out, nil
 }
 
-func (c *blockchainAPIClient) SetMinerServiceStarted(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, BlockchainAPI_SetMinerServiceStarted_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *blockchainAPIClient) SendFSMEvent(ctx context.Context, in *SendFSMEventRequest, opts ...grpc.CallOption) (*GetFSMStateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetFSMStateResponse)
@@ -444,16 +430,6 @@ func (c *blockchainAPIClient) Run(ctx context.Context, in *emptypb.Empty, opts .
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, BlockchainAPI_Run_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *blockchainAPIClient) Mine(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, BlockchainAPI_Mine_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -573,12 +549,10 @@ type BlockchainAPIServer interface {
 	GetBlocksMinedNotSet(context.Context, *emptypb.Empty) (*GetBlocksMinedNotSetResponse, error)
 	SetBlockSubtreesSet(context.Context, *SetBlockSubtreesSetRequest) (*emptypb.Empty, error)
 	GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error)
-	SetMinerServiceStarted(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error)
 	GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error)
 	WaitFSMToTransitionToGivenState(context.Context, *WaitFSMToTransitionRequest) (*emptypb.Empty, error)
 	Run(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
-	Mine(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	CatchUpTransactions(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	CatchUpBlocks(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	Restore(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
@@ -678,9 +652,6 @@ func (UnimplementedBlockchainAPIServer) SetBlockSubtreesSet(context.Context, *Se
 func (UnimplementedBlockchainAPIServer) GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlocksSubtreesNotSet not implemented")
 }
-func (UnimplementedBlockchainAPIServer) SetMinerServiceStarted(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetMinerServiceStarted not implemented")
-}
 func (UnimplementedBlockchainAPIServer) SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendFSMEvent not implemented")
 }
@@ -692,9 +663,6 @@ func (UnimplementedBlockchainAPIServer) WaitFSMToTransitionToGivenState(context.
 }
 func (UnimplementedBlockchainAPIServer) Run(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Run not implemented")
-}
-func (UnimplementedBlockchainAPIServer) Mine(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Mine not implemented")
 }
 func (UnimplementedBlockchainAPIServer) CatchUpTransactions(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CatchUpTransactions not implemented")
@@ -1220,24 +1188,6 @@ func _BlockchainAPI_GetBlocksSubtreesNotSet_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BlockchainAPI_SetMinerServiceStarted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockchainAPIServer).SetMinerServiceStarted(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockchainAPI_SetMinerServiceStarted_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).SetMinerServiceStarted(ctx, req.(*emptypb.Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _BlockchainAPI_SendFSMEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SendFSMEventRequest)
 	if err := dec(in); err != nil {
@@ -1306,24 +1256,6 @@ func _BlockchainAPI_Run_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).Run(ctx, req.(*emptypb.Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlockchainAPI_Mine_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockchainAPIServer).Mine(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockchainAPI_Mine_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).Mine(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1584,10 +1516,6 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockchainAPI_GetBlocksSubtreesNotSet_Handler,
 		},
 		{
-			MethodName: "SetMinerServiceStarted",
-			Handler:    _BlockchainAPI_SetMinerServiceStarted_Handler,
-		},
-		{
 			MethodName: "SendFSMEvent",
 			Handler:    _BlockchainAPI_SendFSMEvent_Handler,
 		},
@@ -1602,10 +1530,6 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Run",
 			Handler:    _BlockchainAPI_Run_Handler,
-		},
-		{
-			MethodName: "Mine",
-			Handler:    _BlockchainAPI_Mine_Handler,
 		},
 		{
 			MethodName: "CatchUpTransactions",

@@ -220,7 +220,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 					b.logger.Debugf("[BlockAssembler] FSM current state: %s", *currentState)
 
-					if *currentState == blockchain_api.FSMStateType_MINING {
+					if *currentState == blockchain_api.FSMStateType_RUNNING {
 						miningCandidate, subtrees, err := b.getMiningCandidate()
 						utils.SafeSend(responseCh, &miningCandidateResponse{
 							miningCandidate: miningCandidate,

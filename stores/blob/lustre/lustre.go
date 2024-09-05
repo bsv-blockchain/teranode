@@ -47,7 +47,7 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, o
 
 	var (
 		err      error
-		s3Client *s3.S3
+		s3Client s3Store
 	)
 
 	logger.Infof("Creating lustre store s3 Url: %s, dir: %s, persistDir: %s", s3Url, dir, persistDir)
@@ -58,7 +58,8 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, o
 			return nil, errors.NewStorageError("[Lustre] failed to create s3 client", err)
 		}
 	} else {
-		logger.Warnf("[Lustre] S3 URL (host and path) is not provided, S3 client will not be created")
+		s3Client = nil
+		logger.Infof("[Lustre] S3 URL (host and path) is not provided, S3 client will not be created")
 	}
 
 	return NewLustreStore(logger, s3Client, dir, persistDir, opts...)
@@ -241,7 +242,11 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.O
 			file, err = os.Open(s.getFileNameForPersist(fileName))
 			if err != nil {
 				// s.logger.Warnf("[Lustre][GetIoReader] [%s] file not found in subtree temp dir: %v", fileName, err)
-				if errors.Is(err, os.ErrNotExist) && s.s3Client != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					if s.s3Client == nil {
+						return nil, errors.ErrNotFound
+					}
+
 					// check s3
 					fileReader, err := s.s3Client.GetIoReader(ctx, hash, opts...)
 					if err != nil {
@@ -283,7 +288,12 @@ func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
 			if err != nil {
 				s.logger.Warnf("[Lustre][Get] [%s] file not found in persist dir: %v", fileName, err)
-				if errors.Is(err, os.ErrNotExist) && s.s3Client != nil {
+
+				if errors.Is(err, os.ErrNotExist) {
+					if s.s3Client == nil {
+						return nil, errors.ErrNotFound
+					}
+
 					// check s3
 					bytes, err = s.s3Client.Get(ctx, hash, opts...)
 					if err != nil {
@@ -324,7 +334,11 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts .
 			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
 			if err != nil {
 				// s.logger.Warnf("[Lustre][GetHead] [%s] file not found in subtree temp dir: %v", fileName, err)
-				if errors.Is(err, os.ErrNotExist) && s.s3Client != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					if s.s3Client == nil {
+						return nil, errors.ErrNotFound
+					}
+
 					// check s3
 					bytes, err = s.s3Client.Get(ctx, hash, opts...)
 					if err != nil {
@@ -362,7 +376,11 @@ func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options)
 			// check the persist sub dir
 			_, err = os.Stat(s.getFileNameForPersist(fileName))
 			if err != nil {
-				if os.IsNotExist(err) && s.s3Client != nil {
+				if os.IsNotExist(err) {
+					if s.s3Client == nil {
+						return false, nil
+					}
+
 					// check s3
 					exists, err := s.s3Client.Exists(context.Background(), hash, opts...)
 					if err != nil {
