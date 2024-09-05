@@ -47,7 +47,7 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, o
 
 	var (
 		err      error
-		s3Client *s3.S3
+		s3Client s3Store
 	)
 
 	logger.Infof("Creating lustre store s3 Url: %s, dir: %s, persistDir: %s", s3Url, dir, persistDir)

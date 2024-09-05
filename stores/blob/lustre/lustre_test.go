@@ -19,8 +19,10 @@ import (
 
 func TestFile_NilS3(t *testing.T) {
 	t.Run("no s3", func(t *testing.T) {
+		var s3Client s3Store
+		require.Nil(t, s3Client)
 
-		f, err := NewLustreStore(ulogger.TestLogger{}, nil, "/tmp/ubsv-tests", "persist")
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
 
 		// should not exist
