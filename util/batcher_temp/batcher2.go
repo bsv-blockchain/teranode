@@ -37,7 +37,7 @@ func New[T any](size int, timeout time.Duration, fn func(batch []*T), background
 
 // Put adds an item to the batch. If the batch is full, or the timeout is reached
 // the batch will be processed.
-func (b *Batcher2[T]) Put(item *T) {
+func (b *Batcher2[T]) Put(item *T, payloadSize ...int) { // Payload size is not used in this implementation
 	b.ch <- item
 }
 

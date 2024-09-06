@@ -10,7 +10,8 @@ import (
 	aeroTest "github.com/ajeetdsouza/testcontainers-aerospike-go"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
+	batcher_a "github.com/bitcoin-sv/ubsv/util/batcher_temp"
+	batcher_b "github.com/bitcoin-sv/ubsv/util/batcher_temp2"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
@@ -49,9 +50,33 @@ func TestAerospikeInContainer(t *testing.T) {
 			logger:        ulogger.TestLogger{},
 			utxoBatchSize: 2,
 		}
-		store.storeBatcher = batcher.New[batchStoreItem](100, 2, store.sendStoreBatch, true)
-		store.getBatcher = batcher.New[batchGetItem](100, 2, store.sendGetBatch, true)
-		store.spendBatcher = batcher.New(100, 2, store.sendSpendBatchLua, true)
+		store.storeBatcher = batcher_b.New[batchStoreItem](
+			store.sendStoreBatch,
+			batcher_b.WithBackground[batchStoreItem](true),
+			batcher_b.WithMaxItems[batchStoreItem](100),
+			batcher_b.WithTimeout[batchStoreItem](2),
+		)
+
+		store.getBatcher = batcher_b.New[batchGetItem](
+			store.sendGetBatch,
+			batcher_b.WithBackground[batchGetItem](true),
+			batcher_b.WithMaxItems[batchGetItem](100),
+			batcher_b.WithTimeout[batchGetItem](2),
+		)
+
+		store.spendBatcher = batcher_b.New[batchSpend](
+			store.sendSpendBatchLua,
+			batcher_b.WithBackground[batchSpend](true),
+			batcher_b.WithMaxItems[batchSpend](100),
+			batcher_b.WithTimeout[batchSpend](2),
+		)
+
+		store.outpointBatcher = batcher_b.New[batchOutpoint](
+			store.sendOutpointBatch,
+			batcher_b.WithBackground[batchOutpoint](true),
+			batcher_b.WithMaxItems[batchOutpoint](100),
+			batcher_b.WithTimeout[batchOutpoint](2),
+		)
 
 		// 75696d1ef2b70f62c0157e7dd9cfef13f4f3ee5fae98cd04e00b1822d26363fa
 		previousTx, err := bt.NewTxFromString("010000000000000000ef012d3746b3fa849a901dac83f4ee0bc9f8a0b294e69ee2a216fd0614c49f5aac9b000000008b483045022100b059ea8f390ab16cf2744203a12a4d0a6a85abf62aee68c09164551fc5a9c72e0220324cf2639078a8052b9a533cdd7a53b93cc32b4ecaa5c3326abf651107deef1d01410446ca32230229946b745df0b2a220084f8afd45ca0b40314999c73a84e8bdfcaaa31f60f756e4b4971492de4d4a18e820ad861f9a949ca3bb700ca1f24ddb9110ffffffffb0662ef1000000001976a914cb775ace861ff5e18fb5bfcc848ea7bbb3b347e288ac0230e20ff1000000001976a914ff9baa5b596c5aeedd9c2c41ade6883ffa88bc1f88ac80841e00000000001976a9149131dafa70cc0ac860c08873508c1aa3a72b31a988ac00000000")
@@ -89,6 +114,7 @@ func TestAerospikeInContainer(t *testing.T) {
 				Vout:         0,
 			},
 		}
+		assert.Len(t, outpoints, 2)
 
 		// Get the previous output
 		err = store.PreviousOutputsDecorate(ctx, outpoints)
@@ -111,9 +137,10 @@ func TestAerospikeInContainer(t *testing.T) {
 			logger:        ulogger.TestLogger{},
 			utxoBatchSize: 2,
 		}
-		store.storeBatcher = batcher.New[batchStoreItem](100, 2, store.sendStoreBatch, true)
-		store.getBatcher = batcher.New[batchGetItem](100, 2, store.sendGetBatch, true)
-		store.spendBatcher = batcher.New(100, 2, store.sendSpendBatchLua, true)
+		store.storeBatcher = batcher_a.New[batchStoreItem](100, 2, store.sendStoreBatch, true)
+		store.getBatcher = batcher_a.New[batchGetItem](100, 2, store.sendGetBatch, true)
+		store.spendBatcher = batcher_a.New(100, 2, store.sendSpendBatchLua, true)
+		store.outpointBatcher = batcher_a.New[batchOutpoint](100, 2, store.sendOutpointBatch, true)
 
 		tx, err := bt.NewTxFromString("010000000000000000ef01c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd3704000000004847304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901ffffffff00f2052a0100000043410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac0200ca9a3b00000000434104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84cac00286bee0000000043410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac00000000")
 		require.NoError(t, err)
