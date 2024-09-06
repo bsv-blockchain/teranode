@@ -131,7 +131,9 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 			,peer_id
 			,coinbase_tx
 			,invalid
-		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17)
+			,mined_set
+			,subtrees_set
+		) VALUES (0, $1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
 			RETURNING id
 		`
 	} else {
