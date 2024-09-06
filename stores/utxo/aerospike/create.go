@@ -259,7 +259,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			if aErr.ResultCode == types.KEY_EXISTS_ERROR {
 				// we want to return a tx already exists error on this case
 				// this should only be called with 1 record
-				err = errors.NewTxAlreadyExistsError("%v already exists in store", batch[0].txHash)
+				err = errors.NewTxAlreadyExistsError("[sendStoreBatch-1] %v already exists in store", batch[0].txHash)
 				for _, bItem := range batch {
 					utils.SafeSend(bItem.done, err)
 				}
@@ -283,7 +283,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](batch[idx].done, errors.NewTxAlreadyExistsError("%v already exists in store", batch[idx].txHash))
+					utils.SafeSend[error](batch[idx].done, errors.NewTxAlreadyExistsError("[sendStoreBatch-2] %v already exists in store", batch[idx].txHash))
 					continue
 				}
 
@@ -475,8 +475,9 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 			utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
 		} else {
 			utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+
+			return
 		}
-		return
 	}
 
 	// Get a new write policy which will allow CREATE or UPDATE
@@ -507,7 +508,7 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("%v already exists in store", bItem.txHash))
+					utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("[storeTransactionExternally] %v already exists in store", bItem.txHash))
 
 					return
 				}
@@ -554,8 +555,9 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 			utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("error writing output to external store [%s]", bItem.txHash.String(), err))
 		} else {
 			utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]", bItem.txHash.String(), err))
+
+			return
 		}
-		return
 	}
 
 	// Get a new write policy which will allow CREATE or UPDATE
@@ -586,7 +588,7 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("%v already exists in store", bItem.txHash))
+					utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("[storePartialTransactionExternally] %v already exists in store", bItem.txHash))
 
 					return
 				}
