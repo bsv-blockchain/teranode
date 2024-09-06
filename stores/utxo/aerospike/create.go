@@ -363,9 +363,6 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	}
 
 	if len(tx.Inputs) == 0 {
-		if !tx.IsCoinbase() {
-			return nil, errors.NewProcessingError("tx %s has no inputs. Only a coinbase tx has no inputs", txHash)
-		}
 		fee = 0
 		utxoHashes, err = utxo.GetUtxoHashes(tx, txHash)
 	} else {
