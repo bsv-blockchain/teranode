@@ -441,7 +441,7 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 		c.running.Store(false)
 		err := c.conn.Close()
 		if err != nil {
-			c.logger.Errorf("[Blockchain] failed to close connection", err)
+			c.logger.Errorf("[Blockchain] failed to close connection %v", err)
 		}
 	}()
 
