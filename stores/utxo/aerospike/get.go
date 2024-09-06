@@ -217,6 +217,8 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 }
 
 func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, fields ...string) error {
+	var err error
+
 	batchPolicy := util.GetAerospikeBatchPolicy()
 	batchPolicy.ReplicaPolicy = aerospike.MASTER // we only want to read from the master for tx metadata, due to blockIDs being updated
 
@@ -244,7 +246,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 		batchRecords[idx] = record
 	}
 
-	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		return errors.NewStorageError("error in aerospike map store batch records: %w", err)
 	}
@@ -265,24 +267,13 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 
 			items[idx].Data = &meta.Data{}
 
-			externalTx := &bt.Tx{}
+			var externalTx *bt.Tx
 
 			external, ok := bins["external"].(bool)
 			if ok && external {
-				// Get the raw transaction from the externalStore...
-				reader, err := s.externalStore.GetIoReader(
-					context.TODO(),
-					items[idx].Hash[:],
-					options.WithFileExtension("tx"),
-				)
-				if err != nil {
-					items[idx].Err = errors.NewStorageError("could not get tx from external store", err)
-					continue
-				}
+				if externalTx, err = s.getTxFromExternalStore(items[idx].Hash); err != nil {
+					items[idx].Err = err
 
-				_, err = externalTx.ReadFrom(reader)
-				if err != nil {
-					items[idx].Err = errors.NewTxInvalidError("could not read tx from reader", err)
 					continue
 				}
 			}
@@ -484,6 +475,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			} else {
 				batchItem.errCh <- errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID)
 			}
+
 			close(batchItem.errCh)
 
 			continue
