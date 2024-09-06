@@ -2,10 +2,11 @@ package blockpersister
 
 import (
 	"context"
+	"net/url"
+
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 
@@ -123,6 +124,11 @@ func (u *Server) Start(ctx context.Context) error {
 			err := <-errCh
 			// if err is nil, it means function is successfully executed, return nil.
 			if err == nil {
+				return nil
+			}
+
+			if errors.Is(err, errors.ErrBlockExists) {
+				// if block exists, it is not an error, so return nil to mark message as committed.
 				return nil
 			}
 
