@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
+const stringTrue = "true"
+
 type BitcoinTestSuite struct {
 	suite.Suite
 	Framework    *tf.BitcoinTestFramework
@@ -41,10 +43,17 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 	suite.ComposeFiles = composeFiles
 	suite.SettingsMap = settingsMap
 
-	err = helper.Unzip("../../data.zip", "../../")
+	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
+	err = removeDataDirectory("../../data", isGitHubActions)
+
 	if err != nil {
-		suite.T().Fatalf("Failed to unzip data directory: %v", err)
+		suite.T().Fatal(err)
 	}
+
+	// err = helper.Unzip("../../data.zip", "../../")
+	// if err != nil {
+	// 	suite.T().Fatalf("Failed to unzip data directory: %v", err)
+	// }
 
 	suite.T().Log("Initializing BitcoinTestFramework")
 	suite.Framework, err = helper.SetupBitcoinTestFramework(suite.ComposeFiles, suite.SettingsMap)
@@ -76,8 +85,44 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 	suite.T().Log("BitcoinTestFramework setup completed")
 }
 
+func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsDoNotReset(settingsMap map[string]string, composeFiles []string) {
+	var err error
+
+	suite.ComposeFiles = composeFiles
+	suite.SettingsMap = settingsMap
+
+	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
+	err = removeDataDirectory("../../data", isGitHubActions)
+
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	suite.T().Log("Initializing BitcoinTestFramework")
+	suite.Framework, err = helper.SetupBitcoinTestFramework(suite.ComposeFiles, suite.SettingsMap)
+
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	err = helper.WaitForBlockHeight(NodeURL1, 300, 180)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	if err != nil {
+		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
+	}
+
+	suite.T().Log("BitcoinTestFramework setup completed")
+}
+
 func (suite *BitcoinTestSuite) SetupTestWithCustomSettings(settingsMap map[string]string) {
 	suite.SetupTestWithCustomComposeAndSettings(settingsMap, suite.DefaultComposeFiles())
+}
+
+func (suite *BitcoinTestSuite) SetupTestWithCustomSettingsDoNotReset(settingsMap map[string]string) {
+	suite.SetupTestWithCustomComposeAndSettingsDoNotReset(settingsMap, suite.DefaultComposeFiles())
 }
 
 func (suite *BitcoinTestSuite) SetupTest() {
@@ -89,7 +134,7 @@ func (suite *BitcoinTestSuite) TearDownTest() {
 		suite.T().Fatal(err)
 	}
 
-	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == "true"
+	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
 	err := removeDataDirectory("../../data", isGitHubActions)
 
 	if err != nil {
@@ -103,6 +148,11 @@ func TestBitcoinTestSuite(t *testing.T) {
 
 func removeDataDirectory(dir string, useSudo bool) error {
 	var cmd *exec.Cmd
+
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil
+	}
+
 	if !useSudo {
 		cmd = exec.Command("rm", "-rf", dir)
 	} else {

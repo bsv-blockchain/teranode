@@ -180,6 +180,8 @@ const (
 	// TestNet3 represents the test network (version 3). This is the SVNode testnet
 	TestNet3 BitcoinNet = 0xf4f3e5f4
 
+	Custom BitcoinNet = 0x00000001
+
 	// STN represents the scaling test network.
 	STN BitcoinNet = 0x00000000
 )
@@ -190,6 +192,7 @@ var bnStrings = map[BitcoinNet]string{
 	MainNet:  "MainNet",
 	TestNet:  "TestNet",
 	TestNet3: "TestNet3",
+	Custom:   "Custom",
 	STN:      "STN",
 }
 
