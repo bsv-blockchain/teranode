@@ -30,7 +30,7 @@ services:
     entrypoint: ["/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     environment:
       # utxostore: aerospike://localhost:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=file://./data/ubsv1/external
-      utxostore: aerospike://localhost:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=lustre:///?subDirectory=sv-node/external%26localDir=./data/ubsv1/external%26localPersist=s3
+      utxostore: aerospike://localhost:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&logging=true&externalStore=lustre:///?subDirectory=sv-node/external%26localDir=./data/ubsv1/external%26localPersist=s3
     volumes:
       - ./data/ubsv1/external:/app/data/ubsv1/external
 
@@ -40,7 +40,7 @@ services:
     entrypoint: ["/app/wait.sh", "localhost", "3200", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     environment:
       # utxostore: aerospike://localhost:3200/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=file://./data/ubsv2/external
-      utxostore: aerospike://localhost:3200/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=lustre:///?subDirectory=sv-node/external%26localDir=./data/ubsv2/external%26localPersist=s3
+      utxostore: aerospike://localhost:3200/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&logging=true&externalStore=lustre:///?subDirectory=sv-node/external%26localDir=./data/ubsv2/external%26localPersist=s3
     volumes:
       - ./data/ubsv2/external:/app/data/ubsv2/external
 
@@ -50,7 +50,7 @@ services:
     entrypoint: ["/app/wait.sh", "localhost", "3300", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     environment:
       # utxostore: aerospike://localhost:3300/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=file://./data/ubsv3/external
-      utxostore: aerospike://localhost:3100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=lustre:///?subDirectory=sv-node/external%26localDir=./data/ubsv3/external%26localPersist=s3
+      utxostore: aerospike://localhost:3300/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&logging=true&externalStore=lustre:///?subDirectory=sv-node/external%26localDir=./data/ubsv3/external%26localPersist=s3
     volumes:
       - ./data/ubsv3/external:/app/data/ubsv3/external
 
