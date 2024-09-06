@@ -1,4 +1,4 @@
-////go:build functional
+//go:build functional
 
 // How to run each test:
 // Clean up docker containers before running the test manually
