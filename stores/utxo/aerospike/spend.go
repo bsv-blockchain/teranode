@@ -71,6 +71,8 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	}
 
 	if err = g.Wait(); err != nil {
+		s.logger.Errorf("error in aerospike spend (batched mode): %v", err)
+
 		// revert the successfully spent utxos
 		unspendErr := s.UnSpend(ctx, spentSpends)
 		if unspendErr != nil {
