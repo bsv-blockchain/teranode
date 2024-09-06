@@ -3,9 +3,10 @@ package util
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"net"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
@@ -66,7 +67,7 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, serviceName string, 
 
 	lis, err := net.Listen("tcp", address)
 	if err != nil {
-		return errors.NewServiceError("[%s] GRPC server failed to listen [%w]", serviceName, err)
+		return errors.NewServiceError("[%s] GRPC server failed to listen", serviceName, err)
 	}
 
 	register(grpcServer)
