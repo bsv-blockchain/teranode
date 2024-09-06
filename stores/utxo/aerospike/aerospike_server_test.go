@@ -418,9 +418,6 @@ func TestAerospike(t *testing.T) {
 		err = db.Spend(context.Background(), spendsAll, 0)
 		require.NoError(t, err)
 
-		err = db.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, 1)
-		require.NoError(t, err)
-
 		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
 		require.NoError(t, err)
 		utxos, ok := value.Bins["utxos"].([]interface{})
@@ -432,7 +429,17 @@ func TestAerospike(t *testing.T) {
 			require.Equal(t, spendingTxID2[:], utxoBytes[32:])
 			// require.Equal(t, spendingTxID2.String(), utxoSpendTxID)
 		}
-		require.Equal(t, aerospikeExpiration, value.Expiration)
+
+		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx has not yet been mined
+
+		// Now call SetMinedMulti
+		err = db.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, 1)
+		require.NoError(t, err)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		require.NoError(t, err)
+
+		require.Equal(t, aerospikeExpiration, value.Expiration) // Now TTL should be set to aerospikeExpiration
 
 		// try to spend with different txid
 		err = db.Spend(context.Background(), spends3, 0)

@@ -9,7 +9,7 @@
 -- / __| '_ \ / _ \ '_ \ / _` |
 -- \__ \ |_) |  __/ | | | (_| |
 -- |___/ .__/ \___|_| |_|\__,_|
---    |_|
+--     |_|
 --
 function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     if not aerospike:exists(rec) then
