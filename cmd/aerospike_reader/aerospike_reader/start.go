@@ -14,7 +14,7 @@ import (
 )
 
 func Start() {
-	logger := ulogger.NewGoCoreLogger("aerospike_reader")
+	logger := ulogger.NewGoCoreLogger("aerospike_reader", ulogger.WithLevel("WARN"))
 
 	fmt.Println()
 
