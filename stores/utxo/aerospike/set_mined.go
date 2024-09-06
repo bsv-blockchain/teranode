@@ -5,15 +5,20 @@ package aerospike
 import (
 	"context"
 	"math"
+	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/aerospike/aerospike-client-go/v7/types"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
+	_, _, deferFn := tracing.StartTracing(ctx, "aerospike:SetMinedMulti2")
+	defer deferFn()
+
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
 	// math.MaxUint32 - 1 does not update expiration of the record
@@ -28,11 +33,16 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 			return errors.NewProcessingError("aerospike NewKey error", err)
 		}
 
-		op := aerospike.ListAppendOp("blockIDs", blockID)
-		record := aerospike.NewBatchWrite(policy, key, op)
+		batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 
-		// Add to batch
-		batchRecords[idx] = record
+		batchRecords[idx] = aerospike.NewBatchUDF(
+			batchUDFPolicy,
+			key,
+			luaPackage,
+			"setMined",
+			aerospike.NewValue(blockID),
+			aerospike.NewValue(s.expiration), // ttl
+		)
 	}
 
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
@@ -60,7 +70,22 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 
 			nrErrors++
 		} else {
-			okUpdates++
+			response := batchRecord.BatchRec().Record
+			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
+				responseMsg, ok := response.Bins["SUCCESS"].(string)
+				if ok {
+					responseMsgParts := strings.Split(responseMsg, ":")
+
+					switch responseMsgParts[0] {
+					case "OK":
+						okUpdates++
+					default:
+						nrErrors++
+					}
+				}
+			} else {
+				nrErrors++
+			}
 		}
 	}
 
@@ -70,25 +95,6 @@ func (s *Store) SetMinedMulti(_ context.Context, hashes []*chainhash.Hash, block
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
 		return errors.NewError("aerospike batchRecord errors", errs)
 	}
-
-	return nil
-}
-
-func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32) error {
-	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
-	policy.RecordExistsAction = aerospike.UPDATE_ONLY
-
-	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
-	if err != nil {
-		return errors.NewProcessingError("aerospike NewKey error", err)
-	}
-
-	_, err = s.client.Operate(policy, key, aerospike.ListAppendOp("blockIDs", blockID))
-	if err != nil {
-		return errors.NewStorageError("aerospike Operate error", err)
-	}
-
-	prometheusTxMetaAerospikeMapSetMined.Inc()
 
 	return nil
 }
