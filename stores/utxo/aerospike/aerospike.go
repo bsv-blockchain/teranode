@@ -37,6 +37,11 @@ var (
 	}
 )
 
+type batcherIfc[T any] interface {
+	Put(item *T, payloadSize ...int)
+	Trigger()
+}
+
 type Store struct {
 	url                        *url.URL
 	client                     *uaerospike.Client
@@ -47,10 +52,10 @@ type Store struct {
 	medianBlockTime            atomic.Uint32
 	logger                     ulogger.Logger
 	batchID                    atomic.Uint64
-	storeBatcher               *batcher.Batcher2[batchStoreItem]
-	getBatcher                 *batcher.Batcher2[batchGetItem]
-	spendBatcher               *batcher.Batcher2[batchSpend]
-	outpointBatcher            *batcher.Batcher2[batchOutpoint]
+	storeBatcher               batcherIfc[batchStoreItem]
+	getBatcher                 batcherIfc[batchGetItem]
+	spendBatcher               batcherIfc[batchSpend]
+	outpointBatcher            batcherIfc[batchOutpoint]
 	externalStore              blob.Store
 	utxoBatchSize              int
 	externalizeAllTransactions bool
