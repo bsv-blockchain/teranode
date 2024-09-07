@@ -11,7 +11,6 @@ import (
 
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"log"
 	"math/rand/v2"
 	"net"
 	"sync"
