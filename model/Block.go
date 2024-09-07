@@ -491,11 +491,15 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 
 	// TODO - Re-enable order checking in all cases
 	startLegacy := gocore.Config().GetBool("startLegacy", false)
+	if startLegacy {
+		log.Printf("WARNING: startLegacy env: %v", startLegacy)
+	}
 
 	// Horrible hack to allow see if this pod is running the legacy service
 	for _, cmd := range os.Args[1:] {
 		if cmd == "-legacy=1" {
 			startLegacy = true
+			log.Printf("WARNING: startLegacy flag: %v", startLegacy)
 		}
 	}
 
