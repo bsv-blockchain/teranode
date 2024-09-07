@@ -122,7 +122,7 @@ func main() {
 		bitcoin2utxoset.Start()
 		return
 	case "settings.run":
-		settings.Start()
+		settings.Start(version, commit)
 		return
 	}
 

@@ -5,5 +5,5 @@ import (
 )
 
 func main() {
-	settings.Start()
+	settings.Start("", "")
 }
