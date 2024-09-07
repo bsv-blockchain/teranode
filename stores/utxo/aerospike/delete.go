@@ -27,6 +27,7 @@ func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
 		}
 
 		prometheusUtxoMapErrors.WithLabelValues("Delete", err.Error()).Inc()
+
 		return errors.NewStorageError("error in aerospike delete key", err)
 	}
 

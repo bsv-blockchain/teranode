@@ -41,6 +41,7 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 	var mu sync.Mutex
 
 	g := errgroup.Group{}
+
 	for _, spend := range spends {
 		if spend == nil {
 			continue
@@ -78,10 +79,12 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 		if unspendErr != nil {
 			err = errors.Join(err, unspendErr)
 		}
+
 		return errors.NewError("error in aerospike spend (batched mode)", err)
 	}
 
 	prometheusUtxoMapSpend.Add(float64(len(spends)))
+
 	return nil
 }
 
@@ -120,6 +123,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	// TODO #1035 group all spends to the same record (tx) to the same call in LUA and change the LUA script to handle multiple spends
 
 	for idx, bItem := range batch {
+		// nolint: gosec
 		keySource := uaerospike.CalculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize))
 
 		key, err = aerospike.NewKey(s.namespace, s.setName, keySource)
@@ -146,6 +150,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		s.logger.Errorf("[SPEND_BATCH_LUA][%d] failed to batch spend aerospike map utxos in batchId %d: %v", batchID, len(batch), err)
+
 		for idx, bItem := range batch {
 			bItem.done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] failed to batch spend aerospike map utxo in batchId %d: %d - %w", bItem.spend.TxID.String(), batchID, idx, err)
 		}
@@ -156,6 +161,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	// batchOperate may have no errors, but some of the records may have failed
 	for idx, batchRecord := range batchRecords {
 		spend := batch[idx].spend
+
 		err = batchRecord.BatchRec().Err
 		if err != nil {
 			s.logger.Errorf("SAO idx: %d, %s:%d : %v", idx, spend.TxID, spend.Vout, err)
@@ -185,7 +191,6 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 									}
 								}
 							}()
-
 						}
 
 					case "FROZEN":

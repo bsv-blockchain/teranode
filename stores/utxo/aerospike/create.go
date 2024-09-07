@@ -252,8 +252,8 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-
 		var aErr *aerospike.AerospikeError
+
 		ok := errors.As(err, &aErr)
 		if ok {
 			if aErr.ResultCode == types.KEY_EXISTS_ERROR {
@@ -267,6 +267,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				return
 			}
 		}
+
 		s.logger.Errorf("[STORE_BATCH][batch:%d] error in aerospike map store batch records: %v", batchID, err)
 
 		for _, bItem := range batch {
@@ -425,6 +426,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	commonBins := []*aerospike.Bin{
 		aerospike.NewBin("version", aerospike.NewIntegerValue(int(tx.Version))),
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
+		// nolint: gosec
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
 		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(size)),
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
@@ -488,6 +490,7 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 			wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
 		}
 
+		// nolint: gosec
 		keySource := uaerospike.CalculateKeySource(bItem.txHash, uint32(i))
 
 		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
@@ -536,6 +539,7 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 		}
 
 		wrapper.UTXOs = append(wrapper.UTXOs, &utxopersister.UTXO{
+			// nolint: gosec
 			Index:  uint32(i),
 			Value:  output.Satoshis,
 			Script: *output.LockingScript,
@@ -568,6 +572,7 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 			wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
 		}
 
+		// nolint: gosec
 		keySource := uaerospike.CalculateKeySource(bItem.txHash, uint32(i))
 
 		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)

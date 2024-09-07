@@ -50,6 +50,7 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 func (s *Store) unSpendLua(spend *utxo.Spend) error {
 	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
+	// nolint gosec
 	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
@@ -80,7 +81,12 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 	switch responseMsgParts[0] {
 	case "OK":
 		if len(responseMsgParts) > 1 && responseMsgParts[1] == "NOTALLSPENT" {
-			go s.incrementNrRecords(spend.TxID, 1)
+			go func() {
+				_, err := s.incrementNrRecords(spend.TxID, 1)
+				if err != nil {
+					s.logger.Errorf("error incrementing nrRecords for tx %s: %v", spend.TxID.String(), err)
+				}
+			}()
 		}
 
 	case "ERROR":

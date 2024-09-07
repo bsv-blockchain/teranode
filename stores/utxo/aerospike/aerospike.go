@@ -63,6 +63,7 @@ type Store struct {
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	initPrometheusMetrics()
+
 	if gocore.Config().GetBool("aerospike_debug", true) {
 		asl.Logger.SetLevel(asl.DEBUG)
 	}
@@ -80,12 +81,14 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	}
 
 	expiration := uint32(0)
+
 	expirationValue := aerospikeURL.Query().Get("expiration")
 	if expirationValue != "" {
 		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
 		if err != nil {
 			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
 		}
+		// nolint: gosec
 		expiration = uint32(expiration64)
 	}
 
@@ -94,12 +97,12 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		setName = "txmeta"
 	}
 
-	externalStoreUrl, err := url.Parse(aerospikeURL.Query().Get("externalStore"))
+	externalStoreURL, err := url.Parse(aerospikeURL.Query().Get("externalStore"))
 	if err != nil {
 		return nil, err
 	}
 
-	externalStore, err := blob.NewStore(logger, externalStoreUrl)
+	externalStore, err := blob.NewStore(logger, externalStoreURL)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +129,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	storeBatchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
 	storeBatchDurationStr, _ := gocore.Config().GetInt("utxostore_storeBatcherDurationMillis", 10)
 	storeBatchDuration := time.Duration(storeBatchDurationStr) * time.Millisecond
+
 	if storeBatchSize > 1 {
 		s.storeBatcher = batcher.New[batchStoreItem](storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
 	} else {
@@ -161,6 +165,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
 	s.blockHeight.Store(blockHeight)
+
 	return nil
 }
 
@@ -171,6 +176,7 @@ func (s *Store) GetBlockHeight() uint32 {
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	s.logger.Debugf("setting median block time to %d", medianTime)
 	s.medianBlockTime.Store(medianTime)
+
 	return nil
 }
 
@@ -191,7 +197,6 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	Therefore, we will extract the Deadline from the context and use it as a timeout for the
 	operation.
 	*/
-
 	var timeout time.Duration
 
 	deadline, ok := ctx.Deadline()
@@ -213,6 +218,7 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	}
 
 	bin := aerospike.NewBin("bin", "value")
+
 	err = s.client.PutBins(writePolicy, key, bin)
 	if err != nil {
 		return -2, details, err
@@ -232,5 +238,6 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 }
 
 func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
+	// nolint: gosec
 	return vout % uint32(s.utxoBatchSize)
 }

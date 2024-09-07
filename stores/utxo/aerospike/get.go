@@ -49,6 +49,7 @@ type batchOutpoint struct {
 func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	prometheusUtxoMapGet.Inc()
 
+	// nolint: gosec
 	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
 
 	key, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
@@ -140,6 +141,7 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*me
 }
 
 func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
+	// nolint: gosec
 	tx := &bt.Tx{
 		Version:  uint32(bins["version"].(int)),
 		LockTime: uint32(bins["locktime"].(int)),
@@ -330,6 +332,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 					var blockIDs []uint32
 
 					for _, val := range temp {
+						// nolint: gosec
 						blockIDs = append(blockIDs, uint32(val.(int)))
 					}
 

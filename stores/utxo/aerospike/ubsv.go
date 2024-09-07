@@ -22,7 +22,6 @@ func registerLuaIfNecessary(client *uaerospike.Client, funcName string, funcByte
 
 	for _, udf := range udfs {
 		if udf.Filename == funcName+".lua" {
-
 			foundScript = true
 			break
 		}
@@ -39,5 +38,6 @@ func registerLuaIfNecessary(client *uaerospike.Client, funcName string, funcByte
 			return err
 		}
 	}
+
 	return nil
 }

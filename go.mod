@@ -86,8 +86,6 @@ require (
 	modernc.org/sqlite v1.28.0
 )
 
-require gotest.tools v2.2.0+incompatible
-
 require (
 	github.com/creack/pty v1.1.20 // indirect
 	github.com/rogpeppe/go-internal v1.11.0 // indirect
