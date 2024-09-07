@@ -781,7 +781,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
 	err := sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block)
 	if err != nil {
-		log.Printf("SAO %v", err)
+		// log.Printf("SAO %v", err)
 		time.Sleep(5 * time.Second)
 		panic(err)
 		// if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {

@@ -755,8 +755,8 @@ github.com/ordishs/go-bt/v2 v2.2.10 h1:m4DURy+H5wPsA8jtqpOn5YelZ2QOoQ2Ce3RlR2B0q
 github.com/ordishs/go-bt/v2 v2.2.10/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
 github.com/ordishs/go-utils v1.0.51 h1:XgBphXkjoUxRdahzyNRpQ5NnB96ygkggIqqzX6ruaFo=
 github.com/ordishs/go-utils v1.0.51/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
-github.com/ordishs/gocore v1.0.66 h1:5wrhcnYrKdRefPvrvMhrEgF5vJrPDq45aaoiH8Qa3k8=
-github.com/ordishs/gocore v1.0.66/go.mod h1:k6BD/+c2Onli/SWyNYwBFqBXhEd8Bw2mSqYTBVQrenQ=
+github.com/ordishs/gocore v1.0.67 h1:+ziHNwHMntTQ+alKwZoIyaoex1HHTzhnOW/PF/OfcEc=
+github.com/ordishs/gocore v1.0.67/go.mod h1:k6BD/+c2Onli/SWyNYwBFqBXhEd8Bw2mSqYTBVQrenQ=
 github.com/outcaste-io/ristretto v0.2.3 h1:AK4zt/fJ76kjlYObOeNwh4T3asEuaCmp26pOvUOL9w0=
 github.com/outcaste-io/ristretto v0.2.3/go.mod h1:W8HywhmtlopSB1jeMg3JtdIhf+DYkLAr0VN/s4+MHac=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 h1:onHthvaw9LFnH4t2DcNVpwGmV9E1BkGknEliJkfwQj0=
