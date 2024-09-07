@@ -229,31 +229,26 @@ end
 function setTTL(rec, ttl)
     -- Check if all the utxos are spent and set the TTL, but only for transactions that have been in at least one block
     local blockIDs = rec['blockIDs']
+    local nrRecords = rec['nrRecords']
     local signal = ""
 
-    if #blockIDs > 0 then
-        local nrRecords = rec['nrRecords']
-
-        if nrRecords == nil then
-            -- This is a pagination record: check if all the utxos are spent
-            if rec['spentUtxos'] == rec['nrUtxos'] then
-                signal = ":ALLSPENT"
-                record.set_ttl(rec, ttl)
-            else 
-                record.set_ttl(rec, -1)
-            end
-        else
-            -- The is the master record: only set_ttl if all the utxos are spent and the nrRecords is 1  
-            if rec['spentUtxos'] == rec['nrUtxos'] and nrRecords == 1 then
-                record.set_ttl(rec, ttl)
-            else
-                record.set_ttl(rec, -1)
-            end
+    if nrRecords == nil then
+        -- This is a pagination record: check if all the utxos are spent
+        if rec['spentUtxos'] == rec['nrUtxos'] then
+            signal = ":ALLSPENT"
         end
+        -- TTL is determined externally for pagination records; do not set TTL here
+        -- as we only want to set TTL for this record and all the other pagination records
+        -- when the TX is fully spent and all the UTXOs are spent
     else
-        record.set_ttl(rec, -1)
+        -- This is a master record: only set TTL if nrRecords is 1 and blockIDs has at least one item
+        if nrRecords == 1 and blockIDs and #blockIDs > 0 then
+            record.set_ttl(rec, ttl)
+            signal = ":TTLSET"
+        else
+            record.set_ttl(rec, -1)
+        end
     end
 
     return signal
 end
-

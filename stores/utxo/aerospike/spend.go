@@ -173,7 +173,19 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						if len(responseMsgParts) > 1 && responseMsgParts[1] == "ALLSPENT" {
 							// all utxos in this record are spent so we decrement the nrRecords in the master record
 							// we do this in a separate go routine to avoid blocking the batcher
-							go s.incrementNrRecords(spend.TxID, -1)
+							go func() {
+								res, err := s.incrementNrRecords(spend.TxID, -1)
+								if err != nil {
+									s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to decrement nrRecords: %v", spend.TxID.String(), err)
+								}
+
+								if r, ok := res.(string); ok {
+									if r == "OK:TTLSET" {
+										// TODO - we should TTL all the pagination records for this TX
+									}
+								}
+							}()
+
 						}
 
 					case "FROZEN":
@@ -206,7 +218,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	stat.NewStat("postBatchOperate").AddTime(start)
 }
 
-func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) {
+func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
 	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, txid[:])
@@ -214,13 +226,16 @@ func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) {
 		s.logger.Warnf("[incrementNrRecords][%s] failed to create key for %v: %v", txid, err)
 	}
 
-	if _, err := s.client.Execute(
+	res, err := s.client.Execute(
 		policy,
 		key,
 		luaPackage,
 		"incrementNrRecords",
 		aerospike.NewIntegerValue(increment),
-	); err != nil {
-		s.logger.Errorf("[incrementNrRecords][%s] failed to increment nrRecords: %v", key, err)
+	)
+	if err != nil {
+		return nil, errors.NewProcessingError("[incrementNrRecords][%s] failed to increment nrRecords", key, err)
 	}
+
+	return res, nil
 }
