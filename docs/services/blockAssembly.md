@@ -314,6 +314,31 @@ Here's a table documenting the structure of the `Subtree` type:
 
 Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
 
+Note - For subtree files in the `subtree-store` S3 buckets, each subtree has a size of 48MB.
+
+##### Subtree Composition
+
+Each subtree consists of:
+- hash: 32 bytes
+- fees: 4 bytes
+- sizeInBytes: 4 bytes
+- numberOfLeaves: 4 bytes
+- subtreeHeight: 4 bytes
+
+##### Calculation:
+```
+1024 * 1024 * (32 + 4 + 4 + 4 + 4) = 48MB
+```
+
+##### Data Transfer Between Nodes
+
+However - only 32MB is transferred between the nodes. Each subtree transfer includes:
+
+- hash: 32 bytes
+```
+1024 * 1024 * (32) = 32MB
+```
+
 #### 3.3 UTXO Meta Data Model
 
 The UTXO Meta data model is defined in `stores/utxo/meta/data.go`:

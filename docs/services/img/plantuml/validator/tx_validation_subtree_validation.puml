@@ -6,6 +6,6 @@ participant "Subtree Validation" as SubtreeValidation
 Validator -> Kafka: publishToKafka()
 Kafka -> SubtreeValidation: consume()
 
-left footer Last Modified On: 19-March-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

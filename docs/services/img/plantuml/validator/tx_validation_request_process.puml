@@ -21,6 +21,6 @@ Validator -> SubtreeValidation: Return errors, if any
 
 deactivate SubtreeValidation
 
-left footer Last Modified On: 27-May-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

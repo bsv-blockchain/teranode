@@ -235,7 +235,7 @@ This is widely used by all services, given it is a comprehensive set of data goi
 
 ## 4. Use Cases
 
-## 4.1. Asset Server:
+### 4.1. Asset Server:
 
 ![utxo_asset_service_diagram.svg](../services/img/plantuml/utxo/utxo_asset_service_diagram.svg)
 
@@ -248,7 +248,7 @@ This is widely used by all services, given it is a comprehensive set of data goi
 
 To know more about the AssetService, please check its specific service documentation.
 
-## 4.2. Block Persister
+### 4.2. Block Persister
 
 ![utxo_block_persister_service_diagram.svg](../services/img/plantuml/utxo/utxo_block_persister_service_diagram.svg)
 
@@ -257,7 +257,7 @@ To know more about the AssetService, please check its specific service documenta
 2. Depending on the settings Block Persister operates under, the persister will request the utxo meta data in batches or one by one. In general, and depending on the specific UTXO store implementation, the batched processing is more efficient.
 
 
-## 4.3. Block Assembly
+### 4.3. Block Assembly
 
 
 ![utxo_block_assembly.svg](../services/img/plantuml/utxo/utxo_block_assembly.svg)
@@ -276,7 +276,7 @@ Coinbase Transaction deletion (UTXO step):
 
 To know more about the Block Assembly, please check its specific service documentation.
 
-## 4.4. Block Validation
+### 4.4. Block Validation
 
 ![utxo_block_validation.svg](../services/img/plantuml/utxo/utxo_block_validation.svg)
 
@@ -284,14 +284,14 @@ To know more about the Block Assembly, please check its specific service documen
 2. Once a block is validated, the **Block Validator** service stores the coinbase tx and their associated UTXO data in the **UTXO Store**.
 3. The **UTXO Store** interacts with the underlying **Datastore** implementation to store the coinbase tx and UTXO data.
 
-## 4.5. Subtree Validation
+### 4.5. Subtree Validation
 
 ![utxo_subtree_validation_service_diagram.svg](../services/img/plantuml/utxo/utxo_subtree_validation_service_diagram.svg)
 
 In order to validate subtrees, the Subtree Validation service will retrieve the UTXO meta data for each tx in the subtree. This is done by sending a request to the UTXO Store, either in batches or one by one, depending on the settings.
 
 
-## 4.6. Transaction Validator
+### 4.6. Transaction Validator
 
 ![utxo_transaction_validator.svg](../services/img/plantuml/utxo/utxo_transaction_validator.svg)
 
@@ -312,7 +312,15 @@ On the other hand, we can see the process for unspending an UTXO here:
 
 To know more about the Transaction Validator, please check its specific service documentation.
 
+### 4.7. UTXO Batch Processing and External Storage mode
 
+Aerospike is the primary datastore for the UTXO store. However, to overcome Aerospike's record size limitation of 1MB, the system implements an external storage mechanism for large transactions.
+
+If a transaction is too large to fit in a single Aerospike record (indicated by a `RECORD_TOO_BIG` error), or if the system is configured to externalize all transactions, the UTXO store will store the full transaction data in an external storage (typically AWS S3, but any external storage can be used).
+
+In such cases, the full transaction data is stored externally, while metadata and UTXOs are still stored in Aerospike, potentially across multiple records. The Aerospike record will have an `external` flag set to true, indicating that the full transaction data is stored externally.
+
+When the UTXO data is needed, the system will first check the Aerospike record. If the `external flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.
 
 ## 5. Technology
 

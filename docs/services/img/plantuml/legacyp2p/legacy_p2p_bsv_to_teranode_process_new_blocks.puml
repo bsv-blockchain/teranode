@@ -66,6 +66,6 @@ deactivate legacy
 
 deactivate legacy
 
-left footer "P2P Legacy - Block Processing \n Last Modified On: 27-March-2024. © 2024 Bitcoin SV. All rights reserved."
+left footer "P2P Legacy - Block Processing \n Last Modified On: %date("dd-MMM-yyyy"). © 2024 Bitcoin SV. All rights reserved."
 
 @enduml
