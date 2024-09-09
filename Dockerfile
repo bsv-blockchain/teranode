@@ -27,6 +27,9 @@ RUN echo "Building git sha: ${GITHUB_SHA}"
 
 RUN make build -j 32
 
+# This could be run in the ${BASE_IMG} so we don't have to do it on every build, but it's not a big deal and this is pretty quick
+RUN go install github.com/go-delve/delve/cmd/dlv@latest
+
 # RUN_IMG should be overritten by --build-args
 FROM --platform=linux/amd64 ${RUN_IMG} as linux-amd64
 WORKDIR /app
