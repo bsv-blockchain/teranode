@@ -564,7 +564,8 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	require.Error(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
-	expectedErrorMessage := "Error: SERVICE_ERROR (error code: 49), [ValidateBlock][" + block.Header.Hash().String() + "] failed to store block: Error: STORAGE_ERROR (error code: 59), error storing block " + block.Header.Hash().String() + " as previous block " + hashPrevBlock.String() + " not found: 0: sql: no rows in result set"
+	expectedErrorMessage := "Error: SERVICE_ERROR (error code: 49)"
+	// Message [ValidateBlock][" + block.Header.Hash().String() + "] failed to store block, Wrapped err: Error: STORAGE_ERROR (error code: 59), Message: error storing block " + block.Header.Hash().String() + " as previous block " + hashPrevBlock.String() + " not found, Wrapped err: Error: UNKNOWN, (error code: 0), Message: sql: no rows in result set"
 	require.Contains(t, err.Error(), expectedErrorMessage)
 }
 
