@@ -135,7 +135,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 				return err
 			}
 
-			fmt.Println("received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+			// fmt.Println("received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
 			wg.Done()
 			// convert following to int string(message.Message.Value)
 			return nil
@@ -204,7 +204,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 		{
 			name: "Process messages with all success",
 			consumerClosure: func(message KafkaMessage) error {
-				fmt.Println("Consumer closure#1 received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+				// fmt.Println("Consumer closure#1 received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
 				wg.Done()
 				return nil
 			},
@@ -212,7 +212,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 		{
 			name: "Process messages with 2nd time success closure",
 			consumerClosure: func(message KafkaMessage) error {
-				fmt.Println("Consumer closure#2 received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+				// fmt.Println("Consumer closure#2 received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
 				counter++
 				if counter%2 == 0 {
 					wg.Done()
@@ -224,7 +224,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 		{
 			name: "Process messages with 3rd time success closure",
 			consumerClosure: func(message KafkaMessage) error {
-				fmt.Println("Consumer closure#3 received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+				// fmt.Println("Consumer closure#3 received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
 				counter++
 				if counter%3 == 0 {
 					wg.Done()

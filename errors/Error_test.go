@@ -143,18 +143,18 @@ func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
 			expectedCode: ERR_BLOCK_INVALID,
 			expectedMsg:  "invalid block detail",
 		},
-		//{
+		// {
 		//	name:         "InvalidArgument without details",
 		//	grpcError:    status.Error(codes.InvalidArgument, "invalid argument"),
 		//	expectedCode: ErrInvalidArgument.Code,
 		//	expectedMsg:  "invalid argument",
-		//},
+		// },
 		//{
 		//	name:         "Unknown error",
 		//	grpcError:    status.Error(codes.Unknown, "unknown error"),
 		//	expectedCode: ErrUnknown.Code,
 		//	expectedMsg:  "unknown error",
-		//},
+		// },
 	}
 
 	// Run test cases
@@ -277,11 +277,11 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	require.True(t, baseServiceErr.Is(unwrapped))
 	require.True(t, unwrapped.Is(baseServiceErr))
 
-	//baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
+	// baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
 	txInvalidErr := NewTxInvalidError("tx is invalid")
 	level1BlockInvalidError := NewBlockInvalidError("block is invalid", txInvalidErr)
 	level2ServiceError := NewServiceError("service error", level1BlockInvalidError)
-	level3ProcessingError := NewProcessingError("goko processing error", level2ServiceError)
+	level3ProcessingError := NewProcessingError("processing error", level2ServiceError)
 	level4ContextError := NewContextError("context error", level3ProcessingError)
 
 	// Test errors that are nested
@@ -358,9 +358,6 @@ func Test_UnwrapGRPCWithStandardKENError(t *testing.T) {
 	require.Equal(t, ERR_ERROR, unwrapped.Code)
 	require.Equal(t, "rpc error: code = InvalidArgument desc = invalid argument provided", unwrapped.Message)
 
-	// Ensure that the unwrapped error is recognized as equivalent to the original standard error
-	//require.True(t, unwrapped.Is(standardErr))
-
 	// Test with a different gRPC status code and message
 	standardErrResourceExhausted := fmt.Errorf("Resource exhausted")
 	grpcErr = status.Error(codes.ResourceExhausted, standardErrResourceExhausted.Error())
@@ -375,7 +372,4 @@ func Test_UnwrapGRPCWithStandardKENError(t *testing.T) {
 	// Check that the unwrapped error contains the correct message and code
 	require.Equal(t, ERR_ERROR, unwrappedResourceExhausted.Code)
 	require.Equal(t, "rpc error: code = ResourceExhausted desc = Resource exhausted", unwrappedResourceExhausted.Message)
-
-	// Ensure that the unwrapped error is recognized as equivalent to the original standard error
-	//require.True(t, unwrappedNotFound.Is(standardErrNotFound))
 }

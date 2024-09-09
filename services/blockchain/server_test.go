@@ -51,7 +51,7 @@ func Test_GetBlock(t *testing.T) {
 	require.Empty(t, block)
 
 	unwrappedErr := errors.UnwrapGRPC(err)
-	//require.ErrorIs(t, unwrappedErr, errors.ErrBlockNotFound)
+	// require.ErrorIs(t, unwrappedErr, errors.ErrBlockNotFound)
 	require.True(t, unwrappedErr.Is(errors.ErrBlockNotFound))
 
 	requestHeight := &blockchain_api.GetBlockByHeightRequest{
