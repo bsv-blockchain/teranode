@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -123,7 +123,7 @@ func sendMessage(msgType string, args ...string) error {
 	if p == nil || !p.Connected() {
 		err := reconnect(conn.RemoteAddr().String())
 		if err != nil {
-			return errors.NewError("failed to reconnect: %v", err)
+			return errors.NewError("failed to reconnect", err)
 		}
 	}
 

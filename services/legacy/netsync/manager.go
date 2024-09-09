@@ -8,22 +8,23 @@ import (
 	"bytes"
 	"container/list"
 	"context"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 
-	"log"
+	"google.golang.org/protobuf/types/known/emptypb"
+
 	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	peerpkg "github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
@@ -779,7 +780,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
 	err := sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block)
 	if err != nil {
-		log.Printf("SAO %v", err)
+		// log.Printf("SAO %v", err)
 		time.Sleep(5 * time.Second)
 		panic(err)
 		// if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
@@ -827,21 +828,15 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
 		if sm.current() { // used to check for isOrphan || sm.current()
-			// if you are at the Legacy Sync mode, tell FSM to transition to normal running.
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
 
-			currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+			// Since we are current, we can tell FSM to transition to RUN
+			// Blockchain client will checkl if miner is registered, if so it will send Mine event, and FSM will transition to Mine
+			_, err = sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{})
 			if err != nil {
-				// TODO: how to handle it gracefully?
-				sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+				sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
 			}
-
-			if *currentState == blockchain_api.FSMStateType_LEGACYSYNCING {
-				err := sm.blockchainClient.SendFSMEvent(sm.ctx, blockchain_api.FSMEventType_RUN)
-				if err != nil {
-					return errors.NewServiceError("[Main] failed to send MINE notification", err)
-				}
-			}
+			//}
 		}
 	}
 
@@ -1103,6 +1098,14 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		}
 	}
 
+	// If we are current, send a RUN event to the FSM
+	if sm.current() {
+		_, err := sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{})
+		if err != nil {
+			sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
+		}
+	}
+
 	// If this inv contains a block announcement, and this isn't coming from
 	// our current sync peer or we're current, then update the last
 	// announced block for this peer. We'll use this information later to
@@ -1135,7 +1138,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		// Ignore unsupported inventory types.
 		switch iv.Type {
 		case wire.InvTypeBlock:
-		case wire.InvTypeTx:
+		// case wire.InvTypeTx: // SAO TODO - temporarily ignore transactions
 		default:
 			continue
 		}
@@ -1273,6 +1276,7 @@ out:
 				}
 
 			case *txMsg:
+				// TODO - if we are in Legacy Sync mode, should we ignore this message?
 				sm.handleTxMsg(msg)
 				if msg.reply != nil {
 					msg.reply <- struct{}{}

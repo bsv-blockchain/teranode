@@ -2,26 +2,30 @@
 
 ## Index
 
+
 1. [Description](#1-description)
-2. [Functionality ](#2-functionality-)
+2. [Functionality](#2-functionality)
 - [2.1. Service initialization](#21-service-initialization)
 - [2.2. Adding a new block to the blockchain](#22-adding-a-new-block-to-the-blockchain)
-- [2.3. Getting a block from the blockchain](#23-getting-a-block-from-the-blockchain)
-- [2.4. Getting the last N blocks from the blockchain](#24-getting-the-last-n-blocks-from-the-blockchain)
-- [2.5. Checking if a Block Exists in the Blockchain](#25-checking-if-a-block-exists-in-the-blockchain)
-- [2.6. Getting the Best Block Header](#26-getting-the-best-block-header)
-- [2.7. Getting the Block Headers](#27-getting-the-block-headers)
-- [2.8. Invalidating a Block](#28-invalidating-a-block)
-- [2.9. Subscribing to Blockchain Events](#29-subscribing-to-blockchain-events)
-- [2.10. Triggering a Subscription Notification](#210-triggering-a-subscription-notification)
+- [2.3. Sending new block notifications to the Block Persister](#23-sending-new-block-notifications-to-the-block-persister)
+- [2.4. Getting a block from the blockchain](#24-getting-a-block-from-the-blockchain)
+- [2.5. Getting the last N blocks from the blockchain](#25-getting-the-last-n-blocks-from-the-blockchain)
+- [2.6. Checking if a Block Exists in the Blockchain](#26-checking-if-a-block-exists-in-the-blockchain)
+- [2.7. Getting the Best Block Header](#27-getting-the-best-block-header)
+- [2.8. Getting the Block Headers](#28-getting-the-block-headers)
+- [2.9. Invalidating a Block](#29-invalidating-a-block)
+- [2.10. Subscribing to Blockchain Events](#210-subscribing-to-blockchain-events)
+- [2.11. Triggering a Subscription Notification](#211-triggering-a-subscription-notification)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
-4. [Data Model ](#4-data-model-)
+4. [Data Model](#4-data-model)
 - [4.1. Blocks](#41-blocks)
 - [4.2. Block Database Data Structure](#42-block---database-data-structure)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+- [Blockchain Service Configuration](#blockchain-service-configuration)
+- [Operational Settings](#operational-settings)
 
 
 ## 1. Description
@@ -65,9 +69,26 @@ Explanation of the sequence:
 
 ### 2.2. Adding a new block to the blockchain
 
+
+There are 2 clients invoking this endpoint:
+
+1. **The `Block Assembly` service:**
+   - The `Block Assembly` service calls the `AddBlock` method on the `Blockchain Service` to add a new mined block to the blockchain.
+
+The sequence diagram for the Block Assembly to add a new block to the blockchain is as follows:
+
 ![blockchain_add_block.svg](img/plantuml/blockchain/blockchain_add_block.svg)
 
-Explanation of the sequence:
+
+2. **The `Block Validation` service:**
+   - The `Block Validation` service calls the `AddBlock` method on the `Blockchain Service` to add a new block (received from another node) to the blockchain.
+
+The sequence diagram for the Block Validation to add a new block to the blockchain is as follows:
+
+![block_validation_p2p_block_validation.svg](img/plantuml/blockvalidation/block_validation_p2p_block_validation.svg)
+
+
+Explanation of the sequences:
 
 1. **Client Request:**
     - The `Client` calls the `AddBlock` method on the `Blockchain Service`, passing the block request.
@@ -91,15 +112,15 @@ Explanation of the sequence:
 7. **Send Notifications:**
     - The service sends notifications for the block.
 
-There are 2 clients invoking this endpoint:
+### 2.3. Sending new block notifications to the Block Persister
 
-1. **The `Block Assembly` service:**
-    - The `Block Assembly` service calls the `AddBlock` method on the `Blockchain Service` to add a new mined block to the blockchain.
+The Blockchain service, after adding a new block, emits a Kafka notification which is received by the Block Persister service. The Block Persister service is responsible for post-processing the block and storing it in a file format, in a persistent data store (such as S3).
 
-2. **The `Block Validation` service:**
-    - The `Block Validation` service calls the `AddBlock` method on the `Blockchain Service` to add a new block (received from another node) to the blockchain.
+![blockchain_send_to_block_persister.svg](img/plantuml/blockchain/blockchain_send_to_block_persister.svg)
 
-### 2.3. Getting a block from the blockchain
+The Blockchain service, based on standard practices, will retry sending the message until Kafka receives it. In case of Kafka downtime, the service will keep retrying for as long as the message is not sent.
+
+### 2.4. Getting a block from the blockchain
 
 ![blockchain_get_block.svg](img/plantuml/blockchain/blockchain_get_block.svg)
 
@@ -133,7 +154,7 @@ There are 2 clients invoking this endpoint:
 - **The `Block Assembly` service:**
     - The `Block Assembly` service calls the `GetBlock` method on the `Blockchain Service` to retrieve a block from the blockchain.
 
-### 2.4. Getting the last N blocks from the blockchain
+### 2.5. Getting the last N blocks from the blockchain
 
 ![blockchain_get_last_n_blocks.svg](img/plantuml/blockchain/blockchain_get_last_n_blocks.svg)
 
@@ -155,7 +176,7 @@ Explanation of the sequence:
 
 The `Asset Server` service is the only client invoking this endpoint. It calls the `GetLastNBlocks` method on the `Blockchain Service` to retrieve the last N blocks from the blockchain.
 
-### 2.5. Checking if a Block Exists in the Blockchain
+### 2.6. Checking if a Block Exists in the Blockchain
 
 ![blockchain_check_exists.svg](img/plantuml/blockchain/blockchain_check_exists.svg)
 
@@ -178,7 +199,7 @@ Explanation of the sequence:
 
 The `Block Validation` service is the only client invoking this endpoint. It calls the `GetBlockExists` method on the `Blockchain Service` to check if a block exists in the blockchain.
 
-### 2.6. Getting the Best Block Header
+### 2.7. Getting the Best Block Header
 
 ![blockchain_get_best_block_header.svg](img/plantuml/blockchain/blockchain_get_best_block_header.svg)
 
@@ -200,7 +221,7 @@ Explanation of the sequence:
 
 Multiple services make use of this endpoint, including the `Block Assembly`, `P2P Server`, and `Asset Server` services, as well as the `UTXO Store`.
 
-### 2.7. Getting the Block Headers
+### 2.8. Getting the Block Headers
 
 The methods `GetBlockHeader`, `GetBlockHeaders`, and `GetBlockHeaderIDs` in the `Blockchain` service provide different ways to retrieve information about blocks in the blockchain.
 
@@ -238,7 +259,7 @@ Each of these methods serves a specific need:
 Multiple services make use of these endpoints, including the `Block Assembly`, `Block Validation`, and `Asset Server` services.
 
 
-### 2.8. Invalidating a Block
+### 2.9. Invalidating a Block
 
 ![blockchain_invalidate_block.svg](img/plantuml/blockchain/blockchain_invalidate_block.svg)
 
@@ -247,7 +268,7 @@ Multiple services make use of these endpoints, including the `Block Assembly`, `
 3. The `Store` performs the invalidation operation and returns the result (success or error) back to the `Blockchain Service`.
 4. Finally, the `Blockchain Service` returns a response to the `Client`, which is either an empty response (indicating success) or an error message.
 
-### 2.9. Subscribing to Blockchain Events
+### 2.10. Subscribing to Blockchain Events
 
 The Blockchain service provides a subscription mechanism for clients to receive notifications about blockchain events.
 
@@ -263,7 +284,7 @@ In this diagram, the sequence of operations is as follows:
 
 Multiple services make use of the subscription service, including the `Block Assembly`, `Block Validation`, `P2P`, and `Asset Server` services, and `UTXO` store. To know more, check the documentation of those services.
 
-### 2.10. Triggering a Subscription Notification
+### 2.11. Triggering a Subscription Notification
 
 There are two distinct paths for sending notifications, notifications originating from the `Blockchain Server` and notifications originating from a `Blockchain Client` gRPC client.
 
@@ -470,13 +491,15 @@ This service uses several `gocore` configuration settings. Here's a list of thes
 - **Blockchain Store URL (`blockchain_store`)**: The URL for connecting to the blockchain data store. Essential for the service's ability to access and store block data.
 - **gRPC Listen Address (`blockchain_grpcListenAddress`)**: Specifies the address and port the blockchain service's gRPC server listens on, enabling RPC calls for blockchain operations.
 - **Kafka Brokers URL (`kafka_blocksFinalConfig`)**: Configuration for connecting to Kafka brokers, used for publishing new block notifications.
-- **Difficulty Adjustment Window (`difficulty_adjustment_window`)**: Defines the number of blocks considered for calculating difficulty adjustments, impacting how the network responds to changes in block production rates.
 - **Difficulty Adjustment Flag (`difficulty_adjustment`)**: Enables or disables dynamic difficulty adjustments, allowing for a static difficulty for networks that do not require frequent adjustments.
-- **Proof of Work Limit (`difficulty_pow_limit`)**: Sets the upper limit for the proof of work calculations, ensuring that difficulty adjustments do not make the mining process infeasibly hard.
-- **Initial Difficulty (`mining_n_bits`)**: The starting difficulty target for mining, relevant for network startups or when special difficulty rules apply.
 
 ### Operational Settings
 - **Max Retries (`blockchain_maxRetries`)**: The maximum number of attempts to connect to the blockchain service, ensuring resilience against temporary connectivity issues.
 - **Retry Sleep Duration (`blockchain_retrySleep`)**: The wait time between retry attempts for connecting to the blockchain service, providing a back-off mechanism to reduce load during outages.
 - **Initial Blocks Count (`mine_initial_blocks_count`)**: Specifies the number of blocks that should be mined at the initial difficulty level, useful for network startups or testing environments.
+
+### Removed settings
+- **Difficulty Adjustment Window (`difficulty_adjustment_window`)**: Defines the number of blocks considered for calculating difficulty adjustments, impacting how the network responds to changes in block production rates.
 - **Target Time per Block (`difficulty_target_time_per_block`)**: The desired time interval between blocks, guiding the difficulty adjustment process to maintain a steady block production rate.
+- **Proof of Work Limit (`difficulty_pow_limit`)**: Sets the upper limit for the proof of work calculations, ensuring that difficulty adjustments do not make the mining process infeasibly hard.
+- **Initial Difficulty (`mining_n_bits`)**: The starting difficulty target for mining, relevant for network startups or when special difficulty rules apply.

@@ -3,11 +3,13 @@ package validator
 import (
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -115,7 +117,64 @@ func TestGoBt2GoSDKTransaction(t *testing.T) {
 		txBytes := largeTx.Bytes()
 		sdkTx := GoBt2GoSDKTransaction(largeTx)
 
-		assert.Equal(t, largeTx.TxID(), sdkTx.TxID())
+		assert.Equal(t, largeTx.TxID(), sdkTx.TxID().String())
 		assert.Equal(t, txBytes, sdkTx.Bytes())
+	})
+}
+
+func BenchmarkValidateTransaction(b *testing.B) {
+	txV := &TxValidator{
+		policy: NewPolicySettings(),
+		logger: ulogger.TestLogger{},
+	}
+	txHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9.bin")
+	require.NoError(b, err)
+	tx, err := bt.NewTxFromBytes(txHex)
+	require.NoError(b, err)
+
+	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = txV.ValidateTransaction(tx, 740975)
+		}
+	})
+}
+
+func BenchmarkValidateTransactionSDK(b *testing.B) {
+	gocore.Config().Set("validator_useSDKInterpreter", "true")
+
+	txV := &TxValidator{
+		policy: NewPolicySettings(),
+		logger: ulogger.TestLogger{},
+	}
+
+	txHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9.bin")
+	require.NoError(b, err)
+	tx, err := bt.NewTxFromBytes(txHex)
+	require.NoError(b, err)
+
+	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = txV.ValidateTransaction(tx, 740975)
+		}
+	})
+}
+
+func BenchmarkValidateTransactionSDK2(b *testing.B) {
+	gocore.Config().Set("validator_useSDKInterpreter", "true")
+
+	txV := &TxValidator{
+		policy: NewPolicySettings(),
+		logger: ulogger.TestLogger{},
+	}
+
+	txHex, err := os.ReadFile("./testdata/f568c66631de7b5842ebae84594cee00f7864132828997d09441fc2a937e9fab.hex")
+	require.NoError(b, err)
+	tx, err := bt.NewTxFromString(string(txHex))
+	require.NoError(b, err)
+
+	b.Run("BenchmarkCheckScripts", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = txV.ValidateTransaction(tx, 740975)
+		}
 	})
 }

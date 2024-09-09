@@ -121,7 +121,7 @@ jobs:
 
   # Get version tag
   get_tag:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - name: Determine deployment tag
         id: deployment_tag

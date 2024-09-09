@@ -13,7 +13,7 @@ import (
 var EOFMarker = make([]byte, 32) // 32 zero bytes
 
 type UTXOWrapper struct {
-	TxID     *chainhash.Hash
+	TxID     chainhash.Hash
 	Height   uint32
 	Coinbase bool
 	UTXOs    []*UTXO
@@ -30,6 +30,7 @@ func (uw *UTXOWrapper) Bytes() []byte {
 	for _, u := range uw.UTXOs {
 		size += 4 + 8 + 4 + len(u.Script) // index + value + script length + script
 	}
+
 	b := make([]byte, 0, size)
 
 	b = append(b, uw.TxID[:]...)
@@ -71,57 +72,36 @@ func (uw *UTXOWrapper) DeletionBytes(index uint32) [36]byte {
 }
 
 func NewUTXOWrapperFromReader(r io.Reader) (*UTXOWrapper, error) {
-	// Read the TXID
-	b1 := make([]byte, 32)
+	uw := &UTXOWrapper{}
 
-	n, err := io.ReadFull(r, b1)
-	if err != nil {
-		return nil, errors.NewStorageError("failed to read txid", err)
-	}
-
-	if n != 32 {
-		return nil, errors.NewStorageError("Not enough bytes read %d", n, io.ErrUnexpectedEOF)
+	if n, err := io.ReadFull(r, uw.TxID[:]); err != nil || n != 32 {
+		return nil, errors.NewStorageError("failed to read txid, expected 32 bytes got %d", n, err)
 	}
 
 	// Check if all the bytes are zero
-	if bytes.Equal(b1, EOFMarker) {
+	if bytes.Equal(uw.TxID[:], EOFMarker) {
 		// We return an empty UTXOWrapper and io.EOF to signal the end of the stream
 		// The empty UTXOWrapper indicates an EOF where the eofMarker was written
 		return &UTXOWrapper{}, io.EOF
 	}
 
-	// hash, err := chainhash.NewHash(b)
-	// if err != nil {
-	// 	return nil, errors.NewStorageError("failed to create hash from bytes:", err)
-	// }
-
 	// Read the encoded height/coinbase + number of UTXOs
-	b2 := make([]byte, 8)
-	n, err = io.ReadFull(r, b2)
-
-	if err != nil {
-		return nil, errors.NewStorageError("failed to read height and number of utxos", err)
+	var b [8]byte
+	if n, err := io.ReadFull(r, b[:]); err != nil || n != 8 {
+		return nil, errors.NewStorageError("failed to read height and number of utxos, expected 8 bytes got %d", n, err)
 	}
 
-	if n != 8 {
-		return nil, errors.NewStorageError("Not enough bytes read %d", n, io.ErrUnexpectedEOF)
-	}
+	encodedHeight := uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
+	numUTXOs := uint32(b[4]) | uint32(b[5])<<8 | uint32(b[6])<<16 | uint32(b[7])<<24
 
-	encodedHeight := uint32(b2[0]) | uint32(b2[1])<<8 | uint32(b2[2])<<16 | uint32(b2[3])<<24
-	numUTXOs := uint32(b2[4]) | uint32(b2[5])<<8 | uint32(b2[6])<<16 | uint32(b2[7])<<24
+	uw.Height = encodedHeight >> 1
+	uw.Coinbase = (encodedHeight & 1) == 1
+	uw.UTXOs = make([]*UTXO, numUTXOs)
 
-	uw := &UTXOWrapper{
-		TxID:     new(chainhash.Hash),
-		Height:   encodedHeight >> 1,
-		Coinbase: (encodedHeight & 1) == 1,
-		UTXOs:    make([]*UTXO, numUTXOs),
-	}
-
-	copy(uw.TxID[:], b1[:])
+	var err error
 
 	for i := uint32(0); i < numUTXOs; i++ {
-		uw.UTXOs[i], err = NewUTXOFromReader(r)
-		if err != nil {
+		if uw.UTXOs[i], err = NewUTXOFromReader(r); err != nil {
 			return nil, err
 		}
 	}
@@ -192,6 +172,7 @@ func (u *UTXO) Bytes() []byte {
 	b = append(b, byte(u.Value), byte(u.Value>>8), byte(u.Value>>16), byte(u.Value>>24), byte(u.Value>>32), byte(u.Value>>40), byte(u.Value>>48), byte(u.Value>>56))
 
 	// Append little-endian script length
+	// nolint: gosec
 	scriptLen := uint32(len(u.Script))
 	b = append(b, byte(scriptLen), byte(scriptLen>>8), byte(scriptLen>>16), byte(scriptLen>>24))
 

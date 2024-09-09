@@ -4,15 +4,14 @@ import (
 	"context"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-	"github.com/bitcoin-sv/ubsv/util/retry"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -159,10 +158,12 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 
 //gocognit:ignore
 func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (err error) {
+	txID := tx.TxID()
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Validator:Validate",
 		tracing.WithParentStat(v.stats),
 		tracing.WithHistogram(prometheusTransactionValidateTotal),
-		tracing.WithDebugLogMessage(v.logger, "[Validator:Validate] called for %s", tx.TxID()),
+		tracing.WithDebugLogMessage(v.logger, "[Validator:Validate] called for %s", txID),
+		tracing.WithTag("txid", txID),
 	)
 	defer deferFn()
 	var spentUtxos []*utxo.Spend
@@ -179,16 +180,16 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 		// this function should be moved into go-bt
 		if err := util.IsTransactionFinal(tx, utxoStoreBlockHeight+1, utxoStoreMedianBlockTime); err != nil {
-			return errors.NewNonFinalError("[Validate][%s] transaction is not final", tx.TxIDChainHash().String(), err)
+			return errors.NewNonFinalError("[Validate][%s] transaction is not final", txID, err)
 		}
 	}
 
 	if tx.IsCoinbase() {
-		return errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", tx.TxIDChainHash().String())
+		return errors.NewProcessingError("[Validate][%s] coinbase transactions are not supported", txID)
 	}
 
 	if err = v.validateTransaction(ctx, tx, blockHeight); err != nil {
-		return errors.NewProcessingError("[Validate][%s] error validating transaction", tx.TxID(), err)
+		return errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
 	}
 
 	// decouple the tracing context to not cancel the context when finalize the block assembly
@@ -209,7 +210,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// TODO make this stricter, checking whether this utxo was already spent by the same tx and return early if so
 	//      do not allow any utxo be spent more than once
 	if spentUtxos, err = v.spendUtxos(setSpan, tx, blockHeight); err != nil {
-		return errors.NewProcessingError("[Validate][%s] error spending utxos", tx.TxID(), err)
+		return errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
 	}
 
 	var txMetaData *meta.Data
@@ -222,13 +223,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				// stop all processing, this transaction has already been validated and passed into the block assembly
 				// buf := make([]byte, 1024)
 				// runtime.Stack(buf, false)
-				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", tx.TxIDChainHash().String(), err)
+				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
 				// v.logger.Debugf("[Validate][%s] stack: %s", tx.TxIDChainHash().String(), string(buf))
 
 				return nil
 			}
 
-			v.logger.Errorf("[Validate][%s] error registering tx in metaStore: %v", tx.TxIDChainHash().String(), err)
+			v.logger.Errorf("[Validate][%s] error registering tx in metaStore: %v", txID, err)
 
 			if reverseErr := v.reverseSpends(setSpan, spentUtxos); reverseErr != nil {
 				err = errors.NewProcessingError("error reversing utxo spends: %v", reverseErr, err)
@@ -280,15 +281,15 @@ func (v *Validator) TriggerBatcher() {
 	// Noop
 }
 
-func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Hash) (err error) {
+func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.Hash) (err error) {
 	for retries := 0; retries < 3; retries++ {
-		if metaErr := v.utxoStore.Delete(setSpan.Ctx, txID); metaErr != nil {
+		if metaErr := v.utxoStore.Delete(setSpan.Ctx, txHash); metaErr != nil {
 			if retries < 2 {
 				backoff := time.Duration(2^retries) * time.Second
-				v.logger.Errorf("error deleting tx %s from tx meta utxoStore, retrying in %s: %v", txID.String(), backoff.String(), metaErr)
+				v.logger.Errorf("error deleting tx %s from tx meta utxoStore, retrying in %s: %v", txHash.String(), backoff.String(), metaErr)
 				time.Sleep(backoff)
 			} else {
-				err = errors.NewStorageError("error deleting tx %s from tx meta utxoStore", txID.String(), metaErr)
+				err = errors.NewStorageError("error deleting tx %s from tx meta utxoStore", txHash.String(), metaErr)
 			}
 		} else {
 			break
@@ -297,7 +298,7 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txID *chainhash.Has
 
 	if v.txMetaKafkaChan != nil {
 		startKafka := time.Now()
-		v.txMetaKafkaChan <- append(txID.CloneBytes(), []byte("delete")...)
+		v.txMetaKafkaChan <- append(txHash.CloneBytes(), []byte("delete")...)
 		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 	}
 
@@ -436,6 +437,11 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spe
 }
 
 func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "extendTransaction",
+		tracing.WithHistogram(prometheusTransactionValidate),
+	)
+	defer deferFn()
+
 	if tx.IsCoinbase() {
 		return nil
 	}
@@ -466,11 +472,6 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		tracing.WithHistogram(prometheusTransactionValidate),
 	)
 	defer deferFn()
-
-	basicSpan := tracing.Start(ctx, "BasicValidation")
-	defer func() {
-		basicSpan.Finish()
-	}()
 
 	// 0) Check whether we have a complete transaction in extended format, with all input information
 	//    we cannot check the satoshi input, OP_RETURN is allowed 0 satoshis

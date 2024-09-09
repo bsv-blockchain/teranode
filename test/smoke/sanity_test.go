@@ -1,9 +1,10 @@
 //go:build functional
 
-// How to run this test:
-// $ unzip data.zip
-// $ cd test/functional/
-// $ `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestShouldAllowFairTx`
+// How to run each test:
+// Clean up docker containers before running the test manually
+// $ cd test/smoke/
+// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestSanityTestSuite$/TestShouldAllowFairTx$" -tags functional
+// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestSanityTestSuite$/TestShouldAllowFairTx_UseRpc$" -tags functional
 
 package test
 
@@ -13,8 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/test/setup"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -23,7 +22,6 @@ import (
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
-	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
@@ -34,10 +32,13 @@ type SanityTestSuite struct {
 	setup.BitcoinTestSuite
 }
 
+// func (suite *SanityTestSuite) TearDownTest() {
+// }
+
 func (suite *SanityTestSuite) TestShouldAllowFairTx() {
-	ctx := context.Background()
 	t := suite.T()
 	framework := suite.Framework
+	ctx := framework.Context
 	url := "http://localhost:18090"
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
@@ -56,6 +57,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
+
 		t.Errorf("Failed to decode Coinbase private key: %v", err)
 	}
 
@@ -94,6 +96,7 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	newTx := bt.NewTx()
 	err = newTx.FromUTXOs(utxo)
 	if err != nil {
+
 		t.Errorf("Error adding UTXO to transaction: %s\n", err)
 	}
 
@@ -116,65 +119,50 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	time.Sleep(10 * time.Second)
 
 	height, _ := helper.GetBlockHeight(url)
-	fmt.Printf("Block height: %d\n", height)
+	logger.Infof("Block height before mining: %d\n", height)
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
-	fmt.Printf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
-	// assert.Less(t, utxoBalanceAfter, utxoBalanceBefore)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
 	baClient := framework.Nodes[0].BlockassemblyClient
-	blockHash, err := helper.MineBlock(ctx, baClient, logger)
+	_, err = helper.MineBlock(ctx, baClient, logger)
+
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	fmt.Printf("Block height: %d\n", height)
-	var newHeight int
+	blockStore := framework.Nodes[0].Blockstore
+	blockchainClient := framework.Nodes[0].BlockchainClient
+	bl := false
+	targetHeight := height + 1
+
 	for i := 0; i < 30; i++ {
-		newHeight, _ = helper.GetBlockHeight(url)
-		if newHeight > height {
+		err := helper.WaitForBlockHeight(url, targetHeight, 60)
+		if err != nil {
+			t.Errorf("Failed to wait for block height: %v", err)
+		}
+
+		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+		logger.Infof("Tetsing on Best block header: %v", header[0].Hash())
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreUrl, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
+
+		if err != nil {
+			t.Errorf("error checking if tx exists in block: %v", err)
+		}
+
+		if bl {
 			break
 		}
-		time.Sleep(1 * time.Second)
-	}
-	if newHeight <= height {
-		t.Errorf("Block height did not increase after mining block")
-	}
 
-	blockchainStoreURL, _, found := gocore.Config().GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
-	blockchainDB, err := blockchain_store.NewStore(logger, blockchainStoreURL)
-	logger.Debugf("blockchainStoreURL: %v", blockchainStoreURL)
-	if err != nil {
-		panic(err.Error())
-	}
-	if !found {
-		panic("no blockchain_store setting found")
-	}
-	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
-	fmt.Printf("Block: %v\n", b)
+		targetHeight++
+		_, err = helper.MineBlock(ctx, baClient, logger)
 
-	blockStore := framework.Nodes[0].Blockstore
-	var o []options.Options
-	o = append(o, options.WithFileExtension("block"))
-	//wait
-	time.Sleep(10 * time.Second)
-	blockchainClient := framework.Nodes[0].BlockchainClient
-	header, meta, _ := blockchainClient.GetBestBlockHeader(ctx)
-	fmt.Printf("Best block header: %v\n", header.Hash())
-
-	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
-	// t.Errorf("error getting block reader: %v", err)
-	if err != nil {
-		t.Errorf("error getting block reader: %v", err)
-	}
-	if err == nil {
-		if bl, err := helper.ReadFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), framework.Nodes[0].BlockstoreUrl); err != nil {
-			t.Errorf("error reading block: %v", err)
-		} else {
-			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
-			assert.Equal(t, true, bl, "Test Tx not found in block")
+		if err != nil {
+			t.Errorf("Failed to mine block: %v", err)
 		}
 	}
+
+	assert.Equal(t, true, bl, "Test Tx not found in block")
 
 }
 
@@ -182,10 +170,8 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx_UseRpc() {
 	ctx := context.Background()
 	t := suite.T()
 	framework := suite.Framework
+	logger := framework.Logger
 	url := "http://localhost:18090"
-
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
 
 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
@@ -256,75 +242,66 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx_UseRpc() {
 		t.Errorf("Failed to send new transaction: %v", err)
 	}
 
-	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
+	logger.Infof("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
 	time.Sleep(10 * time.Second)
 
 	height, _ := helper.GetBlockHeight(url)
 	fmt.Printf("Block height: %d\n", height)
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
-	fmt.Printf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
-	// assert.Less(t, utxoBalanceAfter, utxoBalanceBefore)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
 	baClient := framework.Nodes[0].BlockassemblyClient
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
+
 	if err != nil {
 		t.Errorf("Failed to get mining candidate: %v", err)
 	}
 
 	framework.Logger.Infof("RPC Url: %d\n", framework.Nodes[0].RPC_URL)
-	blockHash, err := helper.MineBlockWithCandidate_rpc(ctx, framework.Nodes[0].RPC_URL, miningCandidate, logger)
+	_, err = helper.MineBlockWithCandidate_rpc(ctx, framework.Nodes[0].RPC_URL, miningCandidate, logger)
+
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	fmt.Printf("Block height: %d\n", height)
-	var newHeight int
+	blockStore := framework.Nodes[0].Blockstore
+	blockchainClient := framework.Nodes[0].BlockchainClient
+	bl := false
+	targetHeight := height + 1
 	for i := 0; i < 30; i++ {
-		newHeight, _ = helper.GetBlockHeight(url)
-		if newHeight > height {
+
+		err := helper.WaitForBlockHeight(url, targetHeight, 60)
+		if err != nil {
+			t.Errorf("Failed to wait for block height: %v", err)
+		}
+
+		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+		logger.Infof("Tetsing on Best block header: %v", header[0].Hash())
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreUrl, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
+
+		if err != nil {
+			t.Errorf("error checking if tx exists in block: %v", err)
+		}
+
+		if bl {
 			break
 		}
-		time.Sleep(1 * time.Second)
-	}
-	if newHeight <= height {
-		t.Errorf("Block height did not increase after mining block")
-	}
 
-	blockchainStoreURL, _, found := gocore.Config().GetURL("blockchain_store.docker.ci.chainintegrity.ubsv1")
-	blockchainDB, err := blockchain_store.NewStore(logger, blockchainStoreURL)
-	logger.Debugf("blockchainStoreURL: %v", blockchainStoreURL)
-	if err != nil {
-		panic(err.Error())
-	}
-	if !found {
-		panic("no blockchain_store setting found")
-	}
-	b, _, _ := blockchainDB.GetBlock(ctx, (*chainhash.Hash)(blockHash))
-	fmt.Printf("Block: %v\n", b)
-
-	blockStore := framework.Nodes[0].Blockstore
-	var o []options.Options
-	o = append(o, options.WithFileExtension("block"))
-	//wait
-	time.Sleep(10 * time.Second)
-	blockchainClient := framework.Nodes[0].BlockchainClient
-	header, meta, _ := blockchainClient.GetBestBlockHeader(ctx)
-	fmt.Printf("Best block header: %v\n", header.Hash())
-
-	r, err := blockStore.GetIoReader(ctx, header.Hash()[:], o...)
-	// t.Errorf("error getting block reader: %v", err)
-	if err != nil {
-		t.Errorf("error getting block reader: %v", err)
-	}
-	if err == nil {
-		if bl, err := helper.ReadFile(ctx, "block", logger, r, *newTx.TxIDChainHash(), framework.Nodes[0].BlockstoreUrl); err != nil {
-			t.Errorf("error reading block: %v", err)
-		} else {
-			fmt.Printf("Block at height (%d): was tested for the test Tx\n", meta.Height)
-			assert.Equal(t, true, bl, "Test Tx not found in block")
+		miningCandidate, err := baClient.GetMiningCandidate(ctx)
+		if err != nil {
+			t.Errorf("Failed to get mining candidate: %v", err)
 		}
+
+		_, err = helper.MineBlockWithCandidate_rpc(ctx, framework.Nodes[0].RPC_URL, miningCandidate, logger)
+		if err != nil {
+			t.Errorf("Failed to mine block: %v", err)
+		}
+
+		targetHeight++
 	}
+
+	assert.Equal(t, true, bl, "Test Tx not found in block")
 
 }
 

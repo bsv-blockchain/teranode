@@ -18,6 +18,6 @@ deactivate UTXOStore
 HTTPServer --> Client : Response (JSON metadata or error)
 deactivate HTTPServer
 
-left footer Last Modified On: 12-June-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

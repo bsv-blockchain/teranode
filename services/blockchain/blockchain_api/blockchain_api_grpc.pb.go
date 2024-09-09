@@ -21,45 +21,45 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	BlockchainAPI_HealthGRPC_FullMethodName                = "/blockchain_api.BlockchainAPI/HealthGRPC"
-	BlockchainAPI_AddBlock_FullMethodName                  = "/blockchain_api.BlockchainAPI/AddBlock"
-	BlockchainAPI_GetBlock_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBlock"
-	BlockchainAPI_GetBlocks_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBlocks"
-	BlockchainAPI_GetBlockByHeight_FullMethodName          = "/blockchain_api.BlockchainAPI/GetBlockByHeight"
-	BlockchainAPI_GetBlockStats_FullMethodName             = "/blockchain_api.BlockchainAPI/GetBlockStats"
-	BlockchainAPI_GetBlockGraphData_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlockGraphData"
-	BlockchainAPI_GetLastNBlocks_FullMethodName            = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
-	BlockchainAPI_GetSuitableBlock_FullMethodName          = "/blockchain_api.BlockchainAPI/GetSuitableBlock"
-	BlockchainAPI_GetHashOfAncestorBlock_FullMethodName    = "/blockchain_api.BlockchainAPI/GetHashOfAncestorBlock"
-	BlockchainAPI_GetNextWorkRequired_FullMethodName       = "/blockchain_api.BlockchainAPI/GetNextWorkRequired"
-	BlockchainAPI_GetBlockExists_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBlockExists"
-	BlockchainAPI_GetBlockHeaders_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
-	BlockchainAPI_GetBlockHeadersFromHeight_FullMethodName = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromHeight"
-	BlockchainAPI_GetBlockHeaderIDs_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
-	BlockchainAPI_GetBestBlockHeader_FullMethodName        = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
-	BlockchainAPI_GetBlockHeader_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBlockHeader"
-	BlockchainAPI_InvalidateBlock_FullMethodName           = "/blockchain_api.BlockchainAPI/InvalidateBlock"
-	BlockchainAPI_RevalidateBlock_FullMethodName           = "/blockchain_api.BlockchainAPI/RevalidateBlock"
-	BlockchainAPI_Subscribe_FullMethodName                 = "/blockchain_api.BlockchainAPI/Subscribe"
-	BlockchainAPI_SendNotification_FullMethodName          = "/blockchain_api.BlockchainAPI/SendNotification"
-	BlockchainAPI_GetState_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetState"
-	BlockchainAPI_SetState_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetState"
-	BlockchainAPI_SetBlockMinedSet_FullMethodName          = "/blockchain_api.BlockchainAPI/SetBlockMinedSet"
-	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName      = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
-	BlockchainAPI_SetBlockSubtreesSet_FullMethodName       = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
-	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName   = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
-	BlockchainAPI_SendFSMEvent_FullMethodName              = "/blockchain_api.BlockchainAPI/SendFSMEvent"
-	BlockchainAPI_GetFSMCurrentState_FullMethodName        = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
-	BlockchainAPI_Run_FullMethodName                       = "/blockchain_api.BlockchainAPI/Run"
-	BlockchainAPI_Mine_FullMethodName                      = "/blockchain_api.BlockchainAPI/Mine"
-	BlockchainAPI_CatchUpTransactions_FullMethodName       = "/blockchain_api.BlockchainAPI/CatchUpTransactions"
-	BlockchainAPI_CatchUpBlocks_FullMethodName             = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
-	BlockchainAPI_Restore_FullMethodName                   = "/blockchain_api.BlockchainAPI/Restore"
-	BlockchainAPI_LegacySync_FullMethodName                = "/blockchain_api.BlockchainAPI/LegacySync"
-	BlockchainAPI_Unavailable_FullMethodName               = "/blockchain_api.BlockchainAPI/Unavailable"
-	BlockchainAPI_GetBlockLocator_FullMethodName           = "/blockchain_api.BlockchainAPI/GetBlockLocator"
-	BlockchainAPI_LocateBlockHeaders_FullMethodName        = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
-	BlockchainAPI_GetBestHeightAndTime_FullMethodName      = "/blockchain_api.BlockchainAPI/GetBestHeightAndTime"
+	BlockchainAPI_HealthGRPC_FullMethodName                      = "/blockchain_api.BlockchainAPI/HealthGRPC"
+	BlockchainAPI_AddBlock_FullMethodName                        = "/blockchain_api.BlockchainAPI/AddBlock"
+	BlockchainAPI_GetBlock_FullMethodName                        = "/blockchain_api.BlockchainAPI/GetBlock"
+	BlockchainAPI_GetBlocks_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetBlocks"
+	BlockchainAPI_GetBlockByHeight_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBlockByHeight"
+	BlockchainAPI_GetBlockStats_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBlockStats"
+	BlockchainAPI_GetBlockGraphData_FullMethodName               = "/blockchain_api.BlockchainAPI/GetBlockGraphData"
+	BlockchainAPI_GetLastNBlocks_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetLastNBlocks"
+	BlockchainAPI_GetSuitableBlock_FullMethodName                = "/blockchain_api.BlockchainAPI/GetSuitableBlock"
+	BlockchainAPI_GetHashOfAncestorBlock_FullMethodName          = "/blockchain_api.BlockchainAPI/GetHashOfAncestorBlock"
+	BlockchainAPI_GetNextWorkRequired_FullMethodName             = "/blockchain_api.BlockchainAPI/GetNextWorkRequired"
+	BlockchainAPI_GetBlockExists_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBlockExists"
+	BlockchainAPI_GetBlockHeaders_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
+	BlockchainAPI_GetBlockHeadersFromHeight_FullMethodName       = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromHeight"
+	BlockchainAPI_GetBlockHeaderIDs_FullMethodName               = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
+	BlockchainAPI_GetBestBlockHeader_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
+	BlockchainAPI_GetBlockHeader_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBlockHeader"
+	BlockchainAPI_InvalidateBlock_FullMethodName                 = "/blockchain_api.BlockchainAPI/InvalidateBlock"
+	BlockchainAPI_RevalidateBlock_FullMethodName                 = "/blockchain_api.BlockchainAPI/RevalidateBlock"
+	BlockchainAPI_Subscribe_FullMethodName                       = "/blockchain_api.BlockchainAPI/Subscribe"
+	BlockchainAPI_SendNotification_FullMethodName                = "/blockchain_api.BlockchainAPI/SendNotification"
+	BlockchainAPI_GetState_FullMethodName                        = "/blockchain_api.BlockchainAPI/GetState"
+	BlockchainAPI_SetState_FullMethodName                        = "/blockchain_api.BlockchainAPI/SetState"
+	BlockchainAPI_SetBlockMinedSet_FullMethodName                = "/blockchain_api.BlockchainAPI/SetBlockMinedSet"
+	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
+	BlockchainAPI_SetBlockSubtreesSet_FullMethodName             = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
+	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
+	BlockchainAPI_SendFSMEvent_FullMethodName                    = "/blockchain_api.BlockchainAPI/SendFSMEvent"
+	BlockchainAPI_GetFSMCurrentState_FullMethodName              = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
+	BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName = "/blockchain_api.BlockchainAPI/WaitFSMToTransitionToGivenState"
+	BlockchainAPI_Run_FullMethodName                             = "/blockchain_api.BlockchainAPI/Run"
+	BlockchainAPI_CatchUpTransactions_FullMethodName             = "/blockchain_api.BlockchainAPI/CatchUpTransactions"
+	BlockchainAPI_CatchUpBlocks_FullMethodName                   = "/blockchain_api.BlockchainAPI/CatchUpBlocks"
+	BlockchainAPI_Restore_FullMethodName                         = "/blockchain_api.BlockchainAPI/Restore"
+	BlockchainAPI_LegacySync_FullMethodName                      = "/blockchain_api.BlockchainAPI/LegacySync"
+	BlockchainAPI_Unavailable_FullMethodName                     = "/blockchain_api.BlockchainAPI/Unavailable"
+	BlockchainAPI_GetBlockLocator_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBlockLocator"
+	BlockchainAPI_LocateBlockHeaders_FullMethodName              = "/blockchain_api.BlockchainAPI/LocateBlockHeaders"
+	BlockchainAPI_GetBestHeightAndTime_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBestHeightAndTime"
 )
 
 // BlockchainAPIClient is the client API for BlockchainAPI service.
@@ -97,8 +97,8 @@ type BlockchainAPIClient interface {
 	GetBlocksSubtreesNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksSubtreesNotSetResponse, error)
 	SendFSMEvent(ctx context.Context, in *SendFSMEventRequest, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	GetFSMCurrentState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
+	WaitFSMToTransitionToGivenState(ctx context.Context, in *WaitFSMToTransitionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Run(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	Mine(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	CatchUpTransactions(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	CatchUpBlocks(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Restore(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error)
@@ -416,20 +416,20 @@ func (c *blockchainAPIClient) GetFSMCurrentState(ctx context.Context, in *emptyp
 	return out, nil
 }
 
-func (c *blockchainAPIClient) Run(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *blockchainAPIClient) WaitFSMToTransitionToGivenState(ctx context.Context, in *WaitFSMToTransitionRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, BlockchainAPI_Run_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *blockchainAPIClient) Mine(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *blockchainAPIClient) Run(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, BlockchainAPI_Mine_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, BlockchainAPI_Run_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -551,8 +551,8 @@ type BlockchainAPIServer interface {
 	GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error)
 	SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error)
 	GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error)
+	WaitFSMToTransitionToGivenState(context.Context, *WaitFSMToTransitionRequest) (*emptypb.Empty, error)
 	Run(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
-	Mine(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	CatchUpTransactions(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	CatchUpBlocks(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
 	Restore(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
@@ -658,11 +658,11 @@ func (UnimplementedBlockchainAPIServer) SendFSMEvent(context.Context, *SendFSMEv
 func (UnimplementedBlockchainAPIServer) GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFSMCurrentState not implemented")
 }
+func (UnimplementedBlockchainAPIServer) WaitFSMToTransitionToGivenState(context.Context, *WaitFSMToTransitionRequest) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method WaitFSMToTransitionToGivenState not implemented")
+}
 func (UnimplementedBlockchainAPIServer) Run(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Run not implemented")
-}
-func (UnimplementedBlockchainAPIServer) Mine(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Mine not implemented")
 }
 func (UnimplementedBlockchainAPIServer) CatchUpTransactions(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CatchUpTransactions not implemented")
@@ -1224,6 +1224,24 @@ func _BlockchainAPI_GetFSMCurrentState_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_WaitFSMToTransitionToGivenState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WaitFSMToTransitionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).WaitFSMToTransitionToGivenState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).WaitFSMToTransitionToGivenState(ctx, req.(*WaitFSMToTransitionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockchainAPI_Run_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -1238,24 +1256,6 @@ func _BlockchainAPI_Run_Handler(srv interface{}, ctx context.Context, dec func(i
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).Run(ctx, req.(*emptypb.Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _BlockchainAPI_Mine_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BlockchainAPIServer).Mine(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BlockchainAPI_Mine_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BlockchainAPIServer).Mine(ctx, req.(*emptypb.Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1524,12 +1524,12 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockchainAPI_GetFSMCurrentState_Handler,
 		},
 		{
-			MethodName: "Run",
-			Handler:    _BlockchainAPI_Run_Handler,
+			MethodName: "WaitFSMToTransitionToGivenState",
+			Handler:    _BlockchainAPI_WaitFSMToTransitionToGivenState_Handler,
 		},
 		{
-			MethodName: "Mine",
-			Handler:    _BlockchainAPI_Mine_Handler,
+			MethodName: "Run",
+			Handler:    _BlockchainAPI_Run_Handler,
 		},
 		{
 			MethodName: "CatchUpTransactions",

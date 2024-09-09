@@ -19,6 +19,6 @@ deactivate Store
 HTTPServer --> Client : Subtree data (BINARY_STREAM, HEX, JSON)
 deactivate HTTPServer
 
-left footer Last Modified On: 4-Dec-2023
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

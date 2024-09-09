@@ -4,6 +4,13 @@
 -- spendingTxID []byte - 32 byte little-endian hash of the spending transaction
 -- currentBlockHeight number - the current block height
 -- ttl number - the time-to-live for the UTXO record
+--                           _
+--  ___ _ __   ___ _ __   __| |
+-- / __| '_ \ / _ \ '_ \ / _` |
+-- \__ \ |_) |  __/ | | | (_| |
+-- |___/ .__/ \___|_| |_|\__,_|
+--     |_|
+--
 function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
@@ -66,26 +73,7 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
     rec['utxos'] = utxos
     rec['spentUtxos'] = rec['spentUtxos'] + 1
 
-    local signal = ""
-
-    local nrRecords = rec['nrRecords']
-
-    if nrRecords == nil then
-        -- This is a pagination record: check if all the utxos are spent
-        if rec['spentUtxos'] == rec['nrUtxos'] then
-            signal = ":ALLSPENT"
-            record.set_ttl(rec, ttl)
-        else 
-            record.set_ttl(rec, -1)
-        end
-    else
-        -- The is the master record: only set_ttl if all the utxos are spent and the nrRecords is 1  
-        if rec['spentUtxos'] == rec['nrUtxos'] and nrRecords == 1 then
-            record.set_ttl(rec, ttl)
-        else
-            record.set_ttl(rec, -1)
-        end
-    end
+    local signal = setTTL(rec, ttl)
 
     aerospike:update(rec)
 
@@ -96,6 +84,13 @@ end
 -- offset number - the offset in the utxos list (vout % utxoBatchSize)-- utxoHash []byte - 32 byte little-endian hash of the UTXO
 -- spendingTxID []byte - 32 byte little-endian hash of the spending transaction
 -- ttl number - the time-to-live for the UTXO record
+--              ____                       _
+--  _   _ _ __ / ___| _ __   ___ _ __   __| |
+-- | | | | '_ \\___ \| '_ \ / _ \ '_ \ / _` |
+-- | |_| | | | |___) | |_) |  __/ | | | (_| |
+--  \__,_|_| |_|____/| .__/ \___|_| |_|\__,_|
+--                   |_|
+--
 function unSpend(rec, offset, utxoHash)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
@@ -148,6 +143,37 @@ function unSpend(rec, offset, utxoHash)
     return 'OK' .. signal
 end
 
+-- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
+-- blockID number - the block ID
+-- ttl number - the time-to-live for the UTXO record
+--           _   __  __ _                _
+--  ___  ___| |_|  \/  (_)_ __   ___  __| |
+-- / __|/ _ \ __| |\/| | | '_ \ / _ \/ _` |
+-- \__ \  __/ |_| |  | | | | | |  __/ (_| |
+-- |___/\___|\__|_|  |_|_|_| |_|\___|\__,_|
+--
+function setMined(rec, blockID, ttl)
+    if not aerospike:exists(rec) then
+        return "ERROR:TX not found"
+    end
+
+    -- Check if the bin exists; if not, initialize it as an empty list
+    if rec['blockIDs'] == nil then
+        rec['blockIDs'] = list()
+    end
+
+    -- Append the value to the list in the specified bin
+    list.append(rec['blockIDs'], blockID)
+
+    local signal = setTTL(rec, ttl)
+    
+    -- Update the record to save changes
+    aerospike:update(rec)
+    
+    return 'OK' .. signal
+end
+
+
 function bytes_equal(a, b)
     if bytes.size(a) ~= bytes.size(b) then
         return false
@@ -190,16 +216,39 @@ function incrementNrRecords(rec, inc, ttl)
     end
 
     nrRecords = nrRecords + inc
-
-    if nrRecords == 1 and rec['spentUtxos'] == rec['nrUtxos'] then
-        record.set_ttl(rec, ttl)
-    else
-        record.set_ttl(rec, -1)
-    end
-
+   
     rec['nrRecords'] = nrRecords
+
+    local signal = setTTL(rec, ttl)
 
     aerospike:update(rec)
 
-    return 'OK'
+    return 'OK' .. signal
+end
+
+function setTTL(rec, ttl)
+    -- Check if all the utxos are spent and set the TTL, but only for transactions that have been in at least one block
+    local blockIDs = rec['blockIDs']
+    local nrRecords = rec['nrRecords']
+    local signal = ""
+
+    if nrRecords == nil then
+        -- This is a pagination record: check if all the utxos are spent
+        if rec['spentUtxos'] == rec['nrUtxos'] then
+            signal = ":ALLSPENT"
+        end
+        -- TTL is determined externally for pagination records; do not set TTL here
+        -- as we only want to set TTL for this record and all the other pagination records
+        -- when the TX is fully spent and all the UTXOs are spent
+    else
+        -- This is a master record: only set TTL if nrRecords is 1 and blockIDs has at least one item
+        if nrRecords == 1 and blockIDs and #blockIDs > 0 then
+            record.set_ttl(rec, ttl)
+            signal = ":TTLSET"
+        else
+            record.set_ttl(rec, -1)
+        end
+    end
+
+    return signal
 end

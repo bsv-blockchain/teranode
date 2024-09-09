@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -17,9 +18,7 @@ import (
 //     or nil if it is unknown
 //   - When locators are provided, but none of them are known, hashes starting
 //     after the genesis block will be returned
-func (s *SQL) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash,
-	maxHashes uint32) ([]*model.BlockHeader, error) {
-
+func (s *SQL) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	if maxHashes == 0 {
 		return nil, errors.NewInvalidArgumentError("maxHashes must be greater than 0")
 	}
@@ -33,7 +32,9 @@ func (s *SQL) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash,
 			if err != nil {
 				continue
 			}
+
 			foundBlock = hash
+
 			break
 		}
 	}
@@ -53,6 +54,7 @@ func (s *SQL) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash,
 	returnBlockHeaders := make([]*model.BlockHeader, 0, len(blockHeaders))
 	for _, header := range blockHeaders {
 		returnBlockHeaders = append(returnBlockHeaders, header)
+
 		if hashStop != nil && header.Hash().IsEqual(hashStop) {
 			break
 		}

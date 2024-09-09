@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/binary"
 	"math/big"
-	"math/rand"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 
 	"time"
@@ -16,6 +16,8 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
+
+const DifficultyAdjustmentWindow = 144
 
 var (
 	// bigOne is 1 represented as a big.Int.  It is defined here to avoid
@@ -29,86 +31,80 @@ var (
 )
 
 type Difficulty struct {
-	difficultyAdjustment       bool
-	difficultyAdjustmentWindow int
-	nBitsString                string
-	powLimit                   *big.Int
-	lastSlowBlockHash          *chainhash.Hash
-	logger                     ulogger.Logger
-	store                      blockchain_store.Store
+	difficultyAdjustment bool
+	nBits                *model.NBit
+	lastSlowBlockHash    *chainhash.Hash
+	logger               ulogger.Logger
+	store                blockchain_store.Store
+	chainParams          *chaincfg.Params
 }
 
-func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, difficultyAdjustmentWindow int) (*Difficulty, error) {
+func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, params *chaincfg.Params) (*Difficulty, error) {
 	d := &Difficulty{}
 	d.difficultyAdjustment = gocore.Config().GetBool("difficulty_adjustment", false)
-	d.difficultyAdjustmentWindow = difficultyAdjustmentWindow
+	d.chainParams = params
 
-	d.nBitsString, _ = gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
-
-	// powLimit is the highest proof of work value a Bitcoin block
-	// can have for the test network. It is the value 2^224 - 1.eee3e
-	// d.powLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 224), bigOne)
-	// make it easier
-	powLimitExp, _ := gocore.Config().GetInt("difficulty_pow_limit", 224)
-
-	d.powLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, uint(powLimitExp)), bigOne)
+	bytesLittleEndian := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bytesLittleEndian, params.PowLimitBits)
+	d.nBits, _ = model.NewNBitFromSlice(bytesLittleEndian)
 
 	d.logger = logger
 	d.store = store
 	return d, nil
 }
 
-func (d *Difficulty) GetNextWorkRequired(ctx context.Context, bestBlockHeader *model.BlockHeader, bestBlockHeight uint32) (*model.NBit, error) {
-
+func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *model.BlockHeader, bestBlockHeight uint32) (*model.NBit, error) {
 	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
-
-	if bestBlockHeight < uint32(d.difficultyAdjustmentWindow)+4 {
-		d.logger.Debugf("not enough blocks to calculate difficulty adjustment")
-		// not enough blocks to calculate difficulty adjustment
-		// set to start difficulty
-		nBits, _ := model.NewNBitFromString(d.nBitsString)
-		return nBits, nil
-	}
-
-	// Special difficulty rule for testnet:
-	// If the new block's timestamp is more than 2* 10 minutes then allow
-	// mining of a min-difficulty block.
-	now := time.Now()
-	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
-
-	thresholdSeconds := 2 * uint32(targetTimePerBlock)
-	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand)
-	randomOffset := rand.Int31n(21) - 10
-
-	timeDifference := uint32(now.Unix()) - bestBlockHeader.Timestamp
-
-	// if uint32(now.Unix())-bestBlockHeader.Timestamp > 2*uint32(d.targetTimePerBlock) {
-	d.logger.Debugf("timeDifference: %d", timeDifference)
-	d.logger.Debugf("bestBlockHeader.Hash().String(): %s", bestBlockHeader.Hash().String())
-	if d.lastSlowBlockHash != nil {
-		d.logger.Debugf("d.lastSlowBlockHash: %s", d.lastSlowBlockHash.String())
-	}
-	if timeDifference > thresholdSeconds+uint32(randomOffset) && (d.lastSlowBlockHash != bestBlockHeader.Hash()) {
-		d.logger.Debugf("applying special difficulty rule")
-		d.lastSlowBlockHash = bestBlockHeader.Hash()
-		// set to start difficulty
-		nBits, _ := model.NewNBitFromString(d.nBitsString)
-		return nBits, nil
-	}
 
 	if gocore.Config().GetBool("mine_initial_blocks", false) && bestBlockHeight < uint32(initialBlockCount) {
 		// set to start difficulty
 		d.logger.Debugf("mining initial blocks")
 
-		nBits, _ := model.NewNBitFromString(d.nBitsString)
-		return nBits, nil
+		return d.nBits, nil
+	}
+
+	// If regest or simnet we don't adjust the difficulty
+	if d.chainParams.NoDifficultyAdjustment {
+		return &bestBlockHeader.Bits, nil
+	}
+
+	if bestBlockHeight < uint32(DifficultyAdjustmentWindow)+4 {
+		d.logger.Debugf("not enough blocks to calculate difficulty adjustment")
+		// not enough blocks to calculate difficulty adjustment
+		// set to start difficulty
+
+		return d.nBits, nil
+	}
+
+	now := time.Now()
+
+	// For networks that support it, allow special reduction of the
+	// required difficulty once too much time has elapsed without
+	// mining a block.
+	if d.chainParams.ReduceMinDifficulty {
+		// Return minimum difficulty when more than the desired
+		// amount of time has elapsed without mining a block.
+		reductionTime := d.chainParams.MinDiffReductionTime.Seconds()
+
+		allowMinTime := bestBlockHeader.Timestamp + uint32(reductionTime)
+		if now.Unix() > int64(allowMinTime) {
+			bytesLittleEndian := make([]byte, 4)
+			binary.LittleEndian.PutUint32(bytesLittleEndian, d.chainParams.PowLimitBits)
+			nBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
+			return nBits, nil
+		}
 	}
 
 	lastSuitableBlock, err := d.store.GetSuitableBlock(ctx, bestBlockHeader.Hash())
 	if err != nil {
-		return nil, errors.NewStorageError("error getting suitable block: %v", err)
+		return nil,
+			errors.NewStorageError("error getting suitable block", err)
 	}
-	ancestorHash, err := d.store.GetHashOfAncestorBlock(ctx, bestBlockHeader.Hash(), d.difficultyAdjustmentWindow)
+
+	if lastSuitableBlock == nil {
+		return nil, errors.NewProcessingError("lastSuitableBlock is nil", nil)
+	}
+	ancestorHash, err := d.store.GetHashOfAncestorBlock(ctx, bestBlockHeader.Hash(), DifficultyAdjustmentWindow)
 	if err != nil {
 		// could be that we don't have a long enough chain to get the ancestor
 		d.logger.Debugf("error getting ancestor block: %v", err)
@@ -119,57 +115,104 @@ func (d *Difficulty) GetNextWorkRequired(ctx context.Context, bestBlockHeader *m
 		return nil, errors.NewStorageError("error getting suitable block", err)
 	}
 
-	// d.logger.Debugf("firstSuitableBlock: %+v", firstSuitableBlock)
-	// d.logger.Debugf("lastSuitableBlock: %+v", lastSuitableBlock)
-	bits1, _ := model.NewNBitFromSlice(firstSuitableBlock.NBits)
-	bits2, _ := model.NewNBitFromSlice(lastSuitableBlock.NBits)
-	nBits, err := d.ComputeTarget(&model.BlockHeader{
-		Bits:      *bits1,
-		Timestamp: firstSuitableBlock.Time,
-	}, &model.BlockHeader{
-		Bits:      *bits2,
-		Timestamp: lastSuitableBlock.Time,
-	})
+	if firstSuitableBlock == nil {
+		return d.nBits, nil
+	}
+
+	nBits, err := d.computeTarget(firstSuitableBlock, lastSuitableBlock)
 	if err != nil {
 		return nil, errors.NewProcessingError("error calculating next required difficulty", err)
 	}
-	d.logger.Debugf("nBits: %+v", nBits)
+
 	return nBits, nil
 }
-func (d *Difficulty) ComputeTarget(firstBlock *model.BlockHeader, lastBlock *model.BlockHeader) (*model.NBit, error) {
 
-	// If no difficulty adjustment is required, return the previous nbits
-	if !d.difficultyAdjustment {
-		d.logger.Debugf("no difficulty adjustment")
-		return &lastBlock.Bits, nil
+// calcNextRequiredDifficulty calculates the required difficulty for the block
+// after the passed previous block node based on the difficulty retarget rules.
+// This function differs from the exported CalcNextRequiredDifficulty in that
+// the exported version uses the current best chain as the previous block node
+// while this function accepts any block node.
+func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock) (*model.NBit, error) {
+	bytesLittleEndian := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bytesLittleEndian, d.chainParams.PowLimitBits)
+	powLimitBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
+
+	// firstSuitableBits, _ := model.NewNBitFromSlice(suitableFirstBlock.NBits)
+	lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
+	// Genesis block.
+	// if lastNode == nil {
+	// 	return powLimitBits, nil
+	// }
+	now := time.Now().Unix()
+
+	// If regest or simnet we don't adjust the difficulty
+	if d.chainParams.NoDifficultyAdjustment {
+		d.logger.Debugf("no difficulty adjustment - returning %v", lastSuitableBits)
+		return lastSuitableBits, nil
 	}
 
-	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
+	// For networks that support it, allow special reduction of the
+	// required difficulty once too much time has elapsed without
+	// mining a block.
+	if d.chainParams.ReduceMinDifficulty {
+		// Return minimum difficulty when more than the desired
+		// amount of time has elapsed without mining a block.
+		reductionTime := int64(d.chainParams.MinDiffReductionTime /
+			time.Second)
+		allowMinTime := int64(suitableLastBlock.Time) + reductionTime
+		if now > allowMinTime {
+			d.logger.Debugf("more than %d seconds have elapsed without mining a block, returning powLimitBits", d.chainParams.MinDiffReductionTime)
+			return powLimitBits, nil
+		}
+	}
 
-	// Calculate the actual duration (in seconds) taken to mine the blocks between the first and last blocks
-	duration := int64(lastBlock.Timestamp - firstBlock.Timestamp)
+	// Get the block node at the beginning of the window (n-144)
+	// firstNode := lastNode.RelativeAncestor(DifficultyAdjustmentWindow)
+	// if firstNode == nil {
+	// 	return nil, errors.New(errors.ERR_ERROR, "unable to obtain previous retarget block")
+	// }
+
+	// Find the suitable blocks to use as the first and last nodes for the
+	// purpose of the difficulty calculation. A suitable block is the median
+	// timestamp out of the three prior.
+	// suitableLastNode, err := b.getSuitableBlock(lastNode)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// suitableFirstNode, err := b.getSuitableBlock(firstNode)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	lastChainwork := new(big.Int).SetBytes(suitableLastBlock.ChainWork)
+	firstChainwork := new(big.Int).SetBytes(suitableFirstBlock.ChainWork)
+
+	work := new(big.Int).Sub(lastChainwork, firstChainwork)
+	d.logger.Debugf("work: %s", work.String())
 	// In order to avoid difficulty cliffs, we bound the amplitude of the
 	// adjustement we are going to do.
-	if duration > int64(2*d.difficultyAdjustmentWindow)*int64(targetTimePerBlock) {
-		duration = int64(2*d.difficultyAdjustmentWindow) * int64(targetTimePerBlock)
-	} else if duration < int64(d.difficultyAdjustmentWindow/2)*int64(targetTimePerBlock) {
-		duration = int64(d.difficultyAdjustmentWindow/2) * int64(targetTimePerBlock)
+	duration := int64(suitableLastBlock.Time - suitableFirstBlock.Time)
+	if duration > 288*int64(d.chainParams.TargetTimePerBlock.Seconds()) {
+		duration = 288 * int64(d.chainParams.TargetTimePerBlock.Seconds())
+	} else if duration < 72*int64(d.chainParams.TargetTimePerBlock.Seconds()) {
+		duration = 72 * int64(d.chainParams.TargetTimePerBlock.Seconds())
 	}
 
-	// Calculate the new target based on the ratio of actual to expected duration
-	actualDuration := big.NewInt(duration)
-	// Calculate the expected duration for mining the blocks in the difficulty adjustment window
-	expectedDuration := big.NewInt(int64(targetTimePerBlock * d.difficultyAdjustmentWindow))
+	// Calculate the projected work by multiplying the current work by the target time per block (in seconds).
+	projectedWork := new(big.Int).Mul(work, big.NewInt(int64(d.chainParams.TargetTimePerBlock.Seconds())))
+	// Divide the projected work by the actual time duration between the blocks to get the adjusted work.
+	pw := new(big.Int).Div(projectedWork, big.NewInt(duration))
+	// Calculate 2^256, which is the maximum possible value in a 256-bit space (used for Bitcoin's difficulty target).
+	e := new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil)
+	// Subtract the adjusted work from 2^256 to get the new numerator for the target calculation.
+	nt := new(big.Int).Sub(e, pw)
+	// Calculate the new target by dividing the result by the adjusted work. This gives the new difficulty target.
+	newTarget := new(big.Int).Div(nt, pw)
 
-	// Calculate the new target by multiplying the last block's target with the ratio of actual to expected duration
-	newTarget := new(big.Int).Mul(lastBlock.Bits.CalculateTarget(), actualDuration)
-	newTarget.Div(newTarget, expectedDuration)
-
-	if newTarget.Cmp(d.powLimit) > 0 {
-		d.logger.Debugf("difficulty would be above pow limit, set to pow limit")
-		newTarget.Set(d.powLimit)
+	// clip again if above minimum target (too easy)
+	if newTarget.Cmp(d.chainParams.PowLimit) > 0 {
+		d.logger.Debugf("new target would be above pow limit, set to pow limit")
+		newTarget.Set(d.chainParams.PowLimit)
 	}
-
 	nBitsUint := BigToCompact(newTarget)
 	nb, _ := model.NewNBitFromSlice(uint32ToBytes(nBitsUint))
 	return nb, nil
@@ -221,4 +264,82 @@ func uint32ToBytes(value uint32) []byte {
 	bytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(bytes, value)
 	return bytes
+}
+
+// CalcWork calculates a work value from difficulty bits.  Bitcoin increases
+// the difficulty for generating a block by decreasing the value which the
+// generated hash must be less than.  This difficulty target is stored in each
+// block header using a compact representation as described in the documentation
+// for CompactToBig.  The main chain is selected by choosing the chain that has
+// the most proof of work (highest difficulty).  Since a lower target difficulty
+// value equates to higher actual difficulty, the work value which will be
+// accumulated must be the inverse of the difficulty.  Also, in order to avoid
+// potential division by zero and really small floating point numbers, the
+// result adds 1 to the denominator and multiplies the numerator by 2^256.
+func CalcWork(bits uint32) *big.Int {
+	// Return a work value of zero if the passed difficulty bits represent
+	// a negative number. Note this should not happen in practice with valid
+	// blocks, but an invalid block could trigger it.
+	difficultyNum := CompactToBig(bits)
+	if difficultyNum.Sign() <= 0 {
+		return big.NewInt(0)
+	}
+
+	// (1 << 256) / (difficultyNum + 1)
+	denominator := new(big.Int).Add(difficultyNum, bigOne)
+	return new(big.Int).Div(oneLsh256, denominator)
+}
+
+// CompactToBig converts a compact representation of a whole number N to an
+// unsigned 32-bit number.  The representation is similar to IEEE754 floating
+// point numbers.
+//
+// Like IEEE754 floating point, there are three basic components: the sign,
+// the exponent, and the mantissa.  They are broken out as follows:
+//
+//   - the most significant 8 bits represent the unsigned base 256 exponent
+//
+//   - bit 23 (the 24th bit) represents the sign bit
+//
+//   - the least significant 23 bits represent the mantissa
+//
+//     -------------------------------------------------
+//     |   Exponent     |    Sign    |    Mantissa     |
+//     -------------------------------------------------
+//     | 8 bits [31-24] | 1 bit [23] | 23 bits [22-00] |
+//     -------------------------------------------------
+//
+// The formula to calculate N is:
+//
+//	N = (-1^sign) * mantissa * 256^(exponent-3)
+//
+// This compact form is only used in bitcoin to encode unsigned 256-bit numbers
+// which represent difficulty targets, thus there really is not a need for a
+// sign bit, but it is implemented here to stay consistent with bitcoind.
+func CompactToBig(compact uint32) *big.Int {
+	// Extract the mantissa, sign bit, and exponent.
+	mantissa := compact & 0x007fffff
+	isNegative := compact&0x00800000 != 0
+	exponent := uint(compact >> 24)
+
+	// Since the base for the exponent is 256, the exponent can be treated
+	// as the number of bytes to represent the full 256-bit number.  So,
+	// treat the exponent as the number of bytes and shift the mantissa
+	// right or left accordingly.  This is equivalent to:
+	// N = mantissa * 256^(exponent-3)
+	var bn *big.Int
+	if exponent <= 3 {
+		mantissa >>= 8 * (3 - exponent)
+		bn = big.NewInt(int64(mantissa))
+	} else {
+		bn = big.NewInt(int64(mantissa))
+		bn.Lsh(bn, 8*(exponent-3))
+	}
+
+	// Make it negative if the sign bit is set.
+	if isNegative {
+		bn = bn.Neg(bn)
+	}
+
+	return bn
 }

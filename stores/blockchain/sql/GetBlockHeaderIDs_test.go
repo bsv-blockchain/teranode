@@ -13,10 +13,10 @@ import (
 
 func TestSQL_GetBlockHeaderIDs(t *testing.T) {
 	t.Run("empty - no error", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		headerIDs, err := s.GetBlockHeaderIDs(context.Background(), &chainhash.Hash{}, 2)
@@ -25,10 +25,10 @@ func TestSQL_GetBlockHeaderIDs(t *testing.T) {
 	})
 
 	t.Run("", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")

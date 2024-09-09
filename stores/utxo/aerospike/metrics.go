@@ -65,7 +65,7 @@ func _initPrometheusMetrics() {
 			Help: "Number of txmeta map errors",
 		},
 		[]string{
-			"function", //function raising the error
+			"function", // function raising the error
 			"error",    // error returned
 		},
 	)
@@ -107,24 +107,24 @@ func _initPrometheusMetrics() {
 			Help: "Number of utxo get calls done to aerospike",
 		},
 	)
-	//prometheusUtxoMapStore = promauto.NewCounter(
-	//	prometheus.CounterOpts{
-	//		Name: "aerospike_map_utxo_store",
-	//		Help: "Number of utxo store calls done to aerospike",
-	//	},
-	//)
-	//prometheusUtxoMapStoreSpent = promauto.NewCounter(
-	//	prometheus.CounterOpts{
-	//		Name: "aerospike_map_utxo_store_spent",
-	//		Help: "Number of utxo store calls that were already spent to aerospike",
-	//	},
-	//)
-	//prometheusUtxoMapReStore = promauto.NewCounter(
-	//	prometheus.CounterOpts{
-	//		Name: "aerospike_map_utxo_restore",
-	//		Help: "Number of utxo restore calls done to aerospike",
-	//	},
-	//)
+	// prometheusUtxoMapStore = promauto.NewCounter(
+	// 	prometheus.CounterOpts{
+	// 		Name: "aerospike_map_utxo_store",
+	// 		Help: "Number of utxo store calls done to aerospike",
+	// 	},
+	// )
+	// prometheusUtxoMapStoreSpent = promauto.NewCounter(
+	// 	prometheus.CounterOpts{
+	// 		Name: "aerospike_map_utxo_store_spent",
+	// 		Help: "Number of utxo store calls that were already spent to aerospike",
+	// 	},
+	// )
+	// prometheusUtxoMapReStore = promauto.NewCounter(
+	// 	prometheus.CounterOpts{
+	// 		Name: "aerospike_map_utxo_restore",
+	// 		Help: "Number of utxo restore calls done to aerospike",
+	// 	},
+	// )
 	prometheusUtxoMapSpend = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "aerospike_map_utxo_spend",
@@ -150,7 +150,7 @@ func _initPrometheusMetrics() {
 			Help: "Number of utxo errors",
 		},
 		[]string{
-			"function", //function raising the error
+			"function", // function raising the error
 			"error",    // error returned
 		},
 	)

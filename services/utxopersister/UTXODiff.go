@@ -225,7 +225,7 @@ func (ud *UTXODiff) ProcessTx(tx *bt.Tx) error {
 
 	// Create a new UTXOWrapper
 	uw := &UTXOWrapper{
-		TxID:     tx.TxIDChainHash(),
+		TxID:     *tx.TxIDChainHash(),
 		Height:   ud.blockHeight,
 		Coinbase: tx.IsCoinbase(),
 		UTXOs:    make([]*UTXO, 0),
@@ -474,7 +474,7 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 			}
 
 			// Filter UTXOs based on the deletions map
-			utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, deletions, *utxoWrapper.TxID)
+			utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, deletions, utxoWrapper.TxID)
 
 			// Only write the UTXOWrapper if there are remaining UTXOs after deletions
 			if len(utxoWrapper.UTXOs) > 0 {
@@ -501,7 +501,7 @@ func (ud *UTXODiff) CreateUTXOSet(ctx context.Context, previousBlockHash *chainh
 		}
 
 		// Filter UTXOs based on the deletions map
-		utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, deletions, *utxoWrapper.TxID)
+		utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, deletions, utxoWrapper.TxID)
 
 		// Only write the UTXOWrapper if there are remaining UTXOs after deletions
 		if len(utxoWrapper.UTXOs) > 0 {

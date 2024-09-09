@@ -43,5 +43,5 @@ P2PServer -> P2PServer: Start blockchain and validator listeners \n (Goroutines)
 P2PServer -> P2PServer: Starts HTTP server \n (Goroutine)
 deactivate P2PServer
 
-left footer Last Modified On: 6-Mar-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 @enduml

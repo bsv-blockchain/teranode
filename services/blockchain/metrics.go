@@ -1,10 +1,11 @@
 package blockchain
 
 import (
+	"sync"
+
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"sync"
 )
 
 var (
@@ -36,6 +37,7 @@ var (
 	prometheusBlockchainGetFSMCurrentState        prometheus.Histogram
 	prometheusBlockchainGetBlockLocator           prometheus.Histogram
 	prometheusBlockchainLocateBlockHeaders        prometheus.Histogram
+	prometheusExportBlockDb                       prometheus.Histogram
 )
 
 var (
@@ -292,6 +294,15 @@ func _initPrometheusMetrics() {
 			Namespace: "blockchain",
 			Name:      "locate_block_headers",
 			Help:      "Histogram of LocateBlockHeaders calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusExportBlockDb = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "export_block_db",
+			Help:      "Histogram of ExportBlockDB calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

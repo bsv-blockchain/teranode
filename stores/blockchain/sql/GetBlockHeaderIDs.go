@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -18,11 +19,13 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 	if err != nil {
 		return nil, errors.NewServiceError("error in GetBlockHeaderIDs", err)
 	}
+
 	if metas != nil {
 		blockIds := make([]uint32, 0, len(metas))
 		for _, meta := range metas {
 			blockIds = append(blockIds, meta.ID)
 		}
+
 		return blockIds, nil
 	}
 
@@ -55,12 +58,15 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 		ORDER BY height DESC
 	`
 	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ids, nil
 		}
+
 		return nil, errors.NewStorageError("failed to get headers", err)
 	}
+
 	defer rows.Close()
 
 	var id uint32

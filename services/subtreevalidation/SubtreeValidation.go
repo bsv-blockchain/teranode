@@ -135,6 +135,10 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, txHashes []utx
 		missingTxs = append(missingTxs, tx)
 	}
 
+	if len(missingTxs) != len(txHashes) {
+		return nil, errors.NewProcessingError("[getMissingTransactionsBatch] missing tx count mismatch: missing=%d, txHashes=%d", len(missingTxs), len(txHashes))
+	}
+
 	return missingTxs, nil
 }
 
@@ -158,6 +162,9 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	_, err = tx.ReadFrom(body)
 	if err != nil {
 		return nil, err
+	}
+	if !tx.IsExtended() {
+		return nil, errors.NewTxInvalidError("tx is not extended")
 	}
 
 	return tx, nil
@@ -425,6 +432,10 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeMetaBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("meta"))
 	stat.NewStat("7. storeSubtreeMeta").AddTime(start)
 	if err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			u.logger.Infof("[validateSubtreeInternal][%s] subtree meta already exists in store", v.SubtreeHash.String())
+			return nil
+		}
 		return errors.NewStorageError("[validateSubtreeInternal][%s] failed to store subtree meta", v.SubtreeHash.String(), err)
 	}
 
@@ -442,6 +453,10 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	err = u.subtreeStore.Set(ctx, merkleRoot[:], completeSubtreeBytes, options.WithTTL(u.subtreeTTL), options.WithFileExtension("subtree"))
 	stat.NewStat("8. storeSubtree").AddTime(start)
 	if err != nil {
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			u.logger.Infof("[validateSubtreeInternal][%s] subtree already exists in store", v.SubtreeHash.String())
+			return nil
+		}
 		return errors.NewStorageError("[validateSubtreeInternal][%s] failed to store subtree", v.SubtreeHash.String(), err)
 	}
 
@@ -534,8 +549,10 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 
 	u.logger.Infof("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
 
-	var mTx missingTx
-	var missingCount atomic.Uint32
+	var (
+		mTx          missingTx
+		missingCount atomic.Uint32
+	)
 	missed := make([]*chainhash.Hash, 0, len(txMetaSlice))
 	missedMu := sync.Mutex{}
 
@@ -549,6 +566,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 		g.SetLimit(spendBatcherSize * 2)
 
 		for _, mTx = range txsPerLevel[level] {
+			mTx := mTx
 			if mTx.tx == nil {
 				return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
 			}
@@ -567,6 +585,9 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 					u.logger.Infof("[validateSubtree][%s] tx meta is nil [%s]", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
 				} else {
 					u.logger.Debugf("[validateSubtree][%s] adding missing tx to txMetaSlice: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String())
+					if txMetaSlice[mTx.idx] != nil {
+						return errors.NewProcessingError("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), mTx.idx, mTx.tx.TxIDChainHash().String())
+					}
 					txMetaSlice[mTx.idx] = txMeta
 				}
 
@@ -765,6 +786,10 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []u
 			return nil, errors.NewProcessingError("[getMissingTransaction] #3 missing transaction is nil [%s]", mTx.Hash.String())
 		}
 		missingTxs = append(missingTxs, missingTx{tx: tx, idx: mTx.Idx})
+	}
+
+	if len(missingTxs) != len(missingTxHashes) {
+		return nil, errors.NewProcessingError("[getMissingTransaction] missing tx count mismatch: missing=%d, txHashes=%d", len(missingTxs), len(missingTxHashes))
 	}
 
 	return missingTxs, nil

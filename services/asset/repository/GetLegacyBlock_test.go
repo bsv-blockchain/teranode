@@ -3,10 +3,11 @@ package repository
 import (
 	"context"
 	"encoding/binary"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"io"
 	"testing"
 	"time"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -406,6 +407,10 @@ func (s *mockStore) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb
 func (s *mockStore) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
 	panic("not implemented")
 }
+func (s *mockStore) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
+	panic("not implemented")
+}
+
 func (s *mockStore) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
 	panic("not implemented")
 }

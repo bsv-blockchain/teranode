@@ -8,9 +8,9 @@ import (
 	"bytes"
 	"errors"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/base58"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 

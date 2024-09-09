@@ -16,9 +16,9 @@ import (
 var blockCount = 10
 
 func TestSQL_LocateBlockHeaders(t *testing.T) {
-	dbUrl, _ := url.Parse("sqlitememory:///")
+	dbURL, _ := url.Parse("sqlitememory:///")
 
-	s, err := New(ulogger.TestLogger{}, dbUrl)
+	s, err := New(ulogger.TestLogger{}, dbURL)
 	require.NoError(t, err)
 
 	blocks := generateBlocks(t, blockCount)
@@ -31,6 +31,7 @@ func TestSQL_LocateBlockHeaders(t *testing.T) {
 	for i := 0; i < blockCount; i++ {
 		blockLocator = append(blockLocator, blocks[i].Header)
 	}
+
 	locator := []*chainhash.Hash{blocks[9].Hash()}
 	lastLocator := blocks[0].Hash()
 	expectedBlocks := reverseSlice(blockLocator)
@@ -41,6 +42,7 @@ func TestSQL_LocateBlockHeaders(t *testing.T) {
 		hashStop  *chainhash.Hash
 		maxHashes uint32
 	}
+
 	tests := []struct {
 		name    string
 		args    args
@@ -83,9 +85,10 @@ func TestSQL_LocateBlockHeaders(t *testing.T) {
 		{
 			name: "TestSQL_LocateBlockHashes for 10 blocks",
 			args: args{
-				ctx:       context.Background(),
-				locator:   locator,
-				hashStop:  lastLocator,
+				ctx:      context.Background(),
+				locator:  locator,
+				hashStop: lastLocator,
+				// nolint: gosec
 				maxHashes: uint32(blockCount),
 			},
 			want:    expectedBlocks,
@@ -99,10 +102,10 @@ func TestSQL_LocateBlockHeaders(t *testing.T) {
 			if !tt.wantErr(t, err, fmt.Sprintf("LocateBlockHashes(%v, %v, %v, %v)", tt.args.ctx, tt.args.locator, tt.args.hashStop, tt.args.maxHashes)) {
 				return
 			}
+
 			assert.Equalf(t, tt.want, got, "LocateBlockHashes(%v, %v, %v, %v)", tt.args.ctx, tt.args.locator, tt.args.hashStop, tt.args.maxHashes)
 		})
 	}
-
 }
 
 func reverseSlice(slice []*model.BlockHeader) []*model.BlockHeader {
@@ -110,5 +113,6 @@ func reverseSlice(slice []*model.BlockHeader) []*model.BlockHeader {
 		j := len(slice) - 1 - i
 		slice[i], slice[j] = slice[j], slice[i]
 	}
+
 	return slice
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"testing"
 	"time"
 
@@ -370,4 +371,23 @@ func (s BlockAssemblyStore) Store(ctx context.Context, hash *chainhash.Hash, fee
 
 func (s BlockAssemblyStore) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
+}
+
+func Benchmark_validateInternal(b *testing.B) {
+	txF65eHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9.bin")
+	require.NoError(b, err)
+	tx, err := bt.NewTxFromBytes(txF65eHex)
+	require.NoError(b, err)
+
+	v := &Validator{
+		txValidator: TxValidator{
+			policy: NewPolicySettings(),
+			logger: ulogger.TestLogger{},
+		},
+	}
+
+	for i := 0; i < b.N; i++ {
+		err = v.validateTransaction(context.Background(), tx, 740975)
+		require.NoError(b, err)
+	}
 }

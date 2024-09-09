@@ -20,6 +20,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	if er != nil {
 		return nil, nil, errors.NewStorageError("error in GetBestBlockHeader", er)
 	}
+
 	if header != nil {
 		return header, meta, nil
 	}
@@ -49,12 +50,14 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	blockHeader := &model.BlockHeader{}
 	blockHeaderMeta := &model.BlockHeaderMeta{}
 
-	var hashPrevBlock []byte
-	var hashMerkleRoot []byte
-	var nBits []byte
-	var coinbaseBytes []byte
+	var (
+		hashPrevBlock  []byte
+		hashMerkleRoot []byte
+		nBits          []byte
+		coinbaseBytes  []byte
+		err            error
+	)
 
-	var err error
 	if err = s.db.QueryRowContext(ctx, q).Scan(
 		&blockHeaderMeta.ID,
 		&blockHeader.Version,
@@ -71,6 +74,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewStorageError("error in GetBestBlockHeader", err)
 		}
+
 		return nil, nil, err
 	}
 
@@ -81,22 +85,25 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	if err != nil {
 		return nil, nil, errors.NewStorageError("failed to convert hashPrevBlock", err)
 	}
+
 	blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
 		return nil, nil, errors.NewStorageError("failed to convert hashMerkleRoot", err)
 	}
 
-	coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
-	if err != nil {
-		return nil, nil, errors.NewStorageError("failed to convert coinbaseTx", err)
-	}
+	if len(coinbaseBytes) > 0 {
+		coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
+		if err != nil {
+			return nil, nil, errors.NewStorageError("failed to convert coinbaseTx", err)
+		}
 
-	miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
-	if err != nil {
-		return nil, nil, errors.NewStorageError("failed to extract miner", err)
-	}
+		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
+		if err != nil {
+			return nil, nil, errors.NewStorageError("failed to extract miner", err)
+		}
 
-	blockHeaderMeta.Miner = miner
+		blockHeaderMeta.Miner = miner
+	}
 
 	return blockHeader, blockHeaderMeta, nil
 }

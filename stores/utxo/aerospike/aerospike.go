@@ -6,23 +6,24 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/url"
 	"strconv"
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-
 	"github.com/aerospike/aerospike-client-go/v7"
 	asl "github.com/aerospike/aerospike-client-go/v7/logger"
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/ordishs/gocore"
 )
+
+const MaxTxSizeInStoreInBytes = 32 * 1024
 
 var (
 	binNames = []string{
@@ -36,6 +37,11 @@ var (
 	}
 )
 
+type batcherIfc[T any] interface {
+	Put(item *T, payloadSize ...int)
+	Trigger()
+}
+
 type Store struct {
 	url                        *url.URL
 	client                     *uaerospike.Client
@@ -46,10 +52,10 @@ type Store struct {
 	medianBlockTime            atomic.Uint32
 	logger                     ulogger.Logger
 	batchID                    atomic.Uint64
-	storeBatcher               *batcher.Batcher2[batchStoreItem]
-	getBatcher                 *batcher.Batcher2[batchGetItem]
-	spendBatcher               *batcher.Batcher2[batchSpend]
-	outpointBatcher            *batcher.Batcher2[batchOutpoint]
+	storeBatcher               batcherIfc[batchStoreItem]
+	getBatcher                 batcherIfc[batchGetItem]
+	spendBatcher               batcherIfc[batchSpend]
+	outpointBatcher            batcherIfc[batchOutpoint]
 	externalStore              blob.Store
 	utxoBatchSize              int
 	externalizeAllTransactions bool
@@ -57,6 +63,7 @@ type Store struct {
 
 func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	initPrometheusMetrics()
+
 	if gocore.Config().GetBool("aerospike_debug", true) {
 		asl.Logger.SetLevel(asl.DEBUG)
 	}
@@ -74,12 +81,14 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	}
 
 	expiration := uint32(0)
+
 	expirationValue := aerospikeURL.Query().Get("expiration")
 	if expirationValue != "" {
 		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
 		if err != nil {
 			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
 		}
+		// nolint: gosec
 		expiration = uint32(expiration64)
 	}
 
@@ -88,19 +97,22 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 		setName = "txmeta"
 	}
 
-	externalStoreUrl, err := url.Parse(aerospikeURL.Query().Get("externalStore"))
+	externalStoreURL, err := url.Parse(aerospikeURL.Query().Get("externalStore"))
 	if err != nil {
 		return nil, err
 	}
 
-	externalStore, err := blob.NewStore(logger, externalStoreUrl)
+	externalStore, err := blob.NewStore(logger, externalStoreURL)
 	if err != nil {
 		return nil, err
 	}
 
 	// It's very dangerous to change this number after a node has been running for a while
 	// Do not change this value after starting, it is used to calculate the offset for the output
-	utxoBatchSize, _ := gocore.Config().GetInt("utxostore_utxoBatchSize", 1_000)
+	utxoBatchSize, _ := gocore.Config().GetInt("utxostore_utxoBatchSize", 128)
+	if utxoBatchSize < 1 || utxoBatchSize > math.MaxUint32 {
+		return nil, errors.NewInvalidArgumentError("utxoBatchSize must be between 1 and %d", math.MaxUint32)
+	}
 
 	s := &Store{
 		url:                        aerospikeURL,
@@ -117,7 +129,12 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	storeBatchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
 	storeBatchDurationStr, _ := gocore.Config().GetInt("utxostore_storeBatcherDurationMillis", 10)
 	storeBatchDuration := time.Duration(storeBatchDurationStr) * time.Millisecond
-	s.storeBatcher = batcher.New[batchStoreItem](storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
+
+	if storeBatchSize > 1 {
+		s.storeBatcher = batcher.New[batchStoreItem](storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
+	} else {
+		s.logger.Warnf("Store batch size is set to %d, store batching is disabled", storeBatchSize)
+	}
 
 	getBatchSize, _ := gocore.Config().GetInt("utxostore_getBatcherSize", 1024)
 	getBatchDurationStr, _ := gocore.Config().GetInt("utxostore_getBatcherDurationMillis", 10)
@@ -148,6 +165,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	s.logger.Debugf("setting block height to %d", blockHeight)
 	s.blockHeight.Store(blockHeight)
+
 	return nil
 }
 
@@ -158,6 +176,7 @@ func (s *Store) GetBlockHeight() uint32 {
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	s.logger.Debugf("setting median block time to %d", medianTime)
 	s.medianBlockTime.Store(medianTime)
+
 	return nil
 }
 
@@ -178,7 +197,6 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	Therefore, we will extract the Deadline from the context and use it as a timeout for the
 	operation.
 	*/
-
 	var timeout time.Duration
 
 	deadline, ok := ctx.Deadline()
@@ -200,6 +218,7 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	}
 
 	bin := aerospike.NewBin("bin", "value")
+
 	err = s.client.PutBins(writePolicy, key, bin)
 	if err != nil {
 		return -2, details, err
@@ -219,5 +238,6 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 }
 
 func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {
+	// nolint: gosec
 	return vout % uint32(s.utxoBatchSize)
 }

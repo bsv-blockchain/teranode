@@ -36,9 +36,11 @@ func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bo
 			s.blocksCache.SetExists(*blockHash, false) // resets whenever a new block is added
 			return false, nil
 		}
+
 		return false, err
 	}
 
 	s.blocksCache.SetExists(*blockHash, true) // resets whenever a new block is added
+
 	return true, nil
 }

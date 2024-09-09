@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -42,10 +43,10 @@ type ClientI interface {
 
 	// FSM related endpoints
 	GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error)
+	WaitForFSMtoTransitionToGivenState(context.Context, blockchain_api.FSMStateType) error
 	GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType
 	SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
 	Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-	Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 	CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 	CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 	Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
@@ -185,6 +186,9 @@ func (s *MockBlockchain) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {

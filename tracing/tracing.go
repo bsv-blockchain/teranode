@@ -3,11 +3,11 @@ package tracing
 import (
 	"context"
 	"fmt"
-	"github.com/opentracing/opentracing-go/mocktracer"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go/mocktracer"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -85,8 +85,9 @@ func WithDebugLogMessage(logger ulogger.Logger, message string, args ...interfac
 }
 
 func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level string, args []interface{}) {
-	if s.Logger == nil {
-		s.Logger = logger
+	if s.Logger == nil && logger != nil {
+		// duplicate the logger so that the skip frame is correct
+		s.Logger = logger.Duplicate(ulogger.WithSkipFrame(1))
 	}
 	if s.LogMessages == nil {
 		s.LogMessages = []logMessage{{message: message, args: args, level: level}}

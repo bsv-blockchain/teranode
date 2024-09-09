@@ -85,7 +85,18 @@ func WriteTxs(ctx context.Context, logger ulogger.Logger, writer *filestorer.Fil
 	}
 
 	for i := 0; i < len(txMetaSlice); i++ {
-		if _, err := writer.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
+		txMeta := txMetaSlice[i]
+		if txMeta == nil {
+			logger.Errorf("[WriteTxs] txMeta is nil at index %d", i)
+			continue
+		}
+
+		if txMeta.Tx == nil {
+			logger.Errorf("[WriteTxs] txMeta.Tx is nil at index %d", i)
+			continue
+		}
+
+		if _, err := writer.Write(txMeta.Tx.Bytes()); err != nil {
 			return errors.NewProcessingError("error writing tx", err)
 		}
 

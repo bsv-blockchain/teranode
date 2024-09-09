@@ -1,0 +1,22 @@
+@startuml
+participant Client
+participant "RPC Server" as RPC
+participant "Block Assembly Client" as BlockAssembly
+
+Client -> RPC : GetMiningCandidateCmd()
+activate RPC
+
+RPC -> BlockAssembly : GetMiningCandidate(context)
+activate BlockAssembly
+BlockAssembly --> RPC : return MiningCandidate or error
+deactivate BlockAssembly
+
+alt If Retrieval Fails
+    RPC -> Client : Return error
+    deactivate RPC
+else If Retrieval Succeeds
+    RPC -> Client : Return MiningCandidate
+    deactivate RPC
+end
+
+@enduml

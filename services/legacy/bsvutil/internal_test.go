@@ -14,9 +14,9 @@ package bsvutil
 import (
 	"strings"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvec"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/base58"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"golang.org/x/crypto/ripemd160"
 )
 

@@ -54,24 +54,30 @@ func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numb
 		)
 		ORDER BY height DESC
 	`
+
 	rows, err := s.db.QueryContext(ctx, q, blockHashFrom[:], numberOfHeaders)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return blocks, nil
 		}
+
 		return nil, errors.NewStorageError("failed to get blocks", err)
 	}
+
 	defer rows.Close()
 
-	var subtreeCount uint64
-	var transactionCount uint64
-	var sizeInBytes uint64
-	var subtreeBytes []byte
-	var hashPrevBlock []byte
-	var hashMerkleRoot []byte
-	var coinbaseTx []byte
-	var height uint32
-	var nBits []byte
+	var (
+		subtreeCount     uint64
+		transactionCount uint64
+		sizeInBytes      uint64
+		subtreeBytes     []byte
+		hashPrevBlock    []byte
+		hashMerkleRoot   []byte
+		coinbaseTx       []byte
+		height           uint32
+		nBits            []byte
+	)
+
 	for rows.Next() {
 		block := &model.Block{
 			Header: &model.BlockHeader{},
@@ -101,16 +107,20 @@ func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numb
 		if err != nil {
 			return nil, errors.NewStorageError("failed to convert hashPrevBlock", err)
 		}
+
 		block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 		if err != nil {
 			return nil, errors.NewStorageError("failed to convert hashMerkleRoot", err)
 		}
+
 		block.TransactionCount = transactionCount
 		block.SizeInBytes = sizeInBytes
 
-		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+		if len(coinbaseTx) > 0 {
+			block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
+			if err != nil {
+				return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+			}
 		}
 
 		err = block.SubTreesFromBytes(subtreeBytes)

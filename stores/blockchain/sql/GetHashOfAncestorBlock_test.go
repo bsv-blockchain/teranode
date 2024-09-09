@@ -16,10 +16,10 @@ import (
 const blockWindow = 144
 
 func TestSQL_GetHashOfAncestorBlock(t *testing.T) {
-	storeUrl, err := url.Parse("sqlitememory:///")
+	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
-	s, err := New(ulogger.TestLogger{}, storeUrl)
+	s, err := New(ulogger.TestLogger{}, storeURL)
 	require.NoError(t, err)
 
 	blocks := generateBlocks(t, blockWindow+4)
@@ -33,10 +33,10 @@ func TestSQL_GetHashOfAncestorBlock(t *testing.T) {
 	require.Equal(t, blocks[len(blocks)-blockWindow].Hash(), ancestorHash)
 }
 func TestSQL_GetHashOfAncestorBlock_short(t *testing.T) {
-	storeUrl, err := url.Parse("sqlitememory:///")
+	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
 
-	s, err := New(ulogger.TestLogger{}, storeUrl)
+	s, err := New(ulogger.TestLogger{}, storeURL)
 	require.NoError(t, err)
 
 	// don't generate enough blocks
@@ -45,8 +45,8 @@ func TestSQL_GetHashOfAncestorBlock_short(t *testing.T) {
 		_, _, err = s.StoreBlock(context.Background(), block, "")
 		require.NoError(t, err)
 	}
+
 	var expectedHash *chainhash.Hash
-	require.NoError(t, err)
 
 	ancestorHash, err := s.GetHashOfAncestorBlock(context.Background(), blocks[len(blocks)-1].Hash(), blockWindow)
 
@@ -55,14 +55,15 @@ func TestSQL_GetHashOfAncestorBlock_short(t *testing.T) {
 }
 
 func generateBlocks(t *testing.T, numberOfBlocks int) []*model.Block {
-
 	var generateBlocks []*model.Block
+
 	hashPrevBlock, err := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
 	require.NoError(t, err)
 
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
 	require.NoError(t, err)
+
 	coinbase.Outputs = nil
 	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+300)
 
@@ -70,7 +71,9 @@ func generateBlocks(t *testing.T, numberOfBlocks int) []*model.Block {
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddNode(*coinbase.TxIDChainHash(), 0, 0))
 	merkleRoot := subtree.RootHash()
+
 	for i := 0; i < numberOfBlocks; i++ {
+		// nolint: gosec
 		block := &model.Block{
 			Header: &model.BlockHeader{
 				Version:        1,

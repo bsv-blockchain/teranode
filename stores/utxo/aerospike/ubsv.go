@@ -10,7 +10,7 @@ import (
 //go:embed ubsv.lua
 var ubsvLUA []byte
 
-var luaPackage = "ubsv_v7" // N.B. Do not have any "." in this string
+var luaPackage = "ubsv_v9" // N.B. Do not have any "." in this string
 
 func registerLuaIfNecessary(client *uaerospike.Client, funcName string, funcBytes []byte) error {
 	udfs, err := client.ListUDF(nil)
@@ -22,7 +22,6 @@ func registerLuaIfNecessary(client *uaerospike.Client, funcName string, funcByte
 
 	for _, udf := range udfs {
 		if udf.Filename == funcName+".lua" {
-
 			foundScript = true
 			break
 		}
@@ -39,5 +38,6 @@ func registerLuaIfNecessary(client *uaerospike.Client, funcName string, funcByte
 			return err
 		}
 	}
+
 	return nil
 }

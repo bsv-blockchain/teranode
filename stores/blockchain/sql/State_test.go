@@ -12,10 +12,10 @@ import (
 
 func TestSQL_GetState(t *testing.T) {
 	t.Run("state 0", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		_, err = s.GetState(context.Background(), "test")

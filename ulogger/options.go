@@ -14,6 +14,7 @@ type Options struct {
 	loggerType string
 	writer     io.Writer
 	filepath   string
+	skip       int
 }
 
 type Option func(*Options)
@@ -31,6 +32,7 @@ func DefaultOptions() *Options {
 		loggerType: "zerolog",
 		writer:     output,
 		filepath:   "citest.log",
+		skip:       0,
 	}
 }
 
@@ -58,5 +60,30 @@ func WithWriter(writer io.Writer) Option {
 func WithFilePath(filePath string) Option {
 	return func(o *Options) {
 		o.filepath = filePath
+	}
+}
+
+// WithSkipFrame sets the number of frames to skip when logging
+// This is useful when you want to log the calling function from a wrapper function
+func WithSkipFrame(skip int) Option {
+	return func(o *Options) {
+		o.skip = skip
+	}
+}
+
+func LogLevelString(level int) string {
+	switch level {
+	case 0:
+		return "DEBUG"
+	case 1:
+		return "INFO"
+	case 2:
+		return "WARN"
+	case 3:
+		return "ERROR"
+	case 4:
+		return "FATAL"
+	default:
+		return "INFO"
 	}
 }

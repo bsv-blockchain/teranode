@@ -31,7 +31,7 @@ type revalidateBlockData struct {
 	block          *model.Block
 	blockHeaders   []*model.BlockHeader
 	blockHeaderIDs []uint32
-	baseUrl        string
+	baseURL        string
 	retries        int
 }
 
@@ -59,7 +59,7 @@ type BlockValidation struct {
 	setMinedChan                       chan *chainhash.Hash
 	revalidateBlockChan                chan revalidateBlockData
 	stats                              *gocore.Stat
-	excessiveblocksize                 int
+	excessiveBlockSize                 int
 }
 
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
@@ -96,7 +96,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 		setMinedChan:                       make(chan *chainhash.Hash, 1000),
 		revalidateBlockChan:                make(chan revalidateBlockData, 2),
 		stats:                              gocore.NewStat("blockvalidation"),
-		excessiveblocksize:                 excessiveblocksize,
+		excessiveBlockSize:                 excessiveblocksize,
 	}
 
 	go func() {
@@ -118,6 +118,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 
 					// backoff for 5 seconds and try again
 					time.Sleep(5 * time.Second)
+
 					continue
 				}
 
@@ -177,12 +178,15 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 		if len(blocksMinedNotSet) > 0 {
 			u.logger.Infof("[BlockValidation:start] found %d blocks mined not set", len(blocksMinedNotSet))
+
 			for _, block := range blocksMinedNotSet {
 				blockHash := block.Hash()
 
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
+
 				g.Go(func() error {
 					u.logger.Debugf("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
+
 					if err := u.setTxMined(gCtx, blockHash); err != nil {
 						u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
 						u.setMinedChan <- blockHash
@@ -203,10 +207,13 @@ func (u *BlockValidation) start(ctx context.Context) error {
 
 		if len(blocksSubtreesNotSet) > 0 {
 			u.logger.Infof("[BlockValidation:start] found %d blocks subtrees not set", len(blocksSubtreesNotSet))
+
 			for _, block := range blocksSubtreesNotSet {
 				block := block
+
 				g.Go(func() error {
 					u.logger.Infof("[BlockValidation:start] processing block subtrees not set: %s", block.Hash().String())
+
 					if err := u.updateSubtreesTTL(gCtx, block); err != nil {
 						u.logger.Errorf("[BlockValidation:start] failed to update subtrees TTL: %s", err)
 					}
@@ -231,6 +238,7 @@ func (u *BlockValidation) start(ctx context.Context) error {
 				return
 			case blockHash := <-u.setMinedChan:
 				startTime := time.Now()
+
 				u.logger.Debugf("[BlockValidation:start][%s] block setTxMined", blockHash.String())
 
 				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
@@ -256,6 +264,7 @@ func (u *BlockValidation) start(ctx context.Context) error {
 				return
 			case blockData := <-u.revalidateBlockChan:
 				startTime := time.Now()
+
 				u.logger.Infof("[BlockValidation:start][%s] block revalidation Chan", blockData.block.String())
 
 				err := u.reValidateBlock(blockData)
@@ -279,13 +288,16 @@ func (u *BlockValidation) start(ctx context.Context) error {
 			}
 		}
 	}()
+
 	return nil
 }
 
 // validateBlock()
 func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) error {
 	startTime := time.Now()
+
 	u.logger.Infof("[BlockValidation:start][%s] validate block", blockHash.String())
+
 	defer func() {
 		u.logger.Infof("[BlockValidation:start][%s] validate block DONE in %s", blockHash.String(), time.Since(startTime))
 	}()
@@ -316,6 +328,7 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 		if iErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); err != nil {
 			u.logger.Errorf("[BlockValidation:start][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), iErr)
 		}
+
 		return errors.NewServiceError("[BlockValidation:start][%s] InvalidateBlock block is not valid", block.String(), err)
 	}
 
@@ -330,6 +343,7 @@ func (u *BlockValidation) SetBlockExists(hash *chainhash.Hash) error {
 func (u *BlockValidation) GetBlockExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	start := time.Now()
 	stat := gocore.NewStat("GetBlockExists")
+
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -378,8 +392,10 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 }
 
 func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.Hash) (err error) {
-	var block *model.Block
-	var ids []uint32
+	var (
+		block *model.Block
+		ids   []uint32
+	)
 
 	cachedBlock, blockWasAlreadyCached := u.lastValidatedBlocks.Get(*blockHash)
 	if blockWasAlreadyCached && cachedBlock != nil {
@@ -439,6 +455,7 @@ func (u *BlockValidation) isParentMined(ctx context.Context, blockHeader *model.
 
 	// check whether our parent block is in the list of not mined blocks
 	parentBlockMined := true
+
 	for _, b := range blockNotMined {
 		if b.Header.Hash().IsEqual(blockHeader.HashPrevBlock) {
 			parentBlockMined = false
@@ -525,9 +542,9 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 	// check the size of the block
 
 	// 0 is unlimited so don't check the size
-	if u.excessiveblocksize > 0 {
-		if block.SizeInBytes > uint64(u.excessiveblocksize) {
-			return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.excessiveblocksize)
+	if u.excessiveBlockSize > 0 {
+		if block.SizeInBytes > uint64(u.excessiveBlockSize) {
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", block.Header.Hash().String(), block.SizeInBytes, u.excessiveBlockSize)
 		}
 	}
 
@@ -556,9 +573,11 @@ CheckParentMined:
 
 	// validate all the subtrees in the block
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
+
 	if err := u.validateBlockSubtrees(ctx, block, baseURL); err != nil {
 		return err
 	}
+
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
 	// TODO is this wrong? This block might not be on our chain.
@@ -566,6 +585,7 @@ CheckParentMined:
 	// don't be tempted to rely on BlockAssembly to do this.
 	// We need to be sure that the coinbase transaction is stored before we try and do setMinedMulti().
 	u.logger.Debugf("[ValidateBlock][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), block.Height, block.CoinbaseTx.TxIDChainHash().String())
+
 	if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height); err != nil {
 		if errors.Is(err, errors.ErrTxAlreadyExists) {
 			u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
@@ -573,15 +593,18 @@ CheckParentMined:
 			return errors.NewTxError("[ValidateBlock][%s] error storing utxos", block.Header.Hash().String(), err)
 		}
 	}
+
 	u.logger.Debugf("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 
 	useOptimisticMining := u.optimisticMining
 	if len(disableOptimisticMining) > 0 {
 		// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
 		useOptimisticMining = useOptimisticMining && !disableOptimisticMining[0]
+		u.logger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
 	}
 
 	var optimisticMiningWg sync.WaitGroup
+
 	if useOptimisticMining {
 		// make sure the proof of work is enough
 		headerValid, _, err := block.Header.HasMetTargetDifficulty()
@@ -594,9 +617,11 @@ CheckParentMined:
 		u.lastValidatedBlocks.Set(*block.Hash(), block)
 
 		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
+
 		if err = u.blockchainClient.AddBlock(ctx, block, baseURL); err != nil {
 			return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
 		}
+
 		u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
 
 		if err = u.SetBlockExists(block.Header.Hash()); err != nil {
@@ -608,24 +633,30 @@ CheckParentMined:
 		defer callerSpan.Finish()
 
 		optimisticMiningWg.Add(1)
+
 		go func() {
 			defer optimisticMiningWg.Done()
 
 			// get all 100 previous block headers on the main chain
 			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+
 			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(callerSpan.Ctx, block.Header.HashPrevBlock, 100)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 				u.ReValidateBlock(block, baseURL)
+
 				return
 			}
 
 			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(callerSpan.Ctx, block.Header.HashPrevBlock, 100)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
+
 				u.ReValidateBlock(block, baseURL)
+
 				return
 			}
+
 			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
 
 			u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
@@ -644,7 +675,8 @@ CheckParentMined:
 				} else {
 					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", block.String(), err)
 					// TODO TEMP disable invalidation in the scaling test
-					//if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
+
+					// if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
 					//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
 					//}
 				}
@@ -653,10 +685,12 @@ CheckParentMined:
 	} else {
 		// get all 100 previous block headers on the main chain
 		u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+
 		blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 			u.ReValidateBlock(block, baseURL)
+
 			return errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err)
 		}
 
@@ -664,8 +698,10 @@ CheckParentMined:
 		if err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
 			u.ReValidateBlock(block, baseURL)
+
 			return errors.NewServiceError("[ValidateBlock][%s] failed to get block header ids", block.String(), err)
 		}
+
 		u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders DONE", block.Header.Hash().String())
 
 		// validate the block
@@ -679,6 +715,7 @@ CheckParentMined:
 		if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
 		}
+
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
 
 		// set the block in the temporary block cache for 2 minutes, could then be used for SetMined
@@ -700,9 +737,11 @@ CheckParentMined:
 	}
 
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
+
 	if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
 		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%s]", block.Hash().String(), err)
 	}
+
 	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s DONE", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 
 	// decouple the tracing context to not cancel the context when finalize the block processing in the background
@@ -710,42 +749,53 @@ CheckParentMined:
 
 	go func() {
 		u.logger.Infof("[ValidateBlock][%s] updating subtrees TTL", block.Hash().String())
+
 		err := u.updateSubtreesTTL(callerSpan.Ctx, block)
 		if err != nil {
 			// TODO: what to do here? We have already added the block to the blockchain
 			u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees TTL [%s]", block.Hash().String(), err)
 		}
+
 		u.logger.Infof("[ValidateBlock][%s] update subtrees TTL DONE", block.Hash().String())
 	}()
 
-	go func() {
-		/// create bloom filter for the block and store
+	if useOptimisticMining {
+		// run the bloom filter creation in the background
+		go func() {
+			/// create bloom filter for the block and store
+			u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block in background", block.Hash().String())
+			// TODO: for the next phase, consider re-building the bloom filter in the background when node restarts.
+			// currently, if the node restarts, the bloom filter is not re-built and the node will not be able to validate transactions properly,
+			// since there are no bloom filters. This is a temporary solution to get the node up and running.
+			//
+			// Options are:
+			//   1. Re-build the bloom filter in the background when the node restarts
+			//   2. after creating the bloom filter, record it in the storage, and delete it after it expires.
+			u.createAppendBloomFilter(callerSpan.Ctx, block)
+			u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
+		}()
+	} else {
+		// create bloom filter for the block and wait for it
 		u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block", block.Hash().String())
-		// TODO: for the next phase, consider re-building the bloom filter in the background when node restarts.
-		// currently, if the node restarts, the bloom filter is not re-built and the node will not be able to validate transactions properly,
-		// since there are no bloom filters. This is a temporary solution to get the node up and running.
-		// Opitons are:
-		// 1. Re-build the bloom filter in the background when the node restarts
-		// 2. after creating the bloom filter, record it in the storage, and delete it after it expires.
 		u.createAppendBloomFilter(callerSpan.Ctx, block)
 		u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
-	}()
+	}
 
 	return nil
 }
 
-func (u *BlockValidation) ReValidateBlock(block *model.Block, baseUrl string) {
+func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
 	u.logger.Errorf("[ValidateBlock][%s] re-validating block", block.String())
 	u.revalidateBlockChan <- revalidateBlockData{
 		block:   block,
-		baseUrl: baseUrl,
+		baseURL: baseURL,
 	}
 }
 
 func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	ctx, _, deferFn := tracing.StartTracing(context.Background(), "reValidateBlock",
 		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[reValidateBlock][%s] validating block from %s", blockData.block.Hash().String(), blockData.baseUrl),
+		tracing.WithLogMessage(u.logger, "[reValidateBlock][%s] validating block from %s", blockData.block.Hash().String(), blockData.baseURL),
 	)
 	defer deferFn()
 
@@ -757,13 +807,16 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	// validate all the subtrees in the block
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees", blockData.block.Hash().String(), len(blockData.block.Subtrees))
-	if err := u.validateBlockSubtrees(ctx, blockData.block, blockData.baseUrl); err != nil {
+
+	if err := u.validateBlockSubtrees(ctx, blockData.block, blockData.baseURL); err != nil {
 		return err
 	}
+
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees DONE", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
 	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
+
 		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) {
 			// storage or service error, block is not really invalid, but we need to re-validate
 			return err
@@ -795,30 +848,34 @@ func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *mo
 	}()
 
 	startTime := time.Now()
+
 	u.logger.Infof("[createAppendBloomFilter][%s] creating bloom filter", block.Hash().String())
 
 	var err error
 
 	// create a bloom filter for the block
-	bbf := &model.BlockBloomFilter{}
+	bbf := &model.BlockBloomFilter{
+		CreationTime: time.Now(),
+		BlockHash:    block.Hash(),
+	}
+
 	bbf.Filter, err = block.NewOptimizedBloomFilter(ctx, u.logger, u.subtreeStore)
 	if err != nil {
 		u.logger.Errorf("[createAppendBloomFilter][%s] failed to create bloom filter: %s", block.Hash().String(), err)
 		return
 	}
 
-	bbf.CreationTime = time.Now()
-	bbf.BlockHash = block.Hash()
-
 	// prune older bloom filters
 	u.recentBlocksBloomFiltersMu.Lock()
 	newBloomFilters := make([]*model.BlockBloomFilter, 0, len(u.recentBlocksBloomFilters))
+
 	for _, bf := range u.recentBlocksBloomFilters {
 		// only add recent bloom filters back to the list
 		if bf.CreationTime.After(time.Now().Add(-u.recentBlocksBloomFiltersExpiration)) {
 			newBloomFilters = append(newBloomFilters, bf)
 		}
 	}
+
 	u.recentBlocksBloomFilters = newBloomFilters
 
 	// append the most recently validated bloom filter
@@ -841,10 +898,12 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
+
 		g.Go(func() error {
 			if err := u.subtreeStore.SetTTL(gCtx, subtreeHash[:], 0, options.WithFileExtension("subtree")); err != nil {
 				return errors.NewStorageError("failed to update subtree TTL", err)
 			}
+
 			return nil
 		})
 	}
@@ -861,7 +920,7 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 	return nil
 }
 
-func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseUrl string) error {
+func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "ValidateBlockSubtrees")
 	defer deferFn()
 
@@ -874,16 +933,17 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	blockHeight := block.Height
 	if blockHeight == 0 && block.Header.Version > 1 {
 		var err error
+
 		blockHeight, err = block.ExtractCoinbaseHeight()
 		if err != nil {
 			return errors.NewProcessingError("[validateBlockSubtrees][%s] failed to extract coinbase height", block.Hash().String(), err)
 		}
 	}
 
-	//missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
+	// missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHash := subtreeHash
-		//idx := idx
+		// idx := idx
 		// first check all the subtrees exist or not in our store, in parallel, and gather what is missing
 		g.Go(func() error {
 			// get subtree from store
@@ -891,6 +951,7 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 			if err != nil {
 				return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
 			}
+
 			if !subtreeExists {
 				u.logger.Debugf("[validateBlockSubtrees][%s] instructing stv to check missing subtree [%s]", block.Hash().String(), subtreeHash.String())
 				// we don't have the subtree, so we need to process it in the subtree validation service
@@ -900,7 +961,8 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 				defer func() {
 					cancel()
 				}()
-				err = u.subtreeValidationClient.CheckSubtree(checkCtx, *subtreeHash, baseUrl, blockHeight)
+
+				err = u.subtreeValidationClient.CheckSubtree(checkCtx, *subtreeHash, baseURL, blockHeight)
 				if err != nil {
 					return errors.NewServiceError("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service", subtreeHash.String(), err)
 				}
@@ -909,32 +971,35 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 			return nil
 		})
 	}
+
 	err := g.Wait()
+
 	stat.NewStat("1. missingSubtrees").AddTime(start1)
+
 	if err != nil {
 		return err
 	}
 
-	//count := 0
-	//for _, subtreeHash := range missingSubtrees {
+	// count := 0
+	// for _, subtreeHash := range missingSubtrees {
 	//	if subtreeHash != nil {
 	//		count++
 	//	}
 	//}
 	//
-	//if count > 0 {
+	// if count > 0 {
 	//	u.logger.Infof("[validateBlockSubtrees][%s] missing %d of %d subtrees", block.Hash().String(), count, len(block.Subtrees))
 	//}
 	//
-	//startGet := gocore.CurrentTime()
-	//statGet := stat.NewStat("1b. GetSubtrees")
+	// startGet := gocore.CurrentTime()
+	// statGet := stat.NewStat("1b. GetSubtrees")
 	//
-	//subtreeBytesMap := make(map[chainhash.Hash][]chainhash.Hash, len(missingSubtrees))
-	//subtreeBytesMapMu := sync.Mutex{}
-	//g, gCtx = errgroup.WithContext(spanCtx)
-	//g.SetLimit(validateBlockSubtreesConcurrency) // mostly IO bound, so double the limit
+	// subtreeBytesMap := make(map[chainhash.Hash][]chainhash.Hash, len(missingSubtrees))
+	// subtreeBytesMapMu := sync.Mutex{}
+	// g, gCtx = errgroup.WithContext(spanCtx)
+	// g.SetLimit(validateBlockSubtreesConcurrency) // mostly IO bound, so double the limit
 	//
-	//for _, subtreeHash := range missingSubtrees {
+	// for _, subtreeHash := range missingSubtrees {
 	//	// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
 	//	if subtreeHash != nil {
 	//		subtreeHash := subtreeHash
@@ -953,16 +1018,16 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	//		})
 	//	}
 	//}
-	//statGet.AddTime(startGet)
+	// statGet.AddTime(startGet)
 	//
-	//if err = g.Wait(); err != nil {
+	// if err = g.Wait(); err != nil {
 	//	return errors.NewError("[validateBlockSubtrees][%s] failed to get subtrees for block", block.Hash().String(), err)
-	//}
+	// }
 
-	//start2 := gocore.CurrentTime()
-	//stat2 := stat.NewStat("2. validateBlockSubtrees")
+	// start2 := gocore.CurrentTime()
+	// stat2 := stat.NewStat("2. validateBlockSubtrees")
 	//// validate the missing subtrees in series, transactions might rely on each other
-	//for _, subtreeHash := range missingSubtrees {
+	// for _, subtreeHash := range missingSubtrees {
 	//	// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
 	//	if subtreeHash != nil {
 	//		ctx1 := util.ContextWithStat(spanCtx, stat2)
@@ -981,8 +1046,8 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 	//			return errors.NewError("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String(), err)
 	//		}
 	//	}
-	//}
-	//stat2.AddTime(start2)
+	// }
+	// stat2.AddTime(start2)
 
 	return nil
 }

@@ -14,10 +14,10 @@ import (
 
 func TestSQL_GetBlockHeaders(t *testing.T) {
 	t.Run("empty - no error", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		headers, heights, err := s.GetBlockHeaders(context.Background(), block2.Hash(), 2)
@@ -27,10 +27,10 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 	})
 
 	t.Run("", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -39,7 +39,7 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 		_, _, err = s.StoreBlock(context.Background(), block2, "")
 		require.NoError(t, err)
 
-		block2_alt := &model.Block{
+		block2Alt := &model.Block{
 			Header: &model.BlockHeader{
 				Version:        1,
 				Timestamp:      1231469744,
@@ -55,7 +55,7 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 			},
 		}
 
-		_, _, err = s.StoreBlock(context.Background(), block2_alt, "")
+		_, _, err = s.StoreBlock(context.Background(), block2Alt, "")
 		require.NoError(t, err)
 
 		headers, metas, err := s.GetBlockHeaders(context.Background(), block2.Hash(), 2)
@@ -86,10 +86,10 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 		assert.Equal(t, uint32(1), metas[0].Height)
 		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", headers[1].Hash().String())
 
-		headers, metas, err = s.GetBlockHeaders(context.Background(), block2_alt.Hash(), 10)
+		headers, metas, err = s.GetBlockHeaders(context.Background(), block2Alt.Hash(), 10)
 		require.NoError(t, err)
 		assert.Equal(t, 3, len(headers)) // there should be 3 headers in the chain
-		assert.Equal(t, block2_alt.Header.Hash(), headers[0].Hash())
+		assert.Equal(t, block2Alt.Header.Hash(), headers[0].Hash())
 		assert.Equal(t, uint32(2), metas[0].Height)
 		assert.Equal(t, block1.Header.Hash(), headers[1].Hash())
 		assert.Equal(t, uint32(1), metas[1].Height)

@@ -7,14 +7,15 @@ package peer_test
 
 import (
 	"errors"
-	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"io"
 	"net"
 	"strconv"
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
+	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
+
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/libsv/go-bt/v2/chainhash"

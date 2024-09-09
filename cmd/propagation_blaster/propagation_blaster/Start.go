@@ -225,7 +225,7 @@ func sendToPropagationServer(ctx context.Context, logger ulogger.Logger, txExten
 		httpClient := &http.Client{}
 		resp, err := httpClient.Do(req)
 		if err != nil {
-			return errors.NewProcessingError("error sending request: %v", err)
+			return errors.NewProcessingError("error sending request", err)
 		}
 		defer resp.Body.Close()
 

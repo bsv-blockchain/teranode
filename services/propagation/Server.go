@@ -21,6 +21,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"google.golang.org/protobuf/types/known/emptypb"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
@@ -41,7 +45,7 @@ var (
 	propagationStat = gocore.NewStat("propagation")
 
 	// ipv6 multicast constants
-	maxDatagramSize = 512 //100 * 1024 * 1024
+	maxDatagramSize = 512 // 100 * 1024 * 1024
 	ipv6Port        = 9999
 )
 
@@ -53,16 +57,18 @@ type PropagationServer struct {
 	txStore            blob.Store
 	validator          validator.Interface
 	validatorKafkaChan chan []byte
+	blockchainClient   blockchain.ClientI
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface) *PropagationServer {
+func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI) *PropagationServer {
 	initPrometheusMetrics()
 
 	return &PropagationServer{
-		logger:    logger,
-		txStore:   txStore,
-		validator: validatorClient,
+		logger:           logger,
+		txStore:          txStore,
+		validator:        validatorClient,
+		blockchainClient: blockchainClient,
 	}
 }
 
@@ -77,6 +83,25 @@ func (ps *PropagationServer) Init(_ context.Context) (err error) {
 
 // Start function
 func (ps *PropagationServer) Start(ctx context.Context) (err error) {
+	// Check if we need to Restore. If so, move FSM to the Restore state
+	// Restore will block and wait for RUN event to be manually sent
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
+	if fsmStateRestore {
+		// Send Restore event to FSM
+		_, err := ps.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		if err != nil {
+			ps.logger.Errorf("[Faucet] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
+		}
+
+		// Wait for node to finish Restoring.
+		// this means FSM got a RUN event and transitioned to RUN state
+		// this will block
+		ps.logger.Infof("[Faucet] Node is restoring, waiting for FSM to transition to Running state")
+		_ = ps.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		ps.logger.Infof("[Faucet] Node finished restoring and has transitioned to Running state, continuing to start Faucet service")
+	}
+
 	ipv6Addresses, ok := gocore.Config().Get("ipv6_addresses")
 	if ok {
 		err = ps.StartUDP6Listeners(ctx, ipv6Addresses)
@@ -87,7 +112,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 
 	// Experimental QUIC server - to test throughput at scale
 	quicAddress, ok := gocore.Config().Get("propagation_quicListenAddress")
-	if ok {
+	if ok && quicAddress != "" {
 		// Create an error channel
 		errChan := make(chan error, 1) // Buffered channel
 
@@ -101,6 +126,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 			if err != nil {
 				errChan <- err // Send any errors to the error channel
 			}
+
 			close(errChan) // Close the channel when done
 		}()
 
@@ -109,7 +135,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 				ps.logger.Errorf("failed to start QUIC server: %v", err)
 			}
 		}()
-
 	}
 
 	ps.status.Store(2)
@@ -117,10 +142,11 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	//  kafka channel setup
 	validatortxsKafkaURL, _, found := gocore.Config().GetURL("kafka_validatortxsConfig")
 	if !found {
-		return errors.New(errors.ERR_CONFIGURATION, "kafka_validatortxsConfig not found, validator channel configuration is required")
+		return errors.New(errors.ERR_CONFIGURATION, "kafka_validatortxs Config not found, validator channel configuration is required")
 	}
 
-	ps.logger.Infof("[Validator] connecting to kafka for sending txs at %s", validatortxsKafkaURL)
+	ps.logger.Infof("[Propagation Server] connecting to kafka for sending txs at %s", validatortxsKafkaURL)
+
 	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
 	if workers > 0 {
 		ps.validatorKafkaChan = make(chan []byte, 10_000)
@@ -161,6 +187,7 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 
 	for _, ipv6Address := range strings.Split(ipv6Addresses, ",") {
 		var conn *net.UDPConn
+
 		conn, err = net.ListenMulticastUDP("udp6", useInterface, &net.UDPAddr{
 			IP:   net.ParseIP(ipv6Address),
 			Port: ipv6Port,
@@ -172,30 +199,35 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 
 		go func(conn *net.UDPConn) {
 			// Loop forever reading from the socket
-			//var numBytes int
-			var src *net.UDPAddr
-			//var oobn int
-			//var flags int
-			var msg wire.Message
-			var b []byte
-			var oobB []byte
-			var msgTx *wire.MsgExtendedTx
+			var (
+				// numBytes int
+				src *net.UDPAddr
+				// oobn int
+				// flags int
+				msg   wire.Message
+				b     []byte
+				oobB  []byte
+				msgTx *wire.MsgExtendedTx
+			)
 
 			buffer := make([]byte, maxDatagramSize)
+
 			for {
 				_, _, _, src, err = conn.ReadMsgUDP(buffer, oobB)
 				if err != nil {
 					log.Fatal("ReadFromUDP failed:", err)
 				}
-				//ps.logger.Infof("read %d bytes from %s, out of bounds data len %d", len(buffer), src.String(), len(oobB))
+				// ps.logger.Infof("read %d bytes from %s, out of bounds data len %d", len(buffer), src.String(), len(oobB))
 
 				reader := bytes.NewReader(buffer)
+
 				msg, b, err = wire.ReadMessage(reader, wire.ProtocolVersion, wire.MainNet)
 				if err != nil {
 					ps.logger.Errorf("wire.ReadMessage failed: %v", err)
 				}
+
 				ps.logger.Infof("read %d bytes into wire message from %s", len(b), src.String())
-				//ps.logger.Infof("wire message type: %v", msg)
+				// ps.logger.Infof("wire message type: %v", msg)
 
 				msgTx, ok = msg.(*wire.MsgExtendedTx)
 				if ok {
@@ -230,6 +262,7 @@ func (ps *PropagationServer) quicServer(_ context.Context, quicAddresses string)
 	if err != nil {
 		return errors.NewInvalidArgumentError("error generating TLS config", err)
 	}
+
 	server := http3.Server{
 		Addr:      quicAddresses,
 		TLSConfig: tlsConfig, // Assume generateTLSConfig() sets up your TLS
@@ -251,9 +284,13 @@ func (ps *PropagationServer) handleStream(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var txLength uint32
-	var err error
-	var txData []byte
+
+	var (
+		txLength uint32
+		err      error
+		txData   []byte
+	)
+
 	for {
 		// Read the size of the incoming transaction first
 		err = binary.Read(r.Body, binary.BigEndian, &txLength)
@@ -261,6 +298,7 @@ func (ps *PropagationServer) handleStream(w http.ResponseWriter, r *http.Request
 			if err != io.EOF {
 				ps.logger.Errorf("Error reading transaction length: %v\n", err)
 			}
+
 			break
 		}
 
@@ -270,6 +308,7 @@ func (ps *PropagationServer) handleStream(w http.ResponseWriter, r *http.Request
 
 		// Read the transaction data
 		txData = make([]byte, txLength)
+
 		_, err := io.ReadFull(r.Body, txData)
 		if err != nil {
 			ps.logger.Errorf("Error reading transaction data: %v\n", err)
@@ -294,6 +333,7 @@ func (ps *PropagationServer) Stop(_ context.Context) error {
 
 func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, error) {
 	var sb strings.Builder
+
 	errs := make([]error, 0)
 
 	code, details, err := ps.txStore.Health(ctx)
@@ -314,6 +354,8 @@ func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, erro
 
 	localValidator := gocore.Config().GetBool("useLocalValidator", false)
 	if localValidator {
+		ps.logger.Infof("[propagation] Using local validator")
+
 		blockHeight := ps.validator.GetBlockHeight()
 		if blockHeight == 0 {
 			err = errors.NewProcessingError("error getting blockHeight from validator: 0")
@@ -352,7 +394,7 @@ func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.
 		return &propagation_api.HealthResponse{
 			Ok:        false,
 			Details:   fmt.Sprintf("Propagation server is not ready (Status=%d)", status),
-			Timestamp: uint32(time.Now().Unix()),
+			Timestamp: time.Now().Unix(),
 		}, nil
 	}
 
@@ -361,7 +403,7 @@ func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.
 		return &propagation_api.HealthResponse{
 			Ok:        false,
 			Details:   details,
-			Timestamp: uint32(time.Now().Unix()),
+			Timestamp: time.Now().Unix(),
 		}, err
 	}
 
@@ -369,13 +411,13 @@ func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.
 		return &propagation_api.HealthResponse{
 			Ok:        false,
 			Details:   details,
-			Timestamp: uint32(time.Now().Unix()),
+			Timestamp: time.Now().Unix(),
 		}, nil
 	}
 
 	return &propagation_api.HealthResponse{
 		Ok:        true,
-		Timestamp: uint32(time.Now().Unix()),
+		Timestamp: time.Now().Unix(),
 	}, nil
 }
 
@@ -416,9 +458,11 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
+
 	for idx, tx := range req.Tx {
 		idx := idx
 		tx := tx
+
 		g.Go(func() error {
 			// just call the internal process transaction function for every transaction
 			err := ps.processTransaction(gCtx, &propagation_api.ProcessTransactionRequest{
@@ -449,6 +493,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 	defer deferFn()
 
 	timeStart := time.Now()
+
 	btTx, err := bt.NewTxFromBytes(req.Tx)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
@@ -534,6 +579,7 @@ func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *p
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("failed to parse transaction from bytes", err))
 	}
+
 	if err = ps.storeTransaction(ctx, btTx); err != nil {
 		return nil, errors.WrapGRPC(errors.NewStorageError("failed to save transaction %s", btTx.TxIDChainHash().String(), err))
 	}
@@ -574,8 +620,10 @@ func (ps *PropagationServer) generateTLSConfig() (*tls.Config, error) {
 	if err != nil {
 		return nil, errors.NewError("error creating x509 certificate", err)
 	}
+
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
 		return nil, errors.NewError("error generating x509 key pair", err)
@@ -590,10 +638,12 @@ func (ps *PropagationServer) generateTLSConfig() (*tls.Config, error) {
 // RemoveInvalidUTF8 returns a string with all invalid UTF-8 characters removed
 func RemoveInvalidUTF8(s string) string {
 	var buf []rune
+
 	for _, r := range s {
 		if r == utf8.RuneError {
 			continue
 		}
+
 		buf = append(buf, r)
 	}
 	return string(buf)

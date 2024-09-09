@@ -24,20 +24,20 @@
 - [4.2. Teranode Installation Types](#42-teranode-installation-types)
     - [4.2.1. Pre-built Binaries](#421-pre-built-binaries)
     - [4.2.2. Docker Container](#422-docker-container)
-    - [4.2.3. Docker Compose ](#423-docker-compose-)
-    - [4.2.4 K8 Operator](#424-k8-operator)
+    - [4.2.3. Docker Compose](#423-docker-compose)
+    - [4.2.4 Kubernetes Operator](#424-kubernetes-operator)
 - [4.3. Installing Teranode with Docker Compose](#43-installing-teranode-with-docker-compose)
-    - [4.4. Installing Teranode with the Custom k8 Operator](#44-installing-teranode-with-the-custom-k8-operator)
+    - [4.4. Installing Teranode with the Custom Kubernetes Operator](#44-installing-teranode-with-the-custom-kubernetes-operator)
 5. [Configuration](#5-configuration)
 - [5.1. Configuring Setting Files](#51-configuring-setting-files)
 6. [Node Operation](#6-node-operation)
 - [6.1. Docker Compose Starting and Stopping the Node](#61-docker-compose---starting-and-stopping-the-node)
     - [6.1.1. Starting the Node](#611-starting-the-node)
     - [6.1.2. Stopping the Node](#612-stopping-the-node)
-- [6.2. Custom k8 Operator](#62-custom-k8-operator)
+- [6.2. Custom Kubernetes Operator](#62-custom-kubernetes-operator)
     - [6.2.1. Starting the Node](#621-starting-the-node)
     - [6.2.2. Stopping the Node](#622-stopping-the-node)
-- [6.3. Syncing the Blockchain ](#63-syncing-the-blockchain-)
+- [6.3. Syncing the Blockchain](#63-syncing-the-blockchain)
 - [6.4. Monitoring Node status](#64-monitoring-node-status)
 - [6.5. How to Interact with the Node](#65-how-to-interact-with-the-node)
     - [6.5.1. Teranode RPC HTTP API](#651-teranode-rpc-http-api)
@@ -45,7 +45,7 @@
 7. [Maintenance](#7-maintenance)
 - [7.1. Updating Teranode to a New Version](#71-updating-teranode-to-a-new-version)
     - [7.1.1. Docker Compose](#711-docker-compose)
-    - [7.1.2. K8 Custom Operator](#712-k8-custom-operator)
+    - [7.1.2. Kubernetes Custom Operator](#712-kubernetes-custom-operator)
 - [7.2. Managing Disk Space](#72-managing-disk-space)
 - [7.3. Backing Up Data](#73-backing-up-data)
 8. [Troubleshooting](#8-troubleshooting)
@@ -53,6 +53,8 @@
     - [8.1.1. Health Checks](#811-health-checks)
     - [8.1.2. Monitoring System Resources](#812-monitoring-system-resources)
     - [8.1.3. Check Logs for Errors](#813-check-logs-for-errors)
+- [8.2 Recovery Procedures](#82-recovery-procedures)
+    - [8.2.1. Third Party Component Failure](#821-third-party-component-failure)
 9. [Security Best Practices](#9-security-best-practices)
 - [9.1. Firewall Configuration](#91-firewall-configuration)
 - [9.2. Regular System Updates](#92-regular-system-updates)
@@ -64,7 +66,7 @@
 
 Version 1.0.1 - Last Issued - 2 September 2024
 
-
+----
 
 ## 1. Glossary of Teranode Terms
 
@@ -116,7 +118,7 @@ Version 1.0.1 - Last Issued - 2 September 2024
 
 **UTXO Set**: The set of all unspent transaction outputs on the blockchain.
 
-**Validator**: A component that checks the validity of transactions and blocks according to the network rules.
+**Validator**: A component that checks the validity of transactions and blocks according to the network rules. This runs as a library within the Propagation service.
 
 
 
@@ -201,11 +203,11 @@ Teranode's architecture includes:
 
 
 
+![UBSV_Overview_Public.png](../architecture/img/UBSV_Overview_Public.png)
 
-![UBSV_Container_Diagram.png](../architecture/img/UBSV_Container_Diagram.png)
+
 
 While this document will touch upon these components as needed for setup and operation, it is not intended to provide a comprehensive architectural overview. For a detailed explanation of Teranode's architecture and the interactions between its various components, please refer to the `teranode-architecture-1.5.pdf` document.
-
 
 
 
@@ -232,7 +234,7 @@ Teranode relies on a number of third-party software dependencies, some of which 
 
 
 
-As seen in the Installation section in this document, BSV provides both a `docker compose` that initialises all dependencies within a single server node, and a `k8 operator` that provides a production-live multi-node setup. However, it is the operator responsibility to support and monitor these third parties.
+As seen in the Installation section in this document, BSV provides both a `docker compose` that initialises all dependencies within a single server node, and a `Kubernetes operator` that provides a production-live multi-node setup. However, it is the operator responsibility to support and monitor these third parties.
 
 
 
@@ -306,7 +308,7 @@ Aerospike is an open-source, high-performance, NoSQL database designed for real-
 
 ##### How Aerospike is Used in Teranode
 
-In the context of Teranode, Aerospike is utilized for **UTXO (Unspent Transaction Output) storage**, which requires of a robust high performance and reliability solution.
+In the context of Teranode, Aerospike is utilized for **UTXO (Unspent Transaction Output) storage**, which requires of a robust high performance and reliable solution.
 
 
 
@@ -388,7 +390,7 @@ These figures are approximate. In general, any stable internet connection should
 Key network considerations:
 
 1. Ensure your internet connection is reliable and has sufficient bandwidth to handle continuous data transfer.
-2. Be aware that initial blockchain synchronization, depending on your installation method, may require higher bandwidth usage. If you synchronise automatically starting from the genesys block, you will have to download every block. However, the BSV recommended approach is to install a seed UTXO Set and blockchain.
+2. Be aware that initial blockchain synchronization, depending on your installation method, may require higher bandwidth usage. If you synchronise automatically starting from the genesis block, you will have to download every block. However, the BSV recommended approach is to install a seed UTXO Set and blockchain.
 3. Monitor your network usage to ensure it stays within your ISP's limits and adjust your node's configuration if needed.
 
 
@@ -453,7 +455,7 @@ Cons:
 
 
 
-To keep the initial data sets up-to-date for new nodes, BSV continuously creates and exports new data sets.
+To keep the initial data sets up-to-date for new nodes, the BSV Association, directly or through its partners, continuously creates and exports new data sets.
 
 - Teranode typically makes available the UTXO set for a block 100 blocks prior to the current block
 - This ensures the UTXO set won't change (is finalized)
@@ -476,7 +478,7 @@ Where possible, BSV recommends using the Initial Data Set Installation approach.
 
 
 
-Teranode can be installed and run using four primary methods: pre-built binaries, Docker containers, Docker Compose, or using a k8 Operator. Each method offers different levels of flexibility and ease of use. Only the k8 operator approach is recommended for production usage.
+Teranode can be installed and run using four primary methods: pre-built binaries, Docker containers, Docker Compose, or using a Kubernetes Operator. Each method offers different levels of flexibility and ease of use. Only the Kubernetes operator approach is recommended for production usage.
 
 
 
@@ -516,11 +518,11 @@ Teranode can be installed and run using four primary methods: pre-built binaries
     - This setup uses predefined external dependencies, which may not be customizable.
     - While convenient for development and testing, it is not optimized, nor intended, for production usage.
 
-Note: The `Docker Compose` method is recommended for testing in single node environments as it provides a consistent environment that mirrors the development setup. However, for production deployments or specific performance requirements, users need to consider using the k8 operator approach (next section).
+Note: The `Docker Compose` method is recommended for testing in single node environments as it provides a consistent environment that mirrors the development setup. However, for production deployments or specific performance requirements, users need to consider using the Kubernetes operator approach (next section).
 
 
 
-#### 4.2.4 K8 Operator
+#### 4.2.4 Kubernetes Operator
 
 
 
@@ -536,7 +538,7 @@ The Cluster resource allows fine-grained control over resource allocation, enabl
 
 
 
-It must be noted that, as opposed to the `Docker Compose` approach, the `k8 operator` production-like setup does not install or manages the third party dependencies, explicitly:
+It must be noted that, as opposed to the `Docker Compose` approach, the `Kubernetes operator` production-like setup does not install or manage the third party dependencies, explicitly:
 
 - **Kafka**
 - **PostgreSQL**
@@ -557,7 +559,7 @@ Teranode uses PersistentVolumeClaims (PVCs) for storage in some components. For 
 
 
 ##### Service Deployment
-The Teranode services are deployed as separate components within the Cluster custom resource. Each service (e.g., Asset, BlockValidator, Blockchain, Peer-to-Peer, etc.) is defined with its own specification, including resource requests and limits. The k8 operator manages the creation and lifecycle of these components based on the Cluster resource definition.
+The Teranode services are deployed as separate components within the Cluster custom resource. Each service (e.g., Asset, BlockValidator, Blockchain, Peer-to-Peer, etc.) is defined with its own specification, including resource requests and limits. The Kubernetes operator manages the creation and lifecycle of these components based on the Cluster resource definition.
 
 
 
@@ -581,7 +583,7 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 
 
 
-In the following sections, we will focus on the `Docker Compose`  and `k8 operator` installation method, as it is the most suitable for alpha testing purposes. Users interested in directly running the binaries or managing the docker containers with their own custom setups can reach out to the Teranode support team for further discussion.
+In the following sections, we will focus on the `Docker Compose`  and `Kubernetes operator` installation method, as it is the most suitable for alpha testing purposes. Users interested in directly running the binaries or managing the docker containers with their own custom setups can reach out to the Teranode support team for further discussion.
 
 
 
@@ -605,6 +607,8 @@ In the following sections, we will focus on the `Docker Compose`  and `k8 operat
 
 **Step 1: Create Repository**
 
+**TODO - note from Jeff - if providing a repo, this would be included (no need to create a folder)**
+
 1. Open a terminal or command prompt.
 2. Create the repository:
    ```
@@ -626,6 +630,8 @@ In the following sections, we will focus on the `Docker Compose`  and `k8 operat
 
 
 **Step 3: Prepare Local Settings**
+
+**TODO - note from Jeff - if providing a repo, this would be included**
 
 1. Create a `settings_local.conf` file in the root directory.
 2. Unless instructed otherwise, please put the following content in it.
@@ -778,7 +784,7 @@ Additional Notes:
 
 
 
-#### 4.4. Installing Teranode with the Custom k8 Operator
+#### 4.4. Installing Teranode with the Custom Kubernetes Operator
 
 
 
@@ -948,7 +954,7 @@ Additional Notes:
 
 Additional Notes:
 
-- SharedPVCName represents a persistent volume shared across a number of services (Block Validation, Subtree Validation, Block Assembly, Asset Server). While the implementation of the storage is left at the user's discretion, BSV has successfully tested using a Lustre volume at high throughput, and it can be considered as a reliable option for any Teranode deployment.
+- SharedPVCName represents a persistent volume shared across a number of services (Block Validation, Subtree Validation, Block Assembly, Asset Server). While the implementation of the storage is left at the user's discretion, the BSV Association has successfully tested using an AWS FSX for Lustre volume at high throughput, and it can be considered as a reliable option for any Teranode deployment.
 - Ensure proper network policies and security contexts are in place for your Kubernetes environment.
 - Regularly back up any persistent data stored in PersistentVolumeClaims.
 - The Teranode operator manages the lifecycle of the Teranode services. Direct manipulation of the underlying resources is not recommended.
@@ -1206,7 +1212,7 @@ Remember, <u>always</u> use the <u>graceful shutdown</u> method (`docker-compose
 
 
 
-### 6.2. Custom k8 Operator
+### 6.2. Custom Kubernetes Operator
 
 
 
@@ -1654,6 +1660,16 @@ Port: `8090` (configurable)
 
 - POST `/txs`
     - Retrieves multiple transactions (binary stream format)
+    - The request body is a concatenated series of 32-byte transaction hashes:
+[32-byte hash][32-byte hash][32-byte hash]...
+      - Example (in hex):
+123456789abcdef123456789abcdef123456789abcdef123456789abcdef1234
+567890abcdef123456789abcdef123456789abcdef123456789abcdef123456
+...
+      - Each hash is exactly 32 bytes (256 bits)
+      - No separators between hashes
+      - The body can contain multiple hashes
+      - The server reads until it reaches the end of the body (EOF)
 
 - GET `/txmeta/:hash/json`
     - Retrieves transaction metadata in JSON format
@@ -1844,7 +1860,7 @@ Remember, the exact update process may vary depending on the specific changes in
 
 
 
-#### 7.1.2. K8 Custom Operator
+#### 7.1.2. Kubernetes Custom Operator
 
 
 
@@ -2264,7 +2280,6 @@ For both Docker Compose and Kubernetes, replace `[service_name]` or `<pod-name>`
 * Asset Service
 * Block Validation Service
 * P2P Service
-* Validator Service
 * Block Assembly Service
 * Subtree Validation Service
 * Miner Service
@@ -2329,6 +2344,26 @@ Check your Grafana `UBSV Service Overview` dashboard:
 
 
 
+### 8.2 Recovery Procedures
+
+
+
+#### 8.2.1. Third Party Component Failure
+
+
+
+Teranode is highly dependent on its third party dependencies. Postgres, Kafka and Aerospike are critical for Teranode operations, and the node cannot work without them.
+
+
+
+If a third party service fails, you must restore its functionality. Once it is back, please restart Teranode cleanly, as per the instructions in the Section 6 of this document.
+
+
+
+
+
+
+
 ------
 
 
@@ -2353,12 +2388,12 @@ While Docker Compose creates an isolated network for the Teranode services, some
 
 
 1. **Publicly Exposed Ports:**
-   Review the ports exposed in the Docker Compose or the k8 operator configuration file(s) and ensure your firewall is configured to handle these appropriately:
+   Review the ports exposed in the Docker Compose or the Kubernetes operator configuration file(s) and ensure your firewall is configured to handle these appropriately:
     - `9292`: RPC Server. Open to receive RPC API requests.
 
     - `8090,8091`: Asset Server. Open for incoming HTTP and gRPC asset requests.
 
-    - `8090,8091`:  P2P Server. Open for incoming connections to allow peer discovery and communication.
+    - `9905,9906`:  P2P Server. Open for incoming connections to allow peer discovery and communication.
 
 
 
@@ -2443,7 +2478,7 @@ Before submitting a bug report, gather the following information:
     - Docker Compose version
 2. **Configuration Files**:
     - `settings_local.conf`
-    - Docker Compose and / or K8 custom operator file
+    - Docker Compose and / or Kubernetes custom operator file
 3. **System Resources**:
     - CPU usage
     - Memory usage

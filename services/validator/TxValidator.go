@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/bitcoin-sv/go-sdk/chainhash"
 	"github.com/bitcoin-sv/go-sdk/script"
 	interpreter_sdk "github.com/bitcoin-sv/go-sdk/script/interpreter"
 	"github.com/bitcoin-sv/go-sdk/transaction"
@@ -37,6 +38,8 @@ var (
 		"6974a4c575c661a918e50d735852c29541a3263dcc4ff46bf90eb9f8f0ec485e": {}, // spending of weird OP_SHIFT script causing panic
 		"65cbf31895f6cab997e6c3688b2263808508adc69bcc9054eef5efac6f7895d3": {}, //
 	}
+
+	txWhitelistHashes = map[[32]byte]struct{}{}
 )
 
 var validatorFunc func(*TxValidator, *bt.Tx, uint32) error
@@ -50,6 +53,11 @@ func init() {
 		log.Println("Using generic go-bt script validation")
 
 		validatorFunc = checkScripts
+	}
+
+	for k := range txWhitelist {
+		hash, _ := chainhash.NewHashFromHex(k)
+		txWhitelistHashes[*hash] = struct{}{}
 	}
 }
 
@@ -372,8 +380,10 @@ func GoBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
 		// clone the bytes of the unlocking script
 		unlockingScript := make([]byte, len(*in.UnlockingScript))
 		copy(unlockingScript, *in.UnlockingScript)
+
+		sourceTxHash := chainhash.Hash(in.PreviousTxID())
 		sdkTx.Inputs[i] = &transaction.TransactionInput{
-			SourceTXID:       bt.ReverseBytes(in.PreviousTxID()), // WTF
+			SourceTXID:       &sourceTxHash,
 			SourceTxOutIndex: in.PreviousTxOutIndex,
 			UnlockingScript:  (*script.Script)(&unlockingScript),
 			SequenceNumber:   in.SequenceNumber,

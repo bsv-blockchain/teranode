@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -40,25 +41,27 @@ type BlockAssembler struct {
 	blockchainClient blockchain.ClientI
 	subtreeProcessor *subtreeprocessor.SubtreeProcessor
 
-	miningCandidateCh          chan chan *miningCandidateResponse
-	bestBlockHeader            atomic.Pointer[model.BlockHeader]
-	bestBlockHeight            atomic.Uint32
-	currentChain               []*model.BlockHeader
-	currentChainMap            map[chainhash.Hash]uint32
-	currentChainMapIDs         map[uint32]struct{}
-	currentChainMapMu          sync.RWMutex
-	blockchainSubscriptionCh   chan *blockchain_api.Notification
-	maxBlockReorgRollback      int
-	maxBlockReorgCatchup       int
-	difficultyAdjustmentWindow int
-	difficultyAdjustment       bool
-	currentDifficulty          *model.NBit
-	defaultMiningNBits         *model.NBit
-	resetCh                    chan struct{}
-	resetWaitCount             atomic.Int32
-	resetWaitTime              atomic.Int32
-	currentRunningState        atomic.Value
+	miningCandidateCh        chan chan *miningCandidateResponse
+	bestBlockHeader          atomic.Pointer[model.BlockHeader]
+	bestBlockHeight          atomic.Uint32
+	currentChain             []*model.BlockHeader
+	currentChainMap          map[chainhash.Hash]uint32
+	currentChainMapIDs       map[uint32]struct{}
+	currentChainMapMu        sync.RWMutex
+	blockchainSubscriptionCh chan *blockchain_api.Notification
+	maxBlockReorgRollback    int
+	maxBlockReorgCatchup     int
+	chainParams              *chaincfg.Params
+	difficultyAdjustment     bool
+	currentDifficulty        *model.NBit
+	defaultMiningNBits       *model.NBit
+	resetCh                  chan struct{}
+	resetWaitCount           atomic.Int32
+	resetWaitTime            atomic.Int32
+	currentRunningState      atomic.Value
 }
+
+const DifficultyAdjustmentWindow = 144
 
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utxo.Store,
 	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) *BlockAssembler {
@@ -66,31 +69,38 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, utxoStore utx
 	maxBlockReorgRollback, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgRollback", 100)
 	maxBlockReorgCatchup, _ := gocore.Config().GetInt("blockassembly_maxBlockReorgCatchup", 100)
 
-	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
 	difficultyAdjustment := gocore.Config().GetBool("difficulty_adjustment", false)
 
-	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
-	defaultMiningBits, _ := model.NewNBitFromString(nBitsString)
+	network, _ := gocore.Config().Get("network", "mainnet")
+
+	params, err := chaincfg.GetChainParams(network)
+	if err != nil {
+		logger.Fatalf("Unknown network: %s", network)
+	}
+
+	bytesLittleEndian := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bytesLittleEndian, params.PowLimitBits)
+	defaultMiningBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
 
 	subtreeProcessor, _ := subtreeprocessor.NewSubtreeProcessor(ctx, logger, subtreeStore, utxoStore, newSubtreeChan)
 	b := &BlockAssembler{
-		logger:                     logger,
-		utxoStore:                  utxoStore,
-		subtreeStore:               subtreeStore,
-		blockchainClient:           blockchainClient,
-		subtreeProcessor:           subtreeProcessor,
-		miningCandidateCh:          make(chan chan *miningCandidateResponse),
-		currentChainMap:            make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
-		currentChainMapIDs:         make(map[uint32]struct{}, maxBlockReorgCatchup),
-		maxBlockReorgRollback:      maxBlockReorgRollback,
-		maxBlockReorgCatchup:       maxBlockReorgCatchup,
-		difficultyAdjustmentWindow: difficultyAdjustmentWindow,
-		difficultyAdjustment:       difficultyAdjustment,
-		defaultMiningNBits:         defaultMiningBits,
-		resetCh:                    make(chan struct{}, 2),
-		resetWaitCount:             atomic.Int32{},
-		resetWaitTime:              atomic.Int32{},
-		currentRunningState:        atomic.Value{},
+		logger:                logger,
+		utxoStore:             utxoStore,
+		subtreeStore:          subtreeStore,
+		blockchainClient:      blockchainClient,
+		subtreeProcessor:      subtreeProcessor,
+		miningCandidateCh:     make(chan chan *miningCandidateResponse),
+		currentChainMap:       make(map[chainhash.Hash]uint32, maxBlockReorgCatchup),
+		currentChainMapIDs:    make(map[uint32]struct{}, maxBlockReorgCatchup),
+		maxBlockReorgRollback: maxBlockReorgRollback,
+		maxBlockReorgCatchup:  maxBlockReorgCatchup,
+		chainParams:           params,
+		difficultyAdjustment:  difficultyAdjustment,
+		defaultMiningNBits:    defaultMiningBits,
+		resetCh:               make(chan struct{}, 2),
+		resetWaitCount:        atomic.Int32{},
+		resetWaitTime:         atomic.Int32{},
+		currentRunningState:   atomic.Value{},
 	}
 	b.currentRunningState.Store("starting")
 
@@ -210,7 +220,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 					b.logger.Debugf("[BlockAssembler] FSM current state: %s", *currentState)
 
-					if *currentState == blockchain_api.FSMStateType_MINING {
+					if *currentState == blockchain_api.FSMStateType_RUNNING {
 						miningCandidate, subtrees, err := b.getMiningCandidate()
 						utils.SafeSend(responseCh, &miningCandidateResponse{
 							miningCandidate: miningCandidate,
@@ -650,10 +660,18 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 
 func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 
-	now := time.Now()
-	targetTimePerBlock, _ := gocore.Config().GetInt("difficulty_target_time_per_block", 600)
+	// use difficulty
+	if b.difficultyAdjustment {
+		nbit, err := b.blockchainClient.GetNextWorkRequired(context.Background(), b.bestBlockHeader.Load().Hash())
+		if err != nil {
+			return nil, errors.NewProcessingError("error getting next work required", err)
+		}
+		return nbit, nil
+	}
 
-	thresholdSeconds := 2 * uint32(targetTimePerBlock)
+	now := time.Now()
+	thresholdSeconds := 2 * uint32(b.chainParams.TargetTimePerBlock.Seconds())
+
 	//nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 	randomOffset := rand.Int31n(21) - 10
 
@@ -662,7 +680,7 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	b.logger.Debugf("timeDifference: %d", timeDifference)
 	b.logger.Debugf("bestBlockHeader.Hash().String(): %s", b.bestBlockHeader.Load().Hash().String())
 
-	if !b.difficultyAdjustment || (b.bestBlockHeight.Load() < uint32(b.difficultyAdjustmentWindow)+3) {
+	if !b.difficultyAdjustment || (b.bestBlockHeight.Load() < uint32(DifficultyAdjustmentWindow)+3) {
 		b.logger.Debugf("no difficulty adjustment. Difficulty set to %s", b.defaultMiningNBits.String())
 		return b.defaultMiningNBits, nil
 	} else if timeDifference > thresholdSeconds+uint32(randomOffset) {

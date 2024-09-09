@@ -22,13 +22,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/addrmgr"
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil/bloom"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/connmgr"
 	"github.com/bitcoin-sv/ubsv/services/legacy/netsync"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
@@ -438,8 +438,8 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	}
 
 	// Ignore peers that aren't running Bitcoin
-	if strings.Contains(msg.UserAgent, "ABC") || strings.Contains(msg.UserAgent, "BUCash") {
-		sp.server.logger.Debugf("Rejecting peer %s for not running Bitcoin", sp.Peer)
+	if strings.Contains(msg.UserAgent, "ABC") || strings.Contains(msg.UserAgent, "Cash") || strings.Contains(msg.UserAgent, "Unlimited") {
+		sp.server.logger.Debugf("Rejecting peer %s for not running compatible Bitcoin", sp.Peer)
 		reason := "Sorry, you are not running Bitcoin"
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}
@@ -1989,6 +1989,8 @@ func (s *server) Start() {
 		s.wg.Add(1)
 		go s.upnpUpdateThread()
 	}
+
+	s.WaitForShutdown()
 }
 
 // Stop gracefully shuts down the server by stopping and disconnecting all

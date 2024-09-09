@@ -52,5 +52,5 @@ deactivate AssetServer
 AssetClient --> Coinbase : blockHeadersData
 deactivate AssetClient
 
-left footer Last Modified On: 4-Dec-2023
+left footer Last Modified On: %date("dd-MMM-yyyy")
 @enduml

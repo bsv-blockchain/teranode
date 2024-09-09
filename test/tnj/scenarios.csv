@@ -1,0 +1,21 @@
+Requirement ID,Requirement Description,Test Case Name,Test Case Path,Test Type,Test Status
+TNJ-1.1,Teranode must connect to the chain of blocks which leads back to the Genesis block.,TestBlockValidationValidateBlock,services/blockvalidation/BlockValidation_test.go,Unit Test,Ready
+TNJ-1.1,Teranode must connect to the chain of blocks which leads back to the Genesis block.,TestInvalidBlockWithoutGenesisBlock,services/blockvalidation/BlockValidation_test.go,Unit Test,Ready
+TNJ-1.2,Any chain where the point of origin is not the Genesis block is invalid.,TestInvalidChainWithoutGenesisBlock,services/blockvalidation/BlockValidation_test.go,Unit Test,Ready
+TNJ-2.1,Teranode must not have any restrictions on the maximum block size.,TestShouldRejectExcessiveBlockSize,test/settings/block_size_test.go,E2E Test,Acceptance criteria is not clear
+TNJ-3.1,Teranode must always keep track of the longest honest chain.,TestLongestChainTracking,chain_test.go,Integration,Not Started
+TNJ-3.2,Teranode must always build on top of the longest honest chain.,TestBuildOnLongestChain,chain_test.go,Integration,Not Started
+TNJ-4.1,Nodes that create new blocks must be rewarded with block subsidies.,TestBlockSubsidyReward,test/tnj/tnj_4_test.go,End-to-End,Ready
+TNJ-4.2,The Block Subsidy should be included in the Coinbase transaction of the Block created by the node.,TestBlockSubsidy,test/tnj/tnj_4_test.go,End-to-End,Ready
+TNJ-4.3,The Block Subsidy must follow a deprecating model where the initial block subsidy is 50 BSV and is reduced by 50% every 210’000 blocks.,TestSubsidyDeprecation,subsidy_test.go,Unit Test,Need reg-test mode
+TNJ-4.4,A node must not be able to spend the block subsidy until 100 blocks after the subsidy was received.,TestBlockSubsidy,test/tnj/tnj_4_test.go,Unit Test,Ready
+TNJ-6,Adherence to Difficulty Adjustment,TestDifficultyAdjustment,difficulty_test.go,End-to-End,Not Started
+TNJ-6.1,Teranode must maintain and adjust the difficulty after each block to control the rate of block creation.,TestDifficultyControl,difficulty_test.go,End-to-End,Not Started
+TNJ-6.2,Teranode must not be able to configure any changes related to difficulty adjustment manually.,TestDifficultyConfig,difficulty_test.go,Unit Test,Not Started
+TNJ-7,Adherence to Network Consensus,TestNetworkConsensus,consensus_test.go,Integration,Not Started
+TNJ-7.1,Network Consensus is achieved by the majority of nodes building new blocks on previously broadcast blocks.,TestNetworkConsensus,consensus_test.go,Integration,Not Started
+TNJ-8,Adherence to First-Seen Rule,TestFirstSeenRule,firstseen_test.go,End-to-End,Not Started
+TNJ-8.1,If Teranode detects a double-spend the transaction that was received first must be considered the valid transaction.,TestRejectLongerChainWithDoubleSpend,test/tnj/double_spend_test.go,End-to-End,Pending-Acceptance
+TNJ-8.2,Should proposed blocks include a transaction that Teranode considers a double-spend it should not build on top.,TestDoubleSpendBlock,test/tnj/double_spend_test.go,Unit Test,Pending-Acceptance
+TNJ-9,Adherence to Transaction Consensus Rule,TestTransactionConsensus,transaction_test.go,End-to-End,Not Started
+TNJ-9.1,Teranode must perform validation on all transactions it receives before they can be included in a block.,TestSendTxs,test/fsm/state_test.go,End-to-End,Need more checks

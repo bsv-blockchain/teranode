@@ -24,11 +24,6 @@ import (
 )
 
 func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, block *bsvutil.Block) error {
-	if block.Hash().String() == "0000000000000000037a2d6e18b515f606d25b9d7baea47c6e519825cd763734" {
-		sm.logger.Warnf("skipping block 0000000000000000037a2d6e18b515f606d25b9d7baea47c6e519825cd763734 as already processed")
-		return nil
-	}
-
 	// Make sure we have the correct height for this block before continuing
 	var blockHeight uint32
 
@@ -38,18 +33,21 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		if err != nil {
 			return errors.NewProcessingError("failed to get block header for previous block %s", block.MsgBlock().Header.PrevBlock, err)
 		}
+
 		blockHeight = previousBlockHeaderMeta.Height + 1
+		// nolint: gosec
 		block.SetHeight(int32(blockHeight))
 	} else {
 		blockHeight = uint32(block.Height())
 	}
 
 	ctx, _, deferFn := tracing.StartTracing(ctx, "HandleBlockDirect",
-		tracing.WithDebugLogMessage(
+		tracing.WithLogMessage(
 			sm.logger,
-			"[HandleBlockDirect][%s %d] processing block found from peer %s",
+			"[HandleBlockDirect][%s %d] %d txs, peer %s",
 			block.Hash().String(),
 			blockHeight,
+			len(block.Transactions()),
 			peer.String(),
 		),
 		tracing.WithTag("blockHash", block.Hash().String()),
@@ -88,6 +86,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 	// create valid teranode block, with the subtree hash
 	blockSize := block.MsgBlock().SerializeSize()
+
 	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), uint64(blockSize), blockHeight)
 	if err != nil {
 		return errors.NewProcessingError("failed to create model.NewBlock", err)
@@ -152,7 +151,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		}
 
 		if err := subtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
-			return nil, fmt.Errorf("failed to add coinbase placeholder: %w", err)
+			return nil, errors.NewSubtreeError("failed to add coinbase placeholder", err)
 		}
 
 		// subtreeData contains the extended tx bytes of all transactions references in the subtree
@@ -169,19 +168,21 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, err
 		}
 
+		// TODO move this into a convenience function in the blockchain client
 		currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 		if err != nil {
 			// TODO: how to handle it gracefully?
 			sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
 		}
 
-		legacyMode := *currentState == blockchain_api.FSMStateType_LEGACYSYNCING
-		legacyMode = true // force legacy mode for now
+		legacyMode := currentState != nil && *currentState == blockchain_api.FSMStateType_LEGACYSYNCING
 
 		if legacyMode {
 			// in legacy sync mode, we can process transactions in a block in parallel, but in reverse order
 			// first we create all the utxos, then we spend them
-			sm.validateTransactionsLegacyMode(ctx, txMap, blockHeight)
+			if err = sm.validateTransactionsLegacyMode(ctx, txMap, blockHeight); err != nil {
+				return nil, err
+			}
 		} else {
 			maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
 			sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, blockHeight)
@@ -191,12 +192,13 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		if err != nil {
 			return nil, errors.NewStorageError("failed to serialize subtree", err)
 		}
+
 		if err = sm.subtreeStore.Set(ctx,
 			subtree.RootHash()[:],
 			subtreeBytes,
 			options.WithFileExtension("subtree"),
 			options.WithTTL(2*time.Minute),
-		); err != nil {
+		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 			return nil, errors.NewStorageError("failed to store subtree", err)
 		}
 
@@ -204,12 +206,13 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		if err != nil {
 			return nil, errors.NewStorageError("failed to serialize subtree data", err)
 		}
+
 		if err = sm.subtreeStore.Set(ctx,
 			subtreeData.RootHash()[:],
 			subtreeDataBytes,
 			options.WithFileExtension("subtreeData"),
 			options.WithTTL(2*time.Minute),
-		); err != nil {
+		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 			return nil, errors.NewStorageError("failed to store subtree data", err)
 		}
 
@@ -223,8 +226,24 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	return subtrees, nil
 }
 
-func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) {
+func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactionsLegacyMode")
+	defer deferFn()
+
+	if err := sm.createUtxos(ctx, txMap, blockHeight); err != nil {
+		return err
+	}
+
+	sm.preValidateTransactions(ctx, txMap, blockHeight)
+
+	return nil
+}
+
+// createUtxos creates all the utxos for the transactions in the block in parallel
+// before any spending is done. This only occurs in legacy mode when we assume the
+// block is valid.
+func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) error {
+	_, _, deferFn := tracing.StartTracing(ctx, "createUtxos")
 	defer deferFn()
 
 	storeBatcherSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 1024)
@@ -239,7 +258,11 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 
 		g.Go(func() error {
 			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].tx, blockHeight); err != nil {
-				sm.logger.Errorf("failed to create utxo for tx %s: %s", txHash.String(), err)
+				if errors.Is(err, errors.ErrTxAlreadyExists) {
+					sm.logger.Debugf("failed to create utxo for tx %s: %s", txHash.String(), err)
+				} else {
+					return err
+				}
 			}
 
 			return nil
@@ -247,13 +270,25 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 	}
 
 	// wait for all utxos to be created
-	_ = g.Wait()
+	if err := g.Wait(); err != nil {
+		return errors.NewProcessingError("failed to create utxos", err)
+	}
+
+	return nil
+}
+
+// preValidateTransactions pre-validates all the transactions in the block before
+// sending them to subtree validation.
+func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) {
+	_, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions")
+	defer deferFn()
 
 	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
+
 	spendBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_spendBatcherConcurrency", 32)
 
 	// validate all the transactions in parallel
-	g, gCtx = errgroup.WithContext(context.Background())   // we don't want the tracing to be linked to these calls
+	g, gCtx := errgroup.WithContext(context.Background())  // we don't want the tracing to be linked to these calls
 	g.SetLimit(spendBatcherSize * spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
 
 	// validate all the transactions in parallel
@@ -272,6 +307,9 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 	_ = g.Wait()
 }
 
+// validateTransactions validates all the transactions in the block in parallel
+// per level. This is done to speed up subtree validation later on.
+// The levels indicate the number of parents in the block.
 func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, blockHeight uint32) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactions")
 	defer deferFn()
@@ -324,6 +362,7 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 
 	g, gCtx := errgroup.WithContext(ctx)                         // we don't want the tracing to be linked to these calls
 	g.SetLimit(outpointBatcherSize * outpointBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
+
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()
 
@@ -331,21 +370,38 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 		if txWrapper, found := txMap[txHash]; found {
 			tx := txWrapper.tx
 			txSize := uint64(tx.Size())
+			tx.Size()
 
-			if err := subtree.AddNode(txHash, 0, txSize); err != nil {
-				return fmt.Errorf("failed to add node (%s) to subtree: %w", txHash, err)
+			// Calculate the fees of this transaction
+			// We don't need to check for coinbase transactions, as they have no inputs
+			fee := uint64(0)
+
+			if !tx.IsCoinbase() {
+				// Calculate the fees of this transaction
+				// We don't need to check for coinbase transactions, as they have no inputs
+				for _, input := range tx.Inputs {
+					fee += input.PreviousTxSatoshis
+				}
+
+				for _, output := range tx.Outputs {
+					fee -= output.Satoshis
+				}
+			}
+
+			if err := subtree.AddNode(txHash, fee, txSize); err != nil {
+				return errors.NewTxError("failed to add node (%s) to subtree", txHash, err)
 			}
 			// we need to match the indexes of the subtree and the tx data in subtreeData
 			currentIdx := subtree.Length() - 1
 
 			g.Go(func() error {
 				if err := sm.extendTransaction(gCtx, tx, txMap); err != nil {
-					return fmt.Errorf("failed to extend transaction: %w", err)
+					return errors.NewTxError("failed to extend transaction", err)
 				}
 
 				// store the extended transaction in our subtree tx data file
 				if err := subtreeData.AddTx(tx, currentIdx); err != nil {
-					return fmt.Errorf("failed to add tx to subtree data: %w", err)
+					return errors.NewTxError("failed to add tx to subtree data", err)
 				}
 
 				return nil
@@ -372,30 +428,24 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 	)
 	defer deferFn()
 
-	// Create a map of all transactions in the block
-	txMap := make(map[chainhash.Hash]*txMapWrapper)
+	blockTransactions := block.Transactions()
 
-	for _, wireTx := range block.Transactions() {
+	// Create a map of all transactions in the block
+	txMap := make(map[chainhash.Hash]*txMapWrapper, len(blockTransactions))
+
+	for _, wireTx := range blockTransactions {
 		txHash := *wireTx.Hash()
 
-		// Serialize the tx
-		var txBytes bytes.Buffer
-		if err := wireTx.MsgTx().Serialize(&txBytes); err != nil {
-			return nil, fmt.Errorf("could not serialize msgTx: %w", err)
-		}
-
-		tx, err := bt.NewTxFromBytes(txBytes.Bytes())
+		tx, err := WireTxToGoBtTx(wireTx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create bt.Tx: %w", err)
+			return nil, errors.NewProcessingError("failed to convert wire.Tx to bt.Tx", err)
 		}
 
 		// don't add the coinbase to the txMap, we cannot process it anyway
 		if !tx.IsCoinbase() {
+			tx.SetTxHash(&txHash)
 			txMap[txHash] = &txMapWrapper{tx: tx}
 		}
-
-		// check if has parents in the block
-
 	}
 
 	return txMap, nil
@@ -403,15 +453,14 @@ func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (m
 
 // prepareTxsPerLevel prepares the transactions per level for processing
 // levels are determined by the number of parents in the block
-func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block,
-	txMap map[chainhash.Hash]*txMapWrapper) (uint32, map[uint32][]*bt.Tx) {
-
-	ctx, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel")
+func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper) (uint32, map[uint32][]*bt.Tx) {
+	_, _, deferFn := tracing.StartTracing(ctx, "prepareTxsPerLevel")
 	defer deferFn()
 
 	maxLevel := uint32(0)
 	sizePerLevel := make(map[uint32]uint64)
 	blockTxsPerLevel := make(map[uint32][]*bt.Tx)
+
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()
 		if _, found := txMap[txHash]; found {
@@ -424,12 +473,14 @@ func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Bl
 						if parentTxWrapper.childLevelInBlock >= txMap[txHash].childLevelInBlock {
 							txMap[txHash].childLevelInBlock = parentTxWrapper.childLevelInBlock + 1
 						}
+
 						if txMap[txHash].childLevelInBlock > maxLevel {
 							maxLevel = txMap[txHash].childLevelInBlock
 						}
 					}
 				}
 			}
+
 			sizePerLevel[txMap[txHash].childLevelInBlock] += 1
 		}
 	}
@@ -452,7 +503,7 @@ func (sm *SyncManager) extendTransaction(ctx context.Context, tx *bt.Tx, txMap m
 
 	txWrapper, found := txMap[*tx.TxIDChainHash()]
 	if !found {
-		return fmt.Errorf("tx %s not found in txMap", tx.TxIDChainHash())
+		return errors.NewProcessingError("tx %s not found in txMap", tx.TxIDChainHash())
 	}
 
 	for i, input := range tx.Inputs {
@@ -471,17 +522,49 @@ func (sm *SyncManager) extendTransaction(ctx context.Context, tx *bt.Tx, txMap m
 	}
 
 	if err := sm.utxoStore.PreviousOutputsDecorate(ctx, previousOutputs); err != nil {
-		return fmt.Errorf("failed to decorate previous outputs for tx %s: %w", tx.TxIDChainHash(), err)
+		return errors.NewProcessingError("failed to decorate previous outputs for tx %s", tx.TxIDChainHash(), err)
 	}
 
 	// run through the previous outputs and extend the transaction
 	for _, po := range previousOutputs {
 		if po.LockingScript == nil {
-			return fmt.Errorf("previous output script is empty for %s:%d", po.PreviousTxID, po.Vout)
+			return errors.NewProcessingError("previous output script is empty for %s:%d", po.PreviousTxID, po.Vout)
 		}
 
 		tx.Inputs[po.Idx].PreviousTxSatoshis = po.Satoshis
 		tx.Inputs[po.Idx].PreviousTxScript = bscript.NewFromBytes(po.LockingScript)
 	}
+
 	return nil
+}
+
+// WireTxToGoBtTx converts a wire.Tx to a bt.Tx
+// This does not use the bytes methods, but directly uses the fields of the wire.Tx
+func WireTxToGoBtTx(wireTx *bsvutil.Tx) (*bt.Tx, error) {
+	wTx := wireTx.MsgTx()
+
+	tx := &bt.Tx{
+		Version:  uint32(wTx.Version),
+		LockTime: wTx.LockTime,
+	}
+
+	tx.Inputs = make([]*bt.Input, len(wTx.TxIn))
+	for i, in := range wTx.TxIn {
+		tx.Inputs[i] = &bt.Input{
+			UnlockingScript:    bscript.NewFromBytes(in.SignatureScript),
+			PreviousTxOutIndex: in.PreviousOutPoint.Index,
+			SequenceNumber:     in.Sequence,
+		}
+		_ = tx.Inputs[i].PreviousTxIDAdd(&in.PreviousOutPoint.Hash)
+	}
+
+	tx.Outputs = make([]*bt.Output, len(wTx.TxOut))
+	for i, out := range wTx.TxOut {
+		tx.Outputs[i] = &bt.Output{
+			Satoshis:      uint64(out.Value),
+			LockingScript: bscript.NewFromBytes(out.PkScript),
+		}
+	}
+
+	return tx, nil
 }

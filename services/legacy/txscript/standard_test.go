@@ -9,8 +9,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/chaincfg"
 )
 
 // mustParseShortForm parses the passed short form script and returns the

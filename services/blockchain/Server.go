@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/looplab/fsm"
 	"github.com/ordishs/go-utils"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -48,6 +50,7 @@ type Blockchain struct {
 	notifications      chan *blockchain_api.Notification
 	newBlock           chan struct{}
 	difficulty         *Difficulty
+	chainParams        *chaincfg.Params
 	blockKafkaProducer util.KafkaProducerI
 	stats              *gocore.Stat
 	finiteStateMachine *fsm.FSM
@@ -60,9 +63,14 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 
 	initPrometheusMetrics()
 
-	difficultyAdjustmentWindow, _ := gocore.Config().GetInt("difficulty_adjustment_window", 144)
+	network, _ := gocore.Config().Get("network", "mainnet")
 
-	d, err := NewDifficulty(store, logger, difficultyAdjustmentWindow)
+	params, err := chaincfg.GetChainParams(network)
+	if err != nil {
+		logger.Fatalf("Unknown network: %s", network)
+	}
+
+	d, err := NewDifficulty(store, logger, params)
 	if err != nil {
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}
@@ -79,6 +87,7 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 		notifications:     make(chan *blockchain_api.Notification, 100),
 		newBlock:          make(chan struct{}, 10),
 		difficulty:        d,
+		chainParams:       params,
 		stats:             gocore.NewStat("blockchain"),
 	}, nil
 }
@@ -100,6 +109,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
 	if err == nil && ok {
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
+
 		if _, b.blockKafkaProducer, err = util.ConnectToKafka(blocksKafkaURL); err != nil {
 			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
 		}
@@ -116,6 +126,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				return
 			case notification := <-b.notifications:
 				start := gocore.CurrentTime()
+
 				func() {
 					b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
 
@@ -133,7 +144,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 
 			case s := <-b.newSubscriptions:
 				b.subscribers[s] = true
-				b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
+			//	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
 
 			case s := <-b.deadSubscriptions:
 				delete(b.subscribers, s)
@@ -199,7 +210,16 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				b.logger.Errorf("[Blockchain] failed to start http server: %v", err)
 			}
 		}()
+	}
 
+	testingInDockerWithoutLegacyServer := gocore.Config().GetBool("testing_in_docker_without_legacy_server", false)
+
+	if testingInDockerWithoutLegacyServer {
+		b.logger.Infof("[Blockchain] Testing in docker without legacy server")
+		_, err = b.Run(ctx, &emptypb.Empty{})
+		if err != nil {
+			b.logger.Errorf("[Blockchain] failed to send RUN event in docker environment: %v", err)
+		}
 	}
 
 	// this will block
@@ -321,10 +341,15 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		subtreeHashes[i] = subtreeHash[:]
 	}
 
+	var coinbaseBytes []byte
+	if block.CoinbaseTx != nil {
+		coinbaseBytes = block.CoinbaseTx.Bytes()
+	}
+
 	return &blockchain_api.GetBlockResponse{
 		Header:           block.Header.Bytes(),
 		Height:           height,
-		CoinbaseTx:       block.CoinbaseTx.Bytes(),
+		CoinbaseTx:       coinbaseBytes,
 		SubtreeHashes:    subtreeHashes,
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
@@ -381,10 +406,15 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 		subtreeHashes[i] = subtreeHash[:]
 	}
 
+	var coinbaseBytes []byte
+	if block.CoinbaseTx != nil {
+		coinbaseBytes = block.CoinbaseTx.Bytes()
+	}
+
 	return &blockchain_api.GetBlockResponse{
 		Header:           block.Header.Bytes(),
 		Height:           request.Height,
-		CoinbaseTx:       block.CoinbaseTx.Bytes(),
+		CoinbaseTx:       coinbaseBytes,
 		SubtreeHashes:    subtreeHashes,
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
@@ -456,11 +486,14 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 	defer deferFn()
 
 	var nBits *model.NBit
-	nBitsString, _ := gocore.Config().Get("mining_n_bits", "2000ffff") // TEMP By default, we want hashes with 2 leading zeros. genesis was 1d00ffff
+
+	bytesLittleEndian := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bytesLittleEndian, b.chainParams.PowLimitBits)
+	defaultNbits, _ := model.NewNBitFromSlice(bytesLittleEndian)
 
 	if b.difficulty == nil {
 		b.logger.Debugf("difficulty is null")
-		nBits, _ = model.NewNBitFromString(nBitsString)
+		nBits = defaultNbits
 	} else {
 
 		hash, err := chainhash.NewHash(request.BlockHash)
@@ -473,12 +506,12 @@ func (b *Blockchain) GetNextWorkRequired(ctx context.Context, request *blockchai
 			return nil, errors.WrapGRPC(err)
 		}
 
-		nBitsp, err := b.difficulty.GetNextWorkRequired(ctx, blockHeader, meta.Height)
+		nBitsp, err := b.difficulty.CalcNextWorkRequired(ctx, blockHeader, meta.Height)
 		if err == nil {
 			nBits = nBitsp
 		} else {
 			b.logger.Debugf("error in GetNextWorkRequired: %v", err)
-			nBits, _ = model.NewNBitFromString(nBitsString)
+			nBits = defaultNbits
 		}
 
 		b.logger.Debugf("difficulty adjustment. Difficulty set to %s", nBits.String())
@@ -653,6 +686,8 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 		done:         ch,
 		source:       req.Source,
 	}
+
+	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", req.Source, len(b.subscribers))
 
 	for {
 		select {
@@ -902,23 +937,32 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	}, nil
 }
 
+func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targetState blockchain_api.FSMStateType) error {
+	for b.finiteStateMachine.Current() != targetState.String() {
+		b.logger.Debugf("Waiting 1 second for FSM to transition to %v state, currently at: %v", targetState.String(), b.finiteStateMachine.Current())
+		time.Sleep(1 * time.Second) // Wait and check again in 1 second
+	}
+	return nil
+}
+
 func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.SendFSMEventRequest) (*blockchain_api.GetFSMStateResponse, error) {
-	b.logger.Debugf("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
+	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
 	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
 	if err != nil {
+		b.logger.Debugf("[Blockchain Server] Error sending event to FSM, state has not changed.")
 		return nil, err
 	}
 	state := b.finiteStateMachine.Current()
 
 	// Log the state immediately after storing it
-	b.logger.Infof("[Blockchain Server] state immediately after storing: %v", state)
+	// b.logger.Infof("[Blockchain Server] state immediately after storing: %v", state)
 
 	resp := &blockchain_api.GetFSMStateResponse{
 		State: blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[state]),
 	}
 
-	b.logger.Debugf("[Blockchain Server] FSM current state: %v", b.finiteStateMachine.Current(), ", response: %v", resp)
+	b.logger.Infof("[Blockchain Server] FSM current state: %v, response: %v", b.finiteStateMachine.Current(), resp)
 
 	return resp, nil
 }
@@ -926,20 +970,6 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	req := &blockchain_api.SendFSMEventRequest{
 		Event: blockchain_api.FSMEventType_RUN,
-	}
-
-	_, err := b.SendFSMEvent(ctx, req)
-	if err != nil {
-		// unable to send the event, no need to update the state.
-		return nil, err
-	}
-
-	return nil, nil
-}
-
-func (b *Blockchain) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	req := &blockchain_api.SendFSMEventRequest{
-		Event: blockchain_api.FSMEventType_MINE,
 	}
 
 	_, err := b.SendFSMEvent(ctx, req)

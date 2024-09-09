@@ -5,8 +5,6 @@ x-ubsv-base:
   depends_on:
     - postgres
     - kafka-shared
-  environment:
-    logLevel: "DEBUG"
   volumes:
     - ./data:/app/data
 
@@ -25,13 +23,17 @@ services:
 
   jaeger:
     container_name: jaeger
-    image: jaegertracing/all-in-one:1.22
+    image: jaegertracing/all-in-one:1.59
     network_mode: "host"
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
     ports:
       - "6831:6831/udp"
       - "6832:6832/udp"
       - "5778:5778"
       - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
       - "14250:14250"
       - "14268:14268"
       - "14269:14269"
@@ -98,7 +100,7 @@ services:
       JAEGER_SERVICE_NAME: ubsv-1
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
- 
+      logLevel: "DEBUG"
     volumes:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/ubsv1/txstore:/app/data/ubsv1/txstore
@@ -151,16 +153,13 @@ services:
   tx-blaster-1:
     <<: *ubsv-base
     container_name: tx-blaster-1
-    depends_on:
-      - ubsv-1
-      - ubsv-2
-      - ubsv-3
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv1"
       BLASTER_ARGS: "-workers=2"
     # pass arguments to the command
     command: ["/app/blaster.run", "-workers=1", "-print=0", "-profile=:9092", "-log=0", "-limit=100", "--quic=false"]
     volumes:
+      - ./settings_local.conf:/app/settings_local.conf
       - ./data/txblaster1:/app/data
       # - ./data/txblaster.log:/app/data/txblaster.log
 

@@ -134,9 +134,6 @@ func (v *DefaultValidator) ValidateTransaction(tx *bt.Tx) error { //nolint:funle
 		return validator.NewError(err, api.ErrStatusOutputs)
 	}
 
-	// 6) nLocktime is equal to INT_MAX, or nLocktime and nSequence values are satisfied according to MedianTimePast
-	//    => checked by the node, we do not want to have to know the current block height
-
 	// 7) The transaction size in bytes is greater than or equal to 100
 	if txSize < 100 {
 		return validator.NewError(fmt.Errorf("transaction size in bytes is less than 100 bytes"), api.ErrStatusMalformed)
@@ -198,11 +195,9 @@ The above represents an implementation of the core Teranode validation rules:
 
     - Equal to zero, or
 
-    - <500000000 and smaller than block height, or
+    - <500000000 and smaller than block height, or >=500000000 and SMALLER THAN TIMESTAMP
 
-    - >=500000000 and smaller than timestamp
-
-  - Note: This means that Teranode will deem non-final transactions invalid and reject these transactions. It is up to the user to create proper non-final transactions to ensure that Teranode is aware of them.
+    - Note: This means that Teranode will deem non-final transactions invalid and REJECT these transactions. It is up to the user to create proper non-final transactions to ensure that Teranode is aware of them. For clarity, if a transaction has a locktime in the future, the Tx Validator will reject it.
 
   - No output must be Pay-to-Script-Hash (P2SH)
 

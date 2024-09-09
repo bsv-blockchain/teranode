@@ -28,15 +28,15 @@ type SQL struct {
 	blocksCache   blockchainCache
 }
 
-func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
+func New(logger ulogger.Logger, storeURL *url.URL) (*SQL, error) {
 	logger = logger.New("bcsql")
 
-	db, err := util.InitSQLDB(logger, storeUrl)
+	db, err := util.InitSQLDB(logger, storeURL)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to init sql db", err)
 	}
 
-	switch util.SQLEngine(storeUrl.Scheme) {
+	switch util.SQLEngine(storeURL.Scheme) {
 	case util.Postgres:
 		if err = createPostgresSchema(db); err != nil {
 			return nil, errors.NewStorageError("failed to create postgres schema", err)
@@ -48,12 +48,12 @@ func New(logger ulogger.Logger, storeUrl *url.URL) (*SQL, error) {
 		}
 
 	default:
-		return nil, errors.NewStorageError("unknown database engine: %s", storeUrl.Scheme)
+		return nil, errors.NewStorageError("unknown database engine: %s", storeURL.Scheme)
 	}
 
 	s := &SQL{
 		db:            db,
-		engine:        util.SQLEngine(storeUrl.Scheme),
+		engine:        util.SQLEngine(storeURL.Scheme),
 		logger:        logger,
 		cacheTTL:      2 * time.Minute,
 		responseCache: ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](2 * time.Minute)),
@@ -245,8 +245,11 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 		FROM blocks b
 	`
 
-	var err error
-	var blockCount uint64
+	var (
+		err        error
+		blockCount uint64
+	)
+
 	if err = s.db.QueryRow(q).Scan(
 		&blockCount,
 	); err != nil {
@@ -317,8 +320,10 @@ func (c *blockchainCache) AddBlockHeader(blockHeader *model.BlockHeader, blockHe
 }
 
 func (c *blockchainCache) addBlockHeader(blockHeader *model.BlockHeader, blockHeaderMeta *model.BlockHeaderMeta) bool {
-	const added = true
-	const notAdded = false
+	const (
+		added    = true
+		notAdded = false
+	)
 
 	// height := block.Height
 	// if len(c.chain) != 0 && height == 0 {
@@ -377,22 +382,28 @@ func (s *SQL) ResetBlocksCache(ctx context.Context) error {
 	s.logger.Warnf("Reset")
 	defer s.logger.Warnf("Reset completed")
 
+	// empty the cache
+	s.blocksCache.RebuildBlockchain(nil, nil)
+
 	bestBlockHeader, _, err := s.GetBestBlockHeader(ctx)
 	if err != nil {
 		return err
 	}
 
-	var blockHeaders []*model.BlockHeader
-	var blockHeaderMetas []*model.BlockHeaderMeta
+	var (
+		blockHeaders     []*model.BlockHeader
+		blockHeaderMetas []*model.BlockHeaderMeta
+	)
+
 	blockHeaders, blockHeaderMetas, err = s.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100)
 	if err != nil {
 		return err
 	}
 
+	// re-fill the cache with data from the db
 	s.blocksCache.RebuildBlockchain(blockHeaders, blockHeaderMetas)
 
 	return nil
-
 }
 
 func (c *blockchainCache) GetBestBlockHeader() (*model.BlockHeader, *model.BlockHeaderMeta, error) {
@@ -438,6 +449,7 @@ func (c *blockchainCache) GetBlockHeadersFromHeight(height uint32, limit int) ([
 
 			headers := make([]*model.BlockHeader, 0, limit)
 			metas := make([]*model.BlockHeaderMeta, 0, limit)
+
 			for j := i; j < i+limit; j++ {
 				headers = append(headers, c.headers[c.chain[j]])
 				metas = append(metas, c.metas[c.chain[j]])
@@ -458,7 +470,9 @@ func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberO
 		return nil, nil, nil
 	}
 
+	// nolint: gosec
 	limit := int(numberOfHeaders)
+
 	for i, hash := range c.chain {
 		if hash == *blockHashFrom {
 			if i < limit {
@@ -468,6 +482,7 @@ func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberO
 
 			headers := make([]*model.BlockHeader, 0, limit)
 			metas := make([]*model.BlockHeaderMeta, 0, limit)
+
 			for j := i; j > i-limit; j-- {
 				headers = append(headers, c.headers[c.chain[j]])
 				metas = append(metas, c.metas[c.chain[j]])
@@ -485,6 +500,7 @@ func (c *blockchainCache) GetExists(blockHash chainhash.Hash) (bool, bool) {
 	defer c.mutex.RUnlock()
 
 	exists, ok := c.existsCache[blockHash]
+
 	return exists, ok
 }
 

@@ -2,20 +2,20 @@ package model
 
 import (
 	"context"
+	"encoding/binary"
 	"os"
 	"runtime"
 	"runtime/pprof"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
-	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,26 +24,8 @@ import (
 func TestBigBlock_Valid(t *testing.T) {
 	// Comment this out to run the test, it is commented, so it does not run in GitHub Actions
 	util.SkipVeryLongTests(t)
-	fileDir = "./big-test-generated_test_data/"
-	fileNameTemplate = fileDir + "subtree-%d.bin"
-	fileNameTemplateMerkleHashes = fileDir + "subtree-merkle-hashes.bin"
-	fileNameTemplateBlock = fileDir + "block.bin"
-	txMetafileNameTemplate = fileDir + "txMeta.bin"
-	subtreeStore := newLocalSubtreeStore()
-	txCount := uint64(10 * 1024 * 1024)
-	subtreeSize = 1024 * 1024
-	createNewTestData := false
-
-	// delete all the data in the ./testdata folder to regenerate the testdata
-	block, err := generateTestBlock(txCount, subtreeStore, createNewTestData)
+	subtreeStore, block, err := generateBigBlockTestData(t)
 	require.NoError(t, err)
-
-	txMetaStore := memory.New(ulogger.TestLogger{})
-	loadMetaToMemoryOnce.Do(func() {
-		cachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
-		err = loadTxMetaIntoMemory()
-		require.NoError(t, err)
-	})
 
 	// check if the first txid is in the txMetaStore
 	reqTxId, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
@@ -56,10 +38,6 @@ func TestBigBlock_Valid(t *testing.T) {
 		SizeInBytes:    1,
 		ParentTxHashes: []chainhash.Hash{},
 	}, data)
-
-	for idx, subtreeHash := range block.Subtrees {
-		subtreeStore.files[*subtreeHash] = idx
-	}
 
 	currentChain := make([]*BlockHeader, 11)
 	currentChainIDs := make([]uint32, 11)
@@ -90,6 +68,89 @@ func TestBigBlock_Valid(t *testing.T) {
 	defer f.Close()
 	_ = pprof.WriteHeapProfile(f)
 	require.True(t, v)
+}
+
+func generateBigBlockTestData(t *testing.T) (*localSubtreeStore, *Block, error) {
+	fileDir = "./big-test-generated_test_data/"
+	fileNameTemplate = fileDir + "subtree-%d.bin"
+	fileNameTemplateMerkleHashes = fileDir + "subtree-merkle-hashes.bin"
+	fileNameTemplateBlock = fileDir + "block.bin"
+	txMetafileNameTemplate = fileDir + "txMeta.bin"
+	subtreeStore := newLocalSubtreeStore()
+	txCount := uint64(10 * 1024 * 1024)
+	subtreeSize = 1024 * 1024
+	createNewTestData := false
+
+	// delete all the data in the ./testdata folder to regenerate the testdata
+	block, err := generateTestBlock(txCount, subtreeStore, createNewTestData)
+	require.NoError(t, err)
+
+	txMetaStore := memory.New(ulogger.TestLogger{})
+
+	loadMetaToMemoryOnce.Do(func() {
+		cachedTxMetaStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 1024)
+		err = loadTxMetaIntoMemory()
+		require.NoError(t, err)
+	})
+
+	for idx, subtreeHash := range block.Subtrees {
+		subtreeStore.files[*subtreeHash] = idx
+	}
+
+	return subtreeStore, block, err
+}
+
+func Test_NewOptimizedBloomFilter(t *testing.T) {
+	util.SkipVeryLongTests(t)
+
+	subtreeStore, block, err := generateBigBlockTestData(t)
+	require.NoError(t, err)
+
+	// load the subtrees before starting profiling
+	_ = block.GetAndValidateSubtrees(context.Background(), ulogger.TestLogger{}, subtreeStore)
+
+	runtime.SetCPUProfileRate(500)
+
+	f, _ := os.Create("cpu.prof")
+
+	defer f.Close()
+
+	_ = pprof.StartCPUProfile(f)
+
+	defer pprof.StopCPUProfile()
+
+	timeStart := time.Now()
+	bloomFilter, err := block.NewOptimizedBloomFilter(context.Background(), ulogger.TestLogger{}, subtreeStore)
+	require.NoError(t, err)
+	t.Logf("Time taken: %s\n", time.Since(timeStart))
+
+	f, _ = os.Create("mem.prof")
+
+	defer f.Close()
+
+	_ = pprof.WriteHeapProfile(f)
+
+	require.NotNil(t, bloomFilter)
+
+	assert.Equal(t, true, bloomFilter.Has(0))
+	assert.Equal(t, false, bloomFilter.Has(1))
+
+	// check all txids are in bloom filter
+	for idx, subtree := range block.SubtreeSlices {
+		for nodeIdx, node := range subtree.Nodes {
+			if idx == 0 && nodeIdx == 0 {
+				continue
+			}
+
+			n64 := binary.BigEndian.Uint64(node.Hash[:])
+			assert.Equal(t, true, bloomFilter.Has(n64))
+		}
+	}
+
+	// random negative check
+	assert.Equal(t, false, bloomFilter.Has(1231422))
+	assert.Equal(t, false, bloomFilter.Has(5453456356))
+	assert.Equal(t, false, bloomFilter.Has(4556873583))
 }
 
 func Test_LoadTxMetaIntoMemory(t *testing.T) {

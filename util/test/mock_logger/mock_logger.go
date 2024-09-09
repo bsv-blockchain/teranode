@@ -30,6 +30,11 @@ func (l *MockLogger) New(service string, options ...ulogger.Option) ulogger.Logg
 		calls: make(map[string]int, 1),
 	}
 }
+func (l *MockLogger) Duplicate(options ...ulogger.Option) ulogger.Logger {
+	return &MockLogger{
+		calls: make(map[string]int, 1),
+	}
+}
 func (l *MockLogger) Debugf(format string, args ...interface{}) {
 	l.recordCall("Debugf")
 }

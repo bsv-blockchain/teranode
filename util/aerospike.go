@@ -70,7 +70,7 @@ func GetAerospikeClient(logger ulogger.Logger, url *url.URL) (*uaerospike.Client
 	}
 
 	// increase buffer size to 256MB for large records
-	aerospike.MaxBufferSize = 1024 * 1024 * 256 // 256MB
+	aerospike.MaxBufferSize = 1024 * 1024 * 512 // 512MB
 
 	return client, nil
 }

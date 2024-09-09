@@ -3,8 +3,9 @@ package blockchain
 import (
 	"context"
 
-	"google.golang.org/protobuf/types/known/emptypb"
 	"time"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 
@@ -164,13 +165,17 @@ func (c LocalClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Bloc
 
 func (c LocalClient) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
 	// TODO: Placeholder for now
-	state := blockchain_api.FSMStateType_MINING
+	state := blockchain_api.FSMStateType_RUNNING
 	return &state, nil
+}
+
+func (c LocalClient) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
+	return nil
 }
 
 func (c LocalClient) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
 	// TODO: Fix me, this is a temporary solution
-	return blockchain_api.FSMStateType_MINING
+	return blockchain_api.FSMStateType_RUNNING
 }
 
 func (c LocalClient) SendFSMEvent(_ context.Context, _ blockchain_api.FSMEventType) error {

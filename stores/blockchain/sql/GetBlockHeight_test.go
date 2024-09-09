@@ -13,10 +13,10 @@ import (
 
 func TestSQL_GetBlockHeight(t *testing.T) {
 	t.Run("block 0 - genesis block", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		headerHash, err := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
@@ -29,10 +29,10 @@ func TestSQL_GetBlockHeight(t *testing.T) {
 	})
 
 	t.Run("block 2", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")

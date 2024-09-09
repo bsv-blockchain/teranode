@@ -14,9 +14,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 
+	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	blockchain_options "github.com/bitcoin-sv/ubsv/stores/blockchain/options"
 	utxo_memory "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -231,7 +233,7 @@ func (s *mockStore) GetBlockExists(ctx context.Context, blockHash *chainhash.Has
 func (s *mockStore) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
 	panic("not implemented")
 }
-func (s *mockStore) StoreBlock(ctx context.Context, block *model.Block, peerID string) (uint64, uint32, error) {
+func (s *mockStore) StoreBlock(ctx context.Context, block *model.Block, peerID string, opts ...blockchain_options.StoreBlockOption) (uint64, uint32, error) {
 	s.block = block
 	return 0, 0, nil
 }
@@ -283,4 +285,9 @@ func (s *mockStore) GetBlocksByTime(ctx context.Context, fromTime, toTime time.T
 func (s *mockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (s *mockStore) ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*file.File, error) {
+	panic("not implemented")
+
 }

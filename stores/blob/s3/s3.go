@@ -42,29 +42,40 @@ var (
 	cache = expiringmap.New[string, []byte](1 * time.Minute)
 )
 
+/**
+* Used in Lustre store to retrieve old files.
+* Used in Aerospike store for large transactions in production.
+* TTL managed by S3.
+* SetTTL is not implemented meaning you cannot manually expire a file.
+ */
 func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, error) {
 	logger = logger.New("s3")
 
 	maxIdleConns, err := getQueryParamInt(s3URL, "MaxIdleConns", 100)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to parse MaxIdleConns", err)
+		return nil, errors.NewConfigurationError("[S3] failed to parse MaxIdleConns", err)
 	}
+
 	maxIdleConnsPerHost, err := getQueryParamInt(s3URL, "MaxIdleConnsPerHost", 100)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to parse MaxIdleConnsPerHost", err)
+		return nil, errors.NewConfigurationError("[S3] failed to parse MaxIdleConnsPerHost", err)
 	}
+
 	idleConnTimeout, err := getQueryParamDuration(s3URL, "IdleConnTimeoutSeconds", 100, time.Second)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to parse IdleConnTimeoutSeconds", err)
+		return nil, errors.NewConfigurationError("[S3] failed to parse IdleConnTimeoutSeconds", err)
 	}
+
 	timeout, err := getQueryParamDuration(s3URL, "TimeoutSeconds", 30, time.Second)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to parse TimeoutSeconds", err)
+		return nil, errors.NewConfigurationError("[S3] failed to parse TimeoutSeconds", err)
 	}
+
 	keepAlive, err := getQueryParamDuration(s3URL, "KeepAliveSeconds", 300, time.Second)
 	if err != nil {
-		return nil, errors.NewConfigurationError("failed to parse KeepAliveSeconds", err)
+		return nil, errors.NewConfigurationError("[S3] failed to parse KeepAliveSeconds", err)
 	}
+
 	region := s3URL.Query().Get("region")
 	subDirectory := s3URL.Query().Get("subDirectory")
 
@@ -112,6 +123,7 @@ func (g *S3) Close(_ context.Context) error {
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Close").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(context.Background(), "s3:Close")
 	defer traceSpan.Finish()
 
@@ -122,14 +134,24 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	start := gocore.CurrentTime()
 	defer func() {
 		_ = reader.Close()
+
 		gocore.NewStat("prop_store_s3", true).NewStat("SetFromReader").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:SetFromReader")
 	defer traceSpan.Finish()
 
 	o := options.NewSetOptions(g.options, opts...)
 
 	objectKey := g.getObjectKey(key, o)
+
+	// Check if the object already exists
+	if _, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    objectKey,
+	}); err == nil {
+		return errors.NewBlobAlreadyExistsError("[S3][SetFromReader] [%s] already exists in store", objectKey)
+	}
 
 	// g.logger.Warnf("[S3][%s] Setting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
 
@@ -144,10 +166,9 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 		uploadInput.Expires = &expires
 	}
 
-	_, err := g.uploader.Upload(traceSpan.Ctx, uploadInput)
-	if err != nil {
+	if _, err := g.uploader.Upload(traceSpan.Ctx, uploadInput); err != nil {
 		traceSpan.RecordError(err)
-		return errors.NewStorageError("failed to set data from reader", err)
+		return errors.NewStorageError("[S3] [%s/%s] failed to set data from reader", g.bucket, objectKey, err)
 	}
 
 	return nil
@@ -158,12 +179,21 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Set").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:Set")
 	defer traceSpan.Finish()
 
 	o := options.NewSetOptions(g.options, opts...)
 
 	objectKey := g.getObjectKey(key, o)
+
+	// Check if the object already exists
+	if _, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    objectKey,
+	}); err == nil {
+		return errors.NewBlobAlreadyExistsError("[S3][Set] [%s] already exists in store", objectKey)
+	}
 
 	buf := bytes.NewBuffer(value)
 	uploadInput := &s3.PutObjectInput{
@@ -179,10 +209,9 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 		uploadInput.Expires = &expires
 	}
 
-	_, err := g.uploader.Upload(traceSpan.Ctx, uploadInput)
-	if err != nil {
+	if _, err := g.uploader.Upload(traceSpan.Ctx, uploadInput); err != nil {
 		traceSpan.RecordError(err)
-		return errors.NewStorageError("failed to set data", err)
+		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, objectKey, err)
 	}
 
 	cache.Set(*objectKey, value)
@@ -195,6 +224,7 @@ func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("SetTTL").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:SetTTL")
 	defer traceSpan.Finish()
 
@@ -207,6 +237,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetIoReader").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
@@ -225,7 +256,8 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, errors.ErrNotFound
 		}
-		return nil, errors.NewStorageError("failed to get s3 data", err)
+
+		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get s3 data", g.bucket, objectKey, err)
 	}
 
 	return result.Body, nil
@@ -235,8 +267,8 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
-		// g.logger.Warnf("[S3][%s] Getting object from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
@@ -250,7 +282,7 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 	// check cache
 	cached, ok := cache.Get(*objectKey)
 	if ok {
-		g.logger.Debugf("Cache hit for: %s", *objectKey)
+		g.logger.Debugf("[S3] Cache hit for: %s", *objectKey)
 		return cached, nil
 	}
 
@@ -260,12 +292,15 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 			Bucket: aws.String(g.bucket),
 			Key:    objectKey,
 		})
+
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, errors.ErrNotFound
 		}
+
 		traceSpan.RecordError(err)
-		return nil, errors.NewStorageError("failed to get data", err)
+
+		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get data", g.bucket, objectKey, err)
 	}
 
 	return buf.Bytes(), err
@@ -275,8 +310,8 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetHead").AddTime(start)
-		// g.logger.Warnf("[S3][%s] Getting object head from S3 DONE", utils.ReverseAndHexEncodeSlice(key))
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:GetHead")
 	defer traceSpan.Finish()
 
@@ -290,7 +325,7 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 	// check cache
 	cached, ok := cache.Get(*objectKey)
 	if ok {
-		g.logger.Debugf("Cache hit for: %s", *objectKey)
+		g.logger.Debugf("[S3] Cache hit for: %s", *objectKey)
 
 		if len(cached) < nrOfBytes {
 			return cached, nil
@@ -306,12 +341,15 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 			Key:    objectKey,
 			Range:  aws.String(fmt.Sprintf("bytes=0-%d", nrOfBytes-1)),
 		})
+
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			return nil, errors.ErrNotFound
 		}
+
 		traceSpan.RecordError(err)
-		return nil, errors.NewStorageError("failed to get data head", err)
+
+		return nil, errors.NewStorageError("[S3] [%s/%s] failed to get data head", g.bucket, objectKey, err)
 	}
 
 	return buf.Bytes(), err
@@ -322,6 +360,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (b
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Exists").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:Exists")
 	defer traceSpan.Finish()
 
@@ -352,7 +391,8 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (b
 		}
 
 		traceSpan.RecordError(err)
-		return false, errors.NewStorageError("failed to check whether object exists", err)
+
+		return false, errors.NewStorageError("[S3] [%s/%s] failed to check whether object exists", g.bucket, objectKey, err)
 	}
 
 	return true, nil
@@ -363,6 +403,7 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Del").AddTime(start)
 	}()
+
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()
 
@@ -378,7 +419,7 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 	})
 	if err != nil {
 		traceSpan.RecordError(err)
-		return errors.NewStorageError("unable to del data", err)
+		return errors.NewStorageError("[S3] [%s/%s] unable to del data", g.bucket, objectKey, err)
 	}
 
 	// do we need to wait until we can be sure that the object is deleted?
@@ -395,9 +436,11 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 }
 
 func (g *S3) getObjectKey(hash []byte, o *options.SetOptions) *string {
-	var key string
-	var prefix string
-	var ext string
+	var (
+		key    string
+		prefix string
+		ext    string
+	)
 
 	if o.Extension != "" {
 		ext = "." + o.Extension
@@ -418,7 +461,9 @@ func getQueryParamInt(url *url.URL, key string, defaultValue int) (int, error) {
 	if value == "" {
 		return defaultValue, nil
 	}
+
 	result, err := strconv.Atoi(value)
+
 	return result, err
 }
 
@@ -427,6 +472,8 @@ func getQueryParamDuration(url *url.URL, key string, defaultValue int, duration 
 	if value == "" {
 		return time.Duration(defaultValue) * duration, nil
 	}
+
 	result, err := strconv.Atoi(value)
+
 	return time.Duration(result) * duration, err
 }

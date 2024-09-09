@@ -36,8 +36,9 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	// }
 
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
-	cacheId := chainhash.HashH([]byte(fmt.Sprintf("getBlock-%s", blockHash.String())))
-	cached := s.responseCache.Get(cacheId)
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("getBlock-%s", blockHash.String())))
+
+	cached := s.responseCache.Get(cacheID)
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*getBlockCache); ok && cacheData != nil {
 			s.logger.Debugf("GetBlock cache hit")
@@ -70,16 +71,18 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		Header: &model.BlockHeader{},
 	}
 
-	var subtreeCount uint64
-	var transactionCount uint64
-	var sizeInBytes uint64
-	var subtreeBytes []byte
-	var hashPrevBlock []byte
-	var hashMerkleRoot []byte
-	var coinbaseTx []byte
-	var height uint32
-	var nBits []byte
-	var err error
+	var (
+		subtreeCount     uint64
+		transactionCount uint64
+		sizeInBytes      uint64
+		subtreeBytes     []byte
+		hashPrevBlock    []byte
+		hashMerkleRoot   []byte
+		coinbaseTx       []byte
+		height           uint32
+		nBits            []byte
+		err              error
+	)
 
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
 		&block.Header.Version,
@@ -98,6 +101,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, 0, errors.NewStorageError("error in GetBlock", err)
 		}
+
 		return nil, 0, err
 	}
 
@@ -108,16 +112,20 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	if err != nil {
 		return nil, 0, errors.NewStorageError("failed to convert hashPrevBlock", err)
 	}
+
 	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
 		return nil, 0, errors.NewStorageError("failed to convert hashMerkleRoot", err)
 	}
+
 	block.TransactionCount = transactionCount
 	block.SizeInBytes = sizeInBytes
 
-	block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
-	if err != nil {
-		return nil, 0, errors.NewStorageError("failed to convert coinbaseTx", err)
+	if len(coinbaseTx) > 0 {
+		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
+		if err != nil {
+			return nil, 0, errors.NewStorageError("failed to convert coinbaseTx", err)
+		}
 	}
 
 	err = block.SubTreesFromBytes(subtreeBytes)
@@ -128,7 +136,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	// set the block height on the block
 	block.Height = height
 
-	s.responseCache.Set(cacheId, &getBlockCache{
+	s.responseCache.Set(cacheID, &getBlockCache{
 		block:  block,
 		height: height,
 	}, s.cacheTTL)

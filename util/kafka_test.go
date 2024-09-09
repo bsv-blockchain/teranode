@@ -22,6 +22,7 @@ const (
 	RedpandaImage   = "docker.vectorized.io/vectorized/redpanda"
 	RedpandaVersion = "latest"
 )
+
 type TestContainerWrapper struct {
 	container testcontainers.Container
 	hostPort  int
@@ -79,7 +80,7 @@ func (t *TestContainerWrapper) GetBrokerAddresses() []string {
 }
 
 func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
-	t.Parallel()	
+	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -87,7 +88,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 
 	testContainer := &TestContainerWrapper{}
 
-	err := testContainer.RunContainer(1)
+	err := testContainer.RunContainer(4)
 	require.NoError(t, err)
 
 	defer func() {
@@ -98,15 +99,15 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	}()
 
 	const (
-		KAFKA_PARTITIONS          = 1
-		KAFKA_REPLICATION_FACTOR  = 1
-		KAFKA_UNITTEST            = "unittest"
+		KAFKA_PARTITIONS         = 1
+		KAFKA_REPLICATION_FACTOR = 1
+		KAFKA_UNITTEST           = "unittest"
 	)
 
 	kafkaURL := &url.URL{
-		Scheme: "kafka",
-		Host:   testContainer.GetBrokerAddresses()[0],
-		Path:   KAFKA_UNITTEST,
+		Scheme:   "kafka",
+		Host:     testContainer.GetBrokerAddresses()[0],
+		Path:     KAFKA_UNITTEST,
 		RawQuery: fmt.Sprintf("partitions=%d&replicationFactor=%d", KAFKA_PARTITIONS, KAFKA_REPLICATION_FACTOR),
 	}
 
@@ -167,16 +168,16 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 		}
 	}()
 	const (
-		KAFKA_PARTITIONS          = 1
-		KAFKA_REPLICATION_FACTOR  = 1
-		KAFKA_UNITTEST            = "unittest"
+		KAFKA_PARTITIONS         = 1
+		KAFKA_REPLICATION_FACTOR = 1
+		KAFKA_UNITTEST           = "unittest"
 	)
 
 	// Construct the Kafka URL
 	kafkaURL := &url.URL{
-		Scheme: "kafka",
-		Host:   testContainer.GetBrokerAddresses()[0],
-		Path:   KAFKA_UNITTEST,
+		Scheme:   "kafka",
+		Host:     testContainer.GetBrokerAddresses()[0],
+		Path:     KAFKA_UNITTEST,
 		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=600000&flush_bytes=1024&flush_messages=10000&flush_frequency=1s&replay=1", KAFKA_PARTITIONS, KAFKA_REPLICATION_FACTOR),
 	}
 
@@ -284,9 +285,9 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	}()
 
 	const (
-		KAFKA_PARTITIONS          = 1
-		KAFKA_REPLICATION_FACTOR  = 1
-		KAFKA_UNITTEST            = "unittest"
+		KAFKA_PARTITIONS         = 1
+		KAFKA_REPLICATION_FACTOR = 1
+		KAFKA_UNITTEST           = "unittest"
 	)
 
 	// Construct the Kafka URL
@@ -294,7 +295,7 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 		Scheme: "kafka",
 		Host:   testContainer.GetBrokerAddresses()[0],
 		Path:   KAFKA_UNITTEST,
-		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=600000&flush_bytes=1024&flush_messages=10000&flush_frequency=1s&replay=1", 
+		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=600000&flush_bytes=1024&flush_messages=10000&flush_frequency=1s&replay=1",
 			KAFKA_PARTITIONS, KAFKA_REPLICATION_FACTOR),
 	}
 

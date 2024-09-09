@@ -61,12 +61,14 @@ RUN ln -s ubsv.run filereader.run
 RUN ln -s ubsv.run aerospike_reader.run
 RUN ln -s ubsv.run utxopersister.run
 RUN ln -s ubsv.run seeder.run
-RUN ln -s ubsv.run headers.run
+RUN ln -s ubsv.run bitcoin2utxoset.run
+RUN ln -s ubsv.run settings.run
 
 RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
   ln -s libsecp256k1.so.0.0.0 libsecp256k1.so
 
-ENV LD_LIBRARY_PATH=.
+ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
+ENV PATH=/app:$PATH
 
 # Set the entrypoint to the library
 ENTRYPOINT ["./ubsv.run"]

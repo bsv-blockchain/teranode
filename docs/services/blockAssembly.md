@@ -419,7 +419,9 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 ### Blockchain and Mining Settings:
 - **`blockassembly_maxBlockReorgRollback`**: Maximum number of blocks the service can roll back in the event of a blockchain reorganization, ensuring integrity and continuity.
 - **`blockassembly_maxBlockReorgCatchup`**: Maximum number of blocks to catch up during a blockchain reorganization, critical for maintaining current state with the blockchain.
-- **`mining_n_bits`**: Configures the "nBits" value for mining, dictating the difficulty level of the proof-of-work algorithm for new blocks.
 
 ### General Operational Settings:
 - **`blockassembly_disabled`**: A toggle to enable or disable the block assembly functionality altogether, allowing for dynamic control of service operation.
+
+### Deleted settings
+- **`mining_n_bits`**: Configures the "nBits" value for mining, dictating the difficulty level of the proof-of-work algorithm for new blocks.

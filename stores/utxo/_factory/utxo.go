@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	storelogger "github.com/bitcoin-sv/ubsv/stores/utxo/logger"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
@@ -40,6 +41,10 @@ func NewStore(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL, sou
 		utxoStore, err = dbInit(ctx, logger, storeUrl)
 		if err != nil {
 			return nil, err
+		}
+
+		if storeUrl.Query().Get("logging") == "true" {
+			utxoStore = storelogger.New(ctx, logger, utxoStore)
 		}
 
 		startBlockchain := true

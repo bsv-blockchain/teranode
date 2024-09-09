@@ -12,10 +12,10 @@ import (
 
 func TestSQL_RevalidateBlock(t *testing.T) {
 	t.Run("empty - error", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		err = s.RevalidateBlock(context.Background(), block2.Hash())
@@ -23,10 +23,10 @@ func TestSQL_RevalidateBlock(t *testing.T) {
 	})
 
 	t.Run("Block revalidated", func(t *testing.T) {
-		storeUrl, err := url.Parse("sqlitememory:///")
+		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		s, err := New(ulogger.TestLogger{}, storeUrl)
+		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
 		err = s.insertGenesisTransaction(ulogger.TestLogger{})
@@ -44,9 +44,11 @@ func TestSQL_RevalidateBlock(t *testing.T) {
 		err = s.InvalidateBlock(context.Background(), block3.Hash())
 		require.NoError(t, err)
 
-		var id int
-		var height uint32
-		var invalid bool
+		var (
+			id      int
+			height  uint32
+			invalid bool
+		)
 
 		err = s.db.QueryRowContext(context.Background(),
 			"SELECT id, height, invalid FROM blocks WHERE hash = $1",

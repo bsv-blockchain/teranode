@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -191,8 +192,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					u.logger.Infof("[BlockValidation Init] processing catchup on channel DONE [%s]", c.block.Hash().String())
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 
-					// start mining
-					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_MINE)
+					// catched up, ready to mine, send RUN event
+					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_RUN)
 					if err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to send MINE event [%v]", err)
 					}
@@ -387,6 +388,26 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
+
+	// Check if we need to Restore. If so, move FSM to the Restore state
+	// Restore will block and wait for RUN event to be manually sent
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
+	if fsmStateRestore {
+		// Send Restore event to FSM
+		_, err := u.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		if err != nil {
+			u.logger.Errorf("[Block Validation] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
+		}
+
+		// Wait for node to finish Restoring.
+		// this means FSM got a RUN event and transitioned to RUN state
+		// this will block
+		u.logger.Infof("[Block Validation] Node is restoring, waiting for FSM to transition to Running state")
+		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		u.logger.Infof("[Block Validation] Node finished restoring and has transitioned to Running state, continuing to start Block Validation service")
+	}
+
 	httpAddress, ok := gocore.Config().Get("blockvalidation_httpListenAddress")
 	if ok {
 		err := u.httpServer(ctx, httpAddress)
@@ -637,14 +658,14 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	}
 
 	// validate the block
-	u.logger.Infof("[processBlockFound][%s] validate block", hash.String())
+	u.logger.Infof("[processBlockFound][%s] validate block from %s", hash.String(), baseUrl)
 
 	// this is a bit of a hack, but we need to turn off optimistic mining when in legacy mode
-	useOptimisticMining := true
 	if baseUrl == "legacy" {
-		useOptimisticMining = false
+		err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats, true)
+	} else {
+		err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)
 	}
-	err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats, useOptimisticMining)
 	if err != nil {
 		return errors.WrapGRPC(errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err))
 	}
@@ -837,7 +858,7 @@ LOOP:
 					}
 
 					if (retries % 10) == 0 {
-						u.logger.Infof("[catchup][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: %v - %v", fromBlock.Hash().String(), retries, blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock))
+						u.logger.Infof("[catchup][%s] parent block is still (%d) being validated (hash: %s), waiting for it to finish: validated %v - bloom filters %v", fromBlock.Hash().String(), retries, blockHeader.HashPrevBlock.String(), u.blockValidation.blockHashesCurrentlyValidated.Exists(*blockHeader.HashPrevBlock), u.blockValidation.blockBloomFiltersBeingCreated.Exists(*blockHeader.HashPrevBlock))
 					}
 
 					time.Sleep(1 * time.Second)

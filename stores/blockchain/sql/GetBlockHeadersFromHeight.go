@@ -18,6 +18,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 	if err != nil {
 		return nil, nil, errors.NewStorageError("error in GetBlockHeadersFromHeight", err)
 	}
+
 	if headers != nil {
 		return headers, metas, nil
 	}
@@ -48,19 +49,25 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 		WHERE height >= $1 AND height < $2
 		ORDER BY height DESC
 	`
+
 	rows, err := s.db.QueryContext(ctx, q, height, height+limit)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return blockHeaders, blockMetas, nil
 		}
+
 		return nil, nil, errors.NewStorageError("failed to get headers", err)
 	}
+
 	defer rows.Close()
 
-	var hashPrevBlock []byte
-	var hashMerkleRoot []byte
-	var nBits []byte
-	var insertedAt CustomTime
+	var (
+		hashPrevBlock  []byte
+		hashMerkleRoot []byte
+		nBits          []byte
+		insertedAt     CustomTime
+	)
+
 	for rows.Next() {
 		blockHeader := &model.BlockHeader{}
 		blockHeaderMeta := &model.BlockHeaderMeta{}
@@ -90,6 +97,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 		if err != nil {
 			return nil, nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
 		}
+
 		blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 		if err != nil {
 			return nil, nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)

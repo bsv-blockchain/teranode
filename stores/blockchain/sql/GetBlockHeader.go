@@ -20,6 +20,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 	if er != nil {
 		return nil, nil, errors.NewStorageError("error in GetBlockHeader", er)
 	}
+
 	if header != nil {
 		return header, meta, nil
 	}
@@ -46,12 +47,14 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 	blockHeader := &model.BlockHeader{}
 	blockHeaderMeta := &model.BlockHeaderMeta{}
 
-	var hashPrevBlock []byte
-	var hashMerkleRoot []byte
-	var nBits []byte
-	var coinbaseBytes []byte
+	var (
+		hashPrevBlock  []byte
+		hashMerkleRoot []byte
+		nBits          []byte
+		coinbaseBytes  []byte
+		err            error
+	)
 
-	var err error
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
 		&blockHeader.Version,
 		&blockHeader.Timestamp,
@@ -67,6 +70,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewStorageError("error in GetBlockHeader", errors.ErrNotFound)
 		}
+
 		return nil, nil, err
 	}
 
@@ -77,22 +81,25 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("failed to convert hashPrevBlock", err)
 	}
+
 	blockHeader.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 	}
 
-	coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
-	if err != nil {
-		return nil, nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
-	}
+	if len(coinbaseBytes) > 0 {
+		coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
+		if err != nil {
+			return nil, nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+		}
 
-	miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
-	if err != nil {
-		return nil, nil, errors.NewProcessingError("failed to extract miner", err)
-	}
+		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
+		if err != nil {
+			return nil, nil, errors.NewProcessingError("failed to extract miner", err)
+		}
 
-	blockHeaderMeta.Miner = miner
+		blockHeaderMeta.Miner = miner
+	}
 
 	return blockHeader, blockHeaderMeta, nil
 }

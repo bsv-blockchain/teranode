@@ -1,11 +1,12 @@
 package netsync
 
 import (
+	"bytes"
 	"context"
-	"github.com/stretchr/testify/assert"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -117,5 +118,40 @@ func TestSyncManager_prepareTxsPerLevel(t *testing.T) {
 			}
 			assert.Equal(t, tc.expectedTxMapLen, allParents)
 		})
+	}
+}
+
+func TestWireTxToGoBtTx(t *testing.T) {
+	block, err := testdata.ReadBlockFromFile("../testdata/000000000000000009631dd3dd7357675d8a1f8925be5e7851c68255531ac5fb.bin")
+	require.NoError(t, err)
+
+	for _, wireTx := range block.Transactions() {
+		// Serialize the tx
+		var txBytes bytes.Buffer
+		err = wireTx.MsgTx().Serialize(&txBytes)
+		require.NoError(t, err)
+
+		// Convert the wire tx to GoBtTx
+		gobtTx, err := WireTxToGoBtTx(wireTx)
+		require.NoError(t, err)
+
+		// Serialize the GoBtTx
+		gobtTxBytes := gobtTx.Bytes()
+
+		require.Equal(t, txBytes.Bytes(), gobtTxBytes)
+	}
+}
+
+func BenchmarkCreateTxMap(b *testing.B) {
+	block, err := testdata.ReadBlockFromFile("../testdata/000000000000000009631dd3dd7357675d8a1f8925be5e7851c68255531ac5fb.bin")
+	require.NoError(b, err)
+
+	sm := &SyncManager{}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		_, err := sm.createTxMap(context.Background(), block)
+		require.NoError(b, err)
 	}
 }

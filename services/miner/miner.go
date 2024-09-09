@@ -14,7 +14,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/retry"
@@ -120,19 +119,6 @@ func (m *Miner) Start(ctx context.Context) error {
 	m.waitSeconds, _ = gocore.Config().GetInt("miner_waitSeconds", 30)
 
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
-
-	currentState, err := m.blockchainClient.GetFSMCurrentState(ctx)
-	if err != nil {
-		// TODO: how to handle it gracefully?
-		m.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
-	}
-
-	if *currentState != blockchain_api.FSMStateType_MINING {
-		err := m.blockchainClient.SendFSMEvent(ctx, blockchain_api.FSMEventType_MINE)
-		if err != nil {
-			return errors.NewServiceError("[Main] failed to send MINE notification", err)
-		}
-	}
 
 	var miningCtx context.Context
 	var cancel context.CancelFunc
@@ -244,7 +230,7 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	}
 
 	if solution == nil {
-		return errors.NewProcessingError("no solution found for %s", candidateId)
+		return errors.NewProcessingError("mine: no solution found for %s", candidateId)
 	}
 
 	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
@@ -340,7 +326,7 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 			return errors.NewProcessingError("error mining block on %s", candidateId, err)
 		}
 		if solution == nil {
-			return errors.NewProcessingError("no solution found for %s", candidateId)
+			return errors.NewProcessingError("mineBlocks: no solution found for %s", candidateId)
 		}
 
 		// Define retry delays

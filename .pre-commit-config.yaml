@@ -13,3 +13,7 @@ repos:
         entry: golangci-lint run --new
         language: system
         types: [ go ]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
+    hooks:
+      - id: check-merge-conflict

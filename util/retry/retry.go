@@ -17,21 +17,33 @@ import (
 // error: The error returned by the function, or nil if the function was successful
 // func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error), opts ...Options) (T, error) {
 func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error), opts ...Options) (T, error) {
-	var result T
-	var err error
+	var (
+		result T
+		err    error
+	)
 
 	// NewSetOptions creates a new SetOptions struct with the default values,
 	// and then applies the options provided in the opts slice
 	setOptions := NewSetOptions(opts...)
 
+	// Call the function for the first time
+	result, err = f()
+	if err == nil {
+		// This worked successfully first time, so return the result and nil
+		return result, nil
+	}
+
+	// If we reach here, we have an error, so we need to retry
+	// Loop through the number of retries
 	for i := 0; i < setOptions.RetryCount; i++ {
 		select {
 		case <-ctx.Done(): // Check if the context has been cancelled
 			logger.Errorf("Context cancelled, stopping retries")
 			return result, ctx.Err()
+
 		default:
 			// Log the retry message
-			logger.Infof(setOptions.Message, " (attempt %d): ", i+1)
+			logger.Warnf(setOptions.Message+" (attempt %d): %v, will retry", i+1, err)
 
 			// Call the function
 			result, err = f()
@@ -45,5 +57,9 @@ func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error
 			BackoffAndSleep(i, setOptions.BackoffMultiplier, setOptions.BackoffDurationType)
 		}
 	}
+
+	// Log the retry message
+	logger.Warnf(setOptions.Message+" (given up after %d attempts): %v", setOptions.RetryCount, err)
+
 	return result, err
 }

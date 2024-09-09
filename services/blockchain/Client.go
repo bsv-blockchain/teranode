@@ -441,7 +441,7 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 		c.running.Store(false)
 		err := c.conn.Close()
 		if err != nil {
-			c.logger.Errorf("[Blockchain] failed to close connection", err)
+			c.logger.Errorf("[Blockchain] failed to close connection %v", err)
 		}
 	}()
 
@@ -579,6 +579,16 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMSta
 	return &state.State, nil
 }
 
+func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState blockchain_api.FSMStateType) error {
+	_, err := c.client.WaitFSMToTransitionToGivenState(ctx, &blockchain_api.WaitFSMToTransitionRequest{
+		State: targetState})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *Client) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
 	ctx := context.Background()
 	currentState, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
@@ -592,14 +602,9 @@ func (c *Client) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType 
 func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEventType) error {
 	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
 
-	req := &blockchain_api.SendFSMEventRequest{
+	if _, err := c.client.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{
 		Event: event,
-	}
-
-	c.logger.Infof("[Blockchain Client] Sending FSM event: %v", event)
-
-	_, err := c.client.SendFSMEvent(ctx, req)
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 
@@ -612,19 +617,6 @@ func (c *Client) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, err
 	req := emptypb.Empty{}
 
 	_, err := c.client.Run(ctx, &req)
-	if err != nil {
-		return nil, err
-	}
-
-	return nil, nil
-}
-
-func (c *Client) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	c.logger.Infof("[Blockchain Client] Sending Mine event")
-
-	req := emptypb.Empty{}
-
-	_, err := c.client.Mine(ctx, &req)
 	if err != nil {
 		return nil, err
 	}

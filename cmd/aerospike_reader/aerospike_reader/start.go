@@ -14,7 +14,7 @@ import (
 )
 
 func Start() {
-	logger := ulogger.NewGoCoreLogger("aerospike_reader")
+	logger := ulogger.NewGoCoreLogger("aerospike_reader", ulogger.WithLevel("WARN"))
 
 	fmt.Println()
 
@@ -39,6 +39,7 @@ func Start() {
 		fmt.Printf("error reading utxostore setting: %s\n", err)
 		os.Exit(1)
 	}
+
 	if !found {
 		fmt.Printf("missing utxostore setting\n")
 		os.Exit(1)
@@ -75,6 +76,7 @@ func Start() {
 	if ok {
 		nrRecords, ok := nrRecordsIfc.(int)
 		if ok {
+			// nolint: gosec
 			for i := uint32(1); i < uint32(nrRecords); i++ {
 				keySource := uaerospike.CalculateKeySource(hash, i)
 
@@ -104,15 +106,19 @@ func printRecord(client *uaerospike.Client, key *aero.Key) (*aero.Record, error)
 	fmt.Printf("SetName     : %s\n", response.Key.SetName())
 	fmt.Printf("Node        : %s\n", response.Node.GetName())
 	fmt.Printf("Bins        :")
+
 	var indent = false
+
 	for binName := range response.Bins {
 		if indent {
 			fmt.Printf("            : %s\n", binName)
 		} else {
 			fmt.Printf(" %s\n", binName)
 		}
+
 		indent = true
 	}
+
 	fmt.Printf("Generation  : %d\n", response.Generation)
 	fmt.Printf("Expiration  : %d\n", response.Expiration)
 

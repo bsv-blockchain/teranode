@@ -9,13 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/null"
 	"github.com/bitcoin-sv/ubsv/stores/txmetacache"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -610,4 +609,20 @@ func Benchmark_NewBlockFromBytes(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, _ = NewBlockFromBytes(blockBytesForBenchmark)
 	}
+}
+
+func TestT(t *testing.T) {
+	tx := &bt.Tx{}
+
+	b := tx.Bytes()
+
+	tx2, err := bt.NewTxFromBytes(b)
+	require.NoError(t, err)
+
+	assert.Equal(t, tx, tx2)
+	// t.Logf("%x", tx.Bytes())
+	// t.Logf("%x", tx2.Bytes())
+
+	assert.True(t, tx.TxIDChainHash().Equal(*emptyTX.TxIDChainHash()))
+	assert.True(t, tx2.TxIDChainHash().Equal(*emptyTX.TxIDChainHash()))
 }
