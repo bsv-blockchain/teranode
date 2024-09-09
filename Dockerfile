@@ -61,6 +61,8 @@ RUN ln -s ubsv.run utxostoreblaster.run
 RUN ln -s ubsv.run aerospiketest.run
 RUN ln -s ubsv.run s3blaster.run
 RUN ln -s ubsv.run filereader.run
+RUN ln -s ubsv.run s3inventoryintegrity.run
+RUN ln -s ubsv.run txblockidcheck.run
 RUN ln -s ubsv.run aerospike_reader.run
 RUN ln -s ubsv.run utxopersister.run
 RUN ln -s ubsv.run seeder.run

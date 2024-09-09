@@ -25,6 +25,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/seeder/seeder"
 	"github.com/bitcoin-sv/ubsv/cmd/settings/settings"
 	"github.com/bitcoin-sv/ubsv/cmd/txblaster/txblaster"
+	"github.com/bitcoin-sv/ubsv/cmd/txblockidcheck/txblockidcheck"
 	utxopersister_cmd "github.com/bitcoin-sv/ubsv/cmd/utxopersister/utxopersister"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/asset"
@@ -108,6 +109,9 @@ func main() {
 		return
 	case "s3inventoryintegrity.run":
 		s3inventoryintegrity.Start()
+		return
+	case "txblockidcheck.run":
+		txblockidcheck.Start()
 		return
 	case "aerospike_reader.run":
 		aerospike_reader.Start()
