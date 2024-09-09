@@ -35,6 +35,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const GenesisBlockID = 0
+
 var (
 	emptyTX                               = &bt.Tx{}
 	prometheusBlockFromBytes              prometheus.Histogram
@@ -805,6 +807,11 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	}
 
 	if parentTxMeta == nil || parentTxMeta.IsCoinbase {
+		return nil
+	}
+
+	if len(parentTxMeta.BlockIDs) > 0 && parentTxMeta.BlockIDs[0] == GenesisBlockID {
+		// when blockIds[0] is GenesisBlockID, it means the transaction was imported from a restore and is on a valid chain
 		return nil
 	}
 
