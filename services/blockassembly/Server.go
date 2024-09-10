@@ -134,10 +134,14 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 					options.WithTTL(ba.subtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
 					options.WithFileExtension("subtree"),
 				); err != nil {
-					ba.logger.Errorf("[BlockAssembly:Init][%s] failed to retry store subtree: %s", subtreeRetry.subtreeHash.String(), err)
+					if errors.Is(err, errors.ErrBlobAlreadyExists) {
+						ba.logger.Debugf("[BlockAssembly:Init][%s] subtreeRetryChan: subtree already exists", subtreeRetry.subtreeHash.String())
+						continue
+					}
+					ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree: %s", subtreeRetry.subtreeHash.String(), err)
 
 					if subtreeRetry.retries > 10 {
-						ba.logger.Errorf("[BlockAssembly:Init][%s] failed to retry store subtree, retries exhausted", subtreeRetry.subtreeHash.String())
+						ba.logger.Errorf("[BlockAssembly:Init][%s] subtreeRetryChan: failed to retry store subtree, retries exhausted", subtreeRetry.subtreeHash.String())
 						continue
 					}
 
