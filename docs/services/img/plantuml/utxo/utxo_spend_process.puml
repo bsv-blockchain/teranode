@@ -50,6 +50,6 @@ end
 
 deactivate Store
 
-left footer Last Modified On: 5-June-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

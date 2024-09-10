@@ -107,9 +107,7 @@ Additional logs can be produced when the node is run with the following environm
 
 ## 4. Running the Node in Production
 
--- TODO
-
----
+Please refer to the [Standard Operating Procedures](docs/sop/standardOperatingProcedures.md) for detailed instructions on how to run the node in production.
 
 
 ---
@@ -149,6 +147,10 @@ Store Documentation:
 + [Blob Server](docs/stores/blob.md)
 
 + [UTXO Store](docs/stores/utxo.md)
+
+Kafka Use Case Documentation:
+
++ [Kafka](docs/kafka/kafka.md)
 
 Overlay Service documentation:
 

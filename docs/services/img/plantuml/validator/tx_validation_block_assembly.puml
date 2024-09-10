@@ -21,6 +21,6 @@ end
 
 Validator --> Validator: Return success
 
-left footer Last Modified On: 22-December-2023
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

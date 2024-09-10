@@ -37,6 +37,6 @@ BA -> BA : Start internal listeners (Kafka, gRPC, fRPC)
 BA --> Client : Start complete
 deactivate BA
 
-left footer Last Modified On: 10-Jan-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

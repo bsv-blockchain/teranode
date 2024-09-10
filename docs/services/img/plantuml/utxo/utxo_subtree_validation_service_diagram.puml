@@ -36,6 +36,6 @@ deactivate UtxoStore
 
 deactivate SubtreeValidation
 
-left footer Last Modified On: 4-June-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

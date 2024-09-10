@@ -40,6 +40,6 @@ deactivate STP
 
 BA -> BA : Update internal state
 
-left footer Last Modified On: 10-Jan-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

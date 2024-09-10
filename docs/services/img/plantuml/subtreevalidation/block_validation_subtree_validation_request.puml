@@ -40,6 +40,6 @@ loop for each subtree in the block
 end
 
 deactivate BV
-left footer Last Modified On: 19-March-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

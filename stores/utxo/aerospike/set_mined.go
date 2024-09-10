@@ -81,10 +81,12 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 						okUpdates++
 					default:
 						nrErrors++
+						errs = errors.NewError("aerospike batchRecord SUCCESS bin msg:%s", responseMsg, batchRecord.BatchRec().Err)
 					}
 				}
 			} else {
 				nrErrors++
+				errs = batchRecord.BatchRec().Err
 			}
 		}
 	}

@@ -4,6 +4,7 @@ participant "Node 1" as Node1
 queue "PubSub System" as PubSub
 participant "Node 2" as Node2
 queue "Notification Channel" as notificationChannel
+queue "Kafka" as Kafka
 participant "Block Validator" as BlockValidationClient
 participant "Subtree Validator" as SubtreeValidationClient
 
@@ -16,8 +17,8 @@ end
 PubSub -> Node2: s.topics[blockTopicName]
 activate Node2
 Node2 -> Node2: handleBlockTopic(ctx)
-Node2 -> BlockValidationClient: blockValidationClient.BlockFound(ctx, hash, blockMessage.DataHubUrl)
-Node2 -> notificationChannel: notify blockMessage to s.notificationCh
+Node2 --> Kafka: Send block over kafka_blocksConfig topic  (hash, blockMessage.DataHubUrl)
+Kafka -> BlockValidationClient: Consume block from kafka_blocksConfig topic
 deactivate Node2
 
 === New Mined Block Notification ===
@@ -45,6 +46,6 @@ Node2 -> SubtreeValidationClient: s.subtreeValidationClient.SubtreeFound(ctx, ha
 Node2 -> notificationChannel: notify subtreeMessage to s.notificationCh
 deactivate Node2
 
-left footer Last Modified On: 6-March-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml

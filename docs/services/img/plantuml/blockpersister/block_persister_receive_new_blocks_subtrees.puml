@@ -59,6 +59,6 @@ deactivate BlockPersister
 deactivate BlockPersister
 
 
-left footer Last Modified On: 12-August-2024
+left footer Last Modified On: %date("dd-MMM-yyyy")
 
 @enduml
