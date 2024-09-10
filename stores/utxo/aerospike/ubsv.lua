@@ -163,7 +163,9 @@ function setMined(rec, blockID, ttl)
     end
 
     -- Append the value to the list in the specified bin
-    list.append(rec['blockIDs'], blockID)
+    local blocks = rec['blockIDs']
+    blocks[#blocks + 1] = blockID
+    rec['blockIDs'] = blocks
 
     local signal = setTTL(rec, ttl)
     
