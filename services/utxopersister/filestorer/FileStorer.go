@@ -36,7 +36,6 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store,
 
 	bufferedReader := io.NopCloser(bufio.NewReader(reader))
 	bufferedWriter := bufio.NewWriterSize(io.MultiWriter(writer, hasher), 4096*4)
-	bufferedWriter.Size()
 
 	fs := &FileStorer{
 		logger:         logger,
