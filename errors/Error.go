@@ -50,33 +50,6 @@ func (e *Error) Error() string {
 }
 
 // Is reports whether error codes match.
-/*
-func (e *Error) Is(target *Error) bool {
-	if e == nil {
-		return false
-	}
-
-	if e.Code == target.Code {
-		return true
-	}
-
-	if e.WrappedErr == nil {
-		return false
-	}
-
-	// Unwrap the current error and recursively call Is on the unwrapped error
-	if unwrapped := errors.Unwrap(e); unwrapped != nil {
-		if ue, ok := unwrapped.(*Error); ok {
-			return ue.Is(target)
-		}
-	}
-
-	return false
-}
-*/
-
-// Is reports whether error codes match.
-
 func (e *Error) Is(target error) bool {
 	if e == nil {
 		return false
@@ -84,10 +57,7 @@ func (e *Error) Is(target error) bool {
 
 	targetError, ok := target.(*Error)
 	if !ok {
-		if e.Error() == target.Error() {
-			return true
-		}
-		return false
+		return e.Error() == target.Error()
 	}
 
 	if e.Code == targetError.Code {
@@ -211,22 +181,10 @@ func WrapGRPC(err error) *Error {
 			Message: castedErr.Message,
 		})
 		wrappedErrDetails = append(wrappedErrDetails, details)
-		// add every wrapped error one by one
-		// var errors []*Error
-		// errors = append(errors, err)
+
 		if castedErr.WrappedErr != nil {
 			currWrappedErr := castedErr.WrappedErr
 			for currWrappedErr != nil {
-				/*
-								if err, ok := currWrappedErr.(*Error); ok {
-						details, _ := anypb.New(&TError{
-							Code:    err.Code,
-							Message: err.Message,
-						})
-						wrappedErrDetails = append(wrappedErrDetails, details)
-						currWrappedErr = err.WrappedErr
-					}
-				*/
 				if err, ok := currWrappedErr.(*Error); ok {
 					details, _ := anypb.New(&TError{
 						Code:    err.Code,
@@ -242,16 +200,6 @@ func WrapGRPC(err error) *Error {
 					wrappedErrDetails = append(wrappedErrDetails, details)
 					currWrappedErr = nil
 				}
-				/*
-					else if err, ok := currWrappedErr.(error); ok {
-						details, _ := anypb.New(&TError{
-							Code:    ERR_ERROR,
-							Message: err.Error(),
-						})
-						wrappedErrDetails = append(wrappedErrDetails, details)
-						currWrappedErr = nil
-					}
-				*/
 			}
 		}
 		// for i := 0; i < len(wrappedErrDetails); i++ {
@@ -388,24 +336,6 @@ func Join(errs ...error) error {
 }
 
 func Is(err, target error) bool {
-	fmt.Println("is comparable? ", reflect.TypeOf(target).Comparable())
-	//fmt.Println("Is tries to compare:\n", err, "\n", target)
-	//fmt.Println("is equal?", err.Error() == target.Error())
-	//if convertedTarget, ok := target.(*Error); ok {
-	//	fmt.Println("Target is our error: ", convertedTarget)
-	//	if convertedErr, ok := err.(*Error); ok {
-	//		fmt.Println("Err is our error: ", convertedErr)
-	//		return convertedTarget.Is(convertedErr)
-	//	}
-	//	fmt.Println("First Err is not our error: ", err)
-	//	convertedErr := New(ERR_UNKNOWN, err.Error())
-	//	return convertedTarget.Is(convertedErr)
-	//}
-	//
-	//fmt.Println("Is tries to compare:\n", err, "\n", target)
-	//fmt.Println("Lens: ", len(err.Error()), " and ", len(target.Error()))
-	//fmt.Println(strings.EqualFold(err.Error(), target.Error()))
-
 	return errors.Is(err, target)
 }
 
