@@ -77,6 +77,22 @@ func Test_ErrorIs(t *testing.T) {
 
 	err = New(ERR_BLOCK_INVALID, "invalid block error")
 	require.True(t, err.Is(ErrBlockInvalid))
+
+}
+
+func ReturnsError() error {
+	return NewTxNotFoundError("Tx not found")
+}
+
+func Test_Errors_Standard_Is(t *testing.T) {
+	err := ReturnsError()
+	txNotFoundError := NewTxNotFoundError("Tx not found")
+	fmt.Println("Return error:", err)
+	fmt.Println("Actual error:", txNotFoundError)
+
+	require.True(t, errors.Is(err, txNotFoundError))
+	require.True(t, Is(err, txNotFoundError))
+	//	require.True(t, Is(err, ErrTxNotFound))
 }
 
 func Test_ErrorWrapWithAdditionalContext(t *testing.T) {

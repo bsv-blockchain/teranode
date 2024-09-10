@@ -871,7 +871,9 @@ func filterCurrentBlockHeaderIDsMap(parentTxMeta *meta.Data, currentBlockHeaderI
 func getParentTxMeta(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx) (*meta.Data, error) {
 	parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
 	if err != nil {
+		fmt.Println("HERE")
 		if errors.Is(err, errors.ErrTxNotFound) {
+			fmt.Println("NOPE")
 			return nil, nil
 		}
 
