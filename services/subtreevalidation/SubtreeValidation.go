@@ -58,28 +58,6 @@ func (u *Server) SetTxMetaCacheFromBytes(_ context.Context, key, txMetaBytes []b
 	return nil
 }
 
-func (u *Server) SetTxMetaCacheMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
-	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
-		ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:SetTxMetaCacheMinedMulti")
-		defer deferFn()
-
-		return cache.SetMinedMulti(ctx, hashes, blockID)
-	}
-
-	return nil
-}
-
-func (u *Server) SetTxMetaCacheMulti(ctx context.Context, keys [][]byte, values [][]byte) error {
-	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
-		_, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:SetTxMetaCacheMulti")
-		defer deferFn()
-
-		return cache.SetCacheMulti(keys, values)
-	}
-
-	return nil
-}
-
 func (u *Server) DelTxMetaCache(ctx context.Context, hash *chainhash.Hash) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {
 		ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:DelTxMetaCache")
