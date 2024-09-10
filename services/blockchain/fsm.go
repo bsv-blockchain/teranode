@@ -97,9 +97,10 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Name: blockchain_api.FSMEventType_STOP.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
+					blockchain_api.FSMStateType_RESTORING.String(),
 					blockchain_api.FSMStateType_CATCHINGTXS.String(),
 					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
-					//	blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String(),
+					blockchain_api.FSMStateType_LEGACYSYNCING.String(),
 				},
 				Dst: blockchain_api.FSMStateType_STOPPED.String(),
 			},
