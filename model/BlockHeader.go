@@ -142,16 +142,18 @@ func (bh *BlockHeader) ToWireBlockHeader() *wire.BlockHeader {
 
 func (bh *BlockHeader) HasMetTargetDifficulty() (bool, *chainhash.Hash, error) {
 	target := bh.Bits.CalculateTarget()
+	hash := bh.Hash()
 
 	var bn = big.NewInt(0)
-	bn.SetString(bh.Hash().String(), 16)
+
+	bn.SetString(hash.String(), 16)
 
 	compare := bn.Cmp(target)
 	if compare <= 0 {
-		return true, bh.Hash(), nil
+		return true, hash, nil
 	}
 
-	return false, nil, errors.NewProcessingError("block header does not meet target %d: %032x >? %032x", compare, target.Bytes(), bn.Bytes())
+	return false, hash, errors.NewProcessingError("block header does not meet target %d: %032x >? %032x", compare, target.Bytes(), bn.Bytes())
 }
 
 func (bh *BlockHeader) Bytes() []byte {

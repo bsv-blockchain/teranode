@@ -93,7 +93,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}
 
 	// call the process block wrapper, which will add tracing and logging
-	err = sm.processBlock(ctx, teranodeBlock)
+	err = sm.ProcessBlock(ctx, teranodeBlock)
 	if err != nil {
 		return err
 	}
@@ -101,7 +101,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	return nil
 }
 
-func (sm *SyncManager) processBlock(ctx context.Context, teranodeBlock *model.Block) error {
+func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Block) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "SyncManager:processBlock",
 		tracing.WithLogMessage(
 			sm.logger,
