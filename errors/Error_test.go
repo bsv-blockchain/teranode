@@ -90,9 +90,13 @@ func Test_Errors_Standard_Is(t *testing.T) {
 	// fmt.Println("Return error:", err)
 	// fmt.Println("Actual error:", txNotFoundError)
 
-	require.True(t, errors.Is(err, txNotFoundError))
 	require.True(t, Is(err, txNotFoundError))
-	//	require.True(t, Is(err, ErrTxNotFound))
+	require.True(t, Is(err, ErrTxNotFound))
+
+	fmtError := fmt.Errorf("can't query aerospike")
+	serviceError := NewServiceError("Aerospike service error", fmtError)
+	require.True(t, Is(serviceError, fmtError))
+	require.True(t, serviceError.Is(fmtError))
 }
 
 func Test_ErrorWrapWithAdditionalContext(t *testing.T) {
@@ -294,7 +298,8 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	require.True(t, unwrapped.Is(baseServiceErr))
 
 	// baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
-	txInvalidErr := NewTxInvalidError("tx is invalid")
+	fmtError := fmt.Errorf("can't query transaction meta from aerospike")
+	txInvalidErr := NewTxInvalidError("tx is invalid", fmtError)
 	level1BlockInvalidError := NewBlockInvalidError("block is invalid", txInvalidErr)
 	level2ServiceError := NewServiceError("service error", level1BlockInvalidError)
 	level3ProcessingError := NewProcessingError("processing error", level2ServiceError)
@@ -302,6 +307,7 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 
 	// Test errors that are nested
 	// level 2 error recognizes all the errors in the chain
+	require.True(t, level2ServiceError.Is(fmtError))
 	require.True(t, level2ServiceError.Is(txInvalidErr))
 	require.True(t, level2ServiceError.Is(baseBlockInvalidErr))
 	require.True(t, level2ServiceError.Is(ErrServiceError))
@@ -309,14 +315,11 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	require.True(t, level2ServiceError.Is(ErrTxInvalid))
 
 	// Test that we don't lose any data when wrapping and unwrapping GRPC
-
 	wrapped := WrapGRPC(level4ContextError)
 	unwrapped = UnwrapGRPC(wrapped)
 
-	// fmt.Println("original: ", level4ContextError)
-	// fmt.Println("wrapped: ", wrapped)
-	// fmt.Println("unwrapped: ", unwrapped)
-
+	// checks with the Is function
+	require.True(t, unwrapped.Is(fmtError))
 	require.True(t, unwrapped.Is(txInvalidErr))
 	require.True(t, unwrapped.Is(baseBlockInvalidErr))
 	require.True(t, unwrapped.Is(ErrServiceError))
@@ -325,6 +328,17 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	require.True(t, unwrapped.Is(level2ServiceError))
 	require.True(t, unwrapped.Is(level3ProcessingError))
 	require.True(t, unwrapped.Is(level4ContextError))
+
+	// checks with the standard Is function
+	require.True(t, errors.Is(unwrapped, fmtError))
+	require.True(t, errors.Is(unwrapped, txInvalidErr))
+	require.True(t, errors.Is(unwrapped, baseBlockInvalidErr))
+	require.True(t, errors.Is(unwrapped, ErrServiceError))
+	require.True(t, errors.Is(unwrapped, ErrBlockInvalid))
+	require.True(t, errors.Is(unwrapped, ErrTxInvalid))
+	require.True(t, errors.Is(unwrapped, level2ServiceError))
+	require.True(t, errors.Is(unwrapped, level3ProcessingError))
+	require.True(t, errors.Is(unwrapped, level4ContextError))
 }
 
 func Test_UnwrapGRPCWithStandardError(t *testing.T) {

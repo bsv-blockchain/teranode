@@ -57,7 +57,8 @@ func (e *Error) Is(target error) bool {
 
 	targetError, ok := target.(*Error)
 	if !ok {
-		return e.Error() == target.Error()
+		// fmt.Println("Target is not of type *Error, checking \ne.Error()", e.Error(), "contains() target.Error():\n", target.Error())
+		return strings.Contains(e.Error(), target.Error())
 	}
 
 	if e.Code == targetError.Code {
