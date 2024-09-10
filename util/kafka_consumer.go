@@ -102,7 +102,7 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 // handleMessageWithManualCommit processes the message and commits the offset only if the processing of the message is successful
 func (kc *KafkaConsumer) handleMessageWithManualCommit(ctx context.Context, session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage) error {
 	msg := KafkaMessage{Message: message, Session: session}
-	kc.logger.Infof("Processing message with offset: %v", message.Offset)
+	// kc.logger.Infof("Processing message with offset: %v", message.Offset)
 
 	if kc.consumerClosure != nil {
 		// execute consumer closure
@@ -123,7 +123,7 @@ func (kc *KafkaConsumer) handleMessageWithManualCommit(ctx context.Context, sess
 		kc.workerCh <- msg
 	}
 
-	kc.logger.Infof("Committing offset: %v", message.Offset)
+	// kc.logger.Infof("Committing offset: %v", message.Offset)
 	// Commit the message offset, processing is successful
 	session.MarkMessage(message, "")
 	return nil

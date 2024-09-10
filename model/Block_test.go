@@ -586,6 +586,7 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 		}
 
 		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		fmt.Println("returned err: ", err)
 		require.NoError(t, err)
 	})
 

@@ -696,8 +696,8 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					parentTxHashes = txMeta.ParentTxHashes
 
 					if txMeta.LockTime > 0 {
-						//A transaction must be final, meaning that, if exists, the lock time is: Equal to zero, or <500000000 and smaller than block height, or >=500000000 and SMALLER THAN TIMESTAMP
-						//Any transaction that does not adhere to this consensus rule is to be rejected. See Consensus Rules - TNJ-13
+						// A transaction must be final, meaning that, if exists, the lock time is: Equal to zero, or <500000000 and smaller than block height, or >=500000000 and SMALLER THAN TIMESTAMP
+						// Any transaction that does not adhere to this consensus rule is to be rejected. See Consensus Rules - TNJ-13
 						if err := util.ValidLockTime(txMeta.LockTime, b.Height, b.medianTimestamp); err != nil {
 							return errors.NewLockTimeError("[BLOCK][%s][%s:%d]:%d transaction %s has an invalid locktime: %d", b.Hash().String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), txMeta.LockTime, err)
 						}
@@ -880,7 +880,9 @@ func filterCurrentBlockHeaderIDsMap(parentTxMeta *meta.Data, currentBlockHeaderI
 func getParentTxMeta(gCtx context.Context, txMetaStore utxo.Store, parentTxStruct missingParentTx) (*meta.Data, error) {
 	parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
 	if err != nil {
+		fmt.Println("HERE")
 		if errors.Is(err, errors.ErrTxNotFound) {
+			fmt.Println("NOPE")
 			return nil, nil
 		}
 
