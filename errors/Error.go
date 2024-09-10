@@ -315,12 +315,18 @@ func WrapGRPC(err error) error {
 
 	var uErr *Error
 	if errors.As(err, &uErr) {
-		details, _ := anypb.New(&TError{
-			Code:         uErr.Code,
-			Message:      uErr.Message,
-			WrappedError: uErr.WrappedErr.Error(),
-		})
+		er := &TError{
+			Code:    uErr.Code,
+			Message: uErr.Message,
+		}
+		if uErr.WrappedErr != nil {
+			er.WrappedError = uErr.WrappedErr.Error()
+		}
+
+		details, _ := anypb.New(er)
+
 		st := status.New(ErrorCodeToGRPCCode(uErr.Code), uErr.Message)
+
 		st, err := st.WithDetails(details)
 		if err != nil {
 			return status.New(codes.Internal, "error adding details to gRPC status").Err()
