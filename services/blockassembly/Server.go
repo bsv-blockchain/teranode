@@ -2,9 +2,10 @@ package blockassembly
 
 import (
 	"context"
+	"net/url"
+
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"net/url"
 
 	"time"
 
@@ -234,7 +235,6 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 	var subtreeBytes []byte
 	if subtreeBytes, err = subtree.Serialize(); err != nil {
 		return errors.NewProcessingError("[BlockAssembly:Init][%s] failed to serialize subtree", subtree.RootHash().String(), err)
-
 	}
 
 	if err = ba.subtreeStore.Set(ctx,
@@ -243,13 +243,17 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 		options.WithTTL(ba.subtreeTTL), // this sets the TTL for the subtree, it must be updated when a block is mined
 		options.WithFileExtension("subtree"),
 	); err != nil {
-		ba.logger.Errorf("[BlockAssembly:Init][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			ba.logger.Debugf("[BlockAssembly:Init][%s] subtree already exists", subtree.RootHash().String())
+		} else {
+			ba.logger.Errorf("[BlockAssembly:Init][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
 
-		// add to retry saving the subtree
-		subtreeRetryChan <- &subtreeRetrySend{
-			subtreeHash:  *subtree.RootHash(),
-			subtreeBytes: subtreeBytes,
-			retries:      0,
+			// add to retry saving the subtree
+			subtreeRetryChan <- &subtreeRetrySend{
+				subtreeHash:  *subtree.RootHash(),
+				subtreeBytes: subtreeBytes,
+				retries:      0,
+			}
 		}
 
 		return nil
@@ -597,7 +601,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	)
 	defer deferFn()
 
-	storeId, err := chainhash.NewHash(req.Id[:])
+	storeId, err := chainhash.NewHash(req.Id)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
