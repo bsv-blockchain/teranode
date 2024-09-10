@@ -2,6 +2,10 @@ package logger
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -28,102 +32,146 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) utxo.Stor
 	return s
 }
 
+func caller() string {
+	var callers []string
+
+	depth := 5
+
+	for i := 0; i < depth; i++ {
+		// Get caller information for the given depth
+		pc, file, line, ok := runtime.Caller(2 + i)
+		if !ok {
+			break
+		}
+
+		// The file path is too long, it seems to start from the home directory.
+		// We need to remove the first few folders to make it more readable.
+		// TODO Is there a better way to do this? This only works for my local setup.
+		folders := strings.Split(file, string(filepath.Separator))
+		if len(folders) > 0 {
+			if folders[0] == "github.com" {
+				folders = folders[1:]
+			}
+
+			if folders[0] == "bitcoin-sv" {
+				folders = folders[1:]
+			}
+
+			if folders[0] == "ubsv" {
+				folders = folders[1:]
+			}
+		}
+
+		file = filepath.Join(folders...)
+
+		// Get function name
+		funcName := runtime.FuncForPC(pc).Name()
+		funcPaths := strings.Split(funcName, "/")
+		funcName = funcPaths[len(funcPaths)-1]
+
+		// Add formatted caller information to the result
+		callers = append(callers, fmt.Sprintf("called from %s: %s:%d", funcName, file, line))
+	}
+
+	return strings.Join(callers, ",")
+}
+
 func (s *Store) SetBlockHeight(blockHeight uint32) error {
 	return s.store.SetBlockHeight(blockHeight)
 }
 
 func (s *Store) GetBlockHeight() uint32 {
 	height := s.store.GetBlockHeight()
-	s.logger.Infof("[UTXOStore][logger][GetBlockHeight] %d", height)
+	s.logger.Infof("[UTXOStore][logger][GetBlockHeight] %d : %s", height, caller())
 
 	return height
 }
 
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	err := s.store.SetMedianBlockTime(medianTime)
-	s.logger.Infof("[UTXOStore][logger][SetMedianBlockTime] medianTime %d err %v", medianTime, err)
+	s.logger.Infof("[UTXOStore][logger][SetMedianBlockTime] medianTime %d err %v : %s", medianTime, err, caller())
 
 	return err
 }
 
 func (s *Store) GetMedianBlockTime() uint32 {
 	res := s.store.GetMedianBlockTime()
-	s.logger.Infof("[UTXOStore][logger][GetMedianBlockTime] %d", res)
+	s.logger.Infof("[UTXOStore][logger][GetMedianBlockTime] %d : %s", res, caller())
 
 	return res
 }
 
 func (s *Store) Health(ctx context.Context) (int, string, error) {
-	s.logger.Infof("[UTXOStore][logger][Health]")
+	s.logger.Infof("[UTXOStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx)
 }
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	data, err := s.store.Create(ctx, tx, blockHeight, opts...)
-	s.logger.Infof("[UTXOStore][logger][Create] tx %s blockHeight %d data %v err %v", tx.TxIDChainHash(), blockHeight, data, err)
+	s.logger.Infof("[UTXOStore][logger][Create] tx %s blockHeight %d data %v err %v : %s", tx.TxIDChainHash(), blockHeight, data, err, caller())
 
 	return data, err
 }
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	data, err := s.store.GetMeta(ctx, hash)
-	s.logger.Infof("[UTXOStore][logger][GetMeta] hash %s data %v err %v", hash.String(), data, err)
+	s.logger.Infof("[UTXOStore][logger][GetMeta] hash %s data %v err %v : %s", hash.String(), data, err, caller())
 
 	return data, err
 }
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
 	data, err := s.store.Get(ctx, hash, fields...)
-	s.logger.Infof("[UTXOStore][logger][Get] hash %s, fields %v data %v err %v", hash.String(), fields, data, err)
+	s.logger.Infof("[UTXOStore][logger][Get] hash %s, fields %v data %v err %v : %s", hash.String(), fields, data, err, caller())
 
 	return data, err
 }
 
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
 	err := s.store.Spend(ctx, spends, blockHeight)
-	s.logger.Infof("[UTXOStore][logger][Spend] spends %v blockHeight %d err %v", spends, blockHeight, err)
+	s.logger.Infof("[UTXOStore][logger][Spend] spends %v blockHeight %d err %v : %s", spends, blockHeight, err, caller())
 
 	return err
 }
 
 func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 	err := s.store.UnSpend(ctx, spends)
-	s.logger.Infof("[UTXOStore][logger][UnSpend] spends %v err %v", spends)
+	s.logger.Infof("[UTXOStore][logger][UnSpend] spends %v err %v : %s", spends, caller())
 
 	return err
 }
 
 func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	err := s.store.Delete(ctx, hash)
-	s.logger.Infof("[UTXOStore][logger][Delete] hash %s err %v", hash.String(), err)
+	s.logger.Infof("[UTXOStore][logger][Delete] hash %s err %v : %s", hash.String(), err, caller())
 
 	return err
 }
 
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	err := s.store.SetMinedMulti(ctx, hashes, blockID)
-	s.logger.Infof("[UTXOStore][logger][SetMinedMulti] hashes %v blockID %d err %v", hashes, blockID, err)
+	s.logger.Infof("[UTXOStore][logger][SetMinedMulti] hashes %v blockID %d err %v : %s", hashes, blockID, err, caller())
 
 	return err
 }
 
 func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	resp, err := s.store.GetSpend(ctx, spend)
-	s.logger.Infof("[UTXOStore][logger][GetSpend] spend %v resp %v err %v", spend, resp, err)
+	s.logger.Infof("[UTXOStore][logger][GetSpend] spend %v resp %v err %v : %s", spend, resp, err, caller())
 
 	return resp, err
 }
 
 func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
 	err := s.store.BatchDecorate(ctx, unresolvedMetaDataSlice, fields...)
-	s.logger.Infof("[UTXOStore][logger][BatchDecorate] unresolvedMetaDataSlice %v, fields %v err %v", unresolvedMetaDataSlice, fields, err)
+	s.logger.Infof("[UTXOStore][logger][BatchDecorate] unresolvedMetaDataSlice %v, fields %v err %v : %s", unresolvedMetaDataSlice, fields, err, caller())
 
 	return err
 }
 
 func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
 	err := s.store.PreviousOutputsDecorate(ctx, outpoints)
-	s.logger.Infof("[UTXOStore][logger][PreviousOutputsDecorate] outpoints %v err %v", outpoints, err)
+	s.logger.Infof("[UTXOStore][logger][PreviousOutputsDecorate] outpoints %v err %v : %s", outpoints, err, caller())
 
 	return err
 }
