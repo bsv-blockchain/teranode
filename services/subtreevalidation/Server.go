@@ -2,15 +2,16 @@ package subtreevalidation
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"net/url"
 	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/ordishs/go-utils"
 
@@ -160,6 +161,13 @@ func (u *Server) Start(ctx context.Context) error {
 			case err := <-errCh:
 				// if err is nil, it means function is successfully executed, return nil.
 				if err == nil {
+					return nil
+				}
+
+				if errors.Is(err, errors.ErrSubtreeExists) {
+					// if the error is subtree exists, then return nil, so that the kafka message is marked as committed.
+					// So the message will not be consumed again.
+					u.logger.Infof("Subtree already exists, marking Kafka message as completed.\n")
 					return nil
 				}
 
