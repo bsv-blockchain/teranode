@@ -461,7 +461,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 			continue
 		}
 
-		record, ok := result.(aerospike.BatchRecord)
+		record, ok := result.(*aerospike.BatchRecord)
 		if !ok {
 			item.errCh <- errors.NewProcessingError("could not cast result to aerospike.BatchRecord")
 			close(item.errCh)
