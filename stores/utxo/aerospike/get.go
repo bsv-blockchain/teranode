@@ -415,14 +415,12 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		uniqueKeySourcesSlice = append(uniqueKeySourcesSlice, keySource)
 	}
 
-	// Create a batch of records to read from the txHashes
-
+	// create the keys
 	for _, keySource := range uniqueKeySourcesSlice {
 		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
 			for _, item := range batch {
-				item.errCh <- errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err)
-				close(item.errCh)
+				sendErrorAndClose(item.errCh, errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err))
 			}
 
 			return
@@ -435,44 +433,38 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		batchRecords = append(batchRecords, record)
 	}
 
+	// send the batch to aerospike
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		for _, item := range batch {
-			item.errCh <- errors.NewStorageError("error in aerospike map store batch records: %w", err)
-			close(item.errCh)
+			sendErrorAndClose(item.errCh, errors.NewStorageError("error in aerospike map store batch records: %w", err))
 		}
 
 		return
 	}
-
-	externalTxs := make(map[chainhash.Hash]*bt.Tx)
 
 	// Now we have all the records we need, we can inject the result into the map
 	for i, batchRecordIfc := range batchRecords {
 		uniqueKeySources[uniqueKeySourcesSlice[i]] = batchRecordIfc.BatchRec()
 	}
 
-	for _, item := range batch {
-		result, ok := uniqueKeySources[item.keySource]
-		if !ok {
-			item.errCh <- errors.NewProcessingError("key source not found: %v", item.keySource)
-			close(item.errCh)
+	externalTxs := make(map[chainhash.Hash]*bt.Tx)
 
+	for _, item := range batch {
+		result, found := uniqueKeySources[item.keySource]
+		if !found {
+			sendErrorAndClose(item.errCh, errors.NewProcessingError("key source not found: %v", item.keySource))
 			continue
 		}
 
-		record, ok := result.(*aerospike.BatchRecord)
-		if !ok {
-			item.errCh <- errors.NewProcessingError("could not cast result to aerospike.BatchRecord")
-			close(item.errCh)
-
+		record, found := result.(*aerospike.BatchRecord)
+		if !found {
+			sendErrorAndClose(item.errCh, errors.NewProcessingError("could not cast result to *aerospike.BatchRecord (type: %T)", result))
 			continue
 		}
 
 		if record.Err != nil {
-			item.errCh <- errors.NewProcessingError("error in aerospike map store batch record", record.Err)
-			close(item.errCh)
-
+			sendErrorAndClose(item.errCh, errors.NewProcessingError("error in aerospike previous outputs decorate", record.Err))
 			continue
 		}
 
@@ -482,36 +474,49 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		external, ok := bins["external"].(bool)
 		if ok && external {
-			previousTx, ok = externalTxs[item.outpoint.PreviousTxID]
-			if !ok {
+			var found bool
+
+			previousTx, found = externalTxs[item.outpoint.PreviousTxID]
+			if !found {
 				previousTx, err = s.getTxFromExternalStore(item.outpoint.PreviousTxID)
 				if err != nil {
-					item.errCh <- err
-					close(item.errCh)
-
+					sendErrorAndClose(item.errCh, err)
 					continue
 				}
-			}
 
-			externalTxs[item.outpoint.PreviousTxID] = previousTx
+				externalTxs[item.outpoint.PreviousTxID] = previousTx
+			}
 		} else {
 			previousTx, err = s.getTxFromBins(bins)
 			if err != nil {
-				item.errCh <- errors.NewTxInvalidError("invalid tx: %v", err)
-				close(item.errCh)
-
+				sendErrorAndClose(item.errCh, errors.NewTxInvalidError("invalid tx: %v", err))
 				continue
 			}
 		}
 
+		// nolint: gosec
+		if item.outpoint.Vout >= uint32(len(previousTx.Outputs)) {
+			sendErrorAndClose(item.errCh, errors.NewTxInvalidError("invalid Vout index"))
+			continue
+		}
+
 		item.outpoint.Satoshis = previousTx.Outputs[item.outpoint.Vout].Satoshis
 		item.outpoint.LockingScript = *previousTx.Outputs[item.outpoint.Vout].LockingScript
+
 		item.errCh <- nil
 		close(item.errCh)
 	}
 
 	prometheusTxMetaAerospikeMapGetMulti.Inc()
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
+}
+
+func sendErrorAndClose(errCh chan error, err error) {
+	select {
+	case errCh <- err:
+	default:
+	}
+	close(errCh)
 }
 
 func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, error) {
