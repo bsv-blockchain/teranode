@@ -30,6 +30,41 @@ jobs:
           path: coverage.out
           retention-days: 1
 
+  smoketest:
+    name: smoketest
+    runs-on: ubsv-runner
+    env:
+      GITHUB_ACTIONS: true
+    steps:
+      # Setup Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Set up AWS CLI
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      # Authenticate Docker to AWS ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.0"
+
+      - name: Run Smoke tests
+        run: settings_context=docker.ci.tc1.run make smoketests no-reset=1
+        continue-on-error: false
+
   sonarqube:
     name: Sonarqube
     runs-on: ubsv-runner
