@@ -151,7 +151,12 @@ func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.Minin
 		Version:    solution.Version,
 	})
 
-	return errors.UnwrapGRPC(err)
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return nil
+	}
+
+	return unwrappedErr
 }
 
 func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchItem) {
