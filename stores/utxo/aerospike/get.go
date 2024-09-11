@@ -25,9 +25,9 @@ import (
 )
 
 var (
-	stat                        = gocore.NewStat("Aerospike")
+	gocoreStat                  = gocore.NewStat("Aerospike")
 	externalTxCache             = expiringmap.New[chainhash.Hash, *bt.Tx](1 * time.Minute)
-	previousOutputsDecorateStat = stat.NewStat("PreviousOutputsDecorate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
+	previousOutputsDecorateStat = gocoreStat.NewStat("PreviousOutputsDecorate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
 )
 
 type batchGetItemData struct {

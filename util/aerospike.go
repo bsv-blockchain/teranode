@@ -391,7 +391,7 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 					case float64:
 						aerospikePrometheusMetrics[key].Add(i)
 					default:
-						logger.Errorf("Unknown type for aerospike stat %s: %T", key, i)
+						logger.Debugf("Unknown type for aerospike stat %s: %T", key, i)
 					}
 				}
 			}

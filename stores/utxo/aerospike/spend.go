@@ -91,7 +91,7 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	start := time.Now()
 	_, stat, deferFn := tracing.StartTracing(context.Background(), "sendSpendBatchLua",
-		tracing.WithParentStat(stat),
+		tracing.WithParentStat(gocoreStat),
 		tracing.WithHistogram(prometheusUtxoSpendBatch),
 	)
 
@@ -109,7 +109,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
-	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
+	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batch))
 
 	// s.blockHeight is the last mined block, but for the LUA script we are telling it to
 	// evaluate this spend in this block height (i.e. 1 greater)
@@ -118,33 +118,53 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	var (
 		key *aerospike.Key
 		err error
+		ok  bool
 	)
 
-	// TODO #1035 group all spends to the same record (tx) to the same call in LUA and change the LUA script to handle multiple spends
-
+	// create batches of spends, each batch is a record in aerospike
+	// we batch the spends to the same record (tx) to the same call in LUA
+	// this is to avoid the LUA script being called multiple times for the same transaction
+	// we calculate the key source based on the txid and the vout divided by the utxoBatchSize
+	aeroKeyMap := make(map[string]*aerospike.Key)
+	batchesByKey := make(map[*aerospike.Key][]aerospike.MapValue, len(batch))
 	for idx, bItem := range batch {
-		// nolint: gosec
 		keySource := uaerospike.CalculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize))
+		keySourceStr := string(keySource)
 
-		key, err = aerospike.NewKey(s.namespace, s.setName, keySource)
-		if err != nil {
-			// we just return the error on the channel, we cannot process this utxo any further
-			bItem.done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend: %w", bItem.spend.TxID.String(), err)
-			continue
+		if key, ok = aeroKeyMap[keySourceStr]; !ok {
+			key, err = aerospike.NewKey(s.namespace, s.setName, keySource)
+			if err != nil {
+				// we just return the error on the channel, we cannot process this utxo any further
+				bItem.done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] failed to init new aerospike key for spend: %w", bItem.spend.TxID.String(), err)
+				continue
+			}
+
+			aeroKeyMap[keySourceStr] = key
 		}
 
-		// TODO check the master record if this is a paginated tx
+		newMapValue := aerospike.NewMapValue(map[interface{}]interface{}{
+			"idx":          idx,
+			"offset":       s.calculateOffsetForOutput(bItem.spend.Vout),
+			"vOut":         bItem.spend.Vout,
+			"utxoHash":     bItem.spend.UTXOHash[:],
+			"spendingTxID": bItem.spend.SpendingTxID[:],
+		})
 
-		offset := s.calculateOffsetForOutput(bItem.spend.Vout)
+		if _, ok = batchesByKey[key]; !ok {
+			batchesByKey[key] = []aerospike.MapValue{newMapValue}
+		} else {
+			batchesByKey[key] = append(batchesByKey[key], newMapValue)
+		}
+	}
 
-		batchUDFPolicy := aerospike.NewBatchUDFPolicy()
-		batchRecords[idx] = aerospike.NewBatchUDF(batchUDFPolicy, key, luaPackage, "spend",
-			aerospike.NewIntegerValue(int(offset)),          // vout adjusted for utxo batch size
-			aerospike.NewValue(bItem.spend.UTXOHash[:]),     // utxo hash
-			aerospike.NewValue(bItem.spend.SpendingTxID[:]), // spending tx id
+	// TODO #1035 group all spends to the same record (tx) to the same call in LUA and change the LUA script to handle multiple spends
+	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
+	for aeroKey, batchItems := range batchesByKey {
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, luaPackage, "spendMulti",
+			aerospike.NewValue(batchItems),
 			aerospike.NewValue(thisBlockHeight),
 			aerospike.NewValue(s.expiration), // ttl
-		)
+		))
 	}
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
@@ -159,13 +179,19 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	start = stat.NewStat("BatchOperate").AddTime(start)
 
 	// batchOperate may have no errors, but some of the records may have failed
-	for idx, batchRecord := range batchRecords {
-		spend := batch[idx].spend
-
+	for _, batchRecord := range batchRecords {
 		err = batchRecord.BatchRec().Err
+		aeroKey := batchRecord.BatchRec().Key // will this be the same memory address as the key in the loop above?
+
+		batchByKey := batchesByKey[aeroKey]
+		txID := batch[batchByKey[0]["idx"].(int)].spend.TxID // all the same ...
+
 		if err != nil {
-			s.logger.Errorf("SAO idx: %d, %s:%d : %v", idx, spend.TxID, spend.Vout, err)
-			batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %w", spend.TxID.String(), thisBlockHeight, batchID, err)
+			// error occurred, we need to send the error to the done channel for each spend in this batch
+			for _, batchItem := range batchByKey {
+				idx := batchItem["idx"].(int)
+				batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d - %w", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
+			}
 		} else {
 			response := batchRecord.BatchRec().Record
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
@@ -174,15 +200,19 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 					responseMsgParts := strings.Split(responseMsg, ":")
 					switch responseMsgParts[0] {
 					case "OK":
-						batch[idx].done <- nil
+						for _, batchItem := range batchByKey {
+							idx := batchItem["idx"].(int)
+							batch[idx].done <- nil
+						}
 
 						if len(responseMsgParts) > 1 && responseMsgParts[1] == "ALLSPENT" {
 							// all utxos in this record are spent so we decrement the nrRecords in the master record
 							// we do this in a separate go routine to avoid blocking the batcher
 							go func() {
-								res, err := s.incrementNrRecords(spend.TxID, -1)
+								res, err := s.incrementNrRecords(txID, -1)
 								if err != nil {
-									s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to decrement nrRecords: %v", spend.TxID.String(), err)
+									// TODO if this goes wrong, we never decrement the nrRecords and the record will never be deleted
+									s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to decrement nrRecords: %v", txID.String(), err)
 								}
 
 								if r, ok := res.(string); ok {
@@ -194,28 +224,50 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						}
 
 					case "FROZEN":
-						batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchID, responseMsg)
+						for _, batchItem := range batchByKey {
+							idx := batchItem["idx"].(int)
+							batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
+						}
 
 					case "SPENT":
 						// spent by another transaction
 						spendingTxID, hashErr := chainhash.NewHashFromStr(responseMsgParts[1])
 						if hashErr != nil {
-							batch[idx].done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", spend.TxID.String(), hashErr)
+							for _, batchItem := range batchByKey {
+								idx := batchItem["idx"].(int)
+								batch[idx].done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", txID.String(), hashErr)
+							}
 						}
 						// TODO we need to be able to send the spending TX ID in the error down the line
-						batch[idx].done <- utxo.NewErrSpent(spend.TxID, spend.Vout, spend.UTXOHash, spendingTxID)
+						//      this is very indiscriminate, we need to know which output was spent by which tx
+						for _, batchItem := range batchByKey {
+							idx := batchItem["idx"].(int)
+							batch[idx].done <- utxo.NewErrSpent(batch[idx].spend.TxID, batch[idx].spend.Vout, batch[idx].spend.UTXOHash, spendingTxID)
+						}
 					case "ERROR":
 						if len(responseMsgParts) > 1 && responseMsgParts[1] == "TX not found" {
-							batch[idx].done <- errors.NewTxNotFoundError("[SPEND_BATCH_LUA][%s] transaction not found, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchID, responseMsg)
+							for _, batchItem := range batchByKey {
+								idx := batchItem["idx"].(int)
+								batch[idx].done <- errors.NewTxNotFoundError("[SPEND_BATCH_LUA][%s] transaction not found, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
+							}
 						} else {
-							batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchID, responseMsgParts[1])
+							for _, batchItem := range batchByKey {
+								idx := batchItem["idx"].(int)
+								batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsgParts[1])
+							}
 						}
 					default:
-						batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", spend.TxID.String(), thisBlockHeight, batchID, responseMsg)
+						for _, batchItem := range batchByKey {
+							idx := batchItem["idx"].(int)
+							batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
+						}
 					}
 				}
 			} else {
-				batch[idx].done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] could not parse response", spend.TxID.String())
+				for _, batchItem := range batchByKey {
+					idx := batchItem["idx"].(int)
+					batch[idx].done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] could not parse response", txID.String())
+				}
 			}
 		}
 	}

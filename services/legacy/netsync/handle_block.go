@@ -163,7 +163,14 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, err
 		}
 
-		err = sm.extendTransactions(ctx, block, txMap, subtree, subtreeData)
+		// extend all the transactions in the block
+		err = sm.extendTransactions(ctx, block, txMap)
+		if err != nil {
+			return nil, err
+		}
+
+		// create the subtree and subtreeData for the block
+		err = sm.createSubtree(ctx, block, txMap, subtree, subtreeData)
 		if err != nil {
 			return nil, err
 		}
@@ -353,7 +360,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	}
 }
 
-func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper, subtree *util.Subtree, subtreeData *util.SubtreeData) error {
+func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper) error {
 	_, _, deferFn := tracing.StartTracing(ctx, "extendTransactions")
 	defer deferFn()
 
@@ -369,43 +376,16 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 		// the coinbase transaction is not part of the txMap
 		if txWrapper, found := txMap[txHash]; found {
 			tx := txWrapper.tx
-			txSize := uint64(tx.Size())
-			tx.Size()
-
-			// Calculate the fees of this transaction
-			// We don't need to check for coinbase transactions, as they have no inputs
-			fee := uint64(0)
 
 			if !tx.IsCoinbase() {
-				// Calculate the fees of this transaction
-				// We don't need to check for coinbase transactions, as they have no inputs
-				for _, input := range tx.Inputs {
-					fee += input.PreviousTxSatoshis
-				}
+				g.Go(func() error {
+					if err := sm.extendTransaction(gCtx, tx, txMap); err != nil {
+						return errors.NewTxError("failed to extend transaction", err)
+					}
 
-				for _, output := range tx.Outputs {
-					fee -= output.Satoshis
-				}
+					return nil
+				})
 			}
-
-			if err := subtree.AddNode(txHash, fee, txSize); err != nil {
-				return errors.NewTxError("failed to add node (%s) to subtree", txHash, err)
-			}
-			// we need to match the indexes of the subtree and the tx data in subtreeData
-			currentIdx := subtree.Length() - 1
-
-			g.Go(func() error {
-				if err := sm.extendTransaction(gCtx, tx, txMap); err != nil {
-					return errors.NewTxError("failed to extend transaction", err)
-				}
-
-				// store the extended transaction in our subtree tx data file
-				if err := subtreeData.AddTx(tx, currentIdx); err != nil {
-					return errors.NewTxError("failed to add tx to subtree data", err)
-				}
-
-				return nil
-			})
 		}
 	}
 
@@ -415,6 +395,74 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	}
 
 	return nil
+}
+
+func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper, subtree *util.Subtree, subtreeData *util.SubtreeData) error {
+	_, _, deferFn := tracing.StartTracing(ctx, "extendTransactions")
+	defer deferFn()
+
+	for _, wireTx := range block.Transactions() {
+		txHash := *wireTx.Hash()
+
+		// the coinbase transaction is not part of the txMap
+		if txWrapper, found := txMap[txHash]; found {
+			tx := txWrapper.tx
+			txSize := uint64(tx.Size()) // nolint:gosec
+
+			fee, err := calculateTransactionFee(tx)
+			if err != nil {
+				return err
+			}
+
+			if err = subtree.AddNode(txHash, fee, txSize); err != nil {
+				return errors.NewTxError("failed to add node (%s) to subtree", txHash, err)
+			}
+			// we need to match the indexes of the subtree and the tx data in subtreeData
+			currentIdx := subtree.Length() - 1
+
+			// store the extended transaction in our subtree tx data file
+			if err = subtreeData.AddTx(tx, currentIdx); err != nil {
+				return errors.NewTxError("failed to add tx to subtree data", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func calculateTransactionFee(tx *bt.Tx) (uint64, error) {
+	// Calculate the fees of this transaction
+	// we do this with a signed int, to prevent overflow in case of invalid fees
+	inputValue := uint64(0)
+	outputValue := uint64(0)
+
+	if tx == nil {
+		return 0, errors.NewTxError("transaction is nil")
+	}
+
+	// can only calculate fees for extended transactions
+	if !tx.IsExtended() {
+		return 0, errors.NewTxError("transaction %s is not extended", tx.TxIDChainHash())
+	}
+
+	// We don't need to check for coinbase transactions, as they have no inputs
+	if !tx.IsCoinbase() {
+		// Calculate the fees of this transaction
+		// We don't need to check for coinbase transactions, as they have no inputs
+		for _, input := range tx.Inputs {
+			inputValue += input.PreviousTxSatoshis
+		}
+
+		for _, output := range tx.Outputs {
+			outputValue += output.Satoshis
+		}
+
+		if inputValue < outputValue {
+			return 0, errors.NewTxError("transaction %s has invalid fees: %d (input: %d, output: %d)", tx.TxIDChainHash(), inputValue-outputValue, inputValue, outputValue)
+		}
+	}
+
+	return inputValue - outputValue, nil
 }
 
 func (sm *SyncManager) createTxMap(ctx context.Context, block *bsvutil.Block) (map[chainhash.Hash]*txMapWrapper, error) {

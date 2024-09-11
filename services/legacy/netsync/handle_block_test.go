@@ -3,9 +3,11 @@ package netsync
 import (
 	"bytes"
 	"context"
+	"os"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
+	"github.com/libsv/go-bt/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -153,5 +155,43 @@ func BenchmarkCreateTxMap(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := sm.createTxMap(context.Background(), block)
 		require.NoError(b, err)
+	}
+}
+
+func Test_calculateTransactionFee(t *testing.T) {
+	tx1Hex, err := os.ReadFile("../testdata/fb5329b1f8fe83c36da18c97a096f21f02e8200566d232935f3b0c6284e8b2d0.hex")
+	require.NoError(t, err)
+
+	tx1, err := bt.NewTxFromString(string(tx1Hex))
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		tx      *bt.Tx
+		want    uint64
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name:    "nil tx",
+			tx:      nil,
+			want:    0,
+			wantErr: assert.Error,
+		},
+		{
+			name:    "valid tx",
+			tx:      tx1,
+			want:    2,
+			wantErr: assert.NoError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := calculateTransactionFee(tt.tx)
+			if !tt.wantErr(t, err) {
+				return
+			}
+
+			assert.Equal(t, tt.want, got)
+		})
 	}
 }

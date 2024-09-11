@@ -4,7 +4,7 @@ go 1.22.6
 
 toolchain go1.23.0
 
-replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.10
+replace github.com/libsv/go-bt/v2 => github.com/ordishs/go-bt/v2 v2.2.12
 
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
 
@@ -21,7 +21,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.16.21
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.54.3
 	github.com/bitcoin-sv/bdk/module/gobdk v0.0.0-20240828110818-f5e6a0cbf7e2
-	github.com/bitcoin-sv/go-sdk v1.1.1
+	github.com/bitcoin-sv/go-sdk v1.1.6
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
 	github.com/centrifugal/centrifuge v0.33.2
