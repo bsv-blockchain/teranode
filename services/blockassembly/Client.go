@@ -170,6 +170,7 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 	}
 
 	_, err := s.client.AddTxBatch(ctx, txBatch)
+	// this returns <nil> and it is not treated as nil
 	if err != nil {
 		s.logger.Errorf("%v", err)
 		for _, item := range batch {

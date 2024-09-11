@@ -485,9 +485,15 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 		}
 	}
 
-	return &blockassembly_api.AddTxBatchResponse{
+	resp := &blockassembly_api.AddTxBatchResponse{
 		Ok: true,
-	}, errors.WrapGRPC(batchError)
+	} //, errors.WrapGRPC(batchError)
+
+	if batchError == nil {
+		return resp, nil
+	}
+
+	return resp, errors.WrapGRPC(batchError)
 }
 
 func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) (*meta.Data, error) {
