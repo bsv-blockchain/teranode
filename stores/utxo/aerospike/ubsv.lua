@@ -176,19 +176,42 @@ function setMined(rec, blockID, ttl)
 end
 
 
+
+-- Function to compare two byte arrays for equality
+-- Parameters:
+--   a: byte array - The first byte array to compare
+--   b: byte array - The second byte array to compare
+-- Returns:
+--   boolean - true if the byte arrays are equal, false otherwise
 function bytes_equal(a, b)
+    -- Check if the sizes of the byte arrays are different
     if bytes.size(a) ~= bytes.size(b) then
         return false
     end
 
+    -- Compare each byte in the arrays
     for i = 1, bytes.size(a) do 
         if a[i] ~= b[i] then
             return false
         end
     end
+    
+    -- If all bytes are equal, return true
     return true
 end
 
+-- Function to check if a UTXO is frozen
+-- A UTXO is considered frozen if its 'frozen' field is a byte array of 32 'FF' bytes
+-- Parameters:
+--   a: byte array - The 'frozen' field of the UTXO
+-- Returns:
+--   boolean - true if the UTXO is frozen, false otherwise
+--  __                        
+-- / _|_ __ ___ _______ _ __  
+-- | |_| '__/ _ \_  / _ \ '_ \ 
+-- |  _| | | (_) / /  __/ | | |
+-- |_| |_|  \___/___\___|_| |_|
+--                           
 function frozen(a)
     if bytes.size(a) ~= 32 then -- Frozen utxos have 32 'FF' bytes.
         return false
@@ -203,6 +226,11 @@ function frozen(a)
     return true
 end
 
+-- Function to convert a byte array to a hexadecimal string
+-- Parameters:
+--   b: byte array - The byte array to convert
+-- Returns:
+--   string - The hexadecimal representation of the byte array
 function bytes_to_hex(b)
     local hex = ""
     for i = bytes.size(b), 1, -1 do
@@ -211,6 +239,13 @@ function bytes_to_hex(b)
     return hex
 end
 
+-- Increment the number of records and set TTL if necessary
+--  _                                          _   
+-- (_)_ __   ___ _ __ ___ _ __ ___   ___ _ __ | |_ 
+-- | | '_ \ / __| '__/ _ \ '_ ` _ \ / _ \ '_ \| __|
+-- | | | | | (__| | |  __/ | | | | |  __/ | | | |_ 
+-- |_|_| |_|\___|_|  \___|_| |_| |_|\___|_| |_|\__|
+--                                                 
 function incrementNrRecords(rec, inc, ttl)
     local nrRecords = rec['nrRecords']
     if nrRecords == nil then
@@ -228,14 +263,26 @@ function incrementNrRecords(rec, inc, ttl)
     return 'OK' .. signal
 end
 
+-- Function to set the Time-To-Live (TTL) for a record
+-- Parameters:
+--   rec: table - The record to update
+--   ttl: number - The TTL value to set (in seconds)
+-- Returns:
+--   string - A signal indicating the action taken
+--           _  _____ _____ _     
+--  ___  ___| ||_   _|_   _| |    
+-- / __|/ _ \ __|| |   | | | |    
+-- \__ \  __/ |_ | |   | | | |___ 
+-- |___/\___|\__||_|   |_| |_____|
+--                               
 function setTTL(rec, ttl)
-    -- Check if all the utxos are spent and set the TTL, but only for transactions that have been in at least one block
+    -- Check if all the UTXOs are spent and set the TTL, but only for transactions that have been in at least one block
     local blockIDs = rec['blockIDs']
     local nrRecords = rec['nrRecords']
     local signal = ""
 
     if nrRecords == nil then
-        -- This is a pagination record: check if all the utxos are spent
+        -- This is a pagination record: check if all the UTXOs are spent
         if rec['spentUtxos'] == rec['nrUtxos'] then
             signal = ":ALLSPENT"
         end
@@ -245,12 +292,15 @@ function setTTL(rec, ttl)
     else
         -- This is a master record: only set TTL if nrRecords is 1 and blockIDs has at least one item
         if nrRecords == 1 and blockIDs and #blockIDs > 0 then
+            -- Set the TTL for the record
             record.set_ttl(rec, ttl)
             signal = ":TTLSET"
         else
+            -- Remove any existing TTL by setting it to -1 (never expire)
             record.set_ttl(rec, -1)
         end
     end
 
+    -- Return the signal indicating the action taken (if any)
     return signal
 end
