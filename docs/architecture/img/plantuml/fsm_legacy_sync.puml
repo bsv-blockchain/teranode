@@ -1,0 +1,29 @@
+@startuml
+
+participant "Legacy Service" as LegacyService
+participant "Blockchain Service" as BlockchainService
+participant "FSM" as FSM
+
+== Startup ==
+[-> LegacyService : Start
+activate LegacyService
+LegacyService -> LegacyService : Initialize
+
+== LegacySync Request ==
+LegacyService -> BlockchainService : LegacySync (gRPC)
+activate BlockchainService
+
+BlockchainService -> FSM : LegacySync Event
+activate FSM
+
+FSM -> FSM : Transition to \nLegacySyncing
+
+FSM --> BlockchainService : State Updated
+deactivate FSM
+
+BlockchainService --> LegacyService : LegacySync Response
+deactivate BlockchainService
+
+LegacyService -> LegacyService : Start Legacy Sync Process
+
+@enduml
