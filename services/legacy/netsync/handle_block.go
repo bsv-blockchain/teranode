@@ -8,7 +8,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -175,14 +174,18 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, err
 		}
 
+		legacyMode := true
+		// TODO - SAO - remove this when we prove that the legacy sync mode works
 		// TODO move this into a convenience function in the blockchain client
-		currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
-		if err != nil {
-			// TODO: how to handle it gracefully?
-			sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
-		}
+		/*
+			currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+			if err != nil {
+				// TODO: how to handle it gracefully?
+				sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+			}
 
-		legacyMode := currentState != nil && *currentState == blockchain_api.FSMStateType_LEGACYSYNCING
+			// legacyMode := currentState != nil && *currentState == blockchain_api.FSMStateType_LEGACYSYNCING
+		*/
 
 		if legacyMode {
 			// in legacy sync mode, we can process transactions in a block in parallel, but in reverse order
@@ -204,7 +207,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			subtree.RootHash()[:],
 			subtreeBytes,
 			options.WithFileExtension("subtree"),
-			options.WithTTL(2*time.Minute),
+			options.WithTTL(120*time.Minute),
 		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 			return nil, errors.NewStorageError("failed to store subtree", err)
 		}
@@ -218,7 +221,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			subtreeData.RootHash()[:],
 			subtreeDataBytes,
 			options.WithFileExtension("subtreeData"),
-			options.WithTTL(2*time.Minute),
+			options.WithTTL(120*time.Minute),
 		); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 			return nil, errors.NewStorageError("failed to store subtree data", err)
 		}

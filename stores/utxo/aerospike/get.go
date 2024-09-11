@@ -558,6 +558,7 @@ func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, e
 
 func (s *Store) sendGetBatch(batch []*batchGetItem) {
 	items := make([]*utxo.UnresolvedMetaData, 0, len(batch))
+
 	for idx, item := range batch {
 		items = append(items, &utxo.UnresolvedMetaData{
 			Hash:   item.hash,

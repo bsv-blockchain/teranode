@@ -302,7 +302,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 				continue
 			}
 
-			// Don't wrap the error again, processTxMetaUsingCache returns the correctly formated error.
+			// Don't wrap the error again, processTxMetaUsingCache returns the correctly formatted error.
 			return err
 		}
 
