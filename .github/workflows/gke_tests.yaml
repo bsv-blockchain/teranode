@@ -2,6 +2,10 @@ name: tests
 on:
   workflow_call
 
+env:
+  REPO: ubsv
+  ECR_REGION: eu-north-1
+
 jobs:
   go-lint-and-test:
     name: Go Lint and Test
