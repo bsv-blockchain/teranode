@@ -128,7 +128,12 @@ func (s *Client) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {
 		Txid: hash[:],
 	})
 
-	return errors.UnwrapGRPC(err)
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return nil
+	}
+
+	return unwrappedErr
 }
 
 func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, error) {
@@ -170,7 +175,6 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 	}
 
 	_, err := s.client.AddTxBatch(ctx, txBatch)
-	// this returns <nil> and it is not treated as nil
 	if err != nil {
 		s.logger.Errorf("%v", err)
 		for _, item := range batch {
@@ -186,12 +190,24 @@ func (s *Client) sendBatchToBlockAssembly(ctx context.Context, batch []*batchIte
 
 func (s *Client) DeDuplicateBlockAssembly(_ context.Context) error {
 	_, err := s.client.DeDuplicateBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
-	return errors.UnwrapGRPC(err)
+
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return nil
+	}
+
+	return unwrappedErr
 }
 
 func (s *Client) ResetBlockAssembly(_ context.Context) error {
 	_, err := s.client.ResetBlockAssembly(context.Background(), &blockassembly_api.EmptyMessage{})
-	return errors.UnwrapGRPC(err)
+
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return nil
+	}
+
+	return unwrappedErr
 }
 
 func (s *Client) GetBlockAssemblyState(ctx context.Context) (*blockassembly_api.StateMessage, error) {

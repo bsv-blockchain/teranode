@@ -470,6 +470,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("no tx requests in batch"))
 	}
 
+	// this is never used, so we can remove it
 	var batchError error = nil
 	for _, req := range requests {
 		startTxTime := time.Now()
@@ -487,7 +488,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 
 	resp := &blockassembly_api.AddTxBatchResponse{
 		Ok: true,
-	} //, errors.WrapGRPC(batchError)
+	}
 
 	if batchError == nil {
 		return resp, nil
