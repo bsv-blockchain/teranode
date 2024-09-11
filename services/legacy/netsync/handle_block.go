@@ -244,7 +244,12 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 		return err
 	}
 
-	sm.preValidateTransactions(ctx, txMap, blockHeight)
+	sm.logger.Infof("[validateTransactionsLegacyMode] created utxos with %d items", len(txMap))
+
+	if err := sm.preValidateTransactions(ctx, txMap, blockHeight); err != nil {
+		sm.logger.Errorf("[validateTransactionsLegacyMode] failed to pre-validate transactions: %s", err)
+		return err
+	}
 
 	return nil
 }
@@ -289,7 +294,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 
 // preValidateTransactions pre-validates all the transactions in the block before
 // sending them to subtree validation.
-func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) {
+func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) error {
 	_, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions")
 	defer deferFn()
 
@@ -307,14 +312,12 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 
 		g.Go(func() error {
 			// call the validator to validate the transaction, but skip the utxo creation
-			_ = sm.validationClient.Validate(gCtx, txMap[txHash].tx, blockHeight, validator.WithSkipUtxoCreation(true))
-
-			return nil
+			return sm.validationClient.Validate(gCtx, txMap[txHash].tx, blockHeight, validator.WithSkipUtxoCreation(true))
 		})
 	}
 
 	// wait for all the transactions to be validated
-	_ = g.Wait()
+	return g.Wait()
 }
 
 // validateTransactions validates all the transactions in the block in parallel
