@@ -4,6 +4,7 @@ import (
 	_ "embed"
 
 	"github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 )
 
@@ -12,7 +13,7 @@ var ubsvLUA []byte
 
 var luaPackage = "ubsv_v10" // N.B. Do not have any "." in this string
 
-func registerLuaIfNecessary(client *uaerospike.Client, funcName string, funcBytes []byte) error {
+func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, funcName string, funcBytes []byte) error {
 	udfs, err := client.ListUDF(nil)
 	if err != nil {
 		return err
@@ -22,12 +23,14 @@ func registerLuaIfNecessary(client *uaerospike.Client, funcName string, funcByte
 
 	for _, udf := range udfs {
 		if udf.Filename == funcName+".lua" {
+			logger.Infof("LUA script %s already registered", funcName)
 			foundScript = true
 			break
 		}
 	}
 
 	if !foundScript {
+		logger.Infof("LUA script %s not registered - registering", funcName)
 		registerLua, err := client.RegisterUDF(nil, funcBytes, funcName+".lua", aerospike.LUA)
 		if err != nil {
 			return err

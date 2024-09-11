@@ -143,7 +143,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 
 	// Make sure the udf lua scripts are installed in the cluster
 	// update the version of the lua script when a new version is launched, do not re-use the old one
-	if err = registerLuaIfNecessary(client, luaPackage, ubsvLUA); err != nil {
+	if err = registerLuaIfNecessary(logger, client, luaPackage, ubsvLUA); err != nil {
 		return nil, errors.NewStorageError("Failed to register udfLUA", err)
 	}
 
