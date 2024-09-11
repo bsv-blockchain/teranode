@@ -24,13 +24,16 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 	for _, udf := range udfs {
 		if udf.Filename == funcName+".lua" {
 			logger.Infof("LUA script %s already registered", funcName)
+
 			foundScript = true
+
 			break
 		}
 	}
 
 	if !foundScript {
 		logger.Infof("LUA script %s not registered - registering", funcName)
+
 		registerLua, err := client.RegisterUDF(nil, funcBytes, funcName+".lua", aerospike.LUA)
 		if err != nil {
 			return err
