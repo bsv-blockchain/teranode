@@ -153,6 +153,29 @@ func Test_NewOptimizedBloomFilter(t *testing.T) {
 	assert.Equal(t, false, bloomFilter.Has(4556873583))
 }
 
+func Test_NewOptimizedBloomFilter_EmptyBlock(t *testing.T) {
+	subtreeStore := newLocalSubtreeStore()
+
+	timeStart := time.Now()
+	t.Logf("Time taken: %s\n", time.Since(timeStart))
+
+	emptyBlock := &Block{} // Assuming Block is your block struct
+	emptyBloomFilter, err := emptyBlock.NewOptimizedBloomFilter(context.Background(), ulogger.TestLogger{}, subtreeStore)
+	require.NoError(t, err)
+	require.NotNil(t, emptyBloomFilter)
+	assert.Equal(t, false, emptyBloomFilter.Has(0))
+
+	// Case 3: Edge cases
+	assert.Equal(t, false, emptyBloomFilter.Has(0xFFFFFFFFFFFFFFFF))
+	assert.Equal(t, false, emptyBloomFilter.Has(0))
+	assert.Equal(t, false, emptyBloomFilter.Has(1))
+
+	// Case 4: Performance check
+	timeThreshold := 1 * time.Millisecond
+	assert.LessOrEqual(t, time.Since(timeStart), timeThreshold, "Bloom filter creation took too long")
+
+}
+
 func Test_LoadTxMetaIntoMemory(t *testing.T) {
 	// Comment this out to run the test, it is commented, so it does not run in GitHub Actions
 	util.SkipVeryLongTests(t)

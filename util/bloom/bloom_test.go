@@ -25,7 +25,7 @@ func generateRandomTxid() []byte {
 	return bytes
 }
 
-func TestBloomFilter2(t *testing.T) {
+func Test_BloomFilter(t *testing.T) {
 	util.SkipVeryLongTests(t)
 
 	// Number of txids to test
@@ -123,7 +123,7 @@ func TestBloomFilter2(t *testing.T) {
 	t.Logf("Number of false positives: %v\n", falsePositives)
 }
 
-func TestBloomFilter(t *testing.T) {
+func Test_BloomFilterSharded(t *testing.T) {
 	filter := NewShardedBloomFilter()
 
 	// Number of txids to test
