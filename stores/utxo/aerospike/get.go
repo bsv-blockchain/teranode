@@ -42,8 +42,9 @@ type batchGetItem struct {
 }
 
 type batchOutpoint struct {
-	outpoint *meta.PreviousOutput
-	errCh    chan error
+	outpoint  *meta.PreviousOutput
+	keySource string
+	errCh     chan error
 }
 
 func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
@@ -393,18 +394,31 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	// Create a batch of records to read, with a max size of the batch
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batch))
-	batchRecordHashes := make([]chainhash.Hash, 0, len(batch))
 
 	// we de-dupe the txs we need to lookup, since we may have multiple outpoints for the same tx
 	// this is done by using a map of txHashes
-	uniqueTxHashes := make(map[chainhash.Hash]struct{})
+	uniqueKeySources := make(map[string]interface{})
+
 	for _, item := range batch {
-		uniqueTxHashes[item.outpoint.PreviousTxID] = struct{}{}
+		// nolint: gosec
+		keySource := uaerospike.CalculateKeySource(&item.outpoint.PreviousTxID, item.outpoint.Vout/uint32(s.utxoBatchSize))
+
+		keySourceStr := string(keySource)
+
+		item.keySource = keySourceStr
+		uniqueKeySources[keySourceStr] = struct{}{}
+	}
+
+	// Convert uniqueKeySources to a slice
+	uniqueKeySourcesSlice := make([]string, 0, len(uniqueKeySources))
+	for keySource := range uniqueKeySources {
+		uniqueKeySourcesSlice = append(uniqueKeySourcesSlice, keySource)
 	}
 
 	// Create a batch of records to read from the txHashes
-	for txHash := range uniqueTxHashes {
-		key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+
+	for _, keySource := range uniqueKeySourcesSlice {
+		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
 			for _, item := range batch {
 				item.errCh <- errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err)
@@ -419,7 +433,6 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		// Add to batch records
 		batchRecords = append(batchRecords, record)
-		batchRecordHashes = append(batchRecordHashes, txHash)
 	}
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
@@ -432,62 +445,69 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		return
 	}
 
-	txs := make(map[chainhash.Hash]*bt.Tx, len(batchRecords))
-	txErrors := make(map[chainhash.Hash]error)
+	externalTxs := make(map[chainhash.Hash]*bt.Tx)
 
-	// Process the batch records
-	for idx, batchRecordIfc := range batchRecords {
-		previousTxHash := batchRecordHashes[idx]
+	// Now we have all the records we need, we can inject the result into the map
+	for i, batchRecordIfc := range batchRecords {
+		uniqueKeySources[uniqueKeySourcesSlice[i]] = batchRecordIfc.BatchRec()
+	}
 
-		batchRecord := batchRecordIfc.BatchRec()
-		if batchRecord.Err != nil {
-			txErrors[previousTxHash] = errors.NewProcessingError("error in aerospike map store batch record: %w", batchRecord.Err)
+	for _, item := range batch {
+		result, ok := uniqueKeySources[item.keySource]
+		if !ok {
+			item.errCh <- errors.NewProcessingError("key source not found: %v", item.keySource)
+			close(item.errCh)
 
 			continue
 		}
 
-		bins := batchRecord.Record.Bins
+		record, ok := result.(aerospike.BatchRecord)
+		if !ok {
+			item.errCh <- errors.NewProcessingError("could not cast result to aerospike.BatchRecord")
+			close(item.errCh)
+
+			continue
+		}
+
+		if record.Err != nil {
+			item.errCh <- errors.NewProcessingError("error in aerospike map store batch record", record.Err)
+			close(item.errCh)
+
+			continue
+		}
+
+		bins := record.Record.Bins
 
 		var previousTx *bt.Tx
 
 		external, ok := bins["external"].(bool)
 		if ok && external {
-			if previousTx, err = s.getTxFromExternalStore(previousTxHash); err != nil {
-				txErrors[previousTxHash] = err
+			previousTx, ok = externalTxs[item.outpoint.PreviousTxID]
+			if !ok {
+				previousTx, err = s.getTxFromExternalStore(item.outpoint.PreviousTxID)
+				if err != nil {
+					item.errCh <- err
+					close(item.errCh)
 
-				continue
+					continue
+				}
 			}
+
+			externalTxs[item.outpoint.PreviousTxID] = previousTx
 		} else {
 			previousTx, err = s.getTxFromBins(bins)
 			if err != nil {
-				txErrors[previousTxHash] = errors.NewTxInvalidError("invalid tx: %v", err)
+				item.errCh <- errors.NewTxInvalidError("invalid tx: %v", err)
+				close(item.errCh)
 
 				continue
 			}
 		}
 
-		txs[previousTxHash] = previousTx
-	}
-
-	// Now we have all the txs, we can decorate the outpoints
-	for _, batchItem := range batch {
-		previousTx := txs[batchItem.outpoint.PreviousTxID]
-		if previousTx == nil {
-			if err, ok := txErrors[batchItem.outpoint.PreviousTxID]; ok {
-				batchItem.errCh <- err
-			} else {
-				batchItem.errCh <- errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID)
-			}
-
-			close(batchItem.errCh)
-
-			continue
-		}
-
-		batchItem.outpoint.Satoshis = previousTx.Outputs[batchItem.outpoint.Vout].Satoshis
-		batchItem.outpoint.LockingScript = *previousTx.Outputs[batchItem.outpoint.Vout].LockingScript
-		batchItem.errCh <- nil
-		close(batchItem.errCh)
+		item.outpoint.Satoshis = previousTx.Outputs[item.outpoint.Vout].Satoshis
+		item.outpoint.LockingScript = *previousTx.Outputs[item.outpoint.Vout].LockingScript
+		item.errCh <- nil
+		close(item.errCh)
 	}
 
 	prometheusTxMetaAerospikeMapGetMulti.Inc()
