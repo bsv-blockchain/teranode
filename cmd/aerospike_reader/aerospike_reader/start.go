@@ -86,6 +86,9 @@ func Start() {
 					os.Exit(1)
 				}
 
+				fmt.Printf("Record %d\n", i)
+				fmt.Printf("-------\n")
+
 				if _, err := printRecord(client, key); err != nil {
 					fmt.Printf("Failed to print record %d: %s\n", i, err)
 					os.Exit(1)
