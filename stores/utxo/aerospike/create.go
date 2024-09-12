@@ -454,9 +454,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	}
 
 	if external {
-		for i := 0; i < len(batches); i++ {
-			batches[i] = append(batches[i], aerospike.NewBin("external", true))
-		}
+		batches[0] = append(batches[0], aerospike.NewBin("external", true))
 	} else {
 		batches[0] = append(batches[0], aerospike.NewBin("inputs", inputs))
 		batches[0] = append(batches[0], aerospike.NewBin("outputs", outputs))
