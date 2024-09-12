@@ -429,6 +429,7 @@ func (b *Blockchain) GetBlockStats(ctx context.Context, _ *emptypb.Empty) (*mode
 	defer deferFn()
 
 	resp, err := b.store.GetBlockStats(ctx)
+
 	return resp, errors.WrapGRPC(err)
 }
 

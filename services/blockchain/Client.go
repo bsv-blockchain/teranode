@@ -213,7 +213,13 @@ func (c *Client) GetBlockByHeight(ctx context.Context, height uint32) (*model.Bl
 
 func (c *Client) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	resp, err := c.client.GetBlockStats(ctx, &emptypb.Empty{})
-	return resp, errors.UnwrapGRPC(err)
+
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return resp, nil
+	}
+
+	return resp, unwrappedErr
 }
 
 func (c *Client) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
@@ -221,7 +227,12 @@ func (c *Client) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*m
 		PeriodMillis: periodMillis,
 	})
 
-	return resp, errors.UnwrapGRPC(err)
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return resp, nil
+	}
+
+	return resp, unwrappedErr
 }
 
 func (c *Client) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
@@ -400,7 +411,12 @@ func (c *Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash)
 		BlockHash: blockHash.CloneBytes(),
 	})
 
-	return errors.UnwrapGRPC(err)
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return nil
+	}
+
+	return unwrappedErr
 }
 
 func (c *Client) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
@@ -408,7 +424,12 @@ func (c *Client) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash)
 		BlockHash: blockHash.CloneBytes(),
 	})
 
-	return errors.UnwrapGRPC(err)
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return nil
+	}
+
+	return unwrappedErr
 }
 
 func (c *Client) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
