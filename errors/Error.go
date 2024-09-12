@@ -3,14 +3,14 @@ package errors
 import (
 	"errors"
 	"fmt"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/protoadapt"
-	"google.golang.org/protobuf/types/known/anypb"
 	reflect "reflect"
 	"strings"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/protoadapt"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 type ErrData interface {
@@ -306,7 +306,6 @@ func UnwrapGRPC(err error) *Error {
 		Message:    err.Error(),
 		WrappedErr: st.Err(),
 	}
-
 }
 
 /*
