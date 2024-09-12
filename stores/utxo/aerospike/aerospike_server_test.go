@@ -99,6 +99,7 @@ func TestAerospike(t *testing.T) {
 	// raw client to be able to do gets and cleanup
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
+	defer client.Close()
 
 	// TODO use the container in tests
 	// client := setupAerospike(t)
@@ -407,6 +408,98 @@ func TestAerospike(t *testing.T) {
 		)
 		require.NoError(t, aErr)
 		assert.Equal(t, "ERROR:TX not found", ret)
+	})
+
+	t.Run("aerospike 1 record spend 1 and not expire no blockIDs", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		err = db.Spend(context.Background(), spends, 0)
+		require.NoError(t, err)
+
+		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		require.NoError(t, err)
+
+		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx still has UTXOs
+
+		// Now spend all the remaining utxos
+		spendsRemaining := []*utxo.Spend{{
+			TxID:         tx.TxIDChainHash(),
+			Vout:         1,
+			UTXOHash:     utxoHash1,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         2,
+			UTXOHash:     utxoHash2,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         3,
+			UTXOHash:     utxoHash3,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         4,
+			UTXOHash:     utxoHash4,
+			SpendingTxID: spendingTxID2,
+		}}
+
+		err = db.Spend(context.Background(), spendsRemaining, 0)
+		require.NoError(t, err)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		require.NoError(t, err)
+
+		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx has not been in a block yet
+	})
+
+	t.Run("aerospike 1 record spend 1 and not expire", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := db.Create(context.Background(), tx, 0, utxo.WithBlockIDs(1, 2, 3)) // Important that blockIDs are set
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		err = db.Spend(context.Background(), spends, 0)
+		require.NoError(t, err)
+
+		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		require.NoError(t, err)
+
+		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx still has UTXOs
+
+		// Now spend all the remaining utxos
+		spendsRemaining := []*utxo.Spend{{
+			TxID:         tx.TxIDChainHash(),
+			Vout:         1,
+			UTXOHash:     utxoHash1,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         2,
+			UTXOHash:     utxoHash2,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         3,
+			UTXOHash:     utxoHash3,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         4,
+			UTXOHash:     utxoHash4,
+			SpendingTxID: spendingTxID2,
+		}}
+
+		err = db.Spend(context.Background(), spendsRemaining, 0)
+		require.NoError(t, err)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		require.NoError(t, err)
+
+		require.Equal(t, aerospikeExpiration, value.Expiration) // Now TTL should be set to aerospikeExpiration as all UTXOs are spent
 	})
 
 	t.Run("aerospike spend all and expire", func(t *testing.T) {

@@ -368,8 +368,8 @@ function setTTL(rec, ttl)
         -- as we only want to set TTL for this record and all the other pagination records
         -- when the TX is fully spent and all the UTXOs are spent
     else
-        -- This is a master record: only set TTL if nrRecords is 1 and blockIDs has at least one item
-        if nrRecords == 1 and blockIDs and #blockIDs > 0 then
+        -- This is a master record: only set TTL if nrRecords is 1 and blockIDs has at least one item and all UTXOs are spent
+        if nrRecords == 1 and blockIDs and #blockIDs > 0 and rec['spentUtxos'] == rec['nrUtxos'] then
             -- Set the TTL for the record
             record.set_ttl(rec, ttl)
             signal = ":TTLSET"
