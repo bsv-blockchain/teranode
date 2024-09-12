@@ -126,7 +126,7 @@ type txMapWrapper struct {
 	childLevelInBlock  uint32
 }
 
-func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block) ([]*chainhash.Hash, error) {
+func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block) (subtrees []*chainhash.Hash, err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "prepareSubtrees",
 		tracing.WithLogMessage(
 			sm.logger,
@@ -136,9 +136,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			len(block.Transactions()),
 		),
 	)
-	defer deferFn()
+	defer deferFn(err)
 
-	subtrees := make([]*chainhash.Hash, 0)
+	subtrees = make([]*chainhash.Hash, 0)
 	blockHeight := uint32(block.Height())
 
 	// create 1 subtree + subtree.subtreeData

@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"os"
 	"runtime/pprof"
 	"testing"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -88,7 +89,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 
 		v := ValidateSubtree{
 			SubtreeHash:   *subtree.RootHash(),
-			BaseUrl:       "http://localhost:8000",
+			BaseURL:       "http://localhost:8000",
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
@@ -189,7 +190,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 	v := ValidateSubtree{
 		SubtreeHash:   *rootHash,
-		BaseUrl:       "http://localhost:8000",
+		BaseURL:       "http://localhost:8000",
 		TxHashes:      nil,
 		AllowFailFast: false,
 	}
@@ -230,7 +231,7 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 	// Create a mock ValidateSubtree struct
 	v := ValidateSubtree{
 		SubtreeHash:   *hash1,
-		BaseUrl:       "http://localhost:8000",
+		BaseURL:       "http://localhost:8000",
 		TxHashes:      nil,
 		AllowFailFast: false,
 	}
