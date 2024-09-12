@@ -10,6 +10,8 @@ const (
 	GenesisActivationHeight = 620538
 )
 
+// IsExtended checks if a transaction is extended
+// NOTE: 0 satoshi inputs are valid in older transactions
 func IsExtended(tx *bt.Tx, blockHeight uint32) bool {
 	//if blockHeight < GenesisActivationHeight {
 

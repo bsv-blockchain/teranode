@@ -141,7 +141,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if !tx.IsExtended() {
+	if !util.IsExtended(tx, 0) { // block height is not used
 		return nil, errors.NewTxInvalidError("tx is not extended")
 	}
 

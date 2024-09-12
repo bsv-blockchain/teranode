@@ -447,7 +447,7 @@ func calculateTransactionFee(tx *bt.Tx) (uint64, error) {
 	}
 
 	// can only calculate fees for extended transactions
-	if !tx.IsExtended() {
+	if !util.IsExtended(tx, 0) { // block height not used
 		return 0, errors.NewTxError("transaction %s is not extended", tx.TxIDChainHash())
 	}
 
