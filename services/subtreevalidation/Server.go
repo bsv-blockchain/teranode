@@ -280,7 +280,9 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
 		tracing.WithDebugLogMessage(u.logger, "[checkSubtree] called for subtree %s (height %d)", utils.ReverseAndHexEncodeSlice(request.Hash), request.BlockHeight),
 	)
-	defer deferFn(err)
+	defer func() {
+		deferFn(err)
+	}()
 
 	var hash *chainhash.Hash
 

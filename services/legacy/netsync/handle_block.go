@@ -55,7 +55,9 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		tracing.WithTag("blockHash", block.Hash().String()),
 		tracing.WithTag("peer", peer.String()),
 	)
-	defer deferFn(err)
+	defer func() {
+		deferFn(err)
+	}()
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
@@ -112,7 +114,9 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 			teranodeBlock.Height,
 		),
 	)
-	defer deferFn(err)
+	defer func() {
+		deferFn(err)
+	}()
 
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
@@ -139,7 +143,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			len(block.Transactions()),
 		),
 	)
-	defer deferFn(err)
+	defer func() {
+		deferFn(err)
+	}()
 
 	subtrees = make([]*chainhash.Hash, 0)
 	blockHeight := uint32(block.Height())
@@ -249,7 +255,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 
 func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactionsLegacyMode")
-	defer deferFn(err)
+	defer func() {
+		deferFn(err)
+	}()
 
 	if err = sm.createUtxos(ctx, txMap, blockHeight); err != nil {
 		return err
@@ -270,7 +278,9 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 // block is valid.
 func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "createUtxos")
-	defer deferFn(err)
+	defer func() {
+		deferFn(err)
+	}()
 
 	storeBatcherSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 1024)
 	storeBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_storeBatcherConcurrency", 32)
@@ -307,7 +317,9 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 // sending them to subtree validation.
 func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions")
-	defer deferFn(err)
+	defer func() {
+		deferFn(err)
+	}()
 
 	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
 

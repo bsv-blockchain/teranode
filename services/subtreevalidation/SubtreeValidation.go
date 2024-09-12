@@ -216,7 +216,9 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		tracing.WithHistogram(prometheusSubtreeValidationValidateSubtree),
 	)
 
-	defer deferFn(err)
+	defer func() {
+		deferFn(err)
+	}()
 
 	u.logger.Infof("[validateSubtreeInternal][%s] called", v.SubtreeHash.String())
 
@@ -541,7 +543,9 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData, baseURL string, txMetaSlice []*meta.Data, blockHeight uint32) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "SubtreeValidation:processMissingTransactions")
-	defer deferFn(err)
+	defer func() {
+		deferFn(err)
+	}()
 
 	var (
 		missingTxs        []missingTx
