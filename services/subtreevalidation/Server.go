@@ -58,7 +58,6 @@ func New(
 	validatorClient validator.Interface,
 	blockchainClient blockchain.ClientI,
 ) *Server {
-
 	maxMerkleItemsPerSubtree, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1024)
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("subtreevalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
@@ -81,6 +80,7 @@ func New(
 	// create a caching tx meta store
 	if gocore.Config().GetBool("subtreevalidation_txMetaCacheEnabled", true) {
 		logger.Infof("Using cached version of tx meta store")
+
 		u.utxoStore, _ = txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, utxoStore)
 	} else {
 		u.utxoStore = utxoStore
@@ -101,7 +101,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
-
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
@@ -127,6 +126,7 @@ func (u *Server) Start(ctx context.Context) error {
 		// subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
 		// g.SetLimit(subtreeConcurrency)
 		var partitions int
+
 		if partitions, err = strconv.Atoi(subtreesKafkaURL.Query().Get("partitions")); err != nil {
 			return errors.NewInvalidArgumentError("[Subtreevalidation] unable to parse Kafka partitions from %s", subtreesKafkaURL, err)
 		}
@@ -187,17 +187,18 @@ func (u *Server) Start(ctx context.Context) error {
 				// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
 				// kafka message should be committed, so return nil to mark message.
 				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling subtree, marking Kafka message as completed.\n", msg, err)
+
 				return nil
 			case <-ctx.Done():
 				return ctx.Err()
 			}
-
 		})
 	}
 
 	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
 	if err == nil && ok {
 		var partitions int
+
 		if partitions, err = strconv.Atoi(txmetaKafkaURL.Query().Get("partitions")); err != nil {
 			return errors.NewInvalidArgumentError("[Subtreevalidation] unable to parse Kafka partitions from %s", txmetaKafkaURL, err)
 		}
@@ -255,7 +256,8 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *subtreevalidation_api.EmptyM
 	defer deferFn()
 
 	return &subtreevalidation_api.HealthResponse{
-		Ok:        true,
+		Ok: true,
+		// nolint: gosec
 		Timestamp: uint32(time.Now().Unix()),
 	}, nil
 }
@@ -272,15 +274,17 @@ func (u *Server) CheckSubtree(ctx context.Context, request *subtreevalidation_ap
 }
 
 // checkSubtree is the internal function used to check a subtree
-func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_api.CheckSubtreeRequest) (bool, error) {
+func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_api.CheckSubtreeRequest) (ok bool, err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "checkSubtree",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
 		tracing.WithDebugLogMessage(u.logger, "[checkSubtree] called for subtree %s (height %d)", utils.ReverseAndHexEncodeSlice(request.Hash), request.BlockHeight),
 	)
-	defer deferFn()
+	defer deferFn(err)
 
-	hash, err := chainhash.NewHash(request.Hash[:])
+	var hash *chainhash.Hash
+
+	hash, err = chainhash.NewHash(request.Hash)
 	if err != nil {
 		return false, errors.NewProcessingError("[CheckSubtree] Failed to parse subtree hash from request", err)
 	}
@@ -295,6 +299,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 	u.prioritySubtreeCheckActiveMapLock.Lock()
 	u.prioritySubtreeCheckActiveMap[hash.String()] = true
 	u.prioritySubtreeCheckActiveMapLock.Unlock()
+
 	defer func() {
 		u.prioritySubtreeCheckActiveMapLock.Lock()
 		delete(u.prioritySubtreeCheckActiveMap, hash.String())
@@ -320,6 +325,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 			u.logger.Infof("[CheckSubtree] Processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 			var subtree *util.Subtree
+
 			if request.BaseUrl == "legacy" {
 				// read from legacy store
 				subtreeBytes, err := u.subtreeStore.Get(
@@ -335,7 +341,9 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 				if err != nil {
 					return false, errors.NewProcessingError("[CheckSubtree] Failed to create subtree from bytes", err)
 				}
+
 				txHashes := make([]chainhash.Hash, subtree.Length())
+
 				for i := 0; i < subtree.Length(); i++ {
 					txHashes[i] = subtree.Nodes[i].Hash
 				}
@@ -350,14 +358,15 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 				// Call the validateSubtreeInternal method
 				if err = u.validateSubtreeInternal(ctx, v, request.BlockHeight); err != nil {
 					// u.logger.Errorf("SAO %s", err)
-					return false, errors.NewProcessingError("[CheckSubtree] Failed to validate subtree %s", hash.String(), err)
+					return false, errors.NewProcessingError("[CheckSubtree] Failed to validate legacy subtree %s", hash.String(), err)
 				}
 
-				u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
+				u.logger.Debugf("[CheckSubtree] Finished processing priority legacy subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 				return true, nil
 			}
 
+			// This line is only reached when the base URL is not "legacy"
 			v := ValidateSubtree{
 				SubtreeHash:   *hash,
 				BaseURL:       request.BaseUrl,
@@ -372,9 +381,9 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 			u.logger.Debugf("[CheckSubtree] Finished processing priority subtree message for %s from %s", hash.String(), request.BaseUrl)
 
 			return true, nil
-
 		} else {
 			u.logger.Infof("[CheckSubtree] Failed to get lock for subtree %s, retry #%d", hash.String(), retryCount)
+
 			// Wait for a bit before retrying.
 			select {
 			case <-ctx.Done():
