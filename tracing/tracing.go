@@ -45,6 +45,7 @@ func WithTag(key, value string) Options {
 		if s.Tags == nil {
 			s.Tags = make([]tracingTag, 0)
 		}
+
 		s.Tags = append(s.Tags, tracingTag{key: key, value: value})
 	}
 }
@@ -89,6 +90,7 @@ func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level strin
 		// duplicate the logger so that the skip frame is correct
 		s.Logger = logger.Duplicate(ulogger.WithSkipFrame(1))
 	}
+
 	if s.LogMessages == nil {
 		s.LogMessages = []logMessage{{message: message, args: args, level: level}}
 	} else {
@@ -97,7 +99,7 @@ func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level strin
 }
 
 // StartTracing starts a new span with the given name and returns a context with the span and a function to finish the span.
-func StartTracing(ctx context.Context, name string, setOptions ...Options) (context.Context, *gocore.Stat, func()) {
+func StartTracing(ctx context.Context, name string, setOptions ...Options) (context.Context, *gocore.Stat, func(err ...error)) {
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, name)
 
 	// process the options
@@ -106,8 +108,11 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 		opt(options)
 	}
 
-	var start time.Time
-	var stat *gocore.Stat
+	var (
+		start time.Time
+		stat  *gocore.Stat
+	)
+
 	if options.ParentStat != nil {
 		start, stat, ctx = NewStatFromContext(spanCtx, name, options.ParentStat)
 	} else {
@@ -133,7 +138,7 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 		}
 	}
 
-	return ctx, stat, func() {
+	return ctx, stat, func(optionalError ...error) {
 		span.Finish()
 		stat.AddTime(start)
 
@@ -146,15 +151,33 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 		}
 
 		if options.Logger != nil && len(options.LogMessages) > 0 {
-			done := fmt.Sprintf(" DONE in %s", time.Since(start))
+			var (
+				done string
+				err  error
+			)
+
+			if len(optionalError) > 0 {
+				err = optionalError[0]
+			}
+
+			if err != nil {
+				done = fmt.Sprintf(" DONE in %s with error: %v", time.Since(start), err)
+			} else {
+				done = fmt.Sprintf(" DONE in %s", time.Since(start))
+			}
+
 			for _, l := range options.LogMessages {
-				switch {
-				case l.level == "WARN":
-					options.Logger.Warnf(l.message+done, l.args...)
-				case l.level == "DEBUG":
-					options.Logger.Debugf(l.message+done, l.args...)
-				default:
-					options.Logger.Infof(l.message+done, l.args...)
+				if err != nil {
+					options.Logger.Errorf(l.message+done, l.args...)
+				} else {
+					switch {
+					case l.level == "WARN":
+						options.Logger.Warnf(l.message+done, l.args...)
+					case l.level == "DEBUG":
+						options.Logger.Debugf(l.message+done, l.args...)
+					default:
+						options.Logger.Infof(l.message+done, l.args...)
+					}
 				}
 			}
 		}

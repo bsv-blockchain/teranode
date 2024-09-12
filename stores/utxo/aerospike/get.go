@@ -407,8 +407,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
 		if err != nil {
 			for _, item := range batch {
-				item.errCh <- errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err)
-				close(item.errCh)
+				sendErrorAndClose(item.errCh, errors.NewProcessingError("failed to init new aerospike key for txMeta: %w", err))
 			}
 
 			return
@@ -422,11 +421,11 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		batchRecordHashes = append(batchRecordHashes, txHash)
 	}
 
+	// send the batch to aerospike
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		for _, item := range batch {
-			item.errCh <- errors.NewStorageError("error in aerospike map store batch records: %w", err)
-			close(item.errCh)
+			sendErrorAndClose(item.errCh, errors.NewStorageError("error in aerospike map store batch records: %w", err))
 		}
 
 		return
@@ -474,12 +473,10 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		previousTx := txs[batchItem.outpoint.PreviousTxID]
 		if previousTx == nil {
 			if err, ok := txErrors[batchItem.outpoint.PreviousTxID]; ok {
-				batchItem.errCh <- err
+				sendErrorAndClose(batchItem.errCh, err)
 			} else {
-				batchItem.errCh <- errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID)
+				sendErrorAndClose(batchItem.errCh, errors.NewTxNotFoundError("previous tx not found: %v", batchItem.outpoint.PreviousTxID))
 			}
-
-			close(batchItem.errCh)
 
 			continue
 		}
@@ -492,6 +489,14 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 	prometheusTxMetaAerospikeMapGetMulti.Inc()
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
+}
+
+func sendErrorAndClose(errCh chan error, err error) {
+	select {
+	case errCh <- err:
+	default:
+	}
+	close(errCh)
 }
 
 func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, error) {

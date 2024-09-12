@@ -1,0 +1,42 @@
+@startuml
+!define RECTANGLE class
+
+participant "P2P Network" as P2P
+participant "BlockValidation Service" as BlockValidation
+participant "Blockchain Service" as BlockchainService
+participant "FSM" as FSM
+
+
+== Block Reception and Validation ==
+P2P -> BlockValidation : New Block
+activate BlockValidation
+BlockValidation -> BlockValidation : Validate Block
+
+== Catchup Detection ==
+BlockValidation -> BlockValidation : Detect Catchup Mode
+
+== CatchupBlocks Notification ==
+alt In Catchup Mode
+    BlockValidation -> BlockchainService : CatchupBlocks (gRPC)
+    activate BlockchainService
+
+    BlockchainService -> FSM : CatchupBlocks\n Event
+    activate FSM
+
+    FSM -> FSM : Transition to\n CatchingBlocks
+
+    FSM --> BlockchainService : State Updated
+    deactivate FSM
+
+    BlockchainService -> BlockchainService : Start Block\n Catchup Process
+    BlockchainService --> BlockValidation : CatchupBlocks Response
+    deactivate BlockchainService
+
+    BlockValidation -> BlockValidation : Handle Response
+else Not in Catchup Mode
+    BlockValidation -> BlockValidation : Continue Normal Processing
+end
+
+deactivate BlockValidation
+
+@enduml

@@ -1,0 +1,50 @@
+@startuml
+!define RECTANGLE class
+
+participant "P2P Network" as P2P
+participant "Legacy Service" as LegacyService
+participant "Blockchain Service" as BlockchainService
+participant "FSM" as FSM
+participant "Other Services" as OtherService
+
+== Message Handling ==
+P2P -> LegacyService : Block or Inv Message
+activate LegacyService
+
+alt Block Message
+    LegacyService -> LegacyService : handleBlockMsg()
+else Inv Message
+    LegacyService -> LegacyService : handleInvMsg()
+end
+
+LegacyService -> LegacyService : Check if blockchain is current
+
+== Transition to Running State ==
+alt Blockchain is current
+    LegacyService -> BlockchainService : Run (gRPC)
+    activate BlockchainService
+
+    BlockchainService -> FSM : Run Event
+    activate FSM
+
+    FSM -> FSM : Transition to Running
+    FSM -> OtherService : Send FSMState Notification
+    activate OtherService
+    OtherService --> FSM : Notification Sent
+    deactivate OtherService
+
+    FSM --> BlockchainService : State Updated
+    deactivate FSM
+
+    BlockchainService -> BlockchainService : Update internal state
+    BlockchainService --> LegacyService : Run Response
+    deactivate BlockchainService
+
+    LegacyService -> LegacyService : Handle Response
+else Blockchain not current
+    LegacyService -> LegacyService : Continue syncing
+end
+
+deactivate LegacyService
+
+@enduml

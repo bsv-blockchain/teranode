@@ -342,7 +342,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 
 				v := ValidateSubtree{
 					SubtreeHash:   *hash,
-					BaseUrl:       request.BaseUrl,
+					BaseURL:       request.BaseUrl,
 					TxHashes:      txHashes,
 					AllowFailFast: false,
 				}
@@ -360,7 +360,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 
 			v := ValidateSubtree{
 				SubtreeHash:   *hash,
-				BaseUrl:       request.BaseUrl,
+				BaseURL:       request.BaseUrl,
 				AllowFailFast: false,
 			}
 

@@ -127,6 +127,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	// we calculate the key source based on the txid and the vout divided by the utxoBatchSize
 	aeroKeyMap := make(map[string]*aerospike.Key)
 	batchesByKey := make(map[*aerospike.Key][]aerospike.MapValue, len(batch))
+
 	for idx, bItem := range batch {
 		keySource := uaerospike.CalculateKeySource(bItem.spend.TxID, bItem.spend.Vout/uint32(s.utxoBatchSize))
 		keySourceStr := string(keySource)

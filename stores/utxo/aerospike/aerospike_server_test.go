@@ -5,7 +5,6 @@ package aerospike
 import (
 	"context"
 	"encoding/binary"
-	"fmt"
 	"math"
 	"net/url"
 	"testing"
@@ -29,6 +28,7 @@ const (
 	aerospikeNamespace  = "test"      // test
 	aerospikeSet        = "utxo-test" // utxo-test
 	aerospikeExpiration = uint32(30)
+	aerospikeURL        = "aerospike://localhost:3000/test?set=utxo-test&expiration=30&externalStore=file://./data/externalStore"
 )
 
 var (
@@ -99,11 +99,12 @@ func TestAerospike(t *testing.T) {
 	// raw client to be able to do gets and cleanup
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
+	defer client.Close()
 
 	// TODO use the container in tests
 	// client := setupAerospike(t)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(aerospikeURL)
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -131,8 +132,7 @@ func TestAerospike(t *testing.T) {
 
 	t.Cleanup(func() {
 		policy := util.GetAerospikeWritePolicy(0, 0)
-		_, err = client.Delete(policy, key)
-		require.NoError(t, err)
+		_, _ = client.Delete(policy, key)
 	})
 
 	t.Run("aerospike store", func(t *testing.T) {
@@ -409,6 +409,98 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, "ERROR:TX not found", ret)
 	})
 
+	t.Run("aerospike 1 record spend 1 and not expire no blockIDs", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		err = db.Spend(context.Background(), spends, 0)
+		require.NoError(t, err)
+
+		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		require.NoError(t, err)
+
+		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx still has UTXOs
+
+		// Now spend all the remaining utxos
+		spendsRemaining := []*utxo.Spend{{
+			TxID:         tx.TxIDChainHash(),
+			Vout:         1,
+			UTXOHash:     utxoHash1,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         2,
+			UTXOHash:     utxoHash2,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         3,
+			UTXOHash:     utxoHash3,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         4,
+			UTXOHash:     utxoHash4,
+			SpendingTxID: spendingTxID2,
+		}}
+
+		err = db.Spend(context.Background(), spendsRemaining, 0)
+		require.NoError(t, err)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		require.NoError(t, err)
+
+		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx has not been in a block yet
+	})
+
+	t.Run("aerospike 1 record spend 1 and not expire", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := db.Create(context.Background(), tx, 0, utxo.WithBlockIDs(1, 2, 3)) // Important that blockIDs are set
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		err = db.Spend(context.Background(), spends, 0)
+		require.NoError(t, err)
+
+		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
+		require.NoError(t, err)
+
+		require.Equal(t, uint32(0xffffffff), value.Expiration) // Expiration is -1 because the tx still has UTXOs
+
+		// Now spend all the remaining utxos
+		spendsRemaining := []*utxo.Spend{{
+			TxID:         tx.TxIDChainHash(),
+			Vout:         1,
+			UTXOHash:     utxoHash1,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         2,
+			UTXOHash:     utxoHash2,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         3,
+			UTXOHash:     utxoHash3,
+			SpendingTxID: spendingTxID2,
+		}, {
+			TxID:         tx.TxIDChainHash(),
+			Vout:         4,
+			UTXOHash:     utxoHash4,
+			SpendingTxID: spendingTxID2,
+		}}
+
+		err = db.Spend(context.Background(), spendsRemaining, 0)
+		require.NoError(t, err)
+
+		value, err = client.Get(util.GetAerospikeReadPolicy(), txKey)
+		require.NoError(t, err)
+
+		require.Equal(t, aerospikeExpiration, value.Expiration) // Now TTL should be set to aerospikeExpiration as all UTXOs are spent
+	})
+
 	t.Run("aerospike spend all and expire", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
 		txMeta, err := db.Create(context.Background(), tx, 0)
@@ -516,9 +608,8 @@ func TestAerospike(t *testing.T) {
 		require.NoError(t, err)
 		utxos, ok = value.Bins["utxos"].([]interface{})
 		require.True(t, ok)
-		utxoBytes, ok = utxos[spends[0].Vout].([]byte)
-		require.True(t, ok)
-		require.Equal(t, 32, len(utxoBytes))
+		require.Len(t, utxos, 5)
+		require.Len(t, utxos[0].([]byte), 32)
 
 		// utxoSpendTxID = utxos[spends[0].Vout]
 		// require.Equal(t, "", utxoSpendTxID)
@@ -531,8 +622,10 @@ func cleanDB(t *testing.T, client *aero.Client, key *aero.Key, txs ...*bt.Tx) {
 	_, err := client.Delete(policy, key)
 	require.NoError(t, err)
 
-	_, err = client.Delete(policy, coinbaseKey)
-	require.NoError(t, err)
+	if coinbaseKey != nil {
+		_, err = client.Delete(policy, coinbaseKey)
+		require.NoError(t, err)
+	}
 
 	if len(txs) > 0 {
 		for _, tx := range txs {
@@ -547,7 +640,7 @@ func TestLUAScripts(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(aerospikeURL)
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -608,7 +701,7 @@ func TestCreateWithBlockIDs(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(aerospikeURL)
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -652,7 +745,7 @@ func TestStoreOPReturn(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(aerospikeURL)
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -689,7 +782,7 @@ func TestFrozenTX(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(aerospikeURL)
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -723,7 +816,7 @@ func TestFrozenUTXO(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(aerospikeURL)
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -764,7 +857,7 @@ func TestCoinbase(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(aerospikeURL)
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -809,7 +902,7 @@ func TestCoinbase(t *testing.T) {
 //	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 //	require.NoError(t, aeroErr)
 //
-//	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+//  aeroURL, err := url.Parse(aerospikeURL)
 //	require.NoError(t, err)
 //
 //	// ubsv db client
@@ -859,7 +952,7 @@ func TestCoinbase(t *testing.T) {
 //	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 //	require.NoError(t, aeroErr)
 //
-//	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+//	aeroURL, err := url.Parse(aerospikeURL)
 //	require.NoError(t, err)
 //
 //	// ubsv db client
@@ -1005,7 +1098,7 @@ func TestIncrementNrRecords(t *testing.T) {
 	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 	require.NoError(t, aeroErr)
 
-	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+	aeroURL, err := url.Parse(aerospikeURL)
 	require.NoError(t, err)
 
 	// ubsv db client
@@ -1048,12 +1141,132 @@ func TestIncrementNrRecords(t *testing.T) {
 
 }
 
+func TestStore_Decorate(t *testing.T) {
+	initPrometheusMetrics()
+
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(aerospikeURL)
+	require.NoError(t, err)
+
+	// ubsv db client
+	db, err := New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	key, err := aero.NewKey(db.namespace, db.setName, spendingTxID1[:])
+	require.NoError(t, err)
+
+	t.Run("aerospike BatchDecorate", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
+
+		txID := tx.TxIDChainHash().String()
+		_ = txID
+
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		items := []*utxo.UnresolvedMetaData{
+			{
+				Hash: *tx.TxIDChainHash(),
+				Idx:  0,
+			},
+			{
+				Hash: *tx.TxIDChainHash(),
+				Idx:  1,
+			},
+			{
+				Hash: *tx.TxIDChainHash(),
+				Idx:  2,
+			},
+			{
+				Hash: *tx.TxIDChainHash(),
+				Idx:  3,
+			},
+			{
+				Hash: *tx.TxIDChainHash(),
+				Idx:  4,
+			},
+		}
+		err = db.BatchDecorate(context.Background(), items)
+		require.NoError(t, err)
+
+		// check field values
+		for _, item := range items {
+			assert.Equal(t, uint64(215), item.Data.Fee)
+			assert.Equal(t, uint64(328), item.Data.SizeInBytes)
+		}
+	})
+
+	t.Run("aerospike PreviousOutputsDecorate", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
+
+		txID := tx.TxIDChainHash().String()
+		_ = txID
+
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		items := []*meta.PreviousOutput{
+			{
+				PreviousTxID: *tx.TxIDChainHash(),
+				Vout:         0,
+				Idx:          0,
+			},
+			{
+				PreviousTxID: *tx.TxIDChainHash(),
+				Vout:         4,
+				Idx:          1,
+			},
+			{
+				PreviousTxID: *tx.TxIDChainHash(),
+				Vout:         3,
+				Idx:          2,
+			},
+			{
+				PreviousTxID: *tx.TxIDChainHash(),
+				Vout:         2,
+				Idx:          3,
+			},
+			{
+				PreviousTxID: *tx.TxIDChainHash(),
+				Vout:         1,
+				Idx:          4,
+			},
+		}
+		err = db.PreviousOutputsDecorate(context.Background(), items)
+		require.NoError(t, err)
+
+		// check field values for vout 0 - item 0
+		assert.Len(t, items[0].LockingScript, 25)
+		assert.Equal(t, uint64(5_000_000), items[0].Satoshis)
+
+		// check field values for vout 4 - item 1
+		assert.Len(t, items[1].LockingScript, 25)
+		assert.Equal(t, uint64(2_817_689), items[1].Satoshis)
+
+		// check field values for vout 3 - item 2
+		assert.Len(t, items[2].LockingScript, 25)
+		assert.Equal(t, uint64(20_000), items[2].Satoshis)
+
+		// check field values for vout 2 - item 3
+		assert.Len(t, items[3].LockingScript, 25)
+		assert.Equal(t, uint64(20_000), items[3].Satoshis)
+
+		// check field values for vout 1 - item 4
+		assert.Len(t, items[4].LockingScript, 25)
+		assert.Equal(t, uint64(2_000_000), items[4].Satoshis)
+	})
+}
+
 //func TestLargeUTXO(t *testing.T) {
 //	// For this test, we will assume that aerospike can never store more than 2 utxos in a single record
 //	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
 //	require.NoError(t, aeroErr)
 //
-//	aeroURL, err := url.Parse(fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%d&externalStore=file://./data/externalStore", aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
+//	aeroURL, err := url.Parse(fmt.Sprintf(aerospikeURLFormat, aerospikeHost, aerospikePort, aerospikeNamespace, aerospikeSet, aerospikeExpiration))
 //	require.NoError(t, err)
 //
 //	// ubsv db client
