@@ -132,8 +132,7 @@ func TestAerospike(t *testing.T) {
 
 	t.Cleanup(func() {
 		policy := util.GetAerospikeWritePolicy(0, 0)
-		_, err = client.Delete(policy, key)
-		require.NoError(t, err)
+		_, _ = client.Delete(policy, key)
 	})
 
 	t.Run("aerospike store", func(t *testing.T) {
@@ -623,8 +622,10 @@ func cleanDB(t *testing.T, client *aero.Client, key *aero.Key, txs ...*bt.Tx) {
 	_, err := client.Delete(policy, key)
 	require.NoError(t, err)
 
-	_, err = client.Delete(policy, coinbaseKey)
-	require.NoError(t, err)
+	if coinbaseKey != nil {
+		_, err = client.Delete(policy, coinbaseKey)
+		require.NoError(t, err)
+	}
 
 	if len(txs) > 0 {
 		for _, tx := range txs {
@@ -1138,6 +1139,126 @@ func TestIncrementNrRecords(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 1, nrRecords)
 
+}
+
+func TestStore_Decorate(t *testing.T) {
+	initPrometheusMetrics()
+
+	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
+	require.NoError(t, aeroErr)
+
+	aeroURL, err := url.Parse(aerospikeURL)
+	require.NoError(t, err)
+
+	// ubsv db client
+	db, err := New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	key, err := aero.NewKey(db.namespace, db.setName, spendingTxID1[:])
+	require.NoError(t, err)
+
+	t.Run("aerospike BatchDecorate", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
+
+		txID := tx.TxIDChainHash().String()
+		_ = txID
+
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		items := []*utxo.UnresolvedMetaData{
+			{
+				Hash: *tx.TxIDChainHash(),
+				Idx:  0,
+			},
+			{
+				Hash: *tx.TxIDChainHash(),
+				Idx:  1,
+			},
+			{
+				Hash: *tx.TxIDChainHash(),
+				Idx:  2,
+			},
+			{
+				Hash: *tx.TxIDChainHash(),
+				Idx:  3,
+			},
+			{
+				Hash: *tx.TxIDChainHash(),
+				Idx:  4,
+			},
+		}
+		err = db.BatchDecorate(context.Background(), items)
+		require.NoError(t, err)
+
+		// check field values
+		for _, item := range items {
+			assert.Equal(t, uint64(215), item.Data.Fee)
+			assert.Equal(t, uint64(328), item.Data.SizeInBytes)
+		}
+	})
+
+	t.Run("aerospike PreviousOutputsDecorate", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
+		txMeta, err := db.Create(context.Background(), tx, 0)
+
+		txID := tx.TxIDChainHash().String()
+		_ = txID
+
+		assert.NotNil(t, txMeta)
+		require.NoError(t, err)
+
+		items := []*meta.PreviousOutput{
+			{
+				PreviousTxID: *tx.TxIDChainHash(),
+				Vout:         0,
+				Idx:          0,
+			},
+			{
+				PreviousTxID: *tx.TxIDChainHash(),
+				Vout:         4,
+				Idx:          1,
+			},
+			{
+				PreviousTxID: *tx.TxIDChainHash(),
+				Vout:         3,
+				Idx:          2,
+			},
+			{
+				PreviousTxID: *tx.TxIDChainHash(),
+				Vout:         2,
+				Idx:          3,
+			},
+			{
+				PreviousTxID: *tx.TxIDChainHash(),
+				Vout:         1,
+				Idx:          4,
+			},
+		}
+		err = db.PreviousOutputsDecorate(context.Background(), items)
+		require.NoError(t, err)
+
+		// check field values for vout 0 - item 0
+		assert.Len(t, items[0].LockingScript, 25)
+		assert.Equal(t, uint64(5_000_000), items[0].Satoshis)
+
+		// check field values for vout 4 - item 1
+		assert.Len(t, items[1].LockingScript, 25)
+		assert.Equal(t, uint64(2_817_689), items[1].Satoshis)
+
+		// check field values for vout 3 - item 2
+		assert.Len(t, items[2].LockingScript, 25)
+		assert.Equal(t, uint64(20_000), items[2].Satoshis)
+
+		// check field values for vout 2 - item 3
+		assert.Len(t, items[3].LockingScript, 25)
+		assert.Equal(t, uint64(20_000), items[3].Satoshis)
+
+		// check field values for vout 1 - item 4
+		assert.Len(t, items[4].LockingScript, 25)
+		assert.Equal(t, uint64(2_000_000), items[4].Satoshis)
+	})
 }
 
 //func TestLargeUTXO(t *testing.T) {
