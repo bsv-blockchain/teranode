@@ -170,6 +170,12 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s] transaction is coinbase", tx.TxID())
 	}
 
+	if tx.TxIDChainHash().String() == "f0ab5a900c6528edf6aca8d26c884b432e0e48f1db840cd77019cfa5d21867ea" {
+		var breakHere int
+		breakHere++
+		_ = breakHere
+	}
+
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
 	// TODO return tx meta data
