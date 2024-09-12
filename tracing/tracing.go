@@ -99,7 +99,7 @@ func (s *TraceOptions) addLogMessage(logger ulogger.Logger, message, level strin
 }
 
 // StartTracing starts a new span with the given name and returns a context with the span and a function to finish the span.
-func StartTracing(ctx context.Context, name string, setOptions ...Options) (context.Context, *gocore.Stat, func(err ...error)) {
+func StartTracing(ctx context.Context, name string, setOptions ...Options) (context.Context, *gocore.Stat, func(...error)) {
 	span, spanCtx := opentracing.StartSpanFromContext(ctx, name)
 
 	// process the options
