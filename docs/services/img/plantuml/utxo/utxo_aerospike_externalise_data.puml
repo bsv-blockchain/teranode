@@ -1,0 +1,52 @@
+@startuml
+actor Client as C
+participant "UTXO Store" as S
+database Aerospike as A
+database "External Store" as E
+
+C -> S: Create(tx, blockHeight, opts)
+activate S
+
+S -> S: Prepare batchStoreItem
+S -> S: sendStoreBatch
+
+alt externalizeAllTransactions is true
+    S -> E: Store full tx data
+    S -> A: Store metadata and UTXOs
+else externalizeAllTransactions is false
+    S -> A: Attempt to store full data
+
+    alt RECORD_TOO_BIG error
+        A --> S: RECORD_TOO_BIG
+        S -> S: Recalculate bins with external=true
+        S -> E: Store full tx data
+        S -> A: Store metadata and UTXOs
+    else Success
+        A --> S: Success
+    end
+end
+
+alt Multiple records needed
+    loop For each record
+        S -> A: Store part of data
+    end
+end
+
+S --> C: Return result
+deactivate S
+
+note over S, A
+Aerospike records include:
+- external flag (if applicable)
+- metadata
+- UTXOs (possibly split across records)
+end note
+
+note over S, E
+External store contains:
+Full transaction data
+end note
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
