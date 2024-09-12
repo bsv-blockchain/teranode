@@ -65,11 +65,13 @@ func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, base
 	}
 
 	_, err := s.apiClient.BlockFound(ctx, req)
-	if err != nil {
-		return errors.UnwrapGRPC(err)
+
+	unwrappedErr := errors.UnwrapGRPC(err)
+	if unwrappedErr == nil {
+		return nil
 	}
 
-	return nil
+	return unwrappedErr
 }
 
 func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32) error {
