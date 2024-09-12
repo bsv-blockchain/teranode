@@ -94,10 +94,13 @@ The Blockchain service always starts in a `Stopped` state. The Stopped state is 
 
 Upon node initialisation, all services will wait for the FSM to transition to the `Running` state (either directly or after going through a `Legacy Sync` or `Restore`) before starting their operations. As such, the node should see no activity until the FSM transitions to the Running state.
 
-#### 3.2.3. FSM - LRestoring State
+#### 3.2.3. FSM - Restoring State
+
+When a node is starting up, and only if the `fsm_state_restore` setting is enabled, the blockchain will automatically transition into the `Restoring` state. The `Restoring` state represents the node awaiting a restoration process to be completed (such as a set of node initialization processes), before it can transition to a `Running` mode
 
 
-When a node is starting up, and only if the `fsm_state_restore` setting is enabled, all services will be idle and waiting on a manual transition to the `Running` state.
+While at the `Resstoring` state, all services will be idle and waiting on an Admin (manual) transition to the `Running` state.
+
 
 Similarly to the Stopped status, all services will wait for the FSM to transition to the Running state before starting their operations.
 
@@ -163,9 +166,15 @@ The gRPC `Run` method triggers the FSM to transition to the `Running` state. Thi
 
 The gRPC `CatchUpBlocks` method triggers the FSM to transition to the `CatchingBlocks` state. This event is used to indicate that the node is catching up on blocks and needs to process the latest blocks before resuming full operations.
 
+
+![fsm_catchup_blocks.svg](img/plantuml/fsm_catchup_blocks.svg)
+
+
 #### 3.3.4. FSM Event - Catch up Transactions
 
 The gRPC `CatchUpTransactions` method triggers the FSM to transition to the `CatchingTxs` state. This event is used to indicate that the node is catching up on transactions and needs to process the latest transactions before resuming full operations.
+
+This method is intended to be manually triggered.
 
 #### 3.3.5. FSM Event - Unavailable
 
