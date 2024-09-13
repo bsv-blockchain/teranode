@@ -33,9 +33,21 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 		return nil, errors.NewConfigurationError("no blockassembly_grpcAddress setting found")
 	}
 
-	baConn, err := util.GetGRPCClient(ctx, blockAssemblyGrpcAddress, &util.ConnectionOptions{
-		MaxRetries: 3,
-	})
+	maxRetries, _ := gocore.Config().GetInt("blockassembly_grpcMaxRetries", 3)
+
+	retryBackoff, err, _ := gocore.Config().GetDuration("blockassembly_grpcRetryBackoff", 2*time.Second)
+	if err != nil {
+		return nil, errors.NewConfigurationError("blockassembly_grpcRetryBackoff setting error", err)
+	}
+
+	baConn, err := util.GetGRPCClient(
+		ctx,
+		blockAssemblyGrpcAddress,
+		&util.ConnectionOptions{
+			MaxRetries:   maxRetries,
+			RetryBackoff: retryBackoff,
+		},
+	)
 	if err != nil {
 		return nil, errors.NewServiceError("failed to connect to block assembly", err)
 	}
