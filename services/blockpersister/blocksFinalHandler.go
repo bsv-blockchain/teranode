@@ -2,8 +2,6 @@ package blockpersister
 
 import (
 	"context"
-	"os"
-	"path"
 	"sync"
 	"time"
 
@@ -11,10 +9,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/quorum"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -23,10 +20,39 @@ import (
 
 var (
 	once sync.Once
+	q    *quorum.Quorum
 )
 
 func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 	var err error
+
+	once.Do(func() {
+		quorumPath, _ := gocore.Config().Get("block_quorum_path", "")
+		if quorumPath == "" {
+			err = errors.NewConfigurationError("No block_quorum_path specified")
+			return
+		}
+
+		var quorumTimeout time.Duration
+
+		quorumTimeout, err, _ = gocore.Config().GetDuration("block_quorum_timeout", 10*time.Second)
+		if err != nil {
+			err = errors.NewConfigurationError("Bad block_quorum_timeout specified", err)
+			return
+		}
+
+		q, err = quorum.New(
+			u.logger,
+			u.blockStore,
+			quorumPath,
+			quorum.WithTimeout(quorumTimeout),
+			quorum.WithExtension("block"),
+		)
+	})
+
+	if err != nil {
+		return err
+	}
 
 	if msg.Message != nil {
 		ctx, _, deferFn := tracing.StartTracing(u.ctx, "blocksFinalHandler",
@@ -48,18 +74,22 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
 		}
 
-		var gotLock bool
-		var exists bool
+		var (
+			gotLock   bool
+			exists    bool
+			releaseFn func()
+		)
 
 		// Create a new context with cancel function for the lock
 		lockCtx, cancelLock := context.WithCancel(ctx)
 		defer cancelLock() // Ensure the lock is released when persistBlock finishes
 
-		gotLock, exists, err = tryLockIfNotExists(lockCtx, u.logger, hash, u.blockStore, options.WithFileExtension("block"))
+		gotLock, exists, releaseFn, err = q.TryLockIfNotExists(lockCtx, hash)
 		if err != nil {
 			u.logger.Infof("error getting lock for block %s: %v", hash.String(), err)
 			return errors.NewProcessingError("error getting lock for block %s", hash.String(), err)
 		}
+		defer releaseFn()
 
 		if exists {
 			u.logger.Infof("Block %s already exists", hash.String())
@@ -158,86 +188,4 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	}
 
 	return nil
-}
-
-type Exister interface {
-	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
-}
-
-func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainhash.Hash, exister Exister, opts ...options.Options) (bool, bool, error) {
-	b, err := exister.Exists(ctx, hash[:], opts...)
-	if err != nil {
-		return false, false, err
-	}
-
-	if b {
-		return false, true, nil
-	}
-
-	quorumPath, _ := gocore.Config().Get("block_quorum_path", "")
-	if quorumPath == "" {
-		return true, false, nil // Return true if no quorum path is set to tell upstream to process the subtree as if it were locked
-	}
-
-	once.Do(func() {
-		logger.Infof("Creating block quorum path %s", quorumPath)
-		err = os.MkdirAll(quorumPath, 0755)
-	})
-
-	if err != nil {
-		return false, false, errors.NewStorageError("Failed to create block quorum path", err)
-	}
-
-	lockFile := path.Join(quorumPath, hash.String()) + ".lock"
-
-	// If the lock file already exists, the block is being processed by another node. However, the lock may be stale.
-	// If the lock file mtime is more than 10 seconds old it is considered stale and can be removed.
-	if info, err := os.Stat(lockFile); err == nil {
-		if time.Since(info.ModTime()) > 10*time.Second {
-			if err := os.Remove(lockFile); err != nil {
-				logger.Warnf("failed to remove stale lock file %q: %v", lockFile, err)
-			}
-		}
-	}
-
-	// Attempt to acquire lock by atomically creating the lock file
-	// The O_CREATE|O_EXCL|O_WRONLY flags ensure the file is created only if it does not already exist
-	file, err := os.OpenFile(lockFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			// Failed to acquire lock (file already exists or other error)
-			return false, false, nil
-		}
-
-		return false, false, err
-	}
-
-	// Close the file immediately after creating it
-	if err := file.Close(); err != nil {
-		logger.Warnf("failed to close lock file %q: %v", lockFile, err)
-	}
-
-	go func() {
-		// Initialize ticker to update the lock file every 5 seconds
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				if err := os.Remove(lockFile); err != nil && !os.IsNotExist(err) {
-					logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
-				}
-				return
-			case <-ticker.C:
-				// Touch the lock file by updating its access and modification times to the current time
-				now := time.Now()
-				if err := os.Chtimes(lockFile, now, now); err != nil {
-					logger.Warnf("failed to update lock file %q: %v", lockFile, err)
-				}
-			}
-		}
-	}()
-
-	return true, false, nil
 }
