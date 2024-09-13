@@ -67,6 +67,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
 			v.blockassemblyKafkaChan = make(chan []byte, 10000)
+
 			go func() {
 				// TODO add retry
 				if err := util.StartAsyncProducer(v.logger, txsKafkaURL, v.blockassemblyKafkaChan); err != nil {
@@ -86,6 +87,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
 			v.txMetaKafkaChan = make(chan []byte, 10000)
+
 			go func() {
 				_, err := retry.Retry(ctx, logger, func() (interface{}, error) {
 					return nil, util.StartAsyncProducer(v.logger, txmetaKafkaURL, v.txMetaKafkaChan)
@@ -148,6 +150,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 		if v.rejectedTxKafkaChan != nil {
 			startKafka := time.Now()
 			v.rejectedTxKafkaChan <- append(tx.TxIDChainHash().CloneBytes(), err.Error()...)
+
 			prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 		}
 
@@ -165,9 +168,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		tracing.WithDebugLogMessage(v.logger, "[Validator:Validate] called for %s", txID),
 		tracing.WithTag("txid", txID),
 	)
+
 	defer func() {
 		deferFn(err)
 	}()
+
 	var spentUtxos []*utxo.Spend
 
 	// this should be updated automatically by the utxo store
@@ -301,6 +306,7 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.H
 	if v.txMetaKafkaChan != nil {
 		startKafka := time.Now()
 		v.txMetaKafkaChan <- append(txHash.CloneBytes(), []byte("delete")...)
+
 		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 	}
 
@@ -321,6 +327,7 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHei
 	if v.txMetaKafkaChan != nil {
 		startKafka := time.Now()
 		v.txMetaKafkaChan <- append(tx.TxIDChainHash().CloneBytes(), data.MetaBytes()...)
+
 		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 	}
 
@@ -338,8 +345,10 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 		utxoSpan.Finish()
 	}()
 
-	var err error
-	var hash *chainhash.Hash
+	var (
+		err  error
+		hash *chainhash.Hash
+	)
 
 	// check the utxos
 	txIDChainHash := tx.TxIDChainHash()
@@ -400,7 +409,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	if v.blockassemblyKafkaChan != nil {
 		//start := time.Now()
 		v.blockassemblyKafkaChan <- bData.Bytes()
-		//prometheusValidatorSendToBlockAssemblyKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
+		// prometheusValidatorSendToBlockAssemblyKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
 	} else {
 		if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size); err != nil {
 			e := errors.NewStorageError("error calling blockAssembler Store()", err)
@@ -488,7 +497,6 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 }
 
 func feesToBtFeeQuote(minMiningFee float64) *bt.FeeQuote {
-
 	satoshisPerKB := int(minMiningFee * 1e8)
 
 	btFeeQuote := bt.NewFeeQuote()

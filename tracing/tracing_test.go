@@ -2,10 +2,10 @@ package tracing
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/assert"
 )
@@ -80,8 +80,7 @@ func TestStartTracingWithError(t *testing.T) {
 		_, _, deferFn := StartTracing(context.Background(), "TestTracing", WithLogMessage(logger, "test"))
 		defer deferFn(err)
 
-		return errors.New("test error")
-
+		return errors.NewProcessingError("test error")
 	}()
 
 	assert.NotNil(t, err)
@@ -98,8 +97,7 @@ func TestStartTracingWithErrorDeferred(t *testing.T) {
 			deferFn(err)
 		}()
 
-		return errors.New("test error")
-
+		return errors.NewProcessingError("test error")
 	}()
 
 	assert.NotNil(t, err)

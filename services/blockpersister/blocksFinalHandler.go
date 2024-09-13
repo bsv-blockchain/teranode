@@ -42,7 +42,7 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 
 		var hash *chainhash.Hash
 
-		hash, err = chainhash.NewHash(msg.Message.Key[:])
+		hash, err = chainhash.NewHash(msg.Message.Key)
 		if err != nil {
 			u.logger.Errorf("Failed to parse block hash from message: %v", err)
 			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
@@ -51,11 +51,14 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 		var gotLock bool
 		var exists bool
 
-		gotLock, exists, err = tryLockIfNotExists(ctx, u.logger, hash, u.blockStore, options.WithFileExtension("block"))
+		// Create a new context with cancel function for the lock
+		lockCtx, cancelLock := context.WithCancel(ctx)
+		defer cancelLock() // Ensure the lock is released when persistBlock finishes
+
+		gotLock, exists, err = tryLockIfNotExists(lockCtx, u.logger, hash, u.blockStore, options.WithFileExtension("block"))
 		if err != nil {
 			u.logger.Infof("error getting lock for block %s: %v", hash.String(), err)
 			return errors.NewProcessingError("error getting lock for block %s", hash.String(), err)
-			//return errors.NewLockExistsError()
 		}
 
 		if exists {
@@ -66,17 +69,18 @@ func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
 		if !gotLock {
 			u.logger.Infof("Block %s already being persisted", hash.String())
 			return errors.NewBlockExistsError("Block %s already being persisted", hash.String())
-
 		}
 
 		if err = u.persistBlock(ctx, hash, msg.Message.Value); err != nil {
 			if errors.Is(err, errors.ErrNotFound) {
 				u.logger.Warnf("PreviousBlock %s not found, so UTXOSet not processed", hash.String())
+
 				err = nil
 			} else {
 				// don't wrap the error again, persistBlock should return the error in correct format
 				u.logger.Errorf("Error persisting block %s: %v", hash.String(), err)
 			}
+
 			return err
 		}
 	}
@@ -160,11 +164,12 @@ type Exister interface {
 	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
 }
 
-func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainhash.Hash, exister Exister, opts ...options.Options) (bool, bool, error) { // First bool is if the lock was acquired, second is if the item already exists
+func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainhash.Hash, exister Exister, opts ...options.Options) (bool, bool, error) {
 	b, err := exister.Exists(ctx, hash[:], opts...)
 	if err != nil {
 		return false, false, err
 	}
+
 	if b {
 		return false, true, nil
 	}
@@ -178,6 +183,7 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainh
 		logger.Infof("Creating block quorum path %s", quorumPath)
 		err = os.MkdirAll(quorumPath, 0755)
 	})
+
 	if err != nil {
 		return false, false, errors.NewStorageError("Failed to create block quorum path", err)
 	}
@@ -219,7 +225,7 @@ func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainh
 		for {
 			select {
 			case <-ctx.Done():
-				if err := os.Remove(lockFile); err != nil {
+				if err := os.Remove(lockFile); err != nil && !os.IsNotExist(err) {
 					logger.Warnf("failed to remove lock file %q: %v", lockFile, err)
 				}
 				return
