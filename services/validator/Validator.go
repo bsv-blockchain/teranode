@@ -26,16 +26,15 @@ const (
 )
 
 type Validator struct {
-	logger                 ulogger.Logger
-	txValidator            TxValidator
-	utxoStore              utxo.Store
-	blockAssembler         blockassembly.Store
-	saveInParallel         bool
-	blockAssemblyDisabled  bool
-	blockassemblyKafkaChan chan []byte
-	txMetaKafkaChan        chan []byte
-	rejectedTxKafkaChan    chan []byte
-	stats                  *gocore.Stat
+	logger                ulogger.Logger
+	txValidator           TxValidator
+	utxoStore             utxo.Store
+	blockAssembler        blockassembly.Store
+	saveInParallel        bool
+	blockAssemblyDisabled bool
+	txMetaKafkaChan       chan []byte
+	rejectedTxKafkaChan   chan []byte
+	stats                 *gocore.Stat
 }
 
 func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interface, error) {
@@ -59,26 +58,6 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 	}
 
 	v.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
-
-	txsKafkaURL, _, found := gocore.Config().GetURL("kafka_txsConfig")
-	if found {
-		workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
-		// only start the kafka producer if there are workers listening
-		// this can be used to disable the kafka producer, by just setting workers to 0
-		if workers > 0 {
-			v.blockassemblyKafkaChan = make(chan []byte, 10000)
-
-			go func() {
-				// TODO add retry
-				if err := util.StartAsyncProducer(v.logger, txsKafkaURL, v.blockassemblyKafkaChan); err != nil {
-					v.logger.Errorf("[Validator] error starting kafka producer: %v", err)
-					return
-				}
-			}()
-
-			logger.Infof("[Validator] connected to kafka at %s", txsKafkaURL.Host)
-		}
-	}
 
 	txmetaKafkaURL, _, found := gocore.Config().GetURL("kafka_txmetaConfig")
 	if found {
@@ -415,17 +394,10 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 
 	v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 
-	if v.blockassemblyKafkaChan != nil {
-		//start := time.Now()
-		v.blockassemblyKafkaChan <- bData.Bytes()
-		// prometheusValidatorSendToBlockAssemblyKafka.Observe(float64(time.Since(start).Microseconds()) / 1_000_000)
-	} else {
-		if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size); err != nil {
-			e := errors.NewStorageError("error calling blockAssembler Store()", err)
-			traceSpan.RecordError(e)
-			return e
-		}
-
+	if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size); err != nil {
+		e := errors.NewStorageError("error calling blockAssembler Store()", err)
+		traceSpan.RecordError(e)
+		return e
 	}
 
 	return nil

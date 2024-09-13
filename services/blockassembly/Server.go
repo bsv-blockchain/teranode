@@ -2,7 +2,6 @@ package blockassembly
 
 import (
 	"context"
-	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -59,7 +58,6 @@ type BlockAssembly struct {
 	jobStore              *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job] // has built in locking
 	blockSubmissionChan   chan *BlockSubmissionRequest
 	blockAssemblyDisabled bool
-	//blockValidKafkaProducer util.KafkaProducerI
 }
 
 type subtreeRetrySend struct {
@@ -110,15 +108,6 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 
 	// init the block assembler for this server
 	ba.blockAssembler = NewBlockAssembler(ctx, ba.logger, ba.utxoStore, ba.subtreeStore, ba.blockchainClient, newSubtreeChan)
-
-	// Turned off for now, will be used to validate own blocks
-	//kafkaBlocksValidateConfig, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
-	//if err == nil && ok {
-	//	_, ba.blockValidKafkaProducer, err = util.ConnectToKafka(kafkaBlocksValidateConfig)
-	//	if err != nil {
-	//		return errors.NewServiceError("[BlockAssembly:Init] unable to connect to kafka for block validation", err)
-	//	}
-	//}
 
 	// start the new subtree retry processor in the background
 	go func() {
@@ -306,11 +295,6 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 		return errors.NewServiceError("failed to start block assembler", err)
 	}
 
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_txsConfig")
-	if err == nil && ok {
-		go ba.startKafkaListener(ctx, kafkaURL)
-	}
-
 	// this will block
 	if err = util.StartGRPCServer(ctx, ba.logger, "blockassembly", func(server *grpc.Server) {
 		blockassembly_api.RegisterBlockAssemblyAPIServer(server, ba)
@@ -319,57 +303,6 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 	}
 
 	return nil
-}
-
-func (ba *BlockAssembly) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
-	workers, _ := gocore.Config().GetInt("blockassembly_kafkaWorkers", 100)
-	if workers < 1 {
-		// no workers, nothing to do
-		return
-	}
-	ba.logger.Infof("[BlockAssembly] starting Kafka listener")
-
-	consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
-	if consumerRatio < 1 {
-		consumerRatio = 1
-	}
-	partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
-	consumerCount := partitions / consumerRatio
-	if consumerCount < 0 {
-		consumerCount = 1
-	}
-	ba.logger.Infof("[BlockAssembly] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
-	// updates the stats every 5 seconds
-	go func() {
-		for {
-			time.Sleep(5 * time.Second)
-			prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-			prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
-			prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
-		}
-	}()
-
-	// TODO GOKHAN: Check error handling
-	if err := util.StartKafkaGroupListener(ctx, ba.logger, kafkaURL, "blockassembly", nil, consumerCount, true, func(msg util.KafkaMessage) error {
-		startTime := time.Now()
-		data, err := NewFromBytes(msg.Message.Value)
-		if err != nil {
-			ba.logger.Errorf("[BlockAssembly] Failed to decode kafka message: %s", err)
-			return err
-		}
-		if _, err = ba.AddTx(ctx, &blockassembly_api.AddTxRequest{
-			Txid: data.TxIDChainHash.CloneBytes(),
-			Fee:  data.Fee,
-			Size: data.Size,
-		}); err != nil {
-			ba.logger.Errorf("[BlockAssembly] failed to add tx to block assembly: %s", err)
-			return err
-		}
-		prometheusBlockAssemblerSetFromKafka.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-		return nil
-	}); err != nil {
-		ba.logger.Errorf("[BlockAssembly] failed to start Kafka listener: %s", err)
-	}
 }
 
 func (ba *BlockAssembly) Stop(_ context.Context) error {
@@ -767,14 +700,6 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	// if we are mining initial blocks or mining 'immediately' then we won't get notified quick enough
 	// and we'll fork unnecessarily
 	ba.blockAssembler.UpdateBestBlock(ctx)
-
-	// send the block for validation in the blockvalidation server, this makes sure we also mark the block as
-	// invalid if there is something wrong with it
-	// TODO this does not work properly, since the subtreeMeta is not stored with the subtree from our own blocks
-	//      this needs to be changed before re-activating this one
-	//if err = ba.blockValidKafkaProducer.Send(block.Hash().CloneBytes(), block.Hash().CloneBytes()); err != nil {
-	//	ba.logger.Errorf("[BlockAssembly][%s][%s] failed to send block for validation: %s", jobID, block.Hash().String(), err)
-	//}
 
 	// decouple the tracing context to not cancel the context when the subtree TTL is being saved in the background
 	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleSubtreeTTL")
