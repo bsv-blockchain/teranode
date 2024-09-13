@@ -37,6 +37,9 @@ import (
 
 const GenesisBlockID = 0
 
+// LastV1Block https://github.com/bitcoin/bips/blob/master/bip-0034.mediawiki
+const LastV1Block = 227_835
+
 var (
 	emptyTX                               = &bt.Tx{}
 	prometheusBlockFromBytes              prometheus.Histogram
@@ -313,7 +316,7 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 	}
 
 	var coinbaseTx bt.Tx
-	if _, err := coinbaseTx.ReadFrom(buf); err != nil {
+	if _, err = coinbaseTx.ReadFrom(buf); err != nil {
 		return nil, errors.NewBlockInvalidError("error reading coinbase tx", err)
 	}
 
@@ -330,19 +333,6 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 
 	// nolint: gosec
 	block.Height = uint32(blockHeight64)
-
-	// If the height is also stored in the coinbase, we should use that instead
-	if block.Header.Version > 1 {
-		block.Height, err = block.ExtractCoinbaseHeight()
-		if err != nil {
-			if errors.Is(err, errors.ErrCoinbaseMissingBlockHeight) {
-				// TODO - this should only be done when we are loading legacy blocks
-				log.Printf("WARN: Block height not found in coinbase for block %s", block.Hash().String())
-			} else {
-				return nil, errors.NewBlockInvalidError("error extracting coinbase height for block %s", block.Hash(), err)
-			}
-		}
-	}
 
 	return block, nil
 }
@@ -442,10 +432,14 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// TODO - do this another way, if necessary
 
 	// 5. Check that the coinbase transaction includes the correct block height.
-	if b.Header.Version > 1 && b.Height > 210_000 {
-		_, err := b.ExtractCoinbaseHeight()
+	if b.Header.Version > 1 && b.Height > LastV1Block {
+		height, err := b.ExtractCoinbaseHeight()
 		if err != nil {
 			return false, errors.NewBlockInvalidError("[BLOCK][%s] error extracting coinbase height: %w", b.Hash().String(), err)
+		}
+
+		if height != b.Height {
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] block height in coinbase tx (%d) does not match block height in block header (%d)", b.Hash().String(), height, b.Height)
 		}
 	}
 

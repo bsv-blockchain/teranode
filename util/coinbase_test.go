@@ -59,10 +59,21 @@ func TestExtractMiner3(t *testing.T) {
 }
 
 func TestExtractCoinbaseHeight(t *testing.T) {
-	tx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17032a120d2f71646c6e6b2ffa3e9e2068b1e1743dc80d00ffffffff014864a012000000001976a91417db35d440a673a218e70a5b9d07f895facf50d288ac00000000")
-	require.NoError(t, err)
+	t.Run("valid coinbase height 856618", func(t *testing.T) {
+		tx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17032a120d2f71646c6e6b2ffa3e9e2068b1e1743dc80d00ffffffff014864a012000000001976a91417db35d440a673a218e70a5b9d07f895facf50d288ac00000000")
+		require.NoError(t, err)
 
-	height, err := ExtractCoinbaseHeight(tx)
-	require.NoError(t, err)
-	assert.Equal(t, uint32(856618), height)
+		height, err := ExtractCoinbaseHeight(tx)
+		require.NoError(t, err)
+		assert.Equal(t, uint32(856618), height)
+	})
+
+	t.Run("valid coinbase height 210631", func(t *testing.T) {
+		tx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff3504eae0041a0127522cfabe6d6d620af8ed2d63d1c7ad3a61afe44ef47d3acf88f45d4936621a238ba23355f8ea0800000000000000ffffffff01d06e44950000000043410427d214c2e4907d96f67f545fe4f84b8d71856e52bb3d7738890003985a8e0271bd12bf98c6050878c1e3e2684faaad9b5efb2a1e912177e4e1c200dde79806eeac00000000")
+		require.NoError(t, err)
+
+		_, err = ExtractCoinbaseHeight(tx)
+		require.Error(t, err)
+		//assert.Equal(t, uint32(210631), height)
+	})
 }
