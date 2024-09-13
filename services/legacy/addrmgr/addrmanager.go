@@ -232,7 +232,7 @@ func (a *AddrManager) updateAddress(netAddr, srcAddr *wire.NetAddress) {
 	ka.refs++
 	a.addrNew[bucket][addr] = ka
 
-	a.logger.Infof("Added new address %s for a total of %d addresses", addr, a.nTried+a.nNew)
+	a.logger.Debugf("Added new address %s for a total of %d addresses", addr, a.nTried+a.nNew)
 }
 
 // expireNew makes space in the new buckets by expiring the really bad entries.
