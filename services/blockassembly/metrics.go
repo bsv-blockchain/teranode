@@ -28,7 +28,6 @@ var (
 
 	prometheusBlockAssemblerReorg             prometheus.Counter
 	prometheusBlockAssemblerReorgDuration     prometheus.Histogram
-	prometheusBlockAssemblerSetFromKafka      prometheus.Histogram
 	prometheusBlockAssemblyBestBlockHeight    prometheus.Gauge
 	prometheusBlockAssemblyCurrentBlockHeight prometheus.Gauge
 )
@@ -165,15 +164,6 @@ func _initPrometheusMetrics() {
 			Namespace: "blockassembly",
 			Name:      "reorg_duration",
 			Help:      "Histogram of reorg in block assembler",
-			Buckets:   util.MetricsBucketsSeconds,
-		},
-	)
-
-	prometheusBlockAssemblerSetFromKafka = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockassembly",
-			Name:      "set_from_kafka",
-			Help:      "Histogram of tx set on kafka for  block assembler",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
