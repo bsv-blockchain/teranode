@@ -165,7 +165,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		tracing.WithDebugLogMessage(v.logger, "[Validator:Validate] called for %s", txID),
 		tracing.WithTag("txid", txID),
 	)
-	defer deferFn()
+	defer func() {
+		deferFn(err)
+	}()
 	var spentUtxos []*utxo.Spend
 
 	// this should be updated automatically by the utxo store
@@ -420,7 +422,6 @@ func (v *Validator) reverseSpends(traceSpan tracing.Span, spentUtxos []*utxo.Spe
 
 	for retries := 0; retries < 3; retries++ {
 		if errReset := v.utxoStore.UnSpend(ctx, spentUtxos); errReset != nil {
-
 			if retries < 2 {
 				backoff := time.Duration(2^retries) * time.Second
 				v.logger.Errorf("error resetting utxos, retrying in %s: %v", backoff.String(), errReset)

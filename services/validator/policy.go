@@ -24,7 +24,7 @@ type PolicySettings struct {
 	MaxStdTxValidationDuration      int     `json:"maxstdtxvalidationduration"`
 	MaxNonStdTxValidationDuration   int     `json:"maxnonstdtxvalidationduration"`
 	MaxTxChainValidationBudget      int     `json:"maxtxchainvalidationbudget"`
-	ValidationClockCpu              bool    `json:"validationclockcpu"`
+	ValidationClockCPU              bool    `json:"validationclockcpu"`
 	MinConsolidationFactor          int     `json:"minconsolidationfactor"`
 	MaxConsolidationInputScriptSize int     `json:"maxconsolidationinputscriptsize"`
 	MinConfConsolidationInput       int     `json:"minconfconsolidationinput"`
@@ -130,8 +130,8 @@ func (ps *PolicySettings) SetMaxTxChainValidationBudget(budget int) {
 	ps.MaxTxChainValidationBudget = budget
 }
 
-func (ps *PolicySettings) SetValidationClockCpu(use bool) {
-	ps.ValidationClockCpu = use
+func (ps *PolicySettings) SetValidationClockCPU(use bool) {
+	ps.ValidationClockCPU = use
 }
 
 func (ps *PolicySettings) SetMinConsolidationFactor(factor int) {
@@ -246,8 +246,8 @@ func (ps *PolicySettings) GetMaxTxChainValidationBudget() int {
 	return ps.MaxTxChainValidationBudget
 }
 
-func (ps *PolicySettings) GetValidationClockCpu() bool {
-	return ps.ValidationClockCpu
+func (ps *PolicySettings) GetValidationClockCPU() bool {
+	return ps.ValidationClockCPU
 }
 
 func (ps *PolicySettings) GetMinConsolidationFactor() int {

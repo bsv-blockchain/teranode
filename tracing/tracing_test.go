@@ -2,6 +2,7 @@ package tracing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -70,4 +71,39 @@ func TestTraceing(t *testing.T) {
 
 	assert.Contains(t, logger.lastLog, "hello world DONE in")
 
+}
+
+func TestStartTracingWithError(t *testing.T) {
+	logger := newLineLogger()
+
+	err := func() (err error) {
+		_, _, deferFn := StartTracing(context.Background(), "TestTracing", WithLogMessage(logger, "test"))
+		defer deferFn(err)
+
+		return errors.New("test error")
+
+	}()
+
+	assert.NotNil(t, err)
+	t.Log(logger.lastLog)
+	assert.Contains(t, logger.lastLog, "test DONE in")
+}
+
+func TestStartTracingWithErrorDeferred(t *testing.T) {
+	logger := newLineLogger()
+
+	err := func() (err error) {
+		_, _, deferFn := StartTracing(context.Background(), "TestTracing", WithLogMessage(logger, "test"))
+		defer func() {
+			deferFn(err)
+		}()
+
+		return errors.New("test error")
+
+	}()
+
+	assert.NotNil(t, err)
+	assert.Contains(t, logger.lastLog, "test error")
+	assert.Contains(t, logger.lastLog, "test DONE in")
+	assert.Contains(t, logger.lastLog, "with error")
 }
