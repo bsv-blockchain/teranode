@@ -3,51 +3,14 @@ package subtreevalidation
 import (
 	"context"
 
-	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/quorum"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
-)
-
-var (
-	once sync.Once
-	q    *quorum.Quorum
 )
 
 func (u *Server) subtreeHandler(msg util.KafkaMessage) error {
-	var err error
-
-	once.Do(func() {
-		quorumPath, _ := gocore.Config().Get("subtree_quorum_path", "")
-		if quorumPath == "" {
-			err = errors.NewConfigurationError("No subtree_quorum_path specified")
-			return
-		}
-
-		var absoluteQuorumTimeout time.Duration
-
-		absoluteQuorumTimeout, err, _ = gocore.Config().GetDuration("block_quorum_absolute_timeout")
-		if err != nil {
-			err = errors.NewConfigurationError("Bad block_quorum_absolute_timeout specified", err)
-			return
-		}
-
-		q, err = quorum.New(
-			u.logger,
-			u.subtreeStore,
-			quorumPath,
-			quorum.WithAbsoluteTimeout(absoluteQuorumTimeout),
-		)
-	})
-
-	if err != nil {
-		return err
-	}
-
 	if msg.Message != nil {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
