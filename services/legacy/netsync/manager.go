@@ -546,7 +546,7 @@ func (sm *SyncManager) topBlock() int32 {
 func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
 	state, exists := sm.peerStates[peer]
 	if !exists {
-		sm.logger.Warnf("Received done peer message for unknown peer %s", peer)
+		sm.logger.Debugf("Received done peer message for unknown peer %s", peer)
 		return
 	}
 

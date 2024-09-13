@@ -755,6 +755,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 		if mTx.Hash.String() == "f0ab5a900c6528edf6aca8d26c884b432e0e48f1db840cd77019cfa5d21867ea" || mTx.Hash.String() == "6f5d64dc1d4a5012d814714b18003e1c1140b3f55fd1ca9d7725c455405fa783" {
 			var breakHere int
 			breakHere++
+			u.logger.Warnf("breakHere")
 			_ = breakHere
 		}
 
