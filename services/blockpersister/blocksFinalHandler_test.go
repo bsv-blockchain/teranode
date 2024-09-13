@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"io"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/util/quorum"
+	"github.com/ordishs/gocore"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 
@@ -234,16 +237,32 @@ func (m *mockExister) Exists(_ context.Context, _ []byte, _ ...options.Options) 
 func TestLockFile(t *testing.T) {
 	util.SkipVeryLongTests(t) // TODO TEMP fix this test
 
+	quorumPath, _ := gocore.Config().Get("block_quorum_path", "")
+
+	defer func() {
+		// remove quorum path
+		if quorumPath != "" {
+			_ = os.RemoveAll(quorumPath)
+		}
+	}()
+
+	q, err := quorum.New(ulogger.TestLogger{}, &mockExister{}, quorumPath, quorum.WithExtension("block"))
+	require.NoError(t, err)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	hash := chainhash.HashH([]byte("test"))
 
-	gotLock, _, err := tryLockIfNotExists(ctx, ulogger.TestLogger{}, &hash, &mockExister{}, options.WithFileExtension("block"))
+	gotLock, _, releaseLockFunc, err := q.TryLockIfNotExists(ctx, &hash)
 	require.NoError(t, err)
 	assert.True(t, gotLock)
 
-	gotLock, _, err = tryLockIfNotExists(ctx, ulogger.TestLogger{}, &hash, &mockExister{}, options.WithFileExtension("block"))
+	defer releaseLockFunc()
+
+	gotLock, _, releaseLockFunc, err = q.TryLockIfNotExists(ctx, &hash)
 	require.NoError(t, err)
 	assert.False(t, gotLock)
+
+	defer releaseLockFunc()
 
 	cancel()
 
@@ -252,7 +271,9 @@ func TestLockFile(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond) // Wait for the lock to be released
 
-	gotLock, _, err = tryLockIfNotExists(ctx, ulogger.TestLogger{}, &hash, &mockExister{}, options.WithFileExtension("block"))
+	gotLock, _, releaseLockFunc, err = q.TryLockIfNotExists(ctx, &hash)
 	require.NoError(t, err)
 	assert.True(t, gotLock)
+
+	defer releaseLockFunc()
 }

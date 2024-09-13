@@ -474,16 +474,20 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 
 		}
 
-		if err = sm.AddService("Subtree Validation", subtreevalidation.New(ctx,
+		subtreeValidationService, err := subtreevalidation.New(ctx,
 			logger.New("stval"),
 			subtreeStore,
 			txStore,
 			utxoStore,
 			validatorClient,
 			blockchainClient,
-		)); err != nil {
+		)
+		if err != nil {
 			return err
+		}
 
+		if err = sm.AddService("Subtree Validation", subtreeValidationService); err != nil {
+			return err
 		}
 	}
 

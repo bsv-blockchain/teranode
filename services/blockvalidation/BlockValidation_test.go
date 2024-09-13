@@ -87,7 +87,11 @@ func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation
 
 	blockchainClient := &blockchain.LocalClient{}
 
-	subtreeValidationServer := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
+	if err != nil {
+		panic(err)
+	}
+
 	if err := subtreeValidationServer.Init(context.Background()); err != nil {
 		panic(err)
 	}

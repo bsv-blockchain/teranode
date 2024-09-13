@@ -11,6 +11,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	"github.com/bitcoin-sv/ubsv/util/quorum"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/ordishs/go-utils"
@@ -49,6 +50,11 @@ type Server struct {
 	blockchainClient                  blockchain.ClientI
 }
 
+var (
+	once sync.Once
+	q    *quorum.Quorum
+)
+
 func New(
 	ctx context.Context,
 	logger ulogger.Logger,
@@ -57,7 +63,7 @@ func New(
 	utxoStore utxo.Store,
 	validatorClient validator.Interface,
 	blockchainClient blockchain.ClientI,
-) *Server {
+) (*Server, error) {
 	maxMerkleItemsPerSubtree, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1024)
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("subtreevalidation_subtreeTTL", 120)
 	subtreeTTL := time.Duration(subtreeTTLMinutes) * time.Minute
@@ -77,6 +83,35 @@ func New(
 		blockchainClient:                  blockchainClient,
 	}
 
+	var err error
+
+	once.Do(func() {
+		quorumPath, _ := gocore.Config().Get("subtree_quorum_path", "")
+		if quorumPath == "" {
+			err = errors.NewConfigurationError("No subtree_quorum_path specified")
+			return
+		}
+
+		var absoluteQuorumTimeout time.Duration
+
+		absoluteQuorumTimeout, err, _ = gocore.Config().GetDuration("subtree_quorum_absolute_timeout")
+		if err != nil {
+			err = errors.NewConfigurationError("Bad subtree_quorum_absolute_timeout specified", err)
+			return
+		}
+
+		q, err = quorum.New(
+			u.logger,
+			u.subtreeStore,
+			quorumPath,
+			quorum.WithAbsoluteTimeout(absoluteQuorumTimeout),
+		)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
 	// create a caching tx meta store
 	if gocore.Config().GetBool("subtreevalidation_txMetaCacheEnabled", true) {
 		logger.Infof("Using cached version of tx meta store")
@@ -86,7 +121,7 @@ func New(
 		u.utxoStore = utxoStore
 	}
 
-	return u
+	return u, nil
 }
 
 func (u *Server) Health(ctx context.Context) (int, string, error) {
@@ -311,7 +346,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 	retryCount := 0
 
 	for {
-		gotLock, exists, releaseLockFunc, err := tryLockIfNotExists(ctx, u.logger, u.subtreeStore, hash)
+		gotLock, exists, releaseLockFunc, err := q.TryLockIfNotExists(ctx, hash)
 		if err != nil {
 			return false, errors.NewError("[CheckSubtree] error getting lock for Subtree %s", hash.String(), err)
 		}
