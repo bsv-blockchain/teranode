@@ -48,6 +48,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
+	"github.com/felixge/fgprof"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
@@ -224,6 +225,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				IdleTimeout:  120 * time.Second,
 			}
 
+			http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
 			logger.Fatalf("%v", server.ListenAndServe())
 		}
 	}()

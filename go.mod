@@ -88,6 +88,7 @@ require (
 
 require (
 	github.com/creack/pty v1.1.20 // indirect
+	github.com/felixge/fgprof v0.9.5 // indirect
 	github.com/rogpeppe/go-internal v1.11.0 // indirect
 )
 
