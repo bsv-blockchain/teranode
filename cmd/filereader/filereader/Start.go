@@ -55,7 +55,7 @@ func usage(msg string) {
 		fmt.Printf("Error: %s\n\n", msg)
 	}
 
-	fmt.Printf("Usage: filereader [-verbose] [-check] [-useStore] <filename | hash>.[block | subtree | utxoset | utxodiff] | -verify [-old]\n\n")
+	fmt.Printf("Usage: filereader [-verbose] [-check] [-useStore] <filename | hash>.[block | subtree | subtreeData | utxo-set | utxo-additions | utxo-deletions | utxo-headers] | -verify [-old]\n\n")
 
 	os.Exit(1)
 }
@@ -461,7 +461,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 	case "subtreeData":
 		// The subtreeData deserialization needs the subtree first
-		_, _, _, stReader, err := getReader(filename[:len(filename)-4], logger)
+		stPath := filepath.Join(dir, filename[:len(filename)-4])
+
+		_, _, _, stReader, err := getReader(stPath, logger)
 		if err != nil {
 			return err
 		}
