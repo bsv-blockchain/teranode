@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/model"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"io"
 	"log"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -40,6 +42,8 @@ type Server struct {
 	stats            *gocore.Stat
 	ctx              context.Context
 	blockchainClient blockchain.ClientI
+
+	fsmCurrentState atomic.Pointer[blockchain_api.FSMStateType]
 }
 
 // NewServer will return a server instance with the logger stored within it
@@ -97,6 +101,38 @@ func (v *Server) Start(ctx context.Context) error {
 		go v.startKafkaListener(ctx, kafkaURL)
 	}
 
+	if v.blockchainClient != nil {
+		go func() {
+			for {
+				blockchainSubscription, err := v.blockchainClient.Subscribe(ctx, "validator")
+				if err != nil {
+					v.logger.Errorf("[Validator] failed to subscribe to blockchain: %s", err)
+
+					// backoff for 5 seconds and try again
+					time.Sleep(5 * time.Second)
+
+					continue
+				}
+
+				v.logger.Infof("[Validator] Subscribed to blockchain notifications")
+
+				for notification := range blockchainSubscription {
+					if notification == nil {
+						continue
+					}
+
+					if notification.Type == model.NotificationType_FSMState {
+						v.logger.Debugf("[Validator] NEW FSM state notification: %s", notification.Metadata.Metadata)
+						metadata := notification.Metadata.Metadata
+						newState := blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])
+						v.logger.Debugf("[Validator] FSM state notification set: %s", newState)
+						v.fsmCurrentState.Store(&newState)
+					}
+				}
+			}
+		}()
+	}
+
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
 		validator_api.RegisterValidatorAPIServer(server, v)
@@ -131,12 +167,14 @@ func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 
 	if err := util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "blockassembly", nil, consumerCount, true, func(msg util.KafkaMessage) error {
 		//startTime := time.Now()
-		currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
-		if err != nil {
-			v.logger.Errorf("[Validator] Failed to get current state: %s", err)
-			// TODO: how to handle it gracefully?
-		}
-		for *currentState == blockchain_api.FSMStateType_CATCHINGTXS {
+		//currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
+		//if err != nil {
+		//	v.logger.Errorf("[Validator] Failed to get current state: %s", err)
+		//	// TODO: how to handle it gracefully?
+		//}
+
+		currentState := v.fsmCurrentState.Load()
+		for currentState != nil && *currentState == blockchain_api.FSMStateType_CATCHINGTXS {
 			v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
 			time.Sleep(1 * time.Second) // Wait and check again in 1 second
 		}
