@@ -15,12 +15,12 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	block_model "github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -29,6 +29,18 @@ import (
 )
 
 const stdin = "[stdin]"
+
+const (
+	numTransactionsFormat     = "Number of transactions: %d\n"
+	coinbasePlaceholderFormat = "%10d: Coinbase Placeholder\n"
+	nodeFormat                = "%10d: %v\n"
+	errEOFMarkerNotFound      = "ERROR: EOF marker not found\n"
+	eofMarkerFound            = "EOF marker found\n"
+	errCouldntReadFooter      = "Couldn't read footer"
+	magicFormat               = "magic:                        %s\n"
+	blockHashFormat           = "block hash:                   %s\n"
+	blockHeightFormat         = "block height:                 %d\n"
+)
 
 var (
 	verbose      bool
@@ -172,9 +184,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 			return errors.NewProcessingError("error reading header", err)
 		}
 
-		fmt.Printf("magic:                  %s\n", magic)
-		fmt.Printf("block hash:             %s\n", blockHash)
-		fmt.Printf("block height:           %d\n", blockHeight)
+		fmt.Printf(magicFormat, magic)
+		fmt.Printf(blockHashFormat, blockHash)
+		fmt.Printf(blockHeightFormat, blockHeight)
 
 		switch magic {
 		case "U-A-1.0":
@@ -216,9 +228,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				return errors.NewProcessingError("error reading utxo-additions header", err)
 			}
 
-			fmt.Printf("magic:                  %s\n", magic)
-			fmt.Printf("block hash:             %s\n", blockHash)
-			fmt.Printf("block height:           %d\n", blockHeight)
+			fmt.Printf(magicFormat, magic)
+			fmt.Printf(blockHashFormat, blockHash)
+			fmt.Printf(blockHeightFormat, blockHeight)
 			fmt.Printf("previous block hash:    %s\n", previousBlockHash)
 			fmt.Println()
 		}
@@ -229,9 +241,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						if ud == nil {
-							fmt.Printf("ERROR: EOF marker not found\n")
+							fmt.Print(errEOFMarkerNotFound)
 						} else {
-							fmt.Printf("EOF marker found\n")
+							fmt.Print(eofMarkerFound)
 						}
 
 						break
@@ -250,7 +262,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		if filename != stdin {
 			if err := printFooter(r, "utxo"); err != nil {
-				return errors.NewProcessingError("Couldn't read footer", err)
+				return errors.NewProcessingError(errCouldntReadFooter, err)
 			}
 		}
 
@@ -263,9 +275,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				return errors.NewProcessingError("error reading utxo-additions header", err)
 			}
 
-			fmt.Printf("magic:                        %s\n", magic)
-			fmt.Printf("block hash:                   %s\n", blockHash)
-			fmt.Printf("block height:                 %d\n", blockHeight)
+			fmt.Printf(magicFormat, magic)
+			fmt.Printf(blockHashFormat, blockHash)
+			fmt.Printf(blockHeightFormat, blockHeight)
 			fmt.Println()
 		}
 
@@ -275,9 +287,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						if ud == nil {
-							fmt.Printf("ERROR: EOF marker not found\n")
+							fmt.Print(errEOFMarkerNotFound)
 						} else {
-							fmt.Printf("EOF marker found\n")
+							fmt.Print(eofMarkerFound)
 						}
 
 						break
@@ -296,7 +308,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		if filename != stdin {
 			if err := printFooter(r, "utxo"); err != nil {
-				return errors.NewProcessingError("Couldn't read footer", err)
+				return errors.NewProcessingError(errCouldntReadFooter, err)
 			}
 		}
 
@@ -310,9 +322,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				return errors.NewProcessingError("error reading utxo-headers header", err)
 			}
 
-			fmt.Printf("magic:                        %s\n", magic)
-			fmt.Printf("block hash:                   %s\n", blockHash)
-			fmt.Printf("block height:                 %d\n", blockHeight)
+			fmt.Printf(magicFormat, magic)
+			fmt.Printf(blockHashFormat, blockHash)
+			fmt.Printf(blockHeightFormat, blockHeight)
 			fmt.Println()
 		}
 
@@ -324,9 +336,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						if uh == nil {
-							fmt.Printf("ERROR: EOF marker not found\n")
+							fmt.Print(errEOFMarkerNotFound)
 						} else {
-							fmt.Printf("EOF marker found\n")
+							fmt.Print(eofMarkerFound)
 						}
 
 						break
@@ -353,7 +365,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		if filename != stdin {
 			if err := printFooter(r, "tx"); err != nil {
-				return errors.NewProcessingError("Couldn't read footer", err)
+				return errors.NewProcessingError(errCouldntReadFooter, err)
 			}
 		}
 
@@ -367,9 +379,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				return errors.NewProcessingError("error reading utxo-deletions header", err)
 			}
 
-			fmt.Printf("magic:                        %s\n", magic)
-			fmt.Printf("block hash:                   %s\n", blockHash)
-			fmt.Printf("block height:                 %d\n", blockHeight)
+			fmt.Printf(magicFormat, magic)
+			fmt.Printf(blockHashFormat, blockHash)
+			fmt.Printf(blockHeightFormat, blockHeight)
 			fmt.Println()
 		}
 
@@ -379,9 +391,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						if ud == nil {
-							fmt.Printf("ERROR: EOF marker not found\n")
+							fmt.Print(errEOFMarkerNotFound)
 						} else {
-							fmt.Printf("EOF marker found\n")
+							fmt.Print(eofMarkerFound)
 						}
 
 						break
@@ -400,32 +412,87 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		if filename != stdin {
 			if err := printFooter(r, "utxo"); err != nil {
-				return errors.NewProcessingError("Couldn't read footer", err)
+				return errors.NewProcessingError(errCouldntReadFooter, err)
 			}
 		}
 
-	case "utxoset":
-		utxoSet, err := model.NewUTXOSetFromReader(logger, br)
-		if err != nil {
-			return errors.NewProcessingError("error reading utxoSet", err)
-		}
+	// case "utxoset":
+	// 	utxoSet, err := model.NewUTXOSetFromReader(logger, br)
+	// 	if err != nil {
+	// 		return errors.NewProcessingError("error reading utxoSet", err)
+	// 	}
 
-		fmt.Printf("UTXOSet block hash: %v\n", utxoSet.BlockHash)
-		fmt.Printf("UTXOSet with %d UTXOs", utxoSet.Current.Length())
+	// 	fmt.Printf("UTXOSet block hash: %v\n", utxoSet.BlockHash)
+	// 	fmt.Printf("UTXOSet with %d UTXOs", utxoSet.Current.Length())
 
-		if verbose {
-			fmt.Println(":")
-			utxoSet.Current.Iter(func(uk model.UTXOKey, uv *model.UTXOValue) (stop bool) {
-				fmt.Printf("%v %v\n", &uk, uv)
-				return true
-			})
-		} else {
-			fmt.Println()
-		}
+	// 	if verbose {
+	// 		fmt.Println(":")
+	// 		utxoSet.Current.Iter(func(uk model.UTXOKey, uv *model.UTXOValue) (stop bool) {
+	// 			fmt.Printf("%v %v\n", &uk, uv)
+	// 			return true
+	// 		})
+	// 	} else {
+	// 		fmt.Println()
+	// 	}
 
 	case "subtree":
-		num := readSubtree(br, verbose)
-		fmt.Printf("Number of transactions: %d\n", num)
+		st := &util.Subtree{}
+		if err := st.DeserializeFromReader(br); err != nil {
+			return errors.NewProcessingError("error reading subtree", err)
+		}
+
+		fmt.Printf("Subtree root hash: %s\n", st.RootHash())
+		fmt.Printf("Subtree fees: %d\n", st.Fees)
+		fmt.Printf("Subtree height: %d\n", st.Height)
+		fmt.Printf("Subtree size: %d\n", st.SizeInBytes)
+		fmt.Printf("Subtree conflicting nodes: %v\n", st.ConflictingNodes)
+
+		fmt.Printf(numTransactionsFormat, st.Length())
+
+		if verbose {
+			for i, node := range st.Nodes {
+				if block_model.CoinbasePlaceholderHash.IsEqual(&node.Hash) {
+					fmt.Printf(coinbasePlaceholderFormat, i)
+				} else {
+					fmt.Printf(nodeFormat, i, node.Hash)
+				}
+			}
+		}
+
+	case "subtreeData":
+		// The subtreeData deserialization needs the subtree first
+		_, _, _, stReader, err := getReader(filename[:len(filename)-4], logger)
+		if err != nil {
+			return err
+		}
+
+		st := &util.Subtree{}
+		if err := st.DeserializeFromReader(stReader); err != nil {
+			return errors.NewProcessingError("error reading subtree", err)
+		}
+
+		sd, err := util.NewSubtreeDataFromReader(st, br)
+		if err != nil {
+			return errors.NewProcessingError("error reading subtree data", err)
+		}
+
+		fmt.Printf("Subtree root hash: %s\n", st.RootHash())
+		fmt.Printf("Subtree fees: %d\n", st.Fees)
+		fmt.Printf("Subtree height: %d\n", st.Height)
+		fmt.Printf("Subtree size: %d\n", st.SizeInBytes)
+		fmt.Printf("Subtree conflicting nodes: %v\n", st.ConflictingNodes)
+
+		fmt.Printf(numTransactionsFormat, st.Length())
+
+		if verbose {
+			for i, tx := range sd.Txs {
+				if block_model.IsCoinbasePlaceHolderTx(tx) {
+					fmt.Printf(coinbasePlaceholderFormat, i)
+				} else {
+					fmt.Printf(nodeFormat, i, tx.TxIDChainHash())
+				}
+			}
+		}
 
 	case "":
 		blockHeaderBytes := make([]byte, 80)
@@ -454,7 +521,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		fmt.Printf("Block hash: %s\n", block.Hash())
 		fmt.Printf("%s", block.Header.StringDump())
-		fmt.Printf("Number of transactions: %d\n", block.TransactionCount)
+		fmt.Printf(numTransactionsFormat, block.TransactionCount)
 
 		for _, subtree := range block.Subtrees {
 			fmt.Printf("Subtree %s\n", subtree)
@@ -540,9 +607,9 @@ func readSubtree(r io.Reader, verbose bool) uint32 {
 			}
 
 			if block_model.IsCoinbasePlaceHolderTx(&tx) {
-				fmt.Printf("%10d: Coinbase Placeholder\n", i)
+				fmt.Printf(coinbasePlaceholderFormat, i)
 			} else {
-				fmt.Printf("%10d: %v\n", i, tx.TxIDChainHash())
+				fmt.Printf(nodeFormat, i, tx.TxIDChainHash())
 			}
 		}
 	}
