@@ -20,7 +20,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	block_model "github.com/bitcoin-sv/ubsv/model"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
-	utxom "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -148,28 +147,6 @@ func GetBlockStore(logger ulogger.Logger) (blob.Store, error) {
 
 func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reader, queryTxId chainhash.Hash, dir *url.URL) (bool, error) {
 	switch ext {
-	case "utxodiff":
-		utxodiff, err := utxom.NewUTXODiffFromReader(logger, r)
-		if err != nil {
-			return false, errors.NewProcessingError("error reading utxodiff: %w\n", err)
-		}
-
-		fmt.Printf("UTXODiff block hash: %v\n", utxodiff.BlockHash)
-
-		fmt.Printf("UTXODiff removed %d UTXOs", utxodiff.Removed.Length())
-
-		fmt.Printf("UTXODiff added %d UTXOs", utxodiff.Added.Length())
-
-	case "utxoset":
-		utxoSet, err := utxom.NewUTXOSetFromReader(logger, r)
-		if err != nil {
-			return false, errors.NewProcessingError("error reading utxoSet: %v\n", err)
-		}
-
-		fmt.Printf("UTXOSet block hash: %v\n", utxoSet.BlockHash)
-
-		fmt.Printf("UTXOSet with %d UTXOs", utxoSet.Current.Length())
-
 	case "subtree":
 		bl := ReadSubtree(r, logger, true, queryTxId)
 		return bl, nil
