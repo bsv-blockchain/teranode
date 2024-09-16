@@ -461,7 +461,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 	case "subtreeData":
 		// The subtreeData deserialization needs the subtree first
-		stPath := filepath.Join(dir, filename[:len(filename)-4])
+		stPath := filepath.Join(dir, fmt.Sprintf("%s.subtree", filename))
 
 		_, _, _, stReader, err := getReader(stPath, logger)
 		if err != nil {
@@ -488,7 +488,9 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		if verbose {
 			for i, tx := range sd.Txs {
-				if block_model.IsCoinbasePlaceHolderTx(tx) {
+				if tx == nil {
+					fmt.Printf("%10d: <nil>\n", i)
+				} else if block_model.IsCoinbasePlaceHolderTx(tx) {
 					fmt.Printf(coinbasePlaceholderFormat, i)
 				} else {
 					fmt.Printf(nodeFormat, i, tx.TxIDChainHash())
