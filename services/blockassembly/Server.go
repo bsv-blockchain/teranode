@@ -175,7 +175,7 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 
 			case newSubtreeRequest := <-newSubtreeChan:
 
-				err = ba.storeSubtree(ctx, newSubtreeRequest.Subtree, subtreeRetryChan)
+				err := ba.storeSubtree(ctx, newSubtreeRequest.Subtree, subtreeRetryChan)
 				if err != nil {
 					ba.logger.Errorf(err.Error())
 				}
