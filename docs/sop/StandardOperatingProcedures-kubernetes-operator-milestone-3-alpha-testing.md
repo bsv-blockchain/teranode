@@ -781,7 +781,9 @@ While most services are required for the proper functioning of Teranode, some se
 | P2P               |                   |
 | Legacy Gateway    |                   |
 
-The Block and UTXO persister services are optional and can be disabled. If enabled, your node will be in Archive Mode, storing historical block and UTXO data. This data can be useful for analytics and historical lookups but comes with additional storage and processing overhead. Additionally, it can be used as a backup for the UTXO store.
+The Block and UTXO persister services are optional and can be disabled. If enabled, your node will be in Archive Mode, storing historical block and UTXO data.
+As Teranode does not retain historical transaction data, this data can be useful for analytics and historical lookups, but comes with additional storage and processing overhead.
+Additionally, it can be used as a backup for the UTXO store.
 
 
 ## 6. Node Operation
