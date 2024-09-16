@@ -661,7 +661,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		}
 	}
 
-	// start miner. Miner will fire the StartMining event. FSM will transition to state Mining
 	if startMiner {
 		miner, err := miner.NewMiner(
 			ctx,
