@@ -1,0 +1,12 @@
+services:
+  ubsv-1:
+    environment:
+      asset_httpAddress: null 
+
+  ubsv-2:
+    environment:
+      asset_httpAddress: null 
+
+  ubsv-3:
+    environment:
+      asset_httpAddress: null 
