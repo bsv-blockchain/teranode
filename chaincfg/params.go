@@ -34,14 +34,9 @@ var (
 	// testNet3PowLimit is the highest proof of work value a Bitcoin block
 	// can have for the test network (version 3).  It is the value
 	// 2^224 - 1.
-	testNet3PowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 225), bigOne)
-	customPowLimit   = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 240), bigOne)
-	// TODO: change this back
-	// testNet3PowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 224), bigOne)
+	testNet3PowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 224), bigOne)
 
-	// simNetPowLimit is the highest proof of work value a Bitcoin block
-	// can have for the simulation test network.  It is the value 2^255 - 1.
-	simNetPowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 255), bigOne)
+	customPowLimit = new(big.Int).Sub(new(big.Int).Lsh(bigOne, 240), bigOne)
 
 	// stnPowLimit is the highest proof of work value a Bitcoin block can
 	// have for the scaling test network. It is the value 2^224 - 1.
@@ -491,14 +486,12 @@ var TestNet3Params = Params{
 	CoinbaseMaturity:         100,
 	SubsidyReductionInterval: 210000,
 	TargetTimespan:           time.Hour * 24 * 14, // 14 days
-	// TODO: change this back to 10 mins
-	TargetTimePerBlock:       time.Minute * 1, // 10 minutes
-	RetargetAdjustmentFactor: 4,               // 25% less, 400% more
+	TargetTimePerBlock:       time.Minute * 10,    // 10 minutes
+	RetargetAdjustmentFactor: 4,                   // 25% less, 400% more
 	ReduceMinDifficulty:      true,
 	NoDifficultyAdjustment:   false,
-	// TODO: change this back to 20 mins
-	MinDiffReductionTime: time.Minute * 2, // TargetTimePerBlock * 2
-	GenerateSupported:    false,
+	MinDiffReductionTime:     time.Minute * 20, // TargetTimePerBlock * 2
+	GenerateSupported:        false,
 
 	// Checkpoints ordered from oldest to newest.
 	Checkpoints: []Checkpoint{
@@ -671,6 +664,7 @@ func Register(params *Params) error {
 	if _, ok := registeredNets[params.Net]; ok {
 		return ErrDuplicateNet
 	}
+
 	registeredNets[params.Net] = struct{}{}
 	pubKeyHashAddrIDs[params.LegacyPubKeyHashAddrID] = struct{}{}
 	scriptHashAddrIDs[params.LegacyScriptHashAddrID] = struct{}{}
@@ -678,6 +672,7 @@ func Register(params *Params) error {
 
 	// A valid cashaddress prefix for the given net followed by ':'.
 	cashAddressPrefixes[params.CashAddressPrefix+":"] = struct{}{}
+
 	return nil
 }
 
@@ -701,6 +696,7 @@ func IsScriptHashAddrID(id byte) bool {
 func IsCashAddressPrefix(prefix string) bool {
 	prefix = strings.ToLower(prefix)
 	_, ok := cashAddressPrefixes[prefix]
+
 	return ok
 }
 
@@ -710,7 +706,9 @@ func HDPrivateKeyToPublicKeyID(id []byte) ([]byte, error) {
 	}
 
 	var key [4]byte
+
 	copy(key[:], id)
+
 	pubBytes, ok := hdPrivToPubKeyIDs[key]
 	if !ok {
 		return nil, ErrUnknownHDKeyID
@@ -728,6 +726,7 @@ func newHashFromStr(hexStr string) *chainhash.Hash {
 	if err != nil {
 		panic(err)
 	}
+
 	return hash
 }
 
