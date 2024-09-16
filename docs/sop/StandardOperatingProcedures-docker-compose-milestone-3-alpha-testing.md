@@ -2,7 +2,6 @@
 
 ## Index
 
-
 1. [Glossary of Teranode Terms](#1-glossary-of-teranode-terms)
 2. [Introduction](#2-introduction)
 - [2.1. Purpose of the SOP](#21-purpose-of-the-sop)
@@ -25,27 +24,20 @@
     - [4.2.1. Pre-built Binaries](#421-pre-built-binaries)
     - [4.2.2. Docker Container](#422-docker-container)
     - [4.2.3. Docker Compose](#423-docker-compose)
-    - [4.2.4 Kubernetes Operator](#424-kubernetes-operator)
 - [4.3. Installing Teranode with Docker Compose](#43-installing-teranode-with-docker-compose)
-    - [4.4. Installing Teranode with the Custom Kubernetes Operator](#44-installing-teranode-with-the-custom-kubernetes-operator)
 5. [Configuration](#5-configuration)
 - [5.1. Configuring Setting Files](#51-configuring-setting-files)
 6. [Node Operation](#6-node-operation)
 - [6.1. Docker Compose Starting and Stopping the Node](#61-docker-compose---starting-and-stopping-the-node)
     - [6.1.1. Starting the Node](#611-starting-the-node)
     - [6.1.2. Stopping the Node](#612-stopping-the-node)
-- [6.2. Custom Kubernetes Operator](#62-custom-kubernetes-operator)
-    - [6.2.1. Starting the Node](#621-starting-the-node)
-    - [6.2.2. Stopping the Node](#622-stopping-the-node)
-- [6.3. Syncing the Blockchain](#63-syncing-the-blockchain)
-- [6.4. Monitoring Node status](#64-monitoring-node-status)
-- [6.5. How to Interact with the Node](#65-how-to-interact-with-the-node)
-    - [6.5.1. Teranode RPC HTTP API](#651-teranode-rpc-http-api)
-    - [6.5.2. Teranode Asset Server HTTP API](#652-teranode-asset-server-http-api)
+- [6.2. Syncing the Blockchain](#62-syncing-the-blockchain)
+- [6.3. How to Interact with the Node](#63-how-to-interact-with-the-node)
+    - [6.3.1. Teranode RPC HTTP API](#631-teranode-rpc-http-api)
+    - [6.3.2. Teranode Asset Server HTTP API](#632-teranode-asset-server-http-api)
 7. [Maintenance](#7-maintenance)
 - [7.1. Updating Teranode to a New Version](#71-updating-teranode-to-a-new-version)
     - [7.1.1. Docker Compose](#711-docker-compose)
-    - [7.1.2. Kubernetes Custom Operator](#712-kubernetes-custom-operator)
 - [7.2. Managing Disk Space](#72-managing-disk-space)
 - [7.3. Backing Up Data](#73-backing-up-data)
 8. [Troubleshooting](#8-troubleshooting)
@@ -64,7 +56,7 @@
 
 
 
-Version 1.0.1 - Last Issued - 2 September 2024
+Version 1.0.2 - Last Issued - 16 September 2024
 
 ----
 
@@ -93,8 +85,6 @@ Version 1.0.1 - Last Issued - 2 September 2024
 **Initial Block Download (IBD)**: The process of downloading and validating the entire blockchain when setting up a new node.
 
 **Kafka**: A distributed streaming platform used in Teranode for handling real-time data feeds.
-
-**Kubernetes**: An open-source system for automating deployment, scaling, and management of containerized applications.
 
 **Microservices**: An architectural style that structures an application as a collection of loosely coupled services.
 
@@ -221,9 +211,13 @@ While this document will touch upon these components as needed for setup and ope
 
 
 
-- Linear Scalability throughput (3 snapshots - 10K, 100K, 500K) **TODO** <--- To be worked with Joe [19 July] **JOE JOE JOE**
+The Teranode team will provide you with current hardware recommendations. These recommendations will be:
 
-- Max 17,000 (seen in BSV production - perhaps size it up for 30,000 max?)
+1. Tailored to your specific configuration settings
+2. Designed to handle the expected production transaction volume
+3. Updated regularly to reflect the latest performance requirements
+
+This ensures your system is appropriately equipped to manage the projected workload efficiently.
 
 
 
@@ -232,14 +226,10 @@ While this document will touch upon these components as needed for setup and ope
 
 Teranode relies on a number of third-party software dependencies, some of which can be sourced from different vendors.
 
-
-
-As seen in the Installation section in this document, BSV provides both a `docker compose` that initialises all dependencies within a single server node, and a `Kubernetes operator` that provides a production-live multi-node setup. However, it is the operator responsibility to support and monitor these third parties.
-
+BSV provides both a `docker compose` that initialises all dependencies within a single server node, and a `Kubernetes operator` that provides a production-live multi-node setup. This document covers the `docker compose` approach.
 
 
 This section will outline the various vendors in use in Teranode.
-
 
 
 #### 3.2.1. Apache Kafka
@@ -368,10 +358,6 @@ Users can create dashboards in Grafana to visualize the metrics collected by Pro
 In the context of Teranode, Grafana and Prometheus are used to provide comprehensive monitoring and visualization of the blockchain node’s performance, health, and various metrics.
 
 
-**TODO** - https://grafana.com/grafana/dashboards/ we’ll publish a teranode dashboard here - People can download and install an instance from here.  -- To be discussed with Joe, for analysis.
-
-
-
 
 
 ### 3.3. Network Considerations
@@ -392,6 +378,7 @@ Key network considerations:
 1. Ensure your internet connection is reliable and has sufficient bandwidth to handle continuous data transfer.
 2. Be aware that initial blockchain synchronization, depending on your installation method, may require higher bandwidth usage. If you synchronise automatically starting from the genesis block, you will have to download every block. However, the BSV recommended approach is to install a seed UTXO Set and blockchain.
 3. Monitor your network usage to ensure it stays within your ISP's limits and adjust your node's configuration if needed.
+
 
 
 
@@ -468,17 +455,13 @@ Where possible, BSV recommends using the Initial Data Set Installation approach.
 
 
 
-**TODO - how do we do that? **
-
-
-
 
 
 ### 4.2. Teranode Installation Types
 
 
 
-Teranode can be installed and run using four primary methods: pre-built binaries, Docker containers, Docker Compose, or using a Kubernetes Operator. Each method offers different levels of flexibility and ease of use. Only the Kubernetes operator approach is recommended for production usage.
+Teranode can be installed and run using four primary methods: pre-built binaries, Docker containers, Docker Compose, or using a Kubernetes Operator. Each method offers different levels of flexibility and ease of use, however Teranode only recommends using the Docker Compose (for testing) or Kubernetes Operator (for Production) approaches. No guidance or support is offered for the other variants. Only the Kubernetes operator approach is recommended for production usage. This document covers the `docker compose` approach only.
 
 
 
@@ -488,15 +471,11 @@ Teranode can be installed and run using four primary methods: pre-built binaries
 - This method provides the most flexibility but requires manual setup of dependencies.
 - Suitable for users who need fine-grained control over their installation.
 
-
-
 #### 4.2.2. Docker Container
 
 - A Docker image is published to a Docker registry, containing the Teranode binary and internal dependencies.
 - This method offers a balance between ease of use and customization.
 - Ideal for users familiar with Docker who want to integrate Teranode into existing container ecosystems.
-
-
 
 #### 4.2.3. Docker Compose
 
@@ -518,73 +497,7 @@ Teranode can be installed and run using four primary methods: pre-built binaries
     - This setup uses predefined external dependencies, which may not be customizable.
     - While convenient for development and testing, it is not optimized, nor intended, for production usage.
 
-Note: The `Docker Compose` method is recommended for testing in single node environments as it provides a consistent environment that mirrors the development setup. However, for production deployments or specific performance requirements, users need to consider using the Kubernetes operator approach (next section).
-
-
-
-#### 4.2.4 Kubernetes Operator
-
-
-
-Teranode is a complex system that can be deployed on Kubernetes using a custom operator (https://kubernetes.io/docs/concepts/extend-kubernetes/operator/). The deployment is managed through Kubernetes manifests, specifically using a Custom Resource Definition (CRD) of kind "Cluster" in the teranode.bsvblockchain.org/v1alpha1 API group. This Cluster resource defines various components of the Teranode system, including Asset, Block Validator, Block Persister, UTXO Persister, Blockchain, Block Assembly, Miner, Peer-to-Peer, Propagation, Subtree Validator, and Coinbase services.
-
-
-
-The deployment uses kustomization for managing Kubernetes resources, allowing for easier customization and overlay configurations.
-
-
-
-The Cluster resource allows fine-grained control over resource allocation, enabling users to adjust CPU and memory requests and limits for each component.
-
-
-
-It must be noted that, as opposed to the `Docker Compose` approach, the `Kubernetes operator` production-like setup does not install or manage the third party dependencies, explicitly:
-
-- **Kafka**
-- **PostgreSQL**
-- **Aerospike**
-- **Grafana**
-- **Prometheus**
-
-
-
-##### Configuration Management
-Environment variables and settings are managed using ConfigMaps. The Cluster custom resource specifies a `configMapName` (e.g., "shared-config") which is referenced by the various Teranode components. Users will need to create this ConfigMap before deploying the Cluster resource.
-
-
-
-##### Storage Requirements
-Teranode uses PersistentVolumeClaims (PVCs) for storage in some components. For example, the SubtreeValidator specifies storage resources and a storage class. Users should ensure their Kubernetes cluster has the necessary storage classes and capacity available.
-
-
-
-##### Service Deployment
-The Teranode services are deployed as separate components within the Cluster custom resource. Each service (e.g., Asset, BlockValidator, Blockchain, Peer-to-Peer, etc.) is defined with its own specification, including resource requests and limits. The Kubernetes operator manages the creation and lifecycle of these components based on the Cluster resource definition.
-
-
-
-##### Namespace Usage
-Users can deploy Teranode to a specific namespace by specifying it during the operator installation or when applying the Cluster resource.
-
-
-
-##### Networking and Ingress
-Networking is handled through Kubernetes Services and Ingress resources. The Cluster resource allows specification of ingress for Asset, Peer, and Propagation services. It supports customization of ingress class, annotations, and hostnames. The setup appears to use Traefik as the ingress controller, but it's designed to be flexible for different ingress providers.
-
-
-
-##### Third Party Dependencies
-Tools like Grafana, Prometheus, Aerospike Postgres and Kafka are not included in the Teranode operator deployment. Users are expected to set up these tools separately in their Kubernetes environment (or outside of it).
-
-
-
-##### Logging and Troubleshooting
-Standard Kubernetes logging and troubleshooting approaches apply. Users can use `kubectl logs` and `kubectl describe` commands to investigate issues with the deployed pods and resources.
-
-
-
-In the following sections, we will focus on the `Docker Compose`  and `Kubernetes operator` installation method, as it is the most suitable for alpha testing purposes. Users interested in directly running the binaries or managing the docker containers with their own custom setups can reach out to the Teranode support team for further discussion.
-
+Note: The `Docker Compose` method is recommended for testing in single node environments as it provides a consistent environment that mirrors the development setup. However, for production deployments or specific performance requirements, users need to consider using the Kubernetes operator approach (separate document).
 
 
 
@@ -607,15 +520,13 @@ In the following sections, we will focus on the `Docker Compose`  and `Kubernete
 
 **Step 1: Create Repository**
 
-**TODO - note from Jeff - if providing a repo, this would be included (no need to create a folder)**
-
 1. Open a terminal or command prompt.
 2. Create the repository:
    ```
    cd teranode
    ```
 
-3. Copy the docker compose file into the `teranode` folder.
+3. Copy the docker compose file into the `teranode` folder. This was provided to you by the Teranode team.
 
 
 
@@ -630,8 +541,6 @@ In the following sections, we will focus on the `Docker Compose`  and `Kubernete
 
 
 **Step 3: Prepare Local Settings**
-
-**TODO - note from Jeff - if providing a repo, this would be included**
 
 1. Create a `settings_local.conf` file in the root directory.
 2. Unless instructed otherwise, please put the following content in it.
@@ -750,8 +659,6 @@ rpc_listener_url=:${RPC_PORT}
     - **P2P service**: Ports 9905, 9906
     - **RPC service**: 9292
 
-**TODO - what can the user do with those ports? Should the Blockchain, Miner and P2P be removed from this list? **
-
 
 
 **Step 11: Logging and Troubleshooting**
@@ -784,181 +691,6 @@ Additional Notes:
 
 
 
-#### 4.4. Installing Teranode with the Custom Kubernetes Operator
-
-
-
-**Prerequisites**:
-
-- Go version 1.20.0+
-- Docker version 17.03+
-- kubectl version 1.11.3+
-- Access to a Kubernetes v1.11.3+ cluster
-- Operator Lifecycle Manager (OLM) installed
-- Sufficient cluster resources as defined in the Cluster spec
-- A stable internet connection
-
-
-
-**Step 1: Prepare the Environment**
-
-1. Ensure you have the required tools installed (Go, Docker, kubectl).
-2. Verify access to your Kubernetes cluster:
-   ```
-   kubectl cluster-info
-   ```
-
-
-
-**Step 2: Install Operator Lifecycle Manager (OLM)**
-
-1. Install OLM if not already present:
-   ```
-   operator-sdk olm install
-   ```
-
-
-
-**Step 3: Install Teranode Operator**
-
-1. Run the bundle to install the Teranode operator:
-   ```
-   operator-sdk run bundle 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-operator-bundle:v0.0.2 --install-mode OwnNamespace -n <namespace>
-   ```
-   Replace `<namespace>` with your desired namespace.
-
-
-
-**Step 4: Configure Teranode Cluster**
-
-1. Create a ConfigMap for shared configuration:
-   ```
-   kubectl create configmap shared-config --from-file=path/to/your/config/file
-   ```
-
-2. Create a Cluster custom resource file (e.g., clone and modify `config/samples/teranode_v1alpha1_cluster.yaml` or any of the other available samples) with your desired configuration.
-
-3. Adjust resource requests and limits, storage classes, and ingress settings as needed.
-
-
-
-**Step 5: Deploy Teranode Cluster**
-
-1. Apply the Cluster custom resource created in point 4.2:
-   ```
-   kubectl apply -f config/your_config/teranode_your_cluster.yaml
-   ```
-
-
-
-**Step 6: Verify Deployment**
-
-1. Check if all pods are running (your output should be similar to the below):
-   ```
-   kubectl get pods
-   NAME                                                              READY   STATUS      RESTARTS   AGE
-   asset-5cc5745c75-6m5gf                                            1/1     Running     0          3d11h
-   asset-5cc5745c75-84p58                                            1/1     Running     0          3d11h
-   block-assembly-649dfd8596-k8q29                                   1/1     Running     0          3d11h
-   block-assembly-649dfd8596-njdgn                                   1/1     Running     0          3d11h
-   block-persister-57784567d6-tdln7                                  1/1     Running     0          3d11h
-   block-persister-57784567d6-wdx84                                  1/1     Running     0          3d11h
-   block-validator-6c4bf46f8b-bvxmm                                  1/1     Running     0          3d11h
-   blockchain-ccbbd894c-k95z9                                        1/1     Running     0          3d11h
-   coinbase-6d769f5f4d-zkb4s                                         1/1     Running     0          3d11h
-   dkr-ecr-eu-north-1-amazonaws-com-teranode-operator-bundle-v0-1    1/1     Running     0          3d11h
-   ede69fe8f248328195a7b76b2fc4c65a4ae7b7185126cdfd54f61c7eadffnzv   0/1     Completed   0          3d11h
-   miner-6b454ff67c-jsrgv                                            1/1     Running     0          3d11h
-   peer-6845bc4749-24ms4                                             1/1     Running     0          3d11h
-   propagation-648cd4cc56-cw5bp                                      1/1     Running     0          3d11h
-   propagation-648cd4cc56-sllxb                                      1/1     Running     0          3d11h
-   subtree-validator-7879f559d5-9gg9c                                1/1     Running     0          3d11h
-   subtree-validator-7879f559d5-x2dd4                                1/1     Running     0          3d11h
-   teranode-operator-controller-manager-768f498c4d-mk49k             2/2     Running     0          3d11h
-   ```
-
-2. Ensure all services show a status of "Running" or "Completed".
-
-
-
-**Step 7: Configure Ingress (if applicable)**
-
-1. Verify that ingress resources are created for Asset, Peer, and Propagation services:
-   ```
-   kubectl get ingress
-   ```
-
-2. Configure your ingress controller or external load balancer as needed.
-
-
-
-**Step 8: Access Teranode Services**
-
-- The various Teranode services will be accessible through the configured ingress or service endpoints.
-- Refer to your specific ingress or network configuration for exact URLs and ports.
-
-
-
-**Step 9: Monitoring and Logging**
-
-- Set up your preferred monitoring stack (e.g., Prometheus, Grafana) to monitor the Teranode cluster.
-- Use standard Kubernetes logging practices to access logs:
-  ```
-  kubectl logs <pod-name>
-  ```
-
-
-
-**Step 10: Troubleshooting**
-
-1. Check pod status:
-   ```
-   kubectl describe pod <pod-name>
-   ```
-
-2. View pod logs:
-   ```
-   kubectl logs <pod-name>
-   ```
-
-3. Verify ConfigMaps and Secrets:
-   ```
-   kubectl get configmaps
-   kubectl get secrets
-   ```
-
-
-
-**Step 11: Updating Teranode**
-
-1. To update the Teranode cluster, modify the Cluster custom resource and reapply:
-   ```
-   kubectl apply -f config/your_config/teranode_your_cluster.yaml
-   ```
-
-
-
-**Step 12: Uninstalling Teranode**
-
-1. Delete the Cluster custom resource:
-   ```
-   kubectl delete -f config/your_config/teranode_your_cluster.yaml
-   ```
-
-2. Uninstall the Teranode operator:
-   ```
-   operator-sdk cleanup teranode-operator
-   ```
-
-
-
-Additional Notes:
-
-- SharedPVCName represents a persistent volume shared across a number of services (Block Validation, Subtree Validation, Block Assembly, Asset Server). While the implementation of the storage is left at the user's discretion, the BSV Association has successfully tested using an AWS FSX for Lustre volume at high throughput, and it can be considered as a reliable option for any Teranode deployment.
-- Ensure proper network policies and security contexts are in place for your Kubernetes environment.
-- Regularly back up any persistent data stored in PersistentVolumeClaims.
-- The Teranode operator manages the lifecycle of the Teranode services. Direct manipulation of the underlying resources is not recommended.
-
 
 
 ## 5. Configuration
@@ -969,7 +701,7 @@ Additional Notes:
 
 
 
-The following settings can be configured in the Docker Compose  `settings_local.conf`, or in the custom operator ConfigMap.
+The following settings can be configured in the Docker Compose  `settings_local.conf`.
 
 
 
@@ -1033,6 +765,24 @@ For the purposes of the alpha testing, it is recommended not to modify any setti
 
 
 
+
+### 5.2. Optional vs Required services
+
+While most services are required for the proper functioning of Teranode, some services are optional and can be disabled if not needed. The following table provides an overview of the services and their status:
+
+| Required          | Optional          |
+|-------------------|-------------------|
+| Asset Server      | Block Persister   |
+| Block Assembly    | UTXO Persister    |
+| Block Validator   |                   |
+| Subtree Validator |                   |
+| Blockchain        |                   |
+| Coinbase          |                   |
+| Propagation       |                   |
+| P2P               |                   |
+| Legacy Gateway    |                   |
+
+The Block and UTXO persister services are optional and can be disabled. If enabled, your node will be in Archive Mode, storing historical block and UTXO data. This data can be useful for analytics and historical lookups but comes with additional storage and processing overhead. Additionally, it can be used as a backup for the UTXO store.
 
 
 
@@ -1212,294 +962,10 @@ Remember, <u>always</u> use the <u>graceful shutdown</u> method (`docker-compose
 
 
 
-### 6.2. Custom Kubernetes Operator
+### 6.2. Syncing the Blockchain
 
-
-
-#### 6.2.1. Starting the Node
-
-Starting your Teranode instance in Kubernetes involves deploying the Cluster custom resource, which the operator will use to create and manage all necessary services. Follow these steps to start your node:
-
-1. **Pre-start Checklist:**
-   - Ensure your Kubernetes cluster is up and running.
-   - Verify that the Teranode operator is installed and running.
-   - Check that your `teranode_your_cluster.yaml` file is properly configured.
-   - Ensure any required ConfigMaps or Secrets are in place.
-
-2. **Navigate to the Teranode Configuration Directory:**
-   ```
-   cd /path/to/teranode-config
-   ```
-
-3. **Apply the Cluster Custom Resource:**
-
-   ```
-   kubectl apply -f teranode_your_cluster.yaml
-   ```
-   This command creates or updates the Teranode Cluster resource, which the operator will use to deploy all necessary components.
-
-4. **Verify Resource Creation:**
-
-   ```
-   kubectl get clusters
-   ```
-   Ensure your Cluster resource is listed and in the process of being created.
-
-5. **Monitor Pod Creation:**
-   ```
-   kubectl get pods -w
-   ```
-   Watch as the operator creates the necessary pods for each Teranode service.
-
-6. **Check Individual Service Logs:**
-   If a specific service isn't starting correctly, check its logs:
-   ```
-   kubectl logs <pod-name>
-   ```
-   Replace <pod-name> with the name of the specific pod you want to investigate.
-
-7. **Verify Network Connections:**
-   Once all pods are running, ensure the node is connecting to the BSV network:
-   ```
-   kubectl exec <peer-pod-name> -- /app/ubsv.run -p2p=1 getpeerinfo
-   ```
-   Replace <peer-pod-name> with the name of your peer service pod.
-
-8. **Check Synchronization Status:**
-   Monitor the blockchain synchronization process:
-
-   ```
-   kubectl exec <blockchain-pod-name> -- /app/ubsv.run -blockchain=1 getblockchaininfo
-   ```
-   Replace <blockchain-pod-name> with the name of your blockchain service pod.
-
-9. **Access Monitoring Tools:**
-   - If you've set up Grafana and Prometheus, access them through their respective Service or Ingress endpoints.
-   - Use `kubectl port-forward` if needed to access these tools locally.
-
-10. **Troubleshooting:**
-    - If any pod fails to start, check its logs and events:
-      ```
-      kubectl describe pod <pod-name>
-      ```
-    - Ensure all required ConfigMaps and Secrets are correctly referenced in your Cluster resource.
-    - Verify that all PersistentVolumeClaims are bound and have the correct storage class.
-
-11. **Post-start Checks:**
-    - Verify that all Services are created and have the correct endpoints:
-      ```
-      kubectl get services
-      ```
-    - Check that any configured Ingress resources are properly set up:
-      ```
-      kubectl get ingress
-      ```
-    - Ensure all microservices are communicating properly with each other by checking their logs for any connection errors.
-
-Remember, the initial startup may take some time, especially if this is the first time starting the node or if there's a lot of blockchain data to sync. Be patient and monitor the logs for any issues.
-
-For subsequent starts after the initial setup, you typically only need to ensure the Cluster resource is applied, unless you've made configuration changes or updates to the system.
-
-
-
-#### 6.2.2. Stopping the Node
-
-Properly stopping your Teranode instance in Kubernetes is crucial to maintain data integrity and prevent potential issues. Follow these steps to safely stop your node:
-
-1. **Navigate to the Teranode Configuration Directory:**
-   ```
-   cd /path/to/teranode-config
-   ```
-
-2. **Graceful Shutdown:**
-   To stop all services defined in your Cluster resource:
-   ```
-   kubectl delete -f teranode_your_cluster.yaml
-   ```
-   This command tells the operator to remove all resources associated with your Teranode instance.
-
-3. **Verify Shutdown:**
-   Ensure all pods are being terminated:
-   ```
-   kubectl get pods -w
-   ```
-   Watch as the pods are terminated. This may take a few minutes.
-
-4. **Check for Any Lingering Resources:**
-   ```
-   kubectl get all,pvc,configmap,secret -l app.kubernetes.io/part-of=teranode-operator
-   ```
-   Verify that no Teranode-related resources are still present.
-
-5. **Stop Specific Services (if needed):**
-   If you need to stop only specific services, you can scale down their deployments:
-   ```
-   kubectl scale deployment <deployment-name> --replicas=0
-   ```
-   Replace <deployment-name> with the specific deployment you want to stop.
-
-6. **Forced Deletion (use with caution!):**
-   If resources aren't being removed properly:
-   ```
-   kubectl delete -f teranode_v1alpha1_cluster.yaml --grace-period=0 --force
-   ```
-   This forces deletion of resources. Use this only if the normal deletion process is stuck.
-
-7. **Cleanup (optional):**
-   To remove any orphaned resources:
-   ```
-   kubectl delete all,pvc,configmap,secret -l app.kubernetes.io/part-of=teranode-operator
-   ```
-   Be **cautious** with this command as it removes all resources with the Teranode label.
-
-
-
-8. **Data Preservation:**
-   PersistentVolumeClaims are not automatically deleted. Your data should be preserved unless you explicitly delete the PVCs.
-
-
-
-9. **Backup Consideration:**
-   Consider creating a backup of your data before shutting down, especially if you plan to make changes to your setup. You can use tools like Velero for Kubernetes backups.
-
-
-
-10. **Monitoring Shutdown:**
-    Watch the events during shutdown to ensure resources are being removed cleanly:
-    ```
-    kubectl get events -w
-    ```
-
-
-
-11. **Restart Preparation:**
-    If you plan to restart soon, no further action is needed. Your PersistentVolumeClaims and configurations will be preserved for the next startup.
-
-
-
-Remember, always use the graceful shutdown method (deleting the Cluster resource) unless absolutely necessary to force a shutdown. This ensures that all services have time to properly close their connections, flush data to disk, and perform any necessary cleanup operations.
-
-
-
-The operator will manage the orderly shutdown of services, but be prepared to manually clean up any resources that might not be removed automatically if issues occur during the shutdown process.
-
-
-
-
-
-
-
-### 6.3. Syncing the Blockchain
-
-
-
-When a new Teranode instance is deployed in a Kubernetes cluster (or docker compose), it begins the synchronization process automatically. This process, known as the Initial Block Download (IBD), involves downloading and validating the entire blockchain history from other nodes in the network.
-
-##### Synchronization Process:
-
-1. **Peer Discovery**:
-   - Upon startup, the Teranode peer service (typically running in the `peer` pod) begins to discover and connect to other nodes in the BSV network.
-
-
-
-2. **Block Download**:
-   - Once connected, Teranode requests blocks from its peers, typically starting with the first node it successfully connects to.
-
-   - This peer could be either a traditional BSV node or another BSV Teranode.
-
-
-
-3. **Validation and Storage**:
-   - As blocks are received, they are validated by the various Teranode services (e.g., `block-validator`, `subtree-validator`).
-
-   - Valid blocks are then stored in the blockchain database, managed by the `blockchain` service.
-
-   - The UTXO (Unspent Transaction Output) set is updated accordingly, typically managed by the `asset` service.
-
-
-
-4. **Progress Monitoring**:
-   - You can monitor the synchronization progress by checking the logs of relevant pods:
-     ```
-     kubectl logs <blockchain-pod-name>
-     kubectl logs <peer-pod-name>
-     ```
-   - The `getblockchaininfo` command can provide detailed sync status:
-     ```
-     kubectl exec <blockchain-pod-name> -- /app/ubsv.run -blockchain=1 getblockchaininfo
-     ```
-
-
-
-##### Optimizing Initial Sync
-
-To speed up the initial synchronization process, you have the option to seed Teranode with pre-existing data:
-
-1. **Pre-created UTXO Set**:
-
-   - Prepare a PersistentVolume with a pre-created UTXO set.
-
-   - Configure your Cluster resource to use this PersistentVolume for the `asset` service.
-
-
-
-2. **Existing Blockchain DB**:
-   - Similarly, prepare a PersistentVolume with an existing blockchain database.
-
-   - Configure your Cluster resource to use this PersistentVolume for the `blockchain` service.
-
-
-
-3. **Applying Pre-existing Data**:
-   - Update your Cluster custom resource to point to these pre-populated PersistentVolumes.
-   - Apply the updated Cluster resource:
-     ```
-     kubectl apply -f teranode_your_cluster.yaml
-     ```
-
-By using pre-existing data, Teranode can skip a significant portion of the initial sync process, starting from a more recent point in the blockchain history.
-
-
-
-##### Recovery After Downtime
-
-In a Kubernetes environment, Teranode is designed to be resilient and can recover from various types of downtime or disconnections.
-
-
-
-1. **Automatic Restart**:
-   - If a pod crashes or is terminated, Kubernetes will automatically restart it based on the deployment configuration.
-
-   - This is handled by the ReplicaSet controller in Kubernetes.
-
-
-
-2. **Reconnection**:
-   - Upon restart, the `peer` service will re-establish connections with other nodes in the network.
-
-
-
-3. **Block Request**:
-   - Teranode will determine the last block it has and request subsequent blocks from its peers.
-
-   - This process is automatic and doesn't require manual intervention.
-
-
-
-4. **Catch-up Synchronization**:
-   - The node will download and process all blocks it missed during the downtime.
-
-   - This process is typically faster than the initial sync as it involves fewer blocks.
-
-
-
-5. **Monitoring Recovery**:
-
-   - Monitor the recovery process using the same methods as the initial sync:
-     ```
-     kubectl logs <peer-pod-name>
-     kubectl exec <blockchain-pod-name> -- /app/ubsv.run -blockchain=1 getblockchaininfo
-     ```
+Teranode allows to sync the blockchain from a remote node, or from a local snapshot. The Teranode team publishes regular snapshots of the blockchain and UTXO set, which can be used to speed up the initial sync process.
+For more information, please refer to the Teranode team.
 
 
 
@@ -1528,20 +994,7 @@ If Teranode has been offline for an extended period, consider the following:
 
 
 
-
-### 6.4. Monitoring Node status
-
-
-
-Teranode automatically sends logs and metrics to Prometheus. The data can be then visualised in Grafana dashboards.
-
-
-**TODO merge this with the prometheus section**
-**TODO - Do we have anything else to offer? Will the users have predefined dashboards anyhow?**
-
-
-
-### 6.5. How to Interact with the Node
+### 6.3. How to Interact with the Node
 
 
 
@@ -1549,11 +1002,7 @@ There are 2 primary ways to interact with the node, using the RPC Server, and us
 
 
 
-**TODO - Will ZMQ be finally included????????????**
-
-
-
-#### 6.5.1. Teranode RPC HTTP API
+#### 6.3.1. Teranode RPC HTTP API
 
 
 
@@ -1625,7 +1074,7 @@ For detailed information on each method's parameters and return values, refer to
 
 
 
-#### 6.5.2. Teranode Asset Server HTTP API
+#### 6.3.2. Teranode Asset Server HTTP API
 
 
 
@@ -1661,11 +1110,11 @@ Port: `8090` (configurable)
 - POST `/txs`
     - Retrieves multiple transactions (binary stream format)
     - The request body is a concatenated series of 32-byte transaction hashes:
-[32-byte hash][32-byte hash][32-byte hash]...
+      [32-byte hash][32-byte hash][32-byte hash]...
       - Example (in hex):
-123456789abcdef123456789abcdef123456789abcdef123456789abcdef1234
-567890abcdef123456789abcdef123456789abcdef123456789abcdef123456
-...
+      123456789abcdef123456789abcdef123456789abcdef123456789abcdef1234
+      567890abcdef123456789abcdef123456789abcdef123456789abcdef123456
+      ...
       - Each hash is exactly 32 bytes (256 bits)
       - No separators between hashes
       - The body can contain multiple hashes
@@ -1859,116 +1308,6 @@ Port: `8090` (configurable)
 Remember, the exact update process may vary depending on the specific changes in each new version. Always refer to the official update instructions provided with each new release for the most accurate and up-to-date information.
 
 
-
-#### 7.1.2. Kubernetes Custom Operator
-
-
-
-1. **Update the Operator**
-   First, update the Teranode operator to the latest version:
-
-   ```
-   operator-sdk run bundle <new-operator-bundle-image> --install-mode OwnNamespace -n <namespace>
-   ```
-
-   Replace `<new-operator-bundle-image>` with the latest operator bundle image URL and `<namespace>` with your Teranode namespace.
-
-
-
-2. **Update Custom Resource Definition**
-   If there are changes to the CRD, apply the new version:
-
-   ```
-   kubectl apply -f path/to/new/teranode_crd.yaml
-   ```
-
-
-
-3. **Update Cluster Resource**
-   Modify your Cluster custom resource file (`teranode_your_cluster.yaml`) to reflect any new fields or changes required by the new version.
-
-
-
-4. **Apply the Updated Cluster Resource**
-   ```
-   kubectl apply -f teranode_your_cluster.yaml
-   ```
-
-
-
-5. **Monitor the Update Process**
-   Watch the pods as they update:
-
-   ```
-   kubectl get pods -w
-   ```
-
-
-
-6. **Verify the Update**
-   Check that all pods are running and ready:
-
-   ```
-   kubectl get pods
-   ```
-
-
-
-7. **Check Logs for Any Issues**
-
-   ```
-   kubectl logs <pod-name>
-   ```
-
-   Repeat for each pod in your Teranode deployment.
-
-
-
-**Important Considerations:**
-* **Data Persistence**: The update process should not affect data stored in PersistentVolumes. However, it's always good practice to backup important data before updating.
-
-* **Configuration Changes**: Check the release notes or documentation for any required changes to ConfigMaps or Secrets.
-
-* **Custom Resource Changes**: Be aware of any new fields or changes in the Cluster custom resource structure.
-
-* **Database Migrations**: Some updates may require database schema changes. The operator handles this automatically.
-
-* **Rolling Updates**: The Kubernetes operator should handle rolling updates of the Teranode components, minimizing downtime. However, some updates may still require a brief service interruption.
-
-
-
-**After the update:**
-* Monitor the system closely for any unexpected behavior.
-
-* If you've set up Prometheus and Grafana, check the dashboards to verify that performance metrics are normal.
-
-* Verify that all services are communicating correctly and that the node is in sync with the network.
-
-
-
-**If you encounter any issues during or after the update:**
-* Check the specific pod logs for error messages:
-  ```
-  kubectl logs <pod-name>
-  ```
-
-* Check the operator logs for any issues during the update process:
-  ```
-  kubectl logs -l control-plane=controller-manager -n <operator-namespace>
-  ```
-
-* Consult the release notes for known issues and solutions.
-
-* If needed, you can rollback to the previous version by applying the old Cluster resource and downgrading the operator.
-
-* Reach out to the Teranode support team for assistance if problems persist.
-
-
-
-Remember, the exact update process may vary depending on the specific changes in each new version. Always refer to the official update instructions provided with each new release for the most accurate and up-to-date information.
-
-
-
 ### 7.2. Managing Disk Space
 
 
@@ -1997,6 +1336,7 @@ Key considerations and strategies:
 
 
 
+
 ### 7.3. Backing Up Data
 
 
@@ -2011,15 +1351,9 @@ Regular and secure backups are essential for protecting a Teranode installation,
 2. **Database Backups:**
     - PostgreSQL: Use `pg_dump` for regular database backups.
     - Aerospike: Utilize Aerospike's backup tools for consistent snapshots of the UTXO store.
-3. **Transaction and Subtree Stores:**
-    - Implement regular backups of the txstore, subtreestore and block/UTXO persister directories.
-    - Consider incremental backups to save space and time.
 
 
-
-Note: During the alpha testing phase, all Teranodes run in listener mode. Should the data be corrupted or lost, it is possible to simply wipe out the `data` folder and re-create the docker node. This is however not a best practice, nor a recommendation for future phases.
-
-
+Alternatively, consider downloading a fresh blockchain snapshot (UTXO set and blockchain dump) from the Teranode team for a quick restore.
 
 ## 8. Troubleshooting
 
@@ -2048,17 +1382,6 @@ This command lists all services defined in your docker-compose.yml file, along w
 
 
 
-**Kubernetes:**
-
-```bash
-kubectl get pods
-```
-This command lists all pods in the current namespace, showing their status and readiness.
-
-
-
-
-
 ##### 8.1.1.2. Detailed Container/Pod Health
 
 
@@ -2069,15 +1392,6 @@ This command lists all pods in the current namespace, showing their status and r
 docker inspect --format='{{json .State.Health}}' container_name
 ```
 Replace `container_name` with the name of your specific Teranode service container.
-
-
-
-**Kubernetes:**
-
-```bash
-kubectl describe pod <pod-name>
-```
-This provides detailed information about the pod, including its current state, recent events, and readiness probe results.
 
 
 
@@ -2102,34 +1416,6 @@ services:
 
 
 
-**Kubernetes:**
-In your Deployment or StatefulSet specification:
-
-```yaml
-spec:
-  template:
-    spec:
-      containers:
-      - name: ubsv-blockchain
-        ...
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8087
-          periodSeconds: 30
-          timeoutSeconds: 10
-          failureThreshold: 3
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8087
-          periodSeconds: 30
-          timeoutSeconds: 10
-          failureThreshold: 3
-          initialDelaySeconds: 40
-```
-
-
 
 ##### 8.1.1.4. Viewing Health Check Logs
 
@@ -2140,16 +1426,6 @@ spec:
 ```bash
 docker inspect --format='{{json .State.Health}}' container_name | jq
 ```
-
-
-
-**Kubernetes:**
-Health check results are typically logged in the pod events:
-
-```bash
-kubectl describe pod <pod-name>
-```
-Look for events related to readiness and liveness probes.
 
 
 
@@ -2165,20 +1441,7 @@ Look for events related to readiness and liveness probes.
   ```
 
 
-
-**Kubernetes:**
-
-* Use `kubectl top` to view resource usage:
-  ```bash
-  kubectl top pods
-  kubectl top nodes
-  ```
-
-
-
-For both environments:
-
-* Consider setting up Prometheus and Grafana for more comprehensive monitoring.
+* Consider using Prometheus and Grafana for comprehensive monitoring.
 * Look for services consuming unusually high resources.
 
 
@@ -2201,15 +1464,6 @@ docker-compose logs --tail=100  # View only the most recent logs
 
 
 
-**Kubernetes:**
-
-```bash
-kubectl logs -l app.kubernetes.io/part-of=teranode-operator
-kubectl logs -f -l app.kubernetes.io/part-of=teranode-operator  # Follow logs in real-time
-kubectl logs --tail=100 -l app.kubernetes.io/part-of=teranode-operator  # View only the most recent logs
-```
-
-
 
 ##### 8.1.3.2. Viewing Logs for Specific Microservices
 
@@ -2219,14 +1473,6 @@ kubectl logs --tail=100 -l app.kubernetes.io/part-of=teranode-operator  # View o
 
 ```bash
 docker-compose logs [service_name]
-```
-
-
-
-**Kubernetes:**
-
-```bash
-kubectl logs <pod-name>
 ```
 
 
@@ -2252,28 +1498,12 @@ kubectl logs <pod-name>
 
 
 
-**Kubernetes:**
-
-* Show timestamps:
-  ```bash
-  kubectl logs <pod-name> --timestamps=true
-  ```
-* Limit output:
-  ```bash
-  kubectl logs <pod-name> --tail=50
-  ```
-* Since time:
-  ```bash
-  kubectl logs <pod-name> --since-time="2023-07-01T00:00:00Z"
-  ```
-
-
 
 ##### 8.1.3.4. Checking Logs for Specific Teranode Microservices
 
 
 
-For both Docker Compose and Kubernetes, replace `[service_name]` or `<pod-name>` with the appropriate service or pod name:
+For Docker Compose, replace `[service_name]` with the appropriate service or pod name:
 
 * Propagation Service
 * Blockchain Service
@@ -2309,14 +1539,7 @@ docker-compose logs [service_name] > [service_name]_logs.txt
 
 
 
-**Kubernetes:**
-
-```bash
-kubectl logs -l app.kubernetes.io/part-of=teranode-operator > teranode_logs.txt
-kubectl logs <pod-name> > pod_logs.txt
-```
-
-Remember to replace placeholders like `[service_name]`, `<pod-name>`, and label selectors with the appropriate values for your Teranode setup.
+Remember to replace placeholders like `[service_name]`, and label selectors with the appropriate values for your Teranode setup.
 
 
 
@@ -2388,7 +1611,7 @@ While Docker Compose creates an isolated network for the Teranode services, some
 
 
 1. **Publicly Exposed Ports:**
-   Review the ports exposed in the Docker Compose or the Kubernetes operator configuration file(s) and ensure your firewall is configured to handle these appropriately:
+   Review the ports exposed in the Docker Compose configuration file(s) and ensure your firewall is configured to handle these appropriately:
     - `9292`: RPC Server. Open to receive RPC API requests.
 
     - `8090,8091`: Asset Server. Open for incoming HTTP and gRPC asset requests.
@@ -2478,7 +1701,7 @@ Before submitting a bug report, gather the following information:
     - Docker Compose version
 2. **Configuration Files**:
     - `settings_local.conf`
-    - Docker Compose and / or Kubernetes custom operator file
+    - Docker Compose file
 3. **System Resources**:
     - CPU usage
     - Memory usage
@@ -2494,34 +1717,16 @@ Before submitting a bug report, gather the following information:
 7. **Screenshots or Error Messages**:
     - Include any relevant visual information
 
-**10.3. Using the Log Collection Tool**
+**10.3. Submitting the Bug Report**
 
-To standardize and simplify the bug reporting process, we provide a log collection tool similar to Aerospike's `collect_logs`:
-
-1. Run the Teranode log collection tool:
-   ```
-   ./teranode_collect_logs.sh
-   ```
-   **TODO - Refine this once the tool really exists!!**
-
-2. This tool will automatically gather:
-    - Current Teranode settings
-    - Recent logs from all services
-    - System information
-    - Configuration files
-
-3. The tool will create a compressed file with all the collected information.
-
-**10.4. Submitting the Bug Report**
-
-1. Go to the Teranode GitHub repository: [**TODO - Insert Teranode GitHub URL**]
+1. Go to the Teranode GitHub repository.
 2. Click on "Issues" and then "New Issue"
 3. Select the "Bug Report" template
 4. Fill out the template with the information you've gathered
 5. Attach the compressed file from the log collection tool
 6. Submit the issue
 
-**10.5. Bug Report Template**
+**10.4. Bug Report Template**
 
 When creating a new issue, use the following template:
 
@@ -2553,7 +1758,6 @@ When creating a new issue, use the following template:
 [Any other information that might be relevant]
 
 ## Logs and Configuration
-[Mention that you've attached the output from teranode_collect_logs.sh]
 ```
 
 **10.6. After Submitting**
