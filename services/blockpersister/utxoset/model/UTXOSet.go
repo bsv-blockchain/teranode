@@ -1,12 +1,11 @@
 package model
 
 import (
-	"bufio"
 	"context"
 	"encoding/binary"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
-	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
@@ -80,39 +79,6 @@ func LoadUTXOSet(store blob.Store, hash chainhash.Hash) (*UTXOSet, error) {
 	}
 
 	return NewUTXOSetFromReader(ulogger.NewZeroLogger("UTXOSet"), reader)
-}
-
-func (us *UTXOSet) Persist(ctx context.Context, store blob.Store) error {
-	reader, writer := io.Pipe()
-
-	bufferedWriter := bufio.NewWriter(writer)
-
-	go func() {
-		defer func() {
-			// Flush the buffer and close the writer with error handling
-			if err := bufferedWriter.Flush(); err != nil {
-				us.logger.Errorf("error flushing writer: %v", err)
-			}
-
-			if err := writer.CloseWithError(nil); err != nil {
-				us.logger.Errorf("error closing writer: %v", err)
-			}
-		}()
-
-		if err := us.Write(bufferedWriter); err != nil {
-			us.logger.Errorf("error writing UTXO set: %v", err)
-			writer.CloseWithError(err)
-			return
-		}
-	}()
-
-	// Items with TTL get written to base folder, so we need to set the TTL here and will remove it when the file is written.
-	// With the lustre store, removing the TTL will move the file to the S3 folder which tells lustre to move it to an S3 bucket on AWS.
-	if err := store.SetFromReader(ctx, us.BlockHash[:], reader, options.WithFileExtension("utxoset"), options.WithTTL(24*time.Hour)); err != nil {
-		return errors.NewStorageError("[BlockPersister] error persisting utxodiff", err)
-	}
-
-	return store.SetTTL(ctx, us.BlockHash[:], 0, options.WithFileExtension("utxoset"))
 }
 
 func (us *UTXOSet) Write(w io.Writer) error {
