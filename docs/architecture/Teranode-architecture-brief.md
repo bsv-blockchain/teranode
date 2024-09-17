@@ -33,7 +33,7 @@ The diagram below shows all the different microservices, together with their int
 
 ## 2. Data Model and Propagation
 
-Teranode strictly adheres to the Bitcoin Whitepaper, while introducing ground-breaking enhancements.  Let's examine the differences between the BTC data model and the UBSV data model.
+Teranode strictly adheres to the Bitcoin Whitepaper, while introducing ground-breaking enhancements.  Let's examine the differences between the BTC data model and the Teranode data model.
 
 ### 2.1. Comparison of BTC to Teranode BSV
 
@@ -80,7 +80,7 @@ The Teranode network behaviour is characterized by its proactive approach, with 
 - **Transaction Meta Store**: Manages transaction metadata, which is crucial for various validation and assembly processes.
 - **Banlist Service**: Maintains a list of banned entities, safeguarding the network against malicious actors.
 
-The Teranode's architecture revolutionizes Bitcoin's scalability through a combination of unbounded block size, innovative data models (such as SubTrees), and a modular node system. These advancements facilitate high transaction throughput and efficient network operations, positioning UBSV as a scalable solution for future blockchain demands.
+The Teranode's architecture revolutionizes Bitcoin's scalability through a combination of unbounded block size, innovative data models (such as SubTrees), and a modular node system. These advancements facilitate high transaction throughput and efficient network operations, positioning Teranode as a scalable solution for future blockchain demands.
 
 -----
 © 2024 BSV Blockchain Org.

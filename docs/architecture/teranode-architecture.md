@@ -148,7 +148,7 @@ Let's see next how the Teranode BSV data model addresses these issues.
 
 Teranode Transactions (referred to as "Extended Transactions") include additional metadata to facilitate processing, and are broadcast to nodes as they occur.
 
-Teranode is expected to receive new transactions using the extended format only, with the legacy format not supported. A wallet will be required to create new transactions in extended format in order to communicate with UBSV.
+Teranode is expected to receive new transactions using the extended format only, with the legacy format not supported. A wallet will be required to create new transactions in extended format in order to communicate with Teranode.
 
 The Extended Format adds a marker to the transaction format:
 

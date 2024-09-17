@@ -1,6 +1,6 @@
 # 🛠️ Makefile Documentation
 
-This Makefile facilitates a variety of development and build tasks for the UBSV project.
+This Makefile facilitates a variety of development and build tasks for the Teranode project.
 
 - [🛠️ Makefile Documentation](#️-makefile-documentation)
   - [Environment Configuration](#environment-configuration)
@@ -32,7 +32,7 @@ This Makefile facilitates a variety of development and build tasks for the UBSV 
 4. **dev**: Runs both the `dev-dashboard` and `dev-ubsv` concurrently.
 5. **dev-ubsv**: Executes the Go project.
 6. **dev-dashboard**: Installs and runs the Node.js dashboard project located in `./ui/dashboard`.
-7. **build**: Builds both the dashboard and the UBSV.
+7. **build**: Builds both the dashboard and Teranode.
 8. **test**: Executes Go tests excluding the playground and PoC directories.
 9. **longtests**: Executes long-running Go tests.
 10. **testall**: Runs linting and long tests.
@@ -71,7 +71,7 @@ This Makefile facilitates a variety of development and build tasks for the UBSV 
 ### Building:
 
 - `build`: A composite task that runs `build-dashboard` and `build-ubsv`.
-- `build-ubsv`: Builds the main UBSV project with certain tags and linker flags.
+- `build-ubsv`: Builds the main Teranode project with certain tags and linker flags.
 - `build-dashboard`: Installs npm dependencies and builds a dashboard UI.
 
 Other specific build tasks for different components:
