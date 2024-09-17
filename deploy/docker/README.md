@@ -5,7 +5,7 @@ UBSV uses intermediate Docker layers in order increase efficiency of the overall
 The build process uses `Dockerfile_build_base`
 The application runtime environment uses `Dockerfile_run_base`
 
-When there are changes made to either of these files, a new image must be built and incorporated into the application. This is accomplished by enabling two separate GitHub Actions workflows within the ubsv GitHub repo. When these jobs are activated, any commits pushed to any branch will kick off the update process. These jobs will run independently of any other configured workflows. 
+When there are changes made to either of these files, a new image must be built and incorporated into the application. This is accomplished by enabling two separate GitHub Actions workflows within the ubsv GitHub repo. When these jobs are activated, any commits pushed to any branch will kick off the update process. These jobs will run independently of any other configured workflows.
 
 Steps to disable jobs:
 
