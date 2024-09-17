@@ -88,6 +88,7 @@ func (m *Miner) Health(ctx context.Context) (int, string, error) {
 func (m *Miner) Init(ctx context.Context) error {
 	m.MineBlocksNImmediatelyChan = make(chan int, 1)
 	m.MineBlocksNImmediatelyCancelChan = make(chan bool, 1)
+
 	return nil
 }
 
@@ -106,6 +107,7 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	go func() {
 		http.HandleFunc("/mine", m.handler)
+
 		err := server.ListenAndServe()
 		if err != nil {
 			m.logger.Fatalf("[Miner] Error starting http server: %v", err)
@@ -120,13 +122,14 @@ func (m *Miner) Start(ctx context.Context) error {
 
 	m.logger.Infof("[Miner] Starting miner with candidate interval: %ds, block found interval %ds", m.candidateRequestInterval, blockFoundInterval)
 
-	var miningCtx context.Context
-	var cancel context.CancelFunc
+	var (
+		miningCtx         context.Context
+		cancel            context.CancelFunc
+		previousCandidate *model.MiningCandidate
+	)
 
-	var previousCandidate *model.MiningCandidate
 	for {
 		select {
-
 		case <-ctx.Done():
 			m.logger.Infof("[Miner] Stopping miner as ctx is done")
 			if cancel != nil {
@@ -136,10 +139,10 @@ func (m *Miner) Start(ctx context.Context) error {
 
 		case blocks := <-m.MineBlocksNImmediatelyChan:
 			m.logger.Infof("[Miner] Mining %d blocks immediately - START", blocks)
-			err := m.mineBlocks(ctx, blocks)
-			if err != nil {
+			if err := m.mineBlocks(ctx, blocks); err != nil {
 				m.logger.Errorf("[Miner] %v", err)
 			}
+
 			m.logger.Infof("[Miner] Mining %d blocks immediately - DONE", blocks)
 
 		case <-m.candidateTimer.C:
@@ -152,18 +155,21 @@ func (m *Miner) Start(ctx context.Context) error {
 			miningCtx, cancel = context.WithCancel(ctx)
 			defer cancel() // Ensure cancel is called at the end of each iteration
 
-			var candidate *model.MiningCandidate
-			var err error
+			var (
+				candidate *model.MiningCandidate
+				err       error
+			)
 
 			candidate, err = m.blockAssemblyClient.GetMiningCandidate(miningCtx)
 			if err != nil {
-				m.logger.Errorf("error getting mining candidate: %v", err)
+				m.logger.Warnf("error getting mining candidate: %v", err)
 				continue
 			}
 
 			if previousCandidate != nil && bytes.Equal(candidate.Id, previousCandidate.Id) {
 				m.logger.Infof("[Miner] Got same candidate as previous, skipping %s", utils.ReverseAndHexEncodeSlice(candidate.Id))
 				m.candidateTimer.Reset(0)
+
 				continue
 			}
 			previousCandidate = candidate
@@ -188,7 +194,6 @@ func (m *Miner) Start(ctx context.Context) error {
 					m.candidateTimer.Reset(0)
 				}
 			}(miningCtx)
-
 		}
 	}
 }
@@ -212,7 +217,6 @@ func (m *Miner) handler(w http.ResponseWriter, r *http.Request) {
 				m.MineBlocksNImmediatelyCancelChan <- true
 			}
 		}
-
 	}
 }
 
@@ -221,16 +225,16 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 
 	m.logger.Debugf(candidate.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
-	candidateId := utils.ReverseAndHexEncodeSlice(candidate.Id)
+	candidateID := utils.ReverseAndHexEncodeSlice(candidate.Id)
 
 	solution, err := cpuminer.Mine(ctx, candidate)
 	if err != nil {
 		// use %w to wrap the error, so the caller can use errors.Is() to check for this specific error
-		return errors.NewProcessingError("error mining block on %s", candidateId, err)
+		return errors.NewProcessingError("error mining block on %s", candidateID, err)
 	}
 
 	if solution == nil {
-		return errors.NewProcessingError("mine: no solution found for %s", candidateId)
+		return errors.NewProcessingError("mine: no solution found for %s", candidateID)
 	}
 
 	initialBlockCount, _ := gocore.Config().GetInt("mine_initial_blocks_count", 200)
@@ -277,13 +281,13 @@ func (m *Miner) mine(ctx context.Context, candidate *model.MiningCandidate, wait
 	if err != nil {
 		_, err = retry.Retry(ctx, m.logger, func() (struct{}, error) {
 			return struct{}{}, m.blockAssemblyClient.SubmitMiningSolution(ctx, solution)
-		}, retry.WithMessage(fmt.Sprintf("[Miner] submitting mining solution: %s %s", candidateId, blockHash.String())))
+		}, retry.WithMessage(fmt.Sprintf("[Miner] submitting mining solution: %s %s", candidateID, blockHash.String())))
 
 		if err != nil {
 			// After all retries, if there's still an error, wrap and return it using %w
 			// to wrap the error, so the caller can use errors.Is() to check for this specific error
 			// TODO: 3 retries is hardcoded, as it is default in the retry package. This setting should be accessible.
-			return errors.NewServiceError("error submitting mining solution after 3 retries for job %s", candidateId, err)
+			return errors.NewServiceError("error submitting mining solution after 3 retries for job %s", candidateID, err)
 		}
 	}
 
@@ -319,14 +323,15 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 
 		m.logger.Debugf(candidate.Stringify(gocore.Config().GetBool("miner_verbose", false)))
 
-		candidateId := utils.ReverseAndHexEncodeSlice(candidate.Id)
+		candidateID := utils.ReverseAndHexEncodeSlice(candidate.Id)
 
 		solution, err := cpuminer.Mine(ctx, candidate)
 		if err != nil {
-			return errors.NewProcessingError("error mining block on %s", candidateId, err)
+			return errors.NewProcessingError("error mining block on %s", candidateID, err)
 		}
+
 		if solution == nil {
-			return errors.NewProcessingError("mineBlocks: no solution found for %s", candidateId)
+			return errors.NewProcessingError("mineBlocks: no solution found for %s", candidateID)
 		}
 
 		// Define retry delays
@@ -347,7 +352,7 @@ func (m *Miner) mineBlocks(ctx context.Context, blocks int) error {
 		if err != nil {
 			// After all retries, if there's still an error, wrap and return it using %w
 			// to wrap the error, so the caller can use errors.Is() to check for this specific error
-			return errors.NewServiceError("error submitting mining solution after %d retries for job %s", len(retryDelays), candidateId, err)
+			return errors.NewServiceError("error submitting mining solution after %d retries for job %s", len(retryDelays), candidateID, err)
 		}
 	}
 	return nil
@@ -367,7 +372,6 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 
 	for {
 		select {
-
 		case <-ctx.Done():
 			return nil, errors.NewContextCanceledError("[Miner] canceled mining on job %s", candidate.Id)
 
@@ -379,7 +383,6 @@ func (m *Miner) miningCandidate(ctx context.Context, blocks int, previousHash *c
 			return nil, errors.NewServiceError("[Miner] aborting mining on job %s", candidate.Id)
 
 		default:
-
 			// Define retry delays
 			retryDelays := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
 
