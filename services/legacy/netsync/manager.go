@@ -8,9 +8,6 @@ import (
 	"bytes"
 	"container/list"
 	"context"
-
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"math/rand/v2"
 	"net"
 	"sync"
@@ -34,6 +31,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const (
