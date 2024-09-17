@@ -1128,6 +1128,17 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		}
 	}
 
+	// by default, we do not process transactions
+	// only when we are in the running state we process transactions
+	processTransactions := false
+
+	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+	if err != nil {
+		sm.logger.Errorf("Failed to get current FSM state: %v", err)
+	} else if fsmState != nil && *fsmState == blockchain_api.FSMStateType_RUNNING {
+		processTransactions = true
+	}
+
 	// Request the advertised inventory if we don't already have it.  Also,
 	// request parent blocks of orphans if we receive one we already have.
 	// Finally, attempt to detect potential stalls due to long side chains
@@ -1136,7 +1147,11 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		// Ignore unsupported inventory types.
 		switch iv.Type {
 		case wire.InvTypeBlock:
-		// case wire.InvTypeTx: // SAO TODO - temporarily ignore transactions
+		case wire.InvTypeTx:
+			if !processTransactions {
+				// If we are not in running state, we are not interested in transactions
+				continue
+			}
 		default:
 			continue
 		}
