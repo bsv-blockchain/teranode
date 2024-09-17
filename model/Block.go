@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"runtime"
 	"sort"
 	"strconv"
@@ -484,23 +483,13 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 
 	// 12. Check that all transactions are in the valid order and blessed
 	//     Can only be done with a valid texMetaStore passed in
-
-	// TODO - Re-enable order checking in all cases
-	startLegacy := gocore.Config().GetBool("startLegacy", false)
-	if startLegacy {
-		log.Printf("WARNING: startLegacy env: %v", startLegacy)
-	}
-
-	// Horrible hack to allow see if this pod is running the legacy service
-	for _, cmd := range os.Args[1:] {
-		if cmd == "-legacy=1" {
-			startLegacy = true
-			log.Printf("WARNING: startLegacy flag: %v", startLegacy)
+	if txMetaStore != nil {
+		legacyLimitedBlockValidation := gocore.Config().GetBool("legacy_limitedBlockValidation", false)
+		if legacyLimitedBlockValidation {
+			log.Printf("WARNING: legacyLimitedBlockValidation env: %v", legacyLimitedBlockValidation)
 		}
-	}
 
-	if !startLegacy {
-		if txMetaStore != nil {
+		if !legacyLimitedBlockValidation {
 			err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats)
 			if err != nil {
 				return false, err
