@@ -114,7 +114,11 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseUrl s
 			err := ws.WriteMessage(websocket.TextMessage, data)
 			if err != nil {
 				deadClientCh <- ch
-				s.logger.Errorf("Failed to Send notification WS message: %v", err)
+				if err.Error() == "write: connection reset by peer" {
+					s.logger.Infof("Connection Lost: %v", err)
+				} else {
+					s.logger.Errorf("Failed to Send notification WS message: %v", err)
+				}
 				break
 			}
 		}
