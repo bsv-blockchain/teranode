@@ -24,10 +24,6 @@ func ValidLockTime(lockTime uint32, blockHeight uint32, blockTime uint32) error 
 		return nil
 	}
 
-	if blockHeight < LockTimeBIP113 {
-		return errors.NewLockTimeError("lock time (%d) as timestamp is greater than block time (%d)", lockTime, blockTime)
-	}
-
 	return errors.NewLockTimeError("lock time (%d) as timestamp is greater than median block time (%d)", lockTime, blockTime)
 }
 
