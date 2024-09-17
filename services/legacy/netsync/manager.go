@@ -829,12 +829,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
 
 			// Since we are current, we can tell FSM to transition to RUN
-			// Blockchain client will checkl if miner is registered, if so it will send Mine event, and FSM will transition to Mine
-			_, err = sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{})
-			if err != nil {
-				sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
+			// Blockchain client will check if miner is registered, if so it will send Mine event, and FSM will transition to Mine
+			if _, err = sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{}); err != nil {
+				sm.logger.Errorf("[Sync Manager] failed to send FSM RUN event %v", err)
 			}
-			//}
 		}
 	}
 
@@ -1098,9 +1096,8 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 
 	// If we are current, send a RUN event to the FSM
 	if sm.current() {
-		_, err := sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{})
-		if err != nil {
-			sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
+		if _, err := sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{}); err != nil {
+			sm.logger.Errorf("[Sync Manager] failed to send FSM RUN event %v", err)
 		}
 	}
 
