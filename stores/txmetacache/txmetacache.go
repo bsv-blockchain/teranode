@@ -131,18 +131,27 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 
 func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *meta.Data {
 	cachedBytes := make([]byte, 0)
-	_ = t.cache.Get(&cachedBytes, hash[:])
 
-	if len(cachedBytes) > 0 {
-		t.metrics.hits.Add(1)
-		txmetaData := meta.Data{}
-		meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
+		t.metrics.misses.Add(1)
+		t.logger.Warnf("txMetaCache miss for %s", hash.String())
 
-		return &txmetaData
+		return nil
 	}
-	t.metrics.misses.Add(1)
 
-	return nil
+	if len(cachedBytes) == 0 {
+		t.metrics.misses.Add(1)
+		t.logger.Warnf("txMetaCache empty for %s", hash.String())
+
+		return nil
+	}
+
+	t.metrics.hits.Add(1)
+
+	txmetaData := meta.Data{}
+	meta.NewMetaDataFromBytes(&cachedBytes, &txmetaData)
+
+	return &txmetaData
 }
 
 func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
@@ -156,6 +165,7 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 		txmetaData.BlockIDs = make([]uint32, 0) // this is expected behavior, needs to be non-nil
 		return &txmetaData, nil
 	}
+
 	t.metrics.misses.Add(1)
 
 	t.logger.Warnf("txMetaCache miss for %s", hash.String())
@@ -176,7 +186,10 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 
 func (t *TxMetaCache) Get(ctx context.Context, hash *chainhash.Hash, _ ...[]string) (*meta.Data, error) {
 	cachedBytes := make([]byte, 0)
-	_ = t.cache.Get(&cachedBytes, hash[:])
+	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
+		t.logger.Warnf("txMetaCache GET miss for %s", hash.String())
+	}
+
 	// if found in cache
 	if len(cachedBytes) > 0 {
 		t.metrics.hits.Add(1)

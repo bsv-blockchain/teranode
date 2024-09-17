@@ -170,12 +170,6 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s] transaction is coinbase", tx.TxID())
 	}
 
-	if tx.TxIDChainHash().String() == "f0ab5a900c6528edf6aca8d26c884b432e0e48f1db840cd77019cfa5d21867ea" {
-		var breakHere int
-		breakHere++
-		_ = breakHere
-	}
-
 	// validate the transaction in the validation service
 	// this should spend utxos, create the tx meta and create new utxos
 	// TODO return tx meta data
@@ -752,13 +746,6 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	missingTxs = make([]missingTx, 0, len(missingTxHashes))
 
 	for _, mTx := range missingTxHashes {
-		if mTx.Hash.String() == "f0ab5a900c6528edf6aca8d26c884b432e0e48f1db840cd77019cfa5d21867ea" || mTx.Hash.String() == "6f5d64dc1d4a5012d814714b18003e1c1140b3f55fd1ca9d7725c455405fa783" {
-			var breakHere int
-			breakHere++
-			u.logger.Warnf("breakHere")
-			_ = breakHere
-		}
-
 		txIdx, ok := subtreeLookupMap.Get(mTx.Hash)
 		if !ok {
 			return nil, errors.NewProcessingError("[getMissingTransactionsFromFile] missing transaction [%s]", mTx.Hash.String())
