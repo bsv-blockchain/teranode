@@ -1,0 +1,47 @@
+name: teranode-public-manifest
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: 'Repo name'
+        required: true
+        type: string
+      tag:
+        description: 'Deployment tag'
+        required: true
+        type: string
+      region:
+        description: 'AWS region'
+        required: true
+        type: string
+
+jobs:
+  build_manifest:
+    name: Build manifest
+    runs-on: ubuntu-latest
+    outputs:
+      registry: ${{ steps.login-ecr.outputs.registry }}
+    steps:
+      # Set up AWS CLI
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+      # Authenticate Docker to AWS ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          mask-password: true
+      # Status update
+      - name: Deployment message
+        run: echo "Deploying Manifest for tag ${{ inputs.tag }}"
+      # Create docker manifest
+      - uses: int128/docker-manifest-create-action@v1
+        with:
+          tags: ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}
+          suffixes: |
+            -amd64
+            -arm64

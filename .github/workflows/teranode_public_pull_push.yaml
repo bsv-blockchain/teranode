@@ -1,0 +1,71 @@
+---
+name: teranode-public-pull-push
+on:
+  workflow_call:
+    inputs:
+      src_repo:
+        description: 'Source repo name'
+        required: true
+        type: string
+      dest_repo:
+        description: 'Destination repo name'
+        required: true
+        type: string
+      tag:
+        description: 'Deployment tag'
+        required: true
+        type: string
+      region:
+        description: 'Source AWS region'
+        required: true
+        type: string
+      arch:
+        description: 'Architecture to build'
+        required: true
+        type: string
+
+jobs:
+  push-to-public-repo:
+    name: Push to teranode-public repo
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Set up AWS CLI
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      # Authenticate Docker to AWS ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          region: ${{ inputs.region }}
+          mask-password: true
+
+      # Pull image from source repo
+      - name: Pull from source repo
+        run: |
+          docker push \
+          ${{ steps.login-ecr.outputs.registry }}/${{ inputs.src_repo }}
+
+      # Tag image for destination
+      - name: Tag image for destination
+        run: |
+          docker tag \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.dest_repo }}:latest-${{ inputs.arch }}
+
+      # Push image to destination repo
+      - name: Push to destination repo
+        run: |
+          docker push \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.dest_repo }}:latest-${{ inputs.arch }}
