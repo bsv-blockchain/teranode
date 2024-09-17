@@ -54,6 +54,10 @@ func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error) {
 
 	e.Use(middleware.Gzip())
 
+	if e.Debug {
+		e.Use(customLoggerMiddleware(logger))
+	}
+
 	h := &HTTP{
 		logger:     logger,
 		repository: repo,
@@ -256,4 +260,27 @@ func (h *HTTP) Sign(resp *echo.Response, hash []byte) error {
 	}
 
 	return nil
+}
+
+// Middleware to log HTTP requests using the custom logger
+func customLoggerMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			start := time.Now()
+
+			// Process the request
+			err := next(c)
+
+			// Log response status and duration
+			status := c.Response().Status
+			duration := time.Since(start)
+
+			if err != nil {
+				c.Error(err) // Ensure Echo's default error handling
+			}
+
+			logger.Infof("http request: Method=%s, URI=%s, RemoteAddr=%s Status=%d, Duration=%v, err=%v", c.Request().Method, c.Request().RequestURI, c.Request().RemoteAddr, status, duration, err)
+			return err
+		}
+	}
 }

@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -53,7 +54,7 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 			return nil, errors.NewStorageError("failed to read data point", err)
 		}
 
-		blockDataPoints.DataPoints = append(blockDataPoints.DataPoints, dataPoint)
+		// blockDataPoints.DataPoints = append(blockDataPoints.DataPoints, dataPoint)
 	}
 
 	return blockDataPoints, nil
