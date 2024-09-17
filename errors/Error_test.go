@@ -10,6 +10,7 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -61,15 +62,15 @@ func Test_FmtErrorCustomError(t *testing.T) {
 
 // TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
 // TestUnwrapGRPC tests unwrapping a gRPC error back to a custom error.
-// func Test_WrapUnwrapGRPC(t *testing.T) {
-// err := NewNotFoundError("not found")
-// wrappedErr := WrapGRPC(err)
-// Unwrap
-// unwrappedErr := UnwrapGRPC(wrappedErr)
+func Test_WrapUnwrapGRPC(t *testing.T) {
+	err := NewNotFoundError("not found")
+	wrappedErr := WrapGRPC(err)
+	// Unwrap
+	unwrappedErr := UnwrapGRPC(wrappedErr)
 
-// Check error properties
-// require.True(t, unwrappedErr.Is(err))
-// }
+	// Check error properties
+	require.True(t, unwrappedErr.Is(err))
+}
 
 func Test_ErrorIs(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "not found")
@@ -137,62 +138,49 @@ func Test_ErrorEquality(t *testing.T) {
 	require.True(t, dsErr.Is(ErrTxInvalidDoubleSpend))
 }
 
-// TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
-// 	func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
-// 	// Define test cases
-// 	tests := []struct {
-// 		name         string
-// 		grpcError    *Error
-// 		expectedCode ERR
-// 		expectedMsg  string
-// 	}{
-// 		{
-// 			name:         "NotFound with details",
-// 			grpcError:    createGRPCError(ERR_NOT_FOUND, "not found detail"),
-// 			expectedCode: ERR_NOT_FOUND,
-// 			expectedMsg:  "not found detail",
-// 		},
-// 		{
-// 			name:         "Invalid tx with details",
-// 			grpcError:    createGRPCError(ERR_TX_INVALID_DOUBLE_SPEND, "double spend detail"),
-// 			expectedCode: ERR_TX_INVALID_DOUBLE_SPEND,
-// 			expectedMsg:  "double spend detail",
-// 		},
-// 		{
-// 			name:         "Invalid block with details",
-// 			grpcError:    createGRPCError(ERR_BLOCK_INVALID, "invalid block detail"),
-// 			expectedCode: ERR_BLOCK_INVALID,
-// 			expectedMsg:  "invalid block detail",
-// 		},
-// 		// {
-// 		//	name:         "InvalidArgument without details",
-// 		//	grpcError:    status.Error(codes.InvalidArgument, "invalid argument"),
-// 		//	expectedCode: ErrInvalidArgument.Code,
-// 		//	expectedMsg:  "invalid argument",
-// 		// },
-// 		//{
-// 		//	name:         "Unknown error",
-// 		//	grpcError:    status.Error(codes.Unknown, "unknown error"),
-// 		//	expectedCode: ErrUnknown.Code,
-// 		//	expectedMsg:  "unknown error",
-// 		// },
-// 	}
+func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
+	// Define test cases
+	tests := []struct {
+		name         string
+		grpcError    *Error
+		expectedCode ERR
+		expectedMsg  string
+	}{
+		{
+			name:         "NotFound with details",
+			grpcError:    createGRPCError(ERR_NOT_FOUND, "not found detail"),
+			expectedCode: ERR_NOT_FOUND,
+			expectedMsg:  "not found detail",
+		},
+		{
+			name:         "Invalid tx with details",
+			grpcError:    createGRPCError(ERR_TX_INVALID_DOUBLE_SPEND, "double spend detail"),
+			expectedCode: ERR_TX_INVALID_DOUBLE_SPEND,
+			expectedMsg:  "double spend detail",
+		},
+		{
+			name:         "Invalid block with details",
+			grpcError:    createGRPCError(ERR_BLOCK_INVALID, "invalid block detail"),
+			expectedCode: ERR_BLOCK_INVALID,
+			expectedMsg:  "invalid block detail",
+		},
+	}
 
-// 	// Run test cases
-// 	for _, tc := range tests {
-// 		t.Run(tc.name, func(t *testing.T) {
-// 			unwrappedErr := UnwrapGRPC(tc.grpcError)
+	// Run test cases
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			unwrappedErr := UnwrapGRPC(tc.grpcError)
 
-// 			if unwrappedErr.Code != tc.expectedCode {
-// 				t.Errorf("expected code %v; got %v", tc.expectedCode, unwrappedErr.Code)
-// 			}
+			if unwrappedErr.Code != tc.expectedCode {
+				t.Errorf("expected code %v; got %v", tc.expectedCode, unwrappedErr.Code)
+			}
 
-// 			if unwrappedErr.Message != tc.expectedMsg {
-// 				t.Errorf("expected message %q; got %q", tc.expectedMsg, unwrappedErr.Message)
-// 			}
-// 		})
-// 	}
-// }
+			if unwrappedErr.Message != tc.expectedMsg {
+				t.Errorf("expected message %q; got %q", tc.expectedMsg, unwrappedErr.Message)
+			}
+		})
+	}
+}
 
 func Test_UnwrapChain(t *testing.T) {
 	baseErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "base error")
@@ -209,13 +197,13 @@ func Test_UnwrapChain(t *testing.T) {
 }
 
 // TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
-// func Test_GRPCErrorsRoundTrip(t *testing.T) {
-// 	originalErr := New(ERR_BLOCK_NOT_FOUND, "not found")
-// 	wrappedGRPCError := WrapGRPC(originalErr)
-// 	unwrappedError := UnwrapGRPC(wrappedGRPCError)
+func Test_GRPCErrorsRoundTrip(t *testing.T) {
+	originalErr := New(ERR_BLOCK_NOT_FOUND, "not found")
+	wrappedGRPCError := WrapGRPC(originalErr)
+	unwrappedError := UnwrapGRPC(wrappedGRPCError)
 
-// 	require.True(t, unwrappedError.Is(originalErr))
-// }
+	require.True(t, unwrappedError.Is(originalErr))
+}
 
 // Helper function to create a gRPC error with UBSVError details
 func createGRPCError(code ERR, msg string) *Error {
@@ -282,129 +270,126 @@ func TestErrorString(t *testing.T) {
 	assert.Equal(t, "Error: STORAGE_ERROR (error code: 59), Message: failed to set data from reader [bucket:key], Wrapped err: Error: UNKNOWN, (error code: 0), Message: some error", thisErr.Error())
 }
 
-// TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
-// 	func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
-// 	// Base error is not a GRPC error, basic error
-// 	baseServiceErr := NewServiceError("block is invalid")
-// 	baseServiceErrWithNew := New(ERR_SERVICE_ERROR, "block is invalid")
-// 	require.True(t, baseServiceErrWithNew.Is(baseServiceErr))
-// 	require.True(t, baseServiceErr.Is(baseServiceErrWithNew))
+func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
+	// Base error is not a GRPC error, basic error
+	baseServiceErr := NewServiceError("block is invalid")
+	baseServiceErrWithNew := New(ERR_SERVICE_ERROR, "block is invalid")
+	require.True(t, baseServiceErrWithNew.Is(baseServiceErr))
+	require.True(t, baseServiceErr.Is(baseServiceErrWithNew))
 
-// 	baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
-// 	baseBlockInvalidErrWithNew := New(ERR_BLOCK_INVALID, "block is invalid")
-// 	require.True(t, baseBlockInvalidErr.Is(baseBlockInvalidErrWithNew))
+	baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
+	baseBlockInvalidErrWithNew := New(ERR_BLOCK_INVALID, "block is invalid")
+	require.True(t, baseBlockInvalidErr.Is(baseBlockInvalidErrWithNew))
 
-// 	wrappedOnce := WrapGRPC(baseServiceErr)
-// 	unwrapped := UnwrapGRPC(wrappedOnce)
+	wrappedOnce := WrapGRPC(baseServiceErr)
+	unwrapped := UnwrapGRPC(wrappedOnce)
 
-// 	require.True(t, baseServiceErr.Is(unwrapped))
-// 	require.True(t, unwrapped.Is(baseServiceErr))
+	require.True(t, baseServiceErr.Is(unwrapped))
+	require.True(t, unwrapped.Is(baseServiceErr))
 
-// 	// baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
-// 	fmtError := fmt.Errorf("can't query transaction meta from aerospike")
-// 	txInvalidErr := NewTxInvalidError("tx is invalid", fmtError)
-// 	level1BlockInvalidError := NewBlockInvalidError("block is invalid", txInvalidErr)
-// 	level2ServiceError := NewServiceError("service error", level1BlockInvalidError)
-// 	level3ProcessingError := NewProcessingError("processing error", level2ServiceError)
-// 	level4ContextError := NewContextError("context error", level3ProcessingError)
+	// baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
+	fmtError := fmt.Errorf("can't query transaction meta from aerospike")
+	txInvalidErr := NewTxInvalidError("tx is invalid", fmtError)
+	level1BlockInvalidError := NewBlockInvalidError("block is invalid", txInvalidErr)
+	level2ServiceError := NewServiceError("service error", level1BlockInvalidError)
+	level3ProcessingError := NewProcessingError("processing error", level2ServiceError)
+	level4ContextError := NewContextError("context error", level3ProcessingError)
 
-// 	// Test errors that are nested
-// 	// level 2 error recognizes all the errors in the chain
-// 	require.True(t, level2ServiceError.Is(fmtError))
-// 	require.True(t, level2ServiceError.Is(txInvalidErr))
-// 	require.True(t, level2ServiceError.Is(baseBlockInvalidErr))
-// 	require.True(t, level2ServiceError.Is(ErrServiceError))
-// 	require.True(t, level2ServiceError.Is(ErrBlockInvalid))
-// 	require.True(t, level2ServiceError.Is(ErrTxInvalid))
+	// Test errors that are nested
+	// level 2 error recognizes all the errors in the chain
+	require.True(t, level2ServiceError.Is(fmtError))
+	require.True(t, level2ServiceError.Is(txInvalidErr))
+	require.True(t, level2ServiceError.Is(baseBlockInvalidErr))
+	require.True(t, level2ServiceError.Is(ErrServiceError))
+	require.True(t, level2ServiceError.Is(ErrBlockInvalid))
+	require.True(t, level2ServiceError.Is(ErrTxInvalid))
 
-// 	// Test that we don't lose any data when wrapping and unwrapping GRPC
-// 	wrapped := WrapGRPC(level4ContextError)
-// 	unwrapped = UnwrapGRPC(wrapped)
+	// Test that we don't lose any data when wrapping and unwrapping GRPC
+	wrapped := WrapGRPC(level4ContextError)
+	unwrapped = UnwrapGRPC(wrapped)
 
-// 	// checks with the Is function
-// 	require.True(t, unwrapped.Is(fmtError))
-// 	require.True(t, unwrapped.Is(txInvalidErr))
-// 	require.True(t, unwrapped.Is(baseBlockInvalidErr))
-// 	require.True(t, unwrapped.Is(ErrServiceError))
-// 	require.True(t, unwrapped.Is(ErrBlockInvalid))
-// 	require.True(t, unwrapped.Is(ErrTxInvalid))
-// 	require.True(t, unwrapped.Is(level2ServiceError))
-// 	require.True(t, unwrapped.Is(level3ProcessingError))
-// 	require.True(t, unwrapped.Is(level4ContextError))
+	// checks with the Is function
+	require.True(t, unwrapped.Is(fmtError))
+	require.True(t, unwrapped.Is(txInvalidErr))
+	require.True(t, unwrapped.Is(baseBlockInvalidErr))
+	require.True(t, unwrapped.Is(ErrServiceError))
+	require.True(t, unwrapped.Is(ErrBlockInvalid))
+	require.True(t, unwrapped.Is(ErrTxInvalid))
+	require.True(t, unwrapped.Is(level2ServiceError))
+	require.True(t, unwrapped.Is(level3ProcessingError))
+	require.True(t, unwrapped.Is(level4ContextError))
 
-// 	// checks with the standard Is function
-// 	require.True(t, errors.Is(unwrapped, fmtError))
-// 	require.True(t, errors.Is(unwrapped, txInvalidErr))
-// 	require.True(t, errors.Is(unwrapped, baseBlockInvalidErr))
-// 	require.True(t, errors.Is(unwrapped, ErrServiceError))
-// 	require.True(t, errors.Is(unwrapped, ErrBlockInvalid))
-// 	require.True(t, errors.Is(unwrapped, ErrTxInvalid))
-// 	require.True(t, errors.Is(unwrapped, level2ServiceError))
-// 	require.True(t, errors.Is(unwrapped, level3ProcessingError))
-// 	require.True(t, errors.Is(unwrapped, level4ContextError))
-// }
+	// checks with the standard Is function
+	require.True(t, errors.Is(unwrapped, fmtError))
+	require.True(t, errors.Is(unwrapped, txInvalidErr))
+	require.True(t, errors.Is(unwrapped, baseBlockInvalidErr))
+	require.True(t, errors.Is(unwrapped, ErrServiceError))
+	require.True(t, errors.Is(unwrapped, ErrBlockInvalid))
+	require.True(t, errors.Is(unwrapped, ErrTxInvalid))
+	require.True(t, errors.Is(unwrapped, level2ServiceError))
+	require.True(t, errors.Is(unwrapped, level3ProcessingError))
+	require.True(t, errors.Is(unwrapped, level4ContextError))
+}
 
-// TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
-// func Test_UnwrapGRPCWithStandardError(t *testing.T) {
-// 	// Create a simple gRPC error with a standard error message
-// 	grpcErr := status.Error(codes.InvalidArgument, "Invalid argument provided")
+func Test_UnwrapGRPCWithStandardError(t *testing.T) {
+	// Create a simple gRPC error with a standard error message
+	grpcErr := status.Error(codes.InvalidArgument, "Invalid argument provided")
 
-// 	// Unwrap the gRPC error using the UnwrapGRPC function
-// 	unwrapped := UnwrapGRPC(grpcErr)
+	// Unwrap the gRPC error using the UnwrapGRPC function
+	unwrapped := UnwrapGRPC(grpcErr)
 
-// 	// Ensure that the unwrapped error is not nil
-// 	require.NotNil(t, unwrapped)
+	// Ensure that the unwrapped error is not nil
+	require.NotNil(t, unwrapped)
 
-// 	// Check that the unwrapped error contains the correct message and code
-// 	require.Equal(t, ERR_ERROR, unwrapped.Code)
-// 	require.Equal(t, "rpc error: code = InvalidArgument desc = Invalid argument provided", unwrapped.Message)
+	// Check that the unwrapped error contains the correct message and code
+	require.Equal(t, ERR_ERROR, unwrapped.Code)
+	require.Equal(t, "rpc error: code = InvalidArgument desc = Invalid argument provided", unwrapped.Message)
 
-// 	// Test with a different gRPC status code
-// 	grpcErrNotFound := status.Error(codes.NotFound, "Resource not found")
+	// Test with a different gRPC status code
+	grpcErrNotFound := status.Error(codes.NotFound, "Resource not found")
 
-// 	// Unwrap the gRPC error using the UnwrapGRPC function
-// 	unwrappedNotFound := UnwrapGRPC(grpcErrNotFound)
+	// Unwrap the gRPC error using the UnwrapGRPC function
+	unwrappedNotFound := UnwrapGRPC(grpcErrNotFound)
 
-// 	// Ensure that the unwrapped error is not nil
-// 	require.NotNil(t, unwrappedNotFound)
+	// Ensure that the unwrapped error is not nil
+	require.NotNil(t, unwrappedNotFound)
 
-// 	// Check that the unwrapped error contains the correct message and code
-// 	require.Equal(t, ERR_ERROR, unwrappedNotFound.Code)
-// 	require.Equal(t, "rpc error: code = NotFound desc = Resource not found", unwrappedNotFound.Message)
-// }
+	// Check that the unwrapped error contains the correct message and code
+	require.Equal(t, ERR_ERROR, unwrappedNotFound.Code)
+	require.Equal(t, "rpc error: code = NotFound desc = Resource not found", unwrappedNotFound.Message)
+}
 
-// TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
-// func Test_UnwrapGRPCWithStandardKENError(t *testing.T) {
-// 	// Create a standard error
-// 	standardErr := fmt.Errorf("invalid argument provided")
-// 	grpcErr := status.Error(codes.InvalidArgument, standardErr.Error())
+func Test_UnwrapGRPCWithStandardKENError(t *testing.T) {
+	// Create a standard error
+	standardErr := fmt.Errorf("invalid argument provided")
+	grpcErr := status.Error(codes.InvalidArgument, standardErr.Error())
 
-// 	// Wrap the standard error using WrapGRPC
-// 	wrappedErr := WrapGRPC(grpcErr)
-// 	// fmt.Println("WrapGRPC returned: ", wrappedErr)
+	// Wrap the standard error using WrapGRPC
+	wrappedErr := WrapGRPC(grpcErr)
+	// fmt.Println("WrapGRPC returned: ", wrappedErr)
 
-// 	// Unwrap the gRPC error using the UnwrapGRPC function
-// 	unwrapped := UnwrapGRPC(wrappedErr)
+	// Unwrap the gRPC error using the UnwrapGRPC function
+	unwrapped := UnwrapGRPC(wrappedErr)
 
-// 	// Ensure that the unwrapped error is not nil
-// 	require.NotNil(t, unwrapped)
+	// Ensure that the unwrapped error is not nil
+	require.NotNil(t, unwrapped)
 
-// 	// Check that the unwrapped error contains the correct message and code
-// 	require.Equal(t, ERR_ERROR, unwrapped.Code)
-// 	require.Equal(t, "rpc error: code = InvalidArgument desc = invalid argument provided", unwrapped.Message)
+	// Check that the unwrapped error contains the correct message and code
+	require.Equal(t, ERR_ERROR, unwrapped.Code)
+	require.Equal(t, "rpc error: code = InvalidArgument desc = invalid argument provided", unwrapped.Message)
 
-// 	// Test with a different gRPC status code and message
-// 	standardErrResourceExhausted := fmt.Errorf("Resource exhausted")
-// 	grpcErr = status.Error(codes.ResourceExhausted, standardErrResourceExhausted.Error())
-// 	wrappedErrResourceExhausted := WrapGRPC(grpcErr)
+	// Test with a different gRPC status code and message
+	standardErrResourceExhausted := fmt.Errorf("Resource exhausted")
+	grpcErr = status.Error(codes.ResourceExhausted, standardErrResourceExhausted.Error())
+	wrappedErrResourceExhausted := WrapGRPC(grpcErr)
 
-// 	// Unwrap the gRPC error using the UnwrapGRPC function
-// 	unwrappedResourceExhausted := UnwrapGRPC(wrappedErrResourceExhausted)
+	// Unwrap the gRPC error using the UnwrapGRPC function
+	unwrappedResourceExhausted := UnwrapGRPC(wrappedErrResourceExhausted)
 
-// 	// Ensure that the unwrapped error is not nil
-// 	require.NotNil(t, unwrappedResourceExhausted)
+	// Ensure that the unwrapped error is not nil
+	require.NotNil(t, unwrappedResourceExhausted)
 
-// 	// Check that the unwrapped error contains the correct message and code
-// 	require.Equal(t, ERR_ERROR, unwrappedResourceExhausted.Code)
-// 	require.Equal(t, "rpc error: code = ResourceExhausted desc = Resource exhausted", unwrappedResourceExhausted.Message)
-// }
+	// Check that the unwrapped error contains the correct message and code
+	require.Equal(t, ERR_ERROR, unwrappedResourceExhausted.Code)
+	require.Equal(t, "rpc error: code = ResourceExhausted desc = Resource exhausted", unwrappedResourceExhausted.Message)
+}
