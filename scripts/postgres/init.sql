@@ -218,3 +218,13 @@ DATABASE "mainnet-2"
   WITH OWNER = "mainnet-2"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
+
+CREATE ROLE "mainnet-3" LOGIN
+    PASSWORD 'mainnet-3'
+    NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+grant "mainnet-3" to postgres;
+CREATE
+    DATABASE "mainnet-3"
+    WITH OWNER = "mainnet-3"
+    ENCODING = 'UTF8'
+    CONNECTION LIMIT = -1;
