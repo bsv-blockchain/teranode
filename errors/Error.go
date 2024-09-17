@@ -169,7 +169,7 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	return returnErr
 }
 
-func WrapGRPC(err error) *Error {
+func WrapGRPC(err error) error {
 	if err == nil {
 		return nil
 	}
