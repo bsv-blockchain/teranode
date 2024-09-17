@@ -169,6 +169,9 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	return returnErr
 }
 
+// NOTE: GRPC generated code expects this to return error or nil - *Error seems to not evaluate to nil?
+// returning *Error seemed to break asset service endpoints that try to delegate to blockchain service
+// which in turn breaks the dashboard homepage
 func WrapGRPC(err error) error {
 	if err == nil {
 		return nil
