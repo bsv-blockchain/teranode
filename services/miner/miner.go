@@ -139,6 +139,7 @@ func (m *Miner) Start(ctx context.Context) error {
 
 		case blocks := <-m.MineBlocksNImmediatelyChan:
 			m.logger.Infof("[Miner] Mining %d blocks immediately - START", blocks)
+
 			if err := m.mineBlocks(ctx, blocks); err != nil {
 				m.logger.Errorf("[Miner] %v", err)
 			}

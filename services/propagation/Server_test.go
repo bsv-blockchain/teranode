@@ -2,17 +2,16 @@ package propagation
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/tracing"
 	"testing"
-
-	"github.com/libsv/go-bt/v2/chainhash"
 
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/require"
 )
 

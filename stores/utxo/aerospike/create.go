@@ -172,8 +172,10 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
 			if len(batch[idx].tx.Inputs) == 0 {
+				// This will also create the aerospike records
 				go s.storePartialTransactionExternally(batch[idx], binsToStore)
 			} else {
+				// This will also create the aerospike records
 				go s.storeTransactionExternally(batch[idx], binsToStore)
 			}
 
@@ -208,15 +210,13 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					wrapper.Bytes(),
 					options.WithFileExtension("outputs"),
 				); err != nil {
-					if errors.Is(err, errors.ErrBlobAlreadyExists) {
-						utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("error writing output to external store [%s]", bItem.txHash.String(), err))
-					} else {
+					if !errors.Is(err, errors.ErrBlobAlreadyExists) {
 						utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]", bItem.txHash.String(), err))
+						// NOOP for this record
+						batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+
+						continue
 					}
-
-					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
-
-					continue
 				}
 			} else {
 				// store the tx data externally, it is not in our aerospike record
@@ -226,15 +226,13 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					bItem.tx.ExtendedBytes(),
 					options.WithFileExtension("tx"),
 				); err != nil {
-					if errors.Is(err, errors.ErrBlobAlreadyExists) {
-						utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("error writing output to external store [%s]", bItem.txHash.String(), err))
-					} else {
+					if !errors.Is(err, errors.ErrBlobAlreadyExists) {
 						utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+						// NOOP for this record
+						batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+
+						continue
 					}
-
-					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
-
-					continue
 				}
 			}
 		}

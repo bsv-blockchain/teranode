@@ -6,11 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
@@ -240,3 +239,63 @@ func TestTtlCache(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	assert.Equal(t, 0, cache.Len())
 }
+
+// func TestCheckSubtree(t *testing.T) {
+// 	// Store the current working directory
+// 	wd, err := os.Getwd()
+// 	if err != nil {
+// 		t.Fatalf("Failed to get working directory: %v", err)
+// 	}
+
+// 	defer func() {
+// 		_ = os.Chdir(wd) // Ensure we change back to the original directory
+// 	}()
+
+// 	// Change to the root directory (adjust the path as needed)
+// 	err = os.Chdir("../..")
+// 	if err != nil {
+// 		t.Fatalf("Failed to change directory: %v", err)
+// 	}
+
+// 	initPrometheusMetrics()
+
+// 	var (
+// 		txStore          blob.Store
+// 		blockchainClient blockchain.ClientI
+// 		ctx              = context.Background()
+// 		logger           = ulogger.NewVerboseTestLogger(t)
+// 	)
+
+// 	subtreeStoreURL, err, _ := gocore.Config().GetURL("subtreestore")
+// 	require.NoError(t, err)
+
+// 	subtreeStore, err := blob.NewStore(logger, subtreeStoreURL)
+// 	require.NoError(t, err)
+
+// 	utxoStoreURL, err, _ := gocore.Config().GetURL("utxostore")
+// 	require.NoError(t, err)
+
+// 	utxoStore, err := utxofactory.NewStore(ctx, logger, utxoStoreURL, "legacy", false)
+// 	require.NoError(t, err)
+
+// 	validatorClient, err := validator.New(
+// 		ctx,
+// 		logger,
+// 		utxoStore,
+// 	)
+// 	require.NoError(t, err)
+
+// 	server := New(ctx, logger, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient)
+
+// 	hash, err := chainhash.NewHashFromStr("480339e760711e376a1b8bc512b5a29cdabfe7f6d17d221e62578b68a2d423fd")
+// 	require.NoError(t, err)
+
+// 	ok, err := server.checkSubtree(ctx, &subtreevalidation_api.CheckSubtreeRequest{
+// 		Hash:        hash[:],
+// 		BaseUrl:     "legacy",
+// 		BlockHeight: 659611,
+// 	})
+
+// 	require.NoError(t, err)
+// 	assert.True(t, ok)
+// }

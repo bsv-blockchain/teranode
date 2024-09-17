@@ -7,7 +7,6 @@ package addrmgr_test
 import (
 	"errors"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"net"
 	"reflect"
 	"testing"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/addrmgr"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 // naTest is used to describe a test to be performed against the NetAddressKey

@@ -1,11 +1,12 @@
 package legacy
 
 import (
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
 func TestExcessiveBlockSizeUserAgentComment(t *testing.T) {
