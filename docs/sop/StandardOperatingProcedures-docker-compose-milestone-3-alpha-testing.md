@@ -607,9 +607,9 @@ rpc_listener_url=:${RPC_PORT}
 
 
 
-**Step 6: Build the UBSV Image**
+**Step 6: Build the Teranode Image**
 
-1. Build the UBSV image using the provided Dockerfile:
+1. Build the Teranode image using the provided Dockerfile:
    ```
    docker-compose build ubsv-builder
    ```
@@ -652,7 +652,7 @@ rpc_listener_url=:${RPC_PORT}
 
 **Step 10: Interact with Teranode**
 
-- The various UBSV services expose different ports for interaction:
+- The various Teranode services expose different ports for interaction:
     - **Blockchain service**: Port 8082
     - **Asset service**: Ports 8090, 8091
     - **Miner service**: Ports 8089, 8092, 8099
@@ -1247,7 +1247,7 @@ Port: `8090` (configurable)
    docker-compose pull
    ```
 
-3. **Rebuild the UBSV Image**
+3. **Rebuild the Teranode Image**
    If there are changes to the Dockerfile or local build context:
 
    ```
