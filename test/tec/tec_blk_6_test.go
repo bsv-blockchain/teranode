@@ -14,6 +14,20 @@ type TECBlk6TestSuite struct {
 	setup.BitcoinTestSuite
 }
 
+func (suite *TECBlk6TestSuite) InitSuite() {
+	suite.SettingsMap = map[string]string{
+		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tec6",
+		"SETTINGS_CONTEXT_2": "docker.ci.ubsv1.tec6",
+		"SETTINGS_CONTEXT_3": "docker.ci.ubsv1.tec6",
+	}
+}
+
+const (
+	NodeURL1 = "http://localhost:18090"
+	NodeURL2 = "http://localhost:28090"
+	NodeURL3 = "http://localhost:38090"
+)
+
 func (suite *TECBlk6TestSuite) SetupTest() {
 	suite.SetupTestWithCustomComposeAndSettings(
 		suite.SettingsMap,

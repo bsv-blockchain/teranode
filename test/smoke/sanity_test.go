@@ -76,7 +76,8 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	if err != nil {
 		t.Errorf("Failed to request funds: %v", err)
 	}
-	fmt.Printf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
+
+	t.Logf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
 	_, err = txDistributor.SendTransaction(ctx, tx)
 	if err != nil {
@@ -142,8 +143,8 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		}
 
 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
-		logger.Infof("Tetsing on Best block header: %v", header[0].Hash())
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreUrl, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
+		logger.Infof("Testing on Best block header: %v", header[0].Hash())
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
 
 		if err != nil {
 			t.Errorf("error checking if tx exists in block: %v", err)
