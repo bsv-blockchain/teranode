@@ -134,7 +134,7 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash *chainhash.Hash) *me
 
 	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
 		t.metrics.misses.Add(1)
-		t.logger.Warnf("txMetaCache miss for %s", hash.String())
+		t.logger.Debugf("txMetaCache miss for %s", hash.String())
 
 		return nil
 	}
@@ -168,7 +168,7 @@ func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.
 
 	t.metrics.misses.Add(1)
 
-	t.logger.Warnf("txMetaCache miss for %s", hash.String())
+	t.logger.Debugf("txMetaCache miss for %s", hash.String())
 
 	txMeta, err := t.utxoStore.GetMeta(ctx, hash)
 	if err != nil {

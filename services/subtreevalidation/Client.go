@@ -45,11 +45,12 @@ func (s *Client) Health(ctx context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (s *Client) CheckSubtree(ctx context.Context, subtreeHash chainhash.Hash, baseURL string, blockHeight uint32) error {
+func (s *Client) CheckSubtree(ctx context.Context, subtreeHash chainhash.Hash, baseURL string, blockHeight uint32, blockHash *chainhash.Hash) error {
 	req := &subtreevalidation_api.CheckSubtreeRequest{
 		Hash:        subtreeHash[:],
 		BaseUrl:     baseURL,
 		BlockHeight: blockHeight,
+		BlockHash:   blockHash[:],
 	}
 
 	_, err := s.apiClient.CheckSubtree(ctx, req)
