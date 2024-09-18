@@ -574,7 +574,7 @@ CheckParentMined:
 	// validate all the subtrees in the block
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 
-	if err := u.validateBlockSubtrees(ctx, block, baseURL); err != nil {
+	if err = u.validateBlockSubtrees(ctx, block, baseURL); err != nil {
 		return err
 	}
 
