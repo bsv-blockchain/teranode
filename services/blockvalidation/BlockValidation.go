@@ -940,114 +940,43 @@ func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *mode
 		}
 	}
 
-	// missingSubtrees := make([]*chainhash.Hash, len(block.Subtrees))
 	for _, subtreeHash := range block.Subtrees {
-		subtreeHash := subtreeHash
-		// idx := idx
-		// first check all the subtrees exist or not in our store, in parallel, and gather what is missing
+		subtreeHash := subtreeHash // Create a new variable for each iteration to avoid data race
+
 		g.Go(func() error {
-			// get subtree from store
-			subtreeExists, err := u.GetSubtreeExists(gCtx, subtreeHash)
-			if err != nil {
-				return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
-			}
-
-			if !subtreeExists {
-				u.logger.Debugf("[validateBlockSubtrees][%s] instructing stv to check missing subtree [%s]", block.Hash().String(), subtreeHash.String())
-				// we don't have the subtree, so we need to process it in the subtree validation service
-				// this will also store the subtree in the store and block while the subtree is being processed
-				// we do this with a timeout of max 2 minutes
-				checkCtx, cancel := context.WithTimeout(gCtx, 2*time.Minute)
-				defer func() {
-					cancel()
-				}()
-
-				err = u.subtreeValidationClient.CheckSubtree(checkCtx, *subtreeHash, baseURL, blockHeight)
+			select {
+			case <-gCtx.Done():
+				return gCtx.Err()
+			default:
+				subtreeExists, err := u.GetSubtreeExists(gCtx, subtreeHash)
 				if err != nil {
-					return errors.NewServiceError("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service", subtreeHash.String(), err)
+					return errors.NewStorageError("[validateBlockSubtrees][%s] failed to check if subtree exists in store", subtreeHash.String(), err)
 				}
-			}
 
-			return nil
+				if !subtreeExists {
+					u.logger.Debugf("[validateBlockSubtrees][%s] instructing stv to check missing subtree [%s]", block.Hash().String(), subtreeHash.String())
+
+					checkCtx, cancel := context.WithTimeout(gCtx, 2*time.Minute)
+					defer cancel()
+
+					err = u.subtreeValidationClient.CheckSubtree(checkCtx, *subtreeHash, baseURL, blockHeight)
+					if err != nil {
+						return errors.NewServiceError("[validateBlockSubtrees][%s] failed to get subtree from subtree validation service", subtreeHash.String(), err)
+					}
+				}
+
+				return nil
+			}
 		})
 	}
 
 	err := g.Wait()
 
-	stat.NewStat("1. missingSubtrees").AddTime(start1)
+	stat.NewStat("1. validateBlockSubtrees").AddTime(start1)
 
 	if err != nil {
-		return err
+		return errors.NewError("[validateBlockSubtrees][%s] failed to validate subtrees", block.Hash().String(), err)
 	}
-
-	// count := 0
-	// for _, subtreeHash := range missingSubtrees {
-	//	if subtreeHash != nil {
-	//		count++
-	//	}
-	//}
-	//
-	// if count > 0 {
-	//	u.logger.Infof("[validateBlockSubtrees][%s] missing %d of %d subtrees", block.Hash().String(), count, len(block.Subtrees))
-	//}
-	//
-	// startGet := gocore.CurrentTime()
-	// statGet := stat.NewStat("1b. GetSubtrees")
-	//
-	// subtreeBytesMap := make(map[chainhash.Hash][]chainhash.Hash, len(missingSubtrees))
-	// subtreeBytesMapMu := sync.Mutex{}
-	// g, gCtx = errgroup.WithContext(spanCtx)
-	// g.SetLimit(validateBlockSubtreesConcurrency) // mostly IO bound, so double the limit
-	//
-	// for _, subtreeHash := range missingSubtrees {
-	//	// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
-	//	if subtreeHash != nil {
-	//		subtreeHash := subtreeHash
-	//		g.Go(func() error {
-	//			// get subtree from network over http using the baseUrl
-	//			txHashes, err := u.getSubtreeTxHashes(spanCtx, statGet, subtreeHash, baseUrl)
-	//			if err != nil {
-	//				return errors.NewError("[validateBlockSubtrees][%s] failed to get subtree from network", subtreeHash.String(), err)
-	//			}
-	//
-	//			subtreeBytesMapMu.Lock()
-	//			subtreeBytesMap[*subtreeHash] = txHashes
-	//			subtreeBytesMapMu.Unlock()
-	//
-	//			return nil
-	//		})
-	//	}
-	//}
-	// statGet.AddTime(startGet)
-	//
-	// if err = g.Wait(); err != nil {
-	//	return errors.NewError("[validateBlockSubtrees][%s] failed to get subtrees for block", block.Hash().String(), err)
-	// }
-
-	// start2 := gocore.CurrentTime()
-	// stat2 := stat.NewStat("2. validateBlockSubtrees")
-	//// validate the missing subtrees in series, transactions might rely on each other
-	// for _, subtreeHash := range missingSubtrees {
-	//	// since the missingSubtrees is a full slice with only the missing subtrees set, we need to check if it's nil
-	//	if subtreeHash != nil {
-	//		ctx1 := util.ContextWithStat(spanCtx, stat2)
-	//		v := ValidateSubtree{
-	//			SubtreeHash:   *subtreeHash,
-	//			BaseUrl:       baseUrl,
-	//			SubtreeHashes: subtreeBytesMap[*subtreeHash],
-	//			AllowFailFast: false,
-	//		}
-	//		wasDeduplicated, err := u.validateSubtree(ctx1, v)
-	//		if wasDeduplicated && err != nil && errors.Is(err, ubsverrors.ErrThresholdExceeded) {
-	//			// do it again, this time it will not be fail-fast mode
-	//			err = u.validateSubtreeInternal(ctx1, v)
-	//		}
-	//		if err != nil {
-	//			return errors.NewError("[validateBlockSubtrees][%s] invalid subtree found [%s]", block.Hash().String(), subtreeHash.String(), err)
-	//		}
-	//	}
-	// }
-	// stat2.AddTime(start2)
 
 	return nil
 }
