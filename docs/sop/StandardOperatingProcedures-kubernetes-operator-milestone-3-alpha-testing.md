@@ -77,6 +77,8 @@ Version 1.0.2 - Last Issued - 16 September 2024
 
 **BSV**: Bitcoin Satoshi Vision, the blockchain network that Teranode is designed to support.
 
+**BSVA Catalog**: A curated collection of operators and services provided by the Bitcoin SV Association for easy deployment of Teranode and related components.
+
 **Coinbase**: The first transaction in a block, which creates new coins as a reward for the miner.
 
 **Docker**: A platform used to develop, ship, and run applications inside containers.
@@ -94,6 +96,8 @@ Version 1.0.2 - Last Issued - 16 September 2024
 **Microservices**: An architectural style that structures an application as a collection of loosely coupled services.
 
 **Miner**: A node on the network that processes transactions and creates new blocks.
+
+**Operator Lifecycle Manager (OLM)**: A tool to help manage the lifecycle of operators in Kubernetes clusters.
 
 **P2P (Peer-to-Peer)**: A decentralized network where nodes can act as both clients and servers.
 
@@ -535,8 +539,10 @@ In the following sections, we will focus on the `Kubernetes operator` installati
 
 **Step 1: Prepare the Environment**
 
-1. Ensure you have the required tools installed (Go, kubectl).
+1. Ensure you have kubectl installed and configured to access your Kubernetes cluster.
+
 2. Verify access to your Kubernetes cluster:
+
    ```
    kubectl cluster-info
    ```
@@ -545,41 +551,47 @@ In the following sections, we will focus on the `Kubernetes operator` installati
 
 **Step 2: Install Operator Lifecycle Manager (OLM)**
 
-1. Install OLM if not already present:
+1. If OLM is not already installed, install it using the following command:
+
    ```
    operator-sdk olm install
    ```
 
 
 
-**Step 3: Install Teranode Operator**
+**Step 3: Create BSVA CatalogSource**
 
-1. Run the bundle to install the Teranode operator, using the URL provided by the Teranode team:
+1. Create the BSVA CatalogSource in the OLM namespace:
+
    ```
-   operator-sdk run bundle ${URL}/teranode-operator-bundle:v0.0.2 --install-mode OwnNamespace -n <namespace>
-   ```
-   Replace `<namespace>` with your desired namespace.
-
-
-
-**Step 4: Configure Teranode Cluster**
-
-1. Create a ConfigMap for shared configuration:
-   ```
-   kubectl create configmap shared-config --from-file=path/to/your/config/file
+   kubectl create -f olm/catalog-source.yaml
    ```
 
-2. Create a Cluster custom resource file (e.g., clone and modify `config/samples/teranode_v1alpha1_cluster.yaml` or any of the other available samples) with your desired configuration.
-
-3. Adjust resource requests and limits, storage classes, and ingress settings as needed.
 
 
+**Step 4: Create Target Namespace**
 
-**Step 5: Deploy Teranode Cluster**
+1. Create the namespace where you want to install the Teranode operator (this example uses 'teranode-operator'):
 
-1. Apply the Cluster custom resource created in point 4.2:
    ```
-   kubectl apply -f config/your_config/teranode_your_cluster.yaml
+   kubectl create namespace teranode-operator
+   ```
+
+
+
+**Step 5: Create OperatorGroup and Subscription**
+
+1. (Optional) If you're deploying to a namespace other than 'teranode-operator', modify the OperatorGroup to specify your installation namespace:
+
+   ```
+   echo "  - <your-namespace>" >> olm/og.yaml
+   ```
+
+2. Create the OperatorGroup and Subscription resources:
+
+   ```
+   kubectl create -f olm/og.yaml -n teranode-operator
+   kubectl create -f olm/subscription.yaml -n teranode-operator
    ```
 
 
@@ -662,32 +674,12 @@ In the following sections, we will focus on the `Kubernetes operator` installati
 
 
 
-**Step 11: Updating Teranode**
-
-1. To update the Teranode cluster, modify the Cluster custom resource and reapply:
-   ```
-   kubectl apply -f config/your_config/teranode_your_cluster.yaml
-   ```
-
-
-
-**Step 12: Uninstalling Teranode**
-
-1. Delete the Cluster custom resource:
-   ```
-   kubectl delete -f config/your_config/teranode_your_cluster.yaml
-   ```
-
-2. Uninstall the Teranode operator:
-   ```
-   operator-sdk cleanup teranode-operator
-   ```
-
-
-
 Additional Notes:
 
-- SharedPVCName represents a persistent volume shared across a number of services (Block Validation, Subtree Validation, Block Assembly, Asset Server). While the implementation of the storage is left at the user's discretion, the BSV Association has successfully tested using an AWS FSX for Lustre volume at high throughput, and it can be considered as a reliable option for any Teranode deployment.
+- You can also refer to the https://github.com/bitcoin-sv/teranode-operator repository for up to date instructions.
+- This installation uses the 'stable' channel of the BSVA Catalog, which includes automatic upgrades for minor releases.
+- To change the channel or upgrade policy, modify the `olm/subscription.yaml` file before creating the Subscription.
+- SharedPVCName represents a persistent volume shared across a number of services (Block Validation, Subtree Validation, Block Assembly, Asset Server, Block Persister, UTXO Persister). While the implementation of the storage is left at the user's discretion, the BSV Association has successfully tested using an AWS FSX for Lustre volume at high throughput, and it can be considered as a reliable option for any Teranode deployment. **TODO  https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes** - ReadWriteMany**
 - Ensure proper network policies and security contexts are in place for your Kubernetes environment.
 - Regularly back up any persistent data stored in PersistentVolumeClaims.
 - The Teranode operator manages the lifecycle of the Teranode services. Direct manipulation of the underlying resources is not recommended.
@@ -1330,82 +1322,72 @@ Port: `8090` (configurable)
 
 ### 7.1. Updating Teranode to a New Version
 
+With the BSVA Catalog installation method, updates are typically handled automatically for minor releases. However, for major version updates or to change the update policy, follow these steps:
 
-
-1. **Update the Operator**
-   First, update the Teranode operator to the latest version:
-
-   ```
-   operator-sdk run bundle <new-operator-bundle-image> --install-mode OwnNamespace -n <namespace>
-   ```
-
-   Replace `<new-operator-bundle-image>` with the latest operator bundle image URL and `<namespace>` with your Teranode namespace.
-
-
-
-2. **Update Custom Resource Definition**
-   If there are changes to the CRD, apply the new version:
+1. **Check Current Version**
 
    ```
-   kubectl apply -f path/to/new/teranode_crd.yaml
+   kubectl get csv -n teranode-operator
    ```
 
+2. **Update the Subscription**
 
-
-3. **Update Cluster Resource**
-   Modify your Cluster custom resource file (`teranode_your_cluster.yaml`) to reflect any new fields or changes required by the new version.
-
-
-
-4. **Apply the Updated Cluster Resource**
-   ```
-   kubectl apply -f teranode_your_cluster.yaml
-   ```
-
-
-
-5. **Monitor the Update Process**
-   Watch the pods as they update:
+   If you need to change the channel or update behavior, edit the subscription:
 
    ```
-   kubectl get pods -w
+   kubectl edit subscription teranode-operator -n teranode-operator
    ```
 
+   You can modify the
 
+   ```
+   channel
+   ```
 
-6. **Verify the Update**
+    or
+
+   ```
+   installPlanApproval
+   ```
+
+    fields as needed.
+
+3. **Monitor the Update Process**
+
+   Watch the ClusterServiceVersion (CSV) and pods as they update:
+
+   ```
+   kubectl get csv -n teranode-operator -w
+   kubectl get pods -n teranode-operator -w
+   ```
+
+4. **Verify the Update**
+
    Check that all pods are running and ready:
 
    ```
-   kubectl get pods
+   kubectl get pods -n teranode-operator
    ```
 
-
-
-7. **Check Logs for Any Issues**
+5. **Check Logs for Any Issues**
 
    ```
-   kubectl logs <pod-name>
+   kubectl logs deployment/teranode-operator-controller-manager -n teranode-operator
    ```
-
-   Repeat for each pod in your Teranode deployment.
 
 
 
 **Important Considerations:**
 * **Data Persistence**: The update process should not affect data stored in PersistentVolumes. However, it's always good practice to backup important data before updating.
-
 * **Configuration Changes**: Check the release notes or documentation for any required changes to ConfigMaps or Secrets.
-
 * **Custom Resource Changes**: Be aware of any new fields or changes in the Cluster custom resource structure.
-
 * **Database Migrations**: Some updates may require database schema changes. The operator handles this automatically.
-
-* **Rolling Updates**: The Kubernetes operator should handle rolling updates of the Teranode components, minimizing downtime. However, some updates may still require a brief service interruption.
+* Some updates may require manual intervention, especially for major version changes. Always refer to the official documentation for specific update instructions
 
 
 
 **After the update:**
+
 * Monitor the system closely for any unexpected behavior.
 
 * If you've set up Prometheus and Grafana, check the dashboards to verify that performance metrics are normal.
