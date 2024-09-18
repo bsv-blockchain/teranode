@@ -209,14 +209,12 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					bItem.txHash[:],
 					wrapper.Bytes(),
 					options.WithFileExtension("outputs"),
-				); err != nil {
-					if !errors.Is(err, errors.ErrBlobAlreadyExists) {
-						utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]", bItem.txHash.String(), err))
-						// NOOP for this record
-						batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing outputs to external store [%s]", bItem.txHash.String(), err))
+					// NOOP for this record
+					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
-						continue
-					}
+					continue
 				}
 			} else {
 				// store the tx data externally, it is not in our aerospike record
@@ -225,14 +223,12 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					bItem.txHash[:],
 					bItem.tx.ExtendedBytes(),
 					options.WithFileExtension("tx"),
-				); err != nil {
-					if !errors.Is(err, errors.ErrBlobAlreadyExists) {
-						utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
-						// NOOP for this record
-						batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
+				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+					// NOOP for this record
+					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
-						continue
-					}
+					continue
 				}
 			}
 		}
