@@ -17,19 +17,18 @@ import (
 )
 
 var (
-	txStore                 blob.Store
-	subtreeStore            blob.Store
-	blockStore              blob.Store
-	utxoStore               utxostore.Store
-	blockchainClient        blockchain.ClientI
-	validatorClient         validator.Interface
-	subtreeValidationClient subtreevalidation.Interface
-	blockValidationClient   blockvalidation.Interface
+	mainTxstore                 blob.Store
+	mainSubtreestore            blob.Store
+	mainBlockStore              blob.Store
+	mainUtxoStore               utxostore.Store
+	mainValidatorClient         validator.Interface
+	mainSubtreeValidationClient subtreevalidation.Interface
+	mainBlockValidationClient   blockvalidation.Interface
 )
 
 func getUtxoStore(ctx context.Context, logger ulogger.Logger) (utxostore.Store, error) {
-	if utxoStore != nil {
-		return utxoStore, nil
+	if mainUtxoStore != nil {
+		return mainUtxoStore, nil
 	}
 
 	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
@@ -39,50 +38,45 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) (utxostore.Store, 
 	if !found {
 		return nil, errors.NewConfigurationError("no utxostore setting found")
 	}
-	utxoStore, err = utxofactory.NewStore(ctx, logger, utxoStoreURL, "main")
+
+	mainUtxoStore, err = utxofactory.NewStore(ctx, logger, utxoStoreURL, "main")
 	if err != nil {
 		return nil, err
 	}
 
-	return utxoStore, nil
+	return mainUtxoStore, nil
 }
 
 func getSubtreeValidationClient(ctx context.Context, logger ulogger.Logger) (subtreevalidation.Interface, error) {
-	if subtreeValidationClient != nil {
-		return subtreeValidationClient, nil
+	if mainSubtreeValidationClient != nil {
+		return mainSubtreeValidationClient, nil
 	}
 
 	var err error
-	subtreeValidationClient, err = subtreevalidation.NewClient(ctx, logger, "main_stores")
+	mainSubtreeValidationClient, err = subtreevalidation.NewClient(ctx, logger, "main_stores")
 
-	return subtreeValidationClient, err
+	return mainSubtreeValidationClient, err
 }
 
 func getBlockValidationClient(ctx context.Context, logger ulogger.Logger) (blockvalidation.Interface, error) {
-	if blockValidationClient != nil {
-		return blockValidationClient, nil
+	if mainBlockValidationClient != nil {
+		return mainBlockValidationClient, nil
 	}
 
 	var err error
-	blockValidationClient, err = blockvalidation.NewClient(ctx, logger, "main_stores")
+	mainBlockValidationClient, err = blockvalidation.NewClient(ctx, logger, "main_stores")
 
-	return blockValidationClient, err
+	return mainBlockValidationClient, err
 }
 
-func getBlockchainClient(ctx context.Context, logger ulogger.Logger) (blockchain.ClientI, error) {
-	if blockchainClient != nil {
-		return blockchainClient, nil
-	}
-
-	var err error
-	blockchainClient, err = blockchain.NewClient(ctx, logger, "main_stores")
-
-	return blockchainClient, err
+func getBlockchainClient(ctx context.Context, logger ulogger.Logger, source string) (blockchain.ClientI, error) {
+	// don't use a global client, otherwise we don't know the source
+	return blockchain.NewClient(ctx, logger, source)
 }
 
 func getValidatorClient(ctx context.Context, logger ulogger.Logger) (validator.Interface, error) {
-	if validatorClient != nil {
-		return validatorClient, nil
+	if mainValidatorClient != nil {
+		return mainValidatorClient, nil
 	}
 
 	var err error
@@ -93,7 +87,8 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger) (validator.I
 		if err != nil {
 			return nil, errors.NewServiceError("could not create local validator client", err)
 		}
-		validatorClient, err = validator.New(ctx,
+
+		mainValidatorClient, err = validator.New(ctx,
 			logger,
 			utxoStore,
 		)
@@ -102,18 +97,18 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger) (validator.I
 		}
 
 	} else {
-		validatorClient, err = validator.NewClient(ctx, logger)
+		mainValidatorClient, err = validator.NewClient(ctx, logger)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create validator client", err)
 		}
 	}
 
-	return validatorClient, nil
+	return mainValidatorClient, nil
 }
 
 func getTxStore(logger ulogger.Logger) (blob.Store, error) {
-	if txStore != nil {
-		return txStore, nil
+	if mainTxstore != nil {
+		return mainTxstore, nil
 	}
 
 	txStoreUrl, err, found := gocore.Config().GetURL("txstore")
@@ -123,17 +118,18 @@ func getTxStore(logger ulogger.Logger) (blob.Store, error) {
 	if !found {
 		return nil, errors.NewConfigurationError("no txstore setting found")
 	}
-	txStore, err = blob.NewStore(logger, txStoreUrl)
+
+	mainTxstore, err = blob.NewStore(logger, txStoreUrl)
 	if err != nil {
 		return nil, errors.NewServiceError("could not create tx store", err)
 	}
 
-	return txStore, nil
+	return mainTxstore, nil
 }
 
 func getSubtreeStore(logger ulogger.Logger) (blob.Store, error) {
-	if subtreeStore != nil {
-		return subtreeStore, nil
+	if mainSubtreestore != nil {
+		return mainSubtreestore, nil
 	}
 
 	subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
@@ -143,17 +139,18 @@ func getSubtreeStore(logger ulogger.Logger) (blob.Store, error) {
 	if !found {
 		return nil, errors.NewConfigurationError("subtreestore config not found")
 	}
-	subtreeStore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithPrefixDirectory(10))
+
+	mainSubtreestore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithPrefixDirectory(10))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
 
-	return subtreeStore, nil
+	return mainSubtreestore, nil
 }
 
 func getBlockStore(logger ulogger.Logger) (blob.Store, error) {
-	if blockStore != nil {
-		return blockStore, nil
+	if mainBlockStore != nil {
+		return mainBlockStore, nil
 	}
 
 	blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
@@ -163,10 +160,11 @@ func getBlockStore(logger ulogger.Logger) (blob.Store, error) {
 	if !found {
 		return nil, errors.NewConfigurationError("blockstore config not found")
 	}
-	blockStore, err = blob.NewStore(logger, blockStoreUrl)
+
+	mainBlockStore, err = blob.NewStore(logger, blockStoreUrl)
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block store", err)
 	}
 
-	return blockStore, nil
+	return mainBlockStore, nil
 }

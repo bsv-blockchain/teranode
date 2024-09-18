@@ -54,7 +54,6 @@ type Blockchain struct {
 	blockKafkaProducer util.KafkaProducerI
 	stats              *gocore.Stat
 	finiteStateMachine *fsm.FSM
-	client             ClientI
 }
 
 // New will return a server instance with the logger stored within it
@@ -1148,10 +1147,6 @@ func safeClose[T any](ch chan T) {
 	}()
 
 	close(ch)
-}
-
-func (b *Blockchain) SetClient(client ClientI) {
-	b.client = client
 }
 
 func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {

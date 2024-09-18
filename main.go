@@ -154,14 +154,16 @@ func main() {
 		// close all the stores
 		//
 
-		if txStore != nil {
+		if mainTxstore != nil {
 			logger.Debugf("closing tx store")
-			_ = txStore.Close(shutdownCtx)
+
+			_ = mainTxstore.Close(shutdownCtx)
 		}
 
-		if subtreeStore != nil {
+		if mainSubtreestore != nil {
 			logger.Debugf("closing subtree store")
-			_ = subtreeStore.Close(shutdownCtx)
+
+			_ = mainSubtreestore.Close(shutdownCtx)
 		}
 	}()
 
@@ -266,8 +268,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 
 	// blockchain service
 	if startBlockchain {
-
-		var err error
 		blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
 		if err != nil || !found {
 			return err
@@ -276,32 +276,25 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
 		if err != nil {
 			return err
-
 		}
 
-		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, subtreeStore, utxoStore)
+		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, mainSubtreestore, mainUtxoStore)
 		if err != nil {
 			return err
-
 		}
 
-		if err := sm.AddService("BlockChainService", blockchainService); err != nil {
+		if err = sm.AddService("BlockChainService", blockchainService); err != nil {
 			return err
-
 		}
-	}
-
-	blockchainClient, err := blockchain.NewClient(ctx, logger, "main")
-	if err != nil {
-		panic(err)
-	}
-
-	if blockchainService != nil {
-		blockchainService.SetClient(blockchainClient)
 	}
 
 	// p2p server
 	if startP2P {
+		blockchainClient, err := getBlockchainClient(ctx, logger, "p2p")
+		if err != nil {
+			return err
+		}
+
 		p2pService, err := p2p.NewServer(ctx,
 			logger.New("P2P"),
 			blockchainClient,
@@ -322,25 +315,26 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		utxoStore, err := getUtxoStore(ctx, logger)
 		if err != nil {
 			return err
-
 		}
 
 		txStore, err := getTxStore(logger)
 		if err != nil {
 			return err
-
 		}
 
 		subtreeStore, err := getSubtreeStore(logger)
 		if err != nil {
 			return err
-
 		}
 
 		blockStore, err := getBlockStore(logger)
 		if err != nil {
 			return err
+		}
 
+		blockchainClient, err := getBlockchainClient(ctx, logger, "asset")
+		if err != nil {
+			return err
 		}
 
 		if err := sm.AddService("Asset", asset.NewServer(
@@ -357,6 +351,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 	}
 
 	if startRpc {
+		blockchainClient, err := getBlockchainClient(ctx, logger, "rpc")
+		if err != nil {
+			return err
+		}
+
 		rpcServer, err := rpc.NewServer(logger.New("rpc"), blockchainClient)
 		if err != nil {
 			return err
@@ -372,19 +371,21 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		blockStore, err := getBlockStore(logger)
 		if err != nil {
 			return err
-
 		}
 
 		subtreeStore, err := getSubtreeStore(logger)
 		if err != nil {
 			return err
-
 		}
 
 		utxoStore, err := getUtxoStore(ctx, logger)
 		if err != nil {
 			return err
+		}
 
+		blockchainClient, err := getBlockchainClient(ctx, logger, "blockpersister")
+		if err != nil {
+			return err
 		}
 
 		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
@@ -403,7 +404,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		blockStore, err := getBlockStore(logger)
 		if err != nil {
 			return err
+		}
 
+		blockchainClient, err := getBlockchainClient(ctx, logger, "utxopersister")
+		if err != nil {
+			return err
 		}
 
 		if err := sm.AddService("UTXOPersister", utxopersister.New(ctx,
@@ -422,19 +427,21 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			txStore, err := getTxStore(logger)
 			if err != nil {
 				return err
-
 			}
 
 			utxoStore, err := getUtxoStore(ctx, logger)
 			if err != nil {
 				return err
-
 			}
 
 			subtreeStore, err := getSubtreeStore(logger)
 			if err != nil {
 				return err
+			}
 
+			blockchainClient, err := getBlockchainClient(ctx, logger, "blockassembly")
+			if err != nil {
+				return err
 			}
 
 			if err = sm.AddService("BlockAssembly", blockassembly.New(
@@ -445,7 +452,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				blockchainClient,
 			)); err != nil {
 				return err
-
 			}
 		}
 	}
@@ -455,25 +461,26 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		subtreeStore, err := getSubtreeStore(logger)
 		if err != nil {
 			return err
-
 		}
 
 		txStore, err := getTxStore(logger)
 		if err != nil {
 			return err
-
 		}
 
 		utxoStore, err := getUtxoStore(ctx, logger)
 		if err != nil {
 			return err
-
 		}
 
 		validatorClient, err := getValidatorClient(ctx, logger)
 		if err != nil {
 			return err
+		}
 
+		blockchainClient, err := getBlockchainClient(ctx, logger, "subtreevalidation")
+		if err != nil {
+			return err
 		}
 
 		subtreeValidationService, err := subtreevalidation.New(ctx,
@@ -499,25 +506,26 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			subtreeStore, err := getSubtreeStore(logger)
 			if err != nil {
 				return err
-
 			}
 
 			txStore, err := getTxStore(logger)
 			if err != nil {
 				return err
-
 			}
 
 			utxoStore, err := getUtxoStore(ctx, logger)
 			if err != nil {
 				return err
-
 			}
 
 			validatorClient, err := getValidatorClient(ctx, logger)
 			if err != nil {
 				return err
+			}
 
+			blockchainClient, err := getBlockchainClient(ctx, logger, "blockvalidation")
+			if err != nil {
+				return err
 			}
 
 			if err = sm.AddService("Block Validation", blockvalidation.New(
@@ -529,7 +537,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				blockchainClient,
 			)); err != nil {
 				return err
-
 			}
 		}
 	}
@@ -540,7 +547,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			utxoStore, err := getUtxoStore(ctx, logger)
 			if err != nil {
 				return err
+			}
 
+			blockchainClient, err := getBlockchainClient(ctx, logger, "validator")
+			if err != nil {
+				return err
 			}
 
 			if err = sm.AddService("Validator", validator.NewServer(
@@ -549,13 +560,17 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				blockchainClient,
 			)); err != nil {
 				return err
-
 			}
 		}
 	}
 
 	// coinbase tracker server
 	if startCoinbase {
+		blockchainClient, err := getBlockchainClient(ctx, logger, "coinbase")
+		if err != nil {
+			return err
+		}
+
 		if err = sm.AddService("Coinbase", coinbase.New(
 			logger.New("coinB"),
 			blockchainClient,
@@ -566,6 +581,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 	}
 
 	if startFaucet {
+		blockchainClient, err := getBlockchainClient(ctx, logger, "faucet")
+		if err != nil {
+			return err
+		}
+
 		if err = sm.AddService("Faucet", faucet.New(
 			logger.New("faucet"),
 			blockchainClient,
@@ -582,19 +602,21 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			if gocore.Config().GetBool("propagation_use_dumb", false) {
 				if err := sm.AddService("PropagationServer", propagation.NewDumbPropagationServer()); err != nil {
 					return err
-
 				}
 			} else {
 				txStore, err := getTxStore(logger)
 				if err != nil {
 					return err
-
 				}
 
 				validatorClient, err := getValidatorClient(ctx, logger)
 				if err != nil {
 					return err
+				}
 
+				blockchainClient, err := getBlockchainClient(ctx, logger, "propagation")
+				if err != nil {
+					return err
 				}
 
 				if err = sm.AddService("PropagationServer", propagation.New(
@@ -604,7 +626,6 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 					blockchainClient,
 				)); err != nil {
 					return err
-
 				}
 			}
 		}
@@ -614,37 +635,31 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		subtreeStore, err := getSubtreeStore(logger)
 		if err != nil {
 			return err
-
 		}
 
 		utxoStore, err := getUtxoStore(ctx, logger)
 		if err != nil {
 			return err
-
 		}
 
 		validatorClient, err := getValidatorClient(ctx, logger)
 		if err != nil {
 			return err
-
 		}
 
-		blockchainClient, err := getBlockchainClient(ctx, logger)
+		blockchainClient, err := getBlockchainClient(ctx, logger, "legacy")
 		if err != nil {
 			return err
-
 		}
 
 		subtreeValidationClient, err := getSubtreeValidationClient(ctx, logger)
 		if err != nil {
 			return err
-
 		}
 
 		blockValidationClient, err := getBlockValidationClient(ctx, logger)
 		if err != nil {
 			return err
-
 		}
 
 		if err = sm.AddService("Legacy", legacy.New(
@@ -657,23 +672,26 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			blockValidationClient,
 		)); err != nil {
 			return err
-
 		}
 	}
 
 	if startMiner {
-		miner, err := miner.NewMiner(
+		blockchainClient, err := getBlockchainClient(ctx, logger, "miner")
+		if err != nil {
+			return err
+		}
+
+		minerService, err := miner.NewMiner(
 			ctx,
 			logger.New("miner"),
 			blockchainClient,
 		)
 		if err != nil {
 			return err
-
 		}
-		if err = sm.AddService("miner", miner); err != nil {
-			return err
 
+		if err = sm.AddService("miner", minerService); err != nil {
+			return err
 		}
 	}
 
