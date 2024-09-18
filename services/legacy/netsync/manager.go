@@ -1278,6 +1278,14 @@ out:
 		case <-ticker.C:
 			sm.handleCheckSyncPeer()
 		case m := <-sm.msgChan:
+			if sm.current() {
+				sm.logger.Infof("[SyncManager] Legacy reached current, sending RUN event to FSM")
+				_, err := sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{})
+				if err != nil {
+					sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
+				}
+			}
+
 			switch msg := m.(type) {
 			case *newPeerMsg:
 				sm.handleNewPeerMsg(msg.peer)
