@@ -368,6 +368,8 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 							aerospikePrometheusMetrics[prometheusKey].Add(float64(subStat))
 						case float64:
 							aerospikePrometheusMetrics[prometheusKey].Add(subStat)
+						case map[string]interface{}:
+							// ignore these for now - new histogram metrics
 						default:
 							logger.Debugf("Unknown type for aerospike stat %s: %T", subKey, subStat)
 						}
