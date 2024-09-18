@@ -27,7 +27,7 @@ on:
 jobs:
   push-to-public-repo:
     name: Push to teranode-public repo
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.arch == 'arm64' && fromJSON('[ "ubsv-runner-arm" ]') || fromJSON('[ "ubsv-runner" ]') }}
 
     steps:
       - uses: actions/checkout@v4
