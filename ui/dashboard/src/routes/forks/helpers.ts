@@ -88,11 +88,11 @@ function treeBoxes(selector, jsonData, orientation)
             currentLevel.forEach(function(node: any) {
                 if (!node.data?.miner || node.data?.miner?.match(currentMiner))
                     node.color = blue;
-                if (node.data?.miner?.match("m1"))
+                if (node.data?.miner?.endsWith("1"))
                     node.color = yellow;
-                if (node.data?.miner?.match("m2"))
+                if (node.data?.miner?.endsWith("2"))
                     node.color = green;
-                if (node.data?.miner?.match("m3"))
+                if (node.data?.miner?.endsWith("3"))
                     node.color = purple;
             });
         });
@@ -243,7 +243,7 @@ function treeBoxes(selector, jsonData, orientation)
                         console.error(e);
                     }
                 }
-                const date = new Date(d.data.timestamp * 1000);
+                const date = new Date(d.data.block_time);
 
                 // replace the hash in the url with the current hash
                 //const link = document.location.href.replace(/\/forks\/\?hash=.*/, `/forks/?hash=${d.data.hash}`);
