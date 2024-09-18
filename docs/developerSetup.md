@@ -1,6 +1,6 @@
 # 🖥 Developer Setup - Pre-requisites and Installation
 
-This guide assists you in setting up the UBSV node project on your machine. The below assumes you are running a recent version of Mac OS.
+This guide assists you in setting up the Teranode project on your machine. The below assumes you are running a recent version of Mac OS.
 
 
 1. [Install Go](#1-install-go)
