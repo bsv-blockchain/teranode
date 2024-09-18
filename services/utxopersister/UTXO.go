@@ -125,6 +125,7 @@ func (uw *UTXOWrapper) String() string {
 	for _, u := range uw.UTXOs {
 		s.WriteString(fmt.Sprintf("\t%v\n", u))
 	}
+
 	return s.String()
 }
 
