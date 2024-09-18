@@ -389,9 +389,18 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	}
 }
 
-func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper) error {
-	_, _, deferFn := tracing.StartTracing(ctx, "extendTransactions")
-	defer deferFn()
+func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper) (err error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "extendTransactions",
+		tracing.WithLogMessage(sm.logger, "[extendTransactions] called for block %s / height %d", block.Hash(), block.Height()),
+	)
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewProcessingError("recovered in extendTransactions: %v", r, err)
+		}
+
+		deferFn(err)
+	}()
 
 	outpointBatcherSize, _ := gocore.Config().GetInt("utxostore_outpointBatcherSize", 1024)
 	outpointBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_outpointBatcherConcurrency", 32)
@@ -426,9 +435,19 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 	return nil
 }
 
-func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper, subtree *util.Subtree, subtreeData *util.SubtreeData) error {
-	_, _, deferFn := tracing.StartTracing(ctx, "extendTransactions")
-	defer deferFn()
+func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper, subtree *util.Subtree, subtreeData *util.SubtreeData) (err error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "createSubtree",
+		tracing.WithLogMessage(sm.logger, "[createSubtree] called for subtree %s (block %s / height %d)", subtree.RootHash(), block.Hash(), block.Height()),
+	)
+
+	// Add a defer recover to catch any panics and log them
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewProcessingError("recovered in createSubtree: %v", r, err)
+		}
+
+		deferFn(err)
+	}()
 
 	for _, wireTx := range block.Transactions() {
 		txHash := *wireTx.Hash()
@@ -617,6 +636,7 @@ func (sm *SyncManager) extendTransaction(ctx context.Context, tx *bt.Tx, txMap m
 				}
 			}
 		}
+
 		return errors.NewProcessingError("failed to decorate previous outputs for tx %s", tx.TxIDChainHash(), err)
 	}
 
