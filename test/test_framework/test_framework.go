@@ -106,7 +106,7 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 			return errors.NewConfigurationError("no blockchain_grpcAddress setting found")
 		}
 
-		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, getHostAddress(blockchainGrpcAddress))
+		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, getHostAddress(blockchainGrpcAddress), "test")
 		if err != nil {
 			return errors.NewConfigurationError("error creating blockchain client %w", err)
 		}
