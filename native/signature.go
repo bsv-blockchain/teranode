@@ -3,10 +3,9 @@
 package native
 
 /*
-	#cgo CFLAGS: -I./include
 	#cgo LDFLAGS: -lsecp256k1
 	#include <stdlib.h>
-	#include <secp256k1.h>
+	#include <secp256k1/secp256k1.h>
 */
 import "C"
 import (

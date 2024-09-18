@@ -21,7 +21,7 @@ RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesourc
 
 # Install packages
 RUN apt-get update && \
-    apt-get install -y ca-certificates gnupg nodejs build-essential libsecp256k1-dev gcc-aarch64-linux-gnu && \
+    apt-get install -y ca-certificates gnupg nodejs build-essential gcc-aarch64-linux-gnu && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -30,7 +30,29 @@ RUN dpkg --add-architecture arm64
 
 # Add cross-compilation packages
 RUN apt-get update && \
-    apt-get install -y libsecp256k1-dev:arm64 libc6-dev-arm64-cross
+    apt-get install -y libc6-dev-arm64-cross
+
+# Install BDK package conditionning on architecture arm or amd
+WORKDIR /download
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        wget https://github.com/bitcoin-sv/bdk/releases/download/v1.2.0-beta/bdk-v1.2.0-beta-docker-x86_64-release.tar.gz \
+        && tar -xzvf bdk-v1.2.0-beta-docker-x86_64-release.tar.gz \
+        && mv bdk-v1.2.0-beta-docker-x86_64-release /usr/local/bdk-v1.2.0 \
+        && rm -fR /download/* ; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        wget https://github.com/bitcoin-sv/bdk/releases/download/v1.2.0-beta/bdk-v1.2.0-beta-docker-arm64-aarch64-release.tar.gz \
+        && tar -xzvf bdk-v1.2.0-beta-docker-arm64-aarch64-release.tar.gz \
+        && mv bdk-v1.2.0-beta-docker-arm64-aarch64-release /usr/local/bdk-v1.2.0 \
+        && rm -fR /download/* ; \
+    else \
+        echo "ERROR : unsupported architecture $ARCH"; \
+        exit 1; \
+    fi
+
+ENV BDK_INSTALL_ROOT=/usr/local/bdk-v1.2.0
+ENV CGO_LDFLAGS="-L${BDK_INSTALL_ROOT}/lib -L${BDK_INSTALL_ROOT}/bin ${CGO_LDFLAGS}"
+ENV CGO_CFLAGS="-I${BDK_INSTALL_ROOT}/include/core -I${BDK_INSTALL_ROOT}/include ${CGO_CFLAGS}"
 
 # Download all node dependencies for the dashboard, so Docker can cache them if the package.json and package-lock.json files are not changed
 WORKDIR /app/ui/dashboard

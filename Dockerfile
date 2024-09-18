@@ -47,7 +47,7 @@ FROM ${TARGETOS}-${TARGETARCH}
 WORKDIR /app
 
 COPY --from=0 /go/bin/dlv .
-COPY --from=0 /usr/lib/*-linux-gnu/libsecp256k1.so.0.0.0 .
+COPY --from=0 /usr/local/bdk-v1.2.0/bin/libGoBDK.so .
 
 COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs /app/certs
@@ -68,9 +68,6 @@ RUN ln -s ubsv.run utxopersister.run
 RUN ln -s ubsv.run seeder.run
 RUN ln -s ubsv.run bitcoin2utxoset.run
 RUN ln -s ubsv.run settings.run
-
-RUN ln -s libsecp256k1.so.0.0.0 libsecp256k1.so.0 && \
-  ln -s libsecp256k1.so.0.0.0 libsecp256k1.so
 
 ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 ENV PATH=/app:$PATH
