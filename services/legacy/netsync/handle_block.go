@@ -148,7 +148,6 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	}()
 
 	subtrees = make([]*chainhash.Hash, 0)
-	blockHeight := uint32(block.Height())
 
 	var subtree *util.Subtree
 
@@ -203,12 +202,12 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		if legacyMode {
 			// in legacy sync mode, we can process transactions in a block in parallel, but in reverse order
 			// first we create all the utxos, then we spend them
-			if err = sm.validateTransactionsLegacyMode(ctx, txMap, blockHeight); err != nil {
+			if err = sm.validateTransactionsLegacyMode(ctx, txMap, block); err != nil {
 				return nil, err
 			}
 		} else {
 			maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
-			sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, blockHeight)
+			sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, block)
 		}
 
 		var subtreeBytes []byte
@@ -243,7 +242,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.NewStorageError("failed to store subtree data", err)
 		}
 
-		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "legacy", blockHeight, block.Hash()); err != nil {
+		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "legacy", uint32(block.Height()), block.Hash()); err != nil {
 			return nil, errors.NewSubtreeError("failed to check subtree", err)
 		}
 
@@ -253,19 +252,19 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 	return subtrees, nil
 }
 
-func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) (err error) {
+func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactionsLegacyMode")
 	defer func() {
 		deferFn(err)
 	}()
 
-	if err = sm.createUtxos(ctx, txMap, blockHeight); err != nil {
+	if err = sm.createUtxos(ctx, txMap, block); err != nil {
 		return err
 	}
 
 	sm.logger.Infof("[validateTransactionsLegacyMode] created utxos with %d items", len(txMap))
 
-	if err = sm.preValidateTransactions(ctx, txMap, blockHeight); err != nil {
+	if err = sm.preValidateTransactions(ctx, txMap, block); err != nil {
 		sm.logger.Errorf("[validateTransactionsLegacyMode] failed to pre-validate transactions: %s", err)
 		return err
 	}
@@ -276,9 +275,16 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 // createUtxos creates all the utxos for the transactions in the block in parallel
 // before any spending is done. This only occurs in legacy mode when we assume the
 // block is valid.
-func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) (err error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "createUtxos")
+func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "createUtxos",
+		tracing.WithLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", block.Hash(), block.Height()),
+	)
+
 	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewProcessingError("recovered in createUtxos: %v", r, err)
+		}
+
 		deferFn(err)
 	}()
 
@@ -293,7 +299,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 		txHash := txHash
 
 		g.Go(func() error {
-			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].tx, blockHeight); err != nil {
+			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].tx, uint32(block.Height())); err != nil {
 				if errors.Is(err, errors.ErrTxAlreadyExists) {
 					sm.logger.Debugf("failed to create utxo for tx %s: %s", txHash.String(), err)
 				} else {
@@ -315,9 +321,16 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 
 // preValidateTransactions pre-validates all the transactions in the block before
 // sending them to subtree validation.
-func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, blockHeight uint32) (err error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions")
+func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions",
+		tracing.WithLogMessage(sm.logger, "[preValidateTransactions] called for block %s / height %d", block.Hash(), block.Height()),
+	)
+
 	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewProcessingError("recovered in preValidateTransactions: %v", r, err)
+		}
+
 		deferFn(err)
 	}()
 
@@ -335,7 +348,7 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 
 		g.Go(func() error {
 			// call the validator to validate the transaction, but skip the utxo creation
-			return sm.validationClient.Validate(gCtx, txMap[txHash].tx, blockHeight, validator.WithSkipUtxoCreation(true))
+			return sm.validationClient.Validate(gCtx, txMap[txHash].tx, uint32(block.Height()), validator.WithSkipUtxoCreation(true))
 		})
 	}
 
@@ -346,9 +359,18 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 // validateTransactions validates all the transactions in the block in parallel
 // per level. This is done to speed up subtree validation later on.
 // The levels indicate the number of parents in the block.
-func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, blockHeight uint32) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactions")
-	defer deferFn()
+func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, block *bsvutil.Block) (err error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "validateTransactions",
+		tracing.WithLogMessage(sm.logger, "[validateTransactions] called for block %s / height %d", block.Hash(), block.Height()),
+	)
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewProcessingError("recovered in validateTransactions: %v", r, err)
+		}
+
+		deferFn(err)
+	}()
 
 	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
 	spendBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_spendBatcherConcurrency", 32)
@@ -361,7 +383,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		if len(blockTxsPerLevel[i]) < 10 {
 			// if we have less than 10 transactions on a certain level, we can process them immediately by triggering the batcher
 			for txIdx := range blockTxsPerLevel[i] {
-				_ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], blockHeight)
+				_ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], uint32(block.Height()))
 			}
 
 			sm.validationClient.TriggerBatcher()
@@ -375,7 +397,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 
 				g.Go(func() error {
 					// send to validation, but only if the parent is not in the same block
-					_ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], blockHeight)
+					_ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], uint32(block.Height()))
 
 					return nil
 				})
@@ -387,6 +409,8 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 			deferLevelFn()
 		}
 	}
+
+	return nil
 }
 
 func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper) (err error) {
@@ -437,7 +461,7 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 
 func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper, subtree *util.Subtree, subtreeData *util.SubtreeData) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "createSubtree",
-		tracing.WithLogMessage(sm.logger, "[createSubtree] called for subtree %s (block %s / height %d)", subtree.RootHash(), block.Hash(), block.Height()),
+		tracing.WithLogMessage(sm.logger, "[createSubtree] called for block %s / height %d", block.Hash(), block.Height()),
 	)
 
 	// Add a defer recover to catch any panics and log them
@@ -474,6 +498,8 @@ func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, 
 			}
 		}
 	}
+
+	sm.logger.Infof("[createSubtree] created subtree %s for block %s / height %d", subtree.RootHash(), block.Hash(), block.Height())
 
 	return nil
 }
