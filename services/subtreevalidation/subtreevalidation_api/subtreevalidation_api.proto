@@ -25,6 +25,7 @@ message CheckSubtreeRequest {
   bytes hash = 1;
   string base_url = 2;
   uint32 block_height = 3;
+  bytes block_hash = 4;
 }
 
 // swagger:model CheckSubtreeResponse

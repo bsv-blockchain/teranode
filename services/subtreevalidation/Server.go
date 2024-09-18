@@ -316,7 +316,7 @@ func (u *Server) checkSubtree(ctx context.Context, request *subtreevalidation_ap
 	ctx, _, deferFn := tracing.StartTracing(ctx, "checkSubtree",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
-		tracing.WithDebugLogMessage(u.logger, "[checkSubtree] called for subtree %s (height %d)", utils.ReverseAndHexEncodeSlice(request.Hash), request.BlockHeight),
+		tracing.WithLogMessage(u.logger, "[checkSubtree] called for subtree %s (block %s / height %d)", utils.ReverseAndHexEncodeSlice(request.Hash), utils.ReverseAndHexEncodeSlice(request.BlockHash), request.BlockHeight),
 	)
 	defer func() {
 		deferFn(err)

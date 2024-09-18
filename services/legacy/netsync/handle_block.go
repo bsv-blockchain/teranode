@@ -243,7 +243,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.NewStorageError("failed to store subtree data", err)
 		}
 
-		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "legacy", blockHeight); err != nil {
+		if err = sm.subtreeValidation.CheckSubtree(ctx, *subtree.RootHash(), "legacy", blockHeight, block.Hash()); err != nil {
 			return nil, errors.NewSubtreeError("failed to check subtree", err)
 		}
 
