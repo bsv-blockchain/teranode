@@ -105,8 +105,9 @@ Additional logs can be produced when the node is run with the following environm
 
 ## 4. Running the Node in Production
 
-Please refer to the [Standard Operating Procedures](docs/sop/standardOperatingProcedures.md) for detailed instructions on how to run the node in production.
+Please refer to the [Standard Operating Procedures](docs/sop/StandardOperatingProcedures.md) for detailed instructions on how to run the node in production.
 
+Alternatively, you can explore a test environment setup with Docker Compose using the [Docker Compose Documentation](docs/sop/StandardOperatingProcedures-docker-compose-milestone-3-alpha-testing.md).
 
 ---
 
