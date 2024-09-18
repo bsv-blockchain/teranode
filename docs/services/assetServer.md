@@ -75,6 +75,8 @@ The Asset Server is composed of the following components:
 * **UTXO Store**: Provides UTXO data to the Asset Server.
 * **Blob Store**: Provides Subtree and Extended TX data to the Asset Server, referred here as Subtree Store and TX Store.
 * **Blockchain Server**: Provides blockchain data (blocks and block headers) to the Asset Server.
+* **Coinbase Service**: Provides Coinbase data to the Asset Server.
+
 
 
 Finally, note that the Asset Server benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
