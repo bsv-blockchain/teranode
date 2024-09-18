@@ -50,16 +50,11 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 		suite.T().Fatal(err)
 	}
 
-	// err = helper.Unzip("../../data.zip", "../../")
-	// if err != nil {
-	// 	suite.T().Fatalf("Failed to unzip data directory: %v", err)
-	// }
-
 	suite.T().Log("Initializing BitcoinTestFramework")
-	suite.Framework, err = helper.SetupBitcoinTestFramework(suite.ComposeFiles, suite.SettingsMap)
 
+	suite.Framework, err = helper.SetupBitcoinTestFramework(suite.ComposeFiles, suite.SettingsMap)
 	if err != nil {
-		suite.T().Fatal(err)
+		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
 	}
 
 	err = helper.WaitForBlockHeight(NodeURL1, 300, 180)
@@ -78,8 +73,9 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 		suite.T().Fatal(err)
 	}
 
+	err = suite.Framework.GetClientHandles()
 	if err != nil {
-		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
+		suite.T().Fatal(err)
 	}
 
 	suite.T().Log("BitcoinTestFramework setup completed")

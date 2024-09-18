@@ -29,7 +29,7 @@ type BitcoinTestFramework struct {
 }
 
 type BitcoinNode struct {
-	SETTINGS_CONTEXT    string
+	SettingsContext     string
 	CoinbaseClient      cb.Client
 	BlockchainClient    bc.ClientI
 	BlockassemblyClient ba.Client
@@ -37,15 +37,16 @@ type BitcoinNode struct {
 	BlockChainDB        blockchain_store.Store
 	Blockstore          blob.Store
 	SubtreeStore        blob.Store
-	BlockstoreUrl       *url.URL
+	BlockstoreURL       *url.URL
 	UtxoStore           *utxostore.Store
 	SubtreesKafkaURL    *url.URL
-	RPC_URL             string
+	RPCURL              string
 }
 
 func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
+
 	return &BitcoinTestFramework{
 		ComposeFilePaths: composeFilePaths,
 		Context:          context.Background(),
@@ -55,11 +56,9 @@ func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 
 func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 	var testRunMode, _ = gocore.Config().Get("test_run_mode", "ci")
-	logger := b.Logger
-
 	if testRunMode == "ci" {
-		// Start the nodes with docker-compose up operation
 		compose, err := tc.NewDockerCompose(b.ComposeFilePaths...)
+
 		if err != nil {
 			return err
 		}
@@ -68,122 +67,151 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 			return err
 		}
 
-		// Wait for the services to be ready
 		time.Sleep(30 * time.Second)
 
 		b.Compose = compose
+
+		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
+		for _, key := range order {
+			b.Nodes = append(b.Nodes, BitcoinNode{
+				SettingsContext: m[key],
+			})
+		}
 	}
 
-	order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
-	for _, key := range order {
-		b.Nodes = append(b.Nodes, BitcoinNode{
-			SETTINGS_CONTEXT: m[key],
-		})
-	}
+	return nil
+}
+
+// nolint: gocognit
+func (b *BitcoinTestFramework) GetClientHandles() error {
+	logger := b.Logger
 
 	for i, node := range b.Nodes {
-		coinbaseGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_grpcAddress.%s", node.SETTINGS_CONTEXT))
+		coinbaseGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_grpcAddress.%s", node.SettingsContext))
 		fmt.Println(coinbaseGrpcAddress)
+
 		if !ok {
 			return errors.NewConfigurationError("no coinbase_grpcAddress setting found")
 		}
+
 		coinbaseClient, err := cb.NewClientWithAddress(b.Context, logger, getHostAddress(coinbaseGrpcAddress))
 		if err != nil {
 			return errors.NewConfigurationError("error creating coinbase client %w", err)
 		}
+
 		b.Nodes[i].CoinbaseClient = *coinbaseClient
 
-		blockchainGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockchain_grpcAddress.%s", node.SETTINGS_CONTEXT))
+		blockchainGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockchain_grpcAddress.%s", node.SettingsContext))
 		if !ok {
 			return errors.NewConfigurationError("no blockchain_grpcAddress setting found")
 		}
+
 		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, getHostAddress(blockchainGrpcAddress))
 		if err != nil {
 			return errors.NewConfigurationError("error creating blockchain client %w", err)
 		}
+
 		b.Nodes[i].BlockchainClient = blockchainClient
 
-		blockassembly_grpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockassembly_grpcAddress.%s", node.SETTINGS_CONTEXT))
+		blockassemblyGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockassembly_grpcAddress.%s", node.SettingsContext))
 		if !ok {
 			return errors.NewConfigurationError("no blockassembly_grpcAddress setting found")
 		}
-		blockassemblyClient, err := ba.NewClientWithAddress(b.Context, logger, getHostAddress(blockassembly_grpcAddress))
+
+		blockassemblyClient, err := ba.NewClientWithAddress(b.Context, logger, getHostAddress(blockassemblyGrpcAddress))
 		if err != nil {
 			return errors.NewServiceError("error creating blockassembly client %w", err)
 		}
+
 		b.Nodes[i].BlockassemblyClient = *blockassemblyClient
 
-		propagation_grpcAddress, ok := gocore.Config().Get(fmt.Sprintf("propagation_grpcAddress.%s", node.SETTINGS_CONTEXT))
+		propagationGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("propagation_grpcAddress.%s", node.SettingsContext))
 		if !ok {
 			return errors.NewConfigurationError("no propagation_grpcAddress setting found")
 		}
-		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, getHostAddress(propagation_grpcAddress))
+
+		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, getHostAddress(propagationGrpcAddress))
 		if err != nil {
 			return errors.NewConfigurationError("error creating distributor client %w", err)
 		}
+
 		b.Nodes[i].DistributorClient = *distributorClient
 
-		subtreesKafkaUrl, err, ok := gocore.Config().GetURL(fmt.Sprintf("kafka_subtreesConfig.%s.run", node.SETTINGS_CONTEXT))
+		subtreesKafkaURL, err, ok := gocore.Config().GetURL(fmt.Sprintf("kafka_subtreesConfig.%s.run", node.SettingsContext))
 		if err != nil {
 			return errors.NewConfigurationError("no kafka_subtreesConfig setting found")
 		}
+
 		if !ok {
 			return errors.NewConfigurationError("no kafka_subtreesConfig setting found")
 		}
-		kafkaURL, _ := url.Parse(strings.Replace(subtreesKafkaUrl.String(), "kafka-shared", "localhost", 1))
+
+		kafkaURL, _ := url.Parse(strings.Replace(subtreesKafkaURL.String(), "kafka-shared", "localhost", 1))
 		kafkaURL, _ = url.Parse(strings.Replace(kafkaURL.String(), "9092", "19093", 1))
-
 		b.Nodes[i].SubtreesKafkaURL = kafkaURL
+		blockchainStoreURL, _, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s", node.SettingsContext))
 
-		blockchainStoreURL, _, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s", node.SETTINGS_CONTEXT))
 		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
 		if err != nil {
 			return errors.NewConfigurationError("error creating blockchain store %w", err)
 		}
+
 		b.Nodes[i].BlockChainDB = blockchainStore
 
-		blockStoreUrl, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.run", node.SETTINGS_CONTEXT))
+		blockStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.run", node.SettingsContext))
 		if err != nil {
 			return errors.NewConfigurationError("error getting blockstore url %w", err)
 		}
+
 		if !found {
 			return errors.NewConfigurationError("blockstore config not found")
 		}
-		blockStore, err := blob.NewStore(logger, blockStoreUrl)
+
+		blockStore, err := blob.NewStore(logger, blockStoreURL)
 		if err != nil {
 			return errors.NewConfigurationError("error creating blockstore %w", err)
 		}
-		b.Nodes[i].Blockstore = blockStore
-		b.Nodes[i].BlockstoreUrl = blockStoreUrl
 
-		subtreeStoreUrl, err, found := gocore.Config().GetURL(fmt.Sprintf("subtreestore.%s.run", node.SETTINGS_CONTEXT))
+		b.Nodes[i].Blockstore = blockStore
+		b.Nodes[i].BlockstoreURL = blockStoreURL
+
+		subtreeStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("subtreestore.%s.run", node.SettingsContext))
 		if err != nil {
 			return errors.NewConfigurationError("error getting subtreestore url %w", err)
 		}
+
 		if !found {
 			return errors.NewConfigurationError("subtreestore config not found")
 		}
-		subtreeStore, err := blob.NewStore(logger, subtreeStoreUrl)
+
+		subtreeStore, err := blob.NewStore(logger, subtreeStoreURL)
 		if err != nil {
 			return errors.NewConfigurationError("error creating subtreestore %w", err)
 		}
+
 		b.Nodes[i].SubtreeStore = subtreeStore
 
-		utxoStoreUrl, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SETTINGS_CONTEXT))
-		logger.Infof("utxoStoreUrl: %s", utxoStoreUrl.String())
-		b.Nodes[i].UtxoStore, _ = utxostore.New(b.Context, logger, utxoStoreUrl)
-		if err != nil {
-			return errors.NewConfigurationError("error creating utxostore %w", err)
-		}
+		// utxoStoreURL, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SettingsContext))
+		// if err != nil {
+		// 	return errors.NewConfigurationError("error creating utxostore %w", err)
+		// }
 
-		rpcUrl, ok := gocore.Config().Get(fmt.Sprintf("rpc_listener_url.%s", node.SETTINGS_CONTEXT))
-		//remove : from the prefix
-		rpcPort := strings.Replace(rpcUrl, ":", "", 1)
+		// logger.Infof("utxoStoreUrl: %s", utxoStoreURL.String())
+		// b.Nodes[i].UtxoStore, err = utxostore.New(b.Context, logger, utxoStoreURL)
+
+		// if err != nil {
+		// 	return errors.NewConfigurationError("error creating utxostore %w", err)
+		// }
+
+		rpcURL, ok := gocore.Config().Get(fmt.Sprintf("rpc_listener_url.%s", node.SettingsContext))
 		if !ok {
 			return errors.NewConfigurationError("no rpc_listener_url setting found")
 		}
-		b.Nodes[i].RPC_URL = fmt.Sprintf("http://localhost:%d%s", i+1, rpcPort)
+
+		rpcPort := strings.Replace(rpcURL, ":", "", 1)
+		b.Nodes[i].RPCURL = fmt.Sprintf("http://localhost:%d%s", i+1, rpcPort)
 	}
+
 	return nil
 }
 

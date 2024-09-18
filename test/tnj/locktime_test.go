@@ -173,7 +173,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
 
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreUrl, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
 		require.NoError(t, err)
 
 		if bl {
