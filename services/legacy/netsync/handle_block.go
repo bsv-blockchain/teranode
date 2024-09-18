@@ -144,6 +144,10 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 		),
 	)
 	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewProcessingError("recovered in prepareSubtrees: %v", r, err)
+		}
+
 		deferFn(err)
 	}()
 

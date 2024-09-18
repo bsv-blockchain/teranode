@@ -1,14 +1,11 @@
 package model
 
 import (
-	"context"
 	"encoding/binary"
 	"io"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -72,21 +69,13 @@ func NewUTXOSetFromReader(logger ulogger.Logger, r io.Reader) (*UTXOSet, error) 
 	return us, nil
 }
 
-func LoadUTXOSet(store blob.Store, hash chainhash.Hash) (*UTXOSet, error) {
-	reader, err := store.GetIoReader(context.Background(), hash[:], options.WithFileExtension("utxoset"))
-	if err != nil {
-		return nil, errors.NewStorageError("error getting reader", err)
-	}
-
-	return NewUTXOSetFromReader(ulogger.NewZeroLogger("UTXOSet"), reader)
-}
-
 func (us *UTXOSet) Write(w io.Writer) error {
 	if _, err := w.Write(us.BlockHash[:]); err != nil {
 		return errors.NewProcessingError("error writing block hash", err)
 	}
 
 	// Write the number of UTXOs
+	// nolint:gosec
 	if err := binary.Write(w, binary.LittleEndian, uint32(us.Current.Length())); err != nil {
 		return errors.NewProcessingError("error writing number of UTXOs", err)
 	}
