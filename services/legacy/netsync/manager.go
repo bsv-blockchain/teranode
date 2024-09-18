@@ -825,6 +825,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// if we're syncing the chain from scratch.
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
+		sm.logger.Infof("Peer %s reports new height %d, current %v", peer.Addr(), heightUpdate, sm.current())
 		if sm.current() { // used to check for isOrphan || sm.current()
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
 
