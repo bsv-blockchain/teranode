@@ -39,8 +39,6 @@ type Server struct {
 	stats            *gocore.Stat
 	ctx              context.Context
 	blockchainClient blockchain.ClientI
-
-	// fsmCurrentState atomic.Pointer[blockchain_api.FSMStateType]
 }
 
 // NewServer will return a server instance with the logger stored within it
@@ -97,38 +95,6 @@ func (v *Server) Start(ctx context.Context) error {
 		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
 		go v.startKafkaListener(ctx, kafkaURL)
 	}
-
-	//if v.blockchainClient != nil {
-	//	go func() {
-	//		for {
-	//			blockchainSubscription, err := v.blockchainClient.Subscribe(ctx, "validator")
-	//			if err != nil {
-	//				v.logger.Errorf("[Validator] failed to subscribe to blockchain: %s", err)
-	//
-	//				// backoff for 5 seconds and try again
-	//				time.Sleep(5 * time.Second)
-	//
-	//				continue
-	//			}
-	//
-	//			v.logger.Infof("[Validator] Subscribed to blockchain notifications")
-	//
-	//			for notification := range blockchainSubscription {
-	//				if notification == nil {
-	//					continue
-	//				}
-	//
-	//				if notification.Type == model.NotificationType_FSMState {
-	//					v.logger.Debugf("[Validator] NEW FSM state notification: %s", notification.Metadata.Metadata)
-	//					metadata := notification.Metadata.Metadata
-	//					newState := blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])
-	//					v.logger.Debugf("[Validator] FSM state notification set: %s", newState)
-	//					v.fsmCurrentState.Store(&newState)
-	//				}
-	//			}
-	//		}
-	//	}()
-	//}
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
