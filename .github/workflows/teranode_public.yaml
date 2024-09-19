@@ -5,7 +5,7 @@ on:
     # tags:
     #   - 'release-v*'
     branches:
-      - teranode_public_repo
+      - jeff/teranode_public_workflow
 
 env:
   ECR_REGION: eu-north-1
