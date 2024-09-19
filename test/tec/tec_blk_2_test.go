@@ -14,6 +14,14 @@ type TECBlk2TestSuite struct {
 	setup.BitcoinTestSuite
 }
 
+func (suite *TECBlk2TestSuite) InitSuite() {
+	suite.SettingsMap = map[string]string{
+		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tec2",
+		"SETTINGS_CONTEXT_2": "docker.ci.ubsv1.tec2",
+		"SETTINGS_CONTEXT_3": "docker.ci.ubsv1.tec2",
+	}
+}
+
 func (suite *TECBlk2TestSuite) SetupTest() {
 	suite.SetupTestWithCustomComposeAndSettings(
 		suite.SettingsMap,
