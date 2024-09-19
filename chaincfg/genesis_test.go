@@ -6,9 +6,13 @@ package chaincfg
 
 import (
 	"bytes"
+	"encoding/binary"
+	"encoding/hex"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/libsv/go-bt"
 )
 
 // TestGenesisBlock tests the genesis block of the main network for validity by
@@ -16,6 +20,7 @@ import (
 func TestGenesisBlock(t *testing.T) {
 	// Encode the genesis block to raw bytes.
 	var buf bytes.Buffer
+
 	err := MainNetParams.GenesisBlock.Serialize(&buf)
 	if err != nil {
 		t.Fatalf("TestGenesisBlock: %v", err)
@@ -42,6 +47,7 @@ func TestGenesisBlock(t *testing.T) {
 func TestRegTestGenesisBlock(t *testing.T) {
 	// Encode the genesis block to raw bytes.
 	var buf bytes.Buffer
+
 	err := RegressionNetParams.GenesisBlock.Serialize(&buf)
 	if err != nil {
 		t.Fatalf("TestRegTestGenesisBlock: %v", err)
@@ -69,6 +75,7 @@ func TestRegTestGenesisBlock(t *testing.T) {
 func TestTestNet3GenesisBlock(t *testing.T) {
 	// Encode the genesis block to raw bytes.
 	var buf bytes.Buffer
+
 	err := TestNet3Params.GenesisBlock.Serialize(&buf)
 	if err != nil {
 		t.Fatalf("TestTestNet3GenesisBlock: %v", err)
@@ -117,6 +124,86 @@ func TestTestNet3GenesisBlock(t *testing.T) {
 // 			spew.Sdump(SimNetParams.GenesisHash))
 // 	}
 // }
+
+func TestGenesisCoinbase(t *testing.T) {
+	expectedCoinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000"
+	gcb := MainNetParams.GenesisBlock.Transactions[0]
+
+	var buf bytes.Buffer
+	if err := gcb.Serialize(&buf); err != nil {
+		t.Fatalf("Failed to serialize genesis coinbase: %v", err)
+	}
+
+	serialized := hex.EncodeToString(buf.Bytes())
+
+	if expectedCoinbaseHex != serialized {
+		t.Fatalf("Genesis coinbase mismatch:\nexpected: %s\ngot:      %s", expectedCoinbaseHex, serialized)
+	}
+}
+
+func TestGenesisCoinbaseBytes(t *testing.T) {
+	expected := MainNetParams.GenesisBlock.Transactions[0].TxHash().String()
+	expectedCoinbaseHash := "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+
+	gcb := MainNetParams.GenesisBlock.Transactions[0]
+
+	var buf bytes.Buffer
+	if err := gcb.Serialize(&buf); err != nil {
+		t.Fatalf("Failed to serialize genesis coinbase: %v", err)
+	}
+
+	coinbaseTx, err := bt.NewTxFromBytes(buf.Bytes())
+	if err != nil {
+		t.Fatalf("Failed to create new tx from bytes: %v", err)
+	}
+
+	if coinbaseTx.GetTxID() != expected {
+		t.Fatalf("Genesis hash mismatch:\nexpected: %s\ngot:      %s", expected, coinbaseTx.GetTxID())
+	}
+
+	if expectedCoinbaseHash != coinbaseTx.GetTxID() {
+		t.Fatalf("Incorrect genesis coinbase txid.\nexpected: %s\ngot:	%s", expectedCoinbaseHash, coinbaseTx.GetTxID())
+	}
+}
+func TestGenesisBytesFromModelBlock(t *testing.T) {
+	expectedPrevBlockHash := "0000000000000000000000000000000000000000000000000000000000000000"
+
+	wireGenesisBlock := MainNetParams.GenesisBlock
+
+	genesisBlock, err := model.NewBlockFromMsgBlock(wireGenesisBlock)
+	if err != nil {
+		t.Fatalf("Failed to create new block from bytes: %v", err)
+	}
+
+	if genesisBlock.Header.HashPrevBlock.String() != expectedPrevBlockHash {
+		t.Fatalf("Genesis hash mismatch:\nexpected: %s\ngot:      %s", expectedPrevBlockHash, genesisBlock.Header.HashPrevBlock.String())
+	}
+
+	bitsBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(bitsBytes, wireGenesisBlock.Header.Bits)
+
+	nbits, err := model.NewNBitFromSlice(bitsBytes)
+	if err != nil {
+		t.Fatalf("failed to create NBit from Bits: %v", err)
+	}
+
+	if genesisBlock.Header.Bits != *nbits {
+		t.Fatalf("Genesis hash mismatch:\nexpected: %s\ngot:      %s", expectedPrevBlockHash, genesisBlock.Header.HashPrevBlock.String())
+	}
+
+	// modelBlockBytes, err := genesisBlock.Bytes()
+	// if err != nil {
+	// 	t.Fatalf("error getting genesisBlock bytes %v", err)
+	// }
+
+	// var wiredBlockBuf bytes.Buffer
+	// _ = wireGenesisBlock.Serialize(&wiredBlockBuf)
+	// wiredBlockBytes := wiredBlockBuf.Bytes()
+
+	// if !bytes.Equal(modelBlockBytes, wiredBlockBytes) {
+	// 	t.Fatalf("expected: %x\ngot: %x\n", wiredBlockBytes, modelBlockBytes)
+	// }
+}
 
 // genesisBlockBytes are the wire encoded bytes for the genesis block of the
 // main network as of protocol version 60002.

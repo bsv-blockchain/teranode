@@ -35,15 +35,18 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	defer deferFn()
 
 	c := cmd.(*btcjson.GetBlockCmd)
+
 	ch, err := chainhash.NewHashFromStr(c.Hash)
 	if err != nil {
 		return nil, rpcDecodeHexError(c.Hash)
 	}
+
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlock(ctx, ch)
 	if err != nil {
 		return nil, err
 	}
+
 	if b == nil {
 		return nil, &btcjson.RPCError{
 			Code:    btcjson.ErrRPCBlockNotFound,
@@ -57,6 +60,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	if err != nil {
 		return nil, err
 	}
+
 	if *c.Verbosity == 0 {
 		// Generate the JSON object and return it.
 		return hex.EncodeToString(blkBytes), nil
@@ -79,6 +83,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		// 	params      = s.cfg.ChainParams
 		// 	blockHeader = &blk.MsgBlock().Header
 	)
+
 	diff, _ := b.Header.Bits.CalculateDifficulty().Float64()
 
 	baseBlockReply := &btcjson.GetBlockBaseVerboseResult{
@@ -94,7 +99,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		Size:          int32(len(blkBytes)),
 		Bits:          b.Header.Bits.String(),
 		Difficulty:    diff,
-		NextHash:      string(nextBlock.Hash().String()),
+		NextHash:      nextBlock.Hash().String(),
 	}
 
 	// TODO: we can't add the txs to the block as there could be too many.
@@ -150,6 +155,7 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 	if err != nil {
 		return nil, err
 	}
+
 	hash := bh.Hash()
 
 	return hash.String(), nil
@@ -191,6 +197,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 		if c.LockTime != nil && *c.LockTime != 0 {
 			txIn.Sequence = wire.MaxTxInSequenceNum - 1
 		}
+
 		mtx.AddTxIn(txIn)
 	}
 
@@ -287,6 +294,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	if len(hexStr)%2 != 0 {
 		hexStr = "0" + hexStr
 	}
+
 	serializedTx, err := hex.DecodeString(hexStr)
 
 	if err != nil {
@@ -301,6 +309,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 			Message: "TX rejected: " + err.Error(),
 		}
 	}
+
 	s.logger.Debugf("tx to send: %v", tx)
 
 	d, err := distributor.NewDistributor(context.Background(), s.logger)
@@ -317,7 +326,6 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	}
 
 	return res, nil
-
 }
 
 // handleGenerate handles generate commands.
@@ -328,7 +336,20 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		tracing.WithHistogram(prometheusHandleGenerate),
 		tracing.WithLogMessage(s.logger, "[handleGenerate] called for %d blocks", c.NumBlocks),
 	)
+
 	defer deferFn()
+
+	// Respond with an error if there's virtually 0 chance of mining a block
+	// with the CPU.
+	if !s.chainParams.GenerateSupported {
+		return nil, &btcjson.RPCError{
+			Code: btcjson.ErrRPCDifficulty,
+			Message: fmt.Sprintf("No support for `generate` on "+
+				"the current network, %s, as it's unlikely to "+
+				"be possible to mine a block with the CPU.",
+				s.chainParams.Net),
+		}
+	}
 
 	if c.NumBlocks == 0 {
 		return nil, &btcjson.RPCError{
@@ -337,16 +358,18 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 	}
 
-	minerHttpPort, ok := gocore.Config().GetInt("MINER_HTTP_PORT")
+	minerHTTPPort, ok := gocore.Config().GetInt("MINER_HTTP_PORT")
 	if !ok {
 		s.logger.Warnf("MINER_HTTP_PORT not set in config")
+
 		return nil, &btcjson.RPCError{
 			Code:    btcjson.ErrRPCMisc,
 			Message: "Can't contact miner",
 		}
 	}
-	if minerHttpPort < 0 || minerHttpPort > 65535 {
-		return nil, errors.NewInvalidArgumentError("Invalid port number: %d", minerHttpPort)
+
+	if minerHTTPPort < 0 || minerHTTPPort > 65535 {
+		return nil, errors.NewInvalidArgumentError("Invalid port number: %d", minerHTTPPort)
 	}
 
 	if c.NumBlocks <= 0 {
@@ -359,7 +382,7 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	// Construct URL using net/url
 	u := &url.URL{
 		Scheme: "http",
-		Host:   fmt.Sprintf("localhost:%d", minerHttpPort),
+		Host:   fmt.Sprintf("localhost:%d", minerHTTPPort),
 		Path:   "mine",
 	}
 	q := u.Query()
@@ -370,6 +393,7 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	response, err := http.Get(u.String())
 	if err != nil {
 		s.logger.Errorf("The HTTP request failed with error %s\n", err)
+
 		return nil, &btcjson.RPCError{
 			Code:    btcjson.ErrRPCMisc,
 			Message: "Can't contact miner",
@@ -461,12 +485,14 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 	c := cmd.(*btcjson.SubmitMiningSolutionCmd)
 
 	ms := &model.MiningSolution{}
+
 	err := json.Unmarshal([]byte(c.JsonString), ms)
 	if err != nil {
 		return nil, err
 	}
 
 	s.logger.Debugf("in handleSubmitMiningSolution: ms: %+v", ms)
+
 	err = s.blockAssemblyClient.SubmitMiningSolution(ctx, ms)
 	if err != nil {
 		return nil, err

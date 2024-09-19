@@ -41,7 +41,8 @@ func (s *SQL) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash,
 
 	if foundBlock == nil {
 		// if no locators are known, start from the genesis block
-		foundBlock = model.GenesisBlockHeader.Hash()
+		genesisBlockHash := s.chainParams.GenesisBlock.BlockHash()
+		foundBlock = &genesisBlockHash
 	}
 
 	// get the headers starting from the found block

@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"net/url"
+	"os"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -15,6 +16,8 @@ func TestSQL_GetBlock(t *testing.T) {
 	t.Run("block 0 - genesis block", func(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
+
+		os.Setenv("network", "mainnet")
 
 		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
