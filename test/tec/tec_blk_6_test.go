@@ -3,7 +3,6 @@
 package test
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/test/setup"
@@ -36,11 +35,13 @@ func (suite *TECBlk6TestSuite) SetupTest() {
 }
 
 func (suite *TECBlk6TestSuite) TestAssetServerRecoverability() {
-	fmt.Println("Setting up Teranode - Testing Asset Server with asset_httpAddress...")
+	t := suite.T()
+	t.Log("Setting up Teranode - Testing Asset Server with asset_httpAddress...")
 }
 
 func (suite *TECBlk6TestSuite) TestAssetServerRecoverabilityStartup() {
-	fmt.Println("Setting up Teranode - Testing Asset Server without asset_httpAddress...")
+	t := suite.T()
+	t.Log("Setting up Teranode - Testing Asset Server without asset_httpAddress...")
 	suite.SetupTestWithCustomComposeAndSettings(
 		suite.SettingsMap,
 		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml", "../../docker-compose.asset.override.yml"},
