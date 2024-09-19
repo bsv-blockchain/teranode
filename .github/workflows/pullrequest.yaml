@@ -13,7 +13,7 @@ env:
 jobs:
   golangci:
     name: lint
-    runs-on: ubsv-runner
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -28,7 +28,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubsv-runner
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -48,7 +48,7 @@ jobs:
 
   smoketest:
     name: smoketest
-    runs-on: ubsv-runner
+    runs-on: ubuntu-latest
     env:
       GITHUB_ACTIONS: true
     steps:
@@ -85,7 +85,7 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: ubsv-runner
+    runs-on: ubuntu-latest
     needs: test
     steps:
       - name: Checkout
