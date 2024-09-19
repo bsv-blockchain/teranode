@@ -21,7 +21,7 @@ jobs:
       arch: amd64
       tag: latest-amd64
       region: eu-north-1
-      src_repo: ubsv
+      src_repo: latest
       dest_repo: teranode-public
   # Pull/push image for ARM64 (Graviton and Darwin)
   pull_push_arm64:
