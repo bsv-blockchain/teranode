@@ -31,12 +31,20 @@ const (
 func (suite *TECBlk6TestSuite) SetupTest() {
 	suite.SetupTestWithCustomComposeAndSettings(
 		suite.SettingsMap,
-		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml", "../../docker-compose.asset.override.yml"},
+		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"},
 	)
 }
 
 func (suite *TECBlk6TestSuite) TestAssetServerRecoverability() {
-	fmt.Println("Setting up Teranode without Asset Server...")
+	fmt.Println("Setting up Teranode - Testing Asset Server with asset_httpAddress...")
+}
+
+func (suite *TECBlk6TestSuite) TestAssetServerRecoverabilityStartup() {
+	fmt.Println("Setting up Teranode - Testing Asset Server without asset_httpAddress...")
+	suite.SetupTestWithCustomComposeAndSettings(
+		suite.SettingsMap,
+		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml", "../../docker-compose.asset.override.yml"},
+	)
 }
 
 func TestTECBlk6TestSuite(t *testing.T) {
