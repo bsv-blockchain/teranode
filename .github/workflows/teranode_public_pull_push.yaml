@@ -32,7 +32,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Set up AWS CLI
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -40,31 +39,34 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ inputs.region }}
 
-      # Authenticate Docker to AWS ECR
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
         with:
           mask-password: true
 
-      # Pull image from source repo
       - name: Pull from source repo
         run: |
           docker pull \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.src_repo }}:latest-${{ inputs.arch }}
 
-      # Tag image for destination
       - name: Tag image for destination
         run: |
           docker tag \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
           ${{ steps.login-ecr.outputs.registry }}/\
-          ${{ inputs.dest_repo }}:latest-${{ inputs.arch }} \
+          ${{ inputs.dest_repo }}:latest-${{ inputs.arch }}
+
+      - name: Tag image for destination
+        run: |
+          docker tag \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
+          ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:${{ github.sha }}-${{ inputs.arch }}
 
-      # Push image to destination repo
       - name: Push to destination repo
         run: |
           docker push \
