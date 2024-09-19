@@ -9,6 +9,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain/work"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
+	"github.com/bitcoin-sv/ubsv/util"
 	sqlite_errors "github.com/bitcoin-sv/ubsv/util/sqlite"
 	"github.com/lib/pq"
 	"github.com/libsv/go-bt/v2"
@@ -28,9 +29,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		return 0, height, err
 	}
 
-	var miner string
-	if block.CoinbaseTx != nil && block.CoinbaseTx.OutputCount() != 0 {
-		miner = block.CoinbaseTx.Outputs[0].LockingScript.String()
+	miner, err := util.ExtractCoinbaseMiner(block.CoinbaseTx)
+	if err != nil {
+		s.logger.Errorf("error extracting mine from coinbase tx: %v", err)
 	}
 
 	meta := &model.BlockHeaderMeta{
