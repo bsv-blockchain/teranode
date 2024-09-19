@@ -59,8 +59,6 @@ type BlockAssembler struct {
 	resetWaitCount           atomic.Int32
 	resetWaitTime            atomic.Int32
 	currentRunningState      atomic.Value
-
-	// fsmCurrentState atomic.Pointer[blockchain_api.FSMStateType]
 }
 
 const DifficultyAdjustmentWindow = 144
@@ -213,15 +211,11 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 						err: errors.NewProcessingError("waiting for reset to complete"),
 					})
 				} else {
-					// check if current state is running
-					//currentState := b.fsmCurrentState.Load()
-					//if currentState == nil {
 					currentState, err := b.blockchainClient.GetFSMCurrentState(ctx)
 					if err != nil {
 						// TODO: how to handle it gracefully?
 						b.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
 					}
-					//}
 
 					if *currentState == blockchain_api.FSMStateType_RUNNING {
 						miningCandidate, subtrees, err := b.getMiningCandidate()
@@ -242,14 +236,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				case model.NotificationType_Block:
 					b.UpdateBestBlock(ctx)
 				}
-				//case model.NotificationType_FSMState:
-				//	b.logger.Debugf("[BlockAssembler] NEW FSM state notification: %s", notification.Metadata.Metadata)
-				//	metadata := notification.Metadata.Metadata
-				//	newState := blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])
-				//	b.logger.Debugf("[BlockAssembler] FSM state notification set: %s", newState)
-				//	b.fsmCurrentState.Store(&newState)
-				// }
-				// b.currentRunningState.Store("running")
 			} // select
 		} // for
 	}()
