@@ -10,6 +10,7 @@ import (
 	"context"
 	"math/rand/v2"
 	"net"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,9 +30,11 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
+	"github.com/ordishs/gocore"
 )
 
 const (
@@ -81,13 +84,6 @@ type blockMsg struct {
 	block *bsvutil.Block
 	peer  *peerpkg.Peer
 	reply chan error
-}
-
-// invMsg packages a bitcoin inv message and the peer it came from together
-// so the block handler has access to that information.
-type invMsg struct {
-	inv  *wire.MsgInv
-	peer *peerpkg.Peer
 }
 
 // headersMsg packages a bitcoin headers message and the peer it came from
@@ -238,6 +234,7 @@ type SyncManager struct {
 	subtreeStore      blob.Store
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
+	legacyKafkaInvCh  chan []byte
 
 	// These fields should only be accessed from the blockHandler thread.
 	rejectedTxns    map[chainhash.Hash]struct{}
@@ -1609,7 +1606,17 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 		return
 	}
 
-	sm.msgChan <- &invMsg{inv: inv, peer: peer}
+	wireInvMsg := invMsg{inv: inv, peer: peer}
+
+	// write all tx inv messages to Kafka and read from there
+	// this allows us to stop reading in certain cases, but still have the inv messages to catch up on
+	if sm.legacyKafkaInvCh != nil {
+		// write to Kafka
+		sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.Addr(), len(wireInvMsg.inv.InvList))
+		sm.legacyKafkaInvCh <- wireInvMsg.Bytes()
+	} else {
+		sm.msgChan <- &wireInvMsg
+	}
 }
 
 // QueueHeaders adds the passed headers message and peer to the block handling
@@ -1795,5 +1802,95 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 		}
 	}()
 
+	// Kafka for INV messages
+	legacyInvConfigURL, err, ok := gocore.Config().GetURL("kafka_legacyInvConfig")
+	if err == nil && ok {
+		sm.legacyKafkaInvCh = make(chan []byte, 10_000)
+
+		sm.logger.Infof("[Legacy Manager] starting kafka producer for INV messages at %s", legacyInvConfigURL)
+
+		// start a go routine to start the kafka producer
+		go func() {
+			if err = util.StartAsyncProducer(sm.logger, legacyInvConfigURL, sm.legacyKafkaInvCh); err != nil {
+				sm.logger.Errorf("[Legacy Manager] error starting kafka producer: %v", err)
+				return
+			}
+		}()
+
+		kafkaControlChan := make(chan bool) // true = start, false = stop
+
+		// start a go routine to control the kafka listener, using the FSM state of the node
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					// get the FSM state, only turn on the listener if we are in RUN mode
+					fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+					if err != nil {
+						sm.logger.Errorf("[Legacy Manager] failed to get current FSM state: %v", err)
+					}
+
+					if fsmState != nil && *fsmState == blockchain_api.FSMStateType_RUNNING {
+						kafkaControlChan <- true // start or continue the listener
+					} else {
+						kafkaControlChan <- false // stop the listener
+					}
+
+					// wait 2 seconds before checking again
+					// TODO it would be better to be able to listen somehow to state changes in the FSM
+					time.Sleep(2 * time.Second)
+				}
+			}
+		}()
+
+		go func() {
+			var (
+				kafkaCtx    context.Context
+				kafkaCancel context.CancelFunc
+			)
+
+			for control := range kafkaControlChan {
+				if control { // Start signal
+					if kafkaCancel != nil {
+						// Listener is already running, no need to start
+						continue
+					}
+
+					kafkaCtx, kafkaCancel = context.WithCancel(ctx)
+
+					sm.logger.Infof("[Legacy Manager] starting Kafka listener for INV messages on %s", legacyInvConfigURL.String())
+					go sm.startKafkaListener(kafkaCtx, legacyInvConfigURL, "legacyInv", 1)
+				} else if kafkaCancel != nil {
+					sm.logger.Infof("[Legacy Manager] stopping Kafka listener for INV messages on %s", legacyInvConfigURL.String())
+					kafkaCancel() // Stop the listener
+					kafkaCancel = nil
+				}
+			}
+
+			kafkaCancel()
+		}()
+	}
+
 	return &sm, nil
+}
+
+func (sm *SyncManager) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int) {
+	if err := util.StartKafkaGroupListener(ctx, sm.logger, kafkaURL, groupID, nil, consumerCount, false, func(msg util.KafkaMessage) error {
+		wireInvMsg, err := sm.newInvFromBytes(msg.Message.Value)
+		if err != nil {
+			sm.logger.Errorf("failed to create INV message from Kafka message: %v", err)
+			return nil // ignore any errors, the message might be old and/or the peer is already disconnected
+		}
+
+		sm.logger.Debugf("Received INV message from Kafka: %v", wireInvMsg)
+
+		// Queue the INV message on the internal message channel
+		sm.msgChan <- wireInvMsg
+
+		return nil
+	}); err != nil {
+		sm.logger.Errorf("failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
+	}
 }
