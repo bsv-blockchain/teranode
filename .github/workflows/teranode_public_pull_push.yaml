@@ -51,7 +51,8 @@ jobs:
       - name: Pull from source repo
         run: |
           docker pull \
-          ${{ steps.login-ecr.outputs.registry }}/${{ inputs.src_repo }}-${{ inputs.arch }}
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.src_repo }}:latest-${{ inputs.arch }}
 
       # Tag image for destination
       - name: Tag image for destination
