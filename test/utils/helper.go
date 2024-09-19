@@ -840,10 +840,7 @@ func WaitForBlockHeight(url string, targetHeight uint32, timeout time.Duration) 
 }
 
 func CheckIfTxExistsInBlock(ctx context.Context, store blob.Store, storeURL *url.URL, block []byte, blockHeight uint32, tx chainhash.Hash, logger ulogger.Logger) (bool, error) {
-	var o []options.Options
-	o = append(o, options.WithFileExtension("block"))
-	r, err := store.GetIoReader(ctx, block, o...)
-
+	r, err := store.GetIoReader(ctx, block, options.WithFileExtension("block"))
 	if err != nil {
 		return false, errors.NewProcessingError("error getting block reader: %v", err)
 	}

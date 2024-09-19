@@ -23,7 +23,9 @@ func (l *MockLogger) LogLevel() int {
 	return 0
 }
 
-func (l *MockLogger) SetLogLevel(level string) {}
+func (l *MockLogger) SetLogLevel(level string) {
+	// ignore
+}
 
 func (l *MockLogger) New(service string, options ...ulogger.Option) ulogger.Logger {
 	return &MockLogger{
@@ -58,9 +60,11 @@ func (l *MockLogger) Fatalf(format string, args ...interface{}) {
 func (l *MockLogger) recordCall(methodName string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
 	if _, exists := l.calls[methodName]; !exists {
 		l.calls[methodName] = 0
 	}
+
 	l.calls[methodName]++
 }
 
@@ -68,6 +72,7 @@ func (l *MockLogger) AssertNumberOfCalls(t *testing.T, methodName string, expect
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	actualCalls := l.calls[methodName]
+
 	if actualCalls != expectedCalls {
 		t.Errorf("Expected %v calls to %s, got %v", expectedCalls, methodName, actualCalls)
 	}

@@ -79,7 +79,7 @@ func (u *Server) subtreeHandler(msg util.KafkaMessage) error {
 }
 
 type Exister interface {
-	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
+	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
 }
 
 func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, exister Exister, hash *chainhash.Hash) (bool, bool, func(), error) { // First bool is if the lock was acquired, second is if the subtree exists

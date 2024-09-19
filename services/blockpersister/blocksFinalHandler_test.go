@@ -226,7 +226,7 @@ func TestBlock(t *testing.T) {
 
 type mockExister struct{}
 
-func (m *mockExister) Exists(_ context.Context, _ []byte, _ ...options.Options) (bool, error) {
+func (m *mockExister) Exists(_ context.Context, _ []byte, _ ...options.FileOption) (bool, error) {
 	return false, nil
 }
 

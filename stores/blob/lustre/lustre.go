@@ -2,8 +2,6 @@ package lustre
 
 import (
 	"context"
-	"encoding/hex"
-	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -16,20 +14,19 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 )
 
 type s3Store interface {
-	Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error)
-	GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error)
-	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
+	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
+	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
 }
 
 type Lustre struct {
-	paths         []string
+	path          string
 	logger        ulogger.Logger
-	options       *options.SetOptions
+	options       *options.Options
 	persistSubDir string
 	s3Client      s3Store
 }
@@ -42,7 +39,7 @@ type Lustre struct {
 * The only way to expire a file is by calling SetTTL explicitly with TTL = 0
 * Has 3 layers, files in primary path, files in 'S3 persist' path and S3
  */
-func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, opts ...options.Options) (*Lustre, error) {
+func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, opts ...options.StoreOption) (*Lustre, error) {
 	logger = logger.New("lustre")
 
 	var (
@@ -59,29 +56,22 @@ func New(logger ulogger.Logger, s3Url *url.URL, dir string, persistDir string, o
 		}
 	} else {
 		s3Client = nil
+
 		logger.Infof("[Lustre] S3 URL (host and path) is not provided, S3 client will not be created")
 	}
 
 	return NewLustreStore(logger, s3Client, dir, persistDir, opts...)
 }
 
-func NewLustreStore(logger ulogger.Logger, s3Client s3Store, dir string, persistDir string, opts ...options.Options) (*Lustre, error) {
+func NewLustreStore(logger ulogger.Logger, s3Client s3Store, dir string, persistDir string, opts ...options.StoreOption) (*Lustre, error) {
 	logger = logger.New("lustre")
 
-	options := options.NewSetOptions(nil, opts...)
-
-	if options.PrefixDirectory > 0 {
-		logger.Warnf("[Lustre] prefix directory option will be ignored (only supported in S3 store)")
-	}
-
-	if options.SubDirectory != "" {
-		logger.Warnf("[Lustre] subdirectory option will be ignored (only supported in S3 store)")
-	}
+	storeOptions := options.NewStoreOptions(opts...)
 
 	lustreStore := &Lustre{
-		paths:         []string{dir + "/"},
+		path:          dir + "/",
 		logger:        logger,
-		options:       options,
+		options:       storeOptions,
 		persistSubDir: persistDir + "/",
 		s3Client:      s3Client,
 	}
@@ -107,7 +97,7 @@ func (s *Lustre) Close(_ context.Context) error {
 	return nil
 }
 
-func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
 	s.logger.Debugf("[Lustre] SetFromReader: %s", utils.ReverseAndHexEncodeSlice(key))
 
 	defer reader.Close()
@@ -145,7 +135,7 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 	return nil
 }
 
-func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
+func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
 	s.logger.Debugf("[Lustre]  Set: %s", utils.ReverseAndHexEncodeSlice(hash))
 
 	fileName, err := s.getFileNameForSet(hash, opts...)
@@ -176,8 +166,10 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 	return nil
 }
 
-func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.Options) error {
-	fileName, err := s.getFileNameForGet(hash, opts...)
+func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.FileOption) error {
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return err
 	}
@@ -229,8 +221,10 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 	return os.Rename(persistedFilename, fileName)
 }
 
-func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.Options) (io.ReadCloser, error) {
-	fileName, err := s.getFileNameForGet(hash, opts...)
+func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -272,10 +266,12 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.O
 	return file, nil
 }
 
-func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
+func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
 	s.logger.Debugf("[Lustre]  Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 
-	fileName, err := s.getFileNameForGet(hash, opts...)
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -319,10 +315,12 @@ func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.Options) 
 	return bytes, err
 }
 
-func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
+func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
 
-	fileName, err := s.getFileNameForGet(hash, opts...)
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -364,8 +362,10 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts .
 	return bytes[:nrOfBytes], err
 }
 
-func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
-	fileName, err := s.getFileNameForGet(hash, opts...)
+func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return false, err
 	}
@@ -406,10 +406,12 @@ func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.Options)
 	return true, nil
 }
 
-func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.Options) error {
+func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
 	s.logger.Debugf("[Lustre] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
 
-	fileName, err := s.getFileNameForGet(hash, opts...)
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return err
 	}
@@ -425,16 +427,11 @@ func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.Options) er
 	return nil
 }
 
-func (s *Lustre) filename(hash []byte) string {
-	// determine path to use, based on the first byte of the hash and the number of paths
-	path := s.paths[hash[0]%byte(len(s.paths))]
-	return filepath.Join(path, hex.EncodeToString(bt.ReverseBytes(hash)))
-}
-
 func (s *Lustre) getFileNameForPersist(filename string) string {
 	// persisted files are stored in a subdirectory
 	// add the persist dir before the file in the filepath
 	fileParts := strings.Split(filename, string(os.PathSeparator))
+
 	fileParts[len(fileParts)-1] = s.persistSubDir + fileParts[len(fileParts)-1]
 	if fileParts[0] == "" {
 		fileParts[0] = "/"
@@ -445,41 +442,15 @@ func (s *Lustre) getFileNameForPersist(filename string) string {
 	return filepath.Join(fileParts...)
 }
 
-func (s *Lustre) getFileNameForGet(hash []byte, opts ...options.Options) (string, error) {
-	fileOptions := options.NewSetOptions(s.options, opts...)
+func (s *Lustre) getFileNameForSet(hash []byte, opts ...options.FileOption) (string, error) {
+	merged := options.MergeOptions(s.options, opts)
 
-	var fileName string
-
-	if fileOptions.Filename != "" {
-		if len(fileOptions.SubDirectory) > 0 && fileOptions.SubDirectory[:1] == "/" {
-			// if the subdirectory starts with a /, then it is a full path
-			fileName = filepath.Join(fileOptions.SubDirectory, fileOptions.Filename)
-		} else {
-			fileName = filepath.Join(s.paths[0], fileOptions.SubDirectory, fileOptions.Filename)
-		}
-	} else {
-		if fileOptions.SubDirectory != "" {
-			s.logger.Warnf("[Lustre] SubDirectory %q ignored when no opt.Filename specified", fileOptions.SubDirectory)
-		}
-
-		fileName = s.filename(hash)
-	}
-
-	if fileOptions.Extension != "" {
-		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
-	}
-
-	return fileName, nil
-}
-func (s *Lustre) getFileNameForSet(hash []byte, opts ...options.Options) (string, error) {
-	fileName, err := s.getFileNameForGet(hash, opts...)
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return "", err
 	}
 
-	fileOptions := options.NewSetOptions(s.options, opts...)
-
-	if fileOptions.TTL <= 0 {
+	if merged.TTL == nil || *merged.TTL <= 0 {
 		// the file should be persisted
 		fileName = s.getFileNameForPersist(fileName)
 	}
