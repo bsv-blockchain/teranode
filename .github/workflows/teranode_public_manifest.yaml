@@ -39,9 +39,9 @@ jobs:
       - name: Deployment message
         run: echo "Deploying Manifest for tag ${{ inputs.tag }}"
       # Create docker manifest
-      - uses: int128/docker-manifest-create-action@v1
+      - uses: int128/docker-manifest-create-action@v2
         with:
           tags: ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}
-          suffixes: |
-            -amd64
-            -arm64
+          sources: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ github.sha }}-amd64
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ github.sha }}-arm64
