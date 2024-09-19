@@ -85,7 +85,7 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: ubuntu-latest
+    runs-on: ubsv-runner
     needs: test
     steps:
       - name: Checkout

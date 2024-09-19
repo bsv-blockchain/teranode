@@ -64,7 +64,7 @@ jobs:
 
   sonarqube:
     name: Sonarqube
-    runs-on: ubuntu-latest
+    runs-on: ubsv-runner
     needs: go-longtests
     steps:
     - name: Checkout
