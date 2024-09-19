@@ -22,56 +22,9 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
-
-var (
-	prometheusUtxoGet    prometheus.Counter
-	prometheusUtxoSpend  prometheus.Counter
-	prometheusUtxoReset  prometheus.Counter
-	prometheusUtxoDelete prometheus.Counter
-	prometheusUtxoErrors *prometheus.CounterVec
-)
-
-func init() {
-	prometheusUtxoGet = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "sql_utxo_get",
-			Help: "Number of utxo get calls done to sql",
-		},
-	)
-	prometheusUtxoSpend = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "sql_utxo_spend",
-			Help: "Number of utxo spend calls done to sql",
-		},
-	)
-	prometheusUtxoReset = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "sql_utxo_reset",
-			Help: "Number of utxo reset calls done to sql",
-		},
-	)
-	prometheusUtxoDelete = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "sql_utxo_delete",
-			Help: "Number of utxo delete calls done to sql",
-		},
-	)
-	prometheusUtxoErrors = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "sql_utxo_errors",
-			Help: "Number of utxo errors",
-		},
-		[]string{
-			"function", //function raising the error
-			"error",    // error returned
-		},
-	)
-}
 
 type Store struct {
 	logger           ulogger.Logger
@@ -84,6 +37,8 @@ type Store struct {
 }
 
 func New(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL) (*Store, error) {
+	initPrometheusMetrics()
+
 	db, err := util.InitSQLDB(logger, storeUrl)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to init sql db", err)
@@ -545,6 +500,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 		,o.coinbase_spending_height
 		,o.utxo_hash
 		,o.spending_transaction_id
+		,o.frozen
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
 		WHERE t.hash = $1
@@ -582,11 +538,16 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 			}
 
 			var transactionId int
+
 			var coinbaseSpendingHeight uint32
+
 			var utxoHash []byte
+
 			var spendingTransactionID []byte
 
-			err := txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID)
+			var frozen bool
+
+			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID, &frozen)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
@@ -594,9 +555,14 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 				return errors.NewStorageError("[Spend] failed: SELECT output FOR UPDATE NOWAIT %s:%d: %v", spend.TxID, spend.Vout, err)
 			}
 
+			// If the utxo is frozen, it cannot be spent
+			if frozen {
+				return errors.NewFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			}
+
 			// Check if the utxo is already spent
 			if len(spendingTransactionID) > 0 && !bytes.Equal(spendingTransactionID, spend.SpendingTxID[:]) {
-				return errors.NewStorageError("[Spend] utxo already spent for %s:%d", spend.TxID, spend.Vout)
+				return errors.NewSpentError("[Spend] utxo already spent for %s:%d", spend.TxID, spend.Vout)
 			}
 
 			// Check the utxo hash is correct
@@ -636,7 +602,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 		}
 	}
 
-	if err := txn.Commit(); err != nil {
+	if err = txn.Commit(); err != nil {
 		return err
 	}
 
@@ -684,7 +650,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 
 			var transactionId int
 
-			err := txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId)
+			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
@@ -702,7 +668,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 		}
 	}
 
-	if err := txn.Commit(); err != nil {
+	if err = txn.Commit(); err != nil {
 		return err
 	}
 
@@ -815,7 +781,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 	}
 
 	// Commit the transaction
-	if err := txn.Commit(); err != nil {
+	if err = txn.Commit(); err != nil {
 		return err
 	}
 
@@ -830,6 +796,7 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		SELECT
 		 o.coinbase_spending_height
 		,o.spending_transaction_id
+		,o.frozen
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
 		WHERE t.hash = $1
@@ -837,9 +804,12 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 	`
 
 	var coinbaseSpendingHeight uint32
+
 	var spendingTransactionID []byte
 
-	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&coinbaseSpendingHeight, &spendingTransactionID)
+	var frozen bool
+
+	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&coinbaseSpendingHeight, &spendingTransactionID, &frozen)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewNotFoundError("utxo not found for %s:%d", spend.TxID, spend.Vout)
@@ -857,8 +827,13 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		}
 	}
 
+	utxoStatus := utxostore.CalculateUtxoStatus(spendingTxId, coinbaseSpendingHeight, s.blockHeight.Load())
+	if frozen {
+		utxoStatus = utxostore.Status_FROZEN
+	}
+
 	return &utxo.SpendResponse{
-		Status:       int(utxostore.CalculateUtxoStatus(spendingTxId, coinbaseSpendingHeight, s.blockHeight.Load())),
+		Status:       int(utxoStatus),
 		SpendingTxID: spendingTxId,
 		LockTime:     coinbaseSpendingHeight,
 	}, nil
@@ -927,14 +902,14 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.P
 func createPostgresSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS transactions (
-	     id               BIGSERIAL PRIMARY KEY
-	    ,hash             BYTEA NOT NULL
-			,version          BIGINT NOT NULL
-	    ,lock_time        BIGINT NOT NULL
-      ,fee				      BIGINT NOT NULL
-			,size_in_bytes    BIGINT NOT NULL
-			,tombstone_millis BIGINT
-      ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+         id               BIGSERIAL PRIMARY KEY
+        ,hash             BYTEA NOT NULL
+        ,version          BIGINT NOT NULL
+        ,lock_time        BIGINT NOT NULL
+        ,fee              BIGINT NOT NULL
+		,size_in_bytes    BIGINT NOT NULL
+		,tombstone_millis BIGINT
+        ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -954,14 +929,14 @@ func createPostgresSchema(db *usql.DB) error {
 	// The previous transaction hash may exist in this table
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS inputs (
-	     transaction_id            BIGINT NOT NULL REFERENCES transactions(id)
-			,idx 				               BIGINT NOT NULL
-			,previous_transaction_hash BYTEA NOT NULL
-			,previous_tx_idx           BIGINT NOT NULL
-	    ,previous_tx_satoshis      BIGINT NOT NULL
-			,previous_tx_script        BYTEA
-			,unlocking_script          BYTEA NOT NULL
-			,sequence_number           BIGINT NOT NULL
+          transaction_id            BIGINT NOT NULL REFERENCES transactions(id)
+         ,idx                       BIGINT NOT NULL
+         ,previous_transaction_hash BYTEA NOT NULL
+         ,previous_tx_idx           BIGINT NOT NULL
+         ,previous_tx_satoshis      BIGINT NOT NULL
+         ,previous_tx_script        BYTEA
+         ,unlocking_script          BYTEA NOT NULL
+         ,sequence_number           BIGINT NOT NULL
       ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -975,14 +950,15 @@ func createPostgresSchema(db *usql.DB) error {
 	// the spending transaction may not have been removed from the database.
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS outputs (
-	      transaction_id           BIGINT NOT NULL REFERENCES transactions(id)
-			 ,idx 				             BIGINT NOT NULL
-			 ,locking_script           BYTEA NOT NULL
-			 ,satoshis                 BIGINT NOT NULL
-			 ,coinbase_spending_height BIGINT NOT NULL
-			 ,utxo_hash 			         BYTEA NOT NULL
-			 ,spending_transaction_id  BYTEA
-			 ,PRIMARY KEY (transaction_id, idx)
+         transaction_id           BIGINT NOT NULL REFERENCES transactions(id)
+        ,idx                      BIGINT NOT NULL
+        ,locking_script           BYTEA NOT NULL
+        ,satoshis                 BIGINT NOT NULL
+        ,coinbase_spending_height BIGINT NOT NULL
+        ,utxo_hash 			      BYTEA NOT NULL
+        ,spending_transaction_id  BYTEA
+        ,frozen                   BOOLEAN DEFAULT FALSE
+        ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -991,9 +967,9 @@ func createPostgresSchema(db *usql.DB) error {
 
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS block_ids (
-	      transaction_id BIGINT NOT NULL REFERENCES transactions(id)
-			 ,block_id 			 BIGINT NOT NULL
-			 ,PRIMARY KEY (transaction_id, block_id)
+          transaction_id BIGINT NOT NULL REFERENCES transactions(id)
+         ,block_id       BIGINT NOT NULL
+         ,PRIMARY KEY (transaction_id, block_id)
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -1006,14 +982,14 @@ func createPostgresSchema(db *usql.DB) error {
 func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS transactions (
-	     id               INTEGER PRIMARY KEY AUTOINCREMENT
-	    ,hash             BLOB NOT NULL
-			,version          BIGINT NOT NULL
-	    ,lock_time        BIGINT NOT NULL
-			,fee				      BIGINT NOT NULL
-			,size_in_bytes    BIGINT NOT NULL
-			,tombstone_millis BIGINT
-      ,inserted_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+         id               INTEGER PRIMARY KEY AUTOINCREMENT
+        ,hash             BLOB NOT NULL
+        ,version          BIGINT NOT NULL
+        ,lock_time        BIGINT NOT NULL
+        ,fee              BIGINT NOT NULL
+        ,size_in_bytes    BIGINT NOT NULL
+        ,tombstone_millis BIGINT
+        ,inserted_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -1028,14 +1004,14 @@ func createSqliteSchema(db *usql.DB) error {
 	// The previous transaction hash may exist in this table
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS inputs (
-	     transaction_id            INTEGER NOT NULL REFERENCES transactions(id)
-			,idx 				               BIGINT NOT NULL
-			,previous_transaction_hash BLOB NOT NULL
-			,previous_tx_idx           BIGINT NOT NULL
-	    ,previous_tx_satoshis      BIGINT NOT NULL
-			,previous_tx_script        BLOB
-			,unlocking_script          BYTEA NOT NULL
-			,sequence_number           BIGINT NOT NULL
+         transaction_id            INTEGER NOT NULL REFERENCES transactions(id)
+        ,idx                       BIGINT NOT NULL
+        ,previous_transaction_hash BLOB NOT NULL
+        ,previous_tx_idx           BIGINT NOT NULL
+        ,previous_tx_satoshis      BIGINT NOT NULL
+        ,previous_tx_script        BLOB
+        ,unlocking_script          BYTEA NOT NULL
+        ,sequence_number           BIGINT NOT NULL
       ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -1049,14 +1025,15 @@ func createSqliteSchema(db *usql.DB) error {
 	// the spending transaction may not have been removed from the database.
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS outputs (
-	      transaction_id           INTEGER NOT NULL REFERENCES transactions(id)
-			 ,idx 				             BIGINT NOT NULL
-			 ,locking_script           BLOB NOT NULL
-			 ,satoshis                 BIGINT NOT NULL
-			 ,coinbase_spending_height BIGINT NOT NULL
-			 ,utxo_hash 			         BLOB NOT NULL
-			 ,spending_transaction_id  BLOB
-			 ,PRIMARY KEY (transaction_id, idx)
+         transaction_id           INTEGER NOT NULL REFERENCES transactions(id)
+        ,idx                      BIGINT NOT NULL
+        ,locking_script           BLOB NOT NULL
+        ,satoshis                 BIGINT NOT NULL
+        ,coinbase_spending_height BIGINT NOT NULL
+        ,utxo_hash                BLOB NOT NULL
+        ,spending_transaction_id  BLOB
+        ,frozen                   BOOLEAN DEFAULT FALSE
+        ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -1065,9 +1042,9 @@ func createSqliteSchema(db *usql.DB) error {
 
 	if _, err := db.Exec(`
       CREATE TABLE IF NOT EXISTS block_ids (
-	      transaction_id INTEGER NOT NULL REFERENCES transactions(id)
-			 ,block_id 			 BIGINT NOT NULL
-			 ,PRIMARY KEY (transaction_id, block_id)
+         transaction_id INTEGER NOT NULL REFERENCES transactions(id)
+        ,block_id 			 BIGINT NOT NULL
+        ,PRIMARY KEY (transaction_id, block_id)
 	  );
 	`); err != nil {
 		_ = db.Close()

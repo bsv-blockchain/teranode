@@ -227,7 +227,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 					case "FROZEN":
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
-							batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
+							batch[idx].done <- errors.NewFrozenError("[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
 						}
 
 					case "SPENT":

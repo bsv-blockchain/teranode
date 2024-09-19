@@ -5,13 +5,17 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 )
 
 //go:embed ubsv.lua
 var ubsvLUA []byte
 
-var luaPackage = "ubsv_v12" // N.B. Do not have any "." in this string
+var luaPackage = "ubsv_v13" // N.B. Do not have any "." in this string
+
+// frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
+var frozenUTXOBytes = util.CoinbasePlaceholder[:]
 
 func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, funcName string, funcBytes []byte) error {
 	udfs, err := client.ListUDF(nil)

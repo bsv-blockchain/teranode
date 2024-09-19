@@ -253,7 +253,136 @@ function setMined(rec, blockID, ttl)
     return 'OK' .. signal
 end
 
+-- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
+-- offset number - the offset in the utxos list (vout % utxoBatchSize)
+-- utxoHash []byte - 32 byte little-endian hash of the UTXO
+--   __
+--  / _|_ __ ___  ___ _______
+-- | |_| '__/ _ \/ _ \_  / _ \
+-- |  _| | |  __/  __// /  __/
+-- |_| |_|  \___|\___/___\___|
+function freeze(rec, offset, utxoHash)
+    if not aerospike:exists(rec) then
+        return "ERROR:TX not found"
+    end
 
+    -- Get the correct output record
+    local utxos = rec['utxos']
+    if utxos == nil then
+        return "ERROR:UTXOs list not found"
+    end
+
+    local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
+    if utxo == nil then
+        return "ERROR:UTXO not found"
+    end
+
+    -- The first 32 bytes are the utxoHash
+    local existingUTXOHash = bytes.get_bytes(utxo, 1, 32) -- NB - lua arrays are 1-based!!!!
+    if not bytes_equal(existingUTXOHash, utxoHash) then
+        return "ERROR:Output utxohash mismatch"
+    end
+
+    local signal = ""
+
+    -- If the utxo has been spent, trigger alert
+    if bytes.size(utxo) == 64 then
+        local existingSpendingTxID = bytes.get_bytes(utxo, 33, 32) -- NB - lua arrays are 1-based!!!!
+
+        if frozen(existingSpendingTxID) then
+            return "FROZEN:UTXO is already frozen"
+        else
+            return 'SPENT:' .. bytes_to_hex(existingSpendingTxID)
+        end
+    end
+
+    if not bytes.size(utxo) == 32 then
+        return "ERROR:UTXO has an invalid size"
+    end
+
+    -- Update the output to freeze it by setting the spendingTxID to 32 'FF' bytes
+    -- Resize the utxo to 64 bytes
+    local newUtxo = bytes(64)
+
+    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+        newUtxo[i] = utxo[i]
+    end
+
+    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+        newUtxo[32 + i] = 255
+    end
+
+    -- Update the record
+    utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+
+    rec['utxos'] = utxos
+
+    aerospike:update(rec)
+
+    return 'OK' .. signal
+end
+
+-- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
+-- offset number - the offset in the utxos list (vout % utxoBatchSize)
+-- utxoHash []byte - 32 byte little-endian hash of the UTXO
+--               __
+--  _   _ _ __  / _|_ __ ___  ___ _______
+-- | | | | '_ \| |_| '__/ _ \/ _ \_  / _ \
+-- | |_| | | | |  _| | |  __/  __// /  __/
+--  \__,_|_| |_|_| |_|  \___|\___/___\___|
+--
+function unfreeze(rec, offset, utxoHash)
+    if not aerospike:exists(rec) then
+        return "ERROR:TX not found"
+    end
+
+    -- Get the correct output record
+    local utxos = rec['utxos']
+    if utxos == nil then
+        return "ERROR:UTXOs list not found"
+    end
+
+    local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
+    if utxo == nil then
+        return "ERROR:UTXO not found"
+    end
+
+    -- The first 32 bytes are the utxoHash
+    local existingUTXOHash = bytes.get_bytes(utxo, 1, 32) -- NB - lua arrays are 1-based!!!!
+    if not bytes_equal(existingUTXOHash, utxoHash) then
+        return "ERROR:Output utxohash mismatch"
+    end
+
+    local signal = ""
+
+    if not bytes.size(utxo) == 64 then
+        return "ERROR:UTXO has an invalid size"
+    end
+
+    -- If the utxo has been spent, trigger alert
+    local existingSpendingTxID = bytes.get_bytes(utxo, 33, 32) -- NB - lua arrays are 1-based!!!!
+
+    if not frozen(existingSpendingTxID) then
+        return "ERROR:UTXO is not frozen"
+    end
+
+    -- Update the output to freeze it by setting the spendingTxID to 32 'FF' bytes
+    -- Resize the utxo to 64 bytes
+    local newUtxo = bytes(32)
+
+    for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
+        newUtxo[i] = utxo[i]
+    end
+
+    -- Update the record
+    utxos[offset+1] = newUtxo -- NB - lua arrays are 1-based!!!!
+
+    rec['utxos'] = utxos
+
+    aerospike:update(rec)
+
+    return 'OK' .. signal
+end
 
 -- Function to compare two byte arrays for equality
 -- Parameters:

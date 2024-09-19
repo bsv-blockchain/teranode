@@ -86,3 +86,15 @@ func (m *NullStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash,
 func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
+
+func (m *NullStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend) error {
+	return nil
+}
+
+func (m *NullStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend) error {
+	return nil
+}
+
+func (m *NullStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend) error {
+	return nil
+}

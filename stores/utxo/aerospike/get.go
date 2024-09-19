@@ -96,8 +96,16 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 		}
 	}
 
+	utxoStatus := utxo.CalculateUtxoStatus2(spendingTxID)
+
+	// check if frozen
+	if spendingTxID != nil && spendingTxID.IsEqual((*chainhash.Hash)(frozenUTXOBytes)) {
+		utxoStatus = utxo.Status_FROZEN
+		spendingTxID = nil
+	}
+
 	return &utxo.SpendResponse{
-		Status:       int(utxo.CalculateUtxoStatus2(spendingTxID)),
+		Status:       int(utxoStatus),
 		SpendingTxID: spendingTxID,
 	}, nil
 }

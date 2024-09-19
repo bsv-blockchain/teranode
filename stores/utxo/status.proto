@@ -11,4 +11,5 @@ enum Status {
   LOCKED = 2;
   NOT_FOUND = 3;
   ALREADY_EXISTS = 4;
+  FROZEN = 5;
 }

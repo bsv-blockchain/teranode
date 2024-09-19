@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
@@ -19,6 +20,8 @@ import (
 )
 
 func setup(ctx context.Context, t *testing.T) (*Store, *bt.Tx) {
+	initPrometheusMetrics()
+
 	os.Setenv("utxostore_dbTimeoutMillis", "30000")
 
 	logger := ulogger.TestLogger{}
@@ -420,4 +423,44 @@ func TestTombstoneAfterUnSpend(t *testing.T) {
 
 	_, err = store.Get(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
+}
+
+func Test_SmokeTests(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("sql store", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Store(t, db)
+	})
+
+	t.Run("memory spend", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Spend(t, db)
+	})
+
+	t.Run("memory reset", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Restore(t, db)
+	})
+
+	t.Run("memory freeze", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Freeze(t, db)
+	})
 }

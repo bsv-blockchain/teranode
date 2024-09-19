@@ -40,6 +40,7 @@ var (
 	ErrSpent                      = New(ERR_SPENT, "utxo already spent")
 	ErrLockTime                   = New(ERR_LOCKTIME, "Bad lock time")
 	ErrNonFinal                   = New(ERR_NON_FINAL, "tx is non-final")
+	ErrFrozen                     = New(ERR_FROZEN, "tx is frozen")
 	ErrKafkaDecode                = New(ERR_KAFKA_DECODE_ERROR, "error decoding kafka message")
 	ErrContext                    = New(ERR_CONTEXT_ERROR, "context cancelled")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
@@ -251,6 +252,9 @@ func NewLockTimeError(message string, params ...interface{}) *Error {
 }
 func NewNonFinalError(message string, params ...interface{}) *Error {
 	return New(ERR_NON_FINAL, message, params...)
+}
+func NewFrozenError(message string, params ...interface{}) *Error {
+	return New(ERR_FROZEN, message, params...)
 }
 func NewStateInitializationError(message string, params ...interface{}) *Error {
 	return New(ERR_STATE_INITIALIZATION, message, params...)
