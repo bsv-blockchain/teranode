@@ -29,10 +29,14 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		return 0, height, err
 	}
 
-	miner, err := util.ExtractCoinbaseMiner(block.CoinbaseTx)
-	if err != nil {
-		s.logger.Errorf("error extracting mine from coinbase tx: %v", err)
-	}
+ var miner string
+ if block.CoinbaseTx != nil && block.CoinbaseTx.OutputCount() != 0 {
+   var err error
+	  miner, err = util.ExtractCoinbaseMiner(block.CoinbaseTx)
+	  if err != nil {
+		   s.logger.Errorf("error extracting mine from coinbase tx: %v", err)
+	  }
+ }
 
 	meta := &model.BlockHeaderMeta{
 		// nolint: gosec
