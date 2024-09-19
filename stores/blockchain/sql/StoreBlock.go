@@ -30,7 +30,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	}
 
  var miner string
- if block.CoinbaseTx != nil {
+ if block.CoinbaseTx != nil && block.CoinbaseTx.OutputCount() != 0 {
    var err error
 	  miner, err = util.ExtractCoinbaseMiner(block.CoinbaseTx)
 	  if err != nil {
