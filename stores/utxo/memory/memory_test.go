@@ -41,6 +41,14 @@ func TestMemory(t *testing.T) {
 
 		tests.Freeze(t, db)
 	})
+
+	t.Run("memory reassign", func(t *testing.T) {
+		db := New(ulogger.TestLogger{})
+		err := db.delete(tests.Hash)
+		require.NoError(t, err)
+
+		tests.ReAssign(t, db)
+	})
 }
 
 func TestMemorySanity(t *testing.T) {

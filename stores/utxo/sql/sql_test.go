@@ -463,4 +463,13 @@ func Test_SmokeTests(t *testing.T) {
 
 		tests.Freeze(t, db)
 	})
+
+	t.Run("memory reassign", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		err := db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.ReAssign(t, db)
+	})
 }

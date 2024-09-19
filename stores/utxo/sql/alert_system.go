@@ -93,5 +93,38 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) er
 }
 
 func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo *utxostore.Spend) error {
+	// check whether the UTXO is frozen
+	q := `
+            SELECT t.id, o.frozen
+            FROM outputs AS o, transactions AS t
+            WHERE t.hash = $1
+              AND o.transaction_id = t.id AND o.idx = $2
+        `
+
+	var id int
+
+	var frozen bool
+
+	if err := s.db.QueryRowContext(ctx, q, utxo.TxID[:], utxo.Vout).Scan(&id, &frozen); err != nil {
+		return err
+	}
+
+	if !frozen {
+		return errors.NewFrozenError("transaction %s:%d is not frozen", utxo.SpendingTxID, utxo.Vout)
+	}
+
+	// re-assign the UTXO to the new UTXO
+	q = `
+        UPDATE outputs 
+        SET utxo_hash = $1, frozen = false
+        WHERE transaction_id = $2 
+          AND idx = $3 
+          AND spending_transaction_id IS NULL
+          AND frozen = true
+    `
+	if _, err := s.db.ExecContext(ctx, q, newUtxo.UTXOHash[:], id, utxo.Vout); err != nil {
+		return err
+	}
+
 	return nil
 }

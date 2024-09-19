@@ -336,7 +336,7 @@ func TestAerospike(t *testing.T) {
 			aero.NewValue(32), // ttl
 		)
 		require.NoError(t, aErr)
-		assert.Equal(t, "OK", ret)
+		assert.Equal(t, LuaOk, ret)
 
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
@@ -374,7 +374,7 @@ func TestAerospike(t *testing.T) {
 				aero.NewValue(32), // ttl
 			)
 			require.NoError(t, aErr)
-			assert.Equal(t, "OK", ret)
+			assert.Equal(t, LuaOk, ret)
 		}
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -1335,43 +1335,55 @@ func Test_SmokeTests(t *testing.T) {
 	aeroURL, err := url.Parse(aerospikeURL)
 	require.NoError(t, err)
 
-	t.Run("memory store", func(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("aerospike store", func(t *testing.T) {
 		db, err := New(ulogger.TestLogger{}, aeroURL)
 		require.NoError(t, err)
 
-		err = db.delete(tests.TXHash)
+		err = db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
 		tests.Store(t, db)
 	})
 
-	t.Run("memory spend", func(t *testing.T) {
+	t.Run("aerospike spend", func(t *testing.T) {
 		db, err := New(ulogger.TestLogger{}, aeroURL)
 		require.NoError(t, err)
 
-		err = db.delete(tests.TXHash)
+		err = db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
 		tests.Spend(t, db)
 	})
 
-	t.Run("memory reset", func(t *testing.T) {
+	t.Run("aerospike reset", func(t *testing.T) {
 		db, err := New(ulogger.TestLogger{}, aeroURL)
 		require.NoError(t, err)
 
-		err = db.delete(tests.TXHash)
+		err = db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
 		tests.Restore(t, db)
 	})
 
-	t.Run("memory freeze", func(t *testing.T) {
+	t.Run("aerospike freeze", func(t *testing.T) {
 		db, err := New(ulogger.TestLogger{}, aeroURL)
 		require.NoError(t, err)
 
-		err = db.delete(tests.TXHash)
+		err = db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
 		tests.Freeze(t, db)
+	})
+
+	t.Run("aerospike reassign", func(t *testing.T) {
+		db, err := New(ulogger.TestLogger{}, aeroURL)
+		require.NoError(t, err)
+
+		err = db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.ReAssign(t, db)
 	})
 }

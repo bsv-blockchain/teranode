@@ -143,6 +143,12 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			aeroKeyMap[keySourceStr] = key
 		}
 
+		// we need to check if the spending tx id is nil, if it is we cannot proceed
+		if bItem.spend.SpendingTxID == nil {
+			bItem.done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] spending tx id is nil", bItem.spend.TxID.String())
+			continue
+		}
+
 		newMapValue := aerospike.NewMapValue(map[interface{}]interface{}{
 			"idx":          idx,
 			"offset":       s.calculateOffsetForOutput(bItem.spend.Vout),
@@ -200,7 +206,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 				if ok {
 					responseMsgParts := strings.Split(responseMsg, ":")
 					switch responseMsgParts[0] {
-					case "OK":
+					case LuaOk:
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
 							batch[idx].done <- nil
@@ -245,7 +251,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 							idx := batchItem["idx"].(int)
 							batch[idx].done <- utxo.NewErrSpent(batch[idx].spend.TxID, batch[idx].spend.Vout, batch[idx].spend.UTXOHash, spendingTxID)
 						}
-					case "ERROR":
+					case LuaError:
 						if len(responseMsgParts) > 1 && responseMsgParts[1] == "TX not found" {
 							for _, batchItem := range batchByKey {
 								idx := batchItem["idx"].(int)

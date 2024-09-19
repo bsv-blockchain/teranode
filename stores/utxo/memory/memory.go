@@ -282,6 +282,9 @@ func (m *Memory) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.
 }
 
 func (m *Memory) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
 	for _, spend := range spends {
 		if _, ok := m.txs[*spend.TxID]; !ok {
 			return errors.NewTxNotFoundError("%v not found", spend.TxID)
@@ -298,6 +301,9 @@ func (m *Memory) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 }
 
 func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
 	for _, spend := range spends {
 		if _, ok := m.txs[*spend.TxID]; !ok {
 			return errors.NewTxNotFoundError("%v not found", spend.TxID)
@@ -314,6 +320,20 @@ func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 }
 
 func (m *Memory) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	// check whether the utxo is frozen
+	if !m.txs[*utxo.TxID].frozenMap[*utxo.UTXOHash] {
+		return errors.NewFrozenError("%v is not frozen", utxo.TxID)
+	}
+
+	// re-assign the utxo to the new utxo
+	m.txs[*utxo.TxID].utxoMap[*utxo.UTXOHash] = newUtxo.SpendingTxID
+
+	// un-freeze the utxo
+	m.txs[*utxo.TxID].frozenMap[*utxo.UTXOHash] = false
+
 	return nil
 }
 
