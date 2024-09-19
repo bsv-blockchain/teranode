@@ -2,8 +2,10 @@
 name: teranode-public
 on:
   push:
-    tags:
-      - 'release-v*'
+    # tags:
+    #   - 'release-v*'
+    branches:
+      - teranode_public_repo
 
 env:
   ECR_REGION: eu-north-1
