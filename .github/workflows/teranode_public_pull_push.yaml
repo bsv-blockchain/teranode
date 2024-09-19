@@ -45,14 +45,13 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
         with:
-          region: ${{ inputs.region }}
           mask-password: true
 
       # Pull image from source repo
       - name: Pull from source repo
         run: |
           docker pull \
-          ${{ steps.login-ecr.outputs.registry }}/${{ inputs.src_repo }}
+          ${{ steps.login-ecr.outputs.registry }}/${{ inputs.src_repo }}-${{ inputs.arch }}
 
       # Tag image for destination
       - name: Tag image for destination
