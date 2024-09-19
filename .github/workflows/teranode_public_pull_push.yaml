@@ -61,7 +61,7 @@ jobs:
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
           ${{ steps.login-ecr.outputs.registry }}/\
-          ${{ inputs.dest_repo }}:latest-${{ inputs.arch }}
+          ${{ inputs.dest_repo }}:${{ github.sha }}
 
       # Push image to destination repo
       - name: Push to destination repo
