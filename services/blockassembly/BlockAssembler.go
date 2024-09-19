@@ -140,8 +140,10 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 		}
 
 		// variables are defined here to prevent unnecessary allocations
-		var bestBlockchainBlockHeader *model.BlockHeader
-		var meta *model.BlockHeaderMeta
+		var (
+			bestBlockchainBlockHeader *model.BlockHeader
+			meta                      *model.BlockHeaderMeta
+		)
 
 		b.currentRunningState.Store("running")
 		for {
@@ -196,6 +198,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 				b.logger.Warnf("[BlockAssembler][Reset] setting wait count to 2 for getMiningCandidate")
 				b.resetWaitCount.Store(2) // wait 2 blocks before starting to mine again
+				// nolint:gosec
 				b.resetWaitTime.Store(int32(time.Now().Add(20 * time.Minute).Unix()))
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
@@ -240,8 +243,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				case model.NotificationType_Block:
 					b.UpdateBestBlock(ctx)
 				}
-
-				b.currentRunningState.Store("running")
 			} // select
 		} // for
 	}()
@@ -543,7 +544,8 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		Height:        b.bestBlockHeight.Load() + 1,
 		Time:          timeNow,
 		MerkleProof:   coinbaseMerkleProofBytes,
-		SubtreeCount:  uint32(len(subtrees)),
+		// nolint:gosec
+		SubtreeCount: uint32(len(subtrees)),
 	}
 
 	return miningCandidate, subtrees, nil
@@ -686,18 +688,19 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	b.logger.Debugf("timeDifference: %d", timeDifference)
 	b.logger.Debugf("bestBlockHeader.Hash().String(): %s", b.bestBlockHeader.Load().Hash().String())
 
-	if !b.difficultyAdjustment || (b.bestBlockHeight.Load() < uint32(DifficultyAdjustmentWindow)+3) {
+	switch {
+	case !b.difficultyAdjustment || (b.bestBlockHeight.Load() < uint32(DifficultyAdjustmentWindow)+3):
 		b.logger.Debugf("no difficulty adjustment. Difficulty set to %s", b.defaultMiningNBits.String())
 		return b.defaultMiningNBits, nil
-	} else if timeDifference > thresholdSeconds+uint32(randomOffset) {
+	case timeDifference > thresholdSeconds+uint32(randomOffset):
 		// If the new block's timestamp is more than 2* 10 minutes then allow mining of a min-difficulty block.
 		b.logger.Debugf("applying special difficulty rule")
 		// set to start difficulty
 		return b.defaultMiningNBits, nil
-	} else if b.currentDifficulty != nil {
+	case b.currentDifficulty != nil:
 		b.logger.Debugf("setting difficulty to current difficulty %s", b.currentDifficulty.String())
 		return b.currentDifficulty, nil
-	} else {
+	default:
 		b.logger.Debugf("setting difficulty to default mining bits %s", b.defaultMiningNBits.String())
 		return b.defaultMiningNBits, nil
 	}
