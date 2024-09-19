@@ -692,7 +692,7 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	case !b.difficultyAdjustment || (b.bestBlockHeight.Load() < uint32(DifficultyAdjustmentWindow)+3):
 		b.logger.Debugf("no difficulty adjustment. Difficulty set to %s", b.defaultMiningNBits.String())
 		return b.defaultMiningNBits, nil
-	case timeDifference > thresholdSeconds+uint32(randomOffset):
+	case timeDifference > thresholdSeconds+uint32(randomOffset): // nolint: gosec
 		// If the new block's timestamp is more than 2* 10 minutes then allow mining of a min-difficulty block.
 		b.logger.Debugf("applying special difficulty rule")
 		// set to start difficulty
