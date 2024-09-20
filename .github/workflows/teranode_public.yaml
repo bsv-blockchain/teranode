@@ -16,7 +16,7 @@ jobs:
   isolate_version:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.get_tag.outputs.version }}
+      version_tag: ${{ steps.get_tag.outputs.version }}
     steps:
       - name: Separate version from release tag
         id: get_tag
