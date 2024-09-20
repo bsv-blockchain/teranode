@@ -28,7 +28,7 @@ jobs:
     uses: ./.github/workflows/teranode_public_pull_push.yaml
     secrets: inherit
     with:
-      arch: amd64
+      arch: arm64
       tag: latest-amd64
       region: eu-north-1
       src_repo: ubsv
