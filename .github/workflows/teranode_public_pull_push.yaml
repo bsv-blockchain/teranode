@@ -67,8 +67,13 @@ jobs:
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:${{ github.sha }}-${{ inputs.arch }}
 
+      - name: debug
+        run: |
+          docker image ls -a
+
       - name: Push to destination repo
         run: |
-          docker push \
+          docker push -a \
           ${{ steps.login-ecr.outputs.registry }}/\
-          ${{ inputs.dest_repo }}:latest
+          ${{ inputs.dest_repo }}
+        # :latest-${{ input.arch }}
