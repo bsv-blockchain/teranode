@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - 'release-v*'
-    branches:
-      - jeff/teranode_public_workflow
 
 env:
   REF_NAME: ${{ github.ref_name }}
@@ -47,7 +45,10 @@ jobs:
 
   # Create docker manifest for multiple architecture tags
   create_manifest:
-    needs: [pull_push_amd64, pull_push_arm64, isolate_version]
+    needs:
+      - pull_push_amd64
+      - pull_push_arm64
+      - isolate_version
     uses: ./.github/workflows/teranode_public_manifest.yaml
     secrets: inherit
     with:
