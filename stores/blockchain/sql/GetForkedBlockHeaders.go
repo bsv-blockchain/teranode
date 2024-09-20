@@ -14,11 +14,7 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetForkedBlockHeaders")
 	defer deferFn()
 
-	headers, metas, err := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
-	if err != nil {
-		return nil, nil, errors.NewStorageError("error in GetBlockHeaders", err)
-	}
-
+	headers, metas := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
 	if headers != nil {
 		return headers, metas, nil
 	}

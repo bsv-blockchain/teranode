@@ -15,11 +15,7 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeaderIDs")
 	defer deferFn()
 
-	_, metas, err := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
-	if err != nil {
-		return nil, errors.NewServiceError("error in GetBlockHeaderIDs", err)
-	}
-
+	_, metas := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
 	if metas != nil {
 		blockIds := make([]uint32, 0, len(metas))
 		for _, meta := range metas {

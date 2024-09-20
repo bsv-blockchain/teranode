@@ -16,11 +16,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeader")
 	defer deferFn()
 
-	header, meta, er := s.blocksCache.GetBlockHeader(*blockHash)
-	if er != nil {
-		return nil, nil, errors.NewStorageError("error in GetBlockHeader", er)
-	}
-
+	header, meta := s.blocksCache.GetBlockHeader(*blockHash)
 	if header != nil {
 		return header, meta, nil
 	}

@@ -13,11 +13,7 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeight")
 	defer deferFn()
 
-	_, meta, err := s.blocksCache.GetBlockHeader(*blockHash)
-	if err != nil {
-		return 0, errors.NewStorageError("error in GetBlockHeight", err)
-	}
-
+	_, meta := s.blocksCache.GetBlockHeader(*blockHash)
 	if meta != nil {
 		return meta.Height, nil
 	}
@@ -34,7 +30,7 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 
 	var height uint32
 
-	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
+	if err := s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
 		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
