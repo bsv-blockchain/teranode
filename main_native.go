@@ -20,7 +20,7 @@ import (
 
 func init() {
 	// Create a secp256k1 context
-	if gocore.Config().GetBool("use_cgo_verifier", false) {
+	if gocore.Config().GetBool("use_cgo_verifier", true) {
 		log.Println("Using CGO verifier - VerifySignature")
 		interpreter.InjectExternalVerifySignatureFn(native.VerifySignature)
 		sdkinterpreter.InjectExternalVerifySignatureFn(native.VerifySignature)
