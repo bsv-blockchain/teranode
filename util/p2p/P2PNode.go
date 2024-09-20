@@ -121,14 +121,26 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) (*P2PNode, error) {
 		logger.Infof("[P2PNode]   %s/p2p/%s", addr, h.ID().Pretty())
 	}
 
-	return &P2PNode{
+	node := &P2PNode{
 		config:            config,
 		logger:            logger,
 		host:              h,
 		bitcoinProtocolID: "ubsv/bitcoin/1.0.0",
 		handlerByTopic:    make(map[string]Handler),
 		startTime:         time.Now(),
-	}, nil
+	}
+
+	// Set up connection notifications
+	h.Network().Notify(&network.NotifyBundle{
+		ConnectedF: func(n network.Network, conn network.Conn) {
+			node.logger.Infof("[P2PNode] Peer connected: %s", conn.RemotePeer().Pretty())
+		},
+		DisconnectedF: func(n network.Network, conn network.Conn) {
+			node.logger.Infof("[P2PNode] Peer disconnected: %s", conn.RemotePeer().Pretty())
+		},
+	})
+
+	return node, nil
 }
 
 func (s *P2PNode) Start(ctx context.Context, topicNames ...string) error {
