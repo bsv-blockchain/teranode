@@ -43,5 +43,5 @@ jobs:
         with:
           tags: ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}
           sources: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ github.sha }}-amd64
-            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ github.sha }}-arm64
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest-amd64
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest-arm64
