@@ -4,8 +4,6 @@ on:
   push:
     tags:
       - 'release-v*'
-    branches:
-      - master
 
 env:
   REF_NAME: ${{ github.ref_name }}
