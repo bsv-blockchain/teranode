@@ -13,7 +13,7 @@ import (
 )
 
 type existerIfc interface {
-	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
+	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
 }
 
 type QuorumOption func(*Quorum)
@@ -47,7 +47,7 @@ type Quorum struct {
 	absoluteTimeout time.Duration
 	extension       string
 	exister         existerIfc
-	existerOpts     []options.Options
+	existerOpts     []options.FileOption
 }
 
 func New(logger ulogger.Logger, exister existerIfc, path string, quorumOpts ...QuorumOption) (*Quorum, error) {
