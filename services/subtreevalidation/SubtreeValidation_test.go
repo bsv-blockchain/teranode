@@ -85,7 +85,8 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			httpmock.NewBytesResponder(200, nodeBytes),
 		)
 
-		blockValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
+		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
+		require.NoError(t, err)
 
 		v := ValidateSubtree{
 			SubtreeHash:   *subtree.RootHash(),
@@ -93,7 +94,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			TxHashes:      nil,
 			AllowFailFast: false,
 		}
-		err = blockValidation.validateSubtreeInternal(context.Background(), v, util.GenesisActivationHeight)
+		err = subtreeValidation.validateSubtreeInternal(context.Background(), v, util.GenesisActivationHeight)
 		require.NoError(t, err)
 	})
 }
@@ -150,8 +151,10 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 	defer deferFunc()
 
-	blockValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
-	blockValidation.utxoStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
+	require.NoError(t, err)
+
+	subtreeValidation.utxoStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
 
 	numberOfItems := 1_024 * 1_024
 
@@ -164,7 +167,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 1, 0))
 
-		_, err := blockValidation.utxoStore.Create(context.Background(), tx, 0)
+		_, err := subtreeValidation.utxoStore.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
 	}
 
@@ -194,7 +197,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 		TxHashes:      nil,
 		AllowFailFast: false,
 	}
-	err = blockValidation.validateSubtreeInternal(context.Background(), v, util.GenesisActivationHeight)
+	err = subtreeValidation.validateSubtreeInternal(context.Background(), v, util.GenesisActivationHeight)
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
@@ -223,7 +226,8 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 		httpmock.NewBytesResponder(200, nodeBytes),
 	)
 
-	subtreeValidation := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient)
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient)
+	require.NoError(t, err)
 
 	// Create a mock context
 	ctx := context.Background()
