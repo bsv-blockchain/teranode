@@ -69,6 +69,6 @@ jobs:
 
       - name: Push to destination repo
         run: |
-          docker push -a
-        #  ${{ steps.login-ecr.outputs.registry }}/\
-        #  ${{ inputs.dest_repo }}:latest-${{ inputs.arch }}
+          docker push \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.dest_repo }}:latest
