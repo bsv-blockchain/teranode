@@ -51,7 +51,7 @@ jobs:
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.src_repo }}:latest-${{ inputs.arch }}
 
-      - name: Tag image for destination
+      - name: Tag image for destination with latest-arch
         run: |
           docker tag \
           ${{ steps.login-ecr.outputs.registry }}/\
@@ -59,13 +59,21 @@ jobs:
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:latest-${{ inputs.arch }}
 
-      # - name: Tag image for destination
-      #   run: |
-      #     docker tag \
-      #     ${{ steps.login-ecr.outputs.registry }}/\
-      #     ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
-      #     ${{ steps.login-ecr.outputs.registry }}/\
-      #     ${{ inputs.dest_repo }}:${{ github.sha }}-${{ inputs.arch }}
+      - name: Tag image for destination with commit hash
+        run: |
+          docker tag \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.dest_repo }}:${{ github.sha }}-${{ inputs.arch }}
+
+      - name: Tag image for destination with version
+        run: |
+          docker tag \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.dest_repo }}:${{ inputs.version_tag }}
 
       - name: List all images for troubleshooting
         run: |
@@ -76,4 +84,3 @@ jobs:
           docker push -a \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}
-        # :latest-${{ input.arch }}
