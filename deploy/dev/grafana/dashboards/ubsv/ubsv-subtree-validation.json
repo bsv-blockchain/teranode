@@ -113,7 +113,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(validator_transactions_validate_total_micros_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service) / 60  >0",
+          "expr": "sum(increase(validator_transactions_validate_total_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service) / 60  >0",
           "hide": false,
           "legendFormat": "{{service}}",
           "range": true,
@@ -188,10 +188,10 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.95, (validator_transactions_validate_total_micros_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
+          "expr": "avg by (namespace) (histogram_quantile(0.95, (validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
           "instant": false,
           "interval": "",
-          "legendFormat": "p95 us",
+          "legendFormat": "p95 us - {{namespace}}",
           "refId": "A"
         },
         {
@@ -201,9 +201,9 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.99, (validator_transactions_validate_total_micros_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
+          "expr": "avg by (namespace) (histogram_quantile(0.99, (validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
           "interval": "",
-          "legendFormat": "p99 us",
+          "legendFormat": "p99 us - {{namespace}}",
           "range": true,
           "refId": "B"
         },
@@ -214,11 +214,11 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.999, (validator_transactions_validate_total_micros_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
+          "expr": "avg by (namespace) (histogram_quantile(0.999, (validator_transactions_validate_total_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
           "hide": false,
           "instant": false,
           "interval": "",
-          "legendFormat": "p99.9 us",
+          "legendFormat": "p99.9 us - {{namespace}}",
           "refId": "C"
         }
       ],
@@ -317,7 +317,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(subtreevalidation_set_tx_meta_cache_kafka_micros_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(subtreevalidation_set_tx_meta_cache_kafka_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -436,7 +436,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(subtreevalidation_del_tx_meta_cache_kafka_micros_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(subtreevalidation_del_tx_meta_cache_kafka_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -555,7 +555,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(subtreevalidation_bless_missing_transaction_duration_millis_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(subtreevalidation_bless_missing_transaction_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -674,7 +674,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(subtreevalidation_validate_subtree_duration_millis_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(subtreevalidation_validate_subtree_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -876,9 +876,9 @@
       },
       {
         "current": {
-          "selected": false,
-          "text": "Prometheus EU",
-          "value": "Prometheus EU"
+          "selected": true,
+          "text": "Prometheus Frankfurt ",
+          "value": "Prometheus Frankfurt "
         },
         "hide": 0,
         "includeAll": false,
@@ -903,6 +903,6 @@
   "timezone": "",
   "title": "UBSV Subtree Validation",
   "uid": "b0e7b163-27a5-4f20-af5d-dca915d0a2ed",
-  "version": 5,
+  "version": 6,
   "weekStart": ""
 }

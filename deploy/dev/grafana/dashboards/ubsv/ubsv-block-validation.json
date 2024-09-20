@@ -113,7 +113,7 @@
             "uid": "${prometheus}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(validator_transactions_validate_total_micros_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service) / 60  >0",
+          "expr": "sum(increase(validator_transactions_validate_total_count{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (service) / 60  >0",
           "hide": false,
           "legendFormat": "{{service}}",
           "range": true,
@@ -188,10 +188,10 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.95, (validator_transactions_validate_total_micros_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
+          "expr": "avg by (namespace) (histogram_quantile(0.95, (blockvalidation_validate_block_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
           "instant": false,
           "interval": "",
-          "legendFormat": "p95 us",
+          "legendFormat": "p95 us - {{namespace}}",
           "refId": "A"
         },
         {
@@ -201,9 +201,9 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.99, (validator_transactions_validate_total_micros_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
+          "expr": "avg by (namespace) (histogram_quantile(0.99, (blockvalidation_validate_block_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
           "interval": "",
-          "legendFormat": "p99 us",
+          "legendFormat": "p99 us - {{namespace}}",
           "range": true,
           "refId": "B"
         },
@@ -214,11 +214,11 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "avg by (namespace) (histogram_quantile(0.999, (validator_transactions_validate_total_micros_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
+          "expr": "avg by (namespace) (histogram_quantile(0.999, (blockvalidation_validate_block_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"})))",
           "hide": false,
           "instant": false,
           "interval": "",
-          "legendFormat": "p99.9 us",
+          "legendFormat": "p99.9 us - {{namespace}}",
           "refId": "C"
         }
       ],
@@ -317,7 +317,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum(increase(blockvalidation_validate_block_duration_seconds_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "expr": "sum(increase(blockvalidation_validate_block_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
           "format": "heatmap",
           "hide": false,
           "instant": false,
@@ -343,9 +343,128 @@
         "show": true
       },
       "yBucketBound": "auto"
+    },
+    {
+      "cards": {},
+      "color": {
+        "cardColor": "#5794F2",
+        "colorScale": "sqrt",
+        "colorScheme": "interpolateSpectral",
+        "exponent": 0.3,
+        "mode": "spectrum"
+      },
+      "dataFormat": "tsbuckets",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 20,
+        "x": 4,
+        "y": 19
+      },
+      "heatmap": {},
+      "hideZeroBuckets": true,
+      "highlightCards": true,
+      "id": 32,
+      "legend": {
+        "show": true
+      },
+      "options": {
+        "calculate": false,
+        "calculation": {},
+        "cellGap": 2,
+        "cellValues": {
+          "decimals": 0
+        },
+        "color": {
+          "exponent": 0.5,
+          "fill": "#5794F2",
+          "mode": "scheme",
+          "reverse": false,
+          "scale": "exponential",
+          "scheme": "Spectral",
+          "steps": 128
+        },
+        "exemplars": {
+          "color": "rgba(255,0,255,0.7)"
+        },
+        "filterValues": {
+          "le": 1e-9
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        },
+        "showValue": "never",
+        "tooltip": {
+          "show": true,
+          "yHistogram": true
+        },
+        "yAxis": {
+          "axisPlacement": "left",
+          "reverse": false,
+          "unit": "short"
+        }
+      },
+      "pluginVersion": "10.0.3",
+      "repeatDirection": "v",
+      "reverseYBuckets": false,
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${prometheus}"
+          },
+          "editorMode": "code",
+          "exemplar": true,
+          "expr": "sum(increase(block_valid_bucket{instance=~\"$instance\",service=~\"$srvc\",namespace=~\"$namespace\"}[$grouping_interval])) by (le)",
+          "format": "heatmap",
+          "hide": false,
+          "instant": false,
+          "interval": "",
+          "intervalFactor": 1,
+          "legendFormat": "{{ le }}us",
+          "refId": "A"
+        }
+      ],
+      "title": "Block.Valid Duration",
+      "tooltip": {
+        "show": true,
+        "showHistogram": true
+      },
+      "tooltipDecimals": 3,
+      "type": "heatmap",
+      "xAxis": {
+        "show": true
+      },
+      "yAxis": {
+        "format": "short",
+        "logBase": 1,
+        "show": true
+      },
+      "yBucketBound": "auto"
     }
   ],
-  "refresh": "5s",
+  "refresh": "1h",
   "schemaVersion": 38,
   "style": "dark",
   "tags": [],
@@ -519,9 +638,9 @@
       },
       {
         "current": {
-          "selected": false,
-          "text": "Prometheus EU",
-          "value": "Prometheus EU"
+          "selected": true,
+          "text": "Prometheus Frankfurt ",
+          "value": "Prometheus Frankfurt "
         },
         "hide": 0,
         "includeAll": false,
@@ -546,6 +665,6 @@
   "timezone": "",
   "title": "UBSV Block Validation",
   "uid": "aa0a5f22-e0fc-48e3-acb1-6ea86665775a",
-  "version": 6,
+  "version": 9,
   "weekStart": ""
 }
