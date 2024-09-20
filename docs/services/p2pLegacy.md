@@ -65,6 +65,8 @@ Both the Block Validation and the Subtree validation will query the P2P Legacy S
 
 In addition to the block database, the service maintains an in-memory peer database, tracking peers it receives / sends messages from /to.
 
+Also, note how the Blockchain client is used in order to wait for the node State to change to `RUNNING` state. For more information on this, please refer to the [State Management](../architecture/stateManagement.md)  documentation.
+
 ## 3. Data Model
 
 When we announce a teranode block, the format is:

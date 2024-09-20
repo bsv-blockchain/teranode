@@ -2,8 +2,10 @@
 name: teranode-public
 on:
   push:
-    tags:
-      - 'release-v*'
+    # tags:
+    #   - 'release-v*'
+    branches:
+      - jeff/teranode_public_workflow
 
 env:
   REF_NAME: ${{ github.ref_name }}

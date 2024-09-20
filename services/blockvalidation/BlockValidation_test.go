@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"testing"
 	"time"
 
@@ -67,8 +66,6 @@ func (m *MockSubtreeValidationClient) CheckSubtree(ctx context.Context, subtreeH
 }
 
 func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation.Interface, blob.Store, blob.Store, func()) {
-	os.Setenv("network", "mainnet")
-
 	// we only need the httpClient, txMetaStore and validatorClient when blessing a transaction
 	httpmock.Activate()
 	httpmock.RegisterResponder(
@@ -206,7 +203,6 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 func TestBlockValidationValidateBlock(t *testing.T) {
 
 	initPrometheusMetrics()
-
 	txCount := 1024
 	// subtreeHashes := make([]*chainhash.Hash, 0)
 

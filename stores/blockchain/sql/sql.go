@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/ordishs/gocore"
 
@@ -16,7 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/usql"
 	"github.com/jellydator/ttlcache/v3"
 	_ "github.com/lib/pq"
-
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	_ "modernc.org/sqlite"
 )
@@ -28,18 +27,10 @@ type SQL struct {
 	responseCache *ttlcache.Cache[chainhash.Hash, any]
 	cacheTTL      time.Duration
 	blocksCache   blockchainCache
-	chainParams   *chaincfg.Params
 }
 
 func New(logger ulogger.Logger, storeURL *url.URL) (*SQL, error) {
 	logger = logger.New("bcsql")
-
-	network, _ := gocore.Config().Get("network", "mainnet")
-
-	params, err := chaincfg.GetChainParams(network)
-	if err != nil {
-		logger.Fatalf("Unknown network: %s", network)
-	}
 
 	db, err := util.InitSQLDB(logger, storeURL)
 	if err != nil {
@@ -68,7 +59,6 @@ func New(logger ulogger.Logger, storeURL *url.URL) (*SQL, error) {
 		cacheTTL:      2 * time.Minute,
 		responseCache: ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](2 * time.Minute)),
 		blocksCache:   *NewBlockchainCache(),
-		chainParams:   params,
 	}
 
 	err = s.insertGenesisTransaction(logger)
@@ -268,12 +258,16 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 	}
 
 	if blockCount == 0 {
-		wireGenesisBlock := s.chainParams.GenesisBlock
-		// wireGenesisBlock := chaincfg.MainNetParams.GenesisBlock
+		coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff4d04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73ffffffff0100f2052a01000000434104678afdb0fe5548271967f1a67130b7105cd6a828e03909a67962e0ea1f61deb649f6bc3f4cef38c4f35504e51ec112de5c384df7ba0b8d578a4c702b6bf11d5fac00000000")
+		txID := coinbaseTx.TxID()
+		_ = txID
 
-		genesisBlock, err := model.NewBlockFromMsgBlock(wireGenesisBlock)
-		if err != nil {
-			return err
+		genesisBlock := &model.Block{
+			Header:           model.GenesisBlockHeader,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			SizeInBytes:      285,
+			Subtrees:         []*chainhash.Hash{},
 		}
 
 		// turn off foreign key checks when inserting the genesis block
@@ -302,6 +296,7 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 }
 
 type blockchainCache struct {
+	enabled     bool
 	headers     map[chainhash.Hash]*model.BlockHeader
 	metas       map[chainhash.Hash]*model.BlockHeaderMeta
 	existsCache map[chainhash.Hash]bool
@@ -311,6 +306,7 @@ type blockchainCache struct {
 
 func NewBlockchainCache() *blockchainCache {
 	return &blockchainCache{
+		enabled:     gocore.Config().GetBool("blockchain_store_cache_enabled", true),
 		headers:     make(map[chainhash.Hash]*model.BlockHeader, 100),
 		metas:       make(map[chainhash.Hash]*model.BlockHeaderMeta, 100),
 		existsCache: make(map[chainhash.Hash]bool, 100),
@@ -320,6 +316,10 @@ func NewBlockchainCache() *blockchainCache {
 }
 
 func (c *blockchainCache) AddBlockHeader(blockHeader *model.BlockHeader, blockHeaderMeta *model.BlockHeaderMeta) bool {
+	if !c.enabled {
+		return true
+	}
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -365,6 +365,10 @@ func (c *blockchainCache) addBlockHeader(blockHeader *model.BlockHeader, blockHe
 }
 
 func (c *blockchainCache) RebuildBlockchain(blockHeaders []*model.BlockHeader, blockHeaderMetas []*model.BlockHeaderMeta) {
+	if !c.enabled {
+		return
+	}
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -413,37 +417,37 @@ func (s *SQL) ResetBlocksCache(ctx context.Context) error {
 	return nil
 }
 
-func (c *blockchainCache) GetBestBlockHeader() (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+func (c *blockchainCache) GetBestBlockHeader() (*model.BlockHeader, *model.BlockHeaderMeta) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
 	if len(c.chain) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	hash := c.chain[len(c.chain)-1]
 
-	return c.headers[hash], c.metas[hash], nil
+	return c.headers[hash], c.metas[hash]
 }
 
-func (c *blockchainCache) GetBlockHeader(hash chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+func (c *blockchainCache) GetBlockHeader(hash chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
 	blockHeader, ok := c.headers[hash]
 	if !ok {
-		return nil, nil, nil
+		return nil, nil
 	}
 
-	return blockHeader, c.metas[hash], nil
+	return blockHeader, c.metas[hash]
 }
 
-func (c *blockchainCache) GetBlockHeadersFromHeight(height uint32, limit int) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+func (c *blockchainCache) GetBlockHeadersFromHeight(height uint32, limit int) ([]*model.BlockHeader, []*model.BlockHeaderMeta) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
 	if len(c.chain) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	for i, hash := range c.chain {
@@ -451,7 +455,7 @@ func (c *blockchainCache) GetBlockHeadersFromHeight(height uint32, limit int) ([
 		if meta.Height == height {
 			if i+limit > len(c.chain) {
 				// can't get all the headers requested, so return nothing
-				return nil, nil, nil
+				return nil, nil
 			}
 
 			headers := make([]*model.BlockHeader, 0, limit)
@@ -462,19 +466,19 @@ func (c *blockchainCache) GetBlockHeadersFromHeight(height uint32, limit int) ([
 				metas = append(metas, c.metas[c.chain[j]])
 			}
 
-			return headers, metas, nil
+			return headers, metas
 		}
 	}
 
-	return nil, nil, nil
+	return nil, nil
 }
 
-func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 
 	if len(c.chain) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 
 	// nolint: gosec
@@ -484,7 +488,7 @@ func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberO
 		if hash == *blockHashFrom {
 			if i < limit {
 				// can't get all the headers requested, so return nothing
-				return nil, nil, nil
+				return nil, nil
 			}
 
 			headers := make([]*model.BlockHeader, 0, limit)
@@ -495,11 +499,11 @@ func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberO
 				metas = append(metas, c.metas[c.chain[j]])
 			}
 
-			return headers, metas, nil
+			return headers, metas
 		}
 	}
 
-	return nil, nil, nil
+	return nil, nil
 }
 
 func (c *blockchainCache) GetExists(blockHash chainhash.Hash) (bool, bool) {
@@ -512,6 +516,10 @@ func (c *blockchainCache) GetExists(blockHash chainhash.Hash) (bool, bool) {
 }
 
 func (c *blockchainCache) SetExists(blockHash chainhash.Hash, exists bool) {
+	if !c.enabled {
+		return
+	}
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 

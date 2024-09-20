@@ -16,11 +16,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	)
 	defer deferFn()
 
-	headers, metas, err := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
-	if err != nil {
-		return nil, nil, errors.NewStorageError("error in GetBlockHeaders", err)
-	}
-
+	headers, metas := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
 	if headers != nil {
 		return headers, metas, nil
 	}

@@ -16,11 +16,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBestBlockHeader")
 	defer deferFn()
 
-	header, meta, er := s.blocksCache.GetBestBlockHeader()
-	if er != nil {
-		return nil, nil, errors.NewStorageError("error in GetBestBlockHeader", er)
-	}
-
+	header, meta := s.blocksCache.GetBestBlockHeader()
 	if header != nil {
 		return header, meta, nil
 	}

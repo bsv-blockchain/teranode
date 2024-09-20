@@ -116,6 +116,8 @@ When a block parent is not found in the local blockchain, the node will start a 
 
 When a block is not known, it will be requested from the remote node. Once received, it will be queued for validation (effectively starting the process of validation for the parent block from the beginning, as seen in 2.3.1).
 
+Notice that, when catching up, the Block Validator will set the machine state of the node to `CATCHING_UP`. This is done to prevent the node from processing new blocks while it is still catching up. The node will only assemble or process new blocks once it has caught up with the blockchain. For more information on this, please refer to the [State Management](../architecture/stateManagement.md)  documentation.
+
 #### 2.2.3. Validating the Subtrees
 
 Should the validation process for a block encounter a subtree it does not know about, it can request its processing off the Subtree Validation service.

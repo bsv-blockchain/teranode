@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -31,7 +30,6 @@ type Server struct {
 	mu               sync.Mutex
 	running          bool
 	triggerCh        chan string
-	chainParams      *chaincfg.Params
 }
 
 func New(
@@ -39,22 +37,13 @@ func New(
 	logger ulogger.Logger,
 	blockStore blob.Store,
 	blockchainClient blockchain.ClientI,
-
 ) *Server {
-	network, _ := gocore.Config().Get("network", "mainnet")
-
-	params, err := chaincfg.GetChainParams(network)
-	if err != nil {
-		logger.Fatalf("Unknown network: %s", network)
-	}
-
 	return &Server{
 		logger:           logger,
 		blockchainClient: blockchainClient,
 		blockStore:       blockStore,
 		stats:            gocore.NewStat("utxopersister"),
 		triggerCh:        make(chan string, 5),
-		chainParams:      params,
 	}
 }
 
@@ -261,7 +250,7 @@ func (s *Server) processNextBlock(ctx context.Context) error {
 	hash := header.Hash()
 
 	previousBlockHash := header.HashPrevBlock
-	if previousBlockHash.String() == s.chainParams.GenesisHash.String() {
+	if previousBlockHash.String() == "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f" {
 		// Genesis block
 		previousBlockHash = nil
 	}

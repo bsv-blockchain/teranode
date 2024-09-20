@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -660,4 +661,84 @@ func bsvdLookup(host string) ([]net.IP, error) {
 	}
 
 	return cfg.lookup(host)
+}
+
+// nolint: gocognit
+func setConfigValuesFromSettings(logger ulogger.Logger, settings map[string]string, cfg *config) {
+	for k, v := range settings {
+		// check whether the key is of the form "legacy_config_" + configKey
+		if strings.HasPrefix(k, "legacy_config_") {
+			// remove the prefix
+			configKey := k[len("legacy_config_"):]
+			// set the value to the configKey of the map cfg, using reflection
+			// this is done to avoid having to add a new if statement for each new config key
+			field := reflect.ValueOf(cfg).Elem().FieldByName(configKey)
+			if field.IsValid() {
+				// set the value of this field to the correct type
+				switch field.Kind() {
+				case reflect.Bool:
+					field.SetBool(v == "true")
+				case reflect.Int:
+					intVal, err := strconv.Atoi(v)
+					if err != nil {
+						logger.Warnf("Could not convert %s to int: %v", v, err)
+					} else {
+						field.SetInt(int64(intVal))
+					}
+				case reflect.Uint32:
+					uintVal, err := strconv.ParseUint(v, 10, 32)
+					if err != nil {
+						logger.Warnf("Could not convert %s to uint32: %v", v, err)
+					} else {
+						field.SetUint(uintVal)
+					}
+				case reflect.Uint64:
+					uintVal, err := strconv.ParseUint(v, 10, 64)
+					if err != nil {
+						logger.Warnf("Could not convert %s to uint64: %v", v, err)
+					} else {
+						field.SetUint(uintVal)
+					}
+				case reflect.Int64:
+					// this is actually a time duration
+					duration, err := time.ParseDuration(v)
+					if err != nil {
+						logger.Warnf("Could not convert %s to time.Duration: %v", v, err)
+					} else {
+						field.SetInt(duration.Nanoseconds())
+					}
+				case reflect.Float64:
+					floatVal, err := strconv.ParseFloat(v, 64)
+					if err != nil {
+						logger.Warnf("Could not convert %s to float64: %v", v, err)
+					} else {
+						field.SetFloat(floatVal)
+					}
+				case reflect.Uint:
+					uintVal, err := strconv.ParseUint(v, 10, 64)
+					if err != nil {
+						logger.Warnf("Could not convert %s to uint: %v", v, err)
+					} else {
+						field.SetUint(uintVal)
+					}
+				case reflect.String:
+					field.SetString(v)
+				case reflect.Slice:
+					// split the string by the pipe character
+					slice := strings.Split(v, "|")
+					// create a new slice of the correct type
+					newSlice := reflect.MakeSlice(field.Type(), len(slice), len(slice))
+					// iterate over the slice and set the values
+					for i, val := range slice {
+						newSlice.Index(i).SetString(val)
+					}
+					// set the field to the new slice
+					field.Set(newSlice)
+				default:
+					// time.Duration
+					logger.Warnf("Unsupported type for config key %s: %v", configKey, field.Kind())
+				}
+			}
+		}
+	}
 }

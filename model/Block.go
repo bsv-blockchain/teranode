@@ -211,67 +211,6 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, 
 	}, nil
 }
 
-// NewBlockFromMsgBlock creates a new model.Block from a wire.MsgBlock
-func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock) (*Block, error) {
-	if msgBlock == nil {
-		return nil, errors.NewInvalidArgumentError("msgBlock is nil")
-	}
-
-	bitsBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(bitsBytes, msgBlock.Header.Bits)
-
-	nbits, err := NewNBitFromSlice(bitsBytes)
-	if err != nil {
-		return nil, errors.NewBlockInvalidError("failed to create NBit from Bits", err)
-	}
-
-	header := &BlockHeader{
-		Version:        uint32(msgBlock.Header.Version),
-		HashPrevBlock:  &msgBlock.Header.PrevBlock,
-		HashMerkleRoot: &msgBlock.Header.MerkleRoot,
-		Timestamp:      uint32(msgBlock.Header.Timestamp.Unix()),
-		Bits:           *nbits,
-		Nonce:          msgBlock.Header.Nonce,
-	}
-
-	if len(msgBlock.Transactions) == 0 {
-		return nil, errors.NewBlockInvalidError("block has no transactions")
-	}
-
-	var coinbase bytes.Buffer
-	if err = msgBlock.Transactions[0].Serialize(&coinbase); err != nil {
-		return nil, errors.NewProcessingError("failed to serialize coinbase", err)
-	}
-
-	coinbaseTx, err := bt.NewTxFromBytes(coinbase.Bytes())
-	if err != nil {
-		return nil, errors.NewProcessingError("failed to create bt.Tx for coinbase", err)
-	}
-
-	txCount := uint64(len(msgBlock.Transactions))
-	sizeInBytes := uint64(msgBlock.SerializeSize())
-
-	subtrees := make([]*chainhash.Hash, 0)
-
-	subtree, err := util.NewIncompleteTreeByLeafCount(len(msgBlock.Transactions))
-	if err != nil {
-		return nil, errors.NewSubtreeError("failed to create subtree", err)
-	}
-
-	if err = subtree.AddNode(CoinbasePlaceholder, 0, 0); err != nil {
-		return nil, errors.NewSubtreeError("failed to add coinbase placeholder", err)
-	}
-	// TODO: support more than coinbase tx in the subtree
-	// if txCount > 1 {
-	// 	// loop through the transactions ignoring the first coinbase tx and add them to the subtrees list
-
-	// 	// subtrees = append(subtrees, subtree.RootHash())
-	// }
-
-	// Create and return the new Block
-	return NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0)
-}
-
 func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {
 	startTime := time.Now()
 
@@ -925,7 +864,6 @@ func getParentTxMeta(gCtx context.Context, txMetaStore utxo.Store, parentTxStruc
 	parentTxMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.parentTxHash)
 	if err != nil {
 		fmt.Println("HERE")
-
 		if errors.Is(err, errors.ErrTxNotFound) {
 			fmt.Println("NOPE")
 			return nil, nil

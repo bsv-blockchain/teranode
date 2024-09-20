@@ -3,7 +3,6 @@ package sql
 import (
 	"context"
 	"net/url"
-	"os"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -16,10 +15,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		os.Setenv("network", "mainnet")
-
 		s, err := New(ulogger.TestLogger{}, storeURL)
-
 		require.NoError(t, err)
 
 		tip, meta, err := s.GetBestBlockHeader(context.Background())
@@ -34,10 +30,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		os.Setenv("network", "mainnet")
-
 		s, err := New(ulogger.TestLogger{}, storeURL)
-
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -64,10 +57,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		storeURL, err := url.Parse("sqlitememory:///")
 		require.NoError(t, err)
 
-		os.Setenv("network", "mainnet")
-
 		s, err := New(ulogger.TestLogger{}, storeURL)
-
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")

@@ -288,8 +288,6 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 }
 
 func setupBlockAssemblyTest(t require.TestingT) *baTestItems {
-	os.Setenv("network", "mainnet")
-
 	items := baTestItems{}
 
 	items.utxoStore = utxostore.New(ulogger.TestLogger{}) // utxo memory store
