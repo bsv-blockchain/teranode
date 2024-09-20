@@ -14,7 +14,10 @@ on:
         description: 'AWS region'
         required: true
         type: string
-
+      version_tag:
+        description: 'Release version'
+        required: true
+        type: string
 jobs:
   build_manifest:
     name: Build manifest
@@ -41,7 +44,9 @@ jobs:
       # Create docker manifest
       - uses: int128/docker-manifest-create-action@v2
         with:
-          tags: ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.version_tag }}
           sources: |
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest-amd64
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest-arm64

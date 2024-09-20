@@ -23,10 +23,6 @@ on:
         description: 'Architecture to build'
         required: true
         type: string
-      version_tag:
-        description: 'Release version'
-        required: true
-        type: string
 
 jobs:
   push-to-public-repo:
@@ -70,14 +66,6 @@ jobs:
           ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:${{ github.sha }}-${{ inputs.arch }}
-
-      - name: Tag image for destination with version
-        run: |
-          docker tag \
-          ${{ steps.login-ecr.outputs.registry }}/\
-          ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
-          ${{ steps.login-ecr.outputs.registry }}/\
-          ${{ inputs.dest_repo }}:${{ inputs.version_tag }}
 
       - name: List all images for troubleshooting
         run: |
