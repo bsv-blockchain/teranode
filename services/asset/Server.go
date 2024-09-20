@@ -2,6 +2,7 @@ package asset
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"google.golang.org/protobuf/types/known/emptypb"
 
@@ -65,8 +66,6 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("error creating repository", err)
 	}
 
-	v.centrifugeAddr, centrifugeOk = gocore.Config().Get("asset_centrifugeListenAddress", ":8101")
-
 	if httpOk {
 		v.httpServer, err = http_impl.New(v.logger, repo)
 		if err != nil {
@@ -79,15 +78,18 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		}
 	}
 
-	if centrifugeOk && v.httpServer != nil {
-		v.centrifugeServer, err = centrifuge_impl.New(v.logger, repo, v.httpServer)
-		if err != nil {
-			return errors.NewServiceError("error creating centrifuge server: %s", err)
-		}
+	if !gocore.Config().GetBool("asset_centrifuge_disable", false) {
+		v.centrifugeAddr, centrifugeOk = gocore.Config().Get("asset_centrifugeListenAddress", ":8101")
+		if centrifugeOk && v.httpServer != nil {
+			v.centrifugeServer, err = centrifuge_impl.New(v.logger, repo, v.httpServer)
+			if err != nil {
+				return errors.NewServiceError("error creating centrifuge server: %s", err)
+			}
 
-		err = v.centrifugeServer.Init(ctx)
-		if err != nil {
-			return errors.NewServiceError("error initializing centrifuge server: %s", err)
+			err = v.centrifugeServer.Init(ctx)
+			if err != nil {
+				return errors.NewServiceError("error initializing centrifuge server: %s", err)
+			}
 		}
 	}
 
