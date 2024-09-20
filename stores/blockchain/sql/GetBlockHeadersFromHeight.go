@@ -14,11 +14,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetBlockHeadersFromHeight")
 	defer deferFn()
 
-	headers, metas, err := s.blocksCache.GetBlockHeadersFromHeight(height, int(limit))
-	if err != nil {
-		return nil, nil, errors.NewStorageError("error in GetBlockHeadersFromHeight", err)
-	}
-
+	headers, metas := s.blocksCache.GetBlockHeadersFromHeight(height, int(limit))
 	if headers != nil {
 		return headers, metas, nil
 	}

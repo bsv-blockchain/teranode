@@ -14,29 +14,28 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/stretchr/testify/assert"
+	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/util/rand"
 )
 
-func cleanup(testDir string) {
-	_ = os.RemoveAll(testDir)
-}
-
-func TestFile_GetWithAbsolutePath(t *testing.T) {
+func TestFileGetWithAbsolutePath(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
-		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
-
-		f, err := New(ulogger.TestLogger{}, []string{testDir})
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
 		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
 
 		// check if the directory is absolute
-		_, err = os.Stat(testDir)
+		_, err = os.Stat(tempDir)
 		require.NoError(t, err)
 
 		// check if the directory is not relative
-		_, err = os.Stat(testDir[1:])
+		_, err = os.Stat(tempDir[1:])
 		require.Error(t, err)
+
+		f, err := New(ulogger.TestLogger{}, tempDir)
+		require.NoError(t, err)
 
 		err = f.Set(context.Background(), []byte("key"), []byte("value"))
 		require.NoError(t, err)
@@ -48,20 +47,17 @@ func TestFile_GetWithAbsolutePath(t *testing.T) {
 
 		err = f.Del(context.Background(), []byte("key"))
 		require.NoError(t, err)
-
-		cleanup(testDir)
 	})
 }
 
-func TestFile_GetWithRelativePath(t *testing.T) {
+func TestFileGetWithRelativePath(t *testing.T) {
 	// random directory name
 	relativePath := "test-path-" + rand.String(12)
-	f, err := New(ulogger.TestLogger{}, []string{relativePath})
+	f, err := New(ulogger.TestLogger{}, relativePath)
 	require.NoError(t, err)
 
 	// check if the directory is created
-	_, err =
-		os.Stat(relativePath)
+	_, err = os.Stat(relativePath)
 	require.NoError(t, err)
 
 	// check if the directory is relative
@@ -83,84 +79,7 @@ func TestFile_GetWithRelativePath(t *testing.T) {
 	_ = os.RemoveAll(relativePath)
 }
 
-func TestFile_filename(t *testing.T) {
-	t.Run("1 path", func(t *testing.T) {
-		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
-		f, err := New(ulogger.TestLogger{}, []string{testDir})
-		require.NoError(t, err)
-
-		filename := f.filename([]byte("key"))
-		assert.Equal(t, testDir+"/79656b", filename)
-
-		cleanup(testDir)
-	})
-
-	t.Run("1 paths", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, []string{"/tmp/ubsv-tests1"})
-		require.NoError(t, err)
-
-		filename := f.filename([]byte("1key"))
-		assert.Equal(t, "/tmp/ubsv-tests1/79656b31", filename)
-
-		filename = f.filename([]byte("2key"))
-		assert.Equal(t, "/tmp/ubsv-tests1/79656b32", filename)
-
-		filename = f.filename([]byte("3key"))
-		assert.Equal(t, "/tmp/ubsv-tests1/79656b33", filename)
-
-		filename = f.filename([]byte("4key"))
-		assert.Equal(t, "/tmp/ubsv-tests1/79656b34", filename)
-
-		cleanup("/tmp/ubsv-tests1")
-	})
-
-	t.Run("2 paths", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, []string{"/tmp/ubsv-tests1", "/tmp/ubsv-tests2"})
-		require.NoError(t, err)
-
-		filename := f.filename([]byte("1key"))
-		assert.Equal(t, "/tmp/ubsv-tests2/79656b31", filename)
-
-		filename = f.filename([]byte("2key"))
-		assert.Equal(t, "/tmp/ubsv-tests1/79656b32", filename)
-
-		filename = f.filename([]byte("3key"))
-		assert.Equal(t, "/tmp/ubsv-tests2/79656b33", filename)
-
-		filename = f.filename([]byte("4key"))
-		assert.Equal(t, "/tmp/ubsv-tests1/79656b34", filename)
-
-		err = f.Close(context.Background())
-		require.NoError(t, err)
-
-		cleanup("/tmp/ubsv-tests1")
-		cleanup("/tmp/ubsv-tests2")
-	})
-
-	t.Run("4 paths", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, []string{
-			"/tmp/ubsv-tests1",
-			"/tmp/ubsv-tests2",
-			"/tmp/ubsv-tests3",
-			"/tmp/ubsv-tests4",
-		})
-		require.NoError(t, err)
-
-		filename := f.filename([]byte("1key"))
-		assert.Equal(t, "/tmp/ubsv-tests2/79656b31", filename)
-
-		filename = f.filename([]byte("2key"))
-		assert.Equal(t, "/tmp/ubsv-tests3/79656b32", filename)
-
-		filename = f.filename([]byte("3key"))
-		assert.Equal(t, "/tmp/ubsv-tests4/79656b33", filename)
-
-		filename = f.filename([]byte("4key"))
-		assert.Equal(t, "/tmp/ubsv-tests1/79656b34", filename)
-	})
-}
-
-func TestFile_AbsoluteAndRelativePath(t *testing.T) {
+func TestFileAbsoluteAndRelativePath(t *testing.T) {
 	absoluteURL, err := url.ParseRequestURI("file:///absolute/path/to/file")
 	require.NoError(t, err)
 	require.Equal(t, "/absolute/path/to/file", GetPathFromURL(absoluteURL))
@@ -178,37 +97,42 @@ func GetPathFromURL(u *url.URL) string {
 	return u.Path
 }
 
-func TestFile_NewWithEmptyPaths(t *testing.T) {
-	t.Run("empty paths", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, []string{})
+func TestFileNewWithEmptyPath(t *testing.T) {
+	t.Run("empty path", func(t *testing.T) {
+		f, err := New(ulogger.TestLogger{}, "")
 		require.NoError(t, err)
 		require.NotNil(t, f)
 	})
 }
 
-func TestFile_NewWithInvalidDirectory(t *testing.T) {
+func TestFileNewWithInvalidDirectory(t *testing.T) {
 	t.Run("invalid directory", func(t *testing.T) {
 		invalidPath := "/invalid-directory" // Assuming this path cannot be created
-		_, err := New(ulogger.TestLogger{}, []string{invalidPath})
+		_, err := New(ulogger.TestLogger{}, invalidPath)
 		require.Error(t, err) // "mkdir /invalid-directory: read-only file system"
 		require.Contains(t, err.Error(), "failed to create directory")
 	})
 }
 
-func TestFile_loadTTLs(t *testing.T) {
+func TestFileLoadTTLs(t *testing.T) {
 	t.Run("load TTLs", func(t *testing.T) {
-		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
 
 		key := []byte("key")
 		value := []byte("value")
-		ttl := 1 * time.Second
-		ttlInterval := 1 * time.Second
+
+		ttl := 100 * time.Millisecond
+		ttlInterval := 10 * time.Millisecond
+
 		ctx := context.Background()
 
-		f, err := new(ulogger.TestLogger{}, []string{testDir}, ttlInterval)
+		f, err := new(ulogger.TestLogger{}, tempDir, ttlInterval)
 		require.NoError(t, err)
 
-		err = f.Set(ctx, key, value, options.WithTTL(100))
+		err = f.Set(ctx, key, value, options.WithTTL(ttl))
 		require.NoError(t, err)
 
 		err = f.SetTTL(ctx, key, ttl)
@@ -218,18 +142,16 @@ func TestFile_loadTTLs(t *testing.T) {
 
 		f.fileTTLsMu.Lock()
 		fileTTLs = f.fileTTLs
-
-		require.NoError(t, err)
-		require.Contains(t, fileTTLs, f.filename(key))
+		require.Contains(t, fileTTLs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
 		f.fileTTLsMu.Unlock()
 
-		time.Sleep(ttlInterval * 3)
+		time.Sleep(ttl * 2)
 
 		f.fileTTLsMu.Lock()
 		fileTTLs = f.fileTTLs
 
 		require.NoError(t, err)
-		require.NotContains(t, fileTTLs, f.filename(key))
+		require.NotContains(t, fileTTLs, filepath.Join(tempDir, utils.ReverseAndHexEncodeSlice(key)))
 		f.fileTTLsMu.Unlock()
 
 		err = f.Del(ctx, key)
@@ -237,11 +159,14 @@ func TestFile_loadTTLs(t *testing.T) {
 	})
 }
 
-func TestFile_ConcurrentAccess(t *testing.T) {
+func TestFileConcurrentAccess(t *testing.T) {
 	t.Run("concurrent set and get", func(t *testing.T) {
-		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
 
-		f, err := New(ulogger.TestLogger{}, []string{testDir})
+		f, err := New(ulogger.TestLogger{}, tempDir)
 		require.NoError(t, err)
 
 		var wg sync.WaitGroup
@@ -270,12 +195,16 @@ func TestFile_ConcurrentAccess(t *testing.T) {
 	})
 }
 
-func TestFile_SetWithSubdirectoryOptionIgnored(t *testing.T) {
+func TestFileSetWithSubdirectoryOptionIgnored(t *testing.T) {
 	t.Run("subdirectory usage", func(t *testing.T) {
-		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
 
-		subDir := "subdir"
-		f, err := New(ulogger.TestLogger{}, []string{testDir}, options.WithSubDirectory(subDir))
+		subDir := "subDir"
+
+		f, err := New(ulogger.TestLogger{}, tempDir, options.WithSubDirectory(subDir))
 		require.NoError(t, err)
 
 		key := []byte("key")
@@ -285,21 +214,25 @@ func TestFile_SetWithSubdirectoryOptionIgnored(t *testing.T) {
 		require.NoError(t, err)
 
 		// Construct the expected file path in the subdirectory
-		expectedDir := filepath.Join(testDir, subDir)
-		expectedFilePath := filepath.Join(expectedDir, f.filename(key))
+		expectedDir := filepath.Join(tempDir, subDir)
+		expectedFilePath := filepath.Join(expectedDir, utils.ReverseAndHexEncodeSlice(key))
 
 		// Check if the file was NOT created in the subdirectory (it is supposed to be ignored)
 		_, err = os.Stat(expectedFilePath)
-		require.Error(t, err, "expected file not found in subdirectory - the options should be ignored")
+		require.NoError(t, err)
 	})
 }
 
-func TestFile_SetWithSubdirectoryOption(t *testing.T) {
+func TestFileSetWithSubdirectoryOption(t *testing.T) {
 	t.Run("subdirectory usage", func(t *testing.T) {
-		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
 
-		subDir := "subdir"
-		f, err := New(ulogger.TestLogger{}, []string{testDir}, options.WithSubDirectory(subDir))
+		subDir := "subDir"
+
+		f, err := New(ulogger.TestLogger{}, tempDir, options.WithSubDirectory(subDir))
 		require.NoError(t, err)
 
 		key := []byte("key")
@@ -309,12 +242,12 @@ func TestFile_SetWithSubdirectoryOption(t *testing.T) {
 		require.NoError(t, err)
 
 		// Construct the expected file path in the subdirectory
-		expectedDir := filepath.Join(testDir, subDir)
+		expectedDir := filepath.Join(tempDir, subDir)
 		expectedFilePath := filepath.Join(expectedDir, "filename")
 
 		// Check if the file was created in the subdirectory
 		_, err = os.Stat(expectedFilePath)
-		require.NoError(t, err, "expected file found in subdirectoryß")
+		require.NoError(t, err, "expected file found in subdirectory")
 	})
 }
 
@@ -327,11 +260,14 @@ func (rc readCloser) Close() error {
 	return nil
 }
 
-func TestFile_SetFromReaderAndGetIoReader(t *testing.T) {
+func TestFileSetFromReaderAndGetIoReader(t *testing.T) {
 	t.Run("set content from reader", func(t *testing.T) {
-		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
 
-		f, err := New(ulogger.TestLogger{}, []string{testDir})
+		f, err := New(ulogger.TestLogger{}, tempDir)
 		require.NoError(t, err)
 
 		key := []byte("key")
@@ -355,11 +291,14 @@ func TestFile_SetFromReaderAndGetIoReader(t *testing.T) {
 	})
 }
 
-func TestFile_GetHead(t *testing.T) {
+func TestFileGetHead(t *testing.T) {
 	t.Run("get head of content", func(t *testing.T) {
-		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
 
-		f, err := New(ulogger.TestLogger{}, []string{testDir})
+		f, err := New(ulogger.TestLogger{}, tempDir)
 		require.NoError(t, err)
 
 		key := []byte("key")
@@ -381,11 +320,14 @@ func TestFile_GetHead(t *testing.T) {
 	})
 }
 
-func TestFile_Exists(t *testing.T) {
+func TestFileExists(t *testing.T) {
 	t.Run("check if content exists", func(t *testing.T) {
-		var testDir = "/tmp/ubsv-tests/" + rand.String(12)
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
 
-		f, err := New(ulogger.TestLogger{}, []string{testDir})
+		f, err := New(ulogger.TestLogger{}, tempDir)
 		require.NoError(t, err)
 
 		key := []byte("key-exists")

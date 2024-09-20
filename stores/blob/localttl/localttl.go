@@ -18,14 +18,14 @@ type LocalTTL struct {
 
 type BlobStore interface {
 	Health(ctx context.Context) (int, string, error)
-	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
-	Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error)
-	GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.Options) ([]byte, error)
-	GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error)
-	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
-	SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.Options) error
-	SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.Options) error
-	Del(ctx context.Context, key []byte, opts ...options.Options) error
+	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
+	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
+	GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error)
+	GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error)
+	Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error
+	SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.FileOption) error
+	SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error
+	Del(ctx context.Context, key []byte, opts ...options.FileOption) error
 	Close(ctx context.Context) error
 }
 
@@ -52,10 +52,10 @@ func (l *LocalTTL) Close(_ context.Context) error {
 	return nil
 }
 
-func (l *LocalTTL) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
-	setOptions := options.NewSetOptions(nil, opts...)
+func (l *LocalTTL) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
+	setOptions := options.MergeOptions(nil, opts)
 
-	if setOptions.TTL > 0 {
+	if setOptions.TTL != nil && *setOptions.TTL > 0 {
 		// set the value in the ttl store
 		return l.ttlStore.SetFromReader(ctx, key, reader, opts...)
 	}
@@ -64,11 +64,11 @@ func (l *LocalTTL) SetFromReader(ctx context.Context, key []byte, reader io.Read
 	return l.blobStore.SetFromReader(ctx, key, reader, opts...)
 }
 
-func (l *LocalTTL) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
+func (l *LocalTTL) Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error {
 	// l.logger.Debugf("[localTTL] Set called %v\n%s\n%s\n", utils.ReverseAndHexEncodeSlice(key), stack.Stack(), ctx.Value("stack"))
-	setOptions := options.NewSetOptions(nil, opts...)
+	setOptions := options.MergeOptions(nil, opts)
 
-	if setOptions.TTL > 0 {
+	if setOptions.TTL != nil && *setOptions.TTL > 0 {
 		// set the value in the ttl store
 		return l.ttlStore.Set(ctx, key, value, opts...)
 	}
@@ -77,7 +77,7 @@ func (l *LocalTTL) Set(ctx context.Context, key []byte, value []byte, opts ...op
 	return l.blobStore.Set(ctx, key, value, opts...)
 }
 
-func (l *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duration, opts ...options.Options) error {
+func (l *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duration, opts ...options.FileOption) error {
 	// l.logger.Debugf("[localTTL] SetTTL called %v\n%s\n%s\n", utils.ReverseAndHexEncodeSlice(key), stack.Stack(), ctx.Value("stack"))
 	if duration <= 0 {
 		// move the file from the TTL store to the blob store
@@ -113,7 +113,7 @@ func (l *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duratio
 	return l.blobStore.Del(ctx, key, opts...)
 }
 
-func (l *LocalTTL) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
+func (l *LocalTTL) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	ioReader, err := l.ttlStore.GetIoReader(ctx, key, opts...)
 	if err != nil {
 		// couldn't find it in the ttl store, try the blob store
@@ -124,7 +124,7 @@ func (l *LocalTTL) GetIoReader(ctx context.Context, key []byte, opts ...options.
 	return ioReader, nil
 }
 
-func (l *LocalTTL) Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error) {
+func (l *LocalTTL) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
 	value, err := l.ttlStore.Get(ctx, key, opts...)
 	if err != nil {
 		// couldn't find it in the ttl store, try the blob store
@@ -135,7 +135,7 @@ func (l *LocalTTL) Get(ctx context.Context, key []byte, opts ...options.Options)
 	return value, nil
 }
 
-func (l *LocalTTL) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
+func (l *LocalTTL) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
 	value, err := l.ttlStore.GetHead(ctx, key, nrOfBytes, opts...)
 	if err != nil {
 		// couldn't find it in the ttl store, try the blob store
@@ -146,7 +146,7 @@ func (l *LocalTTL) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts 
 	return value, nil
 }
 
-func (l *LocalTTL) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
+func (l *LocalTTL) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
 	found, err := l.ttlStore.Exists(ctx, key, opts...)
 	if err != nil || !found {
 		// couldn't find it in the ttl store, try the blob store
@@ -158,7 +158,7 @@ func (l *LocalTTL) Exists(ctx context.Context, key []byte, opts ...options.Optio
 	return found, nil
 }
 
-func (l *LocalTTL) Del(ctx context.Context, key []byte, opts ...options.Options) error {
+func (l *LocalTTL) Del(ctx context.Context, key []byte, opts ...options.FileOption) error {
 	_ = l.ttlStore.Del(ctx, key, opts...)
 	return l.blobStore.Del(ctx, key, opts...)
 }

@@ -124,6 +124,7 @@ func (fl *FileLogger) Duplicate(options ...Option) Logger {
 
 func logMessage(logFile *os.File, _, level, format string, args ...interface{}) {
 	message := fmt.Sprintf("[%s] [%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), level, fmt.Sprintf(format, args...))
+
 	_, err := logFile.Write([]byte(message))
 	if err != nil {
 		fmt.Printf("Failed to write log message: %s", err)

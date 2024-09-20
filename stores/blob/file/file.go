@@ -2,7 +2,6 @@ package file
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -13,14 +12,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 )
 
 type File struct {
-	paths       []string
+	path        string
 	logger      ulogger.Logger
-	options     *options.SetOptions
+	options     *options.Options
 	fileTTLs    map[string]time.Time
 	fileTTLsMu  sync.Mutex
 	fileTTLsCtx context.Context
@@ -32,34 +30,30 @@ type File struct {
 * Has background jobs to clean up TTL.
 * Able to specify multiple folders - files will be spread across folders based on key/hash/filename supplied.
  */
-func New(logger ulogger.Logger, paths []string, opts ...options.Options) (*File, error) {
-	return new(logger, paths, 1*time.Minute, opts...)
+func New(logger ulogger.Logger, path string, opts ...options.StoreOption) (*File, error) {
+	return new(logger, path, 1*time.Minute, opts...)
 }
 
-func new(logger ulogger.Logger, paths []string, ttlCleanerInterval time.Duration, opts ...options.Options) (*File, error) {
+func new(logger ulogger.Logger, path string, ttlCleanerInterval time.Duration, opts ...options.StoreOption) (*File, error) {
 	logger = logger.New("file")
 
-	// create the directories if they don't exist
-	for _, d := range paths {
-		if err := os.MkdirAll(d, 0755); err != nil {
+	// create the path if necessary
+	if len(path) > 0 {
+		if err := os.MkdirAll(path, 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create directory", err)
 		}
 	}
 
-	options := options.NewSetOptions(nil, opts...)
+	options := options.NewStoreOptions(opts...)
 
-	if options.PrefixDirectory > 0 {
-		logger.Warnf("[File] prefix directory option will be ignored (only supported in S3 store)")
-	}
-
-	if options.SubDirectory != "" {
-		if err := os.MkdirAll(filepath.Join(paths[0], options.SubDirectory), 0755); err != nil {
+	if len(options.SubDirectory) > 0 {
+		if err := os.MkdirAll(filepath.Join(path, options.SubDirectory), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create sub directory", err)
 		}
 	}
 
 	fileStore := &File{
-		paths:       paths,
+		path:        path,
 		logger:      logger,
 		options:     options,
 		fileTTLs:    make(map[string]time.Time),
@@ -79,40 +73,38 @@ func new(logger ulogger.Logger, paths []string, ttlCleanerInterval time.Duration
 }
 
 func (s *File) loadTTLs() error {
-	for _, path := range s.paths {
-		s.logger.Infof("[File] Loading file TTLs: %s", path)
+	s.logger.Infof("[File] Loading file TTLs: %s", s.path)
 
-		// get all files in the directory that end with .ttl
-		files, err := findFilesByExtension(path, ".ttl")
+	// get all files in the directory that end with .ttl
+	files, err := findFilesByExtension(s.path, ".ttl")
+	if err != nil {
+		return errors.NewStorageError("[File] failed to find ttl files", err)
+	}
+
+	var ttlBytes []byte
+
+	var ttl time.Time
+
+	for _, fileName := range files {
+		if fileName[len(fileName)-4:] != ".ttl" {
+			continue
+		}
+
+		// read the ttl
+		ttlBytes, err = os.ReadFile(fileName)
 		if err != nil {
-			return errors.NewStorageError("[File] failed to find ttl files", err)
+			return errors.NewStorageError("[File] failed to read ttl file", err)
 		}
 
-		var ttlBytes []byte
-
-		var ttl time.Time
-
-		for _, fileName := range files {
-			if fileName[len(fileName)-4:] != ".ttl" {
-				continue
-			}
-
-			// read the ttl
-			ttlBytes, err = os.ReadFile(fileName)
-			if err != nil {
-				return errors.NewStorageError("[File] failed to read ttl file", err)
-			}
-
-			ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
-			if err != nil {
-				s.logger.Warnf("[File] failed to parse ttl from %s: %v", fileName, err)
-				continue
-			}
-
-			s.fileTTLsMu.Lock()
-			s.fileTTLs[fileName[:len(fileName)-4]] = ttl
-			s.fileTTLsMu.Unlock()
+		ttl, err = time.Parse(time.RFC3339, string(ttlBytes))
+		if err != nil {
+			s.logger.Warnf("[File] failed to parse ttl from %s: %v", fileName, err)
+			continue
 		}
+
+		s.fileTTLsMu.Lock()
+		s.fileTTLs[fileName[:len(fileName)-4]] = ttl
+		s.fileTTLsMu.Unlock()
 	}
 
 	return nil
@@ -172,12 +164,10 @@ func (s *File) Close(_ context.Context) error {
 	return nil
 }
 
-func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
-	s.logger.Debugf("[File] SetFromReader: %s", utils.ReverseAndHexEncodeSlice(key))
-
+func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
 	defer reader.Close()
 
-	fileName, err := s.getFileNameForSet(key, opts)
+	fileName, err := s.constructFileNameWithTTL(key, opts)
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
 	}
@@ -205,9 +195,9 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 	return nil
 }
 
-func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
-	// s.logger.Debugf("[File] Set: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName, err := s.getFileNameForSet(hash, opts)
+func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
+	fileName, err := s.constructFileNameWithTTL(hash, opts)
+
 	if err != nil {
 		return errors.NewStorageError("[File][Set] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
 	}
@@ -225,43 +215,17 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 	return nil
 }
 
-func (s *File) getFileNameForGet(hash []byte, opts []options.Options) (string, error) {
-	fileOptions := options.NewSetOptions(s.options, opts...)
+func (s *File) constructFileNameWithTTL(hash []byte, opts []options.FileOption) (string, error) {
+	merged := options.MergeOptions(s.options, opts)
 
-	var fileName string
-
-	if fileOptions.Filename != "" {
-		if len(fileOptions.SubDirectory) > 0 && fileOptions.SubDirectory[:1] == "/" {
-			// if the subdirectory starts with a /, then it is a full path
-			fileName = filepath.Join(fileOptions.SubDirectory, fileOptions.Filename)
-		} else {
-			fileName = filepath.Join(s.paths[0], fileOptions.SubDirectory, fileOptions.Filename)
-		}
-	} else {
-		if fileOptions.SubDirectory != "" {
-			s.logger.Warnf("[File] SubDirectory %q ignored when no opt.Filename specified", fileOptions.SubDirectory)
-		}
-
-		fileName = s.filename(hash)
-	}
-
-	if fileOptions.Extension != "" {
-		fileName = fmt.Sprintf("%s.%s", fileName, fileOptions.Extension)
-	}
-
-	return fileName, nil
-}
-func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, error) {
-	fileName, err := s.getFileNameForGet(hash, opts)
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return "", err
 	}
 
-	fileOptions := options.NewSetOptions(s.options, opts...)
-
-	if fileOptions.TTL > 0 {
+	if merged.TTL != nil && *merged.TTL > 0 {
 		// write bytes to file
-		ttl := time.Now().Add(fileOptions.TTL)
+		ttl := time.Now().Add(*merged.TTL)
 		//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 		if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
 			return "", errors.NewStorageError("failed to write ttl to file", err)
@@ -275,8 +239,8 @@ func (s *File) getFileNameForSet(hash []byte, opts []options.Options) (string, e
 	return fileName, nil
 }
 
-func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts ...options.Options) error {
-	fileName, err := s.getFileNameForSet(key, opts)
+func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts ...options.FileOption) error {
+	fileName, err := s.constructFileNameWithTTL(key, opts)
 	if err != nil {
 		return errors.NewStorageError("[File] failed to get file name", err)
 	}
@@ -308,8 +272,10 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 	return nil
 }
 
-func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.Options) (io.ReadCloser, error) {
-	fileName, err := s.getFileNameForGet(hash, opts)
+func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -327,10 +293,12 @@ func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.Optio
 	return file, nil
 }
 
-func (s *File) Get(_ context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
+func (s *File) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName, err := s.getFileNameForGet(hash, opts)
 
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -347,10 +315,12 @@ func (s *File) Get(_ context.Context, hash []byte, opts ...options.Options) ([]b
 	return bytes, err
 }
 
-func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
+func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
 	s.logger.Debugf("[File] Get: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName, err := s.getFileNameForGet(hash, opts)
 
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -374,10 +344,12 @@ func (s *File) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...op
 	return bytes[:nRead], err
 }
 
-func (s *File) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
+func (s *File) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
 	s.logger.Debugf("[File] Exists: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName, err := s.getFileNameForGet(hash, opts)
 
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return false, err
 	}
@@ -394,10 +366,12 @@ func (s *File) Exists(_ context.Context, hash []byte, opts ...options.Options) (
 	return true, nil
 }
 
-func (s *File) Del(_ context.Context, hash []byte, opts ...options.Options) error {
+func (s *File) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
 	s.logger.Debugf("[File] Del: %s", utils.ReverseAndHexEncodeSlice(hash))
-	fileName, err := s.getFileNameForGet(hash, opts)
 
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, hash)
 	if err != nil {
 		return err
 	}
@@ -406,12 +380,6 @@ func (s *File) Del(_ context.Context, hash []byte, opts ...options.Options) erro
 	_ = os.Remove(fileName + ".ttl")
 
 	return os.Remove(fileName)
-}
-
-func (s *File) filename(hash []byte) string {
-	// determine path to use, based on the first byte of the hash and the number of paths
-	path := s.paths[hash[0]%byte(len(s.paths))]
-	return fmt.Sprintf("%s/%x", path, bt.ReverseBytes(hash))
 }
 
 func findFilesByExtension(root, ext string) ([]string, error) {

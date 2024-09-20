@@ -8,6 +8,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -190,18 +191,15 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, err
 		}
 
-		legacyMode := true
-		// TODO - SAO - remove this when we prove that the legacy sync mode works
-		// TODO move this into a convenience function in the blockchain client
-		/*
-			currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
-			if err != nil {
-				// TODO: how to handle it gracefully?
-				sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
-			}
+		var currentState *blockchain_api.FSMStateType
 
-			// legacyMode := currentState != nil && *currentState == blockchain_api.FSMStateType_LEGACYSYNCING
-		*/
+		currentState, err = sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+		if err != nil {
+			sm.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
+		}
+
+		// if we couldn't get the currentState, we assume we are not in legacy mode, that is the safer option
+		legacyMode := currentState != nil && *currentState == blockchain_api.FSMStateType_LEGACYSYNCING
 
 		if legacyMode {
 			// in legacy sync mode, we can process transactions in a block in parallel, but in reverse order
@@ -211,7 +209,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			}
 		} else {
 			maxLevel, blockTxsPerLevel := sm.prepareTxsPerLevel(ctx, block, txMap)
-			sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, block)
+			if err = sm.validateTransactions(ctx, maxLevel, blockTxsPerLevel, block); err != nil {
+				return nil, err
+			}
 		}
 
 		var subtreeBytes []byte

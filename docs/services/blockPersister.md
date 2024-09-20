@@ -35,6 +35,7 @@ The Block Persister files are optionally post-processed by the UTXO Persister, w
 
 * The Blockchain service relies on Kafka for its new block notifications, to which the Block Persister service subscribes to.
 
+* However, note how the Blockchain client is directly accessed in order to wait for the node State Management to change to `RUNNING` state. For more information on this, please refer to the [State Management](../architecture/stateManagement.md)  documentation.
 
 ## 2. Functionality
 

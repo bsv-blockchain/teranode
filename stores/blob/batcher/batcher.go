@@ -36,7 +36,7 @@ type BatchItem struct {
 
 type BlobStore interface {
 	Health(ctx context.Context) (int, string, error)
-	Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error
+	Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error
 }
 
 func New(logger ulogger.Logger, blobStore BlobStore, sizeInBytes int, writeKeys bool) *Batcher {
@@ -183,7 +183,7 @@ func (b *Batcher) Close(_ context.Context) error {
 	return nil
 }
 
-func (b *Batcher) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+func (b *Batcher) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
 	defer reader.Close()
 
 	bb, err := io.ReadAll(reader)
@@ -194,7 +194,7 @@ func (b *Batcher) SetFromReader(ctx context.Context, key []byte, reader io.ReadC
 	return b.Set(ctx, key, bb, opts...)
 }
 
-func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...options.Options) error {
+func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
 	b.queue.Enqueue(BatchItem{
 		hash:  chainhash.Hash(hash),
 		value: value,
@@ -203,26 +203,26 @@ func (b *Batcher) Set(_ context.Context, hash []byte, value []byte, opts ...opti
 	return nil
 }
 
-func (b *Batcher) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.Options) error {
+func (b *Batcher) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.FileOption) error {
 	return errors.NewProcessingError("TTL is not supported in a batcher store")
 }
 
-func (b *Batcher) GetIoReader(_ context.Context, _ []byte, opts ...options.Options) (io.ReadCloser, error) {
+func (b *Batcher) GetIoReader(_ context.Context, _ []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	return nil, errors.NewStorageError("getIoReader is not supported in a batcher store")
 }
 
-func (b *Batcher) Get(_ context.Context, _ []byte, opts ...options.Options) ([]byte, error) {
+func (b *Batcher) Get(_ context.Context, _ []byte, opts ...options.FileOption) ([]byte, error) {
 	return nil, errors.NewStorageError("get is not supported in a batcher store")
 }
 
-func (b *Batcher) GetHead(_ context.Context, _ []byte, _ int, opts ...options.Options) ([]byte, error) {
+func (b *Batcher) GetHead(_ context.Context, _ []byte, _ int, opts ...options.FileOption) ([]byte, error) {
 	return nil, errors.NewStorageError("get head is not supported in a batcher store")
 }
 
-func (b *Batcher) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
+func (b *Batcher) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
 	return false, errors.NewStorageError("exists is not supported in a batcher store")
 }
 
-func (b *Batcher) Del(_ context.Context, hash []byte, opts ...options.Options) error {
+func (b *Batcher) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
 	return errors.NewStorageError("del is not supported in a batcher store")
 }

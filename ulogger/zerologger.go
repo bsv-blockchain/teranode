@@ -105,6 +105,7 @@ func prettyZeroLogger(service string, opts *Options) *ZLoggerWrapper {
 		if cc, ok := i.(string); ok {
 			c = cc
 		}
+
 		if len(c) > 0 {
 			if cwd, err := os.Getwd(); err == nil {
 				if rel, err := filepath.Rel(cwd, c); err == nil {
@@ -116,10 +117,12 @@ func prettyZeroLogger(service string, opts *Options) *ZLoggerWrapper {
 			currentElement := len(split) - 1
 			c = split[currentElement]
 			currentElement--
+
 			for {
 				if currentElement < 0 {
 					break
 				}
+
 				if len(c)+len(split[currentElement])+1 > 32 {
 					break
 				} else {
@@ -130,6 +133,7 @@ func prettyZeroLogger(service string, opts *Options) *ZLoggerWrapper {
 
 			c = colorize(fmt.Sprintf("%-32s", c), colorBold, !isTerminal)
 		}
+
 		return c
 	}
 
@@ -383,5 +387,6 @@ func colorize(s interface{}, c int, disabled bool) string {
 	if disabled {
 		return fmt.Sprintf("%s", s)
 	}
+
 	return fmt.Sprintf("\x1b[%dm%v\x1b[0m", c, s)
 }

@@ -14,8 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_GenerateBlock(t *testing.T) {
+func TestGenerateBlock(t *testing.T) {
 	subtreeStore := NewLocalSubtreeStore()
+
 	testConfig := &TestConfig{
 		FileDir:                      "./test-generated_test_data/",
 		FileNameTemplate:             "./test-generated_test_data/subtree-%d.bin",
@@ -26,6 +27,7 @@ func Test_GenerateBlock(t *testing.T) {
 		TxCount:                      4 * 1024,
 		GenerateNewTestData:          true,
 	}
+
 	block, err := GenerateTestBlock(subtreeStore, testConfig)
 	require.NoError(t, err)
 	require.NotEmpty(t, block)
@@ -36,10 +38,10 @@ func Test_GenerateBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	// check if the first txid is in the txMetaStore
-	reqTxId, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
+	reqTxID, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
 
-	data, err := CachedTxMetaStore.Get(context.Background(), reqTxId)
+	data, err := CachedTxMetaStore.Get(context.Background(), reqTxID)
 	require.NoError(t, err)
 	require.Equal(t, &meta.Data{
 		Fee:            1,
@@ -53,6 +55,7 @@ func Test_GenerateBlock(t *testing.T) {
 
 	currentChain := make([]*model.BlockHeader, 11)
 	currentChainIDs := make([]uint32, 11)
+
 	for i := 0; i < 11; i++ {
 		currentChain[i] = &model.BlockHeader{
 			HashPrevBlock:  &chainhash.Hash{},

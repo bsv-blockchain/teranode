@@ -17,7 +17,7 @@ import (
 
 type MockExister struct{}
 
-func (m MockExister) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
+func (m MockExister) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
 	return false, nil
 }
 

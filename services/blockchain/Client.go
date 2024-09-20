@@ -121,7 +121,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 
 				switch notification.Type {
 				case model.NotificationType_FSMState:
-					c.logger.Infof("[Blockchain] Received FSM state notification: %s", notification.String())
+					c.logger.Infof("[Blockchain] Received FSM state notification: %s", notification.GetMetadata().String())
 					// update the local FSM state variable
 					metadata := notification.Metadata.Metadata
 					newState := blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])

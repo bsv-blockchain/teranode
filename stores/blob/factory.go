@@ -3,7 +3,6 @@ package blob
 import (
 	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/batcher"
@@ -17,7 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
-func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.Options) (store Store, err error) {
+func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (store Store, err error) {
 	switch storeURL.Scheme {
 	case "null":
 		store, err = null.New(logger)
@@ -28,7 +27,7 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.Options)
 		store = memory.New()
 
 	case "file":
-		store, err = file.New(logger, []string{GetPathFromURL(storeURL)}, opts...)
+		store, err = file.New(logger, GetPathFromURL(storeURL), opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("error creating file blob store", err)
 		}
@@ -68,20 +67,15 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.Options)
 	return
 }
 
-func createTTLStore(storeURL *url.URL, logger ulogger.Logger, opts []options.Options, store Store) (Store, error) {
+func createTTLStore(storeURL *url.URL, logger ulogger.Logger, opts []options.StoreOption, store Store) (Store, error) {
 	localTTLStorePath := storeURL.Query().Get("localTTLStorePath")
 	if localTTLStorePath == "" {
 		localTTLStorePath = "/tmp/localTTL"
 	}
 
-	localTTLStorePaths := strings.Split(localTTLStorePath, "|")
-	for i, item := range localTTLStorePaths {
-		localTTLStorePaths[i] = strings.TrimSpace(item)
-	}
-
 	var ttlStore Store
 
-	ttlStore, err := file.New(logger, localTTLStorePaths, opts...)
+	ttlStore, err := file.New(logger, localTTLStorePath, opts...)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to create file store", err)
 	}

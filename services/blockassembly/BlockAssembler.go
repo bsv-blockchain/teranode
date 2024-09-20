@@ -140,8 +140,10 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 		}
 
 		// variables are defined here to prevent unnecessary allocations
-		var bestBlockchainBlockHeader *model.BlockHeader
-		var meta *model.BlockHeaderMeta
+		var (
+			bestBlockchainBlockHeader *model.BlockHeader
+			meta                      *model.BlockHeaderMeta
+		)
 
 		b.currentRunningState.Store("running")
 		for {
@@ -177,6 +179,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					bestBlockchainBlockHeader = b.subtreeProcessor.GetCurrentBlockHeader()
 
 					// set the new height based on the response counts
+					// nolint:gosec
 					currentHeight = uint32(int(meta.Height) - len(response.MovedDownBlocks) + len(response.MovedUpBlocks))
 				}
 
@@ -195,6 +198,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 				b.logger.Warnf("[BlockAssembler][Reset] setting wait count to 2 for getMiningCandidate")
 				b.resetWaitCount.Store(2) // wait 2 blocks before starting to mine again
+				// nolint:gosec
 				b.resetWaitTime.Store(int32(time.Now().Add(20 * time.Minute).Unix()))
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
@@ -205,6 +209,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
 				// wait for the reset to complete before getting a new mining candidate
 				// 2 blocks && at least 20 minutes
+
+				// nolint:gosec
 				if b.resetWaitCount.Load() > 0 || int32(time.Now().Unix()) <= b.resetWaitTime.Load() {
 					b.logger.Warnf("[BlockAssembler] skipping mining candidate, waiting for reset to complete: %d blocks or until %s", b.resetWaitCount.Load(), time.Unix(int64(b.resetWaitTime.Load()), 0).String())
 					utils.SafeSend(responseCh, &miningCandidateResponse{
@@ -232,6 +238,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 			case notification := <-b.blockchainSubscriptionCh:
 				b.currentRunningState.Store("blockchainSubscription")
+
 				switch notification.Type {
 				case model.NotificationType_Block:
 					b.UpdateBestBlock(ctx)
@@ -252,21 +259,24 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 
 	prometheusBlockAssemblyBestBlockHeight.Set(float64(meta.Height))
 
-	// if the bestBlockchainBlockHeader is the same as the current best block header, we already have this block, nothing to do, skip
-	if bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Load().Hash()) {
+	switch {
+	case bestBlockchainBlockHeader.Hash().IsEqual(b.bestBlockHeader.Load().Hash()):
 		b.logger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
 		return
-	} else if !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Load().Hash()) { // if the bestBlockchainBlockHeader's previous block is not the same as the current best block header, reorg
+	case !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(b.bestBlockHeader.Load().Hash()):
 		b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
 		b.currentRunningState.Store("reorging")
 		err = b.handleReorg(ctx, bestBlockchainBlockHeader)
+
 		if err != nil {
 			b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
 			return
 		}
-	} else { // if the bestBlockchainBlockHeader's previous block is the same as the current best block header, move up
+	default:
 		b.logger.Infof("[BlockAssembler][%s] best block header is the same as the previous best block header, moving up: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
+
 		var block *model.Block
+
 		if block, err = b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
 			b.logger.Errorf("[BlockAssembler][%s] error getting block from blockchain: %v", bestBlockchainBlockHeader.Hash(), err)
 			return
@@ -534,7 +544,8 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		Height:        b.bestBlockHeight.Load() + 1,
 		Time:          timeNow,
 		MerkleProof:   coinbaseMerkleProofBytes,
-		SubtreeCount:  uint32(len(subtrees)),
+		// nolint:gosec
+		SubtreeCount: uint32(len(subtrees)),
 	}
 
 	return miningCandidate, subtrees, nil
@@ -677,18 +688,19 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 	b.logger.Debugf("timeDifference: %d", timeDifference)
 	b.logger.Debugf("bestBlockHeader.Hash().String(): %s", b.bestBlockHeader.Load().Hash().String())
 
-	if !b.difficultyAdjustment || (b.bestBlockHeight.Load() < uint32(DifficultyAdjustmentWindow)+3) {
+	switch {
+	case !b.difficultyAdjustment || (b.bestBlockHeight.Load() < uint32(DifficultyAdjustmentWindow)+3):
 		b.logger.Debugf("no difficulty adjustment. Difficulty set to %s", b.defaultMiningNBits.String())
 		return b.defaultMiningNBits, nil
-	} else if timeDifference > thresholdSeconds+uint32(randomOffset) {
+	case timeDifference > thresholdSeconds+uint32(randomOffset): // nolint: gosec
 		// If the new block's timestamp is more than 2* 10 minutes then allow mining of a min-difficulty block.
 		b.logger.Debugf("applying special difficulty rule")
 		// set to start difficulty
 		return b.defaultMiningNBits, nil
-	} else if b.currentDifficulty != nil {
+	case b.currentDifficulty != nil:
 		b.logger.Debugf("setting difficulty to current difficulty %s", b.currentDifficulty.String())
 		return b.currentDifficulty, nil
-	} else {
+	default:
 		b.logger.Debugf("setting difficulty to default mining bits %s", b.defaultMiningNBits.String())
 		return b.defaultMiningNBits, nil
 	}

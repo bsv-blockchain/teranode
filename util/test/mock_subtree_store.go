@@ -3,11 +3,11 @@ package test
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"os"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -22,12 +22,12 @@ func (l TestSubtreeStore) Health(_ context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (l TestSubtreeStore) Exists(_ context.Context, key []byte, _ ...options.Options) (bool, error) {
+func (l TestSubtreeStore) Exists(_ context.Context, key []byte, _ ...options.FileOption) (bool, error) {
 	_, ok := l.Files[chainhash.Hash(key)]
 	return ok, nil
 }
 
-func (l TestSubtreeStore) Get(_ context.Context, key []byte, _ ...options.Options) ([]byte, error) {
+func (l TestSubtreeStore) Get(_ context.Context, key []byte, _ ...options.FileOption) ([]byte, error) {
 	file, ok := l.Files[chainhash.Hash(key)]
 	if !ok {
 		return nil, errors.NewProcessingError("file not found")
@@ -41,7 +41,7 @@ func (l TestSubtreeStore) Get(_ context.Context, key []byte, _ ...options.Option
 	return subtreeBytes, nil
 }
 
-func (l TestSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
+func (l TestSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	file, ok := l.Files[chainhash.Hash(key)]
 	if !ok {
 		return nil, errors.NewProcessingError("file not found")
@@ -55,23 +55,23 @@ func (l TestSubtreeStore) GetIoReader(_ context.Context, key []byte, opts ...opt
 	return subtreeFile, nil
 }
 
-func (l TestSubtreeStore) GetHead(_ context.Context, _ []byte, _ int, opts ...options.Options) ([]byte, error) {
+func (l TestSubtreeStore) GetHead(_ context.Context, _ []byte, _ int, opts ...options.FileOption) ([]byte, error) {
 	panic("not implemented")
 }
 
-func (l TestSubtreeStore) Set(_ context.Context, _ []byte, _ []byte, _ ...options.Options) error {
+func (l TestSubtreeStore) Set(_ context.Context, _ []byte, _ []byte, _ ...options.FileOption) error {
 	panic("not implemented")
 }
 
-func (l TestSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.Options) error {
+func (l TestSubtreeStore) SetFromReader(_ context.Context, _ []byte, _ io.ReadCloser, _ ...options.FileOption) error {
 	panic("not implemented")
 }
 
-func (l TestSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.Options) error {
+func (l TestSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.FileOption) error {
 	panic("not implemented")
 }
 
-func (l TestSubtreeStore) Del(_ context.Context, _ []byte, _ ...options.Options) error {
+func (l TestSubtreeStore) Del(_ context.Context, _ []byte, _ ...options.FileOption) error {
 	panic("not implemented")
 }
 

@@ -2168,22 +2168,8 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 
 	cfg = c
 
-	// UBSV CONFIG
-	// overwrite any config options from ubsv settings, if applicable
-	// TODO this is not working yet
-	//ubsvConfig := config.GetAll()
-	//if ubsvConfig != nil {
-	//	for k, v := range ubsvConfig {
-	//		// check whether the key is of the form "legacy_config_" + configKey
-	//		if strings.HasPrefix(k, "legacy_config_") {
-	//			// remove the prefix
-	//			configKey := k[len("legacy_config_"):]
-	//			// set the value to the configKey of the map cfg, using reflection
-	//			// this is done to avoid having to add a new if statement for each new config key
-	//			reflect.ValueOf(cfg).Elem().FieldByName(configKey).Set(reflect.ValueOf(v).Convert(reflect.ValueOf(cfg).Elem().FieldByName(configKey).Type()))
-	//		}
-	//	}
-	//}
+	// overwrite any config options from settings, if applicable
+	setConfigValuesFromSettings(logger, config.GetAll(), cfg)
 
 	cfg.DataDir, _ = config.Get("legacy_workingDir", "./data")
 

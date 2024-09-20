@@ -18,7 +18,7 @@ type Memory struct {
 	blobs map[[32]byte][]byte
 }
 
-func New() *Memory {
+func New(opts ...options.StoreOption) *Memory {
 	return &Memory{
 		blobs: make(map[[32]byte][]byte),
 	}
@@ -37,7 +37,7 @@ func (m *Memory) Close(_ context.Context) error {
 	return nil
 }
 
-func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
 	defer reader.Close()
 
 	// for consistency with other stores, check if the blob already exists and throw BlobAlreadyExistsError if it does
@@ -55,8 +55,8 @@ func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 	return m.Set(ctx, key, b, opts...)
 }
 
-func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...options.Options) error {
-	setOptions := options.NewSetOptions(nil, opts...)
+func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
+	setOptions := options.NewFileOptions(opts...)
 
 	storeKey := hashKey(hash, setOptions.Extension)
 
@@ -75,13 +75,13 @@ func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...opt
 	return nil
 }
 
-func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.Options) error {
+func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.FileOption) error {
 	// not supported in memory store yet
 	return nil
 }
 
-func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
-	setOptions := options.NewSetOptions(nil, opts...)
+func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+	setOptions := options.NewFileOptions(opts...)
 
 	storeKey := key
 	if setOptions.Extension != "" {
@@ -96,8 +96,8 @@ func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Op
 	return io.NopCloser(bytes.NewBuffer(b)), nil
 }
 
-func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.Options) ([]byte, error) {
-	setOptions := options.NewSetOptions(nil, opts...)
+func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
+	setOptions := options.NewFileOptions(opts...)
 
 	storeKey := hashKey(hash, setOptions.Extension)
 
@@ -112,7 +112,7 @@ func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.Options) ([
 	return bytes, nil
 }
 
-func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
+func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
 	b, err := m.Get(context.Background(), hash)
 	if err != nil {
 		return nil, err
@@ -125,8 +125,8 @@ func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...
 	return b[:nrOfBytes], nil
 }
 
-func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.Options) (bool, error) {
-	setOptions := options.NewSetOptions(nil, opts...)
+func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
+	setOptions := options.NewFileOptions(opts...)
 
 	storeKey := hashKey(hash, setOptions.Extension)
 
@@ -137,8 +137,8 @@ func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.Options)
 	return ok, nil
 }
 
-func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.Options) error {
-	setOptions := options.NewSetOptions(nil, opts...)
+func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
+	setOptions := options.NewFileOptions(opts...)
 
 	storeKey := hashKey(hash, setOptions.Extension)
 

@@ -39,6 +39,8 @@ The Notice how fRPC does not allow for load balancing.
 
 Notice that the Validator, as shown in the diagram above, can be either an instantiated library or a separate service, depending on the Node configuration. To know more, please refer to the Transaction Validator documentation.
 
+Also, note how the Blockchain client is used in order to wait for the node State to change to `RUNNING` state. For more information on this, please refer to the [State Management](../architecture/stateManagement.md)  documentation.
+
 ## 2. Functionality
 
 ### 2.1. Starting the Propagation Service

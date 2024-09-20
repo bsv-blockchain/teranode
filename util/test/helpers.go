@@ -17,20 +17,25 @@ import (
 func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 	// read from the reader and add to txMeta store
 	txHash := chainhash.Hash{}
-	var fee uint64
-	var sizeInBytes uint64
+
+	var (
+		fee         uint64
+		sizeInBytes uint64
+	)
 
 	g := errgroup.Group{}
 
 	batch := make([]FeeAndSize, 0, 1024)
 
 	b := make([]byte, 48)
+
 	for {
 		_, err := io.ReadFull(r, b)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
+
 			return err
 		}
 
@@ -46,6 +51,7 @@ func ReadTxMeta(r io.Reader, txMetaStore *txmetacache.TxMetaCache) error {
 
 		if len(batch) == 1024 {
 			saveBatch := batch
+
 			g.Go(func() error {
 				for _, data := range saveBatch {
 					hash := data.hash

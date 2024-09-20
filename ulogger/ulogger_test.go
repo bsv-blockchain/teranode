@@ -19,6 +19,7 @@ func captureStdout(f func()) string {
 	f()
 
 	w.Close()
+
 	os.Stdout = oldStdout
 
 	var buf bytes.Buffer
@@ -88,16 +89,20 @@ func TestLogLevels(t *testing.T) {
 			})
 
 			fmt.Println(output)
+
 			// Check if the expected outputs are present in the captured output
 			if got := strings.Contains(output, "DEBUG message"); got != tt.expectedOutputs["DEBUG"] {
 				t.Errorf("expected DEBUG output: %v, got: %v", tt.expectedOutputs["DEBUG"], got)
 			}
+
 			if got := strings.Contains(output, "INFO message"); got != tt.expectedOutputs["INFO"] {
 				t.Errorf("expected INFO output: %v, got: %v", tt.expectedOutputs["INFO"], got)
 			}
+
 			if got := strings.Contains(output, "WARN message"); got != tt.expectedOutputs["WARN"] {
 				t.Errorf("expected WARN output: %v, got: %v", tt.expectedOutputs["WARN"], got)
 			}
+
 			if got := strings.Contains(output, "ERROR message"); got != tt.expectedOutputs["ERROR"] {
 				t.Errorf("expected ERROR output: %v, got: %v", tt.expectedOutputs["ERROR"], got)
 			}

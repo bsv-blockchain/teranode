@@ -14,11 +14,7 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 	ctx, _, deferFn := tracing.StartTracing(ctx, "sql:GetHeader")
 	defer deferFn()
 
-	header, _, err := s.blocksCache.GetBlockHeader(*blockHash)
-	if err != nil {
-		return nil, errors.NewStorageError("error in GetHeader: %w", err)
-	}
-
+	header, _ := s.blocksCache.GetBlockHeader(*blockHash)
 	if header != nil {
 		return header, nil
 	}
@@ -61,6 +57,8 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 
 		return nil, errors.NewStorageError("error in Header", err)
 	}
+
+	var err error
 
 	blockHeader.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
