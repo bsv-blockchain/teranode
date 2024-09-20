@@ -38,7 +38,8 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	t := suite.T()
 	framework := suite.Framework
 	ctx := framework.Context
-	url := "http://localhost:18090"
+
+	url := "http://localhost:10090"
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))

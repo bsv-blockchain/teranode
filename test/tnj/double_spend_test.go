@@ -133,7 +133,7 @@ func (suite *TNJDoubleSpendTestSuite) TestRejectLongerChainWithDoubleSpend() {
 	assert.True(t, stateFound, "State 3 was not captured")
 	fmt.Printf("Captured states: %v\n", states)
 
-	headerNode1, _, _ := blockchainNode1.GetBestBlockHeader(ctx)
+	headerNode1, _, _ = blockchainNode1.GetBestBlockHeader(ctx)
 	headerNode0, _, _ := blockchainNode0.GetBestBlockHeader(ctx)
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
 }

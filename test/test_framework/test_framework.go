@@ -16,6 +16,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/sql"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	distributor "github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/docker/go-connections/nat"
 	"github.com/ordishs/gocore"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
 )
@@ -29,6 +30,7 @@ type BitcoinTestFramework struct {
 }
 
 type BitcoinNode struct {
+	NodeName            string
 	SettingsContext     string
 	CoinbaseClient      cb.Client
 	BlockchainClient    bc.ClientI
@@ -72,9 +74,12 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 		b.Compose = compose
 
 		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
+		names := []string{"ubsv-1", "ubsv-2", "ubsv-3"}
+
 		for _, key := range order {
 			b.Nodes = append(b.Nodes, BitcoinNode{
 				SettingsContext: m[key],
+				NodeName:        names[len(b.Nodes)],
 			})
 		}
 	}
@@ -86,77 +91,106 @@ func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 func (b *BitcoinTestFramework) GetClientHandles() error {
 	logger := b.Logger
 
-	for i, node := range b.Nodes {
-		coinbaseGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_grpcAddress.%s", node.SettingsContext))
-		fmt.Println(coinbaseGrpcAddress)
+	logger.Infof("nodes: %v", b.Nodes)
 
-		if !ok {
-			return errors.NewConfigurationError("no coinbase_grpcAddress setting found")
+	for i, node := range b.Nodes {
+		// coinbaseGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("coinbase_grpcAddress.%s", node.SettingsContext))
+		// coinbaseGrpcPort
+
+		// if !ok {
+		// 	return errors.NewConfigurationError("no coinbase_grpcAddress setting found")
+		// }
+
+		coinbaseGRPCPort := "8093/tcp"
+		coinbaseMappedPort, err := b.GetMappedPort(node.NodeName, nat.Port(coinbaseGRPCPort))
+
+		if err != nil {
+			return errors.NewConfigurationError("error getting mapped port %w", err)
 		}
 
-		coinbaseClient, err := cb.NewClientWithAddress(b.Context, logger, getHostAddress(coinbaseGrpcAddress))
+		coinbaseClient, err := cb.NewClientWithAddress(b.Context, logger, makeHostAddressFromPort(coinbaseMappedPort.Port()))
 		if err != nil {
 			return errors.NewConfigurationError("error creating coinbase client %w", err)
 		}
 
 		b.Nodes[i].CoinbaseClient = *coinbaseClient
 
-		blockchainGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockchain_grpcAddress.%s", node.SettingsContext))
-		if !ok {
-			return errors.NewConfigurationError("no blockchain_grpcAddress setting found")
+		// blockchainGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockchain_grpcAddress.%s", node.SettingsContext))
+		// if !ok {
+		// 	return errors.NewConfigurationError("no blockchain_grpcAddress setting found")
+		// }
+		blockchainGRPCPort := "8087/tcp"
+		blockchainMappedPort, err := b.GetMappedPort(node.NodeName, nat.Port(blockchainGRPCPort))
+
+		if err != nil {
+			return errors.NewConfigurationError("error getting mapped port %w", err)
 		}
 
-		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, getHostAddress(blockchainGrpcAddress), "test")
+		blockchainClient, err := bc.NewClientWithAddress(b.Context, logger, makeHostAddressFromPort(blockchainMappedPort.Port()), "test")
 		if err != nil {
 			return errors.NewConfigurationError("error creating blockchain client %w", err)
 		}
 
 		b.Nodes[i].BlockchainClient = blockchainClient
 
-		blockassemblyGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockassembly_grpcAddress.%s", node.SettingsContext))
-		if !ok {
-			return errors.NewConfigurationError("no blockassembly_grpcAddress setting found")
+		// blockassemblyGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("blockassembly_grpcAddress.%s", node.SettingsContext))
+		// if !ok {
+		// 	return errors.NewConfigurationError("no blockassembly_grpcAddress setting found")
+		// }
+
+		blockassemblyGRPCPort := "8085/tcp"
+		blockassemblyMappedPort, err := b.GetMappedPort(node.NodeName, nat.Port(blockassemblyGRPCPort))
+
+		if err != nil {
+			return errors.NewConfigurationError("error getting mapped port %w", err)
 		}
 
-		blockassemblyClient, err := ba.NewClientWithAddress(b.Context, logger, getHostAddress(blockassemblyGrpcAddress))
+		blockassemblyClient, err := ba.NewClientWithAddress(b.Context, logger, makeHostAddressFromPort(blockassemblyMappedPort.Port()))
 		if err != nil {
 			return errors.NewServiceError("error creating blockassembly client %w", err)
 		}
 
 		b.Nodes[i].BlockassemblyClient = *blockassemblyClient
 
-		propagationGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("propagation_grpcAddress.%s", node.SettingsContext))
-		if !ok {
-			return errors.NewConfigurationError("no propagation_grpcAddress setting found")
+		// propagationGrpcAddress, ok := gocore.Config().Get(fmt.Sprintf("propagation_grpcAddress.%s", node.SettingsContext))
+		// if !ok {
+		// 	return errors.NewConfigurationError("no propagation_grpcAddress setting found")
+		// }
+
+		propagationGRPCPort := "8084/tcp"
+		propagationMappedPort, _ := b.GetMappedPort(node.NodeName, nat.Port(propagationGRPCPort))
+
+		if err != nil {
+			return errors.NewConfigurationError("error getting mapped port %w", err)
 		}
 
-		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, getHostAddress(propagationGrpcAddress))
+		distributorClient, err := distributor.NewDistributorFromAddress(b.Context, logger, makeHostAddressFromPort(propagationMappedPort.Port()))
 		if err != nil {
 			return errors.NewConfigurationError("error creating distributor client %w", err)
 		}
 
 		b.Nodes[i].DistributorClient = *distributorClient
 
-		subtreesKafkaURL, err, ok := gocore.Config().GetURL(fmt.Sprintf("kafka_subtreesConfig.%s.run", node.SettingsContext))
-		if err != nil {
-			return errors.NewConfigurationError("no kafka_subtreesConfig setting found")
-		}
+		// subtreesKafkaURL, err, ok := gocore.Config().GetURL(fmt.Sprintf("kafka_subtreesConfig.%s.run", node.SettingsContext))
+		// if err != nil {
+		// 	return errors.NewConfigurationError("no kafka_subtreesConfig setting found")
+		// }
 
-		if !ok {
-			return errors.NewConfigurationError("no kafka_subtreesConfig setting found")
-		}
+		// if !ok {
+		// 	return errors.NewConfigurationError("no kafka_subtreesConfig setting found")
+		// }
 
-		kafkaURL, _ := url.Parse(strings.Replace(subtreesKafkaURL.String(), "kafka-shared", "localhost", 1))
-		kafkaURL, _ = url.Parse(strings.Replace(kafkaURL.String(), "9092", "19093", 1))
-		b.Nodes[i].SubtreesKafkaURL = kafkaURL
-		blockchainStoreURL, _, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s", node.SettingsContext))
+		// kafkaURL, _ := url.Parse(strings.Replace(subtreesKafkaURL.String(), "kafka-shared", "localhost", 1))
+		// kafkaURL, _ = url.Parse(strings.Replace(kafkaURL.String(), "9092", "19093", 1))
+		// b.Nodes[i].SubtreesKafkaURL = kafkaURL
+		// blockchainStoreURL, _, _ := gocore.Config().GetURL(fmt.Sprintf("blockchain_store.%s", node.SettingsContext))
 
-		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
-		if err != nil {
-			return errors.NewConfigurationError("error creating blockchain store %w", err)
-		}
+		// blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
+		// if err != nil {
+		// 	return errors.NewConfigurationError("error creating blockchain store %w", err)
+		// }
 
-		b.Nodes[i].BlockChainDB = blockchainStore
+		// b.Nodes[i].BlockChainDB = blockchainStore
 
 		blockStoreURL, err, found := gocore.Config().GetURL(fmt.Sprintf("blockstore.%s.run", node.SettingsContext))
 		if err != nil {
@@ -203,13 +237,13 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 		// 	return errors.NewConfigurationError("error creating utxostore %w", err)
 		// }
 
-		rpcURL, ok := gocore.Config().Get(fmt.Sprintf("rpc_listener_url.%s", node.SettingsContext))
-		if !ok {
-			return errors.NewConfigurationError("no rpc_listener_url setting found")
-		}
+		// rpcURL, ok := gocore.Config().Get(fmt.Sprintf("rpc_listener_url.%s", node.SettingsContext))
+		// if !ok {
+		// 	return errors.NewConfigurationError("no rpc_listener_url setting found")
+		// }
 
-		rpcPort := strings.Replace(rpcURL, ":", "", 1)
-		b.Nodes[i].RPCURL = fmt.Sprintf("http://localhost:%d%s", i+1, rpcPort)
+		// rpcPort := strings.Replace(rpcURL, ":", "", 1)
+		// b.Nodes[i].RPCURL = fmt.Sprintf("http://localhost:%d%s", i+1, rpcPort)
 	}
 
 	return nil
@@ -223,6 +257,7 @@ func (b *BitcoinTestFramework) StopNodes() error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -233,6 +268,7 @@ func (b *BitcoinTestFramework) StopNodesWithRmVolume() error {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -273,7 +309,27 @@ func (b *BitcoinTestFramework) StartNode(nodeName string) error {
 		time.Sleep(10 * time.Second)
 
 	}
+
 	return nil
+}
+
+func (b *BitcoinTestFramework) GetMappedPort(nodeName string, port nat.Port) (nat.Port, error) {
+	if b.Compose != nil {
+		// Stop the Docker Compose services
+		node, err := b.Compose.ServiceContainer(b.Context, nodeName)
+		if err != nil {
+			return "", err
+		}
+
+		mappedPort, err := node.MappedPort(b.Context, port)
+		if err != nil {
+			return "", err
+		}
+
+		return mappedPort, nil
+	}
+
+	return "", nil
 }
 
 // StopNode stops a particular node.
@@ -290,7 +346,12 @@ func (b *BitcoinTestFramework) StopNode(nodeName string) error {
 			return err
 		}
 	}
+
 	return nil
+}
+
+func makeHostAddressFromPort(port string) string {
+	return fmt.Sprintf("localhost:%s", port)
 }
 
 // getHostAddress returns the host equivalent address for the given ubsv service.

@@ -20,7 +20,7 @@ type BitcoinTestSuite struct {
 }
 
 func (suite *BitcoinTestSuite) DefaultComposeFiles() []string {
-	return []string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"}
+	return []string{"../../docker-compose.e2etest.override.yml"}
 }
 
 func (suite *BitcoinTestSuite) DefaultSettingsMap() map[string]string {
@@ -32,9 +32,9 @@ func (suite *BitcoinTestSuite) DefaultSettingsMap() map[string]string {
 }
 
 const (
-	NodeURL1 = "http://localhost:18090"
-	NodeURL2 = "http://localhost:28090"
-	NodeURL3 = "http://localhost:38090"
+	NodeURL1 = "http://localhost:10090"
+	NodeURL2 = "http://localhost:12090"
+	NodeURL3 = "http://localhost:14090"
 )
 
 func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap map[string]string, composeFiles []string) {
@@ -44,7 +44,7 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 	suite.SettingsMap = settingsMap
 
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
-	err = removeDataDirectory("../../data", isGitHubActions)
+	err = removeDataDirectory("../../data/test", isGitHubActions)
 
 	if err != nil {
 		suite.T().Fatal(err)
