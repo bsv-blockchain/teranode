@@ -16,12 +16,12 @@ jobs:
   isolate_version:
     runs-on: ubuntu-latest
     outputs:
-      version_tag: ${{ steps.get_tag.outputs.version }}
+      version_tag: ${{ steps.get_tag.outputs.version_tag }}
     steps:
       - name: Separate version from release tag
         id: get_tag
         run: |
-          echo "version=$(echo $REF_NAME | sed 's/release-//')" >> $GITHUB_OUTPUT
+          echo "version_tag=$(echo $REF_NAME | sed 's/release-//')" >> $GITHUB_OUTPUT
 
   # Pull/push image for X86 (AMD64)
   pull_push_amd64:
@@ -35,7 +35,7 @@ jobs:
       region: eu-north-1
       src_repo: ubsv
       dest_repo: teranode-public
-      version_tag: ${{ needs.isolate_version.outputs.version }}
+      version_tag: ${{ needs.isolate_version.outputs.version_tag }}
 
   # Pull/push image for ARM64 (Graviton and Darwin)
   pull_push_arm64:
@@ -49,7 +49,7 @@ jobs:
       region: eu-north-1
       src_repo: ubsv
       dest_repo: teranode-public
-      version_tag: ${{ needs.isolate_version.outputs.version }}
+      version_tag: ${{ needs.isolate_version.outputs.version_tag }}
 
   # Create docker manifest for multiple architecture tags
   create_manifest:

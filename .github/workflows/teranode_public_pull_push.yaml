@@ -23,6 +23,10 @@ on:
         description: 'Architecture to build'
         required: true
         type: string
+      version_tag:
+        description: 'Release version'
+        required: true
+        type: string
 
 jobs:
   push-to-public-repo:
