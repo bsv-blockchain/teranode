@@ -425,7 +425,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		for _, item := range batch {
-			sendErrorAndClose(item.errCh, errors.NewStorageError("error in aerospike map store batch records: %w", err))
+			sendErrorAndClose(item.errCh, errors.NewStorageError("error in aerospike send outpoint batch records: %w", err))
 		}
 
 		return
@@ -440,7 +440,11 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		batchRecord := batchRecordIfc.BatchRec()
 		if batchRecord.Err != nil {
-			txErrors[previousTxHash] = errors.NewProcessingError("error in aerospike map store batch record: %w", batchRecord.Err)
+			if errors.Is(batchRecord.Err, aerospike.ErrKeyNotFound) {
+				txErrors[previousTxHash] = errors.NewTxNotFoundError("could not find transaction in aerospike: %w", batchRecord.Err)
+			} else {
+				txErrors[previousTxHash] = errors.NewProcessingError("error in aerospike get outpoint batch record: %w", batchRecord.Err)
+			}
 
 			continue
 		}

@@ -470,7 +470,8 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	if !util.IsExtended(tx, blockHeight) {
 		err := v.extendTransaction(ctx, tx)
 		if err != nil {
-			return errors.NewProcessingError("can't extend transaction %s", tx.TxIDChainHash(), err)
+			// error is already wrapped in our errors package
+			return err
 		}
 	}
 
