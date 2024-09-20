@@ -366,8 +366,7 @@ function unfreeze(rec, offset, utxoHash)
         return "ERROR:UTXO is not frozen"
     end
 
-    -- Update the output to freeze it by setting the spendingTxID to 32 'FF' bytes
-    -- Resize the utxo to 64 bytes
+    -- Update the output utxo to the new utxo
     local newUtxo = bytes(32)
 
     for i = 1, 32 do -- NB - lua arrays are 1-based!!!!
