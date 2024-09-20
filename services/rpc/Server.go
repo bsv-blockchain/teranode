@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -538,7 +537,6 @@ type RPCServer struct {
 	listeners              []net.Listener
 	blockchainClient       blockchain.ClientI
 	blockAssemblyClient    *blockassembly.Client
-	chainParams            *chaincfg.Params
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -1128,13 +1126,6 @@ func (s *RPCServer) Init(ctx context.Context) (err error) {
 	rpcHandlers = rpcHandlersBeforeInit
 	// rand.Seed(time.Now().UnixNano())
 	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger)
-
-	network, _ := gocore.Config().Get("network", "mainnet")
-
-	s.chainParams, err = chaincfg.GetChainParams(network)
-	if err != nil {
-		s.logger.Fatalf("Unknown network: %s", network)
-	}
 
 	return err
 }
