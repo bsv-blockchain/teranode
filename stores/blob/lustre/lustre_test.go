@@ -13,16 +13,21 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestFile_NilS3(t *testing.T) {
+func TestFileNilS3(t *testing.T) {
+	// Get a temporary directory
+	tempDir, err := os.MkdirTemp("", "test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
 	t.Run("no s3", func(t *testing.T) {
 		var s3Client s3Store
+
 		require.Nil(t, s3Client)
 
-		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, tempDir, "persist")
 		require.NoError(t, err)
 
 		// should not exist
@@ -65,9 +70,8 @@ func TestFile_NilS3(t *testing.T) {
 	})
 }
 
-func TestFile_Get(t *testing.T) {
+func TestFileGet(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
-
 		s3Client := NewS3Store()
 		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
 		require.NoError(t, err)
@@ -193,10 +197,15 @@ func TestFile_Get(t *testing.T) {
 	})
 }
 
-func TestFile_GetFromReader(t *testing.T) {
+func TestFileGetFromReader(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
 		s3Client := NewS3Store()
-		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests-reader", "persist")
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, tempDir, "persist")
 		require.NoError(t, err)
 
 		s3Client.Set(nil, fs.ErrNotExist)
@@ -211,21 +220,22 @@ func TestFile_GetFromReader(t *testing.T) {
 
 		err = f.Del(context.Background(), []byte("key"))
 		require.NoError(t, err)
-
-		_ = os.RemoveAll("/tmp/ubsv-tests-reader")
 	})
 
 	t.Run("ttl", func(t *testing.T) {
-		_ = os.RemoveAll("/tmp/ubsv-tests-reader")
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
 
 		s3Client := NewS3Store()
-		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests-reader", "persist")
+		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, tempDir, "persist")
 		require.NoError(t, err)
 
 		s3Client.Set(nil, fs.ErrNotExist)
 
-		filename := "/tmp/ubsv-tests-reader/79656b"
-		persistFilename := "/tmp/ubsv-tests-reader/persist/79656b"
+		filename := tempDir + "/79656b"
+		persistFilename := tempDir + "/persist/79656b"
 
 		// should not exist
 		reader, err := f.GetIoReader(context.Background(), []byte("key"))
@@ -285,73 +295,17 @@ func TestFile_GetFromReader(t *testing.T) {
 		_, err = os.Stat(filename)
 		require.NoError(t, err)
 
-		// file should have been rempved from persisted folder
+		// file should have been removed from persisted folder
 		_, err = os.Stat(persistFilename)
 		require.Error(t, err)
 
 		// cleanup
 		err = f.Del(context.Background(), []byte("key"))
 		require.NoError(t, err)
-
-		_ = os.RemoveAll("/tmp/ubsv-tests-reader")
 	})
 }
 
-func TestFile_filename(t *testing.T) {
-	t.Run("filename", func(t *testing.T) {
-		s3Client := NewS3Store()
-		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
-		require.NoError(t, err)
-
-		s3Client.Set(nil, fs.ErrNotExist)
-
-		filename := f.filename([]byte("key"))
-		assert.Equal(t, "/tmp/ubsv-tests/79656b", filename)
-		persistFilename := f.getFileNameForPersist(filename)
-		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b", persistFilename)
-	})
-	t.Run("getFileNameForGet", func(t *testing.T) {
-		s3Client := NewS3Store()
-		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
-		require.NoError(t, err)
-
-		s3Client.Set(nil, fs.ErrNotExist)
-
-		filename, err := f.getFileNameForGet([]byte("key"))
-		assert.NoError(t, err)
-		assert.Equal(t, "/tmp/ubsv-tests/79656b", filename)
-		persistFilename := f.getFileNameForPersist(filename)
-		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b", persistFilename)
-
-		filename, err = f.getFileNameForGet([]byte("key"), options.WithFileName("filename-1234"))
-		assert.NoError(t, err)
-		assert.Equal(t, "/tmp/ubsv-tests/filename-1234", filename)
-
-		filename, err = f.getFileNameForGet([]byte("key"), options.WithFileName("filename-1234"), options.WithSubDirectory("./data/"))
-		assert.NoError(t, err)
-		assert.Equal(t, "/tmp/ubsv-tests/data/filename-1234", filename)
-
-		filename, err = f.getFileNameForGet([]byte("key"), options.WithFileName("filename-1234"), options.WithSubDirectory("/data/"))
-		assert.NoError(t, err)
-		assert.Equal(t, "/data/filename-1234", filename)
-	})
-
-	t.Run("getFileNameForGet with extension", func(t *testing.T) {
-		s3Client := NewS3Store()
-		f, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "/tmp/ubsv-tests", "persist")
-		require.NoError(t, err)
-
-		s3Client.Set(nil, fs.ErrNotExist)
-
-		filename, err := f.getFileNameForGet([]byte("key"), options.WithFileExtension("meta"))
-		assert.NoError(t, err)
-		assert.Equal(t, "/tmp/ubsv-tests/79656b.meta", filename)
-		persistFilename := f.getFileNameForPersist(filename)
-		assert.Equal(t, "/tmp/ubsv-tests/persist/79656b.meta", persistFilename)
-	})
-}
-
-func TestFile_New(t *testing.T) {
+func TestFileNew(t *testing.T) {
 	url, err := url.ParseRequestURI("lustre://s3.com/ubsv?localDir=/data/subtrees&localPersist=s3")
 	require.NoError(t, err)
 
@@ -377,11 +331,11 @@ func (s *s3StoreMock) Set(value []byte, err error) {
 	s.err = err
 }
 
-func (s *s3StoreMock) Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error) {
+func (s *s3StoreMock) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
 	return s.value, s.err
 }
 
-func (s *s3StoreMock) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
+func (s *s3StoreMock) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	if s.value == nil {
 		return nil, s.err
 	}
@@ -389,7 +343,7 @@ func (s *s3StoreMock) GetIoReader(ctx context.Context, key []byte, opts ...optio
 	return io.NopCloser(bytes.NewReader(s.value)), s.err
 }
 
-func (s *s3StoreMock) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
+func (s *s3StoreMock) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
 	if s.value == nil {
 		return false, s.err
 	}

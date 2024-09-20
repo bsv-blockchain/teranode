@@ -34,7 +34,7 @@ type S3 struct {
 	uploader   *manager.Uploader
 	downloader *manager.Downloader
 	bucket     string
-	options    *options.SetOptions
+	options    *options.Options
 	logger     ulogger.Logger
 }
 
@@ -48,7 +48,7 @@ var (
 * TTL managed by S3.
 * SetTTL is not implemented meaning you cannot manually expire a file.
  */
-func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, error) {
+func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.StoreOption) (*S3, error) {
 	logger = logger.New("s3")
 
 	maxIdleConns, err := getQueryParamInt(s3URL, "MaxIdleConns", 100)
@@ -103,7 +103,7 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.Options) (*S3, e
 		downloader: manager.NewDownloader(client),
 		bucket:     s3URL.Path[1:], // remove leading slash
 		logger:     logger,
-		options:    options.NewSetOptions(nil, opts...),
+		options:    options.NewStoreOptions(opts...),
 	}
 
 	return s, nil
@@ -130,7 +130,7 @@ func (g *S3) Close(_ context.Context) error {
 	return nil
 }
 
-func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.Options) error {
+func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		_ = reader.Close()
@@ -141,7 +141,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	traceSpan := tracing.Start(ctx, "s3:SetFromReader")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(g.options, opts...)
+	o := options.MergeOptions(g.options, opts)
 
 	objectKey := g.getObjectKey(key, o)
 
@@ -161,8 +161,8 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 		Body:   reader,
 	}
 
-	if o.TTL > 0 {
-		expires := time.Now().Add(o.TTL)
+	if o.TTL != nil && *o.TTL > 0 {
+		expires := time.Now().Add(*o.TTL)
 		uploadInput.Expires = &expires
 	}
 
@@ -174,7 +174,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	return nil
 }
 
-func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.Options) error {
+func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Set").AddTime(start)
@@ -183,7 +183,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	traceSpan := tracing.Start(ctx, "s3:Set")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(g.options, opts...)
+	o := options.MergeOptions(g.options, opts)
 
 	objectKey := g.getObjectKey(key, o)
 
@@ -204,8 +204,8 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 
 	// Expires
 
-	if o.TTL > 0 {
-		expires := time.Now().Add(o.TTL)
+	if o.TTL != nil && *o.TTL > 0 {
+		expires := time.Now().Add(*o.TTL)
 		uploadInput.Expires = &expires
 	}
 
@@ -219,7 +219,7 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	return nil
 }
 
-func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.Options) error {
+func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("SetTTL").AddTime(start)
@@ -232,7 +232,7 @@ func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...
 	return nil
 }
 
-func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
+func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetIoReader").AddTime(start)
@@ -241,7 +241,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(g.options, opts...)
+	o := options.MergeOptions(g.options, opts)
 
 	objectKey := g.getObjectKey(key, o)
 
@@ -263,7 +263,7 @@ func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.Option
 	return result.Body, nil
 }
 
-func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]byte, error) {
+func (g *S3) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Get").AddTime(start)
@@ -272,7 +272,7 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 	traceSpan := tracing.Start(ctx, "s3:Get")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(g.options, opts...)
+	o := options.MergeOptions(g.options, opts)
 
 	objectKey := g.getObjectKey(key, o)
 
@@ -306,7 +306,7 @@ func (g *S3) Get(ctx context.Context, key []byte, opts ...options.Options) ([]by
 	return buf.Bytes(), err
 }
 
-func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.Options) ([]byte, error) {
+func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("GetHead").AddTime(start)
@@ -315,7 +315,7 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 	traceSpan := tracing.Start(ctx, "s3:GetHead")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(g.options, opts...)
+	o := options.MergeOptions(g.options, opts)
 
 	objectKey := g.getObjectKey(key, o)
 
@@ -355,7 +355,7 @@ func (g *S3) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...opt
 	return buf.Bytes(), err
 }
 
-func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error) {
+func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Exists").AddTime(start)
@@ -364,7 +364,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (b
 	traceSpan := tracing.Start(ctx, "s3:Exists")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(g.options, opts...)
+	o := options.MergeOptions(g.options, opts)
 
 	objectKey := g.getObjectKey(key, o)
 
@@ -398,7 +398,7 @@ func (g *S3) Exists(ctx context.Context, key []byte, opts ...options.Options) (b
 	return true, nil
 }
 
-func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error {
+func (g *S3) Del(ctx context.Context, key []byte, opts ...options.FileOption) error {
 	start := gocore.CurrentTime()
 	defer func() {
 		gocore.NewStat("prop_store_s3", true).NewStat("Del").AddTime(start)
@@ -407,7 +407,7 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 	traceSpan := tracing.Start(ctx, "s3:Del")
 	defer traceSpan.Finish()
 
-	o := options.NewSetOptions(g.options, opts...)
+	o := options.MergeOptions(g.options, opts)
 
 	objectKey := g.getObjectKey(key, o)
 
@@ -435,7 +435,7 @@ func (g *S3) Del(ctx context.Context, key []byte, opts ...options.Options) error
 	return nil
 }
 
-func (g *S3) getObjectKey(hash []byte, o *options.SetOptions) *string {
+func (g *S3) getObjectKey(hash []byte, o *options.Options) *string {
 	var (
 		key    string
 		prefix string
@@ -450,7 +450,8 @@ func (g *S3) getObjectKey(hash []byte, o *options.SetOptions) *string {
 		key = o.Filename
 	} else {
 		key = fmt.Sprintf("%s%s", utils.ReverseAndHexEncodeSlice(hash), ext)
-		prefix = key[:o.PrefixDirectory]
+
+		prefix = o.CalculatePrefix(key)
 	}
 
 	return aws.String(filepath.Join(o.SubDirectory, prefix, key))

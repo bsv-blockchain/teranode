@@ -161,10 +161,10 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 }
 
 type Exister interface {
-	Exists(ctx context.Context, key []byte, opts ...options.Options) (bool, error)
+	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
 }
 
-func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainhash.Hash, exister Exister, opts ...options.Options) (bool, bool, error) {
+func tryLockIfNotExists(ctx context.Context, logger ulogger.Logger, hash *chainhash.Hash, exister Exister, opts ...options.FileOption) (bool, bool, error) {
 	b, err := exister.Exists(ctx, hash[:], opts...)
 	if err != nil {
 		return false, false, err

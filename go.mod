@@ -75,7 +75,7 @@ require (
 	golang.org/x/sync v0.8.0
 	golang.org/x/sys v0.24.0
 	golang.org/x/term v0.21.0
-	golang.org/x/text v0.16.0
+	golang.org/x/text v0.16.0 // indirect
 	golang.org/x/time v0.5.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.34.2
@@ -86,9 +86,10 @@ require (
 	modernc.org/sqlite v1.28.0
 )
 
+require github.com/felixge/fgprof v0.9.5
+
 require (
 	github.com/creack/pty v1.1.20 // indirect
-	github.com/felixge/fgprof v0.9.5 // indirect
 	github.com/rogpeppe/go-internal v1.11.0 // indirect
 )
 

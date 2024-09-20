@@ -20,9 +20,9 @@ func NewGoCoreLogger(service string, options ...Option) *GoCoreLogger {
 	}
 
 	// TODO fix this linux only issue ???
-	//if _, ok := opts.writer.(*os.File); !ok {
-	//	panic("GoCoreLogger only supports stdout")
-	//}
+	// if _, ok := opts.writer.(*os.File); !ok {
+	//	 panic("GoCoreLogger only supports stdout")
+	// }
 
 	return &GoCoreLogger{gocore.Log(service, gocore.NewLogLevelFromString(opts.logLevel)), opts.skip}
 }
