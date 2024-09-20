@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -181,7 +182,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					// stop mining
 					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_CATCHUPBLOCKS)
 					if err != nil {
-						u.logger.Errorf("[BlockValidation Init] failed to send STOPMINING event [%v]", err)
+						u.logger.Errorf("[BlockValidation Init] failed to send CATCHUPBLOCKS event [%v]", err)
 					}
 
 					u.logger.Infof("[BlockValidation Init] processing catchup on channel [%s]", c.block.Hash().String())
@@ -289,8 +290,8 @@ func (u *Server) blockHandler(msg util.KafkaMessage) error {
 
 	hash, err := chainhash.NewHash(msg.Message.Value[:32])
 	if err != nil {
-		u.logger.Errorf("Failed to parse subtree hash from message: %v", err)
-		return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse subtree hash from message", err)
+		u.logger.Errorf("Failed to parse block hash from message: %v", err)
+		return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
 	}
 
 	var baseUrl string
