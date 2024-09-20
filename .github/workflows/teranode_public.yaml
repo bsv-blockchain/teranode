@@ -15,8 +15,6 @@ jobs:
   # Pull/push image for X86 (AMD64)
   pull_push_amd64:
     uses: ./.github/workflows/teranode_public_pull_push.yaml
-    needs:
-      - isolate_version
     secrets: inherit
     with:
       arch: amd64
@@ -28,8 +26,6 @@ jobs:
   # Pull/push image for ARM64 (Graviton and Darwin)
   pull_push_arm64:
     uses: ./.github/workflows/teranode_public_pull_push.yaml
-    needs:
-      - isolate_version
     secrets: inherit
     with:
       arch: arm64
@@ -51,7 +47,7 @@ jobs:
 
   # Create docker manifest for multiple architecture tags
   create_manifest:
-    needs: [pull_push_amd64, pull_push_arm64]
+    needs: [pull_push_amd64, pull_push_arm64, isolate_version]
     uses: ./.github/workflows/teranode_public_manifest.yaml
     secrets: inherit
     with:
