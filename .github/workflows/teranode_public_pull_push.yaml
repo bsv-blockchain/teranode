@@ -63,12 +63,12 @@ jobs:
         run: |
           docker tag \
           ${{ steps.login-ecr.outputs.registry }}/\
-          ${{ inputs.dest_repo }}:latest-${{ inputs.arch }} \
+          ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:${{ github.sha }}-${{ inputs.arch }}
 
       - name: Push to destination repo
         run: |
-          docker push \
+          docker push -a \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:latest-${{ inputs.arch }}
