@@ -1279,11 +1279,20 @@ out:
 		case <-ticker.C:
 			sm.handleCheckSyncPeer()
 		case m := <-sm.msgChan:
+			// whenever legacy receives a message, check if we are current
 			if sm.current() {
-				sm.logger.Infof("[SyncManager] Legacy reached current, sending RUN event to FSM")
-				_, err := sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{})
+				currentState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 				if err != nil {
-					sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
+					sm.logger.Errorf("[SyncManager] failed to get fsm current state")
+				}
+
+				// we reached current in legacy, and current FSM state is not Running, send RUN event
+				if currentState != nil && *currentState != blockchain_api.FSMStateType_RUNNING {
+					sm.logger.Infof("[SyncManager] Legacy reached current, sending RUN event to FSM")
+					_, err = sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{})
+					if err != nil {
+						sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
+					}
 				}
 			}
 
