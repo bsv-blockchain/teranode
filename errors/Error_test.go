@@ -331,6 +331,93 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	require.True(t, errors.Is(unwrapped, level4ContextError))
 }
 
+func ReturnErrorAsStandardErrorWithoutModification(error *Error) error {
+	return error
+}
+
+func ReturnSpecialErrorFromStandardErrorWithModification(error error) *Error {
+	return NewError("error on the top", error.Error())
+}
+
+// Error scenario
+// handle_block.go: errors.NewProcessingError("failed to process block", err)
+// processBlockFound returns:  errors.WrapGRPC(errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err))
+// ProcessBlock returns error: in *Error, like: errors.NewTxError(), errors.NewBlockInvalidError()
+
+func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *testing.T) {
+	// Base error is not a GRPC error, basic error
+	baseServiceErr := NewServiceError("block is invalid")
+	baseServiceErrWithNew := New(ERR_SERVICE_ERROR, "block is invalid")
+	require.True(t, baseServiceErrWithNew.Is(baseServiceErr))
+	require.True(t, baseServiceErr.Is(baseServiceErrWithNew))
+
+	standardizedBaseError := ReturnErrorAsStandardErrorWithoutModification(baseServiceErr)
+
+	wrappedOnce := WrapGRPC(standardizedBaseError)
+	unwrapped := UnwrapGRPC(wrappedOnce)
+
+	require.True(t, baseServiceErr.Is(unwrapped))
+	require.True(t, unwrapped.Is(baseServiceErr))
+
+	baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
+	baseBlockInvalidErrWithNew := New(ERR_BLOCK_INVALID, "block is invalid")
+	require.True(t, baseBlockInvalidErr.Is(baseBlockInvalidErrWithNew))
+
+	// baseBlockInvalidErr := NewBlockInvalidError("block is invalid")
+	fmtError := fmt.Errorf("can't query transaction meta from aerospike")
+	txInvalidErr := NewTxInvalidError("tx is invalid", fmtError)
+	level1BlockInvalidError := NewBlockInvalidError("block is invalid", txInvalidErr)
+	level2ServiceError := NewServiceError("service error", level1BlockInvalidError)
+	level3ProcessingError := NewProcessingError("processing error", level2ServiceError)
+	level4ContextError := NewContextError("context error", level3ProcessingError)
+
+	// Test errors that are nested
+	// level 2 error recognizes all the errors in the chain
+	require.True(t, level2ServiceError.Is(fmtError))
+	require.True(t, level2ServiceError.Is(txInvalidErr))
+	require.True(t, level2ServiceError.Is(baseBlockInvalidErr))
+	require.True(t, level2ServiceError.Is(ErrServiceError))
+	require.True(t, level2ServiceError.Is(ErrBlockInvalid))
+	require.True(t, level2ServiceError.Is(ErrTxInvalid))
+
+	standardizedComplexError := ReturnErrorAsStandardErrorWithoutModification(level4ContextError)
+	require.True(t, Is(standardizedComplexError, level4ContextError))
+	require.True(t, Is(standardizedComplexError, level3ProcessingError))
+	require.True(t, Is(standardizedComplexError, level2ServiceError))
+	require.True(t, Is(standardizedComplexError, level1BlockInvalidError))
+	require.True(t, Is(standardizedComplexError, txInvalidErr))
+
+	// Test that we don't lose any data when wrapping and unwrapping GRPC
+	topError := ReturnSpecialErrorFromStandardErrorWithModification(standardizedComplexError)
+	fmt.Println("Standardized and then Wrapped error:", topError)
+	wrapped := WrapGRPC(standardizedComplexError)
+	fmt.Println("Wrapped error: ", topError)
+	unwrapped = UnwrapGRPC(wrapped)
+	fmt.Println("Unwrapped error: ", unwrapped)
+
+	// checks with the Is function
+	require.True(t, unwrapped.Is(fmtError))
+	require.True(t, unwrapped.Is(txInvalidErr))
+	require.True(t, unwrapped.Is(baseBlockInvalidErr))
+	require.True(t, unwrapped.Is(ErrServiceError))
+	require.True(t, unwrapped.Is(ErrBlockInvalid))
+	require.True(t, unwrapped.Is(ErrTxInvalid))
+	require.True(t, unwrapped.Is(level2ServiceError))
+	require.True(t, unwrapped.Is(level3ProcessingError))
+	require.True(t, unwrapped.Is(level4ContextError))
+
+	// checks with the standard Is function
+	require.True(t, errors.Is(unwrapped, fmtError))
+	require.True(t, errors.Is(unwrapped, txInvalidErr))
+	require.True(t, errors.Is(unwrapped, baseBlockInvalidErr))
+	require.True(t, errors.Is(unwrapped, ErrServiceError))
+	require.True(t, errors.Is(unwrapped, ErrBlockInvalid))
+	require.True(t, errors.Is(unwrapped, ErrTxInvalid))
+	require.True(t, errors.Is(unwrapped, level2ServiceError))
+	require.True(t, errors.Is(unwrapped, level3ProcessingError))
+	require.True(t, errors.Is(unwrapped, level4ContextError))
+}
+
 func Test_UnwrapGRPCWithStandardError(t *testing.T) {
 	// Create a simple gRPC error with a standard error message
 	grpcErr := status.Error(codes.InvalidArgument, "Invalid argument provided")
