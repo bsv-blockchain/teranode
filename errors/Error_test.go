@@ -336,7 +336,7 @@ func ReturnErrorAsStandardErrorWithoutModification(error *Error) error {
 }
 
 func ReturnSpecialErrorFromStandardErrorWithModification(error error) *Error {
-	return NewError("error on the top", error.Error())
+	return NewError("error on the top", error)
 }
 
 // Error scenario
@@ -389,11 +389,17 @@ func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *test
 
 	// Test that we don't lose any data when wrapping and unwrapping GRPC
 	topError := ReturnSpecialErrorFromStandardErrorWithModification(standardizedComplexError)
-	fmt.Println("Standardized and then Wrapped error:", topError)
-	wrapped := WrapGRPC(standardizedComplexError)
-	fmt.Println("Wrapped error: ", topError)
+	// fmt.Println("\nStandardized and then Wrapped error:\n", topError)
+	require.True(t, Is(topError, level4ContextError))
+	require.True(t, Is(topError, level3ProcessingError))
+	require.True(t, Is(topError, level2ServiceError))
+	require.True(t, Is(topError, level1BlockInvalidError))
+	require.True(t, Is(topError, txInvalidErr))
+
+	wrapped := WrapGRPC(topError)
+	// fmt.Println("\nWrapped error:\n", topError)
 	unwrapped = UnwrapGRPC(wrapped)
-	fmt.Println("Unwrapped error: ", unwrapped)
+	// fmt.Println("\nUnwrapped error:\n", unwrapped)
 
 	// checks with the Is function
 	require.True(t, unwrapped.Is(fmtError))
