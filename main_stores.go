@@ -140,7 +140,7 @@ func getSubtreeStore(logger ulogger.Logger) (blob.Store, error) {
 		return nil, errors.NewConfigurationError("subtreestore config not found")
 	}
 
-	mainSubtreestore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithHashPrefix(10))
+	mainSubtreestore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithHashPrefix(2))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}

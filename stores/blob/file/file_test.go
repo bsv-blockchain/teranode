@@ -34,7 +34,11 @@ func TestFileGetWithAbsolutePath(t *testing.T) {
 		_, err = os.Stat(tempDir[1:])
 		require.Error(t, err)
 
-		f, err := New(ulogger.TestLogger{}, tempDir)
+		// Create a URL from the tempDir
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
 		err = f.Set(context.Background(), []byte("key"), []byte("value"))
@@ -53,11 +57,16 @@ func TestFileGetWithAbsolutePath(t *testing.T) {
 func TestFileGetWithRelativePath(t *testing.T) {
 	// random directory name
 	relativePath := "test-path-" + rand.String(12)
-	f, err := New(ulogger.TestLogger{}, relativePath)
+
+	// Create a URL from the relative path
+	u, err := url.Parse("file://./" + relativePath)
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u)
 	require.NoError(t, err)
 
 	// check if the directory is created
-	_, err = os.Stat(relativePath)
+	_, err = os.Stat("./" + relativePath)
 	require.NoError(t, err)
 
 	// check if the directory is relative
@@ -99,16 +108,20 @@ func GetPathFromURL(u *url.URL) string {
 
 func TestFileNewWithEmptyPath(t *testing.T) {
 	t.Run("empty path", func(t *testing.T) {
-		f, err := New(ulogger.TestLogger{}, "")
-		require.NoError(t, err)
-		require.NotNil(t, f)
+		f, err := New(ulogger.TestLogger{}, nil)
+		require.Error(t, err)
+		require.Nil(t, f)
 	})
 }
 
 func TestFileNewWithInvalidDirectory(t *testing.T) {
 	t.Run("invalid directory", func(t *testing.T) {
 		invalidPath := "/invalid-directory" // Assuming this path cannot be created
-		_, err := New(ulogger.TestLogger{}, invalidPath)
+
+		u, err := url.Parse("file://" + invalidPath)
+		require.NoError(t, err)
+
+		_, err = New(ulogger.TestLogger{}, u)
 		require.Error(t, err) // "mkdir /invalid-directory: read-only file system"
 		require.Contains(t, err.Error(), "failed to create directory")
 	})
@@ -129,7 +142,10 @@ func TestFileLoadTTLs(t *testing.T) {
 
 		ctx := context.Background()
 
-		f, err := new(ulogger.TestLogger{}, tempDir, ttlInterval)
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := new(ulogger.TestLogger{}, u, ttlInterval)
 		require.NoError(t, err)
 
 		err = f.Set(ctx, key, value, options.WithTTL(ttl))
@@ -166,7 +182,10 @@ func TestFileConcurrentAccess(t *testing.T) {
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
-		f, err := New(ulogger.TestLogger{}, tempDir)
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
 		var wg sync.WaitGroup
@@ -202,9 +221,12 @@ func TestFileSetWithSubdirectoryOptionIgnored(t *testing.T) {
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
 		subDir := "subDir"
 
-		f, err := New(ulogger.TestLogger{}, tempDir, options.WithSubDirectory(subDir))
+		f, err := New(ulogger.TestLogger{}, u, options.WithSubDirectory(subDir))
 		require.NoError(t, err)
 
 		key := []byte("key")
@@ -230,9 +252,12 @@ func TestFileSetWithSubdirectoryOption(t *testing.T) {
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
 		subDir := "subDir"
 
-		f, err := New(ulogger.TestLogger{}, tempDir, options.WithSubDirectory(subDir))
+		f, err := New(ulogger.TestLogger{}, u, options.WithSubDirectory(subDir))
 		require.NoError(t, err)
 
 		key := []byte("key")
@@ -267,7 +292,10 @@ func TestFileSetFromReaderAndGetIoReader(t *testing.T) {
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
-		f, err := New(ulogger.TestLogger{}, tempDir)
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
 		key := []byte("key")
@@ -298,7 +326,10 @@ func TestFileGetHead(t *testing.T) {
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
-		f, err := New(ulogger.TestLogger{}, tempDir)
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
 		key := []byte("key")
@@ -327,7 +358,10 @@ func TestFileExists(t *testing.T) {
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
 
-		f, err := New(ulogger.TestLogger{}, tempDir)
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
 		require.NoError(t, err)
 
 		key := []byte("key-exists")
@@ -351,4 +385,32 @@ func TestFileExists(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, exists)
 	})
+}
+
+func TestFileSetWithHashPrefix(t *testing.T) {
+	u, err := url.Parse("file:///data/subtreestore?hashPrefix=2")
+	require.NoError(t, err)
+	require.Equal(t, "/data/subtreestore", u.Path)
+	require.Equal(t, "2", u.Query().Get("hashPrefix"))
+
+	u, err = url.Parse("null:///?localTTLStore=file&localTTLStorePath=./data/subtreestore-ttl?hashPrefix=2")
+	require.NoError(t, err)
+
+	localTTLStoreURL := u.Query().Get("localTTLStorePath")
+	u2, err := url.Parse(localTTLStoreURL)
+	require.NoError(t, err)
+
+	hashPrefix := u2.Query().Get("hashPrefix")
+	require.Equal(t, "2", hashPrefix)
+}
+
+func TestFileSetHashPrefixOverride(t *testing.T) {
+	u, err := url.Parse("file://./data/subtreestore?hashPrefix=2")
+	require.NoError(t, err)
+
+	f, err := New(ulogger.TestLogger{}, u, options.WithHashPrefix(1))
+	require.NoError(t, err)
+
+	// Even though the option is set to 1, the URL hashPrefix should override it
+	require.Equal(t, 2, f.options.HashPrefix)
 }

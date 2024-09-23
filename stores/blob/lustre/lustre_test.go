@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -349,4 +350,25 @@ func (s *s3StoreMock) Exists(ctx context.Context, key []byte, opts ...options.Fi
 	}
 
 	return true, s.err
+}
+
+func TestFileNameForPersist(t *testing.T) {
+	url, err := url.ParseRequestURI("lustre://s3.com/ubsv")
+	require.NoError(t, err)
+
+	store, err := New(ulogger.TestLogger{}, url, "data", "persist", options.WithHashPrefix(2), options.WithSubDirectory("sub"))
+	require.NoError(t, err)
+	require.NotNil(t, store)
+
+	filename, err := store.options.ConstructFilename("data/subtreestore", []byte("key"))
+	require.NoError(t, err)
+	assert.Equal(t, "data/subtreestore/sub/79/79656b", filename)
+
+	filename, err = store.getFileNameForSet([]byte("key"))
+	require.NoError(t, err)
+	assert.Equal(t, "data/persist/sub/79/79656b", filename)
+
+	filename, err = store.getFileNameForSet([]byte("key"), options.WithTTL(2*time.Second))
+	require.NoError(t, err)
+	assert.Equal(t, "data/sub/79/79656b", filename)
 }

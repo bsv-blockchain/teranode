@@ -3,6 +3,7 @@ package blob
 import (
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/batcher"
@@ -27,7 +28,7 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		store = memory.New()
 
 	case "file":
-		store, err = file.New(logger, GetPathFromURL(storeURL), opts...)
+		store, err = file.New(logger, storeURL, opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("error creating file blob store", err)
 		}
@@ -69,13 +70,21 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 
 func createTTLStore(storeURL *url.URL, logger ulogger.Logger, opts []options.StoreOption, store Store) (Store, error) {
 	localTTLStorePath := storeURL.Query().Get("localTTLStorePath")
-	if localTTLStorePath == "" {
+
+	if len(localTTLStorePath) == 0 {
 		localTTLStorePath = "/tmp/localTTL"
+	} else if localTTLStorePath[0] != '/' && !strings.HasPrefix(localTTLStorePath, "./") {
+		localTTLStorePath = "./" + localTTLStorePath
+	}
+
+	u, err := url.Parse("file://" + localTTLStorePath)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to parse localTTLStorePath", err)
 	}
 
 	var ttlStore Store
 
-	ttlStore, err := file.New(logger, localTTLStorePath, opts...)
+	ttlStore, err = file.New(logger, u, opts...)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to create file store", err)
 	}
@@ -109,12 +118,4 @@ func createBatchedStore(storeURL *url.URL, store Store, logger ulogger.Logger) (
 	store = batcher.New(logger, store, int(sizeInBytes), writeKeys)
 
 	return store, nil
-}
-
-func GetPathFromURL(u *url.URL) string {
-	if u.Host == "." {
-		return u.Path[1:] // relative path
-	}
-
-	return u.Path // absolute path
 }

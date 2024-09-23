@@ -7,7 +7,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -174,7 +173,11 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 		return err
 	}
 
-	persistedFilename := s.getFileNameForPersist(fileName)
+	persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+	if err != nil {
+		return err
+	}
+
 	if ttl <= 0 {
 		// check whether the persisted file exists
 		_, err := os.Stat(persistedFilename)
@@ -233,7 +236,12 @@ func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.F
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// check the persist sub dir
-			file, err = os.Open(s.getFileNameForPersist(fileName))
+			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+			if err != nil {
+				return nil, err
+			}
+
+			file, err = os.Open(persistedFilename)
 			if err != nil {
 				// s.logger.Warnf("[Lustre][GetIoReader] [%s] file not found in subtree temp dir: %v", fileName, err)
 				if errors.Is(err, os.ErrNotExist) {
@@ -281,7 +289,12 @@ func (s *Lustre) Get(ctx context.Context, hash []byte, opts ...options.FileOptio
 		if errors.Is(err, os.ErrNotExist) {
 			s.logger.Warnf("[Lustre][Get] [%s] file not found in local dir: %v", fileName, err)
 			// check the persist sub dir
-			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
+			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+			if err != nil {
+				return nil, err
+			}
+
+			bytes, err = os.ReadFile(persistedFilename)
 			if err != nil {
 				s.logger.Warnf("[Lustre][Get] [%s] file not found in persist dir: %v", fileName, err)
 
@@ -329,7 +342,12 @@ func (s *Lustre) GetHead(ctx context.Context, hash []byte, nrOfBytes int, opts .
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// check the persist sub dir
-			bytes, err = os.ReadFile(s.getFileNameForPersist(fileName))
+			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+			if err != nil {
+				return nil, err
+			}
+
+			bytes, err = os.ReadFile(persistedFilename)
 			if err != nil {
 				// s.logger.Warnf("[Lustre][GetHead] [%s] file not found in subtree temp dir: %v", fileName, err)
 				if errors.Is(err, os.ErrNotExist) {
@@ -374,7 +392,12 @@ func (s *Lustre) Exists(_ context.Context, hash []byte, opts ...options.FileOpti
 	if err != nil {
 		if os.IsNotExist(err) {
 			// check the persist sub dir
-			_, err = os.Stat(s.getFileNameForPersist(fileName))
+			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+			if err != nil {
+				return false, err
+			}
+
+			_, err = os.Stat(persistedFilename)
 			if err != nil {
 				if os.IsNotExist(err) {
 					if s.s3Client == nil {
@@ -416,8 +439,13 @@ func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.FileOption)
 		return err
 	}
 
+	persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+	if err != nil {
+		return err
+	}
+
 	// remove ttl file, if exists
-	errPersist := os.Remove(s.getFileNameForPersist(fileName))
+	errPersist := os.Remove(persistedFilename)
 	err = os.Remove(fileName)
 
 	if err != nil && errPersist != nil {
@@ -427,32 +455,19 @@ func (s *Lustre) Del(_ context.Context, hash []byte, opts ...options.FileOption)
 	return nil
 }
 
-func (s *Lustre) getFileNameForPersist(filename string) string {
-	// persisted files are stored in a subdirectory
-	// add the persist dir before the file in the filepath
-	fileParts := strings.Split(filename, string(os.PathSeparator))
-
-	fileParts[len(fileParts)-1] = s.persistSubDir + fileParts[len(fileParts)-1]
-	if fileParts[0] == "" {
-		fileParts[0] = "/"
-	}
-
-	// clean the paths
-	// return filepath.Clean(filepath.Join(fileParts...))
-	return filepath.Join(fileParts...)
-}
-
 func (s *Lustre) getFileNameForSet(hash []byte, opts ...options.FileOption) (string, error) {
 	merged := options.MergeOptions(s.options, opts)
 
-	fileName, err := merged.ConstructFilename(s.path, hash)
-	if err != nil {
-		return "", err
-	}
+	basePath := s.path
 
 	if merged.TTL == nil || *merged.TTL <= 0 {
 		// the file should be persisted
-		fileName = s.getFileNameForPersist(fileName)
+		basePath = filepath.Join(basePath, s.persistSubDir)
+	}
+
+	fileName, err := merged.ConstructFilename(basePath, hash)
+	if err != nil {
+		return "", err
 	}
 
 	return fileName, nil

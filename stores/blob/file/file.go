@@ -4,8 +4,10 @@ import (
 	"context"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -30,12 +32,23 @@ type File struct {
 * Has background jobs to clean up TTL.
 * Able to specify multiple folders - files will be spread across folders based on key/hash/filename supplied.
  */
-func New(logger ulogger.Logger, path string, opts ...options.StoreOption) (*File, error) {
-	return new(logger, path, 1*time.Minute, opts...)
+func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
+	return new(logger, storeURL, 1*time.Minute, opts...)
 }
 
-func new(logger ulogger.Logger, path string, ttlCleanerInterval time.Duration, opts ...options.StoreOption) (*File, error) {
+func new(logger ulogger.Logger, storeURL *url.URL, ttlCleanerInterval time.Duration, opts ...options.StoreOption) (*File, error) {
 	logger = logger.New("file")
+
+	if storeURL == nil {
+		return nil, errors.NewConfigurationError("storeURL is nil")
+	}
+
+	var path string
+	if storeURL.Host == "." {
+		path = storeURL.Path[1:] // relative path
+	} else {
+		path = storeURL.Path // absolute path
+	}
 
 	// create the path if necessary
 	if len(path) > 0 {
@@ -45,6 +58,24 @@ func new(logger ulogger.Logger, path string, ttlCleanerInterval time.Duration, o
 	}
 
 	options := options.NewStoreOptions(opts...)
+
+	if hashPrefix := storeURL.Query().Get("hashPrefix"); len(hashPrefix) > 0 {
+		val, err := strconv.ParseInt(hashPrefix, 10, 64)
+		if err != nil {
+			return nil, errors.NewStorageError("[File] failed to parse hashPrefix", err)
+		}
+
+		options.HashPrefix = int(val)
+	}
+
+	if hashSuffix := storeURL.Query().Get("hashSuffix"); len(hashSuffix) > 0 {
+		val, err := strconv.ParseInt(hashSuffix, 10, 64)
+		if err != nil {
+			return nil, errors.NewStorageError("[File] failed to parse hashSuffix", err)
+		}
+
+		options.HashPrefix = -int(val)
+	}
 
 	if len(options.SubDirectory) > 0 {
 		if err := os.MkdirAll(filepath.Join(path, options.SubDirectory), 0755); err != nil {

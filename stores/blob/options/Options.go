@@ -146,7 +146,7 @@ func (o *Options) CalculatePrefix(filename string) string {
 
 	if o.HashPrefix != 0 {
 		if o.HashPrefix < 0 {
-			start := len(filename) + o.HashPrefix
+			start := len(filename) + o.HashPrefix // in this case, the hash prefix is negative, so we start from the end of the filename
 			if start < 0 {
 				start = 0
 			}
