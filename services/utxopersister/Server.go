@@ -64,12 +64,20 @@ func NewDirect(
 	blockStore blob.Store,
 	blockchainStore blockchain_store.Store,
 ) (*Server, error) {
+	network, _ := gocore.Config().Get("network", "mainnet")
+
+	params, err := chaincfg.GetChainParams(network)
+	if err != nil {
+		logger.Fatalf("Unknown network: %s", network)
+	}
+
 	return &Server{
 		logger:          logger,
 		blockStore:      blockStore,
 		blockchainStore: blockchainStore,
 		stats:           gocore.NewStat("utxopersister"),
 		triggerCh:       make(chan string, 5),
+		chainParams:     params,
 	}, nil
 }
 
@@ -175,6 +183,7 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 
 	// Create an error channel to communicate any errors from the goroutine
 	errCh := make(chan error, 1) // Buffered channel to prevent goroutine leaks
+	delayCh := make(chan time.Duration, 1)
 
 	go func() {
 		defer func() {
@@ -186,7 +195,9 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 
 		s.logger.Debugf("Trigger from %s to process next block", source)
 
-		errCh <- s.processNextBlock(ctx)
+		delay, err := s.processNextBlock(ctx)
+		errCh <- err
+		delayCh <- delay
 	}()
 
 	err := <-errCh
@@ -197,6 +208,11 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 		} else {
 			return err
 		}
+	}
+
+	delay := <-delayCh
+	if delay > 0 {
+		time.Sleep(delay)
 	}
 
 	// Trigger the next block processing
@@ -210,7 +226,7 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 	return nil
 }
 
-func (s *Server) processNextBlock(ctx context.Context) error {
+func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	var (
 		headers       []*model.BlockHeader
 		metas         []*model.BlockHeaderMeta
@@ -226,13 +242,13 @@ func (s *Server) processNextBlock(ctx context.Context) error {
 	}
 
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// Only process the next block if its height is more than 100 behind the current best block height
 	if bestBlockMeta.Height-s.lastHeight < 100 {
 		s.logger.Infof("Waiting for 100 confirmations (height to process: %d, best block height: %d)", s.lastHeight, bestBlockMeta.Height)
-		return nil
+		return 1 * time.Minute, nil
 	}
 
 	// Get the last 2 block headers from this last processed height
@@ -243,17 +259,17 @@ func (s *Server) processNextBlock(ctx context.Context) error {
 	}
 
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	if len(headers) != 2 {
 		s.logger.Infof("2 headers should have been returned, got %d", len(headers))
-		return nil
+		return 0, nil
 	}
 
 	// Sanity check
 	if headers[0].HashPrevBlock.String() != headers[1].Hash().String() {
-		return errors.NewProcessingError("[UTXOPersister] Previous block hash does not match current block hash for block %s height %d", headers[0].Hash(), metas[0].Height)
+		return 0, errors.NewProcessingError("[UTXOPersister] Previous block hash does not match current block hash for block %s height %d", headers[0].Hash(), metas[0].Height)
 	}
 
 	header := headers[0]
@@ -268,7 +284,7 @@ func (s *Server) processNextBlock(ctx context.Context) error {
 
 	us, err := GetUTXOSet(ctx, s.logger, s.blockStore, hash)
 	if err != nil {
-		return errors.NewProcessingError("[UTXOPersister] Error getting UTXOSet for block %s height %d", hash, meta.Height, err)
+		return 0, errors.NewProcessingError("[UTXOPersister] Error getting UTXOSet for block %s height %d", hash, meta.Height, err)
 	}
 
 	s.logger.Infof("Processing block %s height %d", hash, meta.Height)
@@ -278,11 +294,11 @@ func (s *Server) processNextBlock(ctx context.Context) error {
 
 		s.lastHeight++
 
-		return s.writeLastHeight(ctx, s.lastHeight)
+		return 0, s.writeLastHeight(ctx, s.lastHeight)
 	}
 
 	if err := us.CreateUTXOSet(ctx, previousBlockHash); err != nil {
-		return errors.NewProcessingError("[UTXOPersister] Error processing UTXOSet for block %s height %d", hash, meta.Height, err)
+		return 0, errors.NewProcessingError("[UTXOPersister] Error processing UTXOSet for block %s height %d", hash, meta.Height, err)
 	}
 
 	s.lastHeight++
@@ -290,11 +306,11 @@ func (s *Server) processNextBlock(ctx context.Context) error {
 	// Remove the previous block's UTXOSet
 	if previousBlockHash != nil {
 		if err := s.blockStore.Del(ctx, previousBlockHash[:], options.WithFileExtension(utxosetExtension)); err != nil {
-			return errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", previousBlockHash, meta.Height, err)
+			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", previousBlockHash, meta.Height, err)
 		}
 	}
 
-	return s.writeLastHeight(ctx, s.lastHeight)
+	return 0, s.writeLastHeight(ctx, s.lastHeight)
 }
 
 func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
@@ -302,8 +318,8 @@ func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 	b, err := s.blockStore.Get(ctx, nil, options.WithFileName("lastProcessed"), options.WithFileExtension("dat"))
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
-			s.logger.Warnf("lastProcessed.dat does not exist, starting from height 1")
-			return 1, nil
+			s.logger.Warnf("lastProcessed.dat does not exist, starting from height 0")
+			return 0, nil
 		}
 
 		return 0, err
@@ -328,5 +344,12 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 
 	// Write the string to the file
 	// #nosec G306
-	return s.blockStore.Set(ctx, nil, []byte(heightStr), options.WithFileName("lastProcessed"), options.WithFileExtension("dat"))
+	return s.blockStore.Set(
+		ctx,
+		nil,
+		[]byte(heightStr),
+		options.WithFileName("lastProcessed"),
+		options.WithFileExtension("dat"),
+		options.WithAllowOverwrite(true),
+	)
 }

@@ -109,6 +109,7 @@ func (f *FileStorer) Close(ctx context.Context) error {
 		[]byte(hashData),
 		options.WithFileExtension(f.extension+".sha256"),
 		options.WithTTL(0),
+		options.WithAllowOverwrite(true),
 	); err != nil {
 		return errors.NewStorageError("error setting sha256 hash", err)
 	}

@@ -203,8 +203,12 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
 	}
 
-	if _, err := os.Stat(fileName); err == nil {
-		return errors.NewBlobAlreadyExistsError("[File][SetFromReader] [%s] already exists in store", fileName)
+	merged := options.MergeOptions(s.options, opts)
+
+	if !merged.AllowOverwrite {
+		if _, err := os.Stat(fileName); err == nil {
+			return errors.NewBlobAlreadyExistsError("[File][SetFromReader] [%s] already exists in store", fileName)
+		}
 	}
 
 	// write the bytes from the reader to a file with the filename
@@ -227,14 +231,19 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 }
 
 func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
+
 	fileName, err := s.constructFileNameWithTTL(hash, opts)
 
 	if err != nil {
 		return errors.NewStorageError("[File][Set] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
 	}
 
-	if _, err := os.Stat(fileName); err == nil {
-		return errors.NewBlobAlreadyExistsError("[File][Set] [%s] already exists in store", fileName)
+	merged := options.MergeOptions(s.options, opts)
+
+	if !merged.AllowOverwrite {
+		if _, err := os.Stat(fileName); err == nil {
+			return errors.NewBlobAlreadyExistsError("[File][Set] [%s] already exists in store", fileName)
+		}
 	}
 
 	// write bytes to file

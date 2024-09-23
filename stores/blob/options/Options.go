@@ -10,11 +10,12 @@ import (
 )
 
 type Options struct {
-	TTL          *time.Duration
-	Filename     string
-	Extension    string
-	SubDirectory string
-	HashPrefix   int
+	TTL            *time.Duration
+	Filename       string
+	Extension      string
+	SubDirectory   string
+	HashPrefix     int
+	AllowOverwrite bool
 }
 
 type StoreOption func(*Options)
@@ -81,6 +82,12 @@ func WithFileName(name string) FileOption {
 func WithFileExtension(extension string) FileOption {
 	return func(s *Options) {
 		s.Extension = extension
+	}
+}
+
+func WithAllowOverwrite(allowOverwrite bool) FileOption {
+	return func(s *Options) {
+		s.AllowOverwrite = allowOverwrite
 	}
 }
 
