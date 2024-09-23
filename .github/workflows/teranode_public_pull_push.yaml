@@ -55,7 +55,7 @@ jobs:
         run: |
           docker tag \
           ${{ steps.login-ecr.outputs.registry }}/\
-          ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
+          ${{ inputs.src_repo }}:${{ github.sha }}-${{ inputs.arch }} \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:latest-${{ inputs.arch }}
 
@@ -63,7 +63,7 @@ jobs:
         run: |
           docker tag \
           ${{ steps.login-ecr.outputs.registry }}/\
-          ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
+          ${{ inputs.src_repo }}:${{ github.sha }}-${{ inputs.arch }} \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:${{ github.sha }}-${{ inputs.arch }}
 
@@ -71,7 +71,7 @@ jobs:
         run: |
           docker tag \
           ${{ steps.login-ecr.outputs.registry }}/\
-          ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
+          ${{ inputs.src_repo }}:${{ github.sha }}-${{ inputs.arch }} \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:${{ steps.shorthash.outputs.sha_short }}-${{ inputs.arch }}
 
