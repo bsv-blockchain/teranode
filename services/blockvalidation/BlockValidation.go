@@ -548,11 +548,19 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 	}
 
+	checkParentMinedTimeout, err, _ := gocore.Config().GetDuration("check_parent_mined_timeout", 2*time.Minute)
+	if err != nil {
+		return errors.NewConfigurationError("bad setting value", err)
+	}
+
 CheckParentMined:
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.NewContextCanceledError("[ValidateBlock][%s] context cancelled", block.Hash().String())
+		case <-time.After(checkParentMinedTimeout):
+			u.logger.Warnf("[BlockValidation:start][%s] timeout waiting for parent block to be mined. Re-validatiing parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
+			u.ReValidateBlock(block, baseURL)
 		default:
 			parentBlockMined, err := u.isParentMined(ctx, block.Header)
 			if err != nil {
@@ -562,7 +570,7 @@ CheckParentMined:
 			}
 
 			if !parentBlockMined {
-				u.logger.Warnf("[BlockValidation:start][%s] parent block not mined yet, retrying", block.Hash().String())
+				u.logger.Warnf("[BlockValidation:start][%s] parent block %s not mined yet, retrying", block.Hash().String(), block.Header.HashPrevBlock.String())
 				time.Sleep(delay)
 				delay = min(2*delay, maxDelay) // Increase delay, ensuring it does not exceed maxDelay
 			} else {
