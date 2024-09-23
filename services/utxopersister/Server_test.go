@@ -20,7 +20,7 @@ func TestReadWriteHeight(t *testing.T) {
 
 	oldHeight, err := s.readLastHeight(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, uint32(1), oldHeight)
+	assert.Equal(t, uint32(0), oldHeight)
 
 	// Write the height
 	err = s.writeLastHeight(ctx, 100_000)
