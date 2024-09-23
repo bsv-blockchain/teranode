@@ -89,7 +89,7 @@ func (m *MockStore) Health(ctx context.Context) (int, string, error) {
 	return 0, "", nil
 }
 
-func (mu *MockStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+func (m *MockStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	return nil, nil
 }
 
@@ -143,6 +143,18 @@ func (m *MockStore) SetMedianBlockTime(height uint32) error {
 
 func (m *MockStore) GetMedianBlockTime() uint32 {
 	return 0
+}
+
+func (m *MockStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend) error {
+	return nil
+}
+
+func (m *MockStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend) error {
+	return nil
+}
+
+func (m *MockStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend) error {
+	return nil
 }
 
 func TestBlock(t *testing.T) {

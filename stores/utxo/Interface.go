@@ -88,6 +88,11 @@ type Store interface {
 	BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...string) error
 	PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error
 
+	// functions related to Alert System
+	FreezeUTXOs(ctx context.Context, spends []*Spend) error
+	UnFreezeUTXOs(ctx context.Context, spends []*Spend) error
+	ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend) error
+
 	// internal state functions
 	SetBlockHeight(height uint32) error
 	GetBlockHeight() uint32
@@ -146,6 +151,18 @@ func (mu *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSl
 
 }
 func (mu *MockUtxostore) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
+	return nil
+}
+
+func (mu *MockUtxostore) FreezeUTXOs(ctx context.Context, spends []*Spend) error {
+	return nil
+}
+
+func (mu *MockUtxostore) UnFreezeUTXOs(ctx context.Context, spends []*Spend) error {
+	return nil
+}
+
+func (mu *MockUtxostore) ReAssignUTXO(ctx context.Context, utxo *Spend, newUtxo *Spend) error {
 	return nil
 }
 

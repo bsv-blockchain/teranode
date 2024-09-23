@@ -79,7 +79,7 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 
 	responseMsgParts := strings.Split(responseMsg, ":")
 	switch responseMsgParts[0] {
-	case "OK":
+	case LuaOk:
 		if len(responseMsgParts) > 1 && responseMsgParts[1] == "NOTALLSPENT" {
 			go func() {
 				_, err := s.incrementNrRecords(spend.TxID, 1)
@@ -89,7 +89,7 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 			}()
 		}
 
-	case "ERROR":
+	case LuaError:
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()
 		return errors.NewStorageError("error in aerospike unspend record: %s", responseMsg)
 

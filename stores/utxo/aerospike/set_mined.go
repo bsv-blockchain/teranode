@@ -77,7 +77,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 					responseMsgParts := strings.Split(responseMsg, ":")
 
 					switch responseMsgParts[0] {
-					case "OK":
+					case LuaOk:
 						okUpdates++
 					default:
 						nrErrors++

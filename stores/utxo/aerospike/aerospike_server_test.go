@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
@@ -335,7 +336,7 @@ func TestAerospike(t *testing.T) {
 			aero.NewValue(32), // ttl
 		)
 		require.NoError(t, aErr)
-		assert.Equal(t, "OK", ret)
+		assert.Equal(t, LuaOk, ret)
 
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
@@ -373,7 +374,7 @@ func TestAerospike(t *testing.T) {
 				aero.NewValue(32), // ttl
 			)
 			require.NoError(t, aErr)
-			assert.Equal(t, "OK", ret)
+			assert.Equal(t, LuaOk, ret)
 		}
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)
@@ -891,11 +892,11 @@ func TestCoinbase(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Coinbase UTXO can only be spent after 100 blocks")
 
-	db.SetBlockHeight(5000)
+	err = db.SetBlockHeight(5000)
+	require.NoError(t, err)
 
 	err = db.Spend(context.Background(), []*utxo.Spend{spend}, 0)
 	require.NoError(t, err)
-
 }
 
 //func TestBigOPReturn(t *testing.T) {
@@ -1329,3 +1330,60 @@ func TestStore_Decorate(t *testing.T) {
 //	assert.NotNil(t, previousOutput.LockingScript)
 //	// t.Log(previousOutput)
 //}
+
+func Test_SmokeTests(t *testing.T) {
+	aeroURL, err := url.Parse(aerospikeURL)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	t.Run("aerospike store", func(t *testing.T) {
+		db, err := New(ulogger.TestLogger{}, aeroURL)
+		require.NoError(t, err)
+
+		err = db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Store(t, db)
+	})
+
+	t.Run("aerospike spend", func(t *testing.T) {
+		db, err := New(ulogger.TestLogger{}, aeroURL)
+		require.NoError(t, err)
+
+		err = db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Spend(t, db)
+	})
+
+	t.Run("aerospike reset", func(t *testing.T) {
+		db, err := New(ulogger.TestLogger{}, aeroURL)
+		require.NoError(t, err)
+
+		err = db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Restore(t, db)
+	})
+
+	t.Run("aerospike freeze", func(t *testing.T) {
+		db, err := New(ulogger.TestLogger{}, aeroURL)
+		require.NoError(t, err)
+
+		err = db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.Freeze(t, db)
+	})
+
+	t.Run("aerospike reassign", func(t *testing.T) {
+		db, err := New(ulogger.TestLogger{}, aeroURL)
+		require.NoError(t, err)
+
+		err = db.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.ReAssign(t, db)
+	})
+}

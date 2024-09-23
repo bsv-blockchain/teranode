@@ -15,10 +15,11 @@ import (
 )
 
 type memoryData struct {
-	tx       *bt.Tx
-	lockTime uint32
-	blockIDs []uint32
-	utxoMap  map[chainhash.Hash]*chainhash.Hash
+	tx        *bt.Tx
+	lockTime  uint32
+	blockIDs  []uint32
+	utxoMap   map[chainhash.Hash]*chainhash.Hash
+	frozenMap map[chainhash.Hash]bool
 }
 
 type Memory struct {
@@ -29,7 +30,7 @@ type Memory struct {
 	medianBlockTime atomic.Uint32
 }
 
-func New(logger ulogger.Logger) utxo.Store {
+func New(logger ulogger.Logger) *Memory {
 	return &Memory{
 		logger:          logger,
 		txs:             make(map[chainhash.Hash]*memoryData),
@@ -61,14 +62,15 @@ func (m *Memory) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts
 	}
 
 	if _, ok := m.txs[*txHash]; ok {
-		return nil, errors.NewTxNotFoundError("%v not found", txHash)
+		return nil, errors.NewTxAlreadyExistsError("%v already exists", txHash)
 	}
 
 	m.txs[*txHash] = &memoryData{
-		tx:       tx,
-		lockTime: tx.LockTime,
-		blockIDs: make([]uint32, 0),
-		utxoMap:  make(map[chainhash.Hash]*chainhash.Hash),
+		tx:        tx,
+		lockTime:  tx.LockTime,
+		blockIDs:  make([]uint32, 0),
+		utxoMap:   make(map[chainhash.Hash]*chainhash.Hash),
+		frozenMap: make(map[chainhash.Hash]bool),
 	}
 
 	if len(options.BlockIDs) > 0 {
@@ -111,13 +113,13 @@ func (m *Memory) Get(_ context.Context, hash *chainhash.Hash, fields ...[]string
 }
 
 func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
-	m.txsMu.Lock()
-	defer m.txsMu.Unlock()
-
 	metaData, err := m.Get(context.Background(), spend.TxID)
 	if err != nil {
 		return nil, err
 	}
+
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
 
 	if _, ok := m.txs[*spend.TxID]; !ok {
 		return nil, errors.NewTxNotFoundError("%v not found", spend.TxID)
@@ -128,8 +130,15 @@ func (m *Memory) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendResp
 		return nil, errors.NewTxNotFoundError("%v not found", spend.TxID)
 	}
 
+	utxoStatus := utxo.CalculateUtxoStatus(txSpend, metaData.LockTime, m.blockHeight.Load())
+
+	// check if frozen
+	if m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] {
+		utxoStatus = utxo.Status_FROZEN
+	}
+
 	return &utxo.SpendResponse{
-		Status:       int(utxo.CalculateUtxoStatus(txSpend, metaData.LockTime, m.blockHeight.Load())),
+		Status:       int(utxoStatus),
 		SpendingTxID: txSpend,
 		LockTime:     metaData.LockTime,
 	}, nil
@@ -172,6 +181,11 @@ func (m *Memory) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight ui
 			}
 			// same spend tx ID, just ignore and continue
 			continue
+		}
+
+		// check utxo is frozen
+		if m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] {
+			return errors.NewFrozenError("%v is frozen", spend.TxID)
 		}
 
 		m.txs[*spend.TxID].utxoMap[*spend.UTXOHash] = spend.SpendingTxID
@@ -267,6 +281,62 @@ func (m *Memory) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.
 	return nil
 }
 
+func (m *Memory) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	for _, spend := range spends {
+		if _, ok := m.txs[*spend.TxID]; !ok {
+			return errors.NewTxNotFoundError("%v not found", spend.TxID)
+		}
+
+		if _, ok := m.txs[*spend.TxID].utxoMap[*spend.UTXOHash]; !ok {
+			return errors.NewTxNotFoundError("%v not found", spend.TxID)
+		}
+
+		m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] = true
+	}
+
+	return nil
+}
+
+func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	for _, spend := range spends {
+		if _, ok := m.txs[*spend.TxID]; !ok {
+			return errors.NewTxNotFoundError("%v not found", spend.TxID)
+		}
+
+		if _, ok := m.txs[*spend.TxID].utxoMap[*spend.UTXOHash]; !ok {
+			return errors.NewTxNotFoundError("%v not found", spend.TxID)
+		}
+
+		m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] = false
+	}
+
+	return nil
+}
+
+func (m *Memory) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	// check whether the utxo is frozen
+	if !m.txs[*utxo.TxID].frozenMap[*utxo.UTXOHash] {
+		return errors.NewFrozenError("%v is not frozen", utxo.TxID)
+	}
+
+	// re-assign the utxo to the new utxo
+	m.txs[*utxo.TxID].utxoMap[*utxo.UTXOHash] = newUtxo.SpendingTxID
+
+	// un-freeze the utxo
+	m.txs[*utxo.TxID].frozenMap[*utxo.UTXOHash] = false
+
+	return nil
+}
+
 func (m *Memory) SetBlockHeight(height uint32) error {
 	m.blockHeight.Store(height)
 	return nil
@@ -284,4 +354,13 @@ func (m *Memory) SetMedianBlockTime(medianTime uint32) error {
 
 func (m *Memory) GetMedianBlockTime() uint32 {
 	return m.medianBlockTime.Load()
+}
+
+func (m *Memory) delete(hash *chainhash.Hash) error {
+	m.txsMu.Lock()
+	defer m.txsMu.Unlock()
+
+	delete(m.txs, *hash)
+
+	return nil
 }

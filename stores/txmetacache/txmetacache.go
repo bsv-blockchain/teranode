@@ -355,6 +355,38 @@ func (t *TxMetaCache) PreviousOutputsDecorate(ctx context.Context, outpoints []*
 	return t.utxoStore.PreviousOutputsDecorate(ctx, outpoints)
 }
 
+func (t *TxMetaCache) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend) error {
+	if err := t.utxoStore.FreezeUTXOs(ctx, spends); err != nil {
+		return err
+	}
+
+	for _, spend := range spends {
+		_ = t.Delete(ctx, spend.TxID)
+	}
+
+	return nil
+}
+
+func (t *TxMetaCache) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend) error {
+	if err := t.utxoStore.UnFreezeUTXOs(ctx, spends); err != nil {
+		return err
+	}
+
+	for _, spend := range spends {
+		_ = t.Delete(ctx, spend.TxID)
+	}
+
+	return nil
+}
+
+func (t *TxMetaCache) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend) error {
+	if err := t.utxoStore.ReAssignUTXO(ctx, utxo, newUtxo); err != nil {
+		return err
+	}
+
+	return t.Delete(ctx, utxo.TxID)
+}
+
 func (t *TxMetaCache) SetBlockHeight(height uint32) error {
 	return t.utxoStore.SetBlockHeight(height)
 }

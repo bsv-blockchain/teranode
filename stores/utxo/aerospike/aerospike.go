@@ -25,6 +25,9 @@ import (
 
 const MaxTxSizeInStoreInBytes = 32 * 1024
 
+const LuaOk = "OK"
+const LuaError = "ERROR"
+
 var (
 	binNames = []string{
 		"spendable",
