@@ -553,13 +553,16 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		return errors.NewConfigurationError("bad setting value", err)
 	}
 
+	timeoutTimer := time.NewTimer(checkParentMinedTimeout)
+	defer timeoutTimer.Stop()
+
 CheckParentMined:
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.NewContextCanceledError("[ValidateBlock][%s] context cancelled", block.Hash().String())
-		case <-time.After(checkParentMinedTimeout):
-			u.logger.Warnf("[BlockValidation:start][%s] timeout waiting for parent block to be mined. Re-validatiing parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
+		case <-timeoutTimer.C:
+			u.logger.Warnf("[BlockValidation:start][%s] timeout waiting for parent block to be mined. Re-validating parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
 			u.ReValidateBlock(block, baseURL)
 		default:
 			parentBlockMined, err := u.isParentMined(ctx, block.Header)
