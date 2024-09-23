@@ -6,10 +6,6 @@ on:
         description: 'Repo name'
         required: true
         type: string
-      tag:
-        description: 'Deployment tag'
-        required: true
-        type: string
       region:
         description: 'AWS region'
         required: true
@@ -39,11 +35,17 @@ jobs:
         with:
           mask-password: true
 
+      - name: Get short commit hash
+        id: shorthash
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
       - uses: int128/docker-manifest-create-action@v2
         with:
           tags: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.tag }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest
             ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ inputs.version_tag }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ steps.shorthash.outputs.sha_short }}
           sources: |
-            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest-amd64
-            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:latest-arm64
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ github.sha }}-amd64
+            ${{ steps.login-ecr.outputs.registry }}/${{ inputs.repo }}:${{ github.sha }}-arm64

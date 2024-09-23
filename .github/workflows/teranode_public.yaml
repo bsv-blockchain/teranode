@@ -16,7 +16,6 @@ jobs:
     secrets: inherit
     with:
       arch: amd64
-      tag: latest-amd64
       region: eu-north-1
       src_repo: ubsv
       dest_repo: teranode-public
@@ -27,7 +26,6 @@ jobs:
     secrets: inherit
     with:
       arch: arm64
-      tag: latest-amd64
       region: eu-north-1
       src_repo: ubsv
       dest_repo: teranode-public
@@ -54,5 +52,4 @@ jobs:
     with:
       region: eu-north-1
       repo: teranode-public
-      tag: latest
       version_tag: ${{ needs.isolate_version.outputs.version_tag }}

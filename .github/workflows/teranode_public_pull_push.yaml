@@ -11,10 +11,6 @@ on:
         description: 'Destination repo name'
         required: true
         type: string
-      tag:
-        description: 'Deployment tag'
-        required: true
-        type: string
       region:
         description: 'Source AWS region'
         required: true
@@ -45,11 +41,15 @@ jobs:
         with:
           mask-password: true
 
-      - name: Pull from source repo
+      - name: Get short commit hash
+        id: shorthash
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Pull tagged image from source repo for commit
         run: |
           docker pull \
           ${{ steps.login-ecr.outputs.registry }}/\
-          ${{ inputs.src_repo }}:latest-${{ inputs.arch }}
+          ${{ inputs.src_repo }}:${{ github.sha }}
 
       - name: Tag image for destination with latest-arch
         run: |
@@ -59,13 +59,21 @@ jobs:
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:latest-${{ inputs.arch }}
 
-      - name: Tag image for destination with commit hash
+      - name: Tag image for destination with commit hash and arch
         run: |
           docker tag \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
           ${{ steps.login-ecr.outputs.registry }}/\
           ${{ inputs.dest_repo }}:${{ github.sha }}-${{ inputs.arch }}
+
+      - name: Tag image for destination with short commit hash and arch
+        run: |
+          docker tag \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.src_repo }}:latest-${{ inputs.arch }} \
+          ${{ steps.login-ecr.outputs.registry }}/\
+          ${{ inputs.dest_repo }}:${{ steps.shorthash.outputs.sha_short }}-${{ inputs.arch }}
 
       - name: Push to destination repo
         run: |
