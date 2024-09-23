@@ -222,7 +222,6 @@ var MainNetParams = Params{
 	DefaultPort: "8333",
 	DNSSeeds: []DNSSeed{
 		{"seed.bitcoinsv.io", true},
-		{"btccash-seeder.bitcoinunlimited.info", true},
 	},
 
 	// Chain parameters
@@ -467,7 +466,6 @@ var TestNet3Params = Params{
 	DefaultPort: "18333",
 	DNSSeeds: []DNSSeed{
 		{"testnet-seed.bitcoinsv.io", true},
-		{"testnet-btccash-seeder.bitcoinunlimited.info", true},
 	},
 
 	// Chain parameters
@@ -553,7 +551,6 @@ var CustomTestNetParams = Params{
 	DefaultPort: "18333",
 	DNSSeeds: []DNSSeed{
 		{"testnet-seed.bitcoinsv.io", true},
-		{"testnet-btccash-seeder.bitcoinunlimited.info", true},
 	},
 
 	// Chain parameters

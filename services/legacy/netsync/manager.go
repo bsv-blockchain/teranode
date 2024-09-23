@@ -277,7 +277,7 @@ func (sm *SyncManager) resetHeaderState(newestHash *chainhash.Hash, newestHeight
 // later than the final checkpoint or some other reason such as disabled
 // checkpoints.
 func (sm *SyncManager) findNextHeaderCheckpoint(height int32) *chaincfg.Checkpoint {
-	checkpoints := chaincfg.MainNetParams.Checkpoints
+	checkpoints := sm.chainParams.Checkpoints
 	if len(checkpoints) == 0 {
 		return nil
 	}

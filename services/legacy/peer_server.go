@@ -2168,6 +2168,15 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 
 	cfg = c
 
+	// This is normally only done from file in bsvd, but we need to do it here, also happens inside loadConfig
+	network, _ := gocore.Config().Get("network", "mainnet")
+
+	if network == "testnet" {
+		activeNetParams = &testNet3Params
+	} else if network == "regtest" {
+		activeNetParams = &regressionNetParams
+	}
+
 	// overwrite any config options from settings, if applicable
 	setConfigValuesFromSettings(logger, config.GetAll(), cfg)
 
@@ -2254,6 +2263,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 	}
 
 	// Add the peers that are defined in teranode settings...
+	// also retrieved in services/legacy/Server.go:118
 	addresses, found := gocore.Config().GetMulti("legacy_connect_peers", "|")
 	if found {
 		c.ConnectPeers = append(c.ConnectPeers, addresses...)

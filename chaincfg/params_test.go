@@ -38,7 +38,6 @@ func TestMustRegisterPanic(t *testing.T) {
 func TestSeeds(t *testing.T) {
 	expectedSeeds := []DNSSeed{
 		{"seed.bitcoinsv.io", true},
-		{"btccash-seeder.bitcoinunlimited.info", true},
 	}
 
 	if MainNetParams.DNSSeeds == nil {

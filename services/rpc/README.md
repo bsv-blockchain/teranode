@@ -15,6 +15,7 @@ use postman
 
 `{"method": "submitminingsolution", "params": ["{\"id\": \"aGVsbG9JZA==\",\"nonce\": 1804358173, \"coinbase\": \"aGVsbG9JZA==\",\"time\": 1528925410,\"version\": 536870912}"]}`
 
+`{"method": "generate", "params": [101]}`
 
 curl --user bitcoin  -X POST http://localhost:9292 \
      -H "Content-Type: application/json" \

@@ -2,7 +2,6 @@ package legacy
 
 import (
 	"context"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
@@ -77,9 +76,8 @@ func (s *Server) Init(ctx context.Context) error {
 	//}
 	wire.SetLimits(4000000000)
 
-	// seed.bitcoinsv.io
-	// TODO use testnet-seed.bitcoinsv.io for testnet, stn-seed.bitcoinsv.io for STN
-	connectAddresses, _ := gocore.Config().GetMulti("legacy_connect_peers", "|", []string{"44.213.141.106:8333|13.213.100.250:8333|18.199.12.185:8333"})
+	network, _ := gocore.Config().Get("network", "mainnet")
+	chainParams, err := chaincfg.GetChainParams(network)
 
 	// get the public IP and listen on it
 	ip, err := GetOutboundIP()
@@ -103,13 +101,15 @@ func (s *Server) Init(ctx context.Context) error {
 		s.subtreeValidation,
 		s.blockValidation,
 		listenAddresses,
-		&chaincfg.MainNetParams,
+		chainParams,
 		assetHttpAddress,
 	)
 	if err != nil {
 		return err
 	}
 
+	// TODO: is this still needed? Also defined in services/legacy/peer_server.go:2271
+	connectAddresses, _ := gocore.Config().GetMulti("legacy_connect_peers", "|", []string{})
 	for _, addr := range connectAddresses {
 		_ = s.server.addrManager.AddAddressByIP(addr)
 	}

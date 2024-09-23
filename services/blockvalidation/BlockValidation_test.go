@@ -207,6 +207,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 func TestBlockValidationValidateBlock(t *testing.T) {
 
 	initPrometheusMetrics()
+
 	txCount := 1024
 	// subtreeHashes := make([]*chainhash.Hash, 0)
 

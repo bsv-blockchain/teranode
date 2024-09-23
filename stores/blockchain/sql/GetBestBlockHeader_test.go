@@ -16,6 +16,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		require.NoError(t, err)
 
 		s, err := New(ulogger.TestLogger{}, storeURL)
+
 		require.NoError(t, err)
 
 		tip, meta, err := s.GetBestBlockHeader(context.Background())
@@ -31,6 +32,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		require.NoError(t, err)
 
 		s, err := New(ulogger.TestLogger{}, storeURL)
+
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")
@@ -58,6 +60,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		require.NoError(t, err)
 
 		s, err := New(ulogger.TestLogger{}, storeURL)
+
 		require.NoError(t, err)
 
 		_, _, err = s.StoreBlock(context.Background(), block1, "")
