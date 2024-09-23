@@ -21,11 +21,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/bitcoin-sv/ubsv/services/propagation/propagation_api"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -89,8 +86,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
 	if fsmStateRestore {
 		// Send Restore event to FSM
-		_, err := ps.blockchainClient.Restore(ctx, &emptypb.Empty{})
-		if err != nil {
+		if err = ps.blockchainClient.Restore(ctx); err != nil {
 			ps.logger.Errorf("[Faucet] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
 		}
 
@@ -98,7 +94,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		// this means FSM got a RUN event and transitioned to RUN state
 		// this will block
 		ps.logger.Infof("[Faucet] Node is restoring, waiting for FSM to transition to Running state")
-		_ = ps.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		_ = ps.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
 		ps.logger.Infof("[Faucet] Node finished restoring and has transitioned to Running state, continuing to start Faucet service")
 	}
 

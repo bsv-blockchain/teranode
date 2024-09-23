@@ -13,12 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation/blockvalidation_api"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -180,7 +177,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 			case c := <-u.catchupCh:
 				{
 					// stop mining
-					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_CATCHUPBLOCKS)
+					err = u.blockchainClient.CatchUpBlocks(ctx)
 					if err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to send CATCHUPBLOCKS event [%v]", err)
 					}
@@ -194,7 +191,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 
 					// catched up, ready to mine, send RUN event
-					err = u.blockchainClient.SendFSMEvent(ctx1, blockchain_api.FSMEventType_RUN)
+					err = u.blockchainClient.Run(ctx1)
 					if err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to send MINE event [%v]", err)
 					}
@@ -396,7 +393,7 @@ func (u *Server) Start(ctx context.Context) error {
 	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
 	if fsmStateRestore {
 		// Send Restore event to FSM
-		_, err := u.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		err := u.blockchainClient.Restore(ctx)
 		if err != nil {
 			u.logger.Errorf("[Block Validation] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
 		}
@@ -405,7 +402,7 @@ func (u *Server) Start(ctx context.Context) error {
 		// this means FSM got a RUN event and transitioned to RUN state
 		// this will block
 		u.logger.Infof("[Block Validation] Node is restoring, waiting for FSM to transition to Running state")
-		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
 		u.logger.Infof("[Block Validation] Node finished restoring and has transitioned to Running state, continuing to start Block Validation service")
 	}
 

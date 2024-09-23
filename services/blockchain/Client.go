@@ -32,7 +32,7 @@ type Client struct {
 	logger        ulogger.Logger
 	running       *atomic.Bool
 	conn          *grpc.ClientConn
-	fmsState      atomic.Pointer[blockchain_api.FSMStateType]
+	fmsState      atomic.Pointer[FSMStateType]
 	subscribers   []clientSubscriber
 	subscribersMu sync.Mutex
 }
@@ -41,6 +41,22 @@ type BestBlockHeader struct {
 	Header *model.BlockHeader
 	Height uint32
 }
+
+type Notification = blockchain_api.Notification
+
+type NotificationMetadata = blockchain_api.NotificationMetadata
+
+type FSMStateType = blockchain_api.FSMStateType
+
+const (
+	FSMStateSTOPPED        = blockchain_api.FSMStateType_STOPPED
+	FSMStateRUNNING        = blockchain_api.FSMStateType_RUNNING
+	FSMStateCATCHINGBLOCKS = blockchain_api.FSMStateType_CATCHINGBLOCKS
+	FSMStateCATCHINGTXS    = blockchain_api.FSMStateType_CATCHINGTXS
+	FSMStateRESTORING      = blockchain_api.FSMStateType_RESTORING
+	FSMStateLEGACYSYNCING  = blockchain_api.FSMStateType_LEGACYSYNCING
+	FSMStateUNAVAILABLE    = blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE
+)
 
 func NewClient(ctx context.Context, logger ulogger.Logger, source string) (ClientI, error) {
 	logger = logger.New("blkcC")
@@ -124,7 +140,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 					c.logger.Infof("[Blockchain] Received FSM state notification: %s", notification.GetMetadata().String())
 					// update the local FSM state variable
 					metadata := notification.Metadata.Metadata
-					newState := blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])
+					newState := FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])
 					c.fmsState.Store(&newState)
 				default:
 					// send the notification to all subscribers
@@ -666,7 +682,7 @@ func (c *Client) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, e
 
 // FSM related endpoints
 
-func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error) {
+func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
 		return currentState, nil
@@ -680,7 +696,7 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMSta
 	return &state.State, nil
 }
 
-func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState blockchain_api.FSMStateType) error {
+func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState FSMStateType) error {
 	if _, err := c.client.WaitFSMToTransitionToGivenState(ctx, &blockchain_api.WaitFSMToTransitionRequest{
 		State: targetState,
 	}); err != nil {
@@ -690,13 +706,13 @@ func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetS
 	return nil
 }
 
-func (c *Client) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
+func (c *Client) GetFSMCurrentStateForE2ETestMode() FSMStateType {
 	ctx := context.Background()
 
 	currentState, err := c.client.GetFSMCurrentState(ctx, &emptypb.Empty{})
 	if err != nil {
 		c.logger.Errorf("[Blockchain Client] Failed to get FSM current state: %v", err)
-		return blockchain_api.FSMStateType_STOPPED
+		return FSMStateSTOPPED
 	}
 
 	return currentState.State
@@ -714,136 +730,132 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 	return nil
 }
 
-func (c *Client) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+// Run sends a run FSM event to the blockchain service.
+func (c *Client) Run(ctx context.Context) error {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
 		// check whether the current state is the same as the target state
-		if *currentState == blockchain_api.FSMStateType_RUNNING {
-			return nil, nil
+		if *currentState == FSMStateRUNNING {
+			return nil
 		}
 	}
 
 	c.logger.Infof("[Blockchain Client] Sending Run event")
 
-	req := emptypb.Empty{}
-
-	_, err := c.client.Run(ctx, &req)
+	_, err := c.client.Run(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return nil, nil
+	return nil
 }
 
-func (c *Client) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+// CatchUpBlocks sends a catchup blocks FSM event to the blockchain service.
+func (c *Client) CatchUpBlocks(ctx context.Context) error {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
 		// check whether the current state is the same as the target state
-		if *currentState == blockchain_api.FSMStateType_CATCHINGBLOCKS {
-			return nil, nil
+		if *currentState == FSMStateCATCHINGBLOCKS {
+			return nil
 		}
 	}
 
 	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
 
-	req := emptypb.Empty{}
-
-	_, err := c.client.CatchUpBlocks(ctx, &req)
+	_, err := c.client.CatchUpBlocks(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return nil, nil
+	return nil
 }
 
-func (c *Client) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+// CatchUpTransactions sends a catchup transactions FSM event to the blockchain service.
+func (c *Client) CatchUpTransactions(ctx context.Context) error {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
 		// check whether the current state is the same as the target state
-		if *currentState == blockchain_api.FSMStateType_CATCHINGTXS {
-			return nil, nil
+		if *currentState == FSMStateCATCHINGTXS {
+			return nil
 		}
 	}
 
 	c.logger.Infof("[Blockchain Client] Sending Catchup Transactions event")
 
-	req := emptypb.Empty{}
-
-	_, err := c.client.CatchUpTransactions(ctx, &req)
+	_, err := c.client.CatchUpTransactions(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return nil, nil
+	return nil
 }
 
-func (c *Client) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+// Restore sends a restore FSM event to the blockchain service.
+func (c *Client) Restore(ctx context.Context) error {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
 		// check whether the current state is the same as the target state
-		if *currentState == blockchain_api.FSMStateType_RESTORING {
-			return nil, nil
+		if *currentState == FSMStateRESTORING {
+			return nil
 		}
 	}
 
 	c.logger.Infof("[Blockchain Client] Sending Restore event")
 
-	req := emptypb.Empty{}
-
-	_, err := c.client.Restore(ctx, &req)
+	_, err := c.client.Restore(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return nil, nil
+	return nil
 }
 
-func (c *Client) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+// LegacySync sends a legacy sync FSM event to the blockchain service.
+func (c *Client) LegacySync(ctx context.Context) error {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
 		// check whether the current state is the same as the target state
-		if *currentState == blockchain_api.FSMStateType_LEGACYSYNCING {
-			return nil, nil
+		if *currentState == FSMStateLEGACYSYNCING {
+			return nil
 		}
 	}
 
 	c.logger.Infof("[Blockchain Client] Sending Legacy Sync event")
 
-	req := emptypb.Empty{}
-
-	_, err := c.client.LegacySync(ctx, &req)
+	_, err := c.client.LegacySync(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return nil, nil
+	return nil
 }
 
-func (c *Client) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+// Unavailable sends a resource unavailable FSM event to the blockchain service.
+func (c *Client) Unavailable(ctx context.Context) error {
 	currentState := c.fmsState.Load()
 	if currentState != nil {
 		// check whether the current state is the same as the target state
-		if *currentState == blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE {
-			return nil, nil
+		if *currentState == FSMStateUNAVAILABLE {
+			return nil
 		}
 	}
 
 	c.logger.Infof("[Blockchain Client] Sending Resource Unavailable event")
 
-	req := emptypb.Empty{}
-
-	_, err := c.client.Unavailable(ctx, &req)
+	_, err := c.client.Unavailable(ctx, &emptypb.Empty{})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return nil, nil
+	return nil
 }
 
+//
 // Legacy Endpoints
+//
 
+// GetBlockLocator returns a block locator for the given block header hash and height.
 func (c *Client) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
-
 	req := &blockchain_api.GetBlockLocatorRequest{
 		Hash:   blockHeaderHash[:],
 		Height: blockHeaderHeight,

@@ -11,13 +11,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // Server type carries the logger within it
@@ -92,7 +90,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 func (s *Server) Start(ctx context.Context) error {
 	var (
 		err error
-		ch  chan *blockchain_api.Notification
+		ch  chan *blockchain.Notification
 	)
 
 	// Check if we need to Restore. If so, move FSM to the Restore state
@@ -101,8 +99,7 @@ func (s *Server) Start(ctx context.Context) error {
 	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
 	if fsmStateRestore {
 		// Send Restore event to FSM
-		_, err := s.blockchainClient.Restore(ctx, &emptypb.Empty{})
-		if err != nil {
+		if err = s.blockchainClient.Restore(ctx); err != nil {
 			s.logger.Errorf("[Utxo Persister] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
 		}
 
@@ -110,12 +107,12 @@ func (s *Server) Start(ctx context.Context) error {
 		// this means FSM got a RUN event and transitioned to RUN state
 		// this will block
 		s.logger.Infof("[Utxo Persister] Node is restoring, waiting for FSM to transition to Running state")
-		_ = s.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		_ = s.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
 		s.logger.Infof("[Utxo Persister] Node finished restoring and has transitioned to Running state, continuing to start Utxo Persister service")
 	}
 
 	if s.blockchainClient == nil {
-		ch = make(chan *blockchain_api.Notification) // Create a dummy channel
+		ch = make(chan *blockchain.Notification) // Create a dummy channel
 	} else {
 		ch, err = s.blockchainClient.Subscribe(ctx, "utxo-persister")
 		if err != nil {

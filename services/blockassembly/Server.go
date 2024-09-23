@@ -2,10 +2,6 @@ package blockassembly
 
 import (
 	"context"
-
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -151,11 +147,11 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 				// this is the dumbest way we can think of to fix it, at least temporarily
 				time.Sleep(20 * time.Millisecond)
 
-				if err = ba.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
+				if err = ba.blockchainClient.SendNotification(ctx, &blockchain.Notification{
 					Type:     model.NotificationType_Subtree,
 					Hash:     (&subtreeRetry.subtreeHash)[:],
 					Base_URL: "",
-					Metadata: &blockchain_api.NotificationMetadata{
+					Metadata: &blockchain.NotificationMetadata{
 						Metadata: nil,
 					},
 				}); err != nil {
@@ -257,11 +253,11 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtree *util.Subtree
 	// this is the dumbest way we can think of to fix it, at least temporarily
 	time.Sleep(20 * time.Millisecond)
 
-	if err = ba.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
+	if err = ba.blockchainClient.SendNotification(ctx, &blockchain.Notification{
 		Type:     model.NotificationType_Subtree,
 		Hash:     subtree.RootHash()[:],
 		Base_URL: "",
-		Metadata: &blockchain_api.NotificationMetadata{
+		Metadata: &blockchain.NotificationMetadata{
 			Metadata: nil,
 		},
 	}); err != nil {
@@ -278,8 +274,7 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
 	if fsmStateRestore {
 		// Send Restore event to FSM
-		_, err := ba.blockchainClient.Restore(ctx, &emptypb.Empty{})
-		if err != nil {
+		if err = ba.blockchainClient.Restore(ctx); err != nil {
 			ba.logger.Errorf("[BlockAssembly] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
 		}
 
@@ -287,7 +282,7 @@ func (ba *BlockAssembly) Start(ctx context.Context) (err error) {
 		// this means FSM got a RUN event and transitioned to RUN state
 		// this will block
 		ba.logger.Infof("[BlockAssembly] Node is restoring, waiting for FSM to transition to Running state")
-		_ = ba.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		_ = ba.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
 		ba.logger.Infof("[BlockAssembly] Node finished restoring and has transitioned to Running state, continuing to start BlockAssembly service")
 	}
 
@@ -488,11 +483,12 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 		if err != nil {
 			ba.logger.Errorf("failed to convert previous hash: %s", err)
 		}
-		if err := ba.blockchainClient.SendNotification(callerSpan.Ctx, &blockchain_api.Notification{
+
+		if err = ba.blockchainClient.SendNotification(callerSpan.Ctx, &blockchain.Notification{
 			Type:     model.NotificationType_MiningOn,
 			Hash:     previousHash[:],
 			Base_URL: "",
-			Metadata: &blockchain_api.NotificationMetadata{
+			Metadata: &blockchain.NotificationMetadata{
 				Metadata: nil,
 			},
 		}); err != nil {
