@@ -563,7 +563,15 @@ CheckParentMined:
 			return errors.NewContextCanceledError("[ValidateBlock][%s] context cancelled", block.Hash().String())
 		case <-timeoutTimer.C:
 			u.logger.Warnf("[BlockValidation:start][%s] timeout waiting for parent block to be mined. Re-validating parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
-			u.ReValidateBlock(block, baseURL)
+			// We've waited long enough for block-assembly to mark subtrees as set which in turn triggers txs being marked as mined.
+			// Time to force revalidation of the parent block to get all this done
+			parentBlock, err := u.blockchainClient.GetBlock(ctx, block.Header.HashPrevBlock)
+			if err != nil {
+				u.logger.Errorf("[BlockValidation:start][%s] failed to get parent block: %s", block.Hash().String(), err)
+				return errors.NewServiceError("[BlockValidation:start][%s] failed to get parent block", block.Hash().String(), err)
+			}
+			u.ReValidateBlock(parentBlock, baseURL)
+
 		default:
 			parentBlockMined, err := u.isParentMined(ctx, block.Header)
 			if err != nil {
