@@ -193,7 +193,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					// catched up, ready to mine, send RUN event
 					err = u.blockchainClient.Run(ctx1)
 					if err != nil {
-						u.logger.Errorf("[BlockValidation Init] failed to send MINE event [%v]", err)
+						u.logger.Errorf("[BlockValidation Init] failed to send RUN event [%v]", err)
 					}
 				}
 			case blockFound := <-u.blockFoundCh:
