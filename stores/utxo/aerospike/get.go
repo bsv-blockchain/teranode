@@ -548,7 +548,7 @@ func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, e
 	} else {
 		var uw *utxopersister.UTXOWrapper
 
-		uw, err := utxopersister.NewUTXOWrapperFromReader(reader)
+		uw, err := utxopersister.NewUTXOWrapperFromReader(context.Background(), reader)
 		if err != nil {
 			return nil, errors.NewTxInvalidError("could not read outputs from reader: %w", err)
 		}

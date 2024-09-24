@@ -279,7 +279,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, utxoFile string) e
 				return gCtx.Err()
 
 			default:
-				utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(reader)
+				utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(gCtx, reader)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						if utxoWrapper == nil {

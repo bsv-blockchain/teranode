@@ -9,14 +9,15 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
+	"golang.org/x/sync/errgroup"
 )
 
 // This type is responsible for reading and writing UTXO additions, deletions and sets to and from files.
@@ -65,6 +66,7 @@ type UTXOSet struct {
 	txCount         uint64
 	utxoCount       uint64
 	deletionCount   uint64
+	stats           *gocore.Stat
 }
 
 func NewUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error) {
@@ -101,11 +103,12 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, bl
 		additionsStorer: additionsStorer,
 		deletionsStorer: deletionsStorer,
 		store:           store,
+		stats:           gocore.NewStat("utxopersister"),
 	}, nil
 }
 
 func GetUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
-	ud := &UTXOSet{
+	us := &UTXOSet{
 		ctx:       ctx,
 		logger:    logger,
 		blockHash: *blockHash,
@@ -122,22 +125,21 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, bl
 		return nil, nil
 	}
 
-	deletionsMap, err := ud.GetUTXODeletionsMap()
+	deletionsMap, err := us.GetUTXODeletionsMap(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	ud.deletionsMap = deletionsMap
+	us.deletionsMap = deletionsMap
 
-	return ud, nil
+	return us, nil
 }
 
+// Build the file header...
+// - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
+// - a 32-byte hash (little endian) of the block that the data is for
+// - a 4-byte little endian height of the block
 func BuildHeaderBytes(magic string, blockHash *chainhash.Hash, blockHeight uint32, previousBlockHash ...*chainhash.Hash) ([]byte, error) {
-	// Build the file header...
-	// - an 8-byte magic number to indicate the file type and version: U-A-1.0, U-D-1.0, U-S-1.0 (right padded with 0x00)
-	// - a 32-byte hash (little endian) of the block that the data is for
-	// - a 4-byte little endian height of the block
-
 	if len(magic) > 8 {
 		return nil, errors.NewStorageError("magic number is too long")
 	}
@@ -154,9 +156,11 @@ func BuildHeaderBytes(magic string, blockHash *chainhash.Hash, blockHeight uint3
 
 	if len(previousBlockHash) > 0 {
 		prev := make([]byte, 32)
+
 		if previousBlockHash[0] != nil {
-			copy(prev[:], previousBlockHash[0][:])
+			copy(prev, previousBlockHash[0][:])
 		}
+
 		copy(b[44:76], prev)
 	}
 
@@ -213,10 +217,10 @@ func GetUTXOSetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint
 	return magic, blockHash, blockHeight, previousBlockHash, nil
 }
 
-func (ud *UTXOSet) ProcessTx(tx *bt.Tx) error {
+func (us *UTXOSet) ProcessTx(tx *bt.Tx) error {
 	if !tx.IsCoinbase() {
 		for _, input := range tx.Inputs {
-			if err := ud.delete(&UTXODeletion{input.PreviousTxIDChainHash(), input.PreviousTxOutIndex}); err != nil {
+			if err := us.delete(&UTXODeletion{input.PreviousTxIDChainHash(), input.PreviousTxOutIndex}); err != nil {
 				return err
 			}
 		}
@@ -225,67 +229,69 @@ func (ud *UTXOSet) ProcessTx(tx *bt.Tx) error {
 	// Create a new UTXOWrapper
 	uw := &UTXOWrapper{
 		TxID:     *tx.TxIDChainHash(),
-		Height:   ud.blockHeight,
+		Height:   us.blockHeight,
 		Coinbase: tx.IsCoinbase(),
 		UTXOs:    make([]*UTXO, 0),
 	}
 
 	for i, output := range tx.Outputs {
-		if utxo.ShouldStoreOutputAsUTXO(output, ud.blockHeight) {
+		if utxo.ShouldStoreOutputAsUTXO(output, us.blockHeight) {
 			uw.UTXOs = append(uw.UTXOs, &UTXO{
-				uint32(i),
+				uint32(i), // nolint:gosec
 				output.Satoshis,
 				*output.LockingScript,
 			})
 
-			ud.utxoCount++
+			us.utxoCount++
 		}
 	}
 
 	// Write the UTXOWrapper to the file
-	_, err := ud.additionsStorer.Write(uw.Bytes())
+	_, err := us.additionsStorer.Write(uw.Bytes())
 	if err != nil {
 		return err
 	}
 
-	ud.txCount++
+	us.txCount++
 
 	return nil
 }
 
-func (ud *UTXOSet) delete(deletion *UTXODeletion) error {
-	if _, err := ud.deletionsStorer.Write(deletion.DeletionBytes()); err != nil {
+func (us *UTXOSet) delete(deletion *UTXODeletion) error {
+	if _, err := us.deletionsStorer.Write(deletion.DeletionBytes()); err != nil {
 		return err
 	}
 
-	ud.deletionCount++
+	us.deletionCount++
 
 	return nil
 }
 
-func (ud *UTXOSet) Close() error {
-	g, ctx := errgroup.WithContext(ud.ctx)
+func (us *UTXOSet) Close() error {
+	g, ctx := errgroup.WithContext(us.ctx)
 
 	g.Go(func() error {
 		// Write the EOF marker
-		if n, err := ud.additionsStorer.Write(EOFMarker); err != nil || n != len(EOFMarker) {
+		if n, err := us.additionsStorer.Write(EOFMarker); err != nil || n != len(EOFMarker) {
 			return errors.NewStorageError("Error writing EOF marker", err)
 		}
 
 		// Write the number of transactions
 		b := make([]byte, 8)
-		binary.LittleEndian.PutUint64(b, ud.txCount)
-		if n, err := ud.additionsStorer.Write(b); err != nil || n != 8 {
+		binary.LittleEndian.PutUint64(b, us.txCount)
+
+		if n, err := us.additionsStorer.Write(b); err != nil || n != 8 {
 			return errors.NewStorageError("Error writing number of transactions", err)
 		}
 
 		// Write the number of UTXOs
-		binary.LittleEndian.PutUint64(b, ud.utxoCount)
-		if n, err := ud.additionsStorer.Write(b); err != nil || n != 8 {
+		binary.LittleEndian.PutUint64(b, us.utxoCount)
+
+		if n, err := us.additionsStorer.Write(b); err != nil || n != 8 {
 			return errors.NewStorageError("Error writing number of UTXOs", err)
 		}
 
-		if err := ud.additionsStorer.Close(ctx); err != nil {
+		if err := us.additionsStorer.Close(ctx); err != nil {
 			return errors.NewStorageError("Error flushing additions writer", err)
 		}
 
@@ -294,22 +300,23 @@ func (ud *UTXOSet) Close() error {
 
 	g.Go(func() error {
 		// Write the EOF marker
-		if n, err := ud.deletionsStorer.Write(EOFMarker); err != nil || n != len(EOFMarker) {
+		if n, err := us.deletionsStorer.Write(EOFMarker); err != nil || n != len(EOFMarker) {
 			return errors.NewStorageError("Error writing EOF marker", err)
 		}
 
 		// Write the number of transactions - always 0 for deletions
 		b := make([]byte, 8)
-		if n, err := ud.deletionsStorer.Write(b); err != nil || n != 8 {
+		if n, err := us.deletionsStorer.Write(b); err != nil || n != 8 {
 			return errors.NewStorageError("Error writing 0 tx count", err)
 		}
 
-		binary.LittleEndian.PutUint64(b, ud.deletionCount)
-		if n, err := ud.deletionsStorer.Write(b); err != nil || n != 8 {
+		binary.LittleEndian.PutUint64(b, us.deletionCount)
+
+		if n, err := us.deletionsStorer.Write(b); err != nil || n != 8 {
 			return errors.NewStorageError("Error writing number of deletion", err)
 		}
 
-		if err := ud.deletionsStorer.Close(ctx); err != nil {
+		if err := us.deletionsStorer.Close(ctx); err != nil {
 			return errors.NewStorageError("Error flushing deletions writer:", err)
 		}
 
@@ -320,13 +327,13 @@ func (ud *UTXOSet) Close() error {
 		return err
 	}
 
-	ud.logger.Infof("[BlockPersister] Persisting utxo additions and deletions for block %s - DONE", ud.blockHash.String())
+	us.logger.Infof("[BlockPersister] Persisting utxo additions and deletions for block %s - DONE", us.blockHash.String())
 
 	return nil
 }
 
-func (ud *UTXOSet) GetUTXOAdditionsReader() (io.ReadCloser, error) {
-	r, err := ud.store.GetIoReader(ud.ctx, ud.blockHash[:], options.WithFileExtension(additionsExtension), options.WithTTL(0))
+func (us *UTXOSet) GetUTXOAdditionsReader() (io.ReadCloser, error) {
+	r, err := us.store.GetIoReader(us.ctx, us.blockHash[:], options.WithFileExtension(additionsExtension), options.WithTTL(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-additions reader", err)
 	}
@@ -334,8 +341,8 @@ func (ud *UTXOSet) GetUTXOAdditionsReader() (io.ReadCloser, error) {
 	return r, nil
 }
 
-func (ud *UTXOSet) GetUTXODeletionsReader() (io.ReadCloser, error) {
-	r, err := ud.store.GetIoReader(ud.ctx, ud.blockHash[:], options.WithFileExtension(deletionsExtension), options.WithTTL(0))
+func (us *UTXOSet) GetUTXODeletionsReader() (io.ReadCloser, error) {
+	r, err := us.store.GetIoReader(us.ctx, us.blockHash[:], options.WithFileExtension(deletionsExtension), options.WithTTL(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-deletions reader", err)
 	}
@@ -343,7 +350,7 @@ func (ud *UTXOSet) GetUTXODeletionsReader() (io.ReadCloser, error) {
 	return r, nil
 }
 
-func getUTXODeletionsMapFromReader(r io.Reader) (map[[32]byte][]uint32, error) {
+func getUTXODeletionsMapFromReader(ctx context.Context, r io.Reader) (map[[32]byte][]uint32, error) {
 	// Read the header
 	magic, _, _, err := GetHeaderFromReader(r)
 	if err != nil {
@@ -359,43 +366,51 @@ func getUTXODeletionsMapFromReader(r io.Reader) (map[[32]byte][]uint32, error) {
 	var b [36]byte
 
 	for {
-		// Read the next 36 bytes...
-		_, err := io.ReadFull(r, b[:])
-		if err != nil {
-			if err == io.EOF {
-				break
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			// Read the next 36 bytes...
+			_, err := io.ReadFull(r, b[:])
+			if err != nil {
+				if err == io.EOF {
+					return nil, errors.NewStorageError("unexpected EOF before EOFMarker")
+				}
+
+				return nil, errors.NewStorageError("error reading deletions", err)
 			}
-			return nil, errors.NewStorageError("error reading deletions", err)
+
+			var hash [32]byte
+
+			copy(hash[:], b[:32])
+
+			if bytes.Equal(hash[:], EOFMarker) {
+				return m, nil
+			}
+
+			deletedIndices := m[hash]
+			deletedIndices = append(deletedIndices, uint32(b[32])|uint32(b[33])<<8|uint32(b[34])<<16|uint32(b[35])<<24)
+			m[hash] = deletedIndices
 		}
-
-		var hash [32]byte
-		copy(hash[:], b[:32])
-
-		if bytes.Equal(hash[:], EOFMarker) {
-			break
-		}
-
-		deletedIndices := m[hash]
-
-		deletedIndices = append(deletedIndices, uint32(b[32])|uint32(b[33])<<8|uint32(b[34])<<16|uint32(b[35])<<24)
-
-		m[hash] = deletedIndices
 	}
-
-	return m, nil
 }
 
-func (ud *UTXOSet) GetUTXODeletionsMap() (map[[32]byte][]uint32, error) {
-	r, err := ud.GetUTXODeletionsReader()
+func (us *UTXOSet) GetUTXODeletionsMap(ctx context.Context) (map[[32]byte][]uint32, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetUTXODeletionsMap",
+		tracing.WithLogMessage(us.logger, "[GetUTXODeletionsMap] called"),
+	)
+	defer deferFn()
+
+	r, err := us.GetUTXODeletionsReader()
 	if err != nil {
-		return nil, errors.NewStorageError("error getting reader for %s.%s", ud.blockHash, deletionsExtension, err)
+		return nil, errors.NewStorageError("error getting reader for %s.%s", us.blockHash, deletionsExtension, err)
 	}
 
 	defer r.Close()
 
-	m, err := getUTXODeletionsMapFromReader(r)
+	m, err := getUTXODeletionsMapFromReader(ctx, r)
 	if err != nil {
-		return nil, errors.NewStorageError("error loading %s.%s", ud.blockHash, deletionsExtension, err)
+		return nil, errors.NewStorageError("error loading %s.%s", us.blockHash, deletionsExtension, err)
 	}
 
 	return m, nil
@@ -403,20 +418,27 @@ func (ud *UTXOSet) GetUTXODeletionsMap() (map[[32]byte][]uint32, error) {
 
 // CreateUTXOSet generates the UTXO set for the current block, using the previous block's UTXO set
 // and applying additions and deletions from the current block. It returns an error if the operation fails.
-func (ud *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainhash.Hash) (err error) {
-	deletions := ud.deletionsMap
+func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainhash.Hash) (err error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "CreateUTXOSet",
+		tracing.WithParentStat(us.stats),
+		tracing.WithLogMessage(us.logger, "[CreateUTXOSet] called"),
+	)
+	defer deferFn()
+
+	deletions := us.deletionsMap
 
 	if deletions == nil && previousBlockHash != nil {
 		// Load the deletions file for this block in to a set
 		var err error
-		deletions, err = ud.GetUTXODeletionsMap()
+
+		deletions, err = us.GetUTXODeletionsMap(ctx)
 		if err != nil {
 			return errors.NewStorageError("error getting utxo-deletions set", err)
 		}
 	}
 
 	// Open the additions file for this block and stream each record to the new UTXOSet if not in the deletions set
-	additionsReader, err := ud.GetUTXOAdditionsReader()
+	additionsReader, err := us.GetUTXOAdditionsReader()
 	if err != nil {
 		return errors.NewStorageError("error getting utxo-additions reader", err)
 	}
@@ -431,9 +453,9 @@ func (ud *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 		return errors.NewStorageError("invalid magic number in additions file: %s", magic)
 	}
 
-	storer := filestorer.NewFileStorer(ctx, ud.logger, ud.store, ud.blockHash[:], utxosetExtension)
+	storer := filestorer.NewFileStorer(ctx, us.logger, us.store, us.blockHash[:], utxosetExtension)
 
-	b, err := BuildHeaderBytes("U-S-1.0", &ud.blockHash, blockHeight, previousBlockHash)
+	b, err := BuildHeaderBytes("U-S-1.0", &us.blockHash, blockHeight, previousBlockHash)
 	if err != nil {
 		return errors.NewStorageError("error building utxo-set header", err)
 	}
@@ -442,12 +464,14 @@ func (ud *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 		return errors.NewStorageError("error writing utxo-set header", err)
 	}
 
-	var txCount uint64
-	var utxoCount uint64
+	var (
+		txCount   uint64
+		utxoCount uint64
+	)
 
 	if previousBlockHash != nil {
 		// Open the previous UTXOSet for the previous block
-		previousUTXOSetReader, err := ud.store.GetIoReader(ctx, previousBlockHash[:], options.WithFileExtension(utxosetExtension))
+		previousUTXOSetReader, err := us.store.GetIoReader(ctx, previousBlockHash[:], options.WithFileExtension(utxosetExtension))
 		if err != nil {
 			return errors.NewStorageError("error getting utxoset reader for previous block %s", previousBlockHash, err)
 		}
@@ -462,40 +486,49 @@ func (ud *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 			return errors.NewStorageError("invalid magic number in utxo-set file: %s", magic)
 		}
 
+	OUTER:
 		for {
-			// Read the next 36 bytes...
-			utxoWrapper, err := NewUTXOWrapperFromReader(previousUTXOSetReader)
-			if err != nil {
-				if err == io.EOF {
-					break
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+				// Read the next 36 bytes...
+				utxoWrapper, err := NewUTXOWrapperFromReader(ctx, previousUTXOSetReader)
+				if err != nil {
+					if err == io.EOF {
+						break OUTER
+					}
+
+					return errors.NewStorageError("error reading previous utxo-set (%s.%s) at iteration %d", previousBlockHash.String(), utxosetExtension, txCount, err)
 				}
-				return errors.NewStorageError("error reading previous utxo-set (%s.%s) at iteration %d", previousBlockHash.String(), utxosetExtension, txCount, err)
-			}
 
-			// Filter UTXOs based on the deletions map
-			utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, deletions, utxoWrapper.TxID)
+				// Filter UTXOs based on the deletions map
+				utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, deletions, utxoWrapper.TxID)
 
-			// Only write the UTXOWrapper if there are remaining UTXOs after deletions
-			if len(utxoWrapper.UTXOs) > 0 {
-				if _, err := storer.Write(utxoWrapper.Bytes()); err != nil {
-					return errors.NewStorageError("error writing utxo wrapper", err)
+				// Only write the UTXOWrapper if there are remaining UTXOs after deletions
+				if len(utxoWrapper.UTXOs) > 0 {
+					if _, err := storer.Write(utxoWrapper.Bytes()); err != nil {
+						return errors.NewStorageError("error writing utxo wrapper", err)
+					}
+
+					txCount++
+
+					utxoCount += uint64(len(utxoWrapper.UTXOs))
 				}
-				txCount++
-				utxoCount += uint64(len(utxoWrapper.UTXOs))
 			}
-
 		}
 
-		ud.logger.Infof("Read %d UTXOs from previous block %s", txCount, previousBlockHash.String())
+		us.logger.Infof("Read %d UTXOs from previous block %s", txCount, previousBlockHash.String())
 	}
 
 	for {
 		// Read the next 36 bytes...
-		utxoWrapper, err := NewUTXOWrapperFromReader(additionsReader)
+		utxoWrapper, err := NewUTXOWrapperFromReader(ctx, additionsReader)
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
+
 			return errors.NewStorageError("error reading utxo-additions", err)
 		}
 
@@ -521,12 +554,14 @@ func (ud *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 	// Write the number of transactions
 	b = make([]byte, 8)
 	binary.LittleEndian.PutUint64(b, txCount)
+
 	if _, err = storer.Write(b); err != nil {
 		return errors.NewStorageError("error writing number of transactions", err)
 	}
 
 	// Write the number of utxos
 	binary.LittleEndian.PutUint64(b, utxoCount)
+
 	if _, err = storer.Write(b); err != nil {
 		return errors.NewStorageError("error writing number of UTXOs", err)
 	}
@@ -539,28 +574,31 @@ func (ud *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 	return nil
 }
 
-func (ud *UTXOSet) GetUTXOSetReader(optionalBlockHash ...chainhash.Hash) (io.ReadCloser, error) {
-	blockHash := ud.blockHash
+func (us *UTXOSet) GetUTXOSetReader(optionalBlockHash ...chainhash.Hash) (io.ReadCloser, error) {
+	blockHash := us.blockHash
 	if len(optionalBlockHash) > 0 {
 		blockHash = optionalBlockHash[0]
 	}
 
-	return ud.store.GetIoReader(ud.ctx, blockHash[:], options.WithFileExtension(utxosetExtension))
+	return us.store.GetIoReader(us.ctx, blockHash[:], options.WithFileExtension(utxosetExtension))
 }
 
 // filterUTXOs filters out UTXOs that are present in the deletions map.
 func filterUTXOs(utxos []*UTXO, deletions map[[32]byte][]uint32, txID [32]byte) []*UTXO {
 	filteredUTXOs := make([]*UTXO, 0, len(utxos))
+
 	indices, found := deletions[txID]
 	if found {
 		for _, utxo := range utxos {
 			toDelete := false
+
 			for _, index := range indices {
 				if utxo.Index == index {
 					toDelete = true
 					break
 				}
 			}
+
 			if !toDelete {
 				filteredUTXOs = append(filteredUTXOs, utxo)
 			}
@@ -569,6 +607,7 @@ func filterUTXOs(utxos []*UTXO, deletions map[[32]byte][]uint32, txID [32]byte) 
 		// No deletions found for this txID, return all UTXOs
 		return utxos
 	}
+
 	return filteredUTXOs
 }
 

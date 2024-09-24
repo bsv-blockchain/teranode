@@ -100,7 +100,7 @@ func Start() {
 			logger.Infof("subtree %s exists", subtreeHash)
 		}
 
-		if err := filereader.ProcessFile(hash.String()+".block", logger); err != nil {
+		if err := filereader.ProcessFile(context.Background(), hash.String()+".block", logger); err != nil {
 			logger.Errorf("Error during validation: %v", err)
 			return
 		} else {

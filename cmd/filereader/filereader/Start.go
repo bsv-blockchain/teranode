@@ -57,6 +57,7 @@ func usage(msg string) {
 
 func Start() {
 	logger := ulogger.TestLogger{}
+	ctx := context.Background()
 
 	fmt.Println()
 
@@ -76,7 +77,7 @@ func Start() {
 
 	// Wrap the reader with a buffered reader
 	// read the transaction count
-	if err := ProcessFile(path, logger); err != nil {
+	if err := ProcessFile(ctx, path, logger); err != nil {
 		fmt.Printf("error processing file: %v\n", err)
 		os.Exit(1)
 	}
@@ -84,7 +85,7 @@ func Start() {
 	os.Exit(0)
 }
 
-func ProcessFile(path string, logger ulogger.Logger) error {
+func ProcessFile(ctx context.Context, path string, logger ulogger.Logger) error {
 	dir, filename, ext, r, err := getReader(path, logger)
 	if err != nil {
 		return errors.NewProcessingError("error getting reader", err)
@@ -92,14 +93,14 @@ func ProcessFile(path string, logger ulogger.Logger) error {
 
 	logger.Infof("Reading file %s\n", path)
 
-	if err := readFile(filename, ext, logger, r, dir); err != nil {
+	if err := readFile(ctx, filename, ext, logger, r, dir); err != nil {
 		return errors.NewProcessingError("error reading file", err)
 	}
 
 	return nil
 }
 
-func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, dir string) error {
+func readFile(ctx context.Context, filename string, ext string, logger ulogger.Logger, r io.Reader, dir string) error {
 	br := bufio.NewReaderSize(r, 1024*1024)
 
 	if filename == stdin {
@@ -161,7 +162,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		if verbose {
 			for {
-				ud, err := utxopersister.NewUTXOWrapperFromReader(br)
+				ud, err := utxopersister.NewUTXOWrapperFromReader(ctx, br)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						if ud == nil {
@@ -207,7 +208,7 @@ func readFile(filename string, ext string, logger ulogger.Logger, r io.Reader, d
 
 		if verbose {
 			for {
-				ud, err := utxopersister.NewUTXOWrapperFromReader(br)
+				ud, err := utxopersister.NewUTXOWrapperFromReader(ctx, br)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						if ud == nil {

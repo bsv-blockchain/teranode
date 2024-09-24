@@ -56,7 +56,7 @@ func TestNewUTXOSet2(t *testing.T) {
 	err = ud.Close()
 	require.NoError(t, err)
 
-	d, err := ud.GetUTXODeletionsMap()
+	d, err := ud.GetUTXODeletionsMap(ctx)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, len(d))
@@ -75,7 +75,7 @@ func TestNewUTXOSet2(t *testing.T) {
 	assert.Equal(t, "U-A-1.0", magic)
 
 	// Read the txID
-	utxoWrapper, err := NewUTXOWrapperFromReader(r)
+	utxoWrapper, err := NewUTXOWrapperFromReader(ctx, r)
 	require.NoError(t, err)
 
 	assert.Equal(t, tx.TxIDChainHash().String(), utxoWrapper.TxID.String())
@@ -171,7 +171,7 @@ func checkAdditions(t *testing.T, ud *UTXOSet) {
 	require.NoError(t, err)
 
 	for {
-		utxoWrapper, err := NewUTXOWrapperFromReader(r)
+		utxoWrapper, err := NewUTXOWrapperFromReader(context.Background(), r)
 		if err != nil {
 			assert.ErrorIs(t, err, io.EOF)
 			break
