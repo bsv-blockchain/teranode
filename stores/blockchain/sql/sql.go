@@ -151,6 +151,16 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
 	}
 
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_mined_set ON blocks (mined_set) WHERE mined_set = false;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_mined_set index", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_set ON blocks (subtrees_set) WHERE subtrees_set = false;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_subtrees_set index", err)
+	}
+
 	if _, err := db.Exec(`
 		CREATE OR REPLACE FUNCTION reverse_bytes_iter(bytes bytea, length int, midpoint int, index int)
 		RETURNS bytea AS
@@ -242,6 +252,16 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_mined_set ON blocks (mined_set) WHERE mined_set = false;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_mined_set index", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_set ON blocks (subtrees_set) WHERE subtrees_set = false;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_subtrees_set index", err)
 	}
 
 	return nil
