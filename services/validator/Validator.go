@@ -448,7 +448,11 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	}
 
 	if err := v.utxoStore.PreviousOutputsDecorate(ctx, outpoints); err != nil {
-		return errors.NewStorageError("can't extend transaction %s", tx.TxIDChainHash().String(), err)
+		if errors.Is(err, errors.ErrTxNotFound) {
+			return errors.NewTxMissingParentError("error extending transaction, parent tx not found")
+		}
+
+		return errors.NewProcessingError("can't extend transaction %s", tx.TxIDChainHash().String(), err)
 	}
 
 	for i, input := range tx.Inputs {

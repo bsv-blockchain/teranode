@@ -29,6 +29,7 @@ var (
 	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")
 	ErrTxInvalidDoubleSpend       = New(ERR_TX_INVALID_DOUBLE_SPEND, "tx invalid double spend")
 	ErrTxAlreadyExists            = New(ERR_TX_ALREADY_EXISTS, "tx already exists")
+	ErrMissingParentTx            = New(ERR_TX_MISSING_PARENT, "missing parent tx")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
@@ -219,6 +220,9 @@ func NewTxInvalidDoubleSpendError(message string, params ...interface{}) *Error 
 }
 func NewTxAlreadyExistsError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_ALREADY_EXISTS, message, params...)
+}
+func NewTxMissingParentError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_MISSING_PARENT, message, params...)
 }
 func NewTxError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_ERROR, message, params...)

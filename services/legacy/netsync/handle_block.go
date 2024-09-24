@@ -651,7 +651,7 @@ func (sm *SyncManager) extendTransaction(ctx context.Context, tx *bt.Tx, txMap m
 	}
 
 	if err := sm.utxoStore.PreviousOutputsDecorate(ctx, previousOutputs); err != nil {
-		if errors.Is(err, errors.ErrProcessing) {
+		if errors.Is(err, errors.ErrProcessing) || errors.Is(err, errors.ErrTxNotFound) {
 			// we could not decorate the transaction. This could be because the parent transaction has been ttl'ed, which
 			// can only happen if this transaction has been processed. In that case, we can try getting the transaction
 			// itself.
