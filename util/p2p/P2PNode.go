@@ -133,10 +133,10 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) (*P2PNode, error) {
 	// Set up connection notifications
 	h.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(n network.Network, conn network.Conn) {
-			node.logger.Infof("[P2PNode] Peer connected: %s", conn.RemotePeer().Pretty())
+			node.logger.Debugf("[P2PNode] Peer connected: %s", conn.RemotePeer().Pretty())
 		},
 		DisconnectedF: func(n network.Network, conn network.Conn) {
-			node.logger.Infof("[P2PNode] Peer disconnected: %s", conn.RemotePeer().Pretty())
+			node.logger.Debugf("[P2PNode] Peer disconnected: %s", conn.RemotePeer().Pretty())
 		},
 	})
 
