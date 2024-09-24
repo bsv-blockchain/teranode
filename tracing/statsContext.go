@@ -9,7 +9,7 @@ import (
 
 type statsKey struct{}
 
-var defaultStat = gocore.NewStat("no root", true)
+var defaultStat = gocore.RootStat // RootStat
 
 func ContextWithStat(ctx context.Context, stat *gocore.Stat) context.Context {
 	return context.WithValue(ctx, statsKey{}, stat)
@@ -27,14 +27,18 @@ func NewStatFromContext(ctx context.Context, key string, defaultParent *gocore.S
 		if defaultParent != nil {
 			parentStat = defaultParent
 		} else {
-			parentStat = gocore.NewStat("no root", true)
+			parentStat = defaultStat
 		}
 	}
+
 	ignoreChildren := true
+
 	if len(options) > 0 {
 		ignoreChildren = options[0]
 	}
+
 	stat := parentStat.NewStat(key, ignoreChildren)
+
 	return gocore.CurrentTime(), stat, context.WithValue(ctx, statsKey{}, stat)
 }
 
@@ -47,6 +51,7 @@ func CopyStatFromContext(ctxFrom context.Context, ctxTo context.Context) context
 	if !ok {
 		stat = defaultStat
 	}
+
 	return context.WithValue(ctxTo, statsKey{}, stat)
 }
 
@@ -59,5 +64,6 @@ func Stat(stat *gocore.Stat, func1 func() interface{}) interface{} {
 	defer func() {
 		stat.AddTime(start)
 	}()
+
 	return func1()
 }

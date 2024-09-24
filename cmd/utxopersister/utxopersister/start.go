@@ -2,17 +2,41 @@ package utxopersister
 
 import (
 	"context"
+	"net/http"
+	_ "net/http/pprof" // nolint:gosec
 
 	utxopersister_service "github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 )
 
 func Start() {
-	ctx := context.Background()
+	ctx, _, deferFn := tracing.StartTracing(
+		context.Background(),
+		"utxopersister",
+	)
+	defer deferFn()
+
 	logger := ulogger.NewGoCoreLogger("utxopd")
+
+	profilerAddr, found := gocore.Config().Get("profilerAddr")
+	if !found {
+		logger.Warnf("profilerAddr not found in config")
+	} else {
+		logger.Infof("Profiler available at http://%s/debug/pprof", profilerAddr)
+		gocore.RegisterStatsHandlers()
+		prefix, _ := gocore.Config().Get("stats_prefix")
+		logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
+
+		// Start http server for the profiler
+		go func() {
+			// nolint:gosec
+			logger.Errorf("%v", http.ListenAndServe(profilerAddr, nil))
+		}()
+	}
 
 	blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
 	if err != nil || !found {
