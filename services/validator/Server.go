@@ -14,7 +14,6 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/validator/validator_api"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -26,7 +25,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // Server type carries the logger within it
@@ -77,7 +75,7 @@ func (v *Server) Start(ctx context.Context) error {
 	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
 	if fsmStateRestore {
 		// Send Restore event to FSM
-		_, err := v.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		err := v.blockchainClient.Restore(ctx)
 		if err != nil {
 			v.logger.Errorf("[Validator] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
 		}
@@ -86,7 +84,7 @@ func (v *Server) Start(ctx context.Context) error {
 		// this means FSM got a RUN event and transitioned to RUN state
 		// this will block
 		v.logger.Infof("[Validator] Node is restoring, waiting for FSM to transition to Running state")
-		_ = v.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		_ = v.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
 		v.logger.Infof("[Validator] Node finished restoring and has transitioned to Running state, continuing to start Transaction Validator service")
 	}
 
@@ -141,7 +139,7 @@ func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 			v.logger.Errorf("[Validator] Failed to get current state: %s", err)
 			return err
 		}
-		for currentState != nil && *currentState == blockchain_api.FSMStateType_CATCHINGTXS {
+		for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
 			v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
 			time.Sleep(1 * time.Second) // Wait and check again in 1 second
 		}

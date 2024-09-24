@@ -17,8 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
-	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	ubsvblockchain "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
@@ -31,7 +30,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const (
@@ -227,7 +225,7 @@ type SyncManager struct {
 	quit    chan struct{}
 
 	// UBSV services
-	blockchainClient  blockchain2.ClientI
+	blockchainClient  ubsvblockchain.ClientI
 	validationClient  validator.Interface
 	utxoStore         utxostore.Store
 	subtreeStore      blob.Store
@@ -831,7 +829,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 
 			// Since we are current, we can tell FSM to transition to RUN
 			// Blockchain client will check if miner is registered, if so it will send Mine event, and FSM will transition to Mine
-			if _, err = sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{}); err != nil {
+			if err = sm.blockchainClient.Run(sm.ctx); err != nil {
 				sm.logger.Errorf("[Sync Manager] failed to send FSM RUN event %v", err)
 			}
 		}
@@ -1097,7 +1095,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 
 	// If we are current, send a RUN event to the FSM
 	if sm.current() {
-		if _, err := sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{}); err != nil {
+		if err := sm.blockchainClient.Run(sm.ctx); err != nil {
 			sm.logger.Errorf("[Sync Manager] failed to send FSM RUN event %v", err)
 		}
 	}
@@ -1133,7 +1131,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
 		sm.logger.Errorf("Failed to get current FSM state: %v", err)
-	} else if fsmState != nil && *fsmState == blockchain_api.FSMStateType_RUNNING {
+	} else if fsmState != nil && *fsmState == ubsvblockchain.FSMStateRUNNING {
 		processTransactions = true
 	}
 
@@ -1287,10 +1285,9 @@ out:
 				}
 
 				// we reached current in legacy, and current FSM state is not Running, send RUN event
-				if currentState != nil && *currentState != blockchain_api.FSMStateType_RUNNING {
+				if currentState != nil && *currentState != ubsvblockchain.FSMStateRUNNING {
 					sm.logger.Infof("[SyncManager] Legacy reached current, sending RUN event to FSM")
-					_, err = sm.blockchainClient.Run(sm.ctx, &emptypb.Empty{})
-					if err != nil {
+					if err = sm.blockchainClient.Run(sm.ctx); err != nil {
 						sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
 					}
 				}
@@ -1359,7 +1356,7 @@ out:
 // handleBlockchainNotification handles notifications from blockchain.  It does
 // things such as request orphan block parents and relay accepted blocks to
 // connected peers.
-func (sm *SyncManager) handleBlockchainNotification(notification *blockchain_api.Notification) {
+func (sm *SyncManager) handleBlockchainNotification(notification *ubsvblockchain.Notification) {
 	switch notification.Type {
 	// A block has been accepted into the blockchain.  Relay it to other
 	// peers.
@@ -1511,7 +1508,7 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 
 // New constructs a new SyncManager. Use Start to begin processing asynchronous
 // block, tx, and inv updates.
-func New(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain2.ClientI,
+func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	config *Config) (*SyncManager, error) {

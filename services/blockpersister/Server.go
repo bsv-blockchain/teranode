@@ -4,12 +4,8 @@ import (
 	"context"
 	"net/url"
 
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"github.com/bitcoin-sv/ubsv/errors"
-
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -92,7 +88,7 @@ func (u *Server) Start(ctx context.Context) error {
 	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
 	if fsmStateRestore {
 		// Send Restore event to FSM
-		_, err := u.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		err := u.blockchainClient.Restore(ctx)
 		if err != nil {
 			u.logger.Errorf("[Block Persister] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
 		}
@@ -101,7 +97,7 @@ func (u *Server) Start(ctx context.Context) error {
 		// this means FSM got a RUN event and transitioned to RUN state
 		// this will block
 		u.logger.Infof("[Block Persister] Node is restoring, waiting for FSM to transition to Running state")
-		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
 		u.logger.Infof("[Block Persister] Node finished restoring and has transitioned to Running state, continuing to start Block Persister service")
 	}
 

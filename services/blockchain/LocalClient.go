@@ -2,13 +2,9 @@ package blockchain
 
 import (
 	"context"
-
 	"time"
 
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"github.com/bitcoin-sv/ubsv/errors"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -163,19 +159,19 @@ func (c LocalClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Bloc
 	return c.store.GetBlocksSubtreesNotSet(ctx)
 }
 
-func (c LocalClient) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
+func (c LocalClient) GetFSMCurrentState(_ context.Context) (*FSMStateType, error) {
 	// TODO: Placeholder for now
-	state := blockchain_api.FSMStateType_RUNNING
+	state := FSMStateRUNNING
 	return &state, nil
 }
 
-func (c LocalClient) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {
+func (c LocalClient) WaitForFSMtoTransitionToGivenState(_ context.Context, _ FSMStateType) error {
 	return nil
 }
 
-func (c LocalClient) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
+func (c LocalClient) GetFSMCurrentStateForE2ETestMode() FSMStateType {
 	// TODO: Fix me, this is a temporary solution
-	return blockchain_api.FSMStateType_RUNNING
+	return FSMStateRUNNING
 }
 
 func (c LocalClient) SendFSMEvent(_ context.Context, _ blockchain_api.FSMEventType) error {
@@ -183,32 +179,32 @@ func (c LocalClient) SendFSMEvent(_ context.Context, _ blockchain_api.FSMEventTy
 	return nil
 }
 
-func (c LocalClient) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, nil
+func (c LocalClient) Run(ctx context.Context) error {
+	return nil
 }
 
-func (c LocalClient) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, nil
+func (c LocalClient) Mine(ctx context.Context) error {
+	return nil
 }
 
-func (c LocalClient) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, nil
+func (c LocalClient) CatchUpBlocks(ctx context.Context) error {
+	return nil
 }
 
-func (c LocalClient) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, nil
+func (c LocalClient) CatchUpTransactions(ctx context.Context) error {
+	return nil
 }
 
-func (c LocalClient) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, nil
+func (c LocalClient) Restore(ctx context.Context) error {
+	return nil
 }
 
-func (c LocalClient) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, nil
+func (c LocalClient) LegacySync(ctx context.Context) error {
+	return nil
 }
 
-func (c LocalClient) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, nil
+func (c LocalClient) Unavailable(ctx context.Context) error {
+	return nil
 }
 
 // GetBlockLocator returns a block locator for the latest block.

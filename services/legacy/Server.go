@@ -2,15 +2,13 @@ package legacy
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
-	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -126,7 +124,7 @@ func (s *Server) Start(ctx context.Context) error {
 	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
 	if fsmStateRestore {
 		// Send Restore event to FSM
-		_, err := s.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		err := s.blockchainClient.Restore(ctx)
 		if err != nil {
 			s.logger.Errorf("[Legacy Server] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
 		}
@@ -135,12 +133,12 @@ func (s *Server) Start(ctx context.Context) error {
 		// this means FSM got a RUN event and transitioned to RUN state
 		// this will block
 		s.logger.Infof("[Legacy Server] Node is restoring, waiting for FSM to transition to Running state")
-		_ = s.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		_ = s.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
 		s.logger.Infof("[Legacy Server] Node finished restoring and has transitioned to Running state, continuing to start Legacy service")
 	}
 
 	// Tell FSM that we are in legacy sync, so it will transition to LegacySync state
-	_, err := s.blockchainClient.LegacySync(ctx, &emptypb.Empty{})
+	err := s.blockchainClient.LegacySync(ctx)
 	if err != nil {
 		s.logger.Errorf("[Legacy Server] failed to send Legacy Sync event to the FSM [%v]", err)
 	}

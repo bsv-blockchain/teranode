@@ -3,8 +3,6 @@ package blockchain
 import (
 	"context"
 
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -42,16 +40,16 @@ type ClientI interface {
 	GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error)
 
 	// FSM related endpoints
-	GetFSMCurrentState(ctx context.Context) (*blockchain_api.FSMStateType, error)
-	WaitForFSMtoTransitionToGivenState(context.Context, blockchain_api.FSMStateType) error
-	GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType
-	SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
-	Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-	CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-	CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-	Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-	LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
-	Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
+	GetFSMCurrentState(ctx context.Context) (*FSMStateType, error)
+	WaitForFSMtoTransitionToGivenState(context.Context, FSMStateType) error
+	GetFSMCurrentStateForE2ETestMode() FSMStateType
+	// SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
+	Run(ctx context.Context) error
+	CatchUpBlocks(ctx context.Context) error
+	CatchUpTransactions(ctx context.Context) error
+	Restore(ctx context.Context) error
+	LegacySync(ctx context.Context) error
+	Unavailable(ctx context.Context) error
 
 	// new legacy endpoints
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error)
@@ -194,28 +192,25 @@ func (s *MockBlockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, _
 func (s *MockBlockchain) GetFSMCurrentStateForE2ETestMode() blockchain_api.FSMStateType {
 	panic("not implemented")
 }
-func (s *MockBlockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+func (s *MockBlockchain) Run(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *MockBlockchain) Mine(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+func (s *MockBlockchain) Mine(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *MockBlockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+func (s *MockBlockchain) CatchUpTransactions(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *MockBlockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+func (s *MockBlockchain) CatchUpBlocks(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *MockBlockchain) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+func (s *MockBlockchain) Restore(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *MockBlockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+func (s *MockBlockchain) LegacySync(ctx context.Context) error {
 	panic("not implemented")
 }
-func (s *MockBlockchain) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
-	panic("not implemented")
-}
-func (s *MockBlockchain) SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error {
+func (s *MockBlockchain) Unavailable(ctx context.Context) error {
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {

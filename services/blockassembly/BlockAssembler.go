@@ -18,8 +18,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -48,7 +46,7 @@ type BlockAssembler struct {
 	currentChainMap          map[chainhash.Hash]uint32
 	currentChainMapIDs       map[uint32]struct{}
 	currentChainMapMu        sync.RWMutex
-	blockchainSubscriptionCh chan *blockchain_api.Notification
+	blockchainSubscriptionCh chan *blockchain.Notification
 	maxBlockReorgRollback    int
 	maxBlockReorgCatchup     int
 	chainParams              *chaincfg.Params
@@ -223,7 +221,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 						b.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
 					}
 
-					if *currentState == blockchain_api.FSMStateType_RUNNING {
+					if *currentState == blockchain.FSMStateRUNNING {
 						miningCandidate, subtrees, err := b.getMiningCandidate()
 						utils.SafeSend(responseCh, &miningCandidateResponse{
 							miningCandidate: miningCandidate,

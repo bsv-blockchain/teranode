@@ -3,18 +3,13 @@ package asset
 import (
 	"context"
 
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/services/blockchain"
-
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-
 	"github.com/bitcoin-sv/ubsv/services/asset/centrifuge_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/http_impl"
 	"github.com/bitcoin-sv/ubsv/services/asset/repository"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -106,7 +101,7 @@ func (v *Server) Start(ctx context.Context) error {
 	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
 	if fsmStateRestore {
 		// Send Restore event to FSM
-		_, err := v.blockchainClient.Restore(ctx, &emptypb.Empty{})
+		err := v.blockchainClient.Restore(ctx)
 		if err != nil {
 			v.logger.Errorf("[Asset] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
 		}
@@ -115,7 +110,7 @@ func (v *Server) Start(ctx context.Context) error {
 		// this means FSM got a RUN event and transitioned to RUN state
 		// this will block
 		v.logger.Infof("[Asset] Node is restoring, waiting for FSM to transition to Running state")
-		_ = v.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain_api.FSMStateType_RUNNING)
+		_ = v.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
 		v.logger.Infof("[Asset] Node finished restoring and has transitioned to Running state, continuing to start Asset service")
 	}
 
