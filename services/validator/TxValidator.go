@@ -9,9 +9,9 @@ import (
 	"github.com/bitcoin-sv/go-sdk/script"
 	interpreter_sdk "github.com/bitcoin-sv/go-sdk/script/interpreter"
 	"github.com/bitcoin-sv/go-sdk/transaction"
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/bscript/interpreter"
@@ -62,8 +62,9 @@ func init() {
 }
 
 type TxValidator struct {
-	policy *PolicySettings
-	logger ulogger.Logger
+	logger      ulogger.Logger
+	policy      *PolicySettings
+	chainParams *chaincfg.Params
 }
 
 func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error {
@@ -113,7 +114,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32) error 
 	// SAO - The rule enforcing that unlocking scripts must be "push only" became more relevant and started being enforced with the
 	//       introduction of Segregated Witness (SegWit) which activated at height 481824.  BCH Forked before this at height 478559
 	//       and therefore let's not enforce this check until then.
-	if blockHeight >= util.ForkIDActivationHeight {
+	if blockHeight > tv.chainParams.UahfForkHeight {
 		// 9) The unlocking script (scriptSig) can only push numbers on the stack
 		if err := tv.pushDataCheck(tx); err != nil {
 			return err
@@ -151,10 +152,10 @@ func (tv *TxValidator) checkTxSize(txSize int, policy *PolicySettings) error {
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
 
-	//minOutput := uint64(0)
-	//if blockHeight >= util.GenesisActivationHeight {
+	// minOutput := uint64(0)
+	// if blockHeight >= tv.chainParams.GenesisActivationHeight {
 	//	minOutput = bt.DustLimit
-	//}
+	// }
 
 	for index, output := range tx.Outputs {
 		isData := output.LockingScript.IsData()
@@ -162,7 +163,7 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32) error {
 		// TODO there are transactions on-chain with 0 sat outputs WTF
 		case !isData && output.Satoshis > MaxSatoshis: // || (minOutput > 0 && output.Satoshis < minOutput)):
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
-		case isData && output.Satoshis != 0 && blockHeight >= util.GenesisActivationHeight:
+		case isData && output.Satoshis != 0 && blockHeight >= tv.chainParams.GenesisActivationHeight:
 			//  This is not enforced on a consensus level, but it is a good practice to not have non 0 value op returns
 			// 		"f77a391a62a128ba17559f3716dd7f68bb0a6df6ac3d10249f06323c1148ad03": {}, // non 0 value op return
 			//		"63518daaab78b7fd7488eb9b241f145c7b27cd43b86369aa38cdafa213e018c5": {}, // non 0 value op return
@@ -199,10 +200,10 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 		total += input.PreviousTxSatoshis
 	}
 
-	//if total == 0 && blockHeight >= util.GenesisActivationHeight {
+	// if total == 0 && blockHeight >= tv.chainParams.GenesisActivationHeight {
 	// TODO there is a lot of shit transactions on-chain with 0 inputs and 0 outputs - WTF
 	// return errors.NewTxInvalidError("transaction input total satoshis cannot be zero")
-	//}
+	// }
 
 	if total > MaxSatoshis {
 		return errors.NewTxInvalidError("transaction input total satoshis is too high")
@@ -294,11 +295,11 @@ func checkScripts(tv *TxValidator, tx *bt.Tx, blockHeight uint32) (err error) {
 		opts := make([]interpreter.ExecutionOptionFunc, 0, 3)
 		opts = append(opts, interpreter.WithTx(tx, i, prevOutput))
 
-		if blockHeight >= util.ForkIDActivationHeight {
+		if blockHeight > tv.chainParams.UahfForkHeight {
 			opts = append(opts, interpreter.WithForkID())
 		}
 
-		if blockHeight >= util.GenesisActivationHeight {
+		if blockHeight >= tv.chainParams.GenesisActivationHeight {
 			opts = append(opts, interpreter.WithAfterGenesis())
 		}
 
@@ -335,7 +336,7 @@ func checkScriptsWithSDK(tv *TxValidator, tx *bt.Tx, blockHeight uint32) (err er
 	}()
 
 	sdkTx := GoBt2GoSDKTransaction(tx)
-	//sdkTx, _ := transaction.NewTransactionFromBytes(tx.Bytes())
+	// sdkTx, _ := transaction.NewTransactionFromBytes(tx.Bytes())
 
 	for i, in := range tx.Inputs {
 		prevOutput := &transaction.TransactionOutput{
@@ -346,11 +347,11 @@ func checkScriptsWithSDK(tv *TxValidator, tx *bt.Tx, blockHeight uint32) (err er
 		opts := make([]interpreter_sdk.ExecutionOptionFunc, 0, 3)
 		opts = append(opts, interpreter_sdk.WithTx(sdkTx, i, prevOutput))
 
-		if blockHeight >= util.ForkIDActivationHeight {
+		if blockHeight > tv.chainParams.UahfForkHeight {
 			opts = append(opts, interpreter_sdk.WithForkID())
 		}
 
-		if blockHeight >= util.GenesisActivationHeight {
+		if blockHeight >= tv.chainParams.GenesisActivationHeight {
 			opts = append(opts, interpreter_sdk.WithAfterGenesis())
 		}
 

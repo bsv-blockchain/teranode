@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -48,8 +49,9 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 	v := &Validator{
 		logger: logger,
 		txValidator: TxValidator{
-			policy: NewPolicySettings(),
-			logger: logger,
+			logger:      logger,
+			policy:      NewPolicySettings(),
+			chainParams: chaincfg.GetChainParamsFromConfig(),
 		},
 		utxoStore:      store,
 		blockAssembler: ba,

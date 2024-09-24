@@ -14,6 +14,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 )
 
 // These variables are the chain proof-of-work limit parameters for each default
@@ -127,8 +128,9 @@ type Params struct {
 
 	// The following are the heights at which the Bitcoin specific forks
 	// became active.
-	UahfForkHeight int32 // August 1, 2017 hard fork
-	DaaForkHeight  int32 // November 13, 2017 hard fork
+	UahfForkHeight          uint32 // August 1, 2017 hard fork
+	DaaForkHeight           uint32 // November 13, 2017 hard fork
+	GenesisActivationHeight uint32 // Genesis activation height
 
 	// Planned hardforks
 	GreatWallActivationTime uint64 // May 15, 2019 hard fork
@@ -233,8 +235,9 @@ var MainNetParams = Params{
 	BIP0065Height: 388381, // 000000000000000004c2b624ed5d7756c508d90fd0da2c7c679febfa6c4735f0
 	BIP0066Height: 363725, // 00000000000000000379eaa19dce8c9b722d46ae6a57c2f1a988119488b50931
 
-	UahfForkHeight: 478558, // 0000000000000000011865af4122fe3b144e2cbeea86142e8ff2fb4107352d43
-	DaaForkHeight:  504031, // 0000000000000000011ebf65b60d0a3de80b8175be709d653b4c1a1beeb6ab9c
+	UahfForkHeight:          478558, // 0000000000000000011865af4122fe3b144e2cbeea86142e8ff2fb4107352d43
+	DaaForkHeight:           504031, // 0000000000000000011ebf65b60d0a3de80b8175be709d653b4c1a1beeb6ab9c
+	GenesisActivationHeight: 620538,
 
 	CoinbaseMaturity:         100,
 	SubsidyReductionInterval: 210000,
@@ -330,8 +333,9 @@ var StnParams = Params{
 	BIP0065Height:    1351,      // Used by regression tests
 	BIP0066Height:    1251,      // Used by regression tests
 
-	UahfForkHeight: 0, // Always active on regtest
-	DaaForkHeight:  0, // Always active on regtest
+	UahfForkHeight:          0, // Always active on regtest
+	DaaForkHeight:           0, // Always active on regtest
+	GenesisActivationHeight: 100,
 
 	SubsidyReductionInterval: 210000,
 	TargetTimespan:           time.Hour * 24 * 14, // 14 days
@@ -403,8 +407,9 @@ var RegressionNetParams = Params{
 	BIP0065Height:    1351,      // Used by regression tests
 	BIP0066Height:    1251,      // Used by regression tests
 
-	UahfForkHeight: 15,   // August 1, 2017 hard fork
-	DaaForkHeight:  2200, // must be > 2016 - see assert in pow.cpp:268
+	UahfForkHeight:          15,   // August 1, 2017 hard fork
+	DaaForkHeight:           2200, // must be > 2016 - see assert in pow.cpp:268
+	GenesisActivationHeight: 0,
 
 	SubsidyReductionInterval: 150,
 	TargetTimespan:           time.Hour * 24 * 14, // 14 days
@@ -478,8 +483,9 @@ var TestNet3Params = Params{
 	BIP0065Height: 581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
 	BIP0066Height: 330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
 
-	UahfForkHeight: 1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
-	DaaForkHeight:  1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
+	UahfForkHeight:          1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
+	DaaForkHeight:           1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
+	GenesisActivationHeight: 1344302,
 
 	CoinbaseMaturity:         100,
 	SubsidyReductionInterval: 210000,
@@ -563,8 +569,9 @@ var CustomTestNetParams = Params{
 	BIP0065Height: 581885, // 00000000007f6655f22f98e72ed80d8b06dc761d5da09df0fa1dc4be4f861eb6
 	BIP0066Height: 330776, // 000000002104c8c45e99a8853285a3b592602a3ccde2b832481da85e9e4ba182
 
-	UahfForkHeight: 1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
-	DaaForkHeight:  1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
+	UahfForkHeight:          1155875, // 00000000f17c850672894b9a75b63a1e72830bbd5f4c8889b5c1a80e7faef138
+	DaaForkHeight:           1188697, // 0000000000170ed0918077bde7b4d36cc4c91be69fa09211f748240dabe047fb
+	GenesisActivationHeight: 1344302,
 
 	CoinbaseMaturity:         100,
 	SubsidyReductionInterval: 210000,
@@ -742,6 +749,13 @@ func GetChainParams(network string) (*Params, error) {
 	default:
 		return nil, errors.New(fmt.Sprintf("unknown network %s", network))
 	}
+}
+
+func GetChainParamsFromConfig() *Params {
+	network, _ := gocore.Config().Get("network", "mainnet")
+	chainParams, _ := GetChainParams(network)
+
+	return chainParams
 }
 
 func init() {

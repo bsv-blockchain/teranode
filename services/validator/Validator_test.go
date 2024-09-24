@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	utxoMemorystore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
@@ -86,8 +87,9 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	v := &Validator{
 		logger: ulogger.TestLogger{},
 		txValidator: TxValidator{
-			policy: NewPolicySettings(),
-			logger: ulogger.TestLogger{},
+			logger:      ulogger.TestLogger{},
+			policy:      NewPolicySettings(),
+			chainParams: chaincfg.GetChainParamsFromConfig(),
 		},
 		utxoStore:           utxoStore,
 		blockAssembler:      BlockAssemblyStore{},
@@ -118,8 +120,9 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 	v := &Validator{
 		logger: ulogger.TestLogger{},
 		txValidator: TxValidator{
-			policy: NewPolicySettings(),
-			logger: ulogger.TestLogger{},
+			logger:      ulogger.TestLogger{},
+			policy:      NewPolicySettings(),
+			chainParams: chaincfg.GetChainParamsFromConfig(),
 		},
 		utxoStore:           utxoStore,
 		blockAssembler:      nil,
@@ -158,8 +161,9 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 
 	v := &Validator{
 		txValidator: TxValidator{
-			policy: NewPolicySettings(),
-			logger: ulogger.TestLogger{},
+			logger:      ulogger.TestLogger{},
+			policy:      NewPolicySettings(),
+			chainParams: chaincfg.GetChainParamsFromConfig(),
 		},
 	}
 
@@ -184,10 +188,13 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 
 	var height uint32 = 249976
 
+	chainParams, _ := chaincfg.GetChainParams("mainnet")
+
 	v := &Validator{
 		txValidator: TxValidator{
-			policy: NewPolicySettings(),
-			logger: ulogger.TestLogger{},
+			logger:      ulogger.TestLogger{},
+			policy:      NewPolicySettings(),
+			chainParams: chainParams,
 		},
 	}
 
@@ -214,8 +221,9 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	v := &Validator{
 		txValidator: TxValidator{
-			policy: NewPolicySettings(),
-			logger: ulogger.TestLogger{},
+			logger:      ulogger.TestLogger{},
+			policy:      NewPolicySettings(),
+			chainParams: chaincfg.GetChainParamsFromConfig(),
 		},
 	}
 
@@ -270,8 +278,9 @@ func TestValidateTransactions(t *testing.T) {
 
 		v := &Validator{
 			txValidator: TxValidator{
-				policy: NewPolicySettings(),
-				logger: ulogger.TestLogger{},
+				logger:      ulogger.TestLogger{},
+				policy:      NewPolicySettings(),
+				chainParams: chaincfg.GetChainParamsFromConfig(),
 			},
 		}
 
@@ -298,8 +307,9 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 
 	v := &Validator{
 		txValidator: TxValidator{
-			policy: NewPolicySettings(),
-			logger: ulogger.TestLogger{},
+			logger:      ulogger.TestLogger{},
+			policy:      NewPolicySettings(),
+			chainParams: chaincfg.GetChainParamsFromConfig(),
 		},
 	}
 
@@ -326,8 +336,9 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 
 	v := &Validator{
 		txValidator: TxValidator{
-			policy: NewPolicySettings(),
-			logger: ulogger.TestLogger{},
+			logger:      ulogger.TestLogger{},
+			policy:      NewPolicySettings(),
+			chainParams: chaincfg.GetChainParamsFromConfig(),
 		},
 	}
 
@@ -381,8 +392,9 @@ func Benchmark_validateInternal(b *testing.B) {
 
 	v := &Validator{
 		txValidator: TxValidator{
-			policy: NewPolicySettings(),
-			logger: ulogger.TestLogger{},
+			logger:      ulogger.TestLogger{},
+			policy:      NewPolicySettings(),
+			chainParams: chaincfg.GetChainParamsFromConfig(),
 		},
 	}
 

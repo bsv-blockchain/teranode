@@ -5,16 +5,12 @@ import (
 )
 
 const (
-	// https://en.wikipedia.org/wiki/Bitcoin_Cash#:~:text=The%20fork%20that%20created%20Bitcoin,second%20version%20or%20an%20altcoin.
-	ForkIDActivationHeight  = 478559 // This is the height that BCH was born
 	GenesisActivationHeight = 620538
 )
 
 // IsExtended checks if a transaction is extended
 // NOTE: 0 satoshi inputs are valid in older transactions
 func IsExtended(tx *bt.Tx, blockHeight uint32) bool {
-	//if blockHeight < GenesisActivationHeight {
-
 	if tx == nil || tx.Inputs == nil {
 		return false
 	}
@@ -26,7 +22,4 @@ func IsExtended(tx *bt.Tx, blockHeight uint32) bool {
 	}
 
 	return true
-
-	//}
-	//return tx.IsExtended()
 }

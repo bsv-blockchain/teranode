@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
@@ -51,8 +52,9 @@ func TestTxValidator_checkScripts(t *testing.T) {
 	for _, tt := range txTests {
 		t.Run(tt.name, func(t *testing.T) {
 			tv := &TxValidator{
-				policy: policy,
-				logger: ulogger.TestLogger{},
+				logger:      ulogger.TestLogger{},
+				policy:      policy,
+				chainParams: chaincfg.GetChainParamsFromConfig(),
 			}
 			tt.wantErr(t, checkScripts(tv, tt.args.tx, tt.args.blockHeight), fmt.Sprintf("checkScriptsWithSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
@@ -64,8 +66,9 @@ func TestTxValidator_checkScriptsWithSDK(t *testing.T) {
 		name := strings.Replace(tt.name, "checkScripts", "checkScriptsWithSDK", 1)
 		t.Run(name, func(t *testing.T) {
 			tv := &TxValidator{
-				policy: policy,
-				logger: ulogger.TestLogger{},
+				logger:      ulogger.TestLogger{},
+				policy:      policy,
+				chainParams: chaincfg.GetChainParamsFromConfig(),
 			}
 			tt.wantErr(t, checkScriptsWithSDK(tv, tt.args.tx, tt.args.blockHeight), fmt.Sprintf("checkScriptsWithSDK(%v, %v)", tt.args.tx, tt.args.blockHeight))
 		})
@@ -78,8 +81,9 @@ func Test_Tx(t *testing.T) {
 	tx, _ := bt.NewTxFromString(txHex)
 
 	txV := &TxValidator{
-		policy: NewPolicySettings(),
-		logger: ulogger.TestLogger{},
+		logger:      ulogger.TestLogger{},
+		policy:      NewPolicySettings(),
+		chainParams: chaincfg.GetChainParamsFromConfig(),
 	}
 
 	err := checkScriptsWithSDK(txV, tx, 720899)
@@ -124,8 +128,9 @@ func TestGoBt2GoSDKTransaction(t *testing.T) {
 
 func BenchmarkValidateTransaction(b *testing.B) {
 	txV := &TxValidator{
-		policy: NewPolicySettings(),
-		logger: ulogger.TestLogger{},
+		logger:      ulogger.TestLogger{},
+		policy:      NewPolicySettings(),
+		chainParams: chaincfg.GetChainParamsFromConfig(),
 	}
 	txHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9.bin")
 	require.NoError(b, err)
@@ -143,8 +148,9 @@ func BenchmarkValidateTransactionSDK(b *testing.B) {
 	gocore.Config().Set("validator_useSDKInterpreter", "true")
 
 	txV := &TxValidator{
-		policy: NewPolicySettings(),
-		logger: ulogger.TestLogger{},
+		logger:      ulogger.TestLogger{},
+		policy:      NewPolicySettings(),
+		chainParams: chaincfg.GetChainParamsFromConfig(),
 	}
 
 	txHex, err := os.ReadFile("./testdata/f65ec8dcc934c8118f3c65f86083c2b7c28dad0579becd0cfe87243e576d9ae9.bin")
@@ -163,8 +169,9 @@ func BenchmarkValidateTransactionSDK2(b *testing.B) {
 	gocore.Config().Set("validator_useSDKInterpreter", "true")
 
 	txV := &TxValidator{
-		policy: NewPolicySettings(),
-		logger: ulogger.TestLogger{},
+		logger:      ulogger.TestLogger{},
+		policy:      NewPolicySettings(),
+		chainParams: chaincfg.GetChainParamsFromConfig(),
 	}
 
 	txHex, err := os.ReadFile("./testdata/f568c66631de7b5842ebae84594cee00f7864132828997d09441fc2a937e9fab.hex")
