@@ -551,7 +551,18 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			return err
 		}
 
-		u.ReValidateBlock(parentBlock, baseURL)
+		u.logger.Warnf("[BlockValidation:ValidateBlock:waitForParentToBeMined][%s] re-validating parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
+
+		if err := u.reValidateBlock(revalidateBlockData{block: parentBlock, baseURL: baseURL}); err != nil {
+			return errors.NewBlockError("[BlockValidation:ValidateBlock:waitForParentToBeMined][%s] failed to revalidate parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
+		}
+
+		// This will call blockchain server to set 'subtrees_mined' true.
+		// This triggers blockchain to publish a notification which block validation uses to mark txs as mined
+		// which is what we are really waiting for
+		if err := u.updateSubtreesTTL(ctx, parentBlock); err != nil {
+			return errors.NewBlockError("[BlockValidation:ValidateBlock:waitForParentToBeMined][%s] failed to update subtree TTLs for parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
+		}
 
 		// Wait for reValidationBlock to do its thing
 		if err := u.waitForParentToBeMined(ctx, block); err != nil {
@@ -776,8 +787,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 func (u *BlockValidation) waitForParentToBeMined(ctx context.Context, block *model.Block) error {
 	// Caution, in regtest, when mining initial blocks, this logic wants to retry over and over as fast as possible to ensure it keeps up
-	backOffMultiplier, _ := gocore.Config().GetInt("blockvalidation_isParentMined_retry_backoff_multiplier", 2)
-	retryCount, _ := gocore.Config().GetInt("blockvalidation_isParentMined_retry_max_retry", 15)
+	backOffMultiplier, _ := gocore.Config().GetInt("blockvalidation_isParentMined_retry_backoff_multiplier", 30)
+	retryCount, _ := gocore.Config().GetInt("blockvalidation_isParentMined_retry_max_retry", 60)
 
 	checkParentBlock := func() (bool, error) {
 		parentBlockMined, err := u.isParentMined(ctx, block.Header)
