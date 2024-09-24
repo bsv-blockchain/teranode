@@ -379,7 +379,7 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 		return true, nil
 	}
 
-	exists, err := u.subtreeStore.Exists(ctx, hash[:])
+	exists, err := u.subtreeStore.Exists(ctx, hash[:], options.WithFileExtension("subtree"))
 	if err != nil {
 		return false, err
 	}
