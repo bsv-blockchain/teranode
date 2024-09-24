@@ -305,6 +305,10 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 		if err := s.blockStore.Del(ctx, previousBlockHash[:], options.WithFileExtension(utxosetExtension)); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", previousBlockHash, meta.Height, err)
 		}
+
+		if err := s.blockStore.Del(ctx, previousBlockHash[:], options.WithFileExtension(utxosetExtension+".sha256")); err != nil {
+			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", previousBlockHash, meta.Height, err)
+		}
 	}
 
 	return 0, s.writeLastHeight(ctx, s.lastHeight)
