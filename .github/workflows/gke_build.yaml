@@ -23,9 +23,7 @@ jobs:
   build-docker:
     name: Build Docker image
     runs-on: ${{ inputs.arch == 'arm64' && fromJSON('[ "ubsv-runner-arm" ]') || fromJSON('[ "ubsv-runner" ]') }}
-
-    # strategy: # This will cause the workflow to terminate if any job fails
-    #   fail-fast: true
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 

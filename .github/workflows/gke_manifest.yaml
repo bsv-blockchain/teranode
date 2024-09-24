@@ -19,8 +19,7 @@ jobs:
   build_manifest:
     name: Deploy EKS
     runs-on: ubuntu-latest
-    strategy: # This will cause the workflow to terminate if any job fails
-      fail-fast: true
+    timeout-minutes: 10
     outputs:
       registry: ${{ steps.login-ecr.outputs.registry }}
     steps:
