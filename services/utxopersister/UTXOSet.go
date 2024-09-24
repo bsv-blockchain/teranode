@@ -1,10 +1,12 @@
 package utxopersister
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -332,10 +334,23 @@ func (us *UTXOSet) Close() error {
 	return nil
 }
 
+type readCloserWrapper struct {
+	*bufio.Reader
+	io.Closer
+}
+
 func (us *UTXOSet) GetUTXOAdditionsReader() (io.ReadCloser, error) {
 	r, err := us.store.GetIoReader(us.ctx, us.blockHash[:], options.WithFileExtension(additionsExtension), options.WithTTL(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-additions reader", err)
+	}
+
+	// If r is not buffered, wrap it in a buffered reader
+	if _, ok := r.(*os.File); !ok {
+		r = &readCloserWrapper{
+			Reader: bufio.NewReader(r),
+			Closer: r.(io.Closer),
+		}
 	}
 
 	return r, nil
@@ -345,6 +360,14 @@ func (us *UTXOSet) GetUTXODeletionsReader() (io.ReadCloser, error) {
 	r, err := us.store.GetIoReader(us.ctx, us.blockHash[:], options.WithFileExtension(deletionsExtension), options.WithTTL(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-deletions reader", err)
+	}
+
+	// If r is not buffered, wrap it in a buffered reader
+	if _, ok := r.(*os.File); !ok {
+		r = &readCloserWrapper{
+			Reader: bufio.NewReader(r),
+			Closer: r.(io.Closer),
+		}
 	}
 
 	return r, nil
@@ -419,7 +442,7 @@ func (us *UTXOSet) GetUTXODeletionsMap(ctx context.Context) (map[[32]byte][]uint
 // CreateUTXOSet generates the UTXO set for the current block, using the previous block's UTXO set
 // and applying additions and deletions from the current block. It returns an error if the operation fails.
 func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainhash.Hash) (err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "CreateUTXOSet",
+	ctx, createStat, deferFn := tracing.StartTracing(ctx, "CreateUTXOSet",
 		tracing.WithParentStat(us.stats),
 		tracing.WithLogMessage(us.logger, "[CreateUTXOSet] called"),
 	)
@@ -465,8 +488,12 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 	}
 
 	var (
-		txCount   uint64
-		utxoCount uint64
+		readStat   = createStat.NewStat("readTX")
+		filterStat = createStat.NewStat("filterUTXOs")
+		writeStat  = createStat.NewStat("writeUTXOs")
+		ts         = gocore.CurrentTime()
+		txCount    uint64
+		utxoCount  uint64
 	)
 
 	if previousBlockHash != nil {
@@ -475,6 +502,15 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 		if err != nil {
 			return errors.NewStorageError("error getting utxoset reader for previous block %s", previousBlockHash, err)
 		}
+
+		// If r is not buffered, wrap it in a buffered reader
+		if _, ok := previousUTXOSetReader.(*os.File); !ok {
+			previousUTXOSetReader = &readCloserWrapper{
+				Reader: bufio.NewReader(previousUTXOSetReader),
+				Closer: previousUTXOSetReader.(io.Closer),
+			}
+		}
+
 		defer previousUTXOSetReader.Close()
 
 		magic, _, _, _, err := GetUTXOSetHeaderFromReader(previousUTXOSetReader)
@@ -502,8 +538,12 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 					return errors.NewStorageError("error reading previous utxo-set (%s.%s) at iteration %d", previousBlockHash.String(), utxosetExtension, txCount, err)
 				}
 
+				ts = readStat.AddTime(ts)
+
 				// Filter UTXOs based on the deletions map
 				utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, deletions, utxoWrapper.TxID)
+
+				ts = filterStat.AddTime(ts)
 
 				// Only write the UTXOWrapper if there are remaining UTXOs after deletions
 				if len(utxoWrapper.UTXOs) > 0 {
@@ -514,6 +554,8 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 					txCount++
 
 					utxoCount += uint64(len(utxoWrapper.UTXOs))
+
+					ts = writeStat.AddTime(ts)
 				}
 			}
 		}
@@ -532,8 +574,12 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 			return errors.NewStorageError("error reading utxo-additions", err)
 		}
 
+		ts = readStat.AddTime(ts)
+
 		// Filter UTXOs based on the deletions map
 		utxoWrapper.UTXOs = filterUTXOs(utxoWrapper.UTXOs, deletions, utxoWrapper.TxID)
+
+		ts = filterStat.AddTime(ts)
 
 		// Only write the UTXOWrapper if there are remaining UTXOs after deletions
 		if len(utxoWrapper.UTXOs) > 0 {
@@ -543,6 +589,8 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 
 			txCount++
 			utxoCount += uint64(len(utxoWrapper.UTXOs))
+
+			ts = writeStat.AddTime(ts)
 		}
 	}
 

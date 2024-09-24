@@ -137,15 +137,10 @@ func (uw *UTXOWrapper) String() string {
 
 func NewUTXOFromReader(r io.Reader) (*UTXO, error) {
 	// Read all the fixed size fields
-	b := make([]byte, 4+8+4) // index + value + length of script
+	var b [16]byte // index + value + length of script
 
-	n, err := io.ReadFull(r, b)
-	if err != nil {
+	if _, err := io.ReadFull(r, b[:]); err != nil {
 		return nil, err
-	}
-
-	if n != 16 {
-		return nil, errors.NewStorageError("Not enough bytes read %d", n, io.ErrUnexpectedEOF)
 	}
 
 	u := &UTXO{
