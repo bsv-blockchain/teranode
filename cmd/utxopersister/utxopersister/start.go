@@ -38,15 +38,15 @@ func Start() {
 		}()
 	}
 
-	blockStoreUrl, err, found := gocore.Config().GetURL("blockstore")
+	blockStoreURL, err, found := gocore.Config().GetURL("blockstore")
 	if err != nil || !found {
 		logger.Errorf("blockstore URL not found in config: %v", err)
 		return
 	}
 
-	logger.Infof("Using blockStore at %s", blockStoreUrl)
+	logger.Infof("Using blockStore at %s", blockStoreURL)
 
-	blockStore, err := blob.NewStore(logger, blockStoreUrl)
+	blockStore, err := blob.NewStore(logger, blockStoreURL)
 	if err != nil {
 		logger.Errorf("Failed to create blockStore: %v", err)
 		return
