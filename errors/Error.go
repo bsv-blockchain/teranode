@@ -177,9 +177,19 @@ func WrapGRPC(err error) error {
 		return nil
 	}
 
+	// If the error is an "*Error", get all wrapped errors, and wrap with gRPC details
 	if castedErr, ok := err.(*Error); ok {
+		// check if the error is already wrapped, don't wrap it with gRPC details
+		// if castedErr.WrappedErr != nil {
+		//
+		//	if _, ok := status.FromError(castedErr.WrappedErr); ok {
+		//		fmt.Println("here")
+		//		return err // Already wrapped, skip further wrapping
+		//	}
+		//}
+
 		var wrappedErrDetails []protoadapt.MessageV1
-		// If the error is already a *Error, wrap it with gRPC details
+		// If the error is already an *Error, wrap it with gRPC details
 		details, _ := anypb.New(&TError{
 			Code:    castedErr.Code,
 			Message: castedErr.Message,

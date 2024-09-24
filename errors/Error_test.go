@@ -339,10 +339,60 @@ func ReturnSpecialErrorFromStandardErrorWithModification(error error) *Error {
 	return NewError("error on the top", error)
 }
 
-// Error scenario
+// An error scenario, from top to down:
 // handle_block.go: errors.NewProcessingError("failed to process block", err)
-// processBlockFound returns:  errors.WrapGRPC(errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err))
-// ProcessBlock returns error: in *Error, like: errors.NewTxError(), errors.NewBlockInvalidError()
+// in blockvalidation/Client.go: errors.UnwrapGRPC(err)
+// blockvalidation/Server.go: ProcessBlock returns error, Let's assume it is an error returned by blockchain service: 	exists, err := u.blockchainClient.GetBlockExists(ctx, hash)
+//	if err != nil {
+//		return false, err
+//	}
+// 	blockvalidation/Server.go:  processBlockFound returns: parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
+//	if err != nil {
+//		return errors.WrapGRPC(
+//			errors.NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", hash.String(), block.Header.HashPrevBlock.String(), err))
+//	}
+//  blockhain/Client.go:  unwrap
+// blockchain/Server.go: 	exists, err := b.store.GetBlockExists(ctx, blockHash)
+//	if err != nil {
+//		return nil, errors.WrapGRPC(err)
+//	}
+// store/sql/GetBlockExists.go: error is returned from Query Row Content
+
+func Test_WrapUnwrapMissingDetailsErr(t *testing.T) {
+	blockHash := chainhash.Hash{'1', '2', '3', '4'}
+
+	// SCENARIO 2
+
+	// blockvalidation/Server.go: replicate error in ValidateBlock
+	blockInvalidError := NewBlockInvalidError("[ValidateBlock][%s] block size %d exceeds excessiveblocksize %d", blockHash.String(), 120, 100)
+	// blockvalidation/Server.go: replicate error in processBlockFound returned exactly as it is by ProcessBlock
+	wrappedBlockInvalidError := WrapGRPC(NewServiceError("failed block validation BlockFound [%s]", blockHash.String(), blockInvalidError))
+	// blockvalidation/Client.go: unwrap
+	unwrappedBlockInvalidError := UnwrapGRPC(wrappedBlockInvalidError)
+	// replicate handle_block.go:
+	processingError := NewProcessingError("failed to process block", unwrappedBlockInvalidError)
+
+	fmt.Println("Scenario 1 error:\n", processingError)
+
+	// SCENARIO 2
+	// replicate store/sql/GetBlockExists.go
+	sqlGetBlockExistsError := fmt.Errorf("sql: expected %d arguments, got %d", 5, 3)
+	// replicate blockchain/Server.go: wrap
+	wrappedErrorSQLGetBlockExistsError := WrapGRPC(sqlGetBlockExistsError)
+	// replicate blockchain/Client.go: unwrap
+	unwrappedErrorSQLGetBlockExistsError := UnwrapGRPC(wrappedErrorSQLGetBlockExistsError)
+	// blockvalidation/Server.go: processBlockFound creates service error and wraps error,
+	serviceError := NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", blockHash.String(), blockHash.String(), unwrappedErrorSQLGetBlockExistsError)
+	wrappedServiceError := WrapGRPC(serviceError)
+	// fmt.Println("Wrapped error:\n", wrappedServiceError)
+	// wrapTwice := WrapGRPC(wrappedServiceError)
+	// fmt.Println("Wrapped error twice:\n", wrapTwice)
+	// replicate blockvalidation/Client.go: unwrap
+	unwrappedServiceError := UnwrapGRPC(wrappedServiceError)
+	// replicate handle_block.go:
+	processingError = NewProcessingError("failed to process block", unwrappedServiceError)
+	fmt.Println("Scenario 2 error:\n", processingError)
+}
 
 func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *testing.T) {
 	// Base error is not a GRPC error, basic error
