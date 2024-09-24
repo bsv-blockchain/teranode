@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/deduplicator"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
@@ -535,12 +536,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	u.logger.Infof("[ValidateBlock][%s] called", block.Header.Hash().String())
 
-	initialDelay := 10 * time.Millisecond // Initial delay of 10ms
-	maxDelay := 5 * time.Second           // Maximum delay
-	delay := initialDelay
-
 	// check the size of the block
-
 	// 0 is unlimited so don't check the size
 	if u.excessiveBlockSize > 0 {
 		if block.SizeInBytes > uint64(u.excessiveBlockSize) {
@@ -548,45 +544,20 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 	}
 
-	checkParentMinedTimeout, err, _ := gocore.Config().GetDuration("check_parent_mined_timeout", 2*time.Minute)
-	if err != nil {
-		return errors.NewConfigurationError("bad setting value", err)
-	}
+	if err := u.waitForParentToBeMined(ctx, block); err != nil {
+		// The parent block is not marked as mined, let's re-validate the parent block
+		parentBlock, err := u.blockchainClient.GetBlock(ctx, block.Header.HashPrevBlock)
+		if err != nil {
+			return err
+		}
 
-	timeoutTimer := time.NewTimer(checkParentMinedTimeout)
-	defer timeoutTimer.Stop()
+		u.ReValidateBlock(parentBlock, baseURL)
 
-CheckParentMined:
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.NewContextCanceledError("[ValidateBlock][%s] context cancelled", block.Hash().String())
-		case <-timeoutTimer.C:
-			u.logger.Warnf("[BlockValidation:start][%s] timeout waiting for parent block to be mined. Re-validating parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
-			// We've waited long enough for block-assembly to mark subtrees as set which in turn triggers txs being marked as mined.
-			// Time to force revalidation of the parent block to get all this done
-			parentBlock, err := u.blockchainClient.GetBlock(ctx, block.Header.HashPrevBlock)
-			if err != nil {
-				u.logger.Errorf("[BlockValidation:start][%s] failed to get parent block: %s", block.Hash().String(), err)
-				return errors.NewServiceError("[BlockValidation:start][%s] failed to get parent block", block.Hash().String(), err)
-			}
-			u.ReValidateBlock(parentBlock, baseURL)
-
-		default:
-			parentBlockMined, err := u.isParentMined(ctx, block.Header)
-			if err != nil {
-				u.logger.Errorf("[BlockValidation:start][%s] failed isParentMined: %s", block.Hash().String(), err)
-				time.Sleep(1 * time.Second)
-				continue CheckParentMined
-			}
-
-			if !parentBlockMined {
-				u.logger.Warnf("[BlockValidation:start][%s] parent block %s not mined yet, retrying", block.Hash().String(), block.Header.HashPrevBlock.String())
-				time.Sleep(delay)
-				delay = min(2*delay, maxDelay) // Increase delay, ensuring it does not exceed maxDelay
-			} else {
-				break CheckParentMined
-			}
+		// Wait for reValidationBlock to do its thing
+		if err := u.waitForParentToBeMined(ctx, block); err != nil {
+			// Give up, the parent block isn't being fully validated
+			// TODO should we invalidate the parent block in this case?
+			return errors.NewBlockError("[BlockValidation:ValidateBlock:waitForParentToBeMined][%s] given up waiting on parent %s", block.Hash().String(), block.Header.HashPrevBlock.String())
 		}
 	}
 
@@ -801,6 +772,36 @@ CheckParentMined:
 	}
 
 	return nil
+}
+
+func (u *BlockValidation) waitForParentToBeMined(ctx context.Context, block *model.Block) error {
+	// Caution, in regtest, when mining initial blocks, this logic wants to retry over and over as fast as possible to ensure it keeps up
+	backOffMultiplier, _ := gocore.Config().GetInt("blockvalidation_isParentMined_retry_backoff_multiplier", 2)
+	retryCount, _ := gocore.Config().GetInt("blockvalidation_isParentMined_retry_max_retry", 15)
+
+	checkParentBlock := func() (bool, error) {
+		parentBlockMined, err := u.isParentMined(ctx, block.Header)
+		if err != nil {
+			return false, err
+		}
+
+		if !parentBlockMined {
+			return false, errors.NewBlockError("[BlockValidation:isParentMined][%s] parent block %s not mined yet", block.Hash().String(), block.Header.HashPrevBlock.String())
+		}
+
+		return true, nil
+	}
+
+	_, err := retry.Retry(
+		ctx,
+		u.logger,
+		checkParentBlock,
+		retry.WithBackoffDurationType(time.Millisecond),
+		retry.WithBackoffMultiplier(backOffMultiplier),
+		retry.WithRetryCount(retryCount),
+	)
+
+	return err
 }
 
 func (u *BlockValidation) ReValidateBlock(block *model.Block, baseURL string) {
