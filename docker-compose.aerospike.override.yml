@@ -10,7 +10,7 @@ services:
     container_name: aerospike-1
     <<: *aerospike-base
     ports:
-      - 3100:3000
+      - 3100:3100
     restart: on-failure
     volumes:
     - ./deploy/dev/aerospike/aerospike-1.conf:/etc/aerospike.conf
@@ -20,7 +20,7 @@ services:
     container_name: aerospike-2
     <<: *aerospike-base
     ports:
-      - 3200:3000
+      - 3200:3200
     restart: on-failure
     volumes:
     - ./deploy/dev/aerospike/aerospike-2.conf:/etc/aerospike.conf
@@ -30,7 +30,7 @@ services:
     container_name: aerospike-3
     <<: *aerospike-base
     ports:
-      - 3300:3000
+      - 3300:3300
     restart: on-failure
     volumes:
     - ./deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf

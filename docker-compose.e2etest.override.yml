@@ -199,7 +199,7 @@ services:
       - ./data/test/ubsv3/txstore:/app/data/txstore
       - ./data/test/ubsv3/subtreestore:/app/data/subtreestore
       - ./data/test/ubsv3/blockstore:/app/data/blockstore
-      - ./data/ubsv3/external:/app/data/ubsv3/external
+      - ./data/test/ubsv3/external:/app/data/ubsv3/external
 
   prometheus-1:
     container_name: prometheus-1-test

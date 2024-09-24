@@ -12,6 +12,7 @@ import (
 	bc "github.com/bitcoin-sv/ubsv/services/blockchain"
 	cb "github.com/bitcoin-sv/ubsv/services/coinbase"
 	blob "github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/sql"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -218,7 +219,7 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 			return errors.NewConfigurationError("subtreestore config not found")
 		}
 
-		subtreeStore, err := blob.NewStore(logger, subtreeStoreURL)
+		subtreeStore, err := blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(2))
 		if err != nil {
 			return errors.NewConfigurationError("error creating subtreestore %w", err)
 		}
