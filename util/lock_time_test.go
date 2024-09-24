@@ -1,6 +1,7 @@
 package util
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -230,4 +231,18 @@ func Test_IsTransactionFinal_FromRequirements(t *testing.T) {
 	// Locktime < 500M, Block Height higher	TRUE	TRUE
 	assert.NoError(t, IsTransactionFinal(txFinal, 124, 500000006))
 	assert.NoError(t, IsTransactionFinal(txNonFinal, 124, 500000006))
+}
+
+func TestGetLockTimeBIP113(t *testing.T) {
+	os.Setenv("network", "mainnet")
+	InitializeLockTimeBIP113()
+	assert.Equal(t, uint32(419328), LockTimeBIP113, "LockTimeBIP113 should be 419328 for mainnet")
+
+	os.Setenv("network", "testnet")
+	InitializeLockTimeBIP113()
+	assert.Equal(t, uint32(770112), LockTimeBIP113, "LockTimeBIP113 should be 770112 for testnet")
+
+	os.Setenv("network", "regtest")
+	InitializeLockTimeBIP113()
+	assert.Equal(t, uint32(1), LockTimeBIP113, "LockTimeBIP113 should be 1 for testnet")
 }

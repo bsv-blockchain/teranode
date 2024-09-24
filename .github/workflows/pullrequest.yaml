@@ -13,7 +13,7 @@ env:
 jobs:
   golangci:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: ubsv-runner
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
