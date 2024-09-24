@@ -862,7 +862,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	}
 
 	// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
-	// TODO it is possible that the parent is much mich older, and does not exist on the current chain of last 100 blocks
+	// TODO it is possible that the parent is much much older, and does not exist on the current chain of last 100 blocks
 	//      maybe check whether the block ID in the parent is older (lower number) than the lowest blockID in the current chain map?
 	foundInPreviousBlocks, minBlockID := filterCurrentBlockHeaderIDsMap(parentTxMeta, currentBlockHeaderIDsMap)
 
@@ -875,6 +875,7 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 		}
 
 		if minBlockID < minSetBlockID {
+			// GOKHAN: fixing here
 			// parent is from a block that is older than the 100 blocks we have in the current chain
 			// we can ignore this, as the parent is not on our current chain
 			logger.Warnf("[BLOCK][%s] parent transaction %s of tx %s is over 100 blocks ago - skipping", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
