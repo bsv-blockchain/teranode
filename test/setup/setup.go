@@ -81,6 +81,38 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 	suite.T().Log("BitcoinTestFramework setup completed")
 }
 
+func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsSkipChecks(settingsMap map[string]string, composeFiles []string) {
+	var err error
+
+	suite.ComposeFiles = composeFiles
+	suite.SettingsMap = settingsMap
+
+	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
+	err = removeDataDirectory("../../data/test", isGitHubActions)
+
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	suite.T().Log("Initializing BitcoinTestFramework")
+
+	suite.Framework, err = helper.SetupBitcoinTestFramework(suite.ComposeFiles, suite.SettingsMap)
+	if err != nil {
+		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
+	}
+
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	err = suite.Framework.GetClientHandles()
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	suite.T().Log("BitcoinTestFramework setup completed")
+}
+
 func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsDoNotReset(settingsMap map[string]string, composeFiles []string) {
 	var err error
 

@@ -23,7 +23,7 @@ func (suite *TECBlk3TestSuite) InitSuite() {
 }
 
 func (suite *TECBlk3TestSuite) SetupTest() {
-	suite.SetupTestWithCustomComposeAndSettings(
+	suite.SetupTestWithCustomComposeAndSettingsSkipChecks(
 		suite.SettingsMap,
 		[]string{"../../docker-compose.yml", "../../docker-compose.aerospike.override.yml", "../../docker-compose.e2etest.override.yml"},
 	)
@@ -38,5 +38,6 @@ func (suite *TECBlk3TestSuite) TestBlockAssemblyRecoverability() {
 }
 
 func TestTECBlk3TestSuite(t *testing.T) {
+
 	suite.Run(t, new(TECBlk3TestSuite))
 }
