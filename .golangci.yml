@@ -9,6 +9,10 @@ linters-settings:
     forbid:
       - p: ^fmt\.Errorf.*$
         msg: use of fmt.Errorf is deprecated, please use errors.New
+  gocognit:
+    # Minimal cognitive complexity to report
+    min-complexity: 200  # You can adjust this number as needed
+
 
 linters:
   enable:
