@@ -48,7 +48,7 @@ jobs:
 
   smoketest:
     name: smoketest
-    runs-on: ubuntu-latest
+    runs-on: ubsv-runner
     env:
       GITHUB_ACTIONS: true
     steps:
