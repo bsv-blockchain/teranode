@@ -178,3 +178,8 @@ func (m MockStore) ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*fi
 	//TODO implement me
 	panic("implement me")
 }
+
+func (m MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	//TODO implement me
+	panic("implement me")
+}

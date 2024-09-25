@@ -2,7 +2,6 @@ package sql
 
 import (
 	"context"
-	"fmt"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -170,9 +169,6 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 		bestBlockHeader, _, err := s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
 
-		bestBlock, _, _ := s.GetBlock(context.Background(), bestBlockHeader.Hash())
-		fmt.Println("BEFORE Best Block: ", bestBlock.Hash())
-
 		block2Alt := &model.Block{
 			Header: &model.BlockHeader{
 				Version:        1,
@@ -195,9 +191,6 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 		// Get current best block header
 		bestBlockHeader, _, err = s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
-
-		bestBlock, _, _ = s.GetBlock(context.Background(), bestBlockHeader.Hash())
-		fmt.Println("Best Block: ", bestBlock.Hash())
 
 		_, metas, err := s.GetBlockHeaders(context.Background(), block2Alt.Hash(), 10)
 		require.NoError(t, err)
