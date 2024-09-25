@@ -1,10 +1,5 @@
 name: Build base container image
-on:
-  push:
-    branches:
-      - master
-      - staging
-      - release/*
+on: workflow_dispatch
 
 env:
   REPO: ubsv
