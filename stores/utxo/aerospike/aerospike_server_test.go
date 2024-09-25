@@ -1,15 +1,15 @@
-//go:build aerospike
-
 package aerospike
 
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"net/url"
 	"testing"
 
 	aero "github.com/aerospike/aerospike-client-go/v7"
+	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
@@ -27,9 +27,8 @@ const (
 	aerospikeHost       = "localhost" // "localhost"
 	aerospikePort       = 3000        // 3800
 	aerospikeNamespace  = "test"      // test
-	aerospikeSet        = "utxo-test" // utxo-test
+	aerospikeSet        = "test"      // utxo-test
 	aerospikeExpiration = uint32(30)
-	aerospikeURL        = "aerospike://localhost:3000/test?set=utxo-test&expiration=30&externalStore=file://./data/externalStore"
 )
 
 var (
@@ -97,21 +96,8 @@ var (
 )
 
 func TestAerospike(t *testing.T) {
-	// raw client to be able to do gets and cleanup
-	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
-	require.NoError(t, aeroErr)
-	defer client.Close()
-
-	// TODO use the container in tests
-	// client := setupAerospike(t)
-
-	aeroURL, err := url.Parse(aerospikeURL)
-	require.NoError(t, err)
-
-	// ubsv db client
-	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
-	require.NoError(t, err)
+	client, db, _, deferFn := initAerospike(t)
+	defer deferFn()
 
 	parentTxHash := tx.Inputs[0].PreviousTxIDChainHash()
 
@@ -130,6 +116,9 @@ func TestAerospike(t *testing.T) {
 
 	txKey, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
+
+	opReturnKey, aErr := aero.NewKey(db.namespace, db.setName, txWithOPReturn.TxIDChainHash().CloneBytes())
+	require.NoError(t, aErr)
 
 	t.Cleanup(func() {
 		policy := util.GetAerospikeWritePolicy(0, 0)
@@ -615,263 +604,159 @@ func TestAerospike(t *testing.T) {
 		// utxoSpendTxID = utxos[spends[0].Vout]
 		// require.Equal(t, "", utxoSpendTxID)
 	})
-}
 
-func cleanDB(t *testing.T, client *aero.Client, key *aero.Key, txs ...*bt.Tx) {
-	policy := util.GetAerospikeWritePolicy(0, 0)
+	t.Run("LUAScripts", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
 
-	_, err := client.Delete(policy, key)
-	require.NoError(t, err)
-
-	if coinbaseKey != nil {
-		_, err = client.Delete(policy, coinbaseKey)
+		txMeta, err := db.Create(context.Background(), tx, 0)
 		require.NoError(t, err)
-	}
+		assert.NotNil(t, txMeta)
 
-	if len(txs) > 0 {
-		for _, tx := range txs {
-			key, _ = aero.NewKey(aerospikeNamespace, aerospikeSet, tx.TxIDChainHash()[:])
-			_, err = client.Delete(policy, key)
-			require.NoError(t, err)
-		}
-	}
-}
+		resp, err := client.Get(nil, txKey, "utxos")
+		require.NoError(t, err)
+		utxos, ok := resp.Bins["utxos"].([]interface{})
+		require.True(t, ok)
+		assert.Len(t, utxos, 5)
 
-func TestLUAScripts(t *testing.T) {
-	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
-	require.NoError(t, aeroErr)
+		utxo, ok := utxos[0].([]byte)
+		require.True(t, ok)
+		require.Len(t, utxo, 32)
+		assert.Equal(t, utxo, utxoHash0[:])
 
-	aeroURL, err := url.Parse(aerospikeURL)
-	require.NoError(t, err)
+		err = db.Spend(context.Background(), spends, 0)
+		require.NoError(t, err)
 
-	// ubsv db client
-	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
-	require.NoError(t, err)
+		resp, err = client.Get(nil, txKey, "utxos", "spentUtxos")
+		require.NoError(t, err)
+		utxos, ok = resp.Bins["utxos"].([]interface{})
+		require.True(t, ok)
+		require.Len(t, utxos, 5)
+		require.Len(t, utxos[0].([]byte), 64)
+		spendUtxos, ok := resp.Bins["spentUtxos"].(int)
+		require.True(t, ok)
+		assert.Equal(t, 1, spendUtxos)
 
-	key, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
-	assert.NotNil(t, key)
+		err = db.UnSpend(context.Background(), spends)
+		require.NoError(t, err)
 
-	_, err = client.Delete(nil, key)
-	require.NoError(t, err)
+		resp, err = client.Get(nil, txKey, "utxos", "spentUtxos")
+		require.NoError(t, err)
+		utxos, ok = resp.Bins["utxos"].([]interface{})
+		require.True(t, ok)
+		require.Len(t, utxos, 5)
+		require.Len(t, utxos[0].([]byte), 32)
+		spendUtxos, ok = resp.Bins["spentUtxos"].(int)
+		require.True(t, ok)
+		assert.Equal(t, 0, spendUtxos)
+	})
 
-	txMeta, err := db.Create(context.Background(), tx, 0)
-	require.NoError(t, err)
-	assert.NotNil(t, txMeta)
+	t.Run("CreateWithBlockIDs", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
 
-	resp, err := client.Get(nil, key, "utxos")
-	require.NoError(t, err)
-	utxos, ok := resp.Bins["utxos"].([]interface{})
-	require.True(t, ok)
-	assert.Len(t, utxos, 5)
+		var blockHeight uint32
 
-	utxo, ok := utxos[0].([]byte)
-	require.True(t, ok)
-	require.Len(t, utxo, 32)
-	assert.Equal(t, utxo, utxoHash0[:])
+		txMeta, err := db.Create(context.Background(), tx, blockHeight, utxo.WithBlockIDs(1, 2, 3))
+		require.NoError(t, err)
+		assert.NotNil(t, txMeta)
 
-	err = db.Spend(context.Background(), spends, 0)
-	require.NoError(t, err)
+		resp, err := client.Get(nil, txKey, "blockIDs")
+		require.NoError(t, err)
+		blockIDs, ok := resp.Bins["blockIDs"].([]interface{})
+		require.True(t, ok)
+		require.Len(t, blockIDs, 3)
 
-	resp, err = client.Get(nil, key, "utxos", "spentUtxos")
-	require.NoError(t, err)
-	utxos, ok = resp.Bins["utxos"].([]interface{})
-	require.True(t, ok)
-	require.Len(t, utxos, 5)
-	require.Len(t, utxos[0].([]byte), 64)
-	spendUtxos, ok := resp.Bins["spentUtxos"].(int)
-	require.True(t, ok)
-	assert.Equal(t, 1, spendUtxos)
+		id1, ok := blockIDs[0].(int)
+		require.True(t, ok)
+		assert.Equal(t, 1, id1)
 
-	err = db.UnSpend(context.Background(), spends)
-	require.NoError(t, err)
+		id2, ok := blockIDs[1].(int)
+		require.True(t, ok)
+		assert.Equal(t, 2, id2)
 
-	resp, err = client.Get(nil, key, "utxos", "spentUtxos")
-	require.NoError(t, err)
-	utxos, ok = resp.Bins["utxos"].([]interface{})
-	require.True(t, ok)
-	require.Len(t, utxos, 5)
-	require.Len(t, utxos[0].([]byte), 32)
-	spendUtxos, ok = resp.Bins["spentUtxos"].(int)
-	require.True(t, ok)
-	assert.Equal(t, 0, spendUtxos)
-}
+		id3, ok := blockIDs[2].(int)
+		require.True(t, ok)
+		assert.Equal(t, 3, id3)
+	})
 
-func TestCreateWithBlockIDs(t *testing.T) {
-	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
-	require.NoError(t, aeroErr)
+	t.Run("TestStoreOPReturn", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
 
-	aeroURL, err := url.Parse(aerospikeURL)
-	require.NoError(t, err)
+		txMeta, err := db.Create(context.Background(), txWithOPReturn, 0)
+		require.NoError(t, err)
+		assert.NotNil(t, txMeta)
 
-	// ubsv db client
-	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
-	require.NoError(t, err)
+		resp, err := client.Get(nil, opReturnKey, "utxos")
+		require.NoError(t, err)
+		utxos, ok := resp.Bins["utxos"].([]interface{})
+		require.True(t, ok)
+		assert.Len(t, utxos, 2)
 
-	key, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
-	assert.NotNil(t, key)
+		_, ok = utxos[0].([]byte)
+		require.False(t, ok)
 
-	_, err = client.Delete(nil, key)
-	require.NoError(t, err)
+		utxo1, ok := utxos[1].([]byte)
+		require.True(t, ok)
+		require.Len(t, utxo1, 32)
+	})
 
-	var blockHeight uint32
+	t.Run("FrozenTX", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
 
-	txMeta, err := db.Create(context.Background(), tx, blockHeight, utxo.WithBlockIDs(1, 2, 3))
-	require.NoError(t, err)
-	assert.NotNil(t, txMeta)
+		txMeta, err := db.Create(context.Background(), tx, 0)
+		require.NoError(t, err)
+		assert.NotNil(t, txMeta)
 
-	resp, err := client.Get(nil, key, "blockIDs")
-	require.NoError(t, err)
-	blockIDs, ok := resp.Bins["blockIDs"].([]interface{})
-	require.True(t, ok)
-	require.Len(t, blockIDs, 3)
+		frozenBin := aero.NewBin("frozen", aero.NewIntegerValue(1))
 
-	id1, ok := blockIDs[0].(int)
-	require.True(t, ok)
-	assert.Equal(t, 1, id1)
+		// Write the bin to the record
+		err = client.PutBins(nil, txKey, frozenBin)
+		require.NoError(t, err)
 
-	id2, ok := blockIDs[1].(int)
-	require.True(t, ok)
-	assert.Equal(t, 2, id2)
+		err = db.Spend(context.Background(), spends, 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "FROZEN:TX is frozen")
+	})
 
-	id3, ok := blockIDs[2].(int)
-	require.True(t, ok)
-	assert.Equal(t, 3, id3)
-}
+	t.Run("FrozenUTXO", func(t *testing.T) {
+		cleanDB(t, client, key, tx)
 
-func TestStoreOPReturn(t *testing.T) {
-	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
-	require.NoError(t, aeroErr)
+		txMeta, err := db.Create(context.Background(), tx, 0)
+		require.NoError(t, err)
+		assert.NotNil(t, txMeta)
 
-	aeroURL, err := url.Parse(aerospikeURL)
-	require.NoError(t, err)
+		frozenMarker, err := chainhash.NewHashFromStr("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")
+		require.NoError(t, err)
 
-	// ubsv db client
-	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
-	require.NoError(t, err)
+		err = db.Spend(context.Background(), []*utxo.Spend{
+			{
+				TxID:         tx.TxIDChainHash(),
+				Vout:         0,
+				UTXOHash:     utxoHash0,
+				SpendingTxID: frozenMarker,
+			},
+		}, 0)
+		require.NoError(t, err)
 
-	key, err := aero.NewKey(db.namespace, db.setName, txWithOPReturn.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
-	assert.NotNil(t, key)
+		err = db.Spend(context.Background(), spends, 0)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "FROZEN:UTXO is frozen")
+	})
 
-	_, err = client.Delete(nil, key)
-	require.NoError(t, err)
+	t.Run("Coinbase", func(t *testing.T) {
 
-	txMeta, err := db.Create(context.Background(), txWithOPReturn, 0)
-	require.NoError(t, err)
-	assert.NotNil(t, txMeta)
-
-	resp, err := client.Get(nil, key, "utxos")
-	require.NoError(t, err)
-	utxos, ok := resp.Bins["utxos"].([]interface{})
-	require.True(t, ok)
-	assert.Len(t, utxos, 2)
-
-	_, ok = utxos[0].([]byte)
-	require.False(t, ok)
-
-	utxo1, ok := utxos[1].([]byte)
-	require.True(t, ok)
-	require.Len(t, utxo1, 32)
-}
-
-func TestFrozenTX(t *testing.T) {
-	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
-	require.NoError(t, aeroErr)
-
-	aeroURL, err := url.Parse(aerospikeURL)
-	require.NoError(t, err)
-
-	// ubsv db client
-	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
-	require.NoError(t, err)
-
-	key, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
-	assert.NotNil(t, key)
-
-	_, err = client.Delete(nil, key)
-	require.NoError(t, err)
-
-	txMeta, err := db.Create(context.Background(), tx, 0)
-	require.NoError(t, err)
-	assert.NotNil(t, txMeta)
-
-	frozenBin := aero.NewBin("frozen", aero.NewIntegerValue(1))
-
-	// Write the bin to the record
-	err = client.PutBins(nil, key, frozenBin)
-	require.NoError(t, err)
-
-	err = db.Spend(context.Background(), spends, 0)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "FROZEN:TX is frozen")
-}
-
-func TestFrozenUTXO(t *testing.T) {
-	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
-	require.NoError(t, aeroErr)
-
-	aeroURL, err := url.Parse(aerospikeURL)
-	require.NoError(t, err)
-
-	// ubsv db client
-	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
-	require.NoError(t, err)
-
-	key, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
-	assert.NotNil(t, key)
-
-	_, err = client.Delete(nil, key)
-	require.NoError(t, err)
-
-	txMeta, err := db.Create(context.Background(), tx, 0)
-	require.NoError(t, err)
-	assert.NotNil(t, txMeta)
-
-	frozenMarker, err := chainhash.NewHashFromStr("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")
-	require.NoError(t, err)
-
-	err = db.Spend(context.Background(), []*utxo.Spend{
-		{
-			TxID:         tx.TxIDChainHash(),
-			Vout:         0,
-			UTXOHash:     utxoHash0,
-			SpendingTxID: frozenMarker,
-		},
-	}, 0)
-	require.NoError(t, err)
-
-	err = db.Spend(context.Background(), spends, 0)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "FROZEN:UTXO is frozen")
+	})
 }
 
 func TestCoinbase(t *testing.T) {
-	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
-	require.NoError(t, aeroErr)
+	client, db, _, deferFn := initAerospike(t)
+	defer deferFn()
 
-	aeroURL, err := url.Parse(aerospikeURL)
-	require.NoError(t, err)
-
-	// ubsv db client
-	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
-	require.NoError(t, err)
-
-	key, err := aero.NewKey(db.namespace, db.setName, coinbaseTx.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
+	key, aErr := aero.NewKey(db.namespace, db.setName, coinbaseTx.TxIDChainHash().CloneBytes())
+	require.NoError(t, aErr)
 	assert.NotNil(t, key)
 
-	_, err = client.Delete(nil, key)
-	require.NoError(t, err)
+	_, aErr = client.Delete(nil, key)
+	require.NoError(t, aErr)
 
 	txMeta, err := db.Create(context.Background(), coinbaseTx, 0)
 	require.NoError(t, err)
@@ -1096,23 +981,15 @@ func TestCalculateOffsetOutput(t *testing.T) {
 }
 
 func TestIncrementNrRecords(t *testing.T) {
-	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
-	require.NoError(t, aeroErr)
+	client, db, _, deferFn := initAerospike(t)
+	defer deferFn()
 
-	aeroURL, err := url.Parse(aerospikeURL)
-	require.NoError(t, err)
-
-	// ubsv db client
-	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
-	require.NoError(t, err)
-
-	key, err := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
-	require.NoError(t, err)
+	key, aErr := aero.NewKey(db.namespace, db.setName, tx.TxIDChainHash().CloneBytes())
+	require.NoError(t, aErr)
 	assert.NotNil(t, key)
 
-	_, err = client.Delete(nil, key)
-	require.NoError(t, err)
+	_, aErr = client.Delete(nil, key)
+	require.NoError(t, aErr)
 
 	txMeta, err := db.Create(context.Background(), tx, 0)
 	require.NoError(t, err)
@@ -1124,7 +1001,8 @@ func TestIncrementNrRecords(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 1, nrRecords)
 
-	db.incrementNrRecords(tx.TxIDChainHash(), 1)
+	_, err = db.incrementNrRecords(tx.TxIDChainHash(), 1)
+	require.NoError(t, err)
 
 	resp, err = client.Get(nil, key, "nrRecords")
 	require.NoError(t, err)
@@ -1132,7 +1010,8 @@ func TestIncrementNrRecords(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 2, nrRecords)
 
-	db.incrementNrRecords(tx.TxIDChainHash(), -1)
+	_, err = db.incrementNrRecords(tx.TxIDChainHash(), -1)
+	require.NoError(t, err)
 
 	resp, err = client.Get(nil, key, "nrRecords")
 	require.NoError(t, err)
@@ -1143,20 +1022,11 @@ func TestIncrementNrRecords(t *testing.T) {
 }
 
 func TestStore_Decorate(t *testing.T) {
-	initPrometheusMetrics()
+	client, db, _, deferFn := initAerospike(t)
+	defer deferFn()
 
-	client, aeroErr := aero.NewClient(aerospikeHost, aerospikePort)
-	require.NoError(t, aeroErr)
-
-	aeroURL, err := url.Parse(aerospikeURL)
-	require.NoError(t, err)
-
-	// ubsv db client
-	db, err := New(ulogger.TestLogger{}, aeroURL)
-	require.NoError(t, err)
-
-	key, err := aero.NewKey(db.namespace, db.setName, spendingTxID1[:])
-	require.NoError(t, err)
+	key, aErr := aero.NewKey(db.namespace, db.setName, spendingTxID1[:])
+	require.NoError(t, aErr)
 
 	t.Run("aerospike BatchDecorate", func(t *testing.T) {
 		cleanDB(t, client, key, tx)
@@ -1332,58 +1202,99 @@ func TestStore_Decorate(t *testing.T) {
 //}
 
 func Test_SmokeTests(t *testing.T) {
-	aeroURL, err := url.Parse(aerospikeURL)
-	require.NoError(t, err)
-
-	ctx := context.Background()
+	_, db, ctx, deferFn := initAerospike(t)
+	defer deferFn()
 
 	t.Run("aerospike store", func(t *testing.T) {
-		db, err := New(ulogger.TestLogger{}, aeroURL)
-		require.NoError(t, err)
-
-		err = db.Delete(ctx, tests.TXHash)
+		err := db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
 		tests.Store(t, db)
 	})
 
 	t.Run("aerospike spend", func(t *testing.T) {
-		db, err := New(ulogger.TestLogger{}, aeroURL)
-		require.NoError(t, err)
-
-		err = db.Delete(ctx, tests.TXHash)
+		err := db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
 		tests.Spend(t, db)
 	})
 
 	t.Run("aerospike reset", func(t *testing.T) {
-		db, err := New(ulogger.TestLogger{}, aeroURL)
-		require.NoError(t, err)
-
-		err = db.Delete(ctx, tests.TXHash)
+		err := db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
 		tests.Restore(t, db)
 	})
 
 	t.Run("aerospike freeze", func(t *testing.T) {
-		db, err := New(ulogger.TestLogger{}, aeroURL)
-		require.NoError(t, err)
-
-		err = db.Delete(ctx, tests.TXHash)
+		err := db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
 		tests.Freeze(t, db)
 	})
 
 	t.Run("aerospike reassign", func(t *testing.T) {
-		db, err := New(ulogger.TestLogger{}, aeroURL)
-		require.NoError(t, err)
-
-		err = db.Delete(ctx, tests.TXHash)
+		err := db.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
 
 		tests.ReAssign(t, db)
 	})
+}
+
+func initAerospike(t *testing.T) (*aero.Client, *Store, context.Context, func()) {
+	initPrometheusMetrics()
+	ctx := context.Background()
+
+	container, err := aeroTest.RunContainer(ctx, aeroTest.WithImage("aerospike:ce-6.4.0.7_2"))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err = container.Terminate(ctx)
+		require.NoError(t, err)
+	})
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+	port, err := container.ServicePort(ctx)
+	require.NoError(t, err)
+
+	// raw client to be able to do gets and cleanup
+	client, aeroErr := aero.NewClient(host, port)
+	require.NoError(t, aeroErr)
+
+	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=30&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet)
+	aeroURL, err := url.Parse(aerospikeContainerURL)
+	require.NoError(t, err)
+
+	// ubsv db client
+	var db *Store
+	db, err = New(ulogger.TestLogger{}, aeroURL)
+	require.NoError(t, err)
+
+	db.client = &uaerospike.Client{Client: client}
+	db.namespace = "test"
+	db.setName = "test"
+
+	return client, db, ctx, func() {
+		client.Close()
+	}
+}
+
+func cleanDB(t *testing.T, client *aero.Client, key *aero.Key, txs ...*bt.Tx) {
+	policy := util.GetAerospikeWritePolicy(0, 0)
+
+	_, err := client.Delete(policy, key)
+	require.NoError(t, err)
+
+	if coinbaseKey != nil {
+		_, err = client.Delete(policy, coinbaseKey)
+		require.NoError(t, err)
+	}
+
+	if len(txs) > 0 {
+		for _, tx := range txs {
+			key, _ = aero.NewKey(aerospikeNamespace, aerospikeSet, tx.TxIDChainHash()[:])
+			_, err = client.Delete(policy, key)
+			require.NoError(t, err)
+		}
+	}
 }
