@@ -1,8 +1,10 @@
 package options
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -111,6 +113,54 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 	return options
 }
 
+// FileOptionsToQuery converts FileOptions to URL query parameters
+func FileOptionsToQuery(opts ...FileOption) url.Values {
+	options := NewFileOptions(opts...)
+	query := url.Values{}
+
+	if options.TTL != nil {
+		query.Set("ttl", strconv.FormatInt(int64(*options.TTL), 10))
+	}
+
+	if options.Filename != "" {
+		query.Set("filename", options.Filename)
+	}
+
+	if options.Extension != "" {
+		query.Set("extension", options.Extension)
+	}
+
+	if options.AllowOverwrite {
+		query.Set("allowOverwrite", "true")
+	}
+
+	return query
+}
+
+// QueryToFileOptions converts URL query parameters to FileOptions
+func QueryToFileOptions(query url.Values) []FileOption {
+	var opts []FileOption
+
+	if ttlStr := query.Get("ttl"); ttlStr != "" {
+		if ttl, err := strconv.ParseInt(ttlStr, 10, 64); err == nil {
+			opts = append(opts, WithTTL(time.Duration(ttl)*time.Second))
+		}
+	}
+
+	if filename := query.Get("filename"); filename != "" {
+		opts = append(opts, WithFileName(filename))
+	}
+
+	if extension := query.Get("extension"); extension != "" {
+		opts = append(opts, WithFileExtension(extension))
+	}
+
+	if allowOverwrite := query.Get("allowOverwrite"); allowOverwrite == "true" {
+		opts = append(opts, WithAllowOverwrite(true))
+	}
+
+	return opts
+}
 func (o *Options) ConstructFilename(basePath string, hash []byte) (string, error) {
 	var (
 		filename string

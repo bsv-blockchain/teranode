@@ -33,6 +33,17 @@ type File struct {
 * Able to specify multiple folders - files will be spread across folders based on key/hash/filename supplied.
  */
 func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
+	if storeURL != nil && storeURL.Query().Get("ttlCleanerInterval") != "" {
+		// This is a special case for testing where we want to set the ttlCleanerInterval to a very short interval
+		// so we don't have to wait long to see the effect of the ttl cleaner.
+		ttlCleanerInterval, err := time.ParseDuration(storeURL.Query().Get("ttlCleanerInterval"))
+		if err != nil {
+			return nil, errors.NewStorageError("[File] failed to parse ttlCleanerInterval", err)
+		}
+
+		return new(logger, storeURL, ttlCleanerInterval, opts...)
+	}
+
 	return new(logger, storeURL, 1*time.Minute, opts...)
 }
 
@@ -299,7 +310,7 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 	}
 
 	// write bytes to file
-	ttl := time.Now().Add(newTTL)
+	ttl := time.Now().Add(newTTL).UTC()
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
 		return errors.NewStorageError("[File] [%s] failed to write ttl to file", fileName, err)

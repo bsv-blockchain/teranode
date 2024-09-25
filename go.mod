@@ -114,10 +114,7 @@ require (
 	modernc.org/gc/v3 v3.0.0-20240107210532-573471604cb6 // indirect
 )
 
-require (
-	github.com/ajeetdsouza/testcontainers-aerospike-go v0.1.0
-	github.com/felixge/fgprof v0.9.5
-)
+require github.com/felixge/fgprof v0.9.5
 
 require (
 	dario.cat/mergo v1.0.0 // indirect
