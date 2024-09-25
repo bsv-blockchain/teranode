@@ -377,7 +377,7 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	}
 
 	// causes lint:gosec error G107: Potential HTTP request made with variable url (gosec)
-	// url := fmt.Sprintf("http://localhost:%d/mine?blocks=%d", minerHttpPort, c.NumBlocks)
+	// url := fmt.Sprintf("http://localhost:%d/mine?blocks=%d", minerHTTPPort, c.NumBlocks)
 
 	// Construct URL using net/url
 	u := &url.URL{

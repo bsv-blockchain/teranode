@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+option go_package = "./;alert_api";
+
+package alert_api;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service AlertAPI {
+  // Health returns the health of the API.
+  rpc HealthGRPC (google.protobuf.Empty) returns (HealthResponse) {}
+}
+
+// swagger:model HealthResponse
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}

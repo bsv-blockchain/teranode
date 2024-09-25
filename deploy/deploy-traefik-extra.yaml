@@ -32,6 +32,10 @@ ports:
     expose: true
     port: 9907
     protocol: TCP
+  p2p-alert:
+    expose: true
+    port: 9908
+    protocol: TCP
   kafka:
     expose: true
     port: 9092

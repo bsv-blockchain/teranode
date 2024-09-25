@@ -28,6 +28,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/cmd/txblockidcheck/txblockidcheck"
 	utxopersister_cmd "github.com/bitcoin-sv/ubsv/cmd/utxopersister/utxopersister"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/alert"
 	"github.com/bitcoin-sv/ubsv/services/asset"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -201,7 +202,8 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 	startBlockPersister := shouldStart("BlockPersister")
 	startUTXOPersister := shouldStart("UTXOPersister")
 	startLegacy := shouldStart("Legacy")
-	startRpc := shouldStart("rpc")
+	startRPC := shouldStart("RPC")
+	startAlert := shouldStart("Alert")
 
 	if help || appCount == 0 {
 		printUsage()
@@ -350,13 +352,13 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		}
 	}
 
-	if startRpc {
+	if startRPC {
 		blockchainClient, err := getBlockchainClient(ctx, logger, "rpc")
 		if err != nil {
 			return err
 		}
 
-		rpcServer, err := rpc.NewServer(logger.New("rpc"), blockchainClient)
+		rpcServer, err := rpc.NewServer(logger.New("RPC"), blockchainClient)
 		if err != nil {
 			return err
 
@@ -364,6 +366,32 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 
 		if err := sm.AddService("Rpc", rpcServer); err != nil {
 			return err
+		}
+	}
+
+	if startAlert {
+		blockchainClient, err := getBlockchainClient(ctx, logger, "alert")
+		if err != nil {
+			return err
+		}
+
+		utxoStore, err := getUtxoStore(ctx, logger)
+		if err != nil {
+			return err
+		}
+
+		blockassemblyClient, err := blockassembly.NewClient(ctx, logger)
+		if err != nil {
+			return err
+		}
+
+		if err = sm.AddService("Alert", alert.New(
+			logger.New("alert"),
+			blockchainClient,
+			utxoStore,
+			blockassemblyClient,
+		)); err != nil {
+			panic(err)
 		}
 	}
 

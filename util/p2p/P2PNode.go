@@ -13,22 +13,19 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/pnet"
-	"github.com/multiformats/go-multiaddr"
-
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	crypto "github.com/libp2p/go-libp2p/core/crypto"
-	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	dRouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dUtil "github.com/libp2p/go-libp2p/p2p/discovery/util"
-
+	"github.com/multiformats/go-multiaddr"
 	"github.com/ordishs/gocore"
 )
 
@@ -114,11 +111,11 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) (*P2PNode, error) {
 		}
 	}
 
-	logger.Infof("[P2PNode] peer ID: %s", h.ID().Pretty())
+	logger.Infof("[P2PNode] peer ID: %s", h.ID().String())
 	logger.Infof("[P2PNode] Connect to me on:")
 
 	for _, addr := range h.Addrs() {
-		logger.Infof("[P2PNode]   %s/p2p/%s", addr, h.ID().Pretty())
+		logger.Infof("[P2PNode]   %s/p2p/%s", addr, h.ID().String())
 	}
 
 	node := &P2PNode{
@@ -133,10 +130,10 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) (*P2PNode, error) {
 	// Set up connection notifications
 	h.Network().Notify(&network.NotifyBundle{
 		ConnectedF: func(n network.Network, conn network.Conn) {
-			node.logger.Debugf("[P2PNode] Peer connected: %s", conn.RemotePeer().Pretty())
+			node.logger.Debugf("[P2PNode] Peer connected: %s", conn.RemotePeer().String())
 		},
 		DisconnectedF: func(n network.Network, conn network.Conn) {
-			node.logger.Debugf("[P2PNode] Peer disconnected: %s", conn.RemotePeer().Pretty())
+			node.logger.Debugf("[P2PNode] Peer disconnected: %s", conn.RemotePeer().String())
 		},
 	})
 

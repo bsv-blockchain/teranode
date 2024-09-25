@@ -294,6 +294,15 @@ func (m *Memory) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 			return errors.NewTxNotFoundError("%v not found", spend.TxID)
 		}
 
+		// check that it is not already frozen, or spent
+		if m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] {
+			return errors.NewFrozenError("%v is already frozen", spend.TxID)
+		}
+
+		if m.txs[*spend.TxID].utxoMap[*spend.UTXOHash] != nil {
+			return errors.NewFrozenError("%v is already spent", spend.TxID)
+		}
+
 		m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] = true
 	}
 
@@ -313,6 +322,11 @@ func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 			return errors.NewTxNotFoundError("%v not found", spend.TxID)
 		}
 
+		// check that it is frozen, otherwise return an error
+		if !m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] {
+			return errors.NewFrozenError("%v is not frozen", spend.TxID)
+		}
+
 		m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] = false
 	}
 
@@ -329,10 +343,8 @@ func (m *Memory) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *ut
 	}
 
 	// re-assign the utxo to the new utxo
-	m.txs[*utxo.TxID].utxoMap[*utxo.UTXOHash] = newUtxo.SpendingTxID
-
-	// un-freeze the utxo
-	m.txs[*utxo.TxID].frozenMap[*utxo.UTXOHash] = false
+	delete(m.txs[*utxo.TxID].utxoMap, *utxo.UTXOHash)
+	m.txs[*utxo.TxID].utxoMap[*newUtxo.UTXOHash] = nil
 
 	return nil
 }
