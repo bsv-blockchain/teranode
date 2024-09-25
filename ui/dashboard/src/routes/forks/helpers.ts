@@ -243,7 +243,7 @@ function treeBoxes(selector, jsonData, orientation)
                         console.error(e);
                     }
                 }
-                const date = new Date(d.data.block_time);
+                const date = new Date(d.data.block_time * 1000);
 
                 // replace the hash in the url with the current hash
                 //const link = document.location.href.replace(/\/forks\/\?hash=.*/, `/forks/?hash=${d.data.hash}`);
