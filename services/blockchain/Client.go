@@ -374,6 +374,17 @@ func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *m
 	return header, meta, nil
 }
 
+func (c *Client) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	resp, err := c.client.CheckBlockIsInCurrentChain(ctx, &blockchain_api.CheckBlockIsCurrentChainRequest{
+		BlockIDs: blockIDs,
+	})
+	if err != nil {
+		return false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.GetIsPartOfCurrentChain(), nil
+}
+
 func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeader(ctx, &blockchain_api.GetBlockHeaderRequest{
 		BlockHash: blockHash[:],

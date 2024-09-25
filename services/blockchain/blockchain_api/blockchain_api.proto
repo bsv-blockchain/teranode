@@ -28,6 +28,7 @@ service BlockchainAPI {
   rpc GetBlockHeadersFromHeight(GetBlockHeadersFromHeightRequest) returns (GetBlockHeadersFromHeightResponse) {}
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
+  rpc CheckBlockIsInCurrentChain(CheckBlockIsCurrentChainRequest) returns (CheckBlockIsCurrentChainResponse) {}
   rpc GetBlockHeader(GetBlockHeaderRequest) returns (GetBlockHeaderResponse) {}
   rpc InvalidateBlock(InvalidateBlockRequest) returns (google.protobuf.Empty) {}
   rpc RevalidateBlock(RevalidateBlockRequest) returns (google.protobuf.Empty) {}
@@ -160,6 +161,11 @@ message GetBlockHeaderRequest {
   bytes blockHash = 1;
 }
 
+// swagger:model CheckBlockIsCurrentChainRequest
+message CheckBlockIsCurrentChainRequest {
+  repeated uint32 blockIDs = 1;
+}
+
 // swagger:model InvalidateBlockRequest
 message InvalidateBlockRequest {
   bytes blockHash = 1;
@@ -179,6 +185,11 @@ message GetBlockHeaderResponse {
   string miner = 5;
   uint32 block_time = 6;
   uint32 timestamp = 7;
+}
+
+// swagger:model CheckBlockIsCurrentChainResponse
+message CheckBlockIsCurrentChainResponse {
+  bool isPartOfCurrentChain = 1;
 }
 
 // swagger:model SubscribeRequest
