@@ -61,7 +61,7 @@ func TestOptionsConstructFilename(t *testing.T) {
 			name:         "With FileName",
 			key:          []byte("key"),
 			storeOptions: nil,
-			fileOptions:  []FileOption{WithFileName("filename-1234")},
+			fileOptions:  []FileOption{WithFilename("filename-1234")},
 			expected:     tempDir + "/filename-1234",
 		},
 		{
@@ -75,7 +75,7 @@ func TestOptionsConstructFilename(t *testing.T) {
 			name:         "With FileName and SubDirectory",
 			key:          []byte("key"),
 			storeOptions: []StoreOption{WithSubDirectory("./data2/")},
-			fileOptions:  []FileOption{WithFileName("filename-5678")},
+			fileOptions:  []FileOption{WithFilename("filename-5678")},
 			expected:     tempDir + "/data2/filename-5678",
 		},
 		{
@@ -95,7 +95,7 @@ func TestOptionsConstructFilename(t *testing.T) {
 			name:         "With FileName and FileExtension",
 			key:          []byte("key"),
 			storeOptions: []StoreOption{WithSubDirectory("./data4/")},
-			fileOptions:  []FileOption{WithFileName("filename-1234"), WithFileExtension("meta")},
+			fileOptions:  []FileOption{WithFilename("filename-1234"), WithFileExtension("meta")},
 			expected:     tempDir + "/data4/filename-1234.meta",
 		},
 		// WithHashPrefix
@@ -117,7 +117,7 @@ func TestOptionsConstructFilename(t *testing.T) {
 			name:         "WithHashPrefix and FileName",
 			key:          []byte("key"),
 			storeOptions: []StoreOption{WithHashPrefix(-1)},
-			fileOptions:  []FileOption{WithFileName("filename-1234a")},
+			fileOptions:  []FileOption{WithFilename("filename-1234a")},
 			expected:     tempDir + "/a/filename-1234a",
 		},
 	}

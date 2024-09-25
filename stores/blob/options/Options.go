@@ -75,7 +75,7 @@ func WithTTL(ttl time.Duration) FileOption {
 	}
 }
 
-func WithFileName(name string) FileOption {
+func WithFilename(name string) FileOption {
 	return func(s *Options) {
 		s.Filename = name
 	}
@@ -148,7 +148,7 @@ func QueryToFileOptions(query url.Values) []FileOption {
 	}
 
 	if filename := query.Get("filename"); filename != "" {
-		opts = append(opts, WithFileName(filename))
+		opts = append(opts, WithFilename(filename))
 	}
 
 	if extension := query.Get("extension"); extension != "" {

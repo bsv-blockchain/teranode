@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -129,7 +130,7 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 		return
 	}
 
-	data, err := s.store.Get(r.Context(), key, opts...)
+	rc, err := s.store.GetIoReader(r.Context(), key, opts...)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			http.Error(w, NotFoundMsg, http.StatusNotFound)
@@ -139,11 +140,11 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 
 		return
 	}
+	defer rc.Close()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	_, _ = io.Copy(w, rc)
 }
 
 func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Request, key []byte, opts ...options.FileOption) {

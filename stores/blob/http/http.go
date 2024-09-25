@@ -15,7 +15,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
 
-const blobURLFormat = "%s/blob/%s"
+const (
+	blobURLFormat        = "%s/blob/%s?%s"
+	blobURLFormatWithTTL = blobURLFormat + "&ttl=%s"
+)
 
 type HTTPStore struct {
 	baseURL    string
@@ -54,7 +57,10 @@ func (s *HTTPStore) Health(ctx context.Context) (int, string, error) {
 func (s *HTTPStore) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
 	encodedKey := base64.URLEncoding.EncodeToString(key)
 
-	resp, err := s.httpClient.Head(fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey))
+	query := options.FileOptionsToQuery(opts...)
+	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
+
+	resp, err := s.httpClient.Head(url)
 	if err != nil {
 		return false, errors.NewStorageError("[HTTPStore] Exists check failed", err)
 	}
@@ -64,29 +70,22 @@ func (s *HTTPStore) Exists(ctx context.Context, key []byte, opts ...options.File
 }
 
 func (s *HTTPStore) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
-	encodedKey := base64.URLEncoding.EncodeToString(key)
-
-	resp, err := s.httpClient.Get(fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey))
+	rc, err := s.GetIoReader(ctx, key, opts...)
 	if err != nil {
 		return nil, errors.NewStorageError("[HTTPStore] Get failed", err)
 	}
-	defer resp.Body.Close()
+	defer rc.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, errors.ErrNotFound
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.NewStorageError(fmt.Sprintf("[HTTPStore] Get failed with status code %d", resp.StatusCode), nil)
-	}
-
-	return io.ReadAll(resp.Body)
+	return io.ReadAll(rc)
 }
 
 func (s *HTTPStore) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error) {
 	encodedKey := base64.URLEncoding.EncodeToString(key)
 
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey), nil)
+	query := options.FileOptionsToQuery(opts...)
+	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, errors.NewStorageError("[HTTPStore] GetHead failed to create request", err)
 	}
@@ -113,7 +112,10 @@ func (s *HTTPStore) GetHead(ctx context.Context, key []byte, nrOfBytes int, opts
 func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	encodedKey := base64.URLEncoding.EncodeToString(key)
 
-	resp, err := s.httpClient.Get(fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey))
+	query := options.FileOptionsToQuery(opts...)
+	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
+
+	resp, err := s.httpClient.Get(url)
 	if err != nil {
 		return nil, errors.NewStorageError("[HTTPStore] GetIoReader failed", err)
 	}
@@ -142,7 +144,7 @@ func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, value io.Read
 	encodedKey := base64.URLEncoding.EncodeToString(key)
 
 	query := options.FileOptionsToQuery(opts...)
-	url := fmt.Sprintf("%s/blob/%s?%s", s.baseURL, encodedKey, query.Encode())
+	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, value)
 	if err != nil {
@@ -167,7 +169,10 @@ func (s *HTTPStore) SetFromReader(ctx context.Context, key []byte, value io.Read
 func (s *HTTPStore) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error {
 	encodedKey := base64.URLEncoding.EncodeToString(key)
 
-	req, err := http.NewRequestWithContext(ctx, "PATCH", fmt.Sprintf("%s/blob/%s?ttl=%s", s.baseURL, encodedKey, ttl.String()), nil)
+	query := options.FileOptionsToQuery(opts...)
+	url := fmt.Sprintf(blobURLFormatWithTTL, s.baseURL, encodedKey, query.Encode(), ttl.String())
+
+	req, err := http.NewRequestWithContext(ctx, "PATCH", url, nil)
 	if err != nil {
 		return errors.NewStorageError("[HTTPStore] SetTTL failed to create request", err)
 	}
@@ -188,7 +193,10 @@ func (s *HTTPStore) SetTTL(ctx context.Context, key []byte, ttl time.Duration, o
 func (s *HTTPStore) Del(ctx context.Context, key []byte, opts ...options.FileOption) error {
 	encodedKey := base64.URLEncoding.EncodeToString(key)
 
-	req, err := http.NewRequestWithContext(ctx, "DELETE", fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey), nil)
+	query := options.FileOptionsToQuery(opts...)
+	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode())
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
 	if err != nil {
 		return errors.NewStorageError("[HTTPStore] Del failed to create request", err)
 	}

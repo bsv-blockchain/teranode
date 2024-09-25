@@ -316,7 +316,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 
 func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 	// Read the file content as a byte slice
-	b, err := s.blockStore.Get(ctx, nil, options.WithFileName("lastProcessed"), options.WithFileExtension("dat"))
+	b, err := s.blockStore.Get(ctx, nil, options.WithFilename("lastProcessed"), options.WithFileExtension("dat"))
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			s.logger.Warnf("lastProcessed.dat does not exist, starting from height 0")
@@ -349,7 +349,7 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 		ctx,
 		nil,
 		[]byte(heightStr),
-		options.WithFileName("lastProcessed"),
+		options.WithFilename("lastProcessed"),
 		options.WithFileExtension("dat"),
 		options.WithAllowOverwrite(true),
 	)

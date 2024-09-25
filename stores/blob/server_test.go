@@ -131,4 +131,42 @@ func TestServerOperations(t *testing.T) {
 		err = client.Del(context.Background(), key)
 		require.NoError(t, err)
 	})
+
+	t.Run("WithFilename", func(t *testing.T) {
+		key := []byte("testKey5")
+		value := []byte("testValue5")
+
+		err := client.Set(context.Background(), key, value, options.WithFilename("testFilename"))
+		require.NoError(t, err)
+
+		exists, err := client.Exists(context.Background(), key)
+		require.NoError(t, err)
+		assert.False(t, exists)
+
+		exists, err = client.Exists(context.Background(), key, options.WithFilename("testFilename"))
+		require.NoError(t, err)
+		assert.True(t, exists)
+
+		err = client.Del(context.Background(), key, options.WithFilename("testFilename"))
+		require.NoError(t, err)
+	})
+
+	t.Run("WithExtension", func(t *testing.T) {
+		key := []byte("testKey5")
+		value := []byte("testValue5")
+
+		err := client.Set(context.Background(), key, value, options.WithFileExtension("ext"))
+		require.NoError(t, err)
+
+		exists, err := client.Exists(context.Background(), key)
+		require.NoError(t, err)
+		assert.False(t, exists)
+
+		exists, err = client.Exists(context.Background(), key, options.WithFileExtension("ext"))
+		require.NoError(t, err)
+		assert.True(t, exists)
+
+		err = client.Del(context.Background(), key, options.WithFileExtension("ext"))
+		require.NoError(t, err)
+	})
 }

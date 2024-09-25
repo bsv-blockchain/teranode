@@ -263,7 +263,7 @@ func TestFileSetWithSubdirectoryOption(t *testing.T) {
 		key := []byte("key")
 		value := []byte("value")
 
-		err = f.Set(context.Background(), key, value, options.WithFileName("filename"))
+		err = f.Set(context.Background(), key, value, options.WithFilename("filename"))
 		require.NoError(t, err)
 
 		// Construct the expected file path in the subdirectory
