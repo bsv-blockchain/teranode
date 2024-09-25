@@ -148,7 +148,11 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	err = db.ReAssignUTXO(ctx, testSpend0, testSpend1)
 	require.NoError(t, err)
 
+	// should return an error, does not exist anymore
 	resp, err := db.GetSpend(ctx, testSpend0)
+	require.Error(t, err)
+
+	resp, err = db.GetSpend(ctx, testSpend1)
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore.Status_OK), resp.Status)
 	require.Nil(t, resp.SpendingTxID)

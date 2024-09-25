@@ -87,10 +87,22 @@ func (s *Store) GetSpend(_ context.Context, spend *utxo.Spend) (*utxo.SpendRespo
 		utxos, ok := value.Bins["utxos"].([]interface{})
 		if ok {
 			b, ok := utxos[spend.Vout].([]byte)
-			if ok && len(b) == 64 {
-				spendingTxID, err = chainhash.NewHash(b[32:])
-				if err != nil {
-					return nil, errors.NewProcessingError("chain hash error", err)
+			if ok {
+				if len(b) < 32 {
+					return nil, errors.NewProcessingError("invalid utxo hash length", nil)
+				}
+
+				// check utxoHash is the same as the one we expect
+				utxoHash := chainhash.Hash(b[:32])
+				if !utxoHash.IsEqual(spend.UTXOHash) {
+					return nil, errors.NewProcessingError("utxo hash mismatch", nil)
+				}
+
+				if len(b) == 64 {
+					spendingTxID, err = chainhash.NewHash(b[32:])
+					if err != nil {
+						return nil, errors.NewProcessingError("chain hash error", err)
+					}
 				}
 			}
 		}

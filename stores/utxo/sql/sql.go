@@ -794,7 +794,8 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 
 	q := `
 		SELECT
-		 o.coinbase_spending_height
+		 o.utxo_hash
+		,o.coinbase_spending_height
 		,o.spending_transaction_id
 		,o.frozen
 		FROM outputs o
@@ -803,19 +804,25 @@ func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendRes
 		AND o.idx = $2
 	`
 
-	var coinbaseSpendingHeight uint32
+	var (
+		utxoHash               []byte
+		coinbaseSpendingHeight uint32
+		spendingTransactionID  []byte
+		frozen                 bool
+	)
 
-	var spendingTransactionID []byte
-
-	var frozen bool
-
-	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&coinbaseSpendingHeight, &spendingTransactionID, &frozen)
+	err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&utxoHash, &coinbaseSpendingHeight, &spendingTransactionID, &frozen)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewNotFoundError("utxo not found for %s:%d", spend.TxID, spend.Vout)
 		}
 
 		return nil, err
+	}
+
+	// check utxoHash is the same as expected
+	if !bytes.Equal(utxoHash, spend.UTXOHash[:]) {
+		return nil, errors.NewStorageError("utxo hash mismatch for %s:%d", spend.TxID, spend.Vout)
 	}
 
 	var spendingTxId *chainhash.Hash

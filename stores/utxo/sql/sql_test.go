@@ -224,9 +224,13 @@ func TestGetSpend(t *testing.T) {
 	_, err := store.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
+	utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
 	spend := &utxo.Spend{
-		TxID: tx.TxIDChainHash(),
-		Vout: 0,
+		TxID:     tx.TxIDChainHash(),
+		Vout:     0,
+		UTXOHash: utxoHash,
 	}
 
 	res, err := store.GetSpend(ctx, spend)
