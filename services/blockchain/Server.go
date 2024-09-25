@@ -582,20 +582,20 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 	}, nil
 }
 
-func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (*blockchain_api.CheckBlockIsCurrentChainResponse, error) {
+func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockchain_api.CheckBlockIsCurrentChainRequest) (*blockchain_api.CheckBlockIsCurrentChainResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "CheckBlockIsInCurrentChain",
 		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetBestBlockHeader),
+		tracing.WithHistogram(prometheusBlockchainCheckBlockIsInCurrentChain),
 	)
 	defer deferFn()
 
-	result, err := b.store.CheckBlockIsInCurrentChain(ctx, blockIDs)
+	result, err := b.store.CheckBlockIsInCurrentChain(ctx, req.BlockIDs)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
 
 	return &blockchain_api.CheckBlockIsCurrentChainResponse{
-		IsCurrentChain: result,
+		IsPartOfCurrentChain: result,
 	}, nil
 }
 

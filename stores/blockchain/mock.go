@@ -165,21 +165,21 @@ func (m MockStore) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block,
 }
 
 func (m MockStore) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*file.File, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 
 func (m MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }

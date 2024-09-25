@@ -2,13 +2,14 @@ package sql
 
 import (
 	"context"
+	"net/url"
+	"testing"
+
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"net/url"
-	"testing"
 )
 
 func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
@@ -109,13 +110,6 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 		_, _, err = s.StoreBlock(context.Background(), block2, "")
 		require.NoError(t, err)
 
-		// Get current best block header
-		// bestBlockHeader, _, err := s.GetBestBlockHeader(context.Background())
-		// require.NoError(t, err)
-
-		// bestBlock, _, _ := s.GetBlock(context.Background(), bestBlockHeader.Hash())
-		// fmt.Println("BEFORE Best Block: ", bestBlock.Hash())
-
 		block2Alt := &model.Block{
 			Header: &model.BlockHeader{
 				Version:        1,
@@ -131,8 +125,6 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 				subtree,
 			},
 		}
-
-		// fmt.Println("Block2Alt header hash prev block ", block2Alt.Header.HashPrevBlock)
 
 		_, _, err = s.StoreBlock(context.Background(), block2Alt, "")
 		require.NoError(t, err)
@@ -186,10 +178,6 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 		}
 
 		_, _, err = s.StoreBlock(context.Background(), block2Alt, "")
-		require.NoError(t, err)
-
-		// Get current best block header
-		bestBlockHeader, _, err = s.GetBestBlockHeader(context.Background())
 		require.NoError(t, err)
 
 		_, metas, err := s.GetBlockHeaders(context.Background(), block2Alt.Hash(), 10)

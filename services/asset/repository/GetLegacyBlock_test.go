@@ -331,6 +331,9 @@ func (s *mockStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader,
 func (s *mockStore) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	panic("not implemented")
 }
+func (s *mockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	panic("not implemented")
+}
 func (s *mockStore) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	panic("not implemented")
 }

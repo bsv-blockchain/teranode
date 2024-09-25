@@ -9,35 +9,36 @@ import (
 )
 
 var (
-	prometheusBlockchainHealth                    prometheus.Counter
-	prometheusBlockchainAddBlock                  prometheus.Histogram
-	prometheusBlockchainGetBlock                  prometheus.Histogram
-	prometheusBlockchainGetBlockStats             prometheus.Histogram
-	prometheusBlockchainGetBlockGraphData         prometheus.Histogram
-	prometheusBlockchainGetLastNBlocks            prometheus.Histogram
-	prometheusBlockchainGetSuitableBlock          prometheus.Histogram
-	prometheusBlockchainGetHashOfAncestorBlock    prometheus.Histogram
-	prometheusBlockchainGetNextWorkRequired       prometheus.Histogram
-	prometheusBlockchainGetBlockExists            prometheus.Histogram
-	prometheusBlockchainGetBestBlockHeader        prometheus.Histogram
-	prometheusBlockchainGetBlockHeader            prometheus.Histogram
-	prometheusBlockchainGetBlockHeaders           prometheus.Histogram
-	prometheusBlockchainGetBlockHeadersFromHeight prometheus.Histogram
-	prometheusBlockchainSubscribe                 prometheus.Histogram
-	prometheusBlockchainGetState                  prometheus.Histogram
-	prometheusBlockchainSetState                  prometheus.Histogram
-	prometheusBlockchainGetBlockHeaderIDs         prometheus.Histogram
-	prometheusBlockchainInvalidateBlock           prometheus.Histogram
-	prometheusBlockchainRevalidateBlock           prometheus.Histogram
-	prometheusBlockchainSendNotification          prometheus.Histogram
-	prometheusBlockchainSetBlockMinedSet          prometheus.Histogram
-	prometheusBlockchainGetBlocksMinedNotSet      prometheus.Histogram
-	prometheusBlockchainSetBlockSubtreesSet       prometheus.Histogram
-	prometheusBlockchainGetBlocksSubtreesNotSet   prometheus.Histogram
-	prometheusBlockchainGetFSMCurrentState        prometheus.Histogram
-	prometheusBlockchainGetBlockLocator           prometheus.Histogram
-	prometheusBlockchainLocateBlockHeaders        prometheus.Histogram
-	prometheusExportBlockDb                       prometheus.Histogram
+	prometheusBlockchainHealth                     prometheus.Counter
+	prometheusBlockchainAddBlock                   prometheus.Histogram
+	prometheusBlockchainGetBlock                   prometheus.Histogram
+	prometheusBlockchainGetBlockStats              prometheus.Histogram
+	prometheusBlockchainGetBlockGraphData          prometheus.Histogram
+	prometheusBlockchainGetLastNBlocks             prometheus.Histogram
+	prometheusBlockchainGetSuitableBlock           prometheus.Histogram
+	prometheusBlockchainGetHashOfAncestorBlock     prometheus.Histogram
+	prometheusBlockchainGetNextWorkRequired        prometheus.Histogram
+	prometheusBlockchainGetBlockExists             prometheus.Histogram
+	prometheusBlockchainGetBestBlockHeader         prometheus.Histogram
+	prometheusBlockchainCheckBlockIsInCurrentChain prometheus.Histogram
+	prometheusBlockchainGetBlockHeader             prometheus.Histogram
+	prometheusBlockchainGetBlockHeaders            prometheus.Histogram
+	prometheusBlockchainGetBlockHeadersFromHeight  prometheus.Histogram
+	prometheusBlockchainSubscribe                  prometheus.Histogram
+	prometheusBlockchainGetState                   prometheus.Histogram
+	prometheusBlockchainSetState                   prometheus.Histogram
+	prometheusBlockchainGetBlockHeaderIDs          prometheus.Histogram
+	prometheusBlockchainInvalidateBlock            prometheus.Histogram
+	prometheusBlockchainRevalidateBlock            prometheus.Histogram
+	prometheusBlockchainSendNotification           prometheus.Histogram
+	prometheusBlockchainSetBlockMinedSet           prometheus.Histogram
+	prometheusBlockchainGetBlocksMinedNotSet       prometheus.Histogram
+	prometheusBlockchainSetBlockSubtreesSet        prometheus.Histogram
+	prometheusBlockchainGetBlocksSubtreesNotSet    prometheus.Histogram
+	prometheusBlockchainGetFSMCurrentState         prometheus.Histogram
+	prometheusBlockchainGetBlockLocator            prometheus.Histogram
+	prometheusBlockchainLocateBlockHeaders         prometheus.Histogram
+	prometheusExportBlockDb                        prometheus.Histogram
 )
 
 var (
@@ -141,6 +142,15 @@ func _initPrometheusMetrics() {
 			Namespace: "blockchain",
 			Name:      "get_get_best_block_header",
 			Help:      "Histogram of GetBestBlockHeader calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainCheckBlockIsInCurrentChain = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "check_block_is_in_current_chain",
+			Help:      "Histogram of CheckBlockIsInCurrentChain calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
