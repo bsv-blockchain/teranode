@@ -20,6 +20,7 @@ var (
 	mainTxstore                 blob.Store
 	mainSubtreestore            blob.Store
 	mainBlockStore              blob.Store
+	mainBlockPersisterStore     blob.Store
 	mainUtxoStore               utxostore.Store
 	mainValidatorClient         validator.Interface
 	mainSubtreeValidationClient subtreevalidation.Interface
@@ -111,7 +112,7 @@ func getTxStore(logger ulogger.Logger) (blob.Store, error) {
 		return mainTxstore, nil
 	}
 
-	txStoreUrl, err, found := gocore.Config().GetURL("txstore")
+	txStoreURL, err, found := gocore.Config().GetURL("txstore")
 	if err != nil {
 		return nil, errors.NewConfigurationError("txstore setting error", err)
 	}
@@ -119,7 +120,7 @@ func getTxStore(logger ulogger.Logger) (blob.Store, error) {
 		return nil, errors.NewConfigurationError("no txstore setting found")
 	}
 
-	mainTxstore, err = blob.NewStore(logger, txStoreUrl)
+	mainTxstore, err = blob.NewStore(logger, txStoreURL)
 	if err != nil {
 		return nil, errors.NewServiceError("could not create tx store", err)
 	}
@@ -167,4 +168,26 @@ func getBlockStore(logger ulogger.Logger) (blob.Store, error) {
 	}
 
 	return mainBlockStore, nil
+}
+
+func getBlockPersisterStore(logger ulogger.Logger) (blob.Store, error) {
+	if mainBlockPersisterStore != nil {
+		return mainBlockPersisterStore, nil
+	}
+
+	blockStoreURL, err, found := gocore.Config().GetURL("blockPersisterStore")
+	if err != nil {
+		return nil, errors.NewConfigurationError("blockPersisterStore setting error", err)
+	}
+
+	if !found {
+		return nil, errors.NewConfigurationError("blockPersisterStore config not found")
+	}
+
+	mainBlockPersisterStore, err = blob.NewStore(logger, blockStoreURL)
+	if err != nil {
+		return nil, errors.NewServiceError("could not create block persister store", err)
+	}
+
+	return mainBlockPersisterStore, nil
 }

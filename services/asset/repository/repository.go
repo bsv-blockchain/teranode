@@ -25,18 +25,18 @@ import (
 )
 
 type Repository struct {
-	logger           ulogger.Logger
-	UtxoStore        utxo.Store
-	TxStore          blob.Store
-	SubtreeStore     blob.Store
-	BlockStore       blob.Store
-	BlockchainClient blockchain.ClientI
+	logger              ulogger.Logger
+	UtxoStore           utxo.Store
+	TxStore             blob.Store
+	SubtreeStore        blob.Store
+	BlockPersisterStore blob.Store
+	BlockchainClient    blockchain.ClientI
 	// coinbaseAvailable bool
 	CoinbaseProvider coinbase_api.CoinbaseAPIClient
 }
 
 func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store,
-	blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockStore blob.Store) (*Repository, error) {
+	blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error) {
 	var cbc coinbase_api.CoinbaseAPIClient
 
 	coinbaseGrpcAddress, ok := gocore.Config().Get("coinbase_grpcAddress")
@@ -52,13 +52,13 @@ func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Sto
 	}
 
 	return &Repository{
-		logger:           logger,
-		BlockchainClient: blockchainClient,
-		CoinbaseProvider: cbc,
-		UtxoStore:        utxoStore,
-		TxStore:          txStore,
-		SubtreeStore:     subtreeStore,
-		BlockStore:       blockStore,
+		logger:              logger,
+		BlockchainClient:    blockchainClient,
+		CoinbaseProvider:    cbc,
+		UtxoStore:           utxoStore,
+		TxStore:             txStore,
+		SubtreeStore:        subtreeStore,
+		BlockPersisterStore: blockPersisterStore,
 	}, nil
 }
 
@@ -225,7 +225,7 @@ func (repo *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Ha
 }
 
 func (repo *Repository) GetSubtreeDataReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
-	return repo.BlockStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
+	return repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 }
 
 func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {

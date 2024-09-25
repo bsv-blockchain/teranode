@@ -33,7 +33,24 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		if err := repo.writeLegacyBlockHeader(block, w); err != nil {
 			_ = w.Close()
 			_ = r.CloseWithError(err)
+
 			return err
+		}
+
+		if len(block.Subtrees) == 0 {
+			// Write the coinbase tx
+			if _, err := w.Write(block.CoinbaseTx.Bytes()); err != nil {
+				_ = w.Close()
+				_ = r.CloseWithError(err)
+
+				return err
+			}
+
+			// close the writer after the coinbase tx has been streamed
+			_ = w.Close()
+			_ = r.Close()
+
+			return nil
 		}
 
 		for _, subtree := range block.Subtrees {
@@ -43,9 +60,11 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 				// try different approach - get the subtree/tx data using the subtree-store and utxo-store
 				err = repo.writeTransactionsViaSubtreeStore(gCtx, block, subtree, w)
 			}
+
 			if err != nil {
 				_ = w.Close()
 				_ = r.CloseWithError(err)
+
 				return err
 			}
 		}
@@ -68,7 +87,8 @@ func (repo *Repository) writeLegacyBlockHeader(block *model.Block, w io.Writer) 
 
 	// write the block size
 	sizeInBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(sizeInBytes, uint32(block.SizeInBytes))
+	binary.LittleEndian.PutUint32(sizeInBytes, uint32(block.SizeInBytes)) // nolint:gosec
+
 	if _, err := w.Write(sizeInBytes); err != nil {
 		return err
 	}
@@ -88,11 +108,8 @@ func (repo *Repository) writeLegacyBlockHeader(block *model.Block, w io.Writer) 
 
 func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, _ *model.Block, subtreeHash *chainhash.Hash, w *io.PipeWriter) error {
 	if subtreeReader, err := repo.GetSubtreeDataReader(ctx, subtreeHash); err != nil {
-
 		return err
-
 	} else {
-
 		// skip the subtree tx size
 		_, _ = subtreeReader.Read(make([]byte, 4))
 
@@ -111,11 +128,13 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, bl
 	if err != nil {
 		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error getting subtree %s from store: %w", subtreeHash.String(), err)
 	}
+
 	defer func() {
 		_ = subtreeReader.Close()
 	}()
 
 	subtree := util.Subtree{}
+
 	err = subtree.DeserializeFromReader(subtreeReader)
 	if err != nil {
 		return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error deserializing subtree: %w", err)
@@ -155,9 +174,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, bl
 			if _, err := w.Write(block.CoinbaseTx.Bytes()); err != nil {
 				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing coinbase tx: %w", err)
 			}
-
 		} else {
-
 			// Write regular tx
 			if _, err := w.Write(txMetaSlice[i].Tx.Bytes()); err != nil {
 				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing tx[%d]: %v)", i, err)
@@ -227,6 +244,7 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 						missed.Add(1)
 						continue
 					}
+
 					txMetaSlice[data.Idx] = data.Data
 				}
 

@@ -329,7 +329,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		blockStore, err := getBlockStore(logger)
+		blockPersisterStore, err := getBlockPersisterStore(logger)
 		if err != nil {
 			return err
 		}
@@ -344,7 +344,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			utxoStore,
 			txStore,
 			subtreeStore,
-			blockStore,
+			blockPersisterStore,
 			blockchainClient,
 		)); err != nil {
 			return err

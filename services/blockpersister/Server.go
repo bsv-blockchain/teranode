@@ -33,7 +33,6 @@ func New(
 	utxoStore utxo.Store,
 	blockchainClient blockchain.ClientI,
 ) *Server {
-
 	u := &Server{
 		ctx:              ctx,
 		logger:           logger,
@@ -81,6 +80,27 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
+	blockPersisterHTTPListenAddress, addressFound := gocore.Config().Get("blockPersister_httpListenAddress")
+
+	if addressFound {
+		blockStoreURL, err, found := gocore.Config().GetURL("blockstore")
+		if err != nil {
+			return errors.NewConfigurationError("blockstore setting error", err)
+		}
+
+		if !found {
+			return errors.NewConfigurationError("blockstore config not found")
+		}
+
+		blobStoreServer, err := blob.NewHTTPBlobServer(u.logger, blockStoreURL)
+		if err != nil {
+			return errors.NewServiceError("failed to create blob store server", err)
+		}
+
+		go func() {
+			u.logger.Warnf("blockStoreServer ended: %v", blobStoreServer.Start(ctx, blockPersisterHTTPListenAddress))
+		}()
+	}
 
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
@@ -193,7 +213,7 @@ func (u *Server) Start(ctx context.Context) error {
 func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage) error) {
 	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
 
-	// Autocommit is disabled for all Kafka listeners for blockpersister, we want to manually commit.
+	// Auto commit is disabled for all Kafka listeners for blockpersister, we want to manually commit.
 	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, false, fn); err != nil {
 		u.logger.Errorf("Failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
 	}

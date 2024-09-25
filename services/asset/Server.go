@@ -17,27 +17,27 @@ import (
 
 // Server type carries the logger within it
 type Server struct {
-	logger           ulogger.Logger
-	utxoStore        utxo.Store
-	txStore          blob.Store
-	subtreeStore     blob.Store
-	blockStore       blob.Store
-	httpAddr         string
-	httpServer       *http_impl.HTTP
-	centrifugeAddr   string
-	centrifugeServer *centrifuge_impl.Centrifuge
-	blockchainClient blockchain.ClientI
+	logger              ulogger.Logger
+	utxoStore           utxo.Store
+	txStore             blob.Store
+	subtreeStore        blob.Store
+	blockPersisterStore blob.Store
+	httpAddr            string
+	httpServer          *http_impl.HTTP
+	centrifugeAddr      string
+	centrifugeServer    *centrifuge_impl.Centrifuge
+	blockchainClient    blockchain.ClientI
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockStore blob.Store, blockchainClient blockchain.ClientI) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server {
 	s := &Server{
-		logger:           logger,
-		utxoStore:        utxoStore,
-		txStore:          txStore,
-		subtreeStore:     subtreeStore,
-		blockStore:       blockStore,
-		blockchainClient: blockchainClient,
+		logger:              logger,
+		utxoStore:           utxoStore,
+		txStore:             txStore,
+		subtreeStore:        subtreeStore,
+		blockPersisterStore: blockPersisterStore,
+		blockchainClient:    blockchainClient,
 	}
 
 	return s
@@ -55,7 +55,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("no asset_httpListenAddress setting found")
 	}
 
-	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, v.blockchainClient, v.subtreeStore, v.blockStore)
+	repo, err := repository.NewRepository(v.logger, v.utxoStore, v.txStore, v.blockchainClient, v.subtreeStore, v.blockPersisterStore)
 
 	if err != nil {
 		return errors.NewServiceError("error creating repository", err)

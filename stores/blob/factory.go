@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/batcher"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
+	"github.com/bitcoin-sv/ubsv/stores/blob/http"
 	"github.com/bitcoin-sv/ubsv/stores/blob/localttl"
 	"github.com/bitcoin-sv/ubsv/stores/blob/lustre"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
@@ -31,6 +32,11 @@ func NewStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		store, err = file.New(logger, storeURL, opts...)
 		if err != nil {
 			return nil, errors.NewStorageError("error creating file blob store", err)
+		}
+	case "http":
+		store, err = http.New(logger, storeURL, opts...)
+		if err != nil {
+			return nil, errors.NewStorageError("error creating http blob store", err)
 		}
 	case "s3":
 		store, err = s3.New(logger, storeURL, opts...)

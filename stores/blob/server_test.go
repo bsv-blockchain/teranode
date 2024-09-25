@@ -1,4 +1,4 @@
-package http
+package blob
 
 import (
 	"bytes"
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/http"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/assert"
@@ -29,7 +29,7 @@ func TestServerOperations(t *testing.T) {
 	serverStoreURL, err := url.Parse(fmt.Sprintf("file://%s?ttlCleanerInterval=100ms", tempDir))
 	require.NoError(t, err)
 
-	blobServer, err := blob.NewHTTPBlobServer(
+	blobServer, err := NewHTTPBlobServer(
 		logger,
 		serverStoreURL,
 		options.WithSubDirectory("sub"),
@@ -38,7 +38,7 @@ func TestServerOperations(t *testing.T) {
 
 	serverAddr := "localhost:8080"
 	go func() {
-		err := blobServer.Start(serverAddr)
+		err := blobServer.Start(context.Background(), serverAddr)
 		if err != nil {
 			t.Logf("Server stopped: %v", err)
 		}
@@ -50,7 +50,7 @@ func TestServerOperations(t *testing.T) {
 	clientStoreURL, err := url.Parse("http://localhost:8080")
 	require.NoError(t, err)
 
-	client, err := New(logger, clientStoreURL)
+	client, err := http.New(logger, clientStoreURL)
 	require.NoError(t, err)
 
 	t.Run("SetAndGet", func(t *testing.T) {

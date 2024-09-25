@@ -1,6 +1,7 @@
 package blob
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -33,7 +34,7 @@ func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, opts ...options
 	}, nil
 }
 
-func (s *HTTPBlobServer) Start(addr string) error {
+func (s *HTTPBlobServer) Start(ctx context.Context, addr string) error {
 	s.logger.Infof("Starting HTTP blob server on %s", addr)
 
 	srv := &http.Server{
@@ -43,6 +44,18 @@ func (s *HTTPBlobServer) Start(addr string) error {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+
+	go func() {
+		<-ctx.Done()
+		s.logger.Infof("Shutting down HTTP blob server")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(ctx); err != nil {
+			s.logger.Errorf("HTTP blob server shutdown error: %v", err)
+		}
+	}()
 
 	return srv.ListenAndServe()
 }
