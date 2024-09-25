@@ -6,17 +6,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/jarcoal/httpmock"
-	"github.com/ordishs/gocore"
-
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -274,6 +276,32 @@ func TestBlockHeadersN(t *testing.T) {
 	assert.Equal(t, catchupBlockHeaders[499].String(), batches[0].hash.String())
 	assert.Equal(t, 498, int(batches[1].size))
 	assert.Equal(t, catchupBlockHeaders[997].String(), batches[1].hash.String())
+}
+
+func TestServer_processBlockFound(t *testing.T) {
+	ctx := context.Background()
+
+	blockHex := "010000000edfb8ccf30a17b7deae9c1f1a3dbbaeb1741ff5906192b921cbe7ece5ab380081caee50ec9ca9b5686bb6f71693a1c4284a269ab5f90d8662343a18e1a7200f52a83b66ffff00202601000001fdb1010001000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17033501002f6d322d75732fc1eaad86485d9cc712818b47ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a9141e7ee30c5c564b78533a44aae23bec1be188281d88ac00000000fd3501"
+	blockBytes, err := hex.DecodeString(blockHex)
+	require.NoError(t, err)
+
+	block, err := model.NewBlockFromBytes(blockBytes)
+	require.NoError(t, err)
+
+	blockchainStore := blockchain_store.NewMockStore()
+	blockchainStore.BlockExists[*block.Header.HashPrevBlock] = true
+
+	utxoStore := utxostore.New(ulogger.TestLogger{})
+
+	txStore := memory.New()
+
+	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, utxoStore)
+
+	s := New(ulogger.TestLogger{}, nil, txStore, utxoStore, nil, blockchainClient)
+	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, blockchainClient, nil, txStore, utxoStore, nil, nil, time.Duration(2)*time.Second)
+
+	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", block)
+	require.NoError(t, err)
 }
 
 func TestServer_processBlockFoundChannel(t *testing.T) {
