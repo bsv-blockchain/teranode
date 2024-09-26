@@ -41,6 +41,7 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store,
 	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 	if err != nil {
 		logger.Errorf("error parsing utxoPersister_buffer_size %q: %v§", utxopersisterBufferSize, err)
+
 		bufferSize = 4096
 	}
 
