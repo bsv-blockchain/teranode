@@ -34,6 +34,9 @@ func init() {
 func checkScriptsWithGoBDK(tv *TxValidator, tx *bt.Tx, blockHeight uint32) error {
 
 	for i, in := range tx.Inputs {
+		if in.PreviousTxScript == nil || in.UnlockingScript == nil {
+			continue
+		}
 		flags, errF := bdkscript.ScriptVerificationFlags(*in.PreviousTxScript, true)
 		if errF != nil {
 			return errors.NewTxInvalidError("failed to calculate flags from prev locking script, flags : %v, error: %v", flags, errF)
