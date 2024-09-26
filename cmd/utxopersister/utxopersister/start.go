@@ -10,6 +10,7 @@ import (
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/felixge/fgprof"
 	"github.com/ordishs/gocore"
 )
 
@@ -27,9 +28,13 @@ func Start() {
 		logger.Warnf("profilerAddr not found in config")
 	} else {
 		logger.Infof("Profiler available at http://%s/debug/pprof", profilerAddr)
+
 		gocore.RegisterStatsHandlers()
 		prefix, _ := gocore.Config().Get("stats_prefix")
 		logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, prefix)
+
+		http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
+		logger.Infof("FGProf available at http://%s/debug/fgprof", profilerAddr)
 
 		// Start http server for the profiler
 		go func() {
