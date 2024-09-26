@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/bytesize"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -503,13 +504,19 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 			return errors.NewStorageError("error getting utxoset reader for previous block %s", previousBlockHash, err)
 		}
 
-		bufferSize := 1 * 1024 * 1024 * 1024 // 1GB
 		// If r is not buffered, wrap it in a buffered reader
 		if _, ok := previousUTXOSetReader.(*os.File); !ok {
-			us.logger.Infof("Buffering previous UTXOSet reader for previous block %s", previousBlockHash)
+			utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "1GB")
+
+			bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
+			if err != nil {
+				return errors.NewConfigurationError("error parsing utxoPersister_buffer_size %q", utxopersisterBufferSize, err)
+			}
+
+			us.logger.Infof("Using %s buffer for previous UTXOSet reader", bufferSize)
 
 			previousUTXOSetReader = &readCloserWrapper{
-				Reader: bufio.NewReaderSize(previousUTXOSetReader, bufferSize),
+				Reader: bufio.NewReaderSize(previousUTXOSetReader, bufferSize.Int()),
 				Closer: previousUTXOSetReader.(io.Closer),
 			}
 		}
