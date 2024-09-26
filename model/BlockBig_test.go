@@ -107,7 +107,7 @@ func Test_NewOptimizedBloomFilter(t *testing.T) {
 	require.NoError(t, err)
 
 	// load the subtrees before starting profiling
-	_ = block.GetAndValidateSubtrees(context.Background(), ulogger.TestLogger{}, subtreeStore)
+	_ = block.GetAndValidateSubtrees(context.Background(), ulogger.TestLogger{}, subtreeStore, nil)
 
 	runtime.SetCPUProfileRate(500)
 

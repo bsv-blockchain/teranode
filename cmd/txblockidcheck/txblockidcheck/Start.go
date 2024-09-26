@@ -164,7 +164,7 @@ func checkBlocks(ctx context.Context, blockHeaders []*model.BlockHeader, blockMe
 			usage(err.Error())
 		}
 
-		if err := block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore); err != nil {
+		if err := block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, nil); err != nil {
 			fmt.Println(err.Error())
 			continue
 		}

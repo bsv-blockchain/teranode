@@ -507,7 +507,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	// missing the subtreeStore should only happen when we are validating an internal block
 	if subtreeStore != nil && len(b.Subtrees) > 0 {
 		// 6. Get and validate any missing subtrees.
-		if err = b.GetAndValidateSubtrees(ctx, logger, subtreeStore); err != nil {
+		if err = b.GetAndValidateSubtrees(ctx, logger, subtreeStore, nil); err != nil {
 			return false, err
 		}
 
@@ -985,21 +985,21 @@ func (b *Block) getFromAerospike(logger ulogger.Logger, parentTxStruct missingPa
 	return errors.NewServiceError("aerospike response: %v", response)
 }
 
-func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store) ([]*util.Subtree, error) {
+func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, fallbackGetFunc func(subtreeHash chainhash.Hash) error) ([]*util.Subtree, error) {
 	startTime := time.Now()
 	defer func() {
 		prometheusBlockGetSubtrees.Observe(time.Since(startTime).Seconds())
 	}()
 
 	// get the subtree slices from the subtree store
-	if err := b.GetAndValidateSubtrees(ctx, logger, subtreeStore); err != nil {
+	if err := b.GetAndValidateSubtrees(ctx, logger, subtreeStore, fallbackGetFunc); err != nil {
 		return nil, err
 	}
 
 	return b.SubtreeSlices, nil
 }
 
-func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store) error {
+func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, fallbackGetFunc func(subtreeHash chainhash.Hash) error) error {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Block:GetAndValidateSubtrees",
 		tracing.WithHistogram(prometheusBlockGetAndValidateSubtrees),
 	)
@@ -1033,6 +1033,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	for i, subtreeHash := range b.Subtrees {
 		i := i
 		if b.SubtreeSlices[i] == nil {
+			blockHash := b.hash
 			subtreeHash := subtreeHash
 
 			g.Go(func() error {
@@ -1040,25 +1041,39 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 				// probably when being moved to permanent storage in another service
 				subtree := &util.Subtree{}
 
-				subtreeReader, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
-				if err != nil {
-					subtreeReader, err = retry.Retry(gCtx, logger, func() (io.ReadCloser, error) {
-						return subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
-					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String())))
-
+				findSubtree := func() (io.ReadCloser, error) {
+					readCloser, err := subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
 					if err != nil {
-						return errors.NewStorageError("[BLOCK][%s] failed to get subtree %s", b.Hash().String(), subtreeHash.String(), err)
+						if errors.Is(err, errors.ErrNotFound) && fallbackGetFunc != nil {
+							if err := fallbackGetFunc(*subtreeHash); err != nil {
+								return nil, err
+							}
+
+							return subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
+						}
 					}
+
+					return readCloser, err
+				}
+				subtreeReader, err := retry.Retry(
+					gCtx,
+					logger,
+					findSubtree,
+					retry.WithMessage(fmt.Sprintf("[BLOCK][%s] failed to get subtree %s", blockHash, subtreeHash)),
+				)
+
+				if err != nil {
+					return errors.NewStorageError("[BLOCK][%s] failed to get subtree %s", blockHash, subtreeHash, err)
 				}
 
 				err = subtree.DeserializeFromReader(subtreeReader)
 				if err != nil {
 					_, err = retry.Retry(gCtx, logger, func() (struct{}, error) {
 						return struct{}{}, subtree.DeserializeFromReader(subtreeReader)
-					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s] failed to deserialize subtree %s", b.Hash().String(), subtreeHash.String())))
+					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s] failed to deserialize subtree %s", blockHash, subtreeHash)))
 
 					if err != nil {
-						return errors.NewStorageError("[BLOCK][%s] failed to deserialize subtree %s", b.Hash().String(), subtreeHash.String(), err)
+						return errors.NewStorageError("[BLOCK][%s] failed to deserialize subtree %s", blockHash, subtreeHash, err)
 					}
 				}
 
@@ -1301,7 +1316,7 @@ func (b *Block) Bytes() ([]byte, error) {
 }
 
 func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store) (*blobloom.Filter, error) {
-	err := b.GetAndValidateSubtrees(ctx, logger, subtreeStore)
+	err := b.GetAndValidateSubtrees(ctx, logger, subtreeStore, nil)
 	if err != nil {
 		// just return the error from the call above
 		return nil, err
