@@ -506,7 +506,7 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 
 		// If r is not buffered, wrap it in a buffered reader
 		if _, ok := previousUTXOSetReader.(*os.File); !ok {
-			utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "1GB")
+			utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
 
 			bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
 			if err != nil {

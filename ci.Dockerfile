@@ -29,14 +29,14 @@ RUN RACE=true TXMETA_SMALL_TAG=true make build-ubsv-ci -j 32
 RUN RACE=true TXMETA_SMALL_TAG=true make build-tx-blaster -j 32
 
 # RUN_IMG should be overritten by --build-args
-FROM --platform=linux/amd64 ${RUN_IMG} as linux-amd64
+FROM --platform=linux/amd64 ${RUN_IMG} AS linux-amd64
 WORKDIR /app
 COPY --from=0 /app/ubsv.run ./ubsv.run
 COPY --from=0 /app/blaster.run ./blaster.run
 COPY --from=0 /app/wait.sh /app/wait.sh
 
 # Don't do anything different for ARM64 (for now)
-FROM --platform=linux/arm64 ${RUN_IMG} as linux-arm64
+FROM --platform=linux/arm64 ${RUN_IMG} AS linux-arm64
 WORKDIR /app
 COPY --from=0 /app/ubsv.run ./ubsv.run
 COPY --from=0 /app/blaster.run ./blaster.run
