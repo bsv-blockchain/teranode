@@ -1046,7 +1046,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 					if err != nil {
 						if errors.Is(err, errors.ErrNotFound) && fallbackGetFunc != nil {
 							if err := fallbackGetFunc(*subtreeHash); err != nil {
-								return nil, err
+								return nil, errors.NewSubtreeNotFoundError("failed to get subtree via fallback method", err)
 							}
 
 							return subtreeStore.GetIoReader(gCtx, subtreeHash[:], options.WithFileExtension("subtree"))
