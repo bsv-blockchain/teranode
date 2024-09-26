@@ -42,7 +42,7 @@ var txTests = []struct {
 		name: "TestTxValidator_checkScripts - empty Tx",
 		args: args{
 			tx:          largeTx,
-			blockHeight: 720000,
+			blockHeight: 720808,
 		},
 		wantErr: assert.NoError,
 	},

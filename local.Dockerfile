@@ -53,7 +53,7 @@ RUN apt update && \
 WORKDIR /app
 
 COPY --from=0 /go/bin/dlv .
-COPY --from=0 /usr/local/bdk-v1.2.0/bin/libGoBDK.so .
+COPY --from=0 /usr/local/bdk-v1.2.1/bin/libGoBDK.so .
 
 COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/certs /app/certs
