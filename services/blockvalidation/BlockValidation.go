@@ -325,7 +325,9 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 	bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
 	u.recentBlocksBloomFiltersMu.Unlock()
 
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
+	oldBlockIDs := &sync.Map{}
+	// TODO GOKHAN: we need to check whether oldBlockIDs is populated here
+	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDs, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
 		if iErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); err != nil {
 			u.logger.Errorf("[BlockValidation:start][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), iErr)
 		}
@@ -606,6 +608,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	var optimisticMiningWg sync.WaitGroup
 
+	oldBlockIDs := &sync.Map{}
+
 	if useOptimisticMining {
 		// make sure the proof of work is enough
 		headerValid, _, err := block.Header.HasMetTargetDifficulty()
@@ -667,7 +671,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
 			u.recentBlocksBloomFiltersMu.Unlock()
 
-			if ok, err := block.Valid(callerSpan.Ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+			// TODO GOKHAN: we need to check whether oldBlockIDs is populated here
+			if ok, err := block.Valid(callerSpan.Ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDs, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 				u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 				if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
@@ -713,8 +718,36 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
 		u.recentBlocksBloomFiltersMu.Unlock()
 
-		if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+		// TODO GOKHAN: we need to check whether oldBlockIDs is populated here
+		if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDs, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
+		}
+
+		// Slice to store the old block IDs
+		var referencedOldBlockIDs []uint32
+		// Flag to check if the oldBlockIDs map has elements
+		var hasTransactionsReferencingOldBlocks bool
+
+		oldBlockIDs.Range(func(key, value interface{}) bool {
+			hasTransactionsReferencingOldBlocks = true
+			val := value.(uint32)
+			referencedOldBlockIDs = append(referencedOldBlockIDs, val)
+			return true // Continue iteration to collect all elements
+		})
+
+		// Check if the old blocks are part of the current chain
+		if hasTransactionsReferencingOldBlocks {
+			// Flag to check if the old blocks are part of the current chain
+			var blocksPartOfCurrentChain bool
+
+			blocksPartOfCurrentChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, referencedOldBlockIDs)
+			if err != nil {
+				return errors.NewServiceError("[ValidateBlock][%s] failed to check if old blocks are part of the current chain", block.String(), err)
+			}
+
+			if !blocksPartOfCurrentChain {
+				return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid, transactions refer old blocks (%v) that are not part of our current chain", block.String(), referencedOldBlockIDs)
+			}
 		}
 
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
@@ -845,7 +878,10 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees DONE", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
-	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
+	oldBlockIDs := &sync.Map{}
+
+	// TODO GOKHAN: we need to check whether oldBlockIDs is populated here
+	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDs, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) {

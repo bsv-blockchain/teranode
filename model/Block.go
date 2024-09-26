@@ -419,15 +419,13 @@ func (b *Block) String() string {
 	return fmt.Sprintf("Block %s (height: %d, txCount: %d, size: %d", b.Hash().String(), b.Height, b.TransactionCount, b.SizeInBytes)
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, transactionsFromOldBlocks *sync.Map,
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, oldBlockIDs *sync.Map,
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Block:Valid",
 		tracing.WithHistogram(prometheusBlockValid),
 		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
 	)
 	defer deferFn()
-
-	transactionsFromOldBlocks.Store(b.Hash().String(), b)
 
 	// 1. Check that the block header hash is less than the target difficulty.
 	headerValid, _, err := b.Header.HasMetTargetDifficulty()
@@ -554,7 +552,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 		}
 
 		if !legacyLimitedBlockValidation {
-			err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats, transactionsFromOldBlocks)
+			err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats, oldBlockIDs)
 			if err != nil {
 				return false, err
 			}
@@ -650,7 +648,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 }
 
 func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, subtreeStore blob.Store,
-	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats, transactionsFromOldBlocks *sync.Map) error {
+	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats, oldBlockIDs *sync.Map) error {
 
 	if b.txMap == nil {
 		return errors.NewStorageError("[BLOCK][%s] txMap is nil, cannot check transaction order", b.Hash().String())
@@ -832,7 +830,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 								// TODO: consider appending the transactions hashes to values, so we can check which transactions are from which blocks
 								//		 enabling better handling on underlining which transactions are invalid
 								for _, blockID := range oldParentBlockIDs {
-									transactionsFromOldBlocks.Store(blockID, struct{}{})
+									oldBlockIDs.Store(blockID, struct{}{})
 								}
 								return nil
 							}

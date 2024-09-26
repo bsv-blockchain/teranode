@@ -38,7 +38,7 @@ var (
 	prometheusBlockchainGetFSMCurrentState         prometheus.Histogram
 	prometheusBlockchainGetBlockLocator            prometheus.Histogram
 	prometheusBlockchainLocateBlockHeaders         prometheus.Histogram
-	prometheusExportBlockDb                        prometheus.Histogram
+	// prometheusExportBlockDb                        prometheus.Histogram
 )
 
 var (
@@ -308,12 +308,12 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusExportBlockDb = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "blockchain",
-			Name:      "export_block_db",
-			Help:      "Histogram of ExportBlockDB calls to the blockchain service",
-			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
+	// prometheusExportBlockDb = promauto.NewHistogram(
+	//	prometheus.HistogramOpts{
+	//		Namespace: "blockchain",
+	//		Name:      "export_block_db",
+	//		Help:      "Histogram of ExportBlockDB calls to the blockchain service",
+	//		Buckets:   util.MetricsBucketsMilliSeconds,
+	//	},
+	//)
 }
