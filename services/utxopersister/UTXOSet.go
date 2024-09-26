@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -351,21 +350,20 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 		return nil, errors.NewStorageError("error getting utxo-additions reader", err)
 	}
 
-	// If r is not buffered, wrap it in a buffered reader
-	if _, ok := r.(*os.File); !ok {
-		utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
+	utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
 
-		bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
-		if err != nil {
-			us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
+	if err != nil {
+		us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
 
-			bufferSize = 4096
-		}
+		bufferSize = 4096
+	}
 
-		r = &readCloserWrapper{
-			Reader: bufio.NewReaderSize(r, bufferSize.Int()),
-			Closer: r.(io.Closer),
-		}
+	us.logger.Infof("Using %s buffer for utxo-additions reader", bufferSize)
+
+	r = &readCloserWrapper{
+		Reader: bufio.NewReaderSize(r, bufferSize.Int()),
+		Closer: r.(io.Closer),
 	}
 
 	return r, nil
@@ -377,12 +375,20 @@ func (us *UTXOSet) GetUTXODeletionsReader() (io.ReadCloser, error) {
 		return nil, errors.NewStorageError("error getting utxo-deletions reader", err)
 	}
 
-	// If r is not buffered, wrap it in a buffered reader
-	if _, ok := r.(*os.File); !ok {
-		r = &readCloserWrapper{
-			Reader: bufio.NewReader(r),
-			Closer: r.(io.Closer),
-		}
+	utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
+
+	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
+	if err != nil {
+		us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+
+		bufferSize = 4096
+	}
+
+	us.logger.Infof("Using %s buffer for utxo-deletions reader", bufferSize)
+
+	r = &readCloserWrapper{
+		Reader: bufio.NewReaderSize(r, bufferSize.Int()),
+		Closer: r.(io.Closer),
 	}
 
 	return r, nil
@@ -518,21 +524,20 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 			return errors.NewStorageError("error getting utxoset reader for previous block %s", previousBlockHash, err)
 		}
 
-		// If r is not buffered, wrap it in a buffered reader
-		if _, ok := previousUTXOSetReader.(*os.File); !ok {
-			utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
+		utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
 
-			bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
-			if err != nil {
-				return errors.NewConfigurationError("error parsing utxoPersister_buffer_size %q", utxopersisterBufferSize, err)
-			}
+		bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
+		if err != nil {
+			us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
 
-			us.logger.Infof("Using %s buffer for previous UTXOSet reader", bufferSize)
+			bufferSize = 4096
+		}
 
-			previousUTXOSetReader = &readCloserWrapper{
-				Reader: bufio.NewReaderSize(previousUTXOSetReader, bufferSize.Int()),
-				Closer: previousUTXOSetReader.(io.Closer),
-			}
+		us.logger.Infof("Using %s buffer for previous UTXOSet reader", bufferSize)
+
+		previousUTXOSetReader = &readCloserWrapper{
+			Reader: bufio.NewReaderSize(previousUTXOSetReader, bufferSize.Int()),
+			Closer: previousUTXOSetReader.(io.Closer),
 		}
 
 		defer previousUTXOSetReader.Close()
