@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,7 +61,8 @@ func TestBigBlock_Valid(t *testing.T) {
 	defer pprof.StopCPUProfile()
 
 	start := time.Now()
-	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs, NewBloomStats())
+	oldBlockIDs := &sync.Map{}
+	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 

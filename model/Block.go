@@ -649,7 +649,6 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 
 func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, subtreeStore blob.Store,
 	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats, oldBlockIDs *sync.Map) error {
-
 	if b.txMap == nil {
 		return errors.NewStorageError("[BLOCK][%s] txMap is nil, cannot check transaction order", b.Hash().String())
 	}
@@ -832,9 +831,11 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 								for _, blockID := range oldParentBlockIDs {
 									oldBlockIDs.Store(blockID, struct{}{})
 								}
+
 								return nil
 							}
 						}
+
 						return nil
 					})
 				}
