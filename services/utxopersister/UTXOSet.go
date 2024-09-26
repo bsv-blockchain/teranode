@@ -503,10 +503,13 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 			return errors.NewStorageError("error getting utxoset reader for previous block %s", previousBlockHash, err)
 		}
 
+		bufferSize := 1 * 1024 * 1024 * 1024 // 1GB
 		// If r is not buffered, wrap it in a buffered reader
 		if _, ok := previousUTXOSetReader.(*os.File); !ok {
+			us.logger.Infof("Buffering previous UTXOSet reader for previous block %s", previousBlockHash)
+
 			previousUTXOSetReader = &readCloserWrapper{
-				Reader: bufio.NewReader(previousUTXOSetReader),
+				Reader: bufio.NewReaderSize(previousUTXOSetReader, bufferSize),
 				Closer: previousUTXOSetReader.(io.Closer),
 			}
 		}
