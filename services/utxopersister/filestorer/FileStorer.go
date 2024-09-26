@@ -45,7 +45,7 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store,
 		bufferSize = 4096
 	}
 
-	logger.Infof("Using %s buffer for previous UTXOSet reader", bufferSize)
+	logger.Infof("Using %s buffer for file storer", bufferSize)
 
 	bufferedReader := io.NopCloser(bufio.NewReaderSize(reader, bufferSize.Int()))
 	bufferedWriter := bufio.NewWriterSize(io.MultiWriter(writer, hasher), bufferSize.Int())

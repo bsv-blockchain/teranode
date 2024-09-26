@@ -340,16 +340,30 @@ type readCloserWrapper struct {
 	io.Closer
 }
 
-func (us *UTXOSet) GetUTXOAdditionsReader() (io.ReadCloser, error) {
-	r, err := us.store.GetIoReader(us.ctx, us.blockHash[:], options.WithFileExtension(additionsExtension), options.WithTTL(0))
+func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetUTXOAdditionsReader",
+		tracing.WithLogMessage(us.logger, "[GetUTXOAdditionsReader] called"),
+	)
+	defer deferFn()
+
+	r, err := us.store.GetIoReader(ctx, us.blockHash[:], options.WithFileExtension(additionsExtension), options.WithTTL(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-additions reader", err)
 	}
 
 	// If r is not buffered, wrap it in a buffered reader
 	if _, ok := r.(*os.File); !ok {
+		utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
+
+		bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
+		if err != nil {
+			us.logger.Warnf("error parsing utxoPersister_buffer_size %q, using default of 4KB", utxopersisterBufferSize)
+
+			bufferSize = 4096
+		}
+
 		r = &readCloserWrapper{
-			Reader: bufio.NewReader(r),
+			Reader: bufio.NewReaderSize(r, bufferSize.Int()),
 			Closer: r.(io.Closer),
 		}
 	}
@@ -462,7 +476,7 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 	}
 
 	// Open the additions file for this block and stream each record to the new UTXOSet if not in the deletions set
-	additionsReader, err := us.GetUTXOAdditionsReader()
+	additionsReader, err := us.GetUTXOAdditionsReader(ctx)
 	if err != nil {
 		return errors.NewStorageError("error getting utxo-additions reader", err)
 	}
