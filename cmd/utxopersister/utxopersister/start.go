@@ -21,7 +21,8 @@ func Start() {
 	)
 	defer deferFn()
 
-	logger := ulogger.NewGoCoreLogger("utxopd")
+	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	logger := ulogger.New("utxopd", ulogger.WithLevel(logLevelStr))
 
 	profilerAddr, found := gocore.Config().Get("profilerAddr")
 	if !found {
