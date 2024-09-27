@@ -14,13 +14,15 @@ import (
 )
 
 type Memory struct {
-	mu    sync.RWMutex
-	blobs map[[32]byte][]byte
+	mu      sync.RWMutex
+	blobs   map[[32]byte][]byte
+	options *options.Options
 }
 
 func New(opts ...options.StoreOption) *Memory {
 	return &Memory{
-		blobs: make(map[[32]byte][]byte),
+		blobs:   make(map[[32]byte][]byte),
+		options: options.NewStoreOptions(opts...),
 	}
 }
 
@@ -40,11 +42,15 @@ func (m *Memory) Close(_ context.Context) error {
 func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
 	defer reader.Close()
 
-	// for consistency with other stores, check if the blob already exists and throw BlobAlreadyExistsError if it does
-	if exists, err := m.Exists(ctx, key); err != nil {
-		return err
-	} else if exists {
-		return errors.NewBlobAlreadyExistsError("blob already exists")
+	merged := options.MergeOptions(m.options, opts)
+
+	if !merged.AllowOverwrite {
+		// for consistency with other stores, check if the blob already exists and throw BlobAlreadyExistsError if it does
+		if exists, err := m.Exists(ctx, key); err != nil {
+			return err
+		} else if exists {
+			return errors.NewBlobAlreadyExistsError("blob already exists")
+		}
 	}
 
 	b, err := io.ReadAll(reader)
@@ -56,15 +62,17 @@ func (m *Memory) SetFromReader(ctx context.Context, key []byte, reader io.ReadCl
 }
 
 func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
-	setOptions := options.NewFileOptions(opts...)
+	merged := options.MergeOptions(m.options, opts)
 
-	storeKey := hashKey(hash, setOptions.Extension)
+	storeKey := hashKey(hash, merged)
 
-	// for consistency with other stores, check if the blob already exists and throw BlobAlreadyExistsError if it does
-	if exists, err := m.Exists(ctx, hash); err != nil {
-		return err
-	} else if exists {
-		return errors.NewBlobAlreadyExistsError("blob already exists")
+	if !merged.AllowOverwrite {
+		// for consistency with other stores, check if the blob already exists and throw BlobAlreadyExistsError if it does
+		if exists, err := m.Exists(ctx, hash); err != nil {
+			return err
+		} else if exists {
+			return errors.NewBlobAlreadyExistsError("blob already exists")
+		}
 	}
 
 	m.mu.Lock()
@@ -97,9 +105,9 @@ func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.Fi
 }
 
 func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.FileOption) ([]byte, error) {
-	setOptions := options.NewFileOptions(opts...)
+	merged := options.MergeOptions(m.options, opts)
 
-	storeKey := hashKey(hash, setOptions.Extension)
+	storeKey := hashKey(hash, merged)
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -126,21 +134,22 @@ func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...
 }
 
 func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.FileOption) (bool, error) {
-	setOptions := options.NewFileOptions(opts...)
+	merged := options.MergeOptions(m.options, opts)
 
-	storeKey := hashKey(hash, setOptions.Extension)
+	storeKey := hashKey(hash, merged)
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	_, ok := m.blobs[storeKey]
+
 	return ok, nil
 }
 
 func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.FileOption) error {
-	setOptions := options.NewFileOptions(opts...)
+	merged := options.MergeOptions(m.options, opts)
 
-	storeKey := hashKey(hash, setOptions.Extension)
+	storeKey := hashKey(hash, merged)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -150,6 +159,18 @@ func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.FileOption)
 	return nil
 }
 
-func hashKey(key []byte, extension string) [32]byte {
-	return chainhash.HashH(append(key, []byte(extension)...))
+func hashKey(key []byte, options *options.Options) [32]byte {
+	var storeKey []byte
+
+	if len(options.Filename) > 0 {
+		storeKey = []byte(options.Filename)
+	} else {
+		storeKey = key
+	}
+
+	if len(options.Extension) > 0 {
+		storeKey = append(storeKey, []byte(options.Extension)...)
+	}
+
+	return chainhash.HashH(storeKey)
 }

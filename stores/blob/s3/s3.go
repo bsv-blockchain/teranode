@@ -13,14 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/errors"
-
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -79,7 +77,7 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.StoreOption) (*S
 	region := s3URL.Query().Get("region")
 	subDirectory := s3URL.Query().Get("subDirectory")
 
-	if subDirectory != "" {
+	if len(subDirectory) > 0 {
 		opts = append(opts, options.WithSubDirectory(subDirectory))
 	}
 
@@ -141,16 +139,18 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 	traceSpan := tracing.Start(ctx, "s3:SetFromReader")
 	defer traceSpan.Finish()
 
-	o := options.MergeOptions(g.options, opts)
+	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, o)
+	objectKey := g.getObjectKey(key, merged)
 
-	// Check if the object already exists
-	if _, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(g.bucket),
-		Key:    objectKey,
-	}); err == nil {
-		return errors.NewBlobAlreadyExistsError("[S3][SetFromReader] [%s] already exists in store", objectKey)
+	if !merged.AllowOverwrite {
+		// Check if the object already exists
+		if _, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(g.bucket),
+			Key:    objectKey,
+		}); err == nil {
+			return errors.NewBlobAlreadyExistsError("[S3][SetFromReader] [%s] already exists in store", objectKey)
+		}
 	}
 
 	// g.logger.Warnf("[S3][%s] Setting object reader from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
@@ -161,8 +161,8 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser
 		Body:   reader,
 	}
 
-	if o.TTL != nil && *o.TTL > 0 {
-		expires := time.Now().Add(*o.TTL)
+	if merged.TTL != nil && *merged.TTL > 0 {
+		expires := time.Now().Add(*merged.TTL)
 		uploadInput.Expires = &expires
 	}
 
@@ -183,19 +183,22 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 	traceSpan := tracing.Start(ctx, "s3:Set")
 	defer traceSpan.Finish()
 
-	o := options.MergeOptions(g.options, opts)
+	merged := options.MergeOptions(g.options, opts)
 
-	objectKey := g.getObjectKey(key, o)
+	objectKey := g.getObjectKey(key, merged)
 
-	// Check if the object already exists
-	if _, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(g.bucket),
-		Key:    objectKey,
-	}); err == nil {
-		return errors.NewBlobAlreadyExistsError("[S3][Set] [%s] already exists in store", objectKey)
+	if !merged.AllowOverwrite {
+		// Check if the object already exists
+		if _, err := g.client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(g.bucket),
+			Key:    objectKey,
+		}); err == nil {
+			return errors.NewBlobAlreadyExistsError("[S3][Set] [%s] already exists in store", objectKey)
+		}
 	}
 
 	buf := bytes.NewBuffer(value)
+
 	uploadInput := &s3.PutObjectInput{
 		Bucket: aws.String(g.bucket),
 		Key:    objectKey,
@@ -204,8 +207,8 @@ func (g *S3) Set(ctx context.Context, key []byte, value []byte, opts ...options.
 
 	// Expires
 
-	if o.TTL != nil && *o.TTL > 0 {
-		expires := time.Now().Add(*o.TTL)
+	if merged.TTL != nil && *merged.TTL > 0 {
+		expires := time.Now().Add(*merged.TTL)
 		uploadInput.Expires = &expires
 	}
 

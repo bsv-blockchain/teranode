@@ -366,11 +366,15 @@ func TestFileNameForPersist(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "data/subtreestore/sub/79/79656b", filename)
 
-	filename, err = store.getFileNameForSet([]byte("key"))
+	var opts []options.FileOption
+
+	filename, err = store.getFilenameForSet([]byte("key"), opts)
 	require.NoError(t, err)
 	assert.Equal(t, "data/persist/sub/79/79656b", filename)
 
-	filename, err = store.getFileNameForSet([]byte("key"), options.WithTTL(2*time.Second))
+	opts = append(opts, options.WithTTL(2*time.Second))
+
+	filename, err = store.getFilenameForSet([]byte("key"), opts)
 	require.NoError(t, err)
 	assert.Equal(t, "data/sub/79/79656b", filename)
 }

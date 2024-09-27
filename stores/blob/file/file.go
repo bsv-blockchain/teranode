@@ -248,7 +248,7 @@ func (s *File) Close(_ context.Context) error {
 func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
 	defer reader.Close()
 
-	fileName, err := s.constructFileNameWithTTL(key, opts)
+	filename, err := s.constructFilenameWithTTL(key, opts)
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
 	}
@@ -256,34 +256,34 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 	merged := options.MergeOptions(s.options, opts)
 
 	if !merged.AllowOverwrite {
-		if _, err := os.Stat(fileName); err == nil {
-			return errors.NewBlobAlreadyExistsError("[File][SetFromReader] [%s] already exists in store", fileName)
+		if _, err := os.Stat(filename); err == nil {
+			return errors.NewBlobAlreadyExistsError("[File][SetFromReader] [%s] already exists in store", filename)
 		}
 	}
 
+	tmpFilename := filename + ".tmp"
+
 	// write the bytes from the reader to a file with the filename
-	file, err := os.Create(fileName + ".tmp")
+	file, err := os.Create(tmpFilename)
 	if err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to create file", fileName, err)
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to create file", filename, err)
 	}
 	defer file.Close()
 
 	if _, err = io.Copy(file, reader); err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write data to file", fileName, err)
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write data to file", filename, err)
 	}
 
 	// rename the file to remove the .tmp extension
-	if err = os.Rename(fileName+".tmp", fileName); err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to rename file", fileName, err)
+	if err = os.Rename(tmpFilename, filename); err != nil {
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to rename file from tmp", filename, err)
 	}
 
 	return nil
 }
 
 func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options.FileOption) error {
-
-	fileName, err := s.constructFileNameWithTTL(hash, opts)
-
+	filename, err := s.constructFilenameWithTTL(hash, opts)
 	if err != nil {
 		return errors.NewStorageError("[File][Set] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(hash), err)
 	}
@@ -291,21 +291,27 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 	merged := options.MergeOptions(s.options, opts)
 
 	if !merged.AllowOverwrite {
-		if _, err := os.Stat(fileName); err == nil {
-			return errors.NewBlobAlreadyExistsError("[File][Set] [%s] already exists in store", fileName)
+		if _, err := os.Stat(filename); err == nil {
+			return errors.NewBlobAlreadyExistsError("[File][Set] [%s] already exists in store", filename)
 		}
 	}
 
+	tmpFilename := filename + ".tmp"
+
 	// write bytes to file
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err = os.WriteFile(fileName, value, 0644); err != nil {
-		return errors.NewStorageError("[File][Set] [%s] failed to write data to file", fileName, err)
+	if err = os.WriteFile(tmpFilename, value, 0644); err != nil {
+		return errors.NewStorageError("[File][Set] [%s] failed to write data to file", filename, err)
+	}
+
+	if err = os.Rename(tmpFilename, filename); err != nil {
+		return errors.NewStorageError("[File][Set] [%s] failed to rename file from tmp", filename, err)
 	}
 
 	return nil
 }
 
-func (s *File) constructFileNameWithTTL(hash []byte, opts []options.FileOption) (string, error) {
+func (s *File) constructFilenameWithTTL(hash []byte, opts []options.FileOption) (string, error) {
 	merged := options.MergeOptions(s.options, opts)
 
 	fileName, err := merged.ConstructFilename(s.path, hash)
@@ -330,7 +336,7 @@ func (s *File) constructFileNameWithTTL(hash []byte, opts []options.FileOption) 
 }
 
 func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts ...options.FileOption) error {
-	fileName, err := s.constructFileNameWithTTL(key, opts)
+	fileName, err := s.constructFilenameWithTTL(key, opts)
 	if err != nil {
 		return errors.NewStorageError("[File] failed to get file name", err)
 	}
@@ -350,6 +356,7 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 
 	// write bytes to file
 	ttl := time.Now().Add(newTTL).UTC()
+
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
 	if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
 		return errors.NewStorageError("[File] [%s] failed to write ttl to file", fileName, err)

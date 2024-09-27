@@ -10,13 +10,7 @@ import (
 	"github.com/ordishs/go-utils"
 )
 
-type LocalTTL struct {
-	logger    ulogger.Logger
-	ttlStore  BlobStore
-	blobStore BlobStore
-}
-
-type BlobStore interface {
+type blobStore interface {
 	Health(ctx context.Context) (int, string, error)
 	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
 	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
@@ -29,11 +23,21 @@ type BlobStore interface {
 	Close(ctx context.Context) error
 }
 
-func New(logger ulogger.Logger, ttlStore, blobStore BlobStore) (*LocalTTL, error) {
+type LocalTTL struct {
+	logger    ulogger.Logger
+	ttlStore  blobStore
+	blobStore blobStore
+	options   *options.Options
+}
+
+func New(logger ulogger.Logger, ttlStore, blobStore blobStore, opts ...options.StoreOption) (*LocalTTL, error) {
+	options := options.NewStoreOptions(opts...)
+
 	b := &LocalTTL{
 		logger:    logger,
 		ttlStore:  ttlStore,
 		blobStore: blobStore,
+		options:   options,
 	}
 
 	return b, nil
@@ -53,9 +57,9 @@ func (l *LocalTTL) Close(_ context.Context) error {
 }
 
 func (l *LocalTTL) SetFromReader(ctx context.Context, key []byte, reader io.ReadCloser, opts ...options.FileOption) error {
-	setOptions := options.MergeOptions(nil, opts)
+	merged := options.MergeOptions(l.options, opts)
 
-	if setOptions.TTL != nil && *setOptions.TTL > 0 {
+	if merged.TTL != nil && *merged.TTL > 0 {
 		// set the value in the ttl store
 		return l.ttlStore.SetFromReader(ctx, key, reader, opts...)
 	}
@@ -66,9 +70,9 @@ func (l *LocalTTL) SetFromReader(ctx context.Context, key []byte, reader io.Read
 
 func (l *LocalTTL) Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error {
 	// l.logger.Debugf("[localTTL] Set called %v\n%s\n%s\n", utils.ReverseAndHexEncodeSlice(key), stack.Stack(), ctx.Value("stack"))
-	setOptions := options.MergeOptions(nil, opts)
+	merged := options.MergeOptions(l.options, opts)
 
-	if setOptions.TTL != nil && *setOptions.TTL > 0 {
+	if merged.TTL != nil && *merged.TTL > 0 {
 		// set the value in the ttl store
 		return l.ttlStore.Set(ctx, key, value, opts...)
 	}
@@ -87,6 +91,7 @@ func (l *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duratio
 				// already there
 				return nil
 			}
+
 			return err
 		}
 
