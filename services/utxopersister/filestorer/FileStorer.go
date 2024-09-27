@@ -29,6 +29,7 @@ type FileStorer struct {
 	bufferedWriter *bufio.Writer
 	hasher         hash.Hash
 	wg             sync.WaitGroup // Add a WaitGroup to manage the goroutine
+	mu             sync.Mutex
 }
 
 func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store, key []byte, extension string) *FileStorer {
@@ -82,10 +83,16 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store,
 }
 
 func (f *FileStorer) Write(b []byte) (n int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	return f.bufferedWriter.Write(b)
 }
 
 func (f *FileStorer) Close(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	if err := f.bufferedWriter.Flush(); err != nil {
 		return errors.NewStorageError("Error flushing writer", err)
 	}
