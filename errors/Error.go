@@ -3,14 +3,14 @@ package errors
 import (
 	"errors"
 	"fmt"
-	reflect "reflect"
-	"strings"
-
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/protoadapt"
 	"google.golang.org/protobuf/types/known/anypb"
+	reflect "reflect"
+	"strings"
+
+	"google.golang.org/grpc/codes"
 )
 
 type ErrData interface {
@@ -179,6 +179,7 @@ func WrapGRPC(err error) error {
 
 	// If the error is an "*Error", get all wrapped errors, and wrap with gRPC details
 	if castedErr, ok := err.(*Error); ok {
+		fmt.Println("wrapping, casted err: ", castedErr)
 		// check if the error is already wrapped, don't wrap it with gRPC details
 		if castedErr.WrappedErr != nil {
 			if _, ok := status.FromError(castedErr.WrappedErr); ok {
@@ -193,15 +194,18 @@ func WrapGRPC(err error) error {
 			Message: castedErr.Message,
 		})
 		wrappedErrDetails = append(wrappedErrDetails, details)
-
+		fmt.Println("initial wrappedErrDetails: ", wrappedErrDetails)
 		if castedErr.WrappedErr != nil {
 			currWrappedErr := castedErr.WrappedErr
 			for currWrappedErr != nil {
 				if err, ok := currWrappedErr.(*Error); ok {
+
 					details, _ := anypb.New(&TError{
 						Code:    err.Code,
 						Message: err.Message,
 					})
+
+					fmt.Println("adding wrapped error details: ", details)
 					wrappedErrDetails = append(wrappedErrDetails, details)
 					currWrappedErr = err.WrappedErr
 				} else {
@@ -214,9 +218,9 @@ func WrapGRPC(err error) error {
 				}
 			}
 		}
-		// for i := 0; i < len(wrappedErrDetails); i++ {
-		//	fmt.Println("Details for the error is: ", wrappedErrDetails[i])
-		// }
+		for i := 0; i < len(wrappedErrDetails); i++ {
+			fmt.Println("Details for the error is: ", wrappedErrDetails[i])
+		}
 
 		st := status.New(ErrorCodeToGRPCCode(castedErr.Code), castedErr.Message)
 		st, detailsErr := st.WithDetails(wrappedErrDetails...)
@@ -268,6 +272,7 @@ func UnwrapGRPC(err error) *Error {
 	}
 
 	if castedErr, ok := err.(*Error); ok {
+		fmt.Println("unwrapping, casted err: ", castedErr)
 		st, ok := status.FromError(castedErr.WrappedErr)
 		if !ok {
 			return castedErr // Not a gRPC status error
@@ -275,7 +280,7 @@ func UnwrapGRPC(err error) *Error {
 
 		var prevErr, currErr *Error
 		// var toBeWrappedErr *Error
-
+		fmt.Println("\n\nDetails for the error is: ", st.Details(), "\n\nhere.")
 		for i := len(st.Details()) - 1; i >= 0; i-- {
 			// Cast the protoadapt.MessageV1 to *anypb.Any, which is what we need to unmarshal
 			detail := st.Details()[i]
@@ -288,7 +293,9 @@ func UnwrapGRPC(err error) *Error {
 
 			var customDetails TError
 			if err := anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
+				fmt.Println("current detail: ", &customDetails)
 				currErr = New(customDetails.Code, customDetails.Message)
+				fmt.Println("current error: ", currErr)
 
 				// if we moved up higher in the hierarchy
 				if prevErr != nil {
@@ -299,6 +306,7 @@ func UnwrapGRPC(err error) *Error {
 			}
 		}
 
+		fmt.Println("returning currErr: ", currErr)
 		return currErr
 	}
 	// If the error is not an "*Error", but "error", unwrap details
