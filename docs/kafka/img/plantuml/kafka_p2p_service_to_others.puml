@@ -1,0 +1,10 @@
+@startuml
+participant Validator as V
+participant P2P
+participant "Block Validation" as BV
+participant "Subtree Validation" as SV
+
+V -> P2P: Rejected Transaction \n(kafka_rejectedTxConfig)
+P2P -> BV: New Block \n(kafka_blocksConfig)
+P2P -> SV: New Subtree \n(kafka_subtreesConfig)
+@enduml

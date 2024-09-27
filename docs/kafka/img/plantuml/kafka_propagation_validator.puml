@@ -1,0 +1,3 @@
+@startuml
+Propagation --> Validator: Tx Notification\n(kafka_validatortxsConfig)
+@enduml
