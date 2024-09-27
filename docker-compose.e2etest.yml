@@ -83,7 +83,7 @@ services:
       - ubsv-network
     command: --config-file /etc/aerospike.conf
     ports:
-      - "13101:3000"
+      - "13100:13100"
     volumes:
       - ./deploy/dev/aerospike/aerospike-tc-1.conf:/etc/aerospike.conf
       - ./data/test/aerospike-1/data:/opt/aerospike/data
@@ -96,7 +96,7 @@ services:
       - ubsv-network
     command: --config-file /etc/aerospike.conf
     ports:
-      - "13201:3000"
+      - "13200:13200"
     volumes:
       - ./deploy/dev/aerospike/aerospike-tc-2.conf:/etc/aerospike.conf
       - ./data/test/aerospike-2/data:/opt/aerospike/data
@@ -109,7 +109,7 @@ services:
       - ubsv-network
     command: --config-file /etc/aerospike.conf
     ports:
-      - "13301:3000"
+      - "13300:13300"
     volumes:
       - ./deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
       - ./data/test/aerospike-3/data:/opt/aerospike/data
@@ -124,11 +124,11 @@ services:
       - kafka-shared
     entrypoint: ["/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1"]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1.test}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1.tc1}
       logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-1:13100/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300&externalStore=file://./data/ubsv1/external
       blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
       coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
+      utxostore: aerospike://aerospike-1:13100/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&externalStore=file://./data/ubsv1/external
       JAEGER_SERVICE_NAME: ubsv-1
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
@@ -138,10 +138,11 @@ services:
       - "11905:9905"
       - "11292:9292"
     volumes:
+      - ./settings_local.conf:/app/settings_local.conf
       - ./data/test/ubsv1/txstore:/app/data/txstore
       - ./data/test/ubsv1/subtreestore:/app/data/subtreestore
       - ./data/test/ubsv1/blockstore:/app/data/blockstore
-      - ./data/test/ubsv1/external:/app/data/ubsv2/external
+      - ./data/test/ubsv1/external:/app/data/ubsv1/external
 
   ubsv-2:
     <<: *ubsv-base
@@ -153,11 +154,11 @@ services:
       - kafka-shared
     entrypoint: ["/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ci.ubsv2.test}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ci.ubsv2.tc1}
       logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-2:13200/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300&externalStore=file://./data/ubsv2/external
       blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
       coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
+      utxostore: aerospike://aerospike-2:13200/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&externalStore=file://./data/ubsv2/external
       JAEGER_SERVICE_NAME: ubsv-2
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
@@ -167,6 +168,7 @@ services:
       - "13905:9905"
       - "13292:9292"
     volumes:
+      - ./settings_local.conf:/app/settings_local.conf
       - ./data/test/ubsv2/txstore:/app/data/txstore
       - ./data/test/ubsv2/subtreestore:/app/data/subtreestore
       - ./data/test/ubsv2/blockstore:/app/data/blockstore
@@ -182,11 +184,11 @@ services:
       - kafka-shared
     entrypoint: ["/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ci.ubsv3.test}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ci.ubsv3.tc1}
       logLevel: "DEBUG"
-      utxostore: aerospike://aerospike-3:13300/test?WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&expiration=300&externalStore=file://./data/ubsv3/external
       blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
       coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
+      utxostore: aerospike://aerospike-3:13300/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&externalStore=file://./data/ubsv3/external
       JAEGER_SERVICE_NAME: ubsv-3
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
@@ -196,6 +198,7 @@ services:
       - "15905:9905"
       - "15292:9292"
     volumes:
+      - ./settings_local.conf:/app/settings_local.conf
       - ./data/test/ubsv3/txstore:/app/data/txstore
       - ./data/test/ubsv3/subtreestore:/app/data/subtreestore
       - ./data/test/ubsv3/blockstore:/app/data/blockstore
