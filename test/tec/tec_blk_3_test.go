@@ -3,7 +3,6 @@
 package test
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/test/setup"
@@ -34,7 +33,22 @@ func (suite *TECBlk3TestSuite) TearDownTest() {
 }
 
 func (suite *TECBlk3TestSuite) TestBlockAssemblyRecoverability() {
-	fmt.Println("Setting up Teranode with invalid blockassembly_grpcAddress...")
+	t := suite.T()
+	blockchainHealth, err := suite.Framework.Nodes[1].BlockchainClient.Health(suite.Framework.Context)
+
+	t.Log("Setting up Teranode with invalid blockassembly_grpcAddress...")
+
+	if err != nil {
+		t.Errorf("Failed to start blockchain: %v", err)
+		return
+	}
+
+	if !blockchainHealth.Ok {
+		t.Errorf("Expected blockchainHealth to be false, but got true")
+		return
+	}
+
+	t.Log("Block Assembly Recoverability Test passed successfully...")
 }
 
 func TestTECBlk3TestSuite(t *testing.T) {
