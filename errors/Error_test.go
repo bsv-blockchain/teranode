@@ -1,8 +1,10 @@
 package errors
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors/grpctest/github.com/bitcoin-sv/ubsv/errors/grpctest"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 
 // Test_NewCustomError tests the creation of custom errors.
 func Test_NewCustomError(t *testing.T) {
+
 	err := New(ERR_NOT_FOUND, "resource not found")
 	require.NotNil(t, err)
 	require.Equal(t, ERR_NOT_FOUND, err.Code)
@@ -535,4 +538,18 @@ func Test_UnwrapGRPCWithStandardError2(t *testing.T) {
 	// Check that the unwrapped error contains the correct message and code
 	require.Equal(t, ERR_ERROR, unwrappedResourceExhausted.Code)
 	require.Equal(t, "rpc error: code = ResourceExhausted desc = Resource exhausted", unwrappedResourceExhausted.Message)
+}
+
+type server struct {
+	grpctest.UnimplementedTestServiceServer
+}
+
+func (s *server) TestMethod(ctx context.Context, req *grpctest.TestRequest) (*grpctest.TestResponse, error) {
+	// Simulate an error
+	baseErr := fmt.Errorf("database connection failed")
+	level1Err := NewTxInvalidError("transaction invalid", baseErr)
+	level2Err := NewBlockInvalidError("block invalid", level1Err)
+	level3Err := NewServiceError("service error", level2Err)
+	// Wrap the error using WrapGRPC
+	return nil, WrapGRPC(level3Err)
 }
