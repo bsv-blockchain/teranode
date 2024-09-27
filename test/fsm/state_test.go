@@ -2,8 +2,8 @@
 
 // How to run this test:
 // $ unzip data.zip
-// $ cd test/state/
-// $ `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run TestNodeCatchUpState`
+// $ cd test/fsm/
+// $ `SETTINGS_CONTEXT=docker.ci.tc1.run go test -run FsmTestSuite`
 
 package test
 
@@ -23,7 +23,6 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type FsmTestSuite struct {
@@ -207,7 +206,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	blockAssemblyNode0 := framework.Nodes[0].BlockassemblyClient
 
 	// Set CatchUpTransactions State
-	_, err := blockchainNode0.CatchUpTransactions(framework.Context, &emptypb.Empty{})
+	err := blockchainNode0.CatchUpTransactions(framework.Context)
 	if err != nil {
 		t.Errorf("Failed to set state: %v", err)
 	}
@@ -259,7 +258,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	fmt.Printf("Metrics: %v\n", metricsAfter)
 	assert.LessOrEqual(t, metricsAfter, float64(10), "Tx count mismatch")
 
-	var o []options.Options
+	var o []options.FileOption
 	o = append(o, options.WithFileExtension("block"))
 	bestBlock, _, _ := blockchainNode0.GetBestBlockHeader(framework.Context)
 	blockStore := framework.Nodes[0].Blockstore
@@ -268,7 +267,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 		t.Errorf("error getting block reader: %v", err)
 	}
 	if err == nil {
-		if bl, err := helper.ReadFile(framework.Context, "block", framework.Logger, r, hashesNode0[5], framework.Nodes[0].BlockstoreUrl); err != nil {
+		if bl, err := helper.ReadFile(framework.Context, "block", framework.Logger, r, hashesNode0[5], framework.Nodes[0].BlockstoreURL); err != nil {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			fmt.Printf("Block at height (%d): was tested for the test Tx\n", *bestBlock.Hash())
@@ -277,8 +276,8 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	}
 
 	bestBlock, _, _ = blockchainNode0.GetBestBlockHeader(framework.Context)
-	// Set Mining State
-	_, err = blockchainNode0.Mine(framework.Context, &emptypb.Empty{})
+	// Set Running State
+	err = blockchainNode0.Run(framework.Context)
 	if err != nil {
 
 		t.Errorf("Failed to set state: %v", err)
@@ -288,7 +287,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	fsmState = blockchainNode0.GetFSMCurrentStateForE2ETestMode()
 	assert.Equal(t, fsmState, blockchain_api.FSMStateType(2), "FSM state is not equal to 2")
 
-	var newHeight int
+	var newHeight uint32
 
 	var bl bool
 	height, _ := helper.GetBlockHeight(url)
@@ -304,7 +303,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 				t.Errorf("error getting block reader: %v", err)
 			}
 			if err == nil {
-				if bl, err = helper.ReadFile(framework.Context, "block", framework.Logger, r, hashesNode0[5], framework.Nodes[0].BlockstoreUrl); err != nil {
+				if bl, err = helper.ReadFile(framework.Context, "block", framework.Logger, r, hashesNode0[5], framework.Nodes[0].BlockstoreURL); err != nil {
 					t.Errorf("error reading block: %v", err)
 				} else {
 					fmt.Printf("Block at height (%d): was tested for the test Tx\n", *bestBlock.Hash())
@@ -328,7 +327,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 
 	// Set CatchUpTransactions State
-	_, err := blockchainNode0.CatchUpTransactions(framework.Context, &emptypb.Empty{})
+	err := blockchainNode0.CatchUpTransactions(framework.Context)
 	if err != nil {
 		t.Errorf("Failed to set state: %v", err)
 	}
@@ -359,13 +358,13 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
 	fmt.Printf("Metrics: %v\n", metricsAfter)
 	assert.LessOrEqual(t, metricsAfter, float64(10), "Tx count mismatch")
 
-	var o []options.Options
+	var o []options.FileOption
 	var r io.ReadCloser
 	o = append(o, options.WithFileExtension("block"))
 	bestBlock, _, _ := blockchainNode0.GetBestBlockHeader(framework.Context)
 	blockStore := framework.Nodes[0].Blockstore
 
-	var newHeight int
+	var newHeight uint32
 	var bl bool
 	height, _ := helper.GetBlockHeight(url)
 	fmt.Println("Height before: ", height)
@@ -380,7 +379,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
 				t.Errorf("error getting block reader: %v", err)
 			}
 			if err == nil {
-				if bl, err = helper.ReadFile(framework.Context, "block", framework.Logger, r, hashesNode1[5], framework.Nodes[0].BlockstoreUrl); err != nil {
+				if bl, err = helper.ReadFile(framework.Context, "block", framework.Logger, r, hashesNode1[5], framework.Nodes[0].BlockstoreURL); err != nil {
 					t.Errorf("error reading block: %v", err)
 				} else {
 					fmt.Printf("Block at height (%d): was tested for the test Tx\n", *bestBlock.Hash())
@@ -396,7 +395,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
 	assert.Equal(t, true, bl, "Test Tx not found in block")
 
 	// Set Mining State
-	_, err = blockchainNode0.Mine(framework.Context, &emptypb.Empty{})
+	err = blockchainNode0.Run(framework.Context)
 	if err != nil {
 		t.Errorf("Failed to set state: %v", err)
 	}
@@ -417,7 +416,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0_and_Node1() {
 				t.Errorf("error getting block reader: %v", err)
 			}
 			if err == nil {
-				if bl, err = helper.ReadFile(framework.Context, "block", framework.Logger, r, hashesNode0[5], framework.Nodes[0].BlockstoreUrl); err != nil {
+				if bl, err = helper.ReadFile(framework.Context, "block", framework.Logger, r, hashesNode0[5], framework.Nodes[0].BlockstoreURL); err != nil {
 					t.Errorf("error reading block: %v", err)
 				} else {
 					fmt.Printf("Block at height (%d): was tested for the test Tx\n", *bestBlock.Hash())
