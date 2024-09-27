@@ -133,20 +133,9 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 // the exported version uses the current best chain as the previous block node
 // while this function accepts any block node.
 func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock) (*model.NBit, error) {
-	bytesLittleEndian := make([]byte, 4)
-	binary.LittleEndian.PutUint32(bytesLittleEndian, d.chainParams.PowLimitBits)
-	powLimitBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
-
-	// firstSuitableBits, _ := model.NewNBitFromSlice(suitableFirstBlock.NBits)
-	lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
-	// Genesis block.
-	// if lastNode == nil {
-	// 	return powLimitBits, nil
-	// }
-	now := time.Now().Unix()
-
 	// If regest or simnet we don't adjust the difficulty
 	if d.chainParams.NoDifficultyAdjustment {
+		lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
 		d.logger.Debugf("no difficulty adjustment - returning %v", lastSuitableBits)
 		return lastSuitableBits, nil
 	}
@@ -160,8 +149,14 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 		reductionTime := int64(d.chainParams.MinDiffReductionTime /
 			time.Second)
 		allowMinTime := int64(suitableLastBlock.Time) + reductionTime
+		now := time.Now().Unix()
 		if now > allowMinTime {
 			d.logger.Debugf("more than %d seconds have elapsed without mining a block, returning powLimitBits", d.chainParams.MinDiffReductionTime)
+
+			bytesLittleEndian := make([]byte, 4)
+			binary.LittleEndian.PutUint32(bytesLittleEndian, d.chainParams.PowLimitBits)
+			powLimitBits, _ := model.NewNBitFromSlice(bytesLittleEndian)
+
 			return powLimitBits, nil
 		}
 	}
@@ -189,7 +184,7 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	work := new(big.Int).Sub(lastChainwork, firstChainwork)
 	d.logger.Debugf("work: %s", work.String())
 	// In order to avoid difficulty cliffs, we bound the amplitude of the
-	// adjustement we are going to do.
+	// adjustment we are going to do.
 	duration := int64(suitableLastBlock.Time - suitableFirstBlock.Time)
 	if duration > 288*int64(d.chainParams.TargetTimePerBlock.Seconds()) {
 		duration = 288 * int64(d.chainParams.TargetTimePerBlock.Seconds())
