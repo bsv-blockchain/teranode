@@ -223,6 +223,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					bItem.txHash[:],
 					bItem.tx.ExtendedBytes(),
 					options.WithFileExtension("tx"),
+					options.WithAllowOverwrite(true),
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
 					// NOOP for this record
