@@ -42,9 +42,9 @@ type Transaction struct {
 }
 
 var allowedHosts = []string{
-	"localhost:19090",
-	"localhost:29090",
-	"localhost:39090",
+	"localhost:16090",
+	"localhost:16091",
+	"localhost:16092",
 }
 
 // Function to call the RPC endpoint with any method and parameters, returning the response and error
