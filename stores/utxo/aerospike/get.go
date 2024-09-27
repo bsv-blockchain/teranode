@@ -547,7 +547,7 @@ func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, e
 			options.WithFileExtension(ext),
 		)
 		if err != nil {
-			return nil, errors.NewStorageError("could not get tx from external store", err)
+			return nil, errors.NewStorageError("[getTxFromExternalStore][%s] could not get tx from external store", previousTxHash.String(), err)
 		}
 	}
 
@@ -555,14 +555,14 @@ func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, e
 
 	if ext == "tx" {
 		if _, err = tx.ReadFrom(reader); err != nil {
-			return nil, errors.NewTxInvalidError("could not read tx from reader: %w", err)
+			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read tx from reader: %w", previousTxHash.String(), err)
 		}
 	} else {
 		var uw *utxopersister.UTXOWrapper
 
 		uw, err := utxopersister.NewUTXOWrapperFromReader(context.Background(), reader)
 		if err != nil {
-			return nil, errors.NewTxInvalidError("could not read outputs from reader: %w", err)
+			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read outputs from reader: %w", previousTxHash.String(), err)
 		}
 
 		utxos := utxopersister.PadUTXOsWithNil(uw.UTXOs)
