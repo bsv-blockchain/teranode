@@ -95,26 +95,19 @@ func (s *Server) Start(ctx context.Context) (err error) {
 		return errors.NewServiceError("error creating p2p server", err)
 	}
 
-	// Create a new (web) server
-	s.webServer = webserver.NewServer(s.appConfig, s.p2pServer)
-
 	// Start the p2p server
 	if err = s.p2pServer.Start(ctx); err != nil {
 		return errors.NewServiceError("error starting p2p server", err)
 	}
 
-	// Serve the web server and then wait endlessly
-	s.webServer.Serve()
+	// wait for a shutdown signal
+	<-ctx.Done()
 
 	return nil
 }
 
 func (s *Server) Stop(ctx context.Context) error {
 	s.appConfig.CloseAll(ctx)
-
-	if err := s.webServer.Shutdown(ctx); err != nil {
-		s.logger.Errorf("error shutting down webserver: %s", err)
-	}
 
 	// Shutdown the p2p server
 	if err := s.p2pServer.Stop(ctx); err != nil {
@@ -181,12 +174,6 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 		Services: config.Services{
 			Log:        NewLogger(s.logger.Duplicate(ulogger.WithSkipFrame(1))),
 			HTTPClient: http.DefaultClient,
-		},
-		WebServer: config.WebServerConfig{
-			IdleTimeout:  60 * time.Second,
-			Port:         "3000",
-			ReadTimeout:  15 * time.Second,
-			WriteTimeout: 15 * time.Second,
 		},
 		RPCConnections: []config.RPCConfig{},
 		GenesisKeys:    genesisKeys,
