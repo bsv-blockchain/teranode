@@ -119,6 +119,8 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 		deferFn(err)
 	}()
 
+	// FROM HERE IT IS RETURNED WITH ERROR: SERVICE_ERROR (error code: 49), Message: failed block validation BlockFound
+
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
 	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height); err != nil {

@@ -14,7 +14,7 @@ import (
 	blob "github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/sql"
+	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/aerospike"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	distributor "github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/docker/go-connections/nat"
@@ -28,6 +28,7 @@ type BitcoinTestFramework struct {
 	Compose          tc.ComposeStack
 	Nodes            []BitcoinNode
 	Logger           ulogger.Logger
+	Cancel           context.CancelFunc
 }
 
 type BitcoinNode struct {
@@ -49,18 +50,23 @@ type BitcoinNode struct {
 func NewBitcoinTestFramework(composeFilePaths []string) *BitcoinTestFramework {
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
+	ctx, cancel := context.WithCancel(context.Background())
 
 	return &BitcoinTestFramework{
 		ComposeFilePaths: composeFilePaths,
-		Context:          context.Background(),
+		Context:          ctx,
 		Logger:           logger,
+		Cancel:           cancel,
 	}
 }
 
 func (b *BitcoinTestFramework) SetupNodes(m map[string]string) error {
 	var testRunMode, _ = gocore.Config().Get("test_run_mode", "ci")
 	if testRunMode == "ci" {
-		compose, err := tc.NewDockerCompose(b.ComposeFilePaths...)
+		identifier := tc.StackIdentifier("e2e")
+
+		// compose, err := tc.NewDockerCompose(b.ComposeFilePaths...)
+		compose, err := tc.NewDockerComposeWith(tc.WithStackFiles(b.ComposeFilePaths...), identifier)
 
 		if err != nil {
 			return err
@@ -226,17 +232,19 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 
 		b.Nodes[i].SubtreeStore = subtreeStore
 
-		// utxoStoreURL, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SettingsContext))
-		// if err != nil {
-		// 	return errors.NewConfigurationError("error creating utxostore %w", err)
-		// }
+		logger.Infof("Settings_context: ", node.SettingsContext)
 
-		// logger.Infof("utxoStoreUrl: %s", utxoStoreURL.String())
-		// b.Nodes[i].UtxoStore, err = utxostore.New(b.Context, logger, utxoStoreURL)
+		utxoStoreURL, err, _ := gocore.Config().GetURL(fmt.Sprintf("utxostore.%s.run", node.SettingsContext))
+		if err != nil {
+			return errors.NewConfigurationError("error creating utxostore %w", err)
+		}
 
-		// if err != nil {
-		// 	return errors.NewConfigurationError("error creating utxostore %w", err)
-		// }
+		logger.Infof("utxoStoreUrl: %s", utxoStoreURL.String())
+		b.Nodes[i].UtxoStore, err = utxostore.New(logger, utxoStoreURL)
+
+		if err != nil {
+			return errors.NewConfigurationError("error creating utxostore %w", err)
+		}
 
 		// rpcURL, ok := gocore.Config().Get(fmt.Sprintf("rpc_listener_url.%s", node.SettingsContext))
 		// if !ok {
@@ -263,8 +271,13 @@ func (b *BitcoinTestFramework) StopNodes() error {
 }
 
 func (b *BitcoinTestFramework) StopNodesWithRmVolume() error {
+	defer func() {
+		if r := recover(); r != nil {
+			b.Logger.Errorf("Recovered from panic: %v", r)
+		}
+	}()
+
 	if b.Compose != nil {
-		// Stop the Docker Compose services
 		if err := b.Compose.Down(b.Context, tc.RemoveVolumes(true)); err != nil {
 			return err
 		}

@@ -61,6 +61,7 @@ type BlockValidation struct {
 	revalidateBlockChan                chan revalidateBlockData
 	stats                              *gocore.Stat
 	excessiveBlockSize                 int
+	lastUsedBaseURL                    string
 }
 
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
@@ -98,6 +99,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 		revalidateBlockChan:                make(chan revalidateBlockData, 2),
 		stats:                              gocore.NewStat("blockvalidation"),
 		excessiveBlockSize:                 excessiveblocksize,
+		lastUsedBaseURL:                    "",
 	}
 
 	go func() {
@@ -441,7 +443,10 @@ func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.H
 	}
 
 	// make sure all the subtrees are loaded in the block
-	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore)
+	fallbackGetFunc := func(subtreeHash chainhash.Hash) error {
+		return u.subtreeValidationClient.CheckSubtree(ctx, subtreeHash, u.lastUsedBaseURL, block.Height, block.Hash())
+	}
+	_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, fallbackGetFunc)
 	if err != nil {
 		return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
 	}
@@ -556,6 +561,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		tracing.WithLogMessage(u.logger, "[ValidateBlock][%s] validating block from %s", block.Hash().String(), baseURL),
 	)
 	defer deferFn()
+
+	u.lastUsedBaseURL = baseURL
 
 	// first check if the block already exists in the blockchain
 	blockExists, err := u.GetBlockExists(ctx, block.Header.Hash())
@@ -923,6 +930,8 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	)
 	defer deferFn()
 
+	u.lastUsedBaseURL = blockData.baseURL
+
 	// make a copy of the recent bloom filters, so we don't get race conditions if the bloom filters are updated
 	u.recentBlocksBloomFiltersMu.Lock()
 	bloomFilters := make([]*model.BlockBloomFilter, 0)
@@ -1077,6 +1086,8 @@ func (u *BlockValidation) updateSubtreesTTL(ctx context.Context, block *model.Bl
 func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "ValidateBlockSubtrees")
 	defer deferFn()
+
+	u.lastUsedBaseURL = baseURL
 
 	validateBlockSubtreesConcurrency, _ := gocore.Config().GetInt("blockvalidation_validateBlockSubtreesConcurrency", util.Max(4, runtime.NumCPU()/2))
 

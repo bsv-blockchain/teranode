@@ -20,7 +20,7 @@ type BitcoinTestSuite struct {
 }
 
 func (suite *BitcoinTestSuite) DefaultComposeFiles() []string {
-	return []string{"../../docker-compose.e2etest.override.yml"}
+	return []string{"../../docker-compose.e2etest.yml"}
 }
 
 func (suite *BitcoinTestSuite) DefaultSettingsMap() map[string]string {
@@ -44,8 +44,13 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 	suite.SettingsMap = settingsMap
 
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
-	err = removeDataDirectory("../../data/test", isGitHubActions)
 
+	err = removeDataDirectory("../../data/test", isGitHubActions)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	err = cleanUpE2EContainers(isGitHubActions)
 	if err != nil {
 		suite.T().Fatal(err)
 	}
@@ -54,20 +59,21 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 
 	suite.Framework, err = helper.SetupBitcoinTestFramework(suite.ComposeFiles, suite.SettingsMap)
 	if err != nil {
+		suite.T().Cleanup(suite.Framework.Cancel)
 		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
 	}
 
-	err = helper.WaitForBlockHeight(NodeURL1, 300, 180)
+	err = helper.WaitForBlockHeight(NodeURL1, 200, 120)
 	if err != nil {
 		suite.T().Fatal(err)
 	}
 
-	err = helper.WaitForBlockHeight(NodeURL2, 300, 120)
+	err = helper.WaitForBlockHeight(NodeURL2, 200, 120)
 	if err != nil {
 		suite.T().Fatal(err)
 	}
 
-	err = helper.WaitForBlockHeight(NodeURL3, 300, 120)
+	err = helper.WaitForBlockHeight(NodeURL3, 200, 120)
 
 	if err != nil {
 		suite.T().Fatal(err)
@@ -149,17 +155,13 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomSettings(settingsMap map[strin
 	suite.SetupTestWithCustomComposeAndSettings(settingsMap, suite.DefaultComposeFiles())
 }
 
-func (suite *BitcoinTestSuite) SetupTestWithCustomSettingsDoNotReset(settingsMap map[string]string) {
-	suite.SetupTestWithCustomComposeAndSettingsDoNotReset(settingsMap, suite.DefaultComposeFiles())
-}
-
 func (suite *BitcoinTestSuite) SetupTest() {
 	suite.SetupTestWithCustomComposeAndSettings(suite.DefaultSettingsMap(), suite.DefaultComposeFiles())
 }
 
 func (suite *BitcoinTestSuite) TearDownTest() {
 	if err := helper.TearDownBitcoinTestFramework(suite.Framework); err != nil {
-		suite.T().Fatal(err)
+		suite.T().Cleanup(suite.Framework.Cancel)
 	}
 
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
@@ -168,6 +170,8 @@ func (suite *BitcoinTestSuite) TearDownTest() {
 	if err != nil {
 		suite.T().Fatal(err)
 	}
+
+	suite.T().Cleanup(suite.Framework.Cancel)
 }
 
 func TestBitcoinTestSuite(t *testing.T) {
@@ -191,6 +195,29 @@ func removeDataDirectory(dir string, useSudo bool) error {
 	cmd.Stderr = os.Stderr
 
 	err := cmd.Run()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func cleanUpE2EContainers(isGitHubActions bool) (err error) {
+	if isGitHubActions {
+		return nil
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = nil
+		}
+	}()
+
+	cmd := exec.Command("bash", "-c", "docker ps -a -q --filter label=com.docker.compose.project=e2e | xargs docker rm -f")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	err = cmd.Run()
 	if err != nil {
 		return err
 	}

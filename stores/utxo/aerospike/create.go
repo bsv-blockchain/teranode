@@ -223,6 +223,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					bItem.txHash[:],
 					bItem.tx.ExtendedBytes(),
 					options.WithFileExtension("tx"),
+					options.WithAllowOverwrite(true),
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
 					// NOOP for this record
@@ -463,14 +464,11 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 		bItem.txHash[:],
 		bItem.tx.ExtendedBytes(),
 		options.WithFileExtension("tx"),
+		options.WithAllowOverwrite(true),
 	); err != nil {
-		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
-		} else {
-			utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
 
-			return
-		}
+		return
 	}
 
 	// Get a new write policy which will allow CREATE or UPDATE
@@ -545,14 +543,11 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 		bItem.txHash[:],
 		wrapper.Bytes(),
 		options.WithFileExtension("outputs"),
+		options.WithAllowOverwrite(true),
 	); err != nil {
-		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("error writing output to external store [%s]", bItem.txHash.String(), err))
-		} else {
-			utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]", bItem.txHash.String(), err))
+		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]", bItem.txHash.String(), err))
 
-			return
-		}
+		return
 	}
 
 	// Get a new write policy which will allow CREATE or UPDATE

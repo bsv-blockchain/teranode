@@ -1,0 +1,6 @@
+@startuml
+participant Blockchain as BC
+participant Blockpersister as BP
+
+BC -> BP: New Block (kafka_blocksFinalConfig)
+@enduml

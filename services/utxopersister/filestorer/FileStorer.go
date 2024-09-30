@@ -14,8 +14,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/bytesize"
 	"github.com/libsv/go-bt"
 	"github.com/ordishs/go-utils"
+	"github.com/ordishs/gocore"
 )
 
 type FileStorer struct {
@@ -27,6 +29,7 @@ type FileStorer struct {
 	bufferedWriter *bufio.Writer
 	hasher         hash.Hash
 	wg             sync.WaitGroup // Add a WaitGroup to manage the goroutine
+	mu             sync.Mutex
 }
 
 func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store, key []byte, extension string) *FileStorer {
@@ -34,10 +37,19 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store,
 
 	reader, writer := io.Pipe()
 
-	bufferSize := 1 * 1024 * 1024 * 1024 // 1GB
+	utxopersisterBufferSize, _ := gocore.Config().Get("utxoPersister_buffer_size", "4KB")
 
-	bufferedReader := io.NopCloser(bufio.NewReaderSize(reader, bufferSize))
-	bufferedWriter := bufio.NewWriterSize(io.MultiWriter(writer, hasher), bufferSize)
+	bufferSize, err := bytesize.Parse(utxopersisterBufferSize)
+	if err != nil {
+		logger.Errorf("error parsing utxoPersister_buffer_size %q: %v§", utxopersisterBufferSize, err)
+
+		bufferSize = 4096
+	}
+
+	logger.Infof("Using %s buffer for file storer", bufferSize)
+
+	bufferedReader := io.NopCloser(bufio.NewReaderSize(reader, bufferSize.Int()))
+	bufferedWriter := bufio.NewWriterSize(io.MultiWriter(writer, hasher), bufferSize.Int())
 
 	fs := &FileStorer{
 		logger:         logger,
@@ -71,10 +83,16 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, store blob.Store,
 }
 
 func (f *FileStorer) Write(b []byte) (n int, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	return f.bufferedWriter.Write(b)
 }
 
 func (f *FileStorer) Close(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	if err := f.bufferedWriter.Flush(); err != nil {
 		return errors.NewStorageError("Error flushing writer", err)
 	}

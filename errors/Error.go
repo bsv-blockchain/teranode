@@ -160,7 +160,6 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	returnErr := &Error{
 		Code:    code,
 		Message: message,
-		//WrappedErr: wErr,
 	}
 	if wErr != nil {
 		returnErr.WrappedErr = wErr
@@ -188,20 +187,32 @@ func WrapGRPC(err error) error {
 
 		var wrappedErrDetails []protoadapt.MessageV1
 		// If the error is already an *Error, wrap it with gRPC details
-		details, _ := anypb.New(&TError{
+		details, pbError := anypb.New(&TError{
 			Code:    castedErr.Code,
 			Message: castedErr.Message,
 		})
-		wrappedErrDetails = append(wrappedErrDetails, details)
+		if pbError != nil {
+			err2 := &Error{
+				// TODO: add grpc construction error type
+				Code:       ERR_ERROR,
+				Message:    "error serializing TError to protobuf Any",
+				WrappedErr: err,
+			}
 
+			return err2
+		}
+
+		wrappedErrDetails = append(wrappedErrDetails, details)
 		if castedErr.WrappedErr != nil {
 			currWrappedErr := castedErr.WrappedErr
 			for currWrappedErr != nil {
 				if err, ok := currWrappedErr.(*Error); ok {
+
 					details, _ := anypb.New(&TError{
 						Code:    err.Code,
 						Message: err.Message,
 					})
+
 					wrappedErrDetails = append(wrappedErrDetails, details)
 					currWrappedErr = err.WrappedErr
 				} else {
@@ -222,20 +233,17 @@ func WrapGRPC(err error) error {
 		st, detailsErr := st.WithDetails(wrappedErrDetails...)
 
 		if detailsErr != nil {
-			// the following should not be used.
-			return &Error{
+			err2 := &Error{
 				// TODO: add grpc construction error type
 				Code:       ERR_ERROR,
 				Message:    "error adding details to the error's gRPC status",
 				WrappedErr: err,
 			}
+
+			return err2
 		}
 
-		return &Error{
-			Code:       castedErr.Code,
-			Message:    castedErr.Message,
-			WrappedErr: st.Err(),
-		}
+		return st.Err()
 	}
 
 	st := status.New(ErrorCodeToGRPCCode(ErrUnknown.Code), ErrUnknown.Message)
@@ -267,41 +275,6 @@ func UnwrapGRPC(err error) *Error {
 		return nil
 	}
 
-	if castedErr, ok := err.(*Error); ok {
-		st, ok := status.FromError(castedErr.WrappedErr)
-		if !ok {
-			return castedErr // Not a gRPC status error
-		}
-
-		var prevErr, currErr *Error
-		// var toBeWrappedErr *Error
-
-		for i := len(st.Details()) - 1; i >= 0; i-- {
-			// Cast the protoadapt.MessageV1 to *anypb.Any, which is what we need to unmarshal
-			detail := st.Details()[i]
-			detailAny, ok := detail.(*anypb.Any)
-
-			if !ok {
-				fmt.Println("This should not happen, detail is not of type anypb.Any")
-				continue // If the detail isn't of the expected type, skip it
-			}
-
-			var customDetails TError
-			if err := anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
-				currErr = New(customDetails.Code, customDetails.Message)
-
-				// if we moved up higher in the hierarchy
-				if prevErr != nil {
-					currErr.WrappedErr = prevErr
-				}
-
-				prevErr = currErr
-			}
-		}
-
-		return currErr
-	}
-	// If the error is not an "*Error", but "error", unwrap details
 	st, ok := status.FromError(err)
 	if !ok {
 		// return err // Not a gRPC status error
@@ -312,82 +285,40 @@ func UnwrapGRPC(err error) *Error {
 		}
 	}
 
-	return &Error{
-		Code:       ERR_ERROR,
-		Message:    err.Error(),
-		WrappedErr: st.Err(),
-	}
-}
-
-/*
-func WrapGRPC(err error) error {
-	if err == nil {
-		return nil
-	}
-
-	var uErr *Error
-	if errors.As(err, &uErr) {
-		er := &TError{
-			Code:    uErr.Code,
-			Message: uErr.Message,
+	if len(st.Details()) == 0 {
+		return &Error{
+			Code:    ERR_ERROR,
+			Message: err.Error(),
 		}
-		if uErr.WrappedErr != nil {
-			er.WrappedError = uErr.WrappedErr.Error()
+	}
+
+	var prevErr, currErr *Error
+
+	for i := len(st.Details()) - 1; i >= 0; i-- {
+		// Cast the protoadapt.MessageV1 to *anypb.Any, which is what we need to unmarshal
+		detail := st.Details()[i]
+		detailAny, ok := detail.(*anypb.Any)
+
+		if !ok {
+			// TODO: This should not happen, detail is not of type anypb.Any. What to do here?
+			continue // If the detail isn't of the expected type, skip it
 		}
 
-		details, _ := anypb.New(er)
+		var customDetails TError
+		if err := anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
+			currErr = New(customDetails.Code, customDetails.Message)
 
-		st := status.New(ErrorCodeToGRPCCode(uErr.Code), uErr.Message)
-
-		st, err := st.WithDetails(details)
-		if err != nil {
-			return status.New(codes.Internal, "error adding details to gRPC status").Err()
-		}
-
-		return st.Err()
-	}
-
-	return status.New(ErrorCodeToGRPCCode(ErrUnknown.Code), ErrUnknown.Message).Err()
-}
-
-func UnwrapGRPC(err error) error {
-	if err == nil {
-		return nil
-	}
-
-	st, ok := status.FromError(err)
-	if !ok {
-		return err // Not a gRPC status error
-	}
-
-	// Attempt to extract and return detailed UBSVError if present
-	for _, detail := range st.Details() {
-		var ubsvErr TError
-		if err := anypb.UnmarshalTo(detail.(*anypb.Any), &ubsvErr, proto.UnmarshalOptions{}); err == nil {
-			if ubsvErr.WrappedError != "" {
-				return New(ubsvErr.Code, ubsvErr.Message, fmt.Errorf(ubsvErr.WrappedError))
-			} else {
-				return New(ubsvErr.Code, ubsvErr.Message)
+			// if we moved up higher in the hierarchy
+			if prevErr != nil {
+				currErr.WrappedErr = prevErr
 			}
+
+			prevErr = currErr
 		}
 	}
 
-	// Fallback: Map common gRPC status codes to custom error codes
-	switch st.Code() {
-	case codes.NotFound:
-		return New(ERR_NOT_FOUND, st.Message())
-	case codes.InvalidArgument:
-		return New(ERR_INVALID_ARGUMENT, st.Message())
-	case codes.ResourceExhausted:
-		return New(ERR_THRESHOLD_EXCEEDED, st.Message())
-	case codes.Unknown:
-		return New(ErrUnknown.Code, st.Message())
-	default:
-		// For unhandled cases, return ErrUnknown with the original gRPC error message
-		return New(ErrUnknown.Code, st.Message())
-	}
+	return currErr
 }
-*/
 
 // ErrorCodeToGRPCCode maps your application-specific error codes to gRPC status codes.
 func ErrorCodeToGRPCCode(code ERR) codes.Code {
@@ -405,15 +336,18 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 
 func Join(errs ...error) error {
 	var messages []string
+
 	for _, err := range errs {
 		if err != nil {
 			messages = append(messages, err.Error())
 		}
 	}
+
 	if len(messages) == 0 {
 		return nil
 	}
-	return fmt.Errorf(strings.Join(messages, ", "))
+
+	return fmt.Errorf("%s", strings.Join(messages, ", "))
 }
 
 func Is(err, target error) bool {
@@ -422,8 +356,4 @@ func Is(err, target error) bool {
 
 func As(err error, target any) bool {
 	return errors.As(err, target)
-}
-
-func ToStandardError(err *Error) error {
-	return fmt.Errorf("%s", err.Error())
 }

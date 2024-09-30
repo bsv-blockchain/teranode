@@ -167,6 +167,143 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 
 }
 
+// func (suite *SanityTestSuite) TestDeleteParentTx() {
+// 	t := suite.T()
+// 	framework := suite.Framework
+// 	ctx := framework.Context
+
+// 	url := "http://localhost:10090"
+
+// 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+// 	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
+
+// 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
+// 		distributor.WithBackoffDuration(200*time.Millisecond),
+// 		distributor.WithRetryAttempts(3),
+// 		distributor.WithFailureTolerance(0),
+// 	)
+
+// 	coinbaseClient := framework.Nodes[0].CoinbaseClient
+// 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+// 	fmt.Printf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+
+// 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+// 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+// 	if err != nil {
+
+// 		t.Errorf("Failed to decode Coinbase private key: %v", err)
+// 	}
+
+// 	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+
+// 	privateKey, err := bec.NewPrivateKey(bec.S256())
+// 	if err != nil {
+// 		t.Errorf("Failed to generate private key: %v", err)
+// 	}
+
+// 	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+// 	if err != nil {
+// 		t.Errorf("Failed to create address: %v", err)
+// 	}
+
+// 	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+// 	if err != nil {
+// 		t.Errorf("Failed to request funds: %v", err)
+// 	}
+
+// 	t.Logf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
+
+// 	_, err = txDistributor.SendTransaction(ctx, tx)
+// 	if err != nil {
+// 		t.Errorf("Failed to send transaction: %v", err)
+// 	}
+
+// 	fmt.Printf("Transaction sent: %s %v\n", tx.TxIDChainHash(), len(tx.Outputs))
+// 	output := tx.Outputs[0]
+// 	utxo := &bt.UTXO{
+// 		TxIDHash:      tx.TxIDChainHash(),
+// 		Vout:          uint32(0),
+// 		LockingScript: output.LockingScript,
+// 		Satoshis:      output.Satoshis,
+// 	}
+
+// 	newTx := bt.NewTx()
+// 	err = newTx.FromUTXOs(utxo)
+// 	if err != nil {
+
+// 		t.Errorf("Error adding UTXO to transaction: %s\n", err)
+// 	}
+
+// 	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, 10000)
+// 	if err != nil {
+// 		t.Errorf("Error adding output to transaction: %v", err)
+// 	}
+
+// 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+// 	if err != nil {
+// 		t.Errorf("Error filling transaction inputs: %v", err)
+// 	}
+
+// 	_, err = txDistributor.SendTransaction(ctx, newTx)
+// 	if err != nil {
+// 		t.Errorf("Failed to send new transaction: %v", err)
+// 	}
+
+// 	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
+// 	time.Sleep(10 * time.Second)
+
+// 	height, _ := helper.GetBlockHeight(url)
+// 	logger.Infof("Block height before mining: %d\n", height)
+
+// 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
+// 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
+
+// 	err = framework.Nodes[0].UtxoStore.Delete(framework.Context, tx.TxIDChainHash())
+// 	if err != nil {
+// 		t.Errorf("Failed to delete parent tx: %v", err)
+// 	}
+
+// 	baClient := framework.Nodes[0].BlockassemblyClient
+// 	_, err = helper.MineBlock(ctx, baClient, logger)
+
+// 	if err != nil {
+// 		t.Errorf("Failed to mine block: %v", err)
+// 	}
+
+// 	blockStore := framework.Nodes[0].Blockstore
+// 	blockchainClient := framework.Nodes[0].BlockchainClient
+// 	bl := false
+// 	targetHeight := height + 1
+
+// 	for i := 0; i < 30; i++ {
+// 		err := helper.WaitForBlockHeight(url, targetHeight, 60)
+// 		if err != nil {
+// 			t.Errorf("Failed to wait for block height: %v", err)
+// 		}
+
+// 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+// 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
+// 		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
+
+// 		if err != nil {
+// 			t.Errorf("error checking if tx exists in block: %v", err)
+// 		}
+
+// 		if bl {
+// 			break
+// 		}
+
+// 		targetHeight++
+// 		_, err = helper.MineBlock(ctx, baClient, logger)
+
+// 		if err != nil {
+// 			t.Errorf("Failed to mine block: %v", err)
+// 		}
+// 	}
+
+// 	assert.Equal(t, true, bl, "Test Tx not found in block")
+
+// }
 // func (suite *SanityTestSuite) TestShouldAllowFairTx_UseRpc() {
 // 	ctx := context.Background()
 // 	t := suite.T()

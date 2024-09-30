@@ -171,43 +171,33 @@ func (s *Server) trigger(ctx context.Context, source string) error {
 
 	if s.running {
 		s.mu.Unlock()
-		// s.logger.Infof("Process already running, skipping trigger from %s", source)
+
+		s.logger.Debugf("Process already running, skipping trigger from %s", source)
+
 		return nil // Exit if the process is already running
 	}
 
 	s.running = true
 	s.mu.Unlock()
 
-	// Create an error channel to communicate any errors from the goroutine
-	errCh := make(chan error, 1) // Buffered channel to prevent goroutine leaks
-	delayCh := make(chan time.Duration, 1)
-
-	go func() {
-		defer func() {
-			// Ensure we reset the running state
-			s.mu.Lock()
-			s.running = false
-			s.mu.Unlock()
-		}()
-
-		s.logger.Debugf("Trigger from %s to process next block", source)
-
-		delay, err := s.processNextBlock(ctx)
-		errCh <- err
-		delayCh <- delay
+	defer func() {
+		s.mu.Lock()
+		s.running = false
+		s.mu.Unlock()
 	}()
 
-	err := <-errCh
+	s.logger.Debugf("Trigger from %s to process next block", source)
+
+	delay, err := s.processNextBlock(ctx)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			s.logger.Infof("No new block to process")
 			return nil
-		} else {
-			return err
 		}
+
+		return err
 	}
 
-	delay := <-delayCh
 	if delay > 0 {
 		time.Sleep(delay)
 	}

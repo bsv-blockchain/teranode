@@ -338,7 +338,7 @@ func (s *Server) loadDatastore(ctx context.Context, models []interface{}, dbURL 
 		datastoreConfig := &datastore.SQLConfig{
 			CommonConfig: commonConfig,
 			Driver:       dbEngine.String(),
-			Host:         dbURL.Host,
+			Host:         dbURL.Hostname(),
 			Name:         dbURL.Path[1:],
 			Password:     password,
 			Port:         dbURL.Port(),

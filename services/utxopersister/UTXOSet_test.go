@@ -65,7 +65,7 @@ func TestNewUTXOSet2(t *testing.T) {
 	assert.True(t, found)
 	assert.Equal(t, 5, len(utxos))
 
-	r, err := ud.GetUTXOAdditionsReader()
+	r, err := ud.GetUTXOAdditionsReader(ctx)
 	require.NoError(t, err)
 
 	defer r.Close()
@@ -162,7 +162,9 @@ func TestNewUTXOSet(t *testing.T) {
 }
 
 func checkAdditions(t *testing.T, ud *UTXOSet) {
-	r, err := ud.GetUTXOAdditionsReader()
+	ctx := context.Background()
+
+	r, err := ud.GetUTXOAdditionsReader(ctx)
 	require.NoError(t, err)
 
 	defer r.Close()
