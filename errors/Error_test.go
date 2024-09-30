@@ -298,7 +298,7 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	level1BlockInvalidError := NewBlockInvalidError("block is invalid", txInvalidErr)
 	level2ServiceError := NewServiceError("service error", level1BlockInvalidError)
 	level3ProcessingError := NewProcessingError("processing error", level2ServiceError)
-	level4ContextError := NewContextError("context error", level3ProcessingError)
+	level4ContextError := NewContextCanceledError("context error", level3ProcessingError)
 
 	// Test errors that are nested
 	// level 2 error recognizes all the errors in the chain
@@ -376,8 +376,8 @@ func Test_WrapUnwrapMissingDetailsErr(t *testing.T) {
 	unwrappedBlockInvalidError := UnwrapGRPC(wrappedBlockInvalidError)
 	// replicate handle_block.go:
 	processingError := NewProcessingError("failed to process block", unwrappedBlockInvalidError)
-
-	fmt.Println("Scenario 1 error:\n", processingError)
+	require.True(t, processingError.Is(blockInvalidError))
+	// fmt.Println("Scenario 1 error:", processingError)
 
 	// SCENARIO 2
 	// replicate store/sql/GetBlockExists.go
@@ -396,7 +396,7 @@ func Test_WrapUnwrapMissingDetailsErr(t *testing.T) {
 	unwrappedServiceError := UnwrapGRPC(wrappedServiceError)
 	// replicate handle_block.go:
 	processingError = NewProcessingError("failed to process block", unwrappedServiceError)
-	fmt.Println("Scenario 2 error:\n", processingError)
+	// fmt.Println("Scenario 2 error:\n", processingError)
 }
 
 func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *testing.T) {
@@ -424,7 +424,7 @@ func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *test
 	level1BlockInvalidError := NewBlockInvalidError("block is invalid", txInvalidErr)
 	level2ServiceError := NewServiceError("service error", level1BlockInvalidError)
 	level3ProcessingError := NewProcessingError("processing error", level2ServiceError)
-	level4ContextError := NewContextError("context error", level3ProcessingError)
+	level4ContextError := NewContextCanceledError("context error", level3ProcessingError)
 
 	// Test errors that are nested
 	// level 2 error recognizes all the errors in the chain
@@ -452,31 +452,31 @@ func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *test
 	require.True(t, Is(topError, txInvalidErr))
 
 	wrapped := WrapGRPC(topError)
-	fmt.Println("\nWrapped error:\n", wrapped)
-	//unwrapped := UnwrapGRPC(wrapped)
+	// fmt.Println("\nWrapped error:\n", wrapped)
+	unwrapped := UnwrapGRPC(wrapped)
 	//fmt.Println("\nUnwrapped error:\n", unwrapped)
 
 	// checks with the Is function
-	//require.True(t, unwrapped.Is(fmtError))
-	//require.True(t, unwrapped.Is(txInvalidErr))
-	//require.True(t, unwrapped.Is(baseBlockInvalidErr))
-	//require.True(t, unwrapped.Is(ErrServiceError))
-	//require.True(t, unwrapped.Is(ErrBlockInvalid))
-	//require.True(t, unwrapped.Is(ErrTxInvalid))
-	//require.True(t, unwrapped.Is(level2ServiceError))
-	//require.True(t, unwrapped.Is(level3ProcessingError))
-	//require.True(t, unwrapped.Is(level4ContextError))
-	//
-	//// checks with the standard Is function
-	//require.True(t, errors.Is(unwrapped, fmtError))
-	//require.True(t, errors.Is(unwrapped, txInvalidErr))
-	//require.True(t, errors.Is(unwrapped, baseBlockInvalidErr))
-	//require.True(t, errors.Is(unwrapped, ErrServiceError))
-	//require.True(t, errors.Is(unwrapped, ErrBlockInvalid))
-	//require.True(t, errors.Is(unwrapped, ErrTxInvalid))
-	//require.True(t, errors.Is(unwrapped, level2ServiceError))
-	//require.True(t, errors.Is(unwrapped, level3ProcessingError))
-	//require.True(t, errors.Is(unwrapped, level4ContextError))
+	require.True(t, unwrapped.Is(fmtError))
+	require.True(t, unwrapped.Is(txInvalidErr))
+	require.True(t, unwrapped.Is(baseBlockInvalidErr))
+	require.True(t, unwrapped.Is(ErrServiceError))
+	require.True(t, unwrapped.Is(ErrBlockInvalid))
+	require.True(t, unwrapped.Is(ErrTxInvalid))
+	require.True(t, unwrapped.Is(level2ServiceError))
+	require.True(t, unwrapped.Is(level3ProcessingError))
+	require.True(t, unwrapped.Is(level4ContextError))
+
+	// checks with the standard Is function
+	require.True(t, errors.Is(unwrapped, fmtError))
+	require.True(t, errors.Is(unwrapped, txInvalidErr))
+	require.True(t, errors.Is(unwrapped, baseBlockInvalidErr))
+	require.True(t, errors.Is(unwrapped, ErrServiceError))
+	require.True(t, errors.Is(unwrapped, ErrBlockInvalid))
+	require.True(t, errors.Is(unwrapped, ErrTxInvalid))
+	require.True(t, errors.Is(unwrapped, level2ServiceError))
+	require.True(t, errors.Is(unwrapped, level3ProcessingError))
+	require.True(t, errors.Is(unwrapped, level4ContextError))
 }
 
 func Test_UnwrapGRPCWithStandardError(t *testing.T) {
@@ -507,7 +507,7 @@ func Test_UnwrapGRPCWithStandardError(t *testing.T) {
 	require.Equal(t, "rpc error: code = NotFound desc = Resource not found", unwrappedNotFound.Message)
 }
 
-func Test_UnwrapGRPCWithStandardError2(t *testing.T) {
+func Test_UnwrapGRPCWithAnotherStandardError(t *testing.T) {
 	// Create a standard error
 	standardErr := fmt.Errorf("invalid argument provided")
 	grpcErr := status.Error(codes.InvalidArgument, standardErr.Error())
@@ -551,9 +551,10 @@ func (s *server) TestMethod(ctx context.Context, req *grpctest.TestRequest) (*gr
 	baseErr := fmt.Errorf("database connection failed")
 	level1Err := NewTxInvalidError("transaction invalid", baseErr)
 	level2Err := NewBlockInvalidError("block invalid", level1Err)
-	level3Err := NewServiceError("top level service error", level2Err)
+	level3Err := NewServiceError("level service error", level2Err)
+	level4Err := NewContextCanceledError("top level context error", level3Err)
 
-	return nil, WrapGRPC(level3Err)
+	return nil, WrapGRPC(level4Err)
 }
 
 func Test_WrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
@@ -590,11 +591,11 @@ func Test_WrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
 	_, err = client.TestMethod(ctx, req)
 	require.Error(t, err)
 
-	fmt.Println("\nReceived error: ", err)
+	// fmt.Println("\nReceived error: ", err)
 
 	// Unwrap the error using UnwrapGRPC
 	unwrappedErr := UnwrapGRPC(err)
-	fmt.Println("\nUnwrapped error: ", unwrappedErr)
+	// fmt.Println("\nUnwrapped error: ", unwrappedErr)
 
 	require.NotNil(t, unwrappedErr)
 
@@ -610,32 +611,15 @@ func Test_WrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
 	//	er2.WrappedError = uErr.WrappedErr.Error()
 	//}
 
-	fmt.Println("\nUnwrapped error: ", uErr)
-
-	//castedErr := unwrappedErr.As(*Error)
-	//require.True(t, ok)
-	//fmt.Println("\nCasted error: ", castedErr)
+	// fmt.Println("\nUnwrapped error: ", uErr)
 
 	require.True(t, uErr.Is(ErrServiceError))
 	require.True(t, Is(unwrappedErr, ErrServiceError))
 	require.True(t, uErr.Is(ErrTxInvalid))
 	require.True(t, Is(unwrappedErr, ErrTxInvalid))
+	require.True(t, uErr.Is(ErrBlockInvalid))
+	require.True(t, Is(unwrappedErr, ErrBlockInvalid))
+	require.True(t, uErr.Is(ErrContextCanceled))
+	require.True(t, Is(unwrappedErr, ErrContextCanceled))
 
-	//// Traverse the wrapped errors
-	//level2Err, ok := customErr.WrappedErr.(*errors.Error)
-	//require.True(t, ok)
-	//require.Equal(t, errors.ERR_BLOCK_INVALID, level2Err.Code)
-	//require.Equal(t, "block invalid", level2Err.Message)
-	//
-	//level1Err, ok := level2Err.WrappedErr.(*errors.Error)
-	//require.True(t, ok)
-	//require.Equal(t, errors.ERR_TX_INVALID, level1Err.Code)
-	//require.Equal(t, "transaction invalid", level1Err.Message)
-	//
-	//baseErr := level1Err.WrappedErr
-	//require.NotNil(t, baseErr)
-	//require.Equal(t, "database connection failed", baseErr.Error())
-
-	// Log the error for visual inspection
-	// LogError(customErr)
 }
