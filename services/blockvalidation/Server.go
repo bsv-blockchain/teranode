@@ -595,6 +595,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = request.Height
 
+	// GOKHAN: ERROR IS RETURNED FROM HERE: failed block validation BlockFound
 	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)
 	if err != nil {
 		// error from processBlockFound is already wrapped
@@ -660,6 +661,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 
 	// this is a bit of a hack, but we need to turn off optimistic mining when in legacy mode
 	if baseUrl == "legacy" {
+		// GOKHAN THIS IS CALLED AND ERROR IS AFTER THIS. but no error message just grpc messages
 		err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats, true)
 	} else {
 		err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)
@@ -949,8 +951,10 @@ LOOP:
 		i++
 		u.logger.Infof("[catchup][%s] validating block %d/%d", block.Hash().String(), i, size.Load())
 
+		// error is returned from validate block:
+
 		if err = u.blockValidation.ValidateBlock(ctx, block, baseURL, u.blockValidation.bloomFilterStats); err != nil {
-			return errors.NewServiceError("[catchup][%s] failed block validation BlockFound [%s]", fromBlock.Hash().String(), block.String(), err)
+			return errors.NewServiceError("[catchup][%s]grep  [%s]", fromBlock.Hash().String(), block.String(), err)
 		}
 		u.logger.Debugf("[catchup][%s] validated block %d/%d", block.Hash().String(), i, size.Load())
 	}
