@@ -43,7 +43,6 @@ var (
 	ErrNonFinal                   = New(ERR_NON_FINAL, "tx is non-final")
 	ErrFrozen                     = New(ERR_FROZEN, "tx is frozen")
 	ErrKafkaDecode                = New(ERR_KAFKA_DECODE_ERROR, "error decoding kafka message")
-	ErrContext                    = New(ERR_CONTEXT_ERROR, "context cancelled")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 	ErrBlobAlreadyExists          = New(ERR_BLOB_ALREADY_EXISTS, "blob already exists")
@@ -175,9 +174,6 @@ func NewProcessingError(message string, params ...interface{}) *Error {
 }
 func NewConfigurationError(message string, params ...interface{}) *Error {
 	return New(ERR_CONFIGURATION, message, params...)
-}
-func NewContextError(message string, params ...interface{}) *Error {
-	return New(ERR_CONTEXT, message, params...)
 }
 func NewContextCanceledError(message string, params ...interface{}) *Error {
 	return New(ERR_CONTEXT_CANCELED, message, params...)
