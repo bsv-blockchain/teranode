@@ -121,7 +121,7 @@ func TestAerospike(t *testing.T) {
 	require.NoError(t, aErr)
 
 	t.Cleanup(func() {
-		policy := util.GetAerospikeWritePolicy(0, 0)
+		policy := util.GetAerospikeWritePolicy(0, aero.TTLDontExpire)
 		_, _ = client.Delete(policy, key)
 	})
 
@@ -315,7 +315,7 @@ func TestAerospike(t *testing.T) {
 		_, ok := rec.Bins["utxos"].([]interface{})
 		require.True(t, ok)
 
-		wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+		wPolicy := util.GetAerospikeWritePolicy(0, aero.TTLDontExpire)
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
 		ret, aErr := client.Execute(wPolicy, txKey, luaPackage, "spend",
@@ -353,7 +353,7 @@ func TestAerospike(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+		wPolicy := util.GetAerospikeWritePolicy(0, aero.TTLDontExpire)
 
 		for _, s := range spendsAll {
 			ret, aErr := client.Execute(wPolicy, txKey, luaPackage, "spend",
@@ -385,7 +385,7 @@ func TestAerospike(t *testing.T) {
 		assert.NotNil(t, txMeta)
 		require.NoError(t, err)
 
-		wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+		wPolicy := util.GetAerospikeWritePolicy(0, aero.TTLDontExpire)
 
 		// spend_v1(rec, utxoHash, spendingTxID, currentBlockHeight, currentUnixTime, ttl)
 		fakeKey, _ := aero.NewKey(aerospikeNamespace, aerospikeSet, []byte{})
@@ -1280,7 +1280,7 @@ func initAerospike(t *testing.T) (*aero.Client, *Store, context.Context, func())
 }
 
 func cleanDB(t *testing.T, client *aero.Client, key *aero.Key, txs ...*bt.Tx) {
-	policy := util.GetAerospikeWritePolicy(0, 0)
+	policy := util.GetAerospikeWritePolicy(0, aero.TTLDontExpire)
 
 	_, err := client.Delete(policy, key)
 	require.NoError(t, err)

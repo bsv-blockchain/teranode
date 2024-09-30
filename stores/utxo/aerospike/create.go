@@ -4,7 +4,6 @@ package aerospike
 
 import (
 	"context"
-	"math"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
@@ -108,7 +107,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
-	batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, math.MaxUint32)
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(0, aerospike.TTLDontExpire)
 	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
@@ -472,7 +471,7 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 	}
 
 	// Get a new write policy which will allow CREATE or UPDATE
-	wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+	wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
 
 	for i := len(binsToStore) - 1; i >= 0; i-- {
 		bins := binsToStore[i]
@@ -551,7 +550,7 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 	}
 
 	// Get a new write policy which will allow CREATE or UPDATE
-	wPolicy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+	wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
 
 	for i := len(binsToStore) - 1; i >= 0; i-- {
 		bins := binsToStore[i]
