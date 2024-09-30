@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bitcoin-sv/ubsv/errors/grpctest/github.com/bitcoin-sv/ubsv/errors/grpctest"
+	"google.golang.org/grpc"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -549,7 +551,72 @@ func (s *server) TestMethod(ctx context.Context, req *grpctest.TestRequest) (*gr
 	baseErr := fmt.Errorf("database connection failed")
 	level1Err := NewTxInvalidError("transaction invalid", baseErr)
 	level2Err := NewBlockInvalidError("block invalid", level1Err)
-	level3Err := NewServiceError("service error", level2Err)
-	// Wrap the error using WrapGRPC
+	level3Err := NewServiceError("top level service error", level2Err)
+
 	return nil, WrapGRPC(level3Err)
+}
+
+func Test_WrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
+	// Set up the server
+	lis, err := net.Listen("tcp", "localhost:0") // Use port 0 for an available port
+	require.NoError(t, err)
+	serverAddr := lis.Addr().String()
+
+	// create a gRPC server and register the service
+	grpcServer := grpc.NewServer()
+	grpctest.RegisterTestServiceServer(grpcServer, &server{})
+
+	go grpcServer.Serve(lis)
+	defer grpcServer.Stop()
+
+	// Allow some time for the server to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Set up the client
+	conn, err := grpc.Dial(serverAddr, grpc.WithInsecure(), grpc.WithBlock())
+	require.NoError(t, err)
+	defer conn.Close()
+
+	client := grpctest.NewTestServiceClient(conn)
+
+	// Create a context
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	// Make the gRPC call
+	req := &grpctest.TestRequest{
+		Message: "Hello",
+	}
+	_, err = client.TestMethod(ctx, req)
+	require.Error(t, err)
+
+	fmt.Println("Received error: ", err)
+
+	// Unwrap the error using UnwrapGRPC
+	unwrappedErr := UnwrapGRPC(err)
+	fmt.Println("Unwrapped error: ", unwrappedErr)
+
+	require.NotNil(t, unwrappedErr)
+
+	// Assert the top-level error
+	require.True(t, Is(unwrappedErr, ErrServiceError))
+	//require.Equal(t, "service error", customErr.Message)
+
+	//// Traverse the wrapped errors
+	//level2Err, ok := customErr.WrappedErr.(*errors.Error)
+	//require.True(t, ok)
+	//require.Equal(t, errors.ERR_BLOCK_INVALID, level2Err.Code)
+	//require.Equal(t, "block invalid", level2Err.Message)
+	//
+	//level1Err, ok := level2Err.WrappedErr.(*errors.Error)
+	//require.True(t, ok)
+	//require.Equal(t, errors.ERR_TX_INVALID, level1Err.Code)
+	//require.Equal(t, "transaction invalid", level1Err.Message)
+	//
+	//baseErr := level1Err.WrappedErr
+	//require.NotNil(t, baseErr)
+	//require.Equal(t, "database connection failed", baseErr.Error())
+
+	// Log the error for visual inspection
+	// LogError(customErr)
 }
