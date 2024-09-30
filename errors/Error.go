@@ -39,6 +39,7 @@ func (e *Error) Error() string {
 		if dataMsg == "" {
 			return fmt.Sprintf("Error: %s, (error code: %d), Message: %v", e.Code.Enum(), e.Code, e.Message)
 		}
+
 		return fmt.Sprintf("%d: %v, data: %s", e.Code, e.Message, dataMsg)
 	}
 
@@ -104,6 +105,7 @@ func (e *Error) As(target interface{}) bool {
 		if reflect.ValueOf(e.WrappedErr).IsNil() {
 			return false
 		}
+
 		return errors.As(e.WrappedErr, target)
 	}
 
@@ -119,6 +121,7 @@ func (e *Error) Unwrap() error {
 	if e == nil {
 		return nil
 	}
+
 	return e.WrappedErr
 }
 
@@ -140,6 +143,7 @@ func New(code ERR, message string, params ...interface{}) *Error {
 
 	// Format the message with the remaining parameters
 	if len(params) > 0 {
+		//nolint:forbidigo
 		err := fmt.Errorf(message, params...)
 		message = err.Error()
 	}
@@ -347,7 +351,7 @@ func Join(errs ...error) error {
 		return nil
 	}
 
-	return fmt.Errorf("%s", strings.Join(messages, ", "))
+	return errors.New(strings.Join(messages, ", "))
 }
 
 func Is(err, target error) bool {

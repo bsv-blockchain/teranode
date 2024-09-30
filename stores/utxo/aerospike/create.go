@@ -411,8 +411,8 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		if output != nil {
 			outputs[i] = output.Bytes()
 
-			// store all non-zero utxos and exceptions from pre-genesis
-			if utxo.ShouldStoreOutputAsUTXO(output, blockHeight) {
+			// store all coinbases, non-zero utxos and exceptions from pre-genesis
+			if utxo.ShouldStoreOutputAsUTXO(isCoinbase, output, blockHeight) {
 				utxos[i] = aerospike.NewBytesValue(utxoHashes[i][:])
 			}
 		}

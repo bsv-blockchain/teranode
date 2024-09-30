@@ -98,8 +98,8 @@ func TestShouldStoreNonZeroUTXO(t *testing.T) {
 	require.Equal(t, txID, tx.TxIDChainHash().String())
 
 	t.Run("should return true for non-zero UTXO", func(t *testing.T) {
-		assert.True(t, shouldStoreNonZeroUTXO(tx.Outputs[0].LockingScript, util.GenesisActivationHeight-1))
-		assert.False(t, shouldStoreNonZeroUTXO(tx.Outputs[0].LockingScript, util.GenesisActivationHeight+1))
+		assert.True(t, shouldStoreNonZeroUTXO(tx.IsCoinbase(), tx.Outputs[0].LockingScript, util.GenesisActivationHeight-1))
+		assert.False(t, shouldStoreNonZeroUTXO(tx.IsCoinbase(), tx.Outputs[0].LockingScript, util.GenesisActivationHeight+1))
 	})
 }
 

@@ -237,7 +237,7 @@ func (us *UTXOSet) ProcessTx(tx *bt.Tx) error {
 	}
 
 	for i, output := range tx.Outputs {
-		if utxo.ShouldStoreOutputAsUTXO(output, us.blockHeight) {
+		if utxo.ShouldStoreOutputAsUTXO(tx.IsCoinbase(), output, us.blockHeight) {
 			uw.UTXOs = append(uw.UTXOs, &UTXO{
 				uint32(i), // nolint:gosec
 				output.Satoshis,
