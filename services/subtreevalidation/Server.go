@@ -215,7 +215,7 @@ func (u *Server) Start(ctx context.Context) error {
 				// if error is not nil, check if the error is a recoverable error.
 				// If the error is a recoverable error, then return the error, so that it kafka message is not marked as committed.
 				// So the message will be consumed again.
-				if errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContext) || errors.Is(err, errors.ErrExternal) {
+				if errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContextCanceled) || errors.Is(err, errors.ErrExternal) {
 					u.logger.Errorf("Recoverable error (%v) processing kafka message %v for handling subtree, returning error, thus not marking Kafka message as complete.\n", msg, err)
 					return err
 				}

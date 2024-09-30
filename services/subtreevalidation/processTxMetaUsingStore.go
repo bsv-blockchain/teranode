@@ -46,7 +46,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					select {
 					case <-gCtx.Done(): // Listen for cancellation signal
 						// Return the error that caused the cancellation
-						return errors.NewContextError("[processTxMetaUsingStore] context done", gCtx.Err())
+						return errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
 
 					default:
 
@@ -70,7 +70,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 				select {
 				case <-gCtx.Done(): // Listen for cancellation signal
 					// Return the error that caused the cancellation
-					return errors.NewContextError("[processTxMetaUsingStore] context done", gCtx.Err())
+					return errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
 				default:
 					for _, data := range missingTxHashesCompacted {
 						if data.Data == nil || data.Err != nil {
@@ -88,7 +88,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		}
 
 		if err := g.Wait(); err != nil {
-			return int(missed.Load()), errors.NewContextError("[processTxMetaUsingStore]", gCtx.Err())
+			return int(missed.Load()), errors.NewContextCanceledError("[processTxMetaUsingStore]", gCtx.Err())
 		}
 
 		return int(missed.Load()), nil
@@ -105,7 +105,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					select {
 					case <-gCtx.Done(): // Listen for cancellation signal
 						// Return the error that caused the cancellation
-						return errors.NewContextError("[processTxMetaUsingStore] context done", gCtx.Err())
+						return errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
 
 					default:
 						txHash := txHashes[i+j]
@@ -139,7 +139,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 		}
 
 		if err := g.Wait(); err != nil {
-			return int(missed.Load()), errors.NewContextError("[processTxMetaUsingStore] context done", gCtx.Err())
+			return int(missed.Load()), errors.NewContextCanceledError("[processTxMetaUsingStore] context done", gCtx.Err())
 		}
 
 		return int(missed.Load()), nil
