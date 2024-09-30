@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package grpctest;
+
+option go_package = "github.com/bitcoin-sv/ubsv/errors/grpctest";
+
+service TestService {
+  rpc TestMethod(TestRequest) returns (TestResponse);
+}
+
+message TestRequest {
+  string message = 1;
+}
+
+message TestResponse {
+  string reply = 1;
+}
