@@ -590,17 +590,36 @@ func Test_WrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
 	_, err = client.TestMethod(ctx, req)
 	require.Error(t, err)
 
-	fmt.Println("Received error: ", err)
+	fmt.Println("\nReceived error: ", err)
 
 	// Unwrap the error using UnwrapGRPC
 	unwrappedErr := UnwrapGRPC(err)
-	fmt.Println("Unwrapped error: ", unwrappedErr)
+	fmt.Println("\nUnwrapped error: ", unwrappedErr)
 
 	require.NotNil(t, unwrappedErr)
 
-	// Assert the top-level error
+	// we are returning correct error but it is not assesed correctly
+
+	var uErr *Error
+	require.True(t, errors.As(unwrappedErr, &uErr))
+	//er2 := &TError{
+	//	Code:    uErr.Code,
+	//	Message: uErr.Message,
+	//}
+	//if uErr.WrappedErr != nil {
+	//	er2.WrappedError = uErr.WrappedErr.Error()
+	//}
+
+	fmt.Println("\nUnwrapped error: ", uErr)
+
+	//castedErr := unwrappedErr.As(*Error)
+	//require.True(t, ok)
+	//fmt.Println("\nCasted error: ", castedErr)
+
+	require.True(t, uErr.Is(ErrServiceError))
 	require.True(t, Is(unwrappedErr, ErrServiceError))
-	//require.Equal(t, "service error", customErr.Message)
+	require.True(t, uErr.Is(ErrTxInvalid))
+	require.True(t, Is(unwrappedErr, ErrTxInvalid))
 
 	//// Traverse the wrapped errors
 	//level2Err, ok := customErr.WrappedErr.(*errors.Error)
