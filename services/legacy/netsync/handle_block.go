@@ -103,6 +103,24 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		return err
 	}
 
+	// remove all the transactions from this block from the orphan pool
+	for _, tx := range block.Transactions() {
+		sm.orphanTxs.Delete(*tx.Hash())
+	}
+
+	// process any orphan transactions that are now valid in background
+	go func() {
+		acceptedTxs := make([]*chainhash.Hash, 0)
+		for _, tx := range block.Transactions() {
+			sm.processOrphanTransactions(ctx, tx.Hash(), &acceptedTxs)
+		}
+
+		if len(acceptedTxs) > 0 {
+			sm.logger.Infof("[HandleBlockDirect][%s %d] accepted %d orphan transactions", block.Hash().String(), blockHeight, len(acceptedTxs))
+			sm.peerNotifier.AnnounceNewTransactions(acceptedTxs)
+		}
+	}()
+
 	return nil
 }
 

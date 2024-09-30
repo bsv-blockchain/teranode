@@ -27,9 +27,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/go-utils/expiringmap"
 )
 
 const (
@@ -197,6 +199,11 @@ func (sps *syncPeerState) validNetworkSpeed(minSyncPeerNetworkSpeed uint64) int 
 	return sps.violations
 }
 
+type orphanTxAndParents struct {
+	tx      *bt.Tx
+	parents map[chainhash.Hash]struct{}
+}
+
 // updateNetwork updates the received bytes. Just tracks 2 ticks
 // worth of network bandwidth.
 func (sps *syncPeerState) updateNetwork(syncPeer *peerpkg.Peer) {
@@ -217,12 +224,11 @@ type SyncManager struct {
 	started      int32
 	shutdown     int32
 	chain        *blockchain.BlockChain
-	//txMemPool      *mempool.TxPool
-	chainParams *chaincfg.Params
-	//progressLogger *blockProgressLogger
-	msgChan chan interface{}
-	wg      sync.WaitGroup
-	quit    chan struct{}
+	orphanTxs    *expiringmap.ExpiringMap[chainhash.Hash, *orphanTxAndParents]
+	chainParams  *chaincfg.Params
+	msgChan      chan interface{}
+	wg           sync.WaitGroup
+	quit         chan struct{}
 
 	// UBSV services
 	blockchainClient  ubsvblockchain.ClientI
@@ -635,9 +641,6 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	_ = tmsg.tx.MsgTx().Serialize(buf)
 	btTx, err := bt.NewTxFromBytes(buf.Bytes())
 
-	// TODO what to do with transactions coming in out of order?
-	// the old node put them into the orphan mempool and accepted them when the parent came in
-	// TODO should we be sending these transactions to the propagation service (Kafka), instead of Validation?
 	err = sm.validationClient.Validate(sm.ctx, btTx, uint32(sm.topBlock()))
 
 	// Remove transaction from request maps. Either the mempool/chain
@@ -648,27 +651,95 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	delete(sm.requestedTxns, *txHash)
 
 	if err != nil {
-		// Do not request this transaction again until a new block
-		// has been processed.
-		sm.rejectedTxns[*txHash] = struct{}{}
-		sm.limitMap(sm.rejectedTxns, maxRejectedTxns)
+		if errors.Is(err, errors.ErrTxMissingParent) {
+			// this is an orphan transaction, we will accept it when the parent comes in
+			// first check if the transaction already exists in the orphan pool, otherwise add it
+			if _, orphanTxExists := sm.orphanTxs.Get(*txHash); !orphanTxExists {
+				sm.logger.Debugf("Orphan transaction %v from %s", txHash, peer)
 
-		// When the error is a rule error, it means the transaction was
-		// simply rejected as opposed to something actually going wrong,
-		// so log it as such.  Otherwise, something really did go wrong,
-		// so log it as an actual error.
-		sm.logger.Errorf("Failed to process transaction %v: %v", txHash, err)
+				// create a map of the parents of the transaction for faster lookups
+				txParents := make(map[chainhash.Hash]struct{})
+				for _, input := range tmsg.tx.MsgTx().TxIn {
+					txParents[input.PreviousOutPoint.Hash] = struct{}{}
+				}
 
-		// Convert the error into an appropriate reject message and send it.
-		// TODO better rejection code and message from the error
-		peer.PushRejectMsg(wire.CmdTx, wire.RejectInvalid, "rejected", txHash, false)
-		return
+				sm.orphanTxs.Set(*txHash, &orphanTxAndParents{
+					tx:      btTx,
+					parents: txParents,
+				})
+			}
+
+			return
+		} else {
+			// Do not request this transaction again until a new block
+			// has been processed.
+			sm.rejectedTxns[*txHash] = struct{}{}
+			sm.limitMap(sm.rejectedTxns, maxRejectedTxns)
+
+			// When the error is a rule error, it means the transaction was
+			// simply rejected as opposed to something actually going wrong,
+			// so log it as such.  Otherwise, something really did go wrong,
+			// so log it as an actual error.
+			sm.logger.Errorf("Failed to process transaction %v: %v", txHash, err)
+
+			// Convert the error into an appropriate reject message and send it.
+			// TODO better rejection code and message from the error
+			peer.PushRejectMsg(wire.CmdTx, wire.RejectInvalid, "rejected", txHash, false)
+
+			return
+		}
 	}
 
 	// acceptedTxs also should contain any orphan transactions that were accepted when this transaction was processed
 	acceptedTxs := []*chainhash.Hash{btTx.TxIDChainHash()}
+
+	// process any orphan transactions that were waiting for this transaction to be accepted
+	// this is a recursive call, but the orphan pool should be limited in size
+	sm.processOrphanTransactions(sm.ctx, btTx.TxIDChainHash(), &acceptedTxs)
+
 	if len(acceptedTxs) > 0 {
 		sm.peerNotifier.AnnounceNewTransactions(acceptedTxs)
+	}
+}
+
+// processOrphanTransactions recursively processes orphan transactions that were waiting for a transaction to be accepted
+func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *chainhash.Hash, acceptedTxs *[]*chainhash.Hash) {
+	// check whether any transaction in the orphan pool has this transaction as a parent
+	_, _, deferFn := tracing.StartTracing(ctx, "processOrphanTransactions")
+	defer deferFn()
+
+	// first we get all the orphan transactions, this will not block the orphan tx pool while processing
+	orphanTxs := sm.orphanTxs.Items()
+
+	for _, orphanTx := range orphanTxs {
+		// check if the orphan transaction has this transaction as a parent
+		if _, ok := orphanTx.parents[*txHash]; !ok {
+			continue
+		}
+
+		// validate the orphan transaction
+		// nolint:gosec
+		err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, uint32(sm.topBlock()))
+		if err != nil {
+			if errors.Is(err, errors.ErrTxMissingParent) {
+				// silently exit, we will accept this transaction when the parent comes in
+				continue
+			}
+
+			// if the transaction was rejected, we will not process any of the orphan transactions that were waiting for it
+			sm.logger.Errorf("Failed to process orphan transaction %v: %v", txHash, err)
+
+			continue
+		}
+
+		// add the orphan transaction to the list of accepted transactions
+		*acceptedTxs = append(*acceptedTxs, orphanTx.tx.TxIDChainHash())
+
+		// remove the orphan transaction from the orphan pool
+		sm.orphanTxs.Delete(*txHash)
+
+		// process any orphan transactions that were waiting for this transaction to be accepted
+		sm.processOrphanTransactions(ctx, orphanTx.tx.TxIDChainHash(), acceptedTxs)
 	}
 }
 
@@ -1517,7 +1588,8 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 		ctx:          ctx,
 		peerNotifier: config.PeerNotifier,
 		chain:        config.Chain,
-		//txMemPool:               config.TxMemPool,
+		//txMemPool:     config.TxMemPool,
+		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](10 * time.Minute),
 		chainParams:     config.ChainParams,
 		rejectedTxns:    make(map[chainhash.Hash]struct{}),
 		requestedTxns:   make(map[chainhash.Hash]struct{}),
@@ -1539,6 +1611,20 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 		subtreeValidation: subtreeValidation,
 		blockValidation:   blockValidation,
 	}
+
+	// set an eviction function for orphan transactions
+	// this will be called when an orphan transaction is evicted from the map
+	sm.orphanTxs.WithEvictionFunction(func(txHash chainhash.Hash, orphanTx *orphanTxAndParents) bool {
+		sm.logger.Infof("evicting orphan transaction %v", txHash)
+
+		// try to process one last time
+		// nolint:gosec
+		if err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, uint32(sm.topBlock())); err != nil {
+			sm.logger.Errorf("failed to validate orphan transaction when evicting %v: %v", txHash, err)
+		}
+
+		return true
+	})
 
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
