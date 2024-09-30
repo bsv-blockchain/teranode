@@ -12,7 +12,7 @@ import (
 )
 
 func (s *Store) Delete(_ context.Context, hash *chainhash.Hash) error {
-	policy := util.GetAerospikeWritePolicy(0, 0)
+	policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {
