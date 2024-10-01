@@ -7,6 +7,7 @@
 // $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxos$" -tags utxo
 // $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestUtxoTestSuite$/TestDeleteParentTx$" -tags utxo
 // $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestUtxoTestSuite$/TestFreezeAndUnfreezeUtxos$" -tags utxo
+// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestUtxoTestSuite$/TestShouldAllowToSpendUtxosAfterReassignment$" -tags utxo
 package test
 
 import (
@@ -27,6 +28,7 @@ import (
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -515,8 +517,14 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 	t := suite.T()
 	framework := suite.Framework
+	settingsMap := suite.SettingsMap
 	logger := framework.Logger
 	ctx := framework.Context
+
+	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ci.ubsv1.TestFreezeAndUnfreezeUtxos"
+	if err := framework.RestartNodes(settingsMap); err != nil {
+		t.Errorf("Failed to restart nodes: %v", err)
+	}
 
 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
@@ -540,7 +548,7 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
 	assert.NoError(t, err, "Failed to create address")
 
-	faucetTx, err := coinbaseClient.RequestFunds(ctx, address0.AddressString, true)
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address0.AddressString, false)
 	assert.NoError(t, err, "Failed to request funds")
 
 	logger.Infof("Faucet Transaction: %s %s", faucetTx.TxIDChainHash(), faucetTx.TxID())
@@ -626,7 +634,9 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 		assert.NoError(t, err, "Error filling transaction inputs")
 
 		_, err = txDistributor.SendTransaction(ctx, spendingTx)
-		assert.NoError(t, err, "Failed to send spending transaction")
+		if err != nil {
+			return nil, err
+		}
 
 		return spendingTx, nil
 	}
@@ -636,14 +646,14 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 	err = framework.Nodes[0].UtxoStore.FreezeUTXOs(ctx, spends)
 	assert.NoError(t, err, "Failed to freeze UTXOs")
 	// Create and send transaction with the frozen spends
+	_, err = createAndSendTx(faucetTx.Outputs[:firstSet], 0)
+	assert.Error(t, err, "Should not allow to spend frozen UTXOs")
+	// Unfreeze the UTXOs
+	err = framework.Nodes[0].UtxoStore.UnFreezeUTXOs(ctx, spends)
+	assert.NoError(t, err, "Failed to unfreeze UTXOs")
+	// Create and send transaction with the unfrozen spends
 	tx1, err := createAndSendTx(faucetTx.Outputs[:firstSet], 0)
 	assert.NoError(t, err, "Failed to create and send first transaction")
-	logger.Infof("First Transaction sent: %s %s", tx1.TxIDChainHash(), tx1.TxID())
-
-	// // Create and send second transaction
-	// tx2, err := createAndSendTx(faucetTx.Outputs[secondSet:], secondSet)
-	// assert.NoError(t, err, "Failed to create and send second transaction")
-	// logger.Infof("Second Transaction sent: %s %s", tx2.TxIDChainHash(), tx2.TxID())
 
 	time.Sleep(10 * time.Second)
 
@@ -684,6 +694,223 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d", utxoBalanceBefore, utxoBalanceAfter)
+}
+
+// TestShouldAllowToSpendUtxosAfterReassignment tests that we can spend UTXOs after reassignment
+// Request TXf from faucet
+// Create a new transaction (TX0) from the first 5 outputs vout[0..5] of the faucet transaction (TXf) - output to pubkey of address0
+// Create the spend object (Spend0) for the UTXO hash of TX0
+// Send the transaction
+// Mine a block
+// Verify the transaction (TX0) is in the block
+// Freeze the UTXO of TX0
+// Create a new transaction (TX1) from the same outputs vout[0..5] of the faucet transaction, but this time assign to pubkey of address1
+// Calculate the UTXO hash for TX1
+// Create the Spend object (Spend1) for the UTXO hash of TX1
+// UtxoStore.ReAssignUTXO(ctx, Spend0, Spend1)
+
+func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxosAfterReassignment() {
+	t := suite.T()
+	framework := suite.Framework
+	settingsMap := suite.SettingsMap
+	logger := framework.Logger
+	ctx := framework.Context
+
+	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ci.ubsv1.TestFreezeAndUnfreezeUtxos"
+	if err := framework.RestartNodes(settingsMap); err != nil {
+		t.Errorf("Failed to restart nodes: %v", err)
+	}
+
+	txDistributor, _ := distributor.NewDistributor(ctx, logger,
+		distributor.WithBackoffDuration(200*time.Millisecond),
+		distributor.WithRetryAttempts(3),
+		distributor.WithFailureTolerance(0),
+	)
+
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+
+	privateKey0, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		t.Errorf("Failed to generate private key: %v", err)
+	}
+
+	privateKey1, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		t.Errorf("Failed to generate private key: %v", err)
+	}
+
+	address0, err := bscript.NewAddressFromPublicKey(privateKey0.PubKey(), true)
+	if err != nil {
+		t.Errorf("Failed to create address: %v", err)
+	}
+
+	address1, err := bscript.NewAddressFromPublicKey(privateKey1.PubKey(), true)
+	if err != nil {
+		t.Errorf("Failed to create address: %v", err)
+	}
+
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address0.AddressString, true)
+	if err != nil {
+		t.Errorf("Failed to request funds: %v", err)
+	}
+
+	t.Logf("Transaction: %s %s\n", faucetTx.TxIDChainHash(), faucetTx.TxID())
+
+	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	if err != nil {
+		t.Errorf("Failed to send transaction: %v", err)
+	}
+
+	logger.Infof("Request funds Transaction sent: %s %v\n", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
+	output := faucetTx.Outputs[0]
+	oldUtxo := &bt.UTXO{
+		TxIDHash:      faucetTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	firstTx := bt.NewTx()
+
+	err = firstTx.FromUTXOs(oldUtxo)
+	if err != nil {
+		t.Errorf("Error adding UTXO to transaction: %s\n", err)
+	}
+
+	err = firstTx.AddP2PKHOutputFromAddress(address1.AddressString, 10000)
+	if err != nil {
+		t.Errorf("Error adding output to transaction: %v", err)
+	}
+
+	err = firstTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
+	if err != nil {
+		t.Errorf("Error filling transaction inputs: %v", err)
+	}
+
+	_, err = txDistributor.SendTransaction(ctx, firstTx)
+	if err != nil {
+		t.Errorf("Failed to send new transaction: %v", err)
+	}
+
+	logger.Infof("First Transaction created with output[0] of faucet sent: %s %s\n", firstTx.TxIDChainHash(), firstTx.TxID())
+
+	time.Sleep(10 * time.Second)
+
+	height, _ := helper.GetBlockHeight(url)
+	logger.Infof("Block height before mining: %d\n", height)
+
+	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
+
+	baClient := framework.Nodes[0].BlockassemblyClient
+	_, err = helper.MineBlock(ctx, baClient, logger)
+
+	if err != nil {
+		t.Errorf("Failed to mine block: %v", err)
+	}
+
+	// Create a reassign transaction from the same output of the faucet transaction
+	output = faucetTx.Outputs[0]
+	newUtxo := &bt.UTXO{
+		TxIDHash:      faucetTx.TxIDChainHash(),
+		Vout:          uint32(1),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	reassignTx := bt.NewTx()
+
+	err = reassignTx.FromUTXOs(newUtxo)
+	if err != nil {
+		t.Errorf("Error adding UTXO to transaction: %s\n", err)
+	}
+
+	err = reassignTx.AddP2PKHOutputFromAddress(address1.AddressString, 10000)
+	if err != nil {
+		t.Errorf("Error adding output to transaction: %v", err)
+	}
+
+	err = reassignTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
+	if err != nil {
+		t.Errorf("Error filling transaction inputs: %v", err)
+	}
+
+	// Freeze the UTXO of the first transaction
+	oldUtxoHash, _ := util.UTXOHashFromOutput(firstTx.TxIDChainHash(), firstTx.Outputs[0], 0)
+	spend := &utxo.Spend{
+		TxID:     firstTx.TxIDChainHash(),
+		Vout:     0,
+		UTXOHash: oldUtxoHash,
+	}
+	err = framework.Nodes[0].UtxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend})
+	require.NoError(t, err, "Failed to freeze UTXOs")
+
+	newUtxoHash, _ := util.UTXOHashFromOutput(reassignTx.TxIDChainHash(), reassignTx.Outputs[0], 0)
+	// nolint: gosec
+	newSpend := &utxo.Spend{
+		TxID:     reassignTx.TxIDChainHash(),
+		Vout:     0,
+		UTXOHash: newUtxoHash,
+	}
+
+	err = framework.Nodes[0].UtxoStore.ReAssignUTXO(ctx, spend, newSpend)
+	require.NoError(t, err, "Failed to reassign UTXOs")
+
+	// try to unfreeze the old utxo
+	err = framework.Nodes[0].UtxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend})
+	require.Error(t, err, "Should not allow to unfreeze UTXOs as it has been reassigned")
+
+	// send the reassign transaction
+	_, err = txDistributor.SendTransaction(ctx, reassignTx)
+	require.NoError(t, err, "Failed to send reassign transaction")
+
+	logger.Infof("Reassignment Transaction created with output[0] of faucet sent: %s %s\n", reassignTx.TxIDChainHash(), reassignTx.TxID())
+
+	time.Sleep(10 * time.Second)
+
+	height, _ = helper.GetBlockHeight(url)
+	logger.Infof("Block height before mining: %d\n", height)
+
+	_, err = helper.MineBlock(ctx, baClient, logger)
+
+	if err != nil {
+		t.Errorf("Failed to mine block: %v", err)
+	}
+
+	blockStore := framework.Nodes[0].Blockstore
+	blockchainClient := framework.Nodes[0].BlockchainClient
+	bl := false
+	targetHeight := height + 1
+
+	for i := 0; i < 30; i++ {
+		err := helper.WaitForBlockHeight(url, targetHeight, 60)
+		if err != nil {
+			t.Errorf("Failed to wait for block height: %v", err)
+		}
+
+		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+		logger.Infof("Testing on Best block header: %v", header[0].Hash())
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *reassignTx.TxIDChainHash(), framework.Logger)
+
+		if err != nil {
+			t.Errorf("error checking if tx exists in block: %v", err)
+		}
+
+		if bl {
+			break
+		}
+
+		targetHeight++
+		_, err = helper.MineBlock(ctx, baClient, logger)
+
+		if err != nil {
+			t.Errorf("Failed to mine block: %v", err)
+		}
+	}
+
+	assert.Equal(t, true, bl, "Test Tx not found in block")
 }
 
 func TestUtxoTestSuite(t *testing.T) {
