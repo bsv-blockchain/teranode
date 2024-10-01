@@ -336,19 +336,7 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 		return errors.NewServiceError("[BlockValidation:start][%s] InvalidateBlock block is not valid", block.String(), err)
 	}
 
-	// this function is unused atm, but putting the oldBlockIDs here for the sake of completeness
-	// Slice to store the old block IDs
-	var referencedOldBlockIDs []uint32
-	// Flag to check if the oldBlockIDs map has elements
-	var hasTransactionsReferencingOldBlocks bool
-
-	oldBlockIDs.Range(func(key, value interface{}) bool {
-		hasTransactionsReferencingOldBlocks = true
-		val := value.(uint32)
-		referencedOldBlockIDs = append(referencedOldBlockIDs, val)
-
-		return true // Continue iteration to collect all elements
-	})
+	referencedOldBlockIDs, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
 
 	// Check if the old blocks are part of the current chain
 	if hasTransactionsReferencingOldBlocks {
@@ -722,18 +710,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				}
 			}
 
-			// Slice to store the old block IDs
-			var referencedOldBlockIDs []uint32
-			// Flag to check if the oldBlockIDs map has elements
-			var hasTransactionsReferencingOldBlocks bool
-
-			oldBlockIDs.Range(func(key, value interface{}) bool {
-				hasTransactionsReferencingOldBlocks = true
-				val := value.(uint32)
-				referencedOldBlockIDs = append(referencedOldBlockIDs, val)
-
-				return true // Continue iteration to collect all elements
-			})
+			referencedOldBlockIDs, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
 
 			// Check if the old blocks are part of the current chain
 			if hasTransactionsReferencingOldBlocks {
@@ -789,18 +766,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
 		}
 
-		// Slice to store the old block IDs
-		var referencedOldBlockIDs []uint32
-		// Flag to check if the oldBlockIDs map has elements
-		var hasTransactionsReferencingOldBlocks bool
-
-		oldBlockIDs.Range(func(key, value interface{}) bool {
-			hasTransactionsReferencingOldBlocks = true
-			val := value.(uint32)
-			referencedOldBlockIDs = append(referencedOldBlockIDs, val)
-
-			return true // Continue iteration to collect all elements
-		})
+		referencedOldBlockIDs, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
 
 		// Check if the old blocks are part of the current chain
 		if hasTransactionsReferencingOldBlocks {
@@ -962,18 +928,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		}
 	}
 
-	// Slice to store the old block IDs
-	var referencedOldBlockIDs []uint32
-	// Flag to check if the oldBlockIDs map has elements
-	var hasTransactionsReferencingOldBlocks bool
-
-	oldBlockIDs.Range(func(key, value interface{}) bool {
-		hasTransactionsReferencingOldBlocks = true
-		val := value.(uint32)
-		referencedOldBlockIDs = append(referencedOldBlockIDs, val)
-
-		return true // Continue iteration to collect all elements
-	})
+	referencedOldBlockIDs, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
 
 	// Check if the old blocks are part of the current chain
 	if hasTransactionsReferencingOldBlocks {
