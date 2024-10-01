@@ -127,6 +127,15 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, bl
 		return nil, nil
 	}
 
+	return us, nil
+}
+
+func GetUTXOSetWithDeletionsMap(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
+	us, err := GetUTXOSet(ctx, logger, store, blockHash)
+	if err != nil {
+		return nil, err
+	}
+
 	deletionsMap, err := us.GetUTXODeletionsMap(ctx)
 	if err != nil {
 		return nil, err
@@ -369,8 +378,8 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 	return r, nil
 }
 
-func (us *UTXOSet) GetUTXODeletionsReader() (io.ReadCloser, error) {
-	r, err := us.store.GetIoReader(us.ctx, us.blockHash[:], options.WithFileExtension(deletionsExtension), options.WithTTL(0))
+func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, error) {
+	r, err := us.store.GetIoReader(ctx, us.blockHash[:], options.WithFileExtension(deletionsExtension), options.WithTTL(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-deletions reader", err)
 	}
@@ -445,7 +454,7 @@ func (us *UTXOSet) GetUTXODeletionsMap(ctx context.Context) (map[[32]byte][]uint
 	)
 	defer deferFn()
 
-	r, err := us.GetUTXODeletionsReader()
+	r, err := us.GetUTXODeletionsReader(ctx)
 	if err != nil {
 		return nil, errors.NewStorageError("error getting reader for %s.%s", us.blockHash, deletionsExtension, err)
 	}

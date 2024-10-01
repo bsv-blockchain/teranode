@@ -277,7 +277,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 		previousBlockHash = nil
 	}
 
-	us, err := GetUTXOSet(ctx, s.logger, s.blockStore, hash)
+	us, err := GetUTXOSetWithDeletionsMap(ctx, s.logger, s.blockStore, hash)
 	if err != nil {
 		return 0, errors.NewProcessingError("[UTXOPersister] Error getting UTXOSet for block %s height %d", hash, meta.Height, err)
 	}
@@ -299,7 +299,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	s.lastHeight++
 
 	// Remove the previous block's UTXOSet
-	if previousBlockHash != nil {
+	if previousBlockHash != nil && !gocore.Config().GetBool("skip_delete", false) {
 		if err := s.blockStore.Del(ctx, previousBlockHash[:], options.WithFileExtension(utxosetExtension)); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", previousBlockHash, meta.Height, err)
 		}
