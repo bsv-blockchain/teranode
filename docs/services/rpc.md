@@ -386,7 +386,7 @@ The RPC service is located in the `services/rpc` directory. The main files and d
 To run the RPC Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -rpc=1
+SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -RPC=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../locallyRunningServices.md) document for more information on running the RPC Service locally.

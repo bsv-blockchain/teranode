@@ -60,7 +60,7 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 | Miner              | `-Miner=1`             | Start the Miner component.            |
 | P2P                | `-P2P=1`               | Begin the P2P communication process.  |
 | Propagation        | `-Propagation=1`       | Begin the Propagation process.        |
-| RPC                | `-rpc=1`               | Begin the RPC server.                 |
+| RPC                | `-RPC=1`               | Begin the RPC server.                 |
 | Seeder             | `-Seeder=1`            | Activate the Seeder component.        |
 | Subtree Validation | `-SubtreeValidation=1` | Begin the Subtree Validation process. |
 | Tx Meta Store      | `-TxMetaStore=1`       | Start the Transaction Meta Store.     |

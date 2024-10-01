@@ -4,7 +4,6 @@ package aerospike
 
 import (
 	"context"
-	"math"
 	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v7"
@@ -48,7 +47,7 @@ func (s *Store) unSpend(ctx context.Context, spends []*utxo.Spend) (err error) {
 }
 
 func (s *Store) unSpendLua(spend *utxo.Spend) error {
-	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+	policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
 
 	// nolint gosec
 	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))

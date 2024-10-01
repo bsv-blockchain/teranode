@@ -4,7 +4,6 @@ package aerospike
 
 import (
 	"context"
-	"math"
 	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v7"
@@ -22,7 +21,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 	batchPolicy := util.GetAerospikeBatchPolicy()
 
 	// math.MaxUint32 - 1 does not update expiration of the record
-	policy := util.GetAerospikeBatchWritePolicy(0, math.MaxUint32-1)
+	policy := util.GetAerospikeBatchWritePolicy(0, aerospike.TTLDontUpdate)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
@@ -103,7 +102,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 
 // SetMined is used in tests
 func (s *Store) SetMined(_ context.Context, hash *chainhash.Hash, blockID uint32) error {
-	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+	policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])

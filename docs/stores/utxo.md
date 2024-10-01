@@ -2,6 +2,9 @@
 
 ## Index
 
+
+## Index
+
 1. [Description](#1-description)
 2. [Architecture](#2-architecture)
 3. [UTXO - Data Model](#3-utxo---data-model)
@@ -10,11 +13,13 @@
    - [3.3. UTXO Meta Data](#33-utxo-meta-data)
 4. [Use Cases](#4-use-cases)
 - [4.1. Asset Server:](#41-asset-server)
-- [4.2. Block Persister ](#42-block-persister-)
+- [4.2. Block Persister](#42-block-persister)
 - [4.3. Block Assembly](#43-block-assembly)
-- [4.4. Block Validation ](#44-block-validation-)
+- [4.4. Block Validation](#44-block-validation)
 - [4.5. Subtree Validation](#45-subtree-validation)
 - [4.6. Transaction Validator](#46-transaction-validator)
+- [4.7. UTXO Batch Processing and External Storage mode](#47-utxo-batch-processing-and-external-storage-mode)
+- [4.8. Alert System and UTXO Management](#48-alert-system-and-utxo-management)
 5. [Technology](#5-technology)
 - [5.1. Language and Libraries](#51-language-and-libraries)
 - [5.2. Data Stores](#52-data-stores)
@@ -23,7 +28,6 @@
 7. [Running the Store Locally](#7-running-the-store-locally)
 - [    How to run](#----how-to-run)
 - [    Settings](#----settings)
-
 
 ## 1. Description
 
@@ -40,6 +44,8 @@ It handles the core functionalities of the UTXO Store:
 * **Spend/UnSpend**: Mark UTXOs as spent or reverse such markings, respectively.
 * **Delete**: Remove UTXOs from the store.
 * **Block Height Management**: Set and retrieve the current blockchain height, which can be crucial for determining the spendability of certain UTXOs based on locktime conditions.
+* **FreezeUTXOs / UnFreezeUTXOs**: Mark UTXOs as frozen or unfrozen, in scenarios involving alert systems or temporary holds on specific UTXOs.
+* **ReAssignUTXO**: Reassign a UTXO to a different owner.
 
 **Principles**:
 
@@ -48,6 +54,10 @@ It handles the core functionalities of the UTXO Store:
 - In production, the data is stored in a Master and Replica configuration.
 - No centralised broker - all clients know where each hash is stored.
 - No cross-transaction state is stored.
+
+The UTXO Store includes functionality to **freeze** and **unfreeze** UTXOs, as well as **re-assign** them.
+- BSV is the only blockchain that allows legal recourse for lost asset (token) recovery to legally rightful owners by design. The Alert System can also freeze assets based on court injunctions and legal notices.
+- Teranode must be able to re-assign (a set of) UTXO(s) to another (specified) address at a specified block height.
 
 ## 2. Architecture
 
@@ -151,7 +161,9 @@ When a user creates a new transaction, the transaction references these UTXOs as
 
 Independent UTXOs can be processed in parallel, potentially improving the efficiency of transaction validation.
 
-To know more about UTXOs, please check https://bitcoin-association.gitbook.io/bitcoin-protocol-documentation/cJw8Rc8JxwBTZVOoBFC6/transaction-lifecycle/transaction-inputs-and-outputs.
+UTXOs now have an additional state: frozen. A frozen UTXO cannot be spent until it is unfrozen.
+
+To know more about UTXOs, please check https://protocol.bsvblockchain.org/transaction-lifecycle/transaction-inputs-and-outputs.
 
 ### 3.2. How are UTXOs stored?
 
@@ -306,6 +318,8 @@ When marking a UTXO as spent, the store will check if the UTXO is known (by its 
 
 ![utxo_spend_process.svg](../services/img/plantuml/utxo/utxo_spend_process.svg)
 
+Also notice how no transaction can be spent if frozen.
+
 On the other hand, we can see the process for unspending an UTXO here:
 
 ![utxo_unspend_process.svg](../services/img/plantuml/utxo/utxo_unspend_process.svg)
@@ -321,6 +335,29 @@ If a transaction is too large to fit in a single Aerospike record (indicated by 
 In such cases, the full transaction data is stored externally, while metadata and UTXOs are still stored in Aerospike, potentially across multiple records. The Aerospike record will have an `external` flag set to true, indicating that the full transaction data is stored externally.
 
 When the UTXO data is needed, the system will first check the Aerospike record. If the `external flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.
+
+
+### 4.8. Alert System and UTXO Management
+
+The UTXO Store supports advanced UTXO management features, which can be utilized by an alert system.
+
+![utxo_freeze_reassign.svg](../services/img/plantuml/utxo/utxo_freeze_reassign.svg)
+
+1. **Freezing UTXOs**: The alert system can request to freeze specific UTXOs, preventing them from being spent.
+   - Checks if the UTXO exists
+   - If the UTXO is already spent, it returns "SPENT"
+   - If the UTXO is already frozen, it returns "FROZEN"
+   - Otherwise, it marks the UTXO as frozen by setting its spending TxID to 32 'FF' bytes
+
+2. **Unfreezing UTXOs**: Previously frozen UTXOs can be unfrozen, allowing them to be spent again.
+   - Checks if the UTXO exists and is frozen
+   - If frozen, it removes the freeze mark
+   - If not frozen, it returns an error
+
+3. **Reassigning UTXOs**: In certain scenarios, UTXOs can be re-assigned to a different transaction.
+   - Checks if the UTXO exists and is frozen
+   - If frozen, it removes the freeze mark
+   - If not frozen, it returns an error
 
 ## 5. Technology
 

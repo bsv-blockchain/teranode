@@ -46,7 +46,14 @@ alt Key exists and TX_ID Value does not match Spending TXID
     Store -> Client: SPENT (with existing Spending TXID)
 end
 
+== Spend frozen UTXO ==
 
+Client -> Store: Request to spend UTXO (Spend a UTXO)
+activate Store
+
+alt UTXO is frozen
+    Store -> Client: FROZEN (UTXO cannot be spent)
+end
 
 deactivate Store
 

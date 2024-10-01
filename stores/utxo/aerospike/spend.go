@@ -4,7 +4,6 @@ package aerospike
 
 import (
 	"context"
-	"math"
 	"strings"
 	"sync"
 	"time"
@@ -283,7 +282,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 }
 
 func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
-	policy := util.GetAerospikeWritePolicy(0, math.MaxUint32)
+	policy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
 
 	key, err := aerospike.NewKey(s.namespace, s.setName, txid[:])
 	if err != nil {
