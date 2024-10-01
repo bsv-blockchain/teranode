@@ -47,7 +47,16 @@ func InitPostgresDB(logger ulogger.Logger, storeUrl *url.URL) (*usql.DB, error) 
 		dbPassword, _ = storeUrl.User.Password()
 	}
 
-	dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=disable host=%s port=%d", dbUser, dbPassword, dbName, dbHost, dbPort)
+	// Default sslmode to "disable"
+	sslMode := "disable"
+
+	// Check if "sslmode" is present in the query parameters
+	queryParams := storeUrl.Query()
+	if val, ok := queryParams["sslmode"]; ok && len(val) > 0 {
+		sslMode = val[0] // Use the first value if multiple are provided
+	}
+
+	dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=%s host=%s port=%d", dbUser, dbPassword, dbName, sslMode, dbHost, dbPort)
 
 	db, err := usql.Open(storeUrl.Scheme, dbInfo)
 	if err != nil {
