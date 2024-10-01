@@ -826,8 +826,9 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 							// add the blockIDs to the transactionsFromOldBlocks map, so the validator can check if those blocks are part of our chain
 							// and return nil
 							if errors.Is(err, errors.ErrTransactionInputFromVeryOldBlock) {
-								// TODO: consider appending the transactions hashes to values, so we can check which transactions are from which blocks
-								//		 enabling better handling on underlining which transactions are invalid
+								// TODO: currently we are only returning the old blockIDs,
+								// 		 consider appending the transactions hashes to values, so we can check which transactions are from which blocks
+								//		 enabling better handling on identifying which transactions are invalid
 								for _, blockID := range oldParentBlockIDs {
 									oldBlockIDs.Store(blockID, struct{}{})
 								}

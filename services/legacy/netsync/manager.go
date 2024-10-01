@@ -217,9 +217,9 @@ type SyncManager struct {
 	started      int32
 	shutdown     int32
 	chain        *blockchain.BlockChain
-	//txMemPool      *mempool.TxPool
+	// txMemPool      *mempool.TxPool
 	chainParams *chaincfg.Params
-	//progressLogger *blockProgressLogger
+	// progressLogger *blockProgressLogger
 	msgChan chan interface{}
 	wg      sync.WaitGroup
 	quit    chan struct{}
@@ -662,6 +662,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 		// Convert the error into an appropriate reject message and send it.
 		// TODO better rejection code and message from the error
 		peer.PushRejectMsg(wire.CmdTx, wire.RejectInvalid, "rejected", txHash, false)
+
 		return
 	}
 

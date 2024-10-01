@@ -276,10 +276,13 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
+
+	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
 func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
-	util.SkipVeryLongTests(t)
+	// util.SkipVeryLongTests(t)
 	fileDir = "./test-generated_test_data/"
 	fileNameTemplate = fileDir + "subtree-%d.bin"
 	fileNameTemplateMerkleHashes = fileDir + "subtree-merkle-hashes.bin"
@@ -331,6 +334,9 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
+
+	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
 func TestBlock_WithDuplicateTransaction(t *testing.T) {
@@ -453,6 +459,9 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.Error(t, err)
 	require.False(t, v)
+
+	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
 func TestGetAndValidateSubtrees(t *testing.T) {
@@ -567,7 +576,10 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.Error(t, err)
 		require.True(t, len(oldBlockIDs) == 0)
-		e := err.(*errors.Error)
+
+		var e *errors.Error
+
+		errors.As(err, &e)
 		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code, "expected error code ERR_BLOCK_INVALID")
 	})
 
@@ -582,7 +594,10 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.Error(t, err)
 		require.True(t, len(oldBlockIDs) == 0)
-		e := err.(*errors.Error)
+
+		var e *errors.Error
+
+		errors.As(err, &e)
 		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code, "expected error code ERR_BLOCK_INVALID")
 	})
 
