@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/ordishs/gocore"
 )
 
@@ -80,7 +81,13 @@ func NewDirect(
 }
 
 func (s *Server) Health(ctx context.Context) (int, string, error) {
-	return 0, "", nil
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
+		{Name: "BlockchainStore", Check: s.blockchainStore.Health},
+		{Name: "BlockStore", Check: s.blockStore.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
 }
 
 func (s *Server) Init(ctx context.Context) (err error) {

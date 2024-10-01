@@ -4,6 +4,8 @@ option go_package = "./;validator_api";
 
 package validator_api;
 
+import "google/protobuf/timestamp.proto";
+
 service ValidatorAPI {
   // Health returns the health of the API.
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
@@ -21,7 +23,7 @@ message EmptyMessage {}
 message HealthResponse {
   bool ok = 1;
   string details = 2;
-  uint32 timestamp = 3;
+  google.protobuf.Timestamp timestamp = 3;
 }
 
 // swagger:model ValidateTransactionRequest

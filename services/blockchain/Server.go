@@ -14,12 +14,11 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
@@ -41,8 +40,6 @@ type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
 	addBlockChan       chan *blockchain_api.AddBlockRequest
 	store              blockchain_store.Store
-	subtreeStore       blob.Store
-	utxoStore          utxo.Store
 	logger             ulogger.Logger
 	newSubscriptions   chan subscriber
 	deadSubscriptions  chan subscriber
@@ -57,8 +54,7 @@ type Blockchain struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, subtreeStore blob.Store,
-	utxoStore utxo.Store) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store) (*Blockchain, error) {
 
 	initPrometheusMetrics()
 
@@ -76,8 +72,6 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 
 	return &Blockchain{
 		store:             store,
-		subtreeStore:      subtreeStore,
-		utxoStore:         utxoStore,
 		logger:            logger,
 		addBlockChan:      make(chan *blockchain_api.AddBlockRequest, 10),
 		newSubscriptions:  make(chan subscriber, 10),
@@ -92,7 +86,27 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 }
 
 func (b *Blockchain) Health(ctx context.Context) (int, string, error) {
-	return 0, "", nil
+	checks := []health.Check{
+		{Name: "BlockchainStore", Check: b.store.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
+}
+
+func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+		tracing.WithParentStat(b.stats),
+		tracing.WithCounter(prometheusBlockchainHealth),
+		tracing.WithLogMessage(b.logger, "[HealthGRPC] called"),
+	)
+	defer deferFn()
+
+	status, details, err := b.Health(ctx)
+	return &blockchain_api.HealthResponse{
+		Ok:        status == http.StatusOK,
+		Details:   details,
+		Timestamp: timestamppb.Now(),
+	}, errors.WrapGRPC(err)
 }
 
 func (b *Blockchain) Init(_ context.Context) error {
@@ -233,20 +247,6 @@ func (b *Blockchain) Start(ctx context.Context) error {
 
 func (b *Blockchain) Stop(_ context.Context) error {
 	return nil
-}
-
-func (b *Blockchain) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		b.stats.NewStat("Health", true).AddTime(start)
-	}()
-
-	prometheusBlockchainHealth.Inc()
-
-	return &blockchain_api.HealthResponse{
-		Ok:        true,
-		Timestamp: timestamppb.New(time.Now()),
-	}, nil
 }
 
 func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBlockRequest) (*emptypb.Empty, error) {

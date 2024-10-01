@@ -2,7 +2,9 @@ package lustre
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -88,8 +90,81 @@ func NewLustreStore(logger ulogger.Logger, s3Client s3Store, dir string, persist
 	return lustreStore, nil
 }
 
-func (s *Lustre) Health(_ context.Context) (int, string, error) {
-	return 0, "Lustre blob Store", nil
+func (s *Lustre) Health(ctx context.Context) (int, string, error) {
+	var issues []string
+
+	// Check main path
+	if err := checkDirectoryPermissions(s.path); err != nil {
+		issues = append(issues, fmt.Sprintf("Main path issue: %v", err))
+	}
+
+	// Check persist subdirectory
+	persistPath := filepath.Join(s.path, s.persistSubDir)
+	if err := checkDirectoryPermissions(persistPath); err != nil {
+		issues = append(issues, fmt.Sprintf("Persist subdirectory issue: %v", err))
+	}
+
+	// Check S3 client if configured
+	if s.s3Client != nil {
+		if err := checkS3Connection(ctx, s.s3Client); err != nil {
+			issues = append(issues, fmt.Sprintf("S3 client issue: %v", err))
+		}
+	}
+
+	if len(issues) > 0 {
+		return http.StatusServiceUnavailable, fmt.Sprintf("Lustre blob Store issues: %v", issues), nil
+	}
+
+	return http.StatusOK, "Lustre blob Store healthy", nil
+}
+
+func checkDirectoryPermissions(path string) error {
+	// Check if directory exists
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("failed to stat directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("path is not a directory")
+	}
+
+	// Check read, write, and delete permissions with a single file operation
+	testFile := filepath.Join(path, ".lustre_test_rwx")
+
+	// Check write permission
+	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+		return fmt.Errorf("failed to write test file: %w", err)
+	}
+
+	// Check read permission
+	if _, err := os.ReadFile(testFile); err != nil {
+		return fmt.Errorf("failed to read test file: %w", err)
+	}
+
+	// Check delete permission
+	if err := os.Remove(testFile); err != nil {
+		return fmt.Errorf("failed to delete test file: %w", err)
+	}
+
+	return nil
+}
+
+func checkS3Connection(ctx context.Context, s3Client s3Store) error {
+	// Create a context with a timeout
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// Attempt to check if a known non-existent key exists
+	// This should return false without an error if the connection is working
+	exists, err := s3Client.Exists(ctx, []byte("lustre_health_check_nonexistent_key"))
+	if err != nil {
+		return fmt.Errorf("failed to check S3 connection: %w", err)
+	}
+	if exists {
+		return fmt.Errorf("unexpected result from S3 connection check")
+	}
+
+	return nil
 }
 
 func (s *Lustre) Close(_ context.Context) error {

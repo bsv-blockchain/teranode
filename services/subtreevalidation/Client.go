@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
@@ -21,6 +22,7 @@ func NewClient(ctx context.Context, logger ulogger.Logger, source string) (Inter
 	if !ok {
 		return nil, errors.NewConfigurationError("no subtreevalidation_grpcAddress setting found")
 	}
+
 	baConn, err := util.GetGRPCClient(ctx, subtreeValidationGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
@@ -37,12 +39,12 @@ func NewClient(ctx context.Context, logger ulogger.Logger, source string) (Inter
 }
 
 func (s *Client) Health(ctx context.Context) (int, string, error) {
-	_, err := s.apiClient.HealthGRPC(ctx, &subtreevalidation_api.EmptyMessage{})
-	if err != nil {
-		return -1, "", err
+	res, err := s.apiClient.HealthGRPC(ctx, &subtreevalidation_api.EmptyMessage{})
+	if !res.Ok || err != nil {
+		return http.StatusFailedDependency, res.Details, errors.UnwrapGRPC(err)
 	}
 
-	return 0, "", nil
+	return http.StatusOK, res.Details, nil
 }
 
 func (s *Client) CheckSubtree(ctx context.Context, subtreeHash chainhash.Hash, baseURL string, blockHeight uint32, blockHash *chainhash.Hash) error {

@@ -12,7 +12,7 @@ import (
 func Test_NewFiniteStateMachine(t *testing.T) {
 	ctx := context.Background()
 	logger := mock_logger.NewTestLogger()
-	blockchainClient, err := New(ctx, logger, nil, nil, nil)
+	blockchainClient, err := New(ctx, logger, nil)
 	require.NoError(t, err)
 
 	fsm := blockchainClient.NewFiniteStateMachine()

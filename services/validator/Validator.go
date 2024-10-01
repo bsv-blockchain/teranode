@@ -2,6 +2,9 @@ package validator
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
@@ -12,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -107,11 +111,42 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 	return v, nil
 }
 
-func (v *Validator) Health(cntxt context.Context) (int, string, error) {
-	start, stat, _ := tracing.NewStatFromContext(cntxt, "Health", v.stats)
+func (v *Validator) Health(ctx context.Context) (int, string, error) {
+	start, stat, _ := tracing.NewStatFromContext(ctx, "Health", v.stats)
 	defer stat.AddTime(start)
 
-	return 0, "LocalValidator", nil
+	checkBlockHeight := func(ctx context.Context) (int, string, error) {
+		var (
+			sb  strings.Builder
+			err error
+		)
+
+		blockHeight := v.GetBlockHeight()
+
+		switch {
+		case blockHeight == 0:
+			err := errors.NewProcessingError("error getting blockHeight from validator: 0")
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v,", err))
+		case blockHeight <= 0:
+			err = errors.NewProcessingError("blockHeight <= 0")
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d,", blockHeight))
+		default:
+			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d,", blockHeight))
+		}
+
+		if err != nil {
+			return http.StatusFailedDependency, sb.String(), err
+		}
+
+		return http.StatusOK, sb.String(), nil
+	}
+
+	checks := []health.Check{
+		{Name: "BlockHeight", Check: checkBlockHeight},
+		{Name: "UTXOStore", Check: v.utxoStore.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
 }
 
 func (v *Validator) GetBlockHeight() uint32 {
@@ -134,7 +169,6 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 
 			prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 		}
-
 	}
 
 	return err

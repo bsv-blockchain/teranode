@@ -1,9 +1,11 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"io/fs"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -196,7 +198,44 @@ func cleanExpiredFiles(s *File) {
 }
 
 func (s *File) Health(_ context.Context) (int, string, error) {
-	return 0, "File Store", nil
+	// Check if the path exists
+	if _, err := os.Stat(s.path); os.IsNotExist(err) {
+		return http.StatusInternalServerError, "File Store: Path does not exist", err
+	}
+
+	// Create a temporary file to test read/write/delete permissions
+	tempFile, err := os.CreateTemp(s.path, "health-check-*.tmp")
+	if err != nil {
+		return http.StatusInternalServerError, "File Store: Unable to create temporary file", err
+	}
+
+	tempFileName := tempFile.Name()
+	defer os.Remove(tempFileName) // Ensure the temp file is removed
+
+	// Test write permission
+	testData := []byte("health check")
+	if _, err := tempFile.Write(testData); err != nil {
+		return http.StatusInternalServerError, "File Store: Unable to write to file", err
+	}
+
+	tempFile.Close()
+
+	// Test read permission
+	readData, err := os.ReadFile(tempFileName)
+	if err != nil {
+		return http.StatusInternalServerError, "File Store: Unable to read file", err
+	}
+
+	if !bytes.Equal(readData, testData) {
+		return http.StatusInternalServerError, "File Store: Data integrity check failed", nil
+	}
+
+	// Test delete permission
+	if err := os.Remove(tempFileName); err != nil {
+		return http.StatusInternalServerError, "File Store: Unable to delete file", err
+	}
+
+	return http.StatusOK, "File Store: Healthy", nil
 }
 
 func (s *File) Close(_ context.Context) error {

@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -31,10 +32,20 @@ func NewLocalClient(logger ulogger.Logger, store blockchain.Store, subtreeStore 
 	}, nil
 }
 
-func (c LocalClient) Health(_ context.Context) (*blockchain_api.HealthResponse, error) {
-	return &blockchain_api.HealthResponse{
-		Ok: true,
-	}, nil
+func (c LocalClient) Health(ctx context.Context) (int, string, error) {
+	if status, msg, err := c.store.Health(ctx); err != nil {
+		return status, msg, err
+	}
+
+	if status, msg, err := c.subtreeStore.Health(ctx); err != nil {
+		return status, msg, err
+	}
+
+	if status, msg, err := c.utxoStore.Health(ctx); err != nil {
+		return status, msg, err
+	}
+
+	return http.StatusOK, "OK", nil
 }
 
 func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {

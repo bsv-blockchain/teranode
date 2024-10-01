@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/http"
 	"net/url"
 	"strconv"
 	"sync/atomic"
@@ -217,14 +218,14 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	// Trying to put and get a record to test the connection
 	key, err := aerospike.NewKey("test", "set", "key")
 	if err != nil {
-		return -1, details, err
+		return http.StatusServiceUnavailable, details, err
 	}
 
 	bin := aerospike.NewBin("bin", "value")
 
 	err = s.client.PutBins(writePolicy, key, bin)
 	if err != nil {
-		return -2, details, err
+		return http.StatusServiceUnavailable, details, err
 	}
 
 	policy := aerospike.NewPolicy()
@@ -234,10 +235,10 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 
 	_, err = s.client.Get(policy, key)
 	if err != nil {
-		return -3, details, err
+		return http.StatusServiceUnavailable, details, err
 	}
 
-	return 0, details, nil
+	return http.StatusOK, details, nil
 }
 
 func (s *Store) calculateOffsetForOutput(vout uint32) uint32 {

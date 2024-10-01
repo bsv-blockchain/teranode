@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -14,11 +15,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 
+	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	blockchain_options "github.com/bitcoin-sv/ubsv/stores/blockchain/options"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxo_memory "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -112,8 +115,10 @@ func Test_GetFSMCurrentState(t *testing.T) {
 }
 
 type testContext struct {
-	server *Blockchain
-	logger ulogger.Logger
+	server       *Blockchain
+	subtreeStore blob.Store
+	utxoStore    utxo.Store
+	logger       ulogger.Logger
 }
 
 func setup(t *testing.T) *testContext {
@@ -122,7 +127,7 @@ func setup(t *testing.T) *testContext {
 	subtreeStore := blob_memory.New()
 	utxoStore := utxo_memory.New(logger)
 	store := mockStore{}
-	server, err := New(context.Background(), logger, &store, subtreeStore, utxoStore)
+	server, err := New(context.Background(), logger, &store)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
@@ -130,8 +135,10 @@ func setup(t *testing.T) *testContext {
 	require.NoError(t, server.Init(context.Background()))
 
 	return &testContext{
-		server: server,
-		logger: logger,
+		server:       server,
+		subtreeStore: subtreeStore,
+		utxoStore:    utxoStore,
+		logger:       logger,
 	}
 }
 
@@ -141,7 +148,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
 	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
 
-	_, err = ctx.server.utxoStore.Create(context.Background(), tx1, 0)
+	_, err = ctx.utxoStore.Create(context.Background(), tx1, 0)
 	require.NoError(t, err)
 
 	nBits, _ := model.NewNBitFromString("2000ffff")
@@ -153,7 +160,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
-	err = ctx.server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
+	err = ctx.subtreeStore.Set(context.Background(), subtree.RootHash()[:], subtreeBytes, options.WithFileExtension("subtree"))
 	require.NoError(t, err)
 
 	subtreeHashes := make([]*chainhash.Hash, 0)
@@ -193,6 +200,10 @@ func NewMockStore(block *model.Block) blockchain_store.Store {
 
 type mockStore struct {
 	block *model.Block
+}
+
+func (s *mockStore) Health(ctx context.Context) (int, string, error) {
+	return http.StatusOK, "OK", nil
 }
 
 func (s *mockStore) GetDB() *usql.DB {

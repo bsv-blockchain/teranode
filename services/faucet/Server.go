@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -55,7 +56,13 @@ func New(logger ulogger.Logger, blockchainClient blockchain.ClientI) *Faucet {
 }
 
 func (f *Faucet) Health(ctx context.Context) (int, string, error) {
-	return 0, "", nil
+
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: f.blockchainClient.Health},
+		{Name: "CoinbaseClient", Check: f.coinbaseClient.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
 }
 
 func (f *Faucet) Init(ctx context.Context) error {

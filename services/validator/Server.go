@@ -3,12 +3,11 @@ package validator
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -52,7 +52,29 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blo
 }
 
 func (v *Server) Health(ctx context.Context) (int, string, error) {
-	return 0, "", nil
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: v.blockchainClient.Health},
+		{Name: "UTXOStore", Check: v.utxoStore.Health},
+		{Name: "Validator", Check: v.validator.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
+}
+
+func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+		tracing.WithParentStat(v.stats),
+		tracing.WithCounter(prometheusHealth),
+		tracing.WithLogMessage(v.logger, "[HealthGRPC] called"),
+	)
+	defer deferFn()
+
+	status, details, err := v.Health(ctx)
+
+	return &validator_api.HealthResponse{
+		Ok:      status == http.StatusOK,
+		Details: details,
+	}, errors.WrapGRPC(err)
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {
@@ -178,46 +200,6 @@ func (v *Server) Stop(_ context.Context) error {
 	}
 
 	return nil
-}
-
-func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		prometheusHealth.Inc()
-		v.stats.NewStat("Health", true).AddTime(start)
-	}()
-
-	var sb strings.Builder
-	errs := make([]error, 0)
-
-	blockHeight := v.validator.GetBlockHeight()
-	if blockHeight == 0 {
-		err := errors.NewProcessingError("error getting blockHeight from validator: 0")
-		errs = append(errs, err)
-		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v\n", err))
-	} else {
-		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
-	}
-
-	if blockHeight <= 0 {
-		errs = append(errs, errors.NewProcessingError("blockHeight <= 0"))
-		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d\n", blockHeight))
-	} else {
-		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
-	}
-
-	if len(errs) > 0 {
-		return &validator_api.HealthResponse{
-			Ok:        false,
-			Details:   sb.String(),
-			Timestamp: uint32(time.Now().Unix()),
-		}, errs[0]
-	}
-
-	return &validator_api.HealthResponse{
-		Ok:        true,
-		Timestamp: uint32(time.Now().Unix()),
-	}, nil
 }
 
 func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {

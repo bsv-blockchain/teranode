@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"net/http"
 	"sync/atomic"
 	"time"
 
@@ -84,12 +85,12 @@ func (c *Client) Stop() {
 }
 
 func (c *Client) Health(ctx context.Context) (int, string, error) {
-	_, err := c.client.HealthGRPC(ctx, &validator_api.EmptyMessage{})
-	if err != nil {
-		return -1, "Validator", err
+	res, err := c.client.HealthGRPC(ctx, &validator_api.EmptyMessage{})
+	if !res.Ok || err != nil {
+		return http.StatusFailedDependency, res.Details, errors.UnwrapGRPC(err)
 	}
 
-	return 0, "Validator", nil
+	return http.StatusOK, res.Details, nil
 }
 
 func (c *Client) GetBlockHeight() uint32 {

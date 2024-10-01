@@ -25,8 +25,8 @@ func Test_NewCustomError(t *testing.T) {
 
 	err := New(ERR_NOT_FOUND, "resource not found")
 	require.NotNil(t, err)
-	require.Equal(t, ERR_NOT_FOUND, err.Code)
-	require.Equal(t, "resource not found", err.Message)
+	require.Equal(t, ERR_NOT_FOUND, err.code)
+	require.Equal(t, "resource not found", err.message)
 
 	secondErr := New(ERR_INVALID_ARGUMENT, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", err)
 	thirdErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "[ValidateBlock][%s] failed to set block subtrees_set: ", "_test_string_", secondErr)
@@ -50,8 +50,8 @@ func Test_NewCustomError(t *testing.T) {
 func Test_FmtErrorCustomError(t *testing.T) {
 	err := New(ERR_NOT_FOUND, "resource not found")
 	require.NotNil(t, err)
-	require.Equal(t, ERR_NOT_FOUND, err.Code)
-	require.Equal(t, "resource not found", err.Message)
+	require.Equal(t, ERR_NOT_FOUND, err.code)
+	require.Equal(t, "resource not found", err.message)
 
 	fmtError := fmt.Errorf("error: %w", err)
 	require.NotNil(t, fmtError)
@@ -177,12 +177,12 @@ func TestUnwrapGRPC_DifferentErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			unwrappedErr := UnwrapGRPC(tc.grpcError)
 
-			if unwrappedErr.Code != tc.expectedCode {
-				t.Errorf("expected code %v; got %v", tc.expectedCode, unwrappedErr.Code)
+			if unwrappedErr.Code() != tc.expectedCode {
+				t.Errorf("expected code %v; got %v", tc.expectedCode, unwrappedErr.Code())
 			}
 
-			if unwrappedErr.Message != tc.expectedMsg {
-				t.Errorf("expected message %q; got %q", tc.expectedMsg, unwrappedErr.Message)
+			if unwrappedErr.Message() != tc.expectedMsg {
+				t.Errorf("expected message %q; got %q", tc.expectedMsg, unwrappedErr.Message())
 			}
 		})
 	}
@@ -230,16 +230,16 @@ func createGRPCError(code ERR, msg string) *Error {
 	}
 
 	return &Error{
-		Code:       code,
-		Message:    msg,
-		WrappedErr: st.Err(),
+		code:       code,
+		message:    msg,
+		wrappedErr: st.Err(),
 	}
 }
 
 func Test_UtxoSpentError(t *testing.T) {
 	baseErr := New(ERR_ERROR, "storage error")
 	require.NotNil(t, baseErr)
-	require.Equal(t, ERR_ERROR, baseErr.Code)
+	require.Equal(t, ERR_ERROR, baseErr.code)
 
 	utxoSpentError := NewUtxoSpentErr(chainhash.Hash{}, chainhash.Hash{}, time.Now(), baseErr)
 	require.NotNil(t, utxoSpentError)
@@ -491,8 +491,8 @@ func Test_UnwrapGRPCWithStandardError(t *testing.T) {
 	require.NotNil(t, unwrapped)
 
 	// Check that the unwrapped error contains the correct message and code
-	require.Equal(t, ERR_ERROR, unwrapped.Code)
-	require.Equal(t, "rpc error: code = InvalidArgument desc = Invalid argument provided", unwrapped.Message)
+	require.Equal(t, ERR_ERROR, unwrapped.Code())
+	require.Equal(t, "rpc error: code = InvalidArgument desc = Invalid argument provided", unwrapped.Message())
 
 	// Test with a different gRPC status code
 	grpcErrNotFound := status.Error(codes.NotFound, "Resource not found")
@@ -504,8 +504,8 @@ func Test_UnwrapGRPCWithStandardError(t *testing.T) {
 	require.NotNil(t, unwrappedNotFound)
 
 	// Check that the unwrapped error contains the correct message and code
-	require.Equal(t, ERR_ERROR, unwrappedNotFound.Code)
-	require.Equal(t, "rpc error: code = NotFound desc = Resource not found", unwrappedNotFound.Message)
+	require.Equal(t, ERR_ERROR, unwrappedNotFound.Code())
+	require.Equal(t, "rpc error: code = NotFound desc = Resource not found", unwrappedNotFound.Message())
 }
 
 func Test_UnwrapGRPCWithAnotherStandardError(t *testing.T) {
@@ -524,8 +524,8 @@ func Test_UnwrapGRPCWithAnotherStandardError(t *testing.T) {
 	require.NotNil(t, unwrapped)
 
 	// Check that the unwrapped error contains the correct message and code
-	require.Equal(t, ERR_ERROR, unwrapped.Code)
-	require.Equal(t, "rpc error: code = InvalidArgument desc = invalid argument provided", unwrapped.Message)
+	require.Equal(t, ERR_ERROR, unwrapped.Code())
+	require.Equal(t, "rpc error: code = InvalidArgument desc = invalid argument provided", unwrapped.Message())
 
 	// Test with a different gRPC status code and message
 	standardErrResourceExhausted := fmt.Errorf("Resource exhausted")
@@ -539,8 +539,8 @@ func Test_UnwrapGRPCWithAnotherStandardError(t *testing.T) {
 	require.NotNil(t, unwrappedResourceExhausted)
 
 	// Check that the unwrapped error contains the correct message and code
-	require.Equal(t, ERR_ERROR, unwrappedResourceExhausted.Code)
-	require.Equal(t, "rpc error: code = ResourceExhausted desc = Resource exhausted", unwrappedResourceExhausted.Message)
+	require.Equal(t, ERR_ERROR, unwrappedResourceExhausted.Code())
+	require.Equal(t, "rpc error: code = ResourceExhausted desc = Resource exhausted", unwrappedResourceExhausted.Message())
 }
 
 type server struct {

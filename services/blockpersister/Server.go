@@ -10,6 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/google/uuid"
 	"github.com/ordishs/gocore"
 )
@@ -69,7 +70,14 @@ func New(
 }
 
 func (u *Server) Health(ctx context.Context) (int, string, error) {
-	return 0, "", nil
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: u.blockchainClient.Health},
+		{Name: "BlockStore", Check: u.blockStore.Health},
+		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
+		{Name: "UTXOStore", Check: u.utxoStore.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
 }
 
 func (u *Server) Init(ctx context.Context) (err error) {

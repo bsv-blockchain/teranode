@@ -562,7 +562,7 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.Error(t, err)
 		e := err.(*errors.Error)
-		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code, "expected error code ERR_BLOCK_INVALID")
+		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code(), "expected error code ERR_BLOCK_INVALID")
 	})
 
 	t.Run("test parent has no block ID", func(t *testing.T) {
@@ -576,7 +576,7 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.Error(t, err)
 		e := err.(*errors.Error)
-		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code, "expected error code ERR_BLOCK_INVALID")
+		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code(), "expected error code ERR_BLOCK_INVALID")
 	})
 
 	t.Run("test parent is not in store so assume is in a previous block", func(t *testing.T) {

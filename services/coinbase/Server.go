@@ -2,6 +2,7 @@ package coinbase
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -11,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -38,8 +40,29 @@ func New(logger ulogger.Logger, blockchainClient bc.ClientI) *Server {
 	}
 }
 
-func (s *Server) Health(_ context.Context) (int, string, error) {
-	return 0, "", nil
+func (s *Server) Health(ctx context.Context) (int, string, error) {
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
+}
+
+func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+		tracing.WithParentStat(s.stats),
+		tracing.WithCounter(prometheusHealth),
+		tracing.WithLogMessage(s.logger, "[HealthGRPC] called"),
+	)
+	defer deferFn()
+
+	status, details, err := s.Health(ctx)
+
+	return &coinbase_api.HealthResponse{
+		Ok:        status == http.StatusOK,
+		Details:   details,
+		Timestamp: timestamppb.New(time.Now()),
+	}, errors.WrapGRPC(err)
 }
 
 func (s *Server) Init(ctx context.Context) error {
@@ -109,19 +132,6 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) Stop(ctx context.Context) error {
 	err := s.coinbase.peerSync.Stop(ctx)
 	return err
-}
-
-func (s *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		s.stats.NewStat("Health_grpc").AddTime(start)
-	}()
-
-	prometheusHealth.Inc()
-	return &coinbase_api.HealthResponse{
-		Ok:        true,
-		Timestamp: timestamppb.New(time.Now()),
-	}, nil
 }
 
 func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFundsRequest) (*coinbase_api.RequestFundsResponse, error) {

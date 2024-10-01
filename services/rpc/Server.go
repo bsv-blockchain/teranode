@@ -23,6 +23,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/btcjson"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/ordishs/gocore"
 )
 
@@ -1130,6 +1131,9 @@ func (s *RPCServer) Init(ctx context.Context) (err error) {
 	rpcHandlers = rpcHandlersBeforeInit
 	// rand.Seed(time.Now().UnixNano())
 	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger)
+	if err != nil {
+		return err
+	}
 
 	s.peerClient, err = peer.NewClient(ctx, s.logger)
 
@@ -1140,5 +1144,14 @@ func (s *RPCServer) Init(ctx context.Context) (err error) {
 		s.logger.Fatalf("Unknown network: %s", network)
 	}
 
-	return err
+	return nil
+}
+
+func (s *RPCServer) Health(ctx context.Context) (int, string, error) {
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
+		{Name: "BlockAssemblyClient", Check: s.blockAssemblyClient.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
 }

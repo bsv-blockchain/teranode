@@ -2,10 +2,11 @@ package cpuminer
 
 import (
 	"encoding/hex"
+	"testing"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // Pay-to-PubKeyHash address
@@ -45,8 +46,8 @@ func TestShortAddressToScript(t *testing.T) {
 	require.True(t, ok)
 
 	expected := "invalid address length for 'ADD8E55'"
-	assert.Equal(t, expected, ubsvError.Message)
-	assert.Equal(t, errors.ErrProcessing.Code, ubsvError.Code)
+	assert.Equal(t, expected, ubsvError.Message())
+	assert.Equal(t, errors.ErrProcessing.Code(), ubsvError.Code())
 }
 
 func TestUnsupportedAddressToScript(t *testing.T) {
@@ -58,6 +59,6 @@ func TestUnsupportedAddressToScript(t *testing.T) {
 	require.True(t, ok)
 
 	expected := "address 27BvY7rFguYQvEL872Y7Fo77Y3EBApC2EK is not supported"
-	assert.Equal(t, expected, ubsvError.Message)
-	assert.Equal(t, errors.ErrProcessing.Code, ubsvError.Code)
+	assert.Equal(t, expected, ubsvError.Message())
+	assert.Equal(t, errors.ErrProcessing.Code(), ubsvError.Code())
 }

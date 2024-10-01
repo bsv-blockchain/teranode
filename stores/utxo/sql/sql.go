@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"sync/atomic"
@@ -128,11 +129,12 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	details := fmt.Sprintf("SQL Engine is %s", s.engine)
 
 	var num int
+
 	err := s.db.QueryRowContext(ctx, "SELECT 1").Scan(&num)
 	if err != nil {
-		return -1, details, err
+		return http.StatusServiceUnavailable, details, err
 	}
-	return 0, details, nil
+	return http.StatusOK, details, nil
 }
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {

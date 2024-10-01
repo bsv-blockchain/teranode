@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -82,7 +83,12 @@ func NewMiner(ctx context.Context, logger ulogger.Logger, blockchainClient block
 }
 
 func (m *Miner) Health(ctx context.Context) (int, string, error) {
-	return 0, "", nil
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: m.blockchainClient.Health},
+		{Name: "BlockAssemblyClient", Check: m.blockAssemblyClient.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
 }
 
 func (m *Miner) Init(ctx context.Context) error {

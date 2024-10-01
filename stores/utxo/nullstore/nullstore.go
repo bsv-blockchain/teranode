@@ -2,6 +2,7 @@ package nullstore
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
@@ -44,7 +45,7 @@ func (m *NullStore) GetMedianBlockTime() uint32 {
 }
 
 func (m *NullStore) Health(ctx context.Context) (int, string, error) {
-	return 0, "NullStore Store", nil
+	return http.StatusOK, "NullStore Store available", nil
 }
 
 func (m *NullStore) Get(_ context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {

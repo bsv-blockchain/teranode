@@ -1,12 +1,15 @@
 package servicemanager
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -177,4 +180,30 @@ func (sm *ServiceManager) Wait() error {
 	sm.logger.Infof("🛑 All services stopped.")
 
 	return err // This is the original error
+}
+
+func (sm *ServiceManager) HealthHandler(ctx context.Context) (int, string, error) {
+	overallStatus := http.StatusOK
+	msgs := make([]string, 0, len(sm.services))
+
+	for _, service := range sm.services {
+		status, details, err := service.instance.Health(ctx)
+
+		if err != nil {
+			overallStatus = http.StatusServiceUnavailable
+		}
+
+		jsonStr := fmt.Sprintf(`{"service": "%s","status": "%d","nested": [%s]}`, service.name, status, details)
+
+		var jsonFormatted bytes.Buffer
+
+		err = json.Indent(&jsonFormatted, []byte(jsonStr), "", "  ")
+		if err == nil {
+			jsonStr = jsonFormatted.String()
+		}
+
+		msgs = append(msgs, jsonStr)
+	}
+
+	return overallStatus, strings.Join(msgs, ",\n"), nil
 }

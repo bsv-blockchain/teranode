@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/services/blockpersister"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
 	memory_blob "github.com/bitcoin-sv/ubsv/stores/blob/memory"
@@ -280,14 +280,15 @@ type mockStore struct {
 	block *model.Block
 }
 
+func (s *mockStore) Health(ctx context.Context) (int, string, error) {
+	return http.StatusOK, "OK", nil
+}
+
 func (s *mockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (s *mockStore) Health(ctx context.Context) (*blockchain_api.HealthResponse, error) {
-	panic("not implemented")
-}
 func (s *mockStore) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
 	s.block = block
 	return nil

@@ -4,6 +4,8 @@ option go_package = "./;blockvalidation_api";
 
 package blockvalidation_api;
 
+import "google/protobuf/timestamp.proto";
+
 service BlockValidationAPI {
   // Health returns the health of the API.
   rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
@@ -24,7 +26,7 @@ message EmptyMessage {}
 message HealthResponse {
   bool ok = 1;
   string details = 2;
-  uint32 timestamp = 3;
+  google.protobuf.Timestamp timestamp = 3;
 }
 
 // swagger:model BlockFoundRequest

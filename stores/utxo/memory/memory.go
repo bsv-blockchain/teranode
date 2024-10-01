@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"sync/atomic"
 
@@ -41,7 +42,7 @@ func New(logger ulogger.Logger) *Memory {
 }
 
 func (m *Memory) Health(_ context.Context) (int, string, error) {
-	return 0, "", nil
+	return http.StatusOK, "Memory Store available", nil
 }
 
 func (m *Memory) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {

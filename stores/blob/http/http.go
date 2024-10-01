@@ -47,7 +47,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 func (s *HTTPStore) Health(ctx context.Context) (int, string, error) {
 	resp, err := s.httpClient.Get(fmt.Sprintf("%s/health", s.baseURL))
 	if err != nil {
-		return 0, "", errors.NewStorageError("[HTTPStore] Health check failed", err)
+		return http.StatusServiceUnavailable, "HTTP Store: Service Unavailable", errors.NewStorageError("[HTTPStore] Health check failed", err)
 	}
 	defer resp.Body.Close()
 

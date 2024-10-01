@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"sync"
 	"time"
@@ -75,6 +76,16 @@ func New(logger ulogger.Logger, storeURL *url.URL) (*SQL, error) {
 	}
 
 	return s, nil
+}
+
+func (s *SQL) Health(ctx context.Context) (int, string, error) {
+	// Check if the database connection is alive
+	err := s.db.PingContext(ctx)
+	if err != nil {
+		return http.StatusFailedDependency, "Database connection error", err
+	}
+
+	return http.StatusOK, "OK", nil
 }
 
 func (s *SQL) GetDB() *usql.DB {

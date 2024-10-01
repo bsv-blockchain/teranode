@@ -25,6 +25,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -33,6 +34,7 @@ import (
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type processBlockFound struct {
@@ -99,8 +101,32 @@ func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
 	return bVal
 }
 
-func (u *Server) Health(_ context.Context) (int, string, error) {
-	return 0, "", nil
+func (u *Server) Health(ctx context.Context) (int, string, error) {
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: u.blockchainClient.Health},
+		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
+		{Name: "TxStore", Check: u.txStore.Health},
+		{Name: "UTXOStore", Check: u.utxoStore.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
+}
+
+func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+		tracing.WithParentStat(u.stats),
+		tracing.WithCounter(prometheusBlockValidationHealth),
+		tracing.WithLogMessage(u.logger, "[HealthGRPC] called"),
+	)
+	defer deferFn()
+
+	status, details, err := u.Health(ctx)
+
+	return &blockvalidation_api.HealthResponse{
+		Ok:        status == http.StatusOK,
+		Details:   details,
+		Timestamp: timestamppb.Now(),
+	}, errors.WrapGRPC(err)
 }
 
 func (u *Server) Init(ctx context.Context) (err error) {
@@ -495,20 +521,6 @@ func (u *Server) Stop(_ context.Context) error {
 	u.processSubtreeNotify.Stop()
 
 	return nil
-}
-
-func (u *Server) HealthGRPC(_ context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
-	start, stat, _ := tracing.NewStatFromContext(context.Background(), "Health", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockValidationHealth.Inc()
-
-	return &blockvalidation_api.HealthResponse{
-		Ok:        true,
-		Timestamp: uint32(time.Now().Unix()),
-	}, nil
 }
 
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {

@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -22,6 +23,10 @@ func NewMockStore() *MockStore {
 		Blocks:      map[chainhash.Hash]*model.Block{},
 		BlockExists: map[chainhash.Hash]bool{},
 	}
+}
+
+func (m MockStore) Health(ctx context.Context) (int, string, error) {
+	return http.StatusOK, "OK", nil
 }
 
 func (m MockStore) GetDB() *usql.DB {

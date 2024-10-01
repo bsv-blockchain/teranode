@@ -2,6 +2,7 @@ package blockassembly
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -106,6 +107,15 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, blockAssem
 	client.batcher = *batcher.New[batchItem](batchSize, duration, sendBatch, true)
 
 	return client, nil
+}
+
+func (s *Client) Health(ctx context.Context) (int, string, error) {
+	resp, err := s.client.HealthGRPC(ctx, &blockassembly_api.EmptyMessage{})
+	if !resp.Ok || err != nil {
+		return http.StatusFailedDependency, resp.Details, errors.UnwrapGRPC(err)
+	}
+
+	return http.StatusOK, "OK", nil
 }
 
 func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64) (bool, error) {

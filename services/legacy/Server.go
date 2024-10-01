@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
@@ -63,8 +64,17 @@ func New(logger ulogger.Logger,
 	}
 }
 
-func (s *Server) Health(_ context.Context) (int, string, error) {
-	return 0, "", nil
+func (s *Server) Health(ctx context.Context) (int, string, error) {
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
+		{Name: "ValidationClient", Check: s.validationClient.Health},
+		{Name: "SubtreeStore", Check: s.subtreeStore.Health},
+		{Name: "UTXOStore", Check: s.utxoStore.Health},
+		{Name: "SubtreeValidation", Check: s.subtreeValidation.Health},
+		{Name: "BlockValidation", Check: s.blockValidation.Health},
+	}
+
+	return health.CheckAll(ctx, checks)
 }
 
 func (s *Server) Init(ctx context.Context) error {
