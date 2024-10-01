@@ -188,6 +188,19 @@ func main() {
 		_, _ = w.Write([]byte(details))
 	})
 
+	// backwards compatibility (using old healthcheck endpoint on 9091)
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		status, details, err := sm.HealthHandler(ctx)
+		if err != nil {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(details))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(details))
+	})
+
 	port, ok := gocore.Config().GetInt("health_check_port", 8000)
 	if !ok {
 		logger.Warnf("health_check_port not set in config, using default port 8000")
