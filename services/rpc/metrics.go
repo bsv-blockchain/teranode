@@ -1,14 +1,15 @@
 package rpc
 
 import (
+	"sync"
+
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"sync"
 )
 
 var (
-	//prometheusHealth                     prometheus.Counter
+	// prometheusHealth                     prometheus.Counter
 	prometheusHandleGetBlock             prometheus.Histogram
 	prometheusHandleGetBestBlockHash     prometheus.Histogram
 	prometheusHandleCreateRawTransaction prometheus.Histogram
@@ -16,6 +17,9 @@ var (
 	prometheusHandleGenerate             prometheus.Histogram
 	prometheusHandleGetMiningCandidate   prometheus.Histogram
 	prometheusHandleSubmitMiningSolution prometheus.Histogram
+	prometheusHandleGetpeerinfo          prometheus.Histogram
+	prometheusHandleGetblockchaininfo    prometheus.Histogram
+	prometheusHandleGetinfo              prometheus.Histogram
 )
 
 var (
@@ -27,7 +31,7 @@ func initPrometheusMetrics() {
 }
 
 func _initPrometheusMetrics() {
-	//prometheusHealth = promauto.NewCounter(
+	// prometheusHealth = promauto.NewCounter(
 	//	prometheus.CounterOpts{
 	//		Namespace: "rpc",
 	//		Name:      "health",
@@ -87,6 +91,30 @@ func _initPrometheusMetrics() {
 			Namespace: "rpc",
 			Name:      "submit_mining_solution",
 			Help:      "Histogram of calls to handleSubmitMiningSolution in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGetpeerinfo = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "get_peer_info",
+			Help:      "Histogram of calls to handleGetpeerinfo in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGetblockchaininfo = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "get_blockchain_info",
+			Help:      "Histogram of calls to handleGetblockchaininfo in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGetinfo = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "get_info",
+			Help:      "Histogram of calls to handleGetinfo in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

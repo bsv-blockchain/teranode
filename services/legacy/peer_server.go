@@ -578,8 +578,8 @@ func (sp *serverPeer) OnBlock(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	}
 }
 
-// OnInv is invoked when a peer receives an inv bitcoin message and is
-// used to examine the inventory being advertised by the remote peer and react
+// OnInv is invoked when a peer receives an inv bitcoin message and
+// is used to examine the inventory being advertised by the remote peer and react
 // accordingly.  We pass the message down to blockmanager which will call
 // QueueMessage with any appropriate responses.
 func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
@@ -807,7 +807,7 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 	if sp.server.services&wire.SFNodeBloom != wire.SFNodeBloom {
 		// Ban the peer if the protocol version is high enough that the
 		// peer is knowingly violating the protocol and banning is
-		// enabled.
+		// enabled.  This is done to prevent fingerprinting attacks.
 		//
 		// NOTE: Even though the addBanScore function already examines
 		// whether or not banning is enabled, it is checked here as well
@@ -1523,7 +1523,12 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			peers = append(peers, sp)
 		})
 		msg.reply <- peers
-
+		// peers := make([]*serverPeer, 0, state.Count())
+		// state.forAllPeers(func(sp *serverPeer) {
+		// 	if sp.Connected() {
+		// 		peers = append(peers, sp)
+		// 	}
+		// })
 	case connectNodeMsg:
 		// TODO: duplicate oneshots?
 		// Limit max number of total peers.
@@ -1755,12 +1760,13 @@ func (s *server) peerHandler() {
 	s.addrManager.Start()
 	s.syncManager.Start()
 
-	s.logger.Infof("Starting peer handler")
+	s.logger.Infof("[Peer Handler] Starting...")
+	defer s.wg.Done()
 
 	state := &peerState{
 		inboundPeers:    make(map[int32]*serverPeer),
-		persistentPeers: make(map[int32]*serverPeer),
 		outboundPeers:   make(map[int32]*serverPeer),
+		persistentPeers: make(map[int32]*serverPeer),
 		banned:          make(map[string]time.Time),
 		outboundGroups:  make(map[string]int),
 		connectionCount: make(map[string]int),
@@ -1973,17 +1979,14 @@ cleanup:
 
 // Start begins accepting connections from peers.
 func (s *server) Start() {
+
 	// Already started?
 	if atomic.AddInt32(&s.started, 1) != 1 {
 		return
 	}
 
-	s.logger.Infof("Starting server")
-
-	// Start the peer handler which in turn starts the address and block
-	// managers.
 	s.wg.Add(1)
-	go s.peerHandler()
+	s.peerHandler()
 
 	if s.nat != nil {
 		s.wg.Add(1)
@@ -2097,6 +2100,25 @@ func parseListeners(addrs []string) ([]net.Addr, error) {
 	}
 	return netAddrs, nil
 }
+func (s *server) getPeers() []*serverPeer {
+	replyChan := make(chan []*serverPeer, 1)
+
+	select {
+	case s.query <- getPeersMsg{reply: replyChan}:
+		s.logger.Debugf("getPeers: Query message sent successfully")
+	default:
+		s.logger.Errorf("getPeers: Failed to send query message, channel full")
+		return nil
+	}
+
+	select {
+	case peers := <-replyChan:
+		return peers
+	case <-time.After(5 * time.Second):
+		s.logger.Warnf("getPeers: Timeout waiting for peer list")
+		return nil
+	}
+}
 
 func (s *server) upnpUpdateThread() {
 	// Go off immediately to prevent code duplication, thereafter we renew
@@ -2158,7 +2180,6 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	listenAddrs []string, chainParams *chaincfg.Params, assetHttpAddress string) (*server, error) {
-
 	// init config
 	c, _, err := loadConfig(logger)
 	if err != nil {

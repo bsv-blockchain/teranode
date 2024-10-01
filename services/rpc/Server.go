@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/btcjson"
+	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/gocore"
 )
@@ -111,7 +112,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getbestblock":          handleUnimplemented,
 	"getbestblockhash":      handleGetBestBlockHash,
 	"getblock":              handleGetBlock,
-	"getblockchaininfo":     handleUnimplemented,
+	"getblockchaininfo":     handleGetblockchaininfo,
 	"getblockcount":         handleUnimplemented,
 	"getblockhash":          handleUnimplemented,
 	"getblockheader":        handleUnimplemented,
@@ -124,12 +125,12 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getgenerate":           handleUnimplemented,
 	"gethashespersec":       handleUnimplemented,
 	"getheaders":            handleUnimplemented,
-	"getinfo":               handleUnimplemented,
+	"getinfo":               handleGetInfo,
 	"getmempoolinfo":        handleUnimplemented,
 	"getmininginfo":         handleUnimplemented,
 	"getnettotals":          handleUnimplemented,
 	"getnetworkhashps":      handleUnimplemented,
-	"getpeerinfo":           handleUnimplemented,
+	"getpeerinfo":           handleGetpeerinfo,
 	"getrawmempool":         handleUnimplemented,
 	"getrawtransaction":     handleUnimplemented,
 	"gettxout":              handleUnimplemented,
@@ -538,6 +539,7 @@ type RPCServer struct {
 	listeners              []net.Listener
 	blockchainClient       blockchain.ClientI
 	blockAssemblyClient    *blockassembly.Client
+	peerClient             peer.ClientI
 	chainParams            *chaincfg.Params
 }
 
@@ -1128,6 +1130,8 @@ func (s *RPCServer) Init(ctx context.Context) (err error) {
 	rpcHandlers = rpcHandlersBeforeInit
 	// rand.Seed(time.Now().UnixNano())
 	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger)
+
+	s.peerClient, err = peer.NewClient(ctx, s.logger)
 
 	network, _ := gocore.Config().Get("network", "mainnet")
 
