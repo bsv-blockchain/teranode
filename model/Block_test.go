@@ -623,8 +623,7 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 
 		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.True(t, len(oldBlockIDs) > 0)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrTransactionInputFromVeryOldBlock))
+		require.NoError(t, err)
 	})
 
 }

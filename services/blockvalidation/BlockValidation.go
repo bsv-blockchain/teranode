@@ -345,11 +345,11 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 
 		blocksPartOfCurrentChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, referencedOldBlockIDs)
 		if err != nil {
-			return errors.NewServiceError("[_][%s] failed to check if old blocks are part of the current chain", block.String(), err)
+			return errors.NewServiceError("[BlockValidation][%s] failed to check if old blocks are part of the current chain", block.String(), err)
 		}
 
 		if !blocksPartOfCurrentChain {
-			return errors.NewBlockInvalidError("[_][%s] block is not valid, transactions refer old blocks (%v) that are not part of our current chain", block.String(), referencedOldBlockIDs)
+			return errors.NewBlockInvalidError("[BlockValidation][%s] block is not valid, transactions refer old blocks (%v) that are not part of our current chain", block.String(), referencedOldBlockIDs)
 		}
 	}
 
@@ -703,7 +703,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				} else {
 					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", block.String(), err)
 					// TODO TEMP disable invalidation in the scaling test
-
+					//      Since the invalidation is disabled, here we are not invalidating the block
+					// 		Consider enabling the invalidation in the future
 					// if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
 					//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
 					//}
@@ -723,12 +724,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				}
 
 				if !blocksPartOfCurrentChain {
-					// return errors.NewBlockInvalidError("[_][%s] block is not valid, transactions refer old blocks (%v) that are not part of our current chain", block.String(), referencedOldBlockIDs)
+					// TODO return errors.NewBlockInvalidError("[_][%s] block is not valid, transactions refer old blocks (%v) that are not part of our current chain", block.String(), referencedOldBlockIDs)
+
+					// TODO TEMP disable invalidation in the scaling test
+					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid, transactions refer old blocks (%v) that are not part of our current chain", block.String())
+
 					// if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
 					//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
 					//}
-					// TODO TEMP disable invalidation in the scaling test
-					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid, transactions refer old blocks (%v) that are not part of our current chain", block.String())
 				}
 			}
 		}()

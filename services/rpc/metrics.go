@@ -1,14 +1,15 @@
 package rpc
 
 import (
+	"sync"
+
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"sync"
 )
 
 var (
-	//prometheusHealth                     prometheus.Counter
+	// prometheusHealth                     prometheus.Counter
 	prometheusHandleGetBlock             prometheus.Histogram
 	prometheusHandleGetBestBlockHash     prometheus.Histogram
 	prometheusHandleCreateRawTransaction prometheus.Histogram
@@ -27,7 +28,7 @@ func initPrometheusMetrics() {
 }
 
 func _initPrometheusMetrics() {
-	//prometheusHealth = promauto.NewCounter(
+	//  prometheusHealth = promauto.NewCounter(
 	//	prometheus.CounterOpts{
 	//		Namespace: "rpc",
 	//		Name:      "health",

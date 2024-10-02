@@ -821,23 +821,14 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 					parentG.Go(func() error {
 						oldParentBlockIDs, err := b.checkParentExistsOnChain(gCtx, logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
-						if err != nil {
-							// if the error is that the parent is from a block that is older than the 100 blocks we have in the current chain
-							// add the blockIDs to the transactionsFromOldBlocks map, so the validator can check if those blocks are part of our chain
-							// and return nil
-							if errors.Is(err, errors.ErrTransactionInputFromVeryOldBlock) {
-								// TODO: currently we are only returning the old blockIDs,
-								// 		 consider appending the transactions hashes to values, so we can check which transactions are from which blocks
-								//		 enabling better handling on identifying which transactions are invalid
-								for _, blockID := range oldParentBlockIDs {
-									oldBlockIDs.Store(blockID, struct{}{})
-								}
 
-								return nil
+						if len(oldParentBlockIDs) > 0 {
+							for _, blockID := range oldParentBlockIDs {
+								oldBlockIDs.Store(blockID, struct{}{})
 							}
 						}
 
-						return nil
+						return err
 					})
 				}
 
@@ -865,17 +856,20 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 	// for the first situation we don't start validating the current block until the parent is validated.
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
 	parentTxMeta, err := getParentTxMeta(gCtx, txMetaStore, parentTxStruct)
+
+	var oldBlockIDs []uint32
+
 	if err != nil {
-		return nil, err
+		return oldBlockIDs, err
 	}
 
 	if parentTxMeta == nil || parentTxMeta.IsCoinbase {
-		return nil, nil
+		return oldBlockIDs, nil
 	}
 
 	if len(parentTxMeta.BlockIDs) > 0 && parentTxMeta.BlockIDs[0] == GenesisBlockID {
 		// when blockIds[0] is GenesisBlockID, it means the transaction was imported from a restore and is on a valid chain
-		return nil, nil
+		return oldBlockIDs, nil
 	}
 
 	// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
@@ -893,18 +887,19 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 			// parent is from a block that is older than the 100 blocks we have in the current chain
 			// we can ignore this, as the parent is not on our current chain
 			logger.Warnf("[BLOCK][%s] parent transaction %s of tx %s is over 100 blocks ago - skipping", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
-			return parentTxMeta.BlockIDs, errors.ErrTransactionInputFromVeryOldBlock
-			// Check if the parent is from an older block in our current chain
-			// we need to return parentTxMeta.BlockIDs back to validator, which can check if those blocks are part of our chain
 
+			// we need to return parentTxMeta.BlockIDs back to validator, which can check if those blocks are part of our chain
+			oldBlockIDs = append(oldBlockIDs, parentTxMeta.BlockIDs...)
+
+			return oldBlockIDs, nil
 		}
 	}
 
 	if len(foundInPreviousBlocks) != 1 {
-		return nil, ErrCheckParentExistsOnChain(gCtx, currentBlockHeaderIDsMap, parentTxMeta, txMetaStore, parentTxStruct, b, foundInPreviousBlocks)
+		return oldBlockIDs, ErrCheckParentExistsOnChain(gCtx, currentBlockHeaderIDsMap, parentTxMeta, txMetaStore, parentTxStruct, b, foundInPreviousBlocks)
 	}
 
-	return nil, nil
+	return oldBlockIDs, nil
 }
 
 func ErrCheckParentExistsOnChain(gCtx context.Context, currentBlockHeaderIDsMap map[uint32]struct{}, parentTxMeta *meta.Data, txMetaStore utxo.Store, parentTxStruct missingParentTx, b *Block, foundInPreviousBlocks map[uint32]struct{}) error {
