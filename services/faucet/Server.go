@@ -60,6 +60,7 @@ func (f *Faucet) Health(ctx context.Context) (int, string, error) {
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: f.blockchainClient.Health},
 		{Name: "CoinbaseClient", Check: f.coinbaseClient.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(f.blockchainClient)},
 	}
 
 	return health.CheckAll(ctx, checks)

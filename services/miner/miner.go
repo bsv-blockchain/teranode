@@ -86,6 +86,7 @@ func (m *Miner) Health(ctx context.Context) (int, string, error) {
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: m.blockchainClient.Health},
 		{Name: "BlockAssemblyClient", Check: m.blockAssemblyClient.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(m.blockchainClient)},
 	}
 
 	return health.CheckAll(ctx, checks)

@@ -35,7 +35,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -247,13 +246,12 @@ type server struct {
 	cfCheckptCachesMtx sync.RWMutex
 
 	// ubsv additions
-	logger            ulogger.Logger
-	blockchainClient  blockchain.ClientI
-	utxoStore         utxostore.Store
-	subtreeStore      blob.Store
-	subtreeValidation subtreevalidation.Interface
-	blockValidation   blockvalidation.Interface
-	assetHttpAddress  string
+	logger           ulogger.Logger
+	blockchainClient blockchain.ClientI
+	utxoStore        utxostore.Store
+	subtreeStore     blob.Store
+	blockValidation  blockvalidation.Interface
+	assetHttpAddress string
 }
 
 // serverPeer extends the peer to maintain state shared by the server and
@@ -2178,7 +2176,7 @@ out:
 // connections from peers.
 func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockchainClient blockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
-	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
+	blockValidation blockvalidation.Interface,
 	listenAddrs []string, chainParams *chaincfg.Params, assetHttpAddress string) (*server, error) {
 	// init config
 	c, _, err := loadConfig(logger)
@@ -2257,7 +2255,6 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		blockchainClient:     blockchainClient,
 		utxoStore:            utxoStore,
 		subtreeStore:         subtreeStore,
-		subtreeValidation:    subtreeValidation,
 		blockValidation:      blockValidation,
 		assetHttpAddress:     assetHttpAddress,
 	}
@@ -2269,7 +2266,6 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		validationClient,
 		utxoStore,
 		subtreeStore,
-		subtreeValidation,
 		blockValidation,
 		&netsync.Config{
 			PeerNotifier:            &s,

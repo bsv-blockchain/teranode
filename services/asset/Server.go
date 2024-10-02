@@ -50,6 +50,7 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "TxStore", Check: v.txStore.Health},
 		{Name: "BlockPersisterStore", Check: v.blockPersisterStore.Health},
 		{Name: "BlockchainClient", Check: v.blockchainClient.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(v.blockchainClient)},
 	}
 
 	return health.CheckAll(ctx, checks)

@@ -32,12 +32,11 @@ type Server struct {
 	height   uint32
 
 	// ubsv stores
-	blockchainClient  blockchain.ClientI
-	validationClient  validator.Interface
-	subtreeStore      blob.Store
-	utxoStore         utxo.Store
-	subtreeValidation subtreevalidation.Interface
-	blockValidation   blockvalidation.Interface
+	blockchainClient blockchain.ClientI
+	validationClient validator.Interface
+	subtreeStore     blob.Store
+	utxoStore        utxo.Store
+	blockValidation  blockvalidation.Interface
 }
 
 // New will return a server instance with the logger stored within it
@@ -53,14 +52,13 @@ func New(logger ulogger.Logger,
 	// initPrometheusMetrics()
 
 	return &Server{
-		logger:            logger,
-		stats:             gocore.NewStat("legacy"),
-		blockchainClient:  blockchainClient,
-		validationClient:  validationClient,
-		subtreeStore:      subtreeStore,
-		utxoStore:         utxoStore,
-		subtreeValidation: subtreeValidation,
-		blockValidation:   blockValidation,
+		logger:           logger,
+		stats:            gocore.NewStat("legacy"),
+		blockchainClient: blockchainClient,
+		validationClient: validationClient,
+		subtreeStore:     subtreeStore,
+		utxoStore:        utxoStore,
+		blockValidation:  blockValidation,
 	}
 }
 
@@ -70,8 +68,8 @@ func (s *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "ValidationClient", Check: s.validationClient.Health},
 		{Name: "SubtreeStore", Check: s.subtreeStore.Health},
 		{Name: "UTXOStore", Check: s.utxoStore.Health},
-		{Name: "SubtreeValidation", Check: s.subtreeValidation.Health},
 		{Name: "BlockValidation", Check: s.blockValidation.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -111,7 +109,6 @@ func (s *Server) Init(ctx context.Context) error {
 		s.validationClient,
 		s.utxoStore,
 		s.subtreeStore,
-		s.subtreeValidation,
 		s.blockValidation,
 		listenAddresses,
 		chainParams,

@@ -74,6 +74,7 @@ func (ps *PropagationServer) Health(ctx context.Context) (int, string, error) {
 		{Name: "BlockchainClient", Check: ps.blockchainClient.Health},
 		{Name: "ValidatorClient", Check: ps.validator.Health},
 		{Name: "TxStore", Check: ps.txStore.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(ps.blockchainClient)},
 	}
 
 	return health.CheckAll(ctx, checks)

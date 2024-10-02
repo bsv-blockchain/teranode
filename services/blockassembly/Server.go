@@ -99,6 +99,7 @@ func (ba *BlockAssembly) Health(ctx context.Context) (int, string, error) {
 		{Name: "SubtreeStore", Check: ba.subtreeStore.Health},
 		{Name: "TxStore", Check: ba.txStore.Health},
 		{Name: "UTXOStore", Check: ba.utxoStore.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(ba.blockchainClient)},
 	}
 
 	return health.CheckAll(ctx, checks)

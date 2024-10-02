@@ -1151,6 +1151,7 @@ func (s *RPCServer) Health(ctx context.Context) (int, string, error) {
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
 		{Name: "BlockAssemblyClient", Check: s.blockAssemblyClient.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)},
 	}
 
 	return health.CheckAll(ctx, checks)

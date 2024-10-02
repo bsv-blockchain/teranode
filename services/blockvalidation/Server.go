@@ -107,6 +107,7 @@ func (u *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
 		{Name: "TxStore", Check: u.txStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
 	}
 
 	return health.CheckAll(ctx, checks)

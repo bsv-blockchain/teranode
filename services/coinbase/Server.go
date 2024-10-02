@@ -43,6 +43,7 @@ func New(logger ulogger.Logger, blockchainClient bc.ClientI) *Server {
 func (s *Server) Health(ctx context.Context) (int, string, error) {
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
+		{Name: "FSM", Check: bc.CheckFSM(s.blockchainClient)},
 	}
 
 	return health.CheckAll(ctx, checks)
