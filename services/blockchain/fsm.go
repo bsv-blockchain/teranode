@@ -135,7 +135,7 @@ func CheckFSM(blockchainClient ClientI) func(ctx context.Context) (int, string, 
 	return func(ctx context.Context) (int, string, error) {
 		state, err := blockchainClient.GetFSMCurrentState(ctx)
 		if err != nil {
-			return http.StatusServiceUnavailable, fmt.Sprintf(`{"service": "FSM", "status": "%d", "error": "%v"}`, http.StatusServiceUnavailable, err), err
+			return http.StatusServiceUnavailable, fmt.Sprintf(`{"resource": "FSM", "status": "%d", "error": "%v"}`, http.StatusServiceUnavailable, err), err
 		}
 
 		var (
@@ -170,6 +170,6 @@ func CheckFSM(blockchainClient ClientI) func(ctx context.Context) (int, string, 
 			message = fmt.Sprintf("OK?: %s", state.String())
 		}
 
-		return status, fmt.Sprintf(`{"service": "FSM", "status": "%d", "state": "%s", "message": "%s"}`, status, state.String(), message), nil
+		return status, fmt.Sprintf(`{"resource": "FSM", "status": "%d", "state": "%s", "message": "%s"}`, status, state.String(), message), nil
 	}
 }
