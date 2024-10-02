@@ -193,7 +193,7 @@ func (sm *ServiceManager) HealthHandler(ctx context.Context) (int, string, error
 			overallStatus = http.StatusServiceUnavailable
 		}
 
-		jsonStr := fmt.Sprintf(`{"service": "%s","status": "%d","nested": [%s]}`, service.name, status, details)
+		jsonStr := fmt.Sprintf(`{"services": [{"service": "%s","status": "%d","dependencies": [%s]}]}`, service.name, status, details)
 
 		var jsonFormatted bytes.Buffer
 

@@ -27,7 +27,7 @@ func CheckAll(ctx context.Context, checks []Check) (int, string, error) {
 		var msg string
 
 		if message[0] == '{' && message[len(message)-1] == '}' {
-			msg = fmt.Sprintf(`{"service": "%s", "status": "%d", "error": "%v", "nested": [%s]}`, check.Name, status, err, message)
+			msg = fmt.Sprintf(`{"service": "%s", "status": "%d", "error": "%v", "dependencies": [%s]}`, check.Name, status, err, message)
 		} else {
 			msg = fmt.Sprintf(`{"service": "%s", "status": "%d", "error": "%v", "message": "%s"}`, check.Name, status, err, message)
 		}
