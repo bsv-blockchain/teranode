@@ -2,7 +2,6 @@ package blockchain
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -135,41 +134,32 @@ func CheckFSM(blockchainClient ClientI) func(ctx context.Context) (int, string, 
 	return func(ctx context.Context) (int, string, error) {
 		state, err := blockchainClient.GetFSMCurrentState(ctx)
 		if err != nil {
-			return http.StatusServiceUnavailable, fmt.Sprintf(`{"resource": "FSM", "status": "%d", "error": "%v"}`, http.StatusServiceUnavailable, err), err
+			return http.StatusServiceUnavailable, "failed to check FSM state", err
 		}
 
 		var (
-			status  int
-			message string
+			status int
 		)
 
 		switch *state {
 		case blockchain_api.FSMStateType_CATCHINGBLOCKS:
 			status = http.StatusOK
-			message = "OK"
 		case blockchain_api.FSMStateType_CATCHINGTXS:
 			status = http.StatusOK
-			message = "OK"
 		case blockchain_api.FSMStateType_LEGACYSYNCING:
 			status = http.StatusOK
-			message = "OK"
 		case blockchain_api.FSMStateType_RESTORING:
 			status = http.StatusOK
-			message = "OK"
 		case blockchain_api.FSMStateType_RUNNING:
 			status = http.StatusOK
-			message = "OK"
 		case blockchain_api.FSMStateType_STOPPED:
 			status = http.StatusServiceUnavailable
-			message = "Resource flagged as stopped"
 		case blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE:
 			status = http.StatusServiceUnavailable
-			message = "Resource flagged as unavailable"
 		default:
 			status = http.StatusOK
-			message = fmt.Sprintf("OK?: %s", state.String())
 		}
 
-		return status, fmt.Sprintf(`{"resource": "FSM", "status": "%d", "state": "%s", "message": "%s"}`, status, state.String(), message), nil
+		return status, state.String(), nil
 	}
 }
