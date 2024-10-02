@@ -38,6 +38,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -412,6 +413,10 @@ func hasServices(advertised, desired wire.ServiceFlag) bool {
 // and is used to negotiate the protocol version details as well as kick start
 // the communications.
 func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgReject {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnVersion",
+		tracing.WithHistogram(peerServerMetrics["OnVersion"]),
+	)
+
 	// Update the address manager with the advertised services for outbound
 	// connections in case they have changed.  This is not done for inbound
 	// connections to help prevent malicious behavior and is skipped when
@@ -506,6 +511,10 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 // pool up to the maximum inventory allowed per message.  When the peer has a
 // bloom filter loaded, the contents are filtered accordingly.
 func (sp *serverPeer) OnMemPool(_ *peer.Peer, _ *wire.MsgMemPool) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnMemPool",
+		tracing.WithHistogram(peerServerMetrics["OnMemPool"]),
+	)
+
 	// we do not support onMempool requests
 	// normally this would only be sent with bloom filtering on, which we do not support
 	sp.server.logger.Warnf("Ignoring mempool request from %v -- bloom filtering is not supported", sp)
@@ -517,6 +526,10 @@ func (sp *serverPeer) OnMemPool(_ *peer.Peer, _ *wire.MsgMemPool) {
 // handler this does not serialize all transactions through a single thread
 // transactions don't rely on the previous one in a linear fashion like blocks.
 func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnTx",
+		tracing.WithHistogram(peerServerMetrics["OnTx"]),
+	)
+
 	if cfg.BlocksOnly {
 		sp.server.logger.Infof("Ignoring tx %v from %v - blocksonly enabled", msg.TxHash(), sp)
 		return
@@ -540,7 +553,11 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 
 // OnBlock is invoked when a peer receives a block bitcoin message. It
 // blocks until the bitcoin block has been fully processed.
-func (sp *serverPeer) OnBlock(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
+func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnBlock",
+		tracing.WithHistogram(peerServerMetrics["OnBlock"]),
+	)
+
 	// Convert the raw MsgBlock to a bsvutil.Block which provides some
 	// convenience methods and things such as hash caching.
 	block := bsvutil.NewBlockFromBlockAndBytes(msg, buf)
@@ -581,6 +598,10 @@ func (sp *serverPeer) OnBlock(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 // accordingly.  We pass the message down to blockmanager which will call
 // QueueMessage with any appropriate responses.
 func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnInv",
+		tracing.WithHistogram(peerServerMetrics["OnInv"]),
+	)
+
 	if !cfg.BlocksOnly {
 		if len(msg.InvList) > 0 {
 			sp.server.syncManager.QueueInv(msg, sp.Peer)
@@ -614,12 +635,20 @@ func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
 // OnHeaders is invoked when a peer receives a headers bitcoin
 // message.  The message is passed down to the sync manager.
 func (sp *serverPeer) OnHeaders(_ *peer.Peer, msg *wire.MsgHeaders) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnHeaders",
+		tracing.WithHistogram(peerServerMetrics["OnHeaders"]),
+	)
+
 	sp.server.syncManager.QueueHeaders(msg, sp.Peer)
 }
 
 // OnGetData is invoked when a peer receives a getdata bitcoin message and
 // is used to deliver block and transaction information.
 func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetData",
+		tracing.WithHistogram(peerServerMetrics["OnGetData"]),
+	)
+
 	numAdded := 0
 	notFound := wire.NewMsgNotFound()
 
@@ -694,6 +723,10 @@ func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
 // OnGetBlocks is invoked when a peer receives a getblocks bitcoin
 // message.
 func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetBlocks",
+		tracing.WithHistogram(peerServerMetrics["OnGetBlocks"]),
+	)
+
 	// Find the most recent known block in the best chain based on the block
 	// locator and fetch all of the block hashes after it until either
 	// wire.MaxBlocksPerMsg have been fetched or the provided stop hash is
@@ -751,6 +784,10 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 // OnGetHeaders is invoked when a peer receives a getheaders bitcoin
 // message.
 func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetHeaders",
+		tracing.WithHistogram(peerServerMetrics["OnGetHeaders"]),
+	)
+
 	// Ignore OnGetHeaders requests if not in sync.
 	if !sp.server.syncManager.IsCurrent() {
 		return
@@ -837,6 +874,10 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 // lower than provided value are inventoried to them.  The peer will be
 // disconnected if an invalid fee filter value is provided.
 func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, msg *wire.MsgFeeFilter) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnFeeFilter",
+		tracing.WithHistogram(peerServerMetrics["OnFeeFilter"]),
+	)
+
 	// Check that the passed minimum fee is a valid amount.
 	if msg.MinFee < 0 || msg.MinFee > bsvutil.MaxSatoshi {
 		sp.server.logger.Debugf("Peer %v sent an invalid feefilter '%v' -- "+
@@ -880,6 +921,10 @@ func (sp *serverPeer) OnFilterLoad(_ *peer.Peer, msg *wire.MsgFilterLoad) {
 // and is used to provide the peer with known addresses from the address
 // manager.
 func (sp *serverPeer) OnGetAddr(_ *peer.Peer, msg *wire.MsgGetAddr) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetAddr",
+		tracing.WithHistogram(peerServerMetrics["OnGetAddr"]),
+	)
+
 	// Don't return any addresses when running on the simulation test
 	// network.  This helps prevent the network from becoming another
 	// public test network since it will not be able to learn about other
@@ -926,6 +971,10 @@ func (sp *serverPeer) OnGetAddr(_ *peer.Peer, msg *wire.MsgGetAddr) {
 // OnAddr is invoked when a peer receives an addr bitcoin message and is
 // used to notify the server about advertised addresses.
 func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnAddr",
+		tracing.WithHistogram(peerServerMetrics["OnAddr"]),
+	)
+
 	// Ignore addresses when running on the simulation test network.  This
 	// helps prevent the network from becoming another public test network
 	// since it will not be able to learn about other peers that have not
@@ -974,23 +1023,39 @@ func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
 
 // OnReject logs all reject messages received from the remote peer.
 func (sp *serverPeer) OnReject(p *peer.Peer, msg *wire.MsgReject) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnReject",
+		tracing.WithHistogram(peerServerMetrics["OnReject"]),
+	)
+
 	sp.server.logger.Warnf("Received reject message from peer %s, code: %s, reason: %s", p, msg.Code.String(), msg.Reason)
 }
 
 // OnNotFound logs all not found messages received from the remote peer.
 func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnNotFound",
+		tracing.WithHistogram(peerServerMetrics["OnNotFound"]),
+	)
+
 	sp.server.logger.Warnf("Received not found message from peer %s, %d not found invs", p, len(msg.InvList))
 }
 
 // OnRead is invoked when a peer receives a message and it is used to update
 // the bytes received by the server.
 func (sp *serverPeer) OnRead(_ *peer.Peer, bytesRead int, msg wire.Message, err error) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnRead",
+		tracing.WithHistogram(peerServerMetrics["OnRead"]),
+	)
+
 	sp.server.AddBytesReceived(uint64(bytesRead))
 }
 
 // OnWrite is invoked when a peer sends a message and it is used to update
 // the bytes sent by the server.
 func (sp *serverPeer) OnWrite(_ *peer.Peer, bytesWritten int, msg wire.Message, err error) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnWrite",
+		tracing.WithHistogram(peerServerMetrics["OnWrite"]),
+	)
+
 	sp.server.AddBytesSent(uint64(bytesWritten))
 }
 

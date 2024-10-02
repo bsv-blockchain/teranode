@@ -49,7 +49,7 @@ func New(logger ulogger.Logger,
 	blockValidation blockvalidation.Interface,
 ) *Server {
 
-	// initPrometheusMetrics()
+	initPrometheusMetrics()
 
 	return &Server{
 		logger:           logger,
