@@ -311,6 +311,7 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "createUtxos",
 		tracing.WithLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", block.Hash(), block.Height()),
+		tracing.WithHistogram(prometheusLegacyNetsyncCreateUtxos),
 	)
 
 	defer func() {
