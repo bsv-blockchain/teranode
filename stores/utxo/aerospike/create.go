@@ -95,7 +95,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	start := time.Now()
-	_, stat, deferFn := tracing.StartTracing(context.Background(), "sendStoreBatch",
+	ctx, stat, deferFn := tracing.StartTracing(context.Background(), "sendStoreBatch",
 		tracing.WithParentStat(gocoreStat),
 		tracing.WithHistogram(prometheusUtxoCreateBatch),
 	)
@@ -172,10 +172,10 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 			if len(batch[idx].tx.Inputs) == 0 {
 				// This will also create the aerospike records
-				go s.storePartialTransactionExternally(batch[idx], binsToStore)
+				go s.storePartialTransactionExternally(ctx, batch[idx], binsToStore)
 			} else {
 				// This will also create the aerospike records
-				go s.storeTransactionExternally(batch[idx], binsToStore)
+				go s.storeTransactionExternally(ctx, batch[idx], binsToStore)
 			}
 
 			continue
@@ -203,8 +203,10 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					})
 				}
 
-				if err := s.externalStore.Set(
-					context.TODO(),
+				timeStart := time.Now()
+
+				if err = s.externalStore.Set(
+					ctx,
 					bItem.txHash[:],
 					wrapper.Bytes(),
 					options.WithFileExtension("outputs"),
@@ -215,10 +217,14 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 					continue
 				}
+
+				prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			} else {
+				timeStart := time.Now()
+
 				// store the tx data externally, it is not in our aerospike record
 				if err = s.externalStore.Set(
-					context.Background(),
+					ctx,
 					bItem.txHash[:],
 					bItem.tx.ExtendedBytes(),
 					options.WithFileExtension("tx"),
@@ -230,6 +236,8 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 					continue
 				}
+
+				prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			}
 		}
 
@@ -290,9 +298,9 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					}
 
 					if len(batch[idx].tx.Inputs) == 0 {
-						go s.storePartialTransactionExternally(batch[idx], binsToStore)
+						go s.storePartialTransactionExternally(ctx, batch[idx], binsToStore)
 					} else {
-						go s.storeTransactionExternally(batch[idx], binsToStore)
+						go s.storeTransactionExternally(ctx, batch[idx], binsToStore)
 					}
 
 					continue
@@ -457,9 +465,11 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 	return batches, nil
 }
 
-func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore [][]*aerospike.Bin) {
+func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStoreItem, binsToStore [][]*aerospike.Bin) {
+	timeStart := time.Now()
+
 	if err := s.externalStore.Set(
-		context.TODO(),
+		ctx,
 		bItem.txHash[:],
 		bItem.tx.ExtendedBytes(),
 		options.WithFileExtension("tx"),
@@ -469,6 +479,8 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 
 		return
 	}
+
+	prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	// Get a new write policy which will allow CREATE or UPDATE
 	wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
@@ -495,7 +507,7 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 			putOps[i] = aerospike.PutOp(bin)
 		}
 
-		if err := s.client.PutBins(wPolicy, key, bins...); err != nil {
+		if err = s.client.PutBins(wPolicy, key, bins...); err != nil {
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
@@ -514,7 +526,7 @@ func (s *Store) storeTransactionExternally(bItem *batchStoreItem, binsToStore []
 	utils.SafeSend(bItem.done, nil)
 }
 
-func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToStore [][]*aerospike.Bin) {
+func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *batchStoreItem, binsToStore [][]*aerospike.Bin) {
 	nonNilOutputs := utxopersister.UnpadSlice(bItem.tx.Outputs)
 
 	wrapper := utxopersister.UTXOWrapper{
@@ -537,8 +549,10 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 		})
 	}
 
+	timeStart := time.Now()
+
 	if err := s.externalStore.Set(
-		context.TODO(),
+		ctx,
 		bItem.txHash[:],
 		wrapper.Bytes(),
 		options.WithFileExtension("outputs"),
@@ -548,6 +562,8 @@ func (s *Store) storePartialTransactionExternally(bItem *batchStoreItem, binsToS
 
 		return
 	}
+
+	prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	// Get a new write policy which will allow CREATE or UPDATE
 	wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
