@@ -1,4 +1,4 @@
-package consolidator
+package utxopersister
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"sort"
 
 	"github.com/bitcoin-sv/ubsv/model"
-	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
@@ -21,8 +20,8 @@ type consolidator struct {
 	blockchainClient headerIfc
 	blockStore       blob.Store
 	insertCounter    uint64
-	deletions        map[*utxopersister.UTXODeletion]struct{}
-	additions        map[*utxopersister.UTXODeletion]*Addition
+	deletions        map[*UTXODeletion]struct{}
+	additions        map[*UTXODeletion]*Addition
 }
 
 type Addition struct {
@@ -39,8 +38,8 @@ func NewConsolidator(logger ulogger.Logger, blockchainStore headerIfc, blockchai
 		blockchainStore:  blockchainStore,
 		blockchainClient: blockchainClient,
 		blockStore:       blockStore,
-		deletions:        make(map[*utxopersister.UTXODeletion]struct{}),
-		additions:        make(map[*utxopersister.UTXODeletion]*Addition),
+		deletions:        make(map[*UTXODeletion]struct{}),
+		additions:        make(map[*UTXODeletion]*Addition),
 	}
 }
 
@@ -65,7 +64,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		hash := header.Hash()
 
 		// Get the last 2 block headers from this last processed height
-		us, err := utxopersister.GetUTXOSet(ctx, c.logger, c.blockStore, hash)
+		us, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.blockStore, hash)
 		if err != nil {
 			return err
 		}
@@ -76,7 +75,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 				return err
 			}
 
-			magic, blockHash, blockHeight, err := utxopersister.GetHeaderFromReader(r)
+			magic, blockHash, blockHeight, err := GetHeaderFromReader(r)
 			if err != nil {
 				return err
 			}
@@ -94,7 +93,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 			return err
 		}
 
-		magic, blockHash, blockHeight, err := utxopersister.GetHeaderFromReader(r)
+		magic, blockHash, blockHeight, err := GetHeaderFromReader(r)
 		if err != nil {
 			return err
 		}
@@ -111,7 +110,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 
 func (c *consolidator) processDeletions(ctx context.Context, r io.ReadCloser) error {
 	for {
-		ud, err := utxopersister.NewUTXODeletionFromReader(r)
+		ud, err := NewUTXODeletionFromReader(r)
 		if err != nil {
 			if err == io.EOF {
 				break
@@ -133,7 +132,7 @@ func (c *consolidator) processDeletions(ctx context.Context, r io.ReadCloser) er
 
 func (c *consolidator) processAdditions(ctx context.Context, r io.ReadCloser) error {
 	for {
-		wrapper, err := utxopersister.NewUTXOWrapperFromReader(ctx, r)
+		wrapper, err := NewUTXOWrapperFromReader(ctx, r)
 		if err != nil {
 			if err == io.EOF {
 				break
@@ -146,7 +145,7 @@ func (c *consolidator) processAdditions(ctx context.Context, r io.ReadCloser) er
 
 		// For each UTXO in the wrapper, check if it exists in the deletions map
 		for _, utxo := range wrapper.UTXOs {
-			key := &utxopersister.UTXODeletion{
+			key := &UTXODeletion{
 				TxID:  txid,
 				Index: utxo.Index,
 			}
@@ -177,8 +176,10 @@ func GetSortedAdditions(additions map[[36]byte]Addition) []Addition {
 	for _, addition := range additions {
 		sortedAdditions = append(sortedAdditions, addition)
 	}
+
 	sort.Slice(sortedAdditions, func(i, j int) bool {
 		return sortedAdditions[i].Order < sortedAdditions[j].Order
 	})
+
 	return sortedAdditions
 }

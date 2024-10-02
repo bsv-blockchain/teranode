@@ -16,6 +16,7 @@ import (
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
@@ -258,13 +259,24 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	}
 
 	if len(headers) != 2 {
-		s.logger.Infof("2 headers should have been returned, got %d", len(headers))
-		return 0, nil
+		return 0, errors.NewProcessingError("2 headers should have been returned, got %d", len(headers))
 	}
 
 	// Sanity check
 	if headers[0].HashPrevBlock.String() != headers[1].Hash().String() {
 		return 0, errors.NewProcessingError("[UTXOPersister] Previous block hash does not match current block hash for block %s height %d", headers[0].Hash(), metas[0].Height)
+	}
+
+	// GetStarting point
+	if err := s.verifyLastSet(ctx, headers[0].HashPrevBlock); err != nil {
+		return 0, err
+	}
+
+	// Rollup a batch of deletions and additions
+	c := NewConsolidator(s.logger, s.blockchainStore, s.blockchainClient, s.blockStore)
+
+	if err := c.ConsolidateBlockRange(ctx, s.lastHeight, bestBlockMeta.Height-s.lastHeight); err != nil {
+		return 0, err
 	}
 
 	header := headers[0]
@@ -351,4 +363,29 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 		options.WithFileExtension("dat"),
 		options.WithAllowOverwrite(true),
 	)
+}
+
+func (s *Server) verifyLastSet(ctx context.Context, hash *chainhash.Hash) error {
+	us := &UTXOSet{
+		ctx:       ctx,
+		logger:    s.logger,
+		blockHash: *hash,
+		store:     s.blockStore,
+	}
+
+	r, err := us.GetUTXOSetReader(hash)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	if _, _, _, _, err := GetUTXOSetHeaderFromReader(r); err != nil {
+		return err
+	}
+
+	if _, _, err := GetFooter(r); err != nil {
+		return errors.NewProcessingError("error seeking to EOF marker", err)
+	}
+
+	return nil
 }
