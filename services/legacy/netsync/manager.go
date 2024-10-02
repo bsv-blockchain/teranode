@@ -397,7 +397,7 @@ func (sm *SyncManager) startSync() {
 		// not support the headers-first approach so do normal block
 		// downloads when in regression test mode.
 		if sm.nextCheckpoint != nil &&
-			int32(bestBlockHeaderMeta.Height) < sm.nextCheckpoint.Height &&
+			int32(bestBlockHeaderMeta.Height) < sm.nextCheckpoint.Height && // nolint:gosec
 			sm.chainParams != &chaincfg.RegressionNetParams {
 			err = bestPeer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
 			if err != nil {
@@ -523,7 +523,7 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
-	if sm.topBlock() == int32(bestBlockHeaderMeta.Height) {
+	if sm.topBlock() == int32(bestBlockHeaderMeta.Height) { // nolint:gosec
 		// Update the time and violations to prevent disconnects.
 		sm.syncPeerState.lastBlockTime = time.Now()
 		sm.syncPeerState.violations = 0
@@ -591,7 +591,7 @@ func (sm *SyncManager) clearRequestedState(state *peerSyncState) {
 }
 
 // updateSyncPeer picks a new peer to sync from.
-func (sm *SyncManager) updateSyncPeer(state *peerSyncState) {
+func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 	sm.logger.Infof("Updating sync peer, last block: %v, violations: %v", sm.syncPeerState.lastBlockTime, sm.syncPeerState.violations)
 
 	// Disconnect from the misbehaving peer.
@@ -611,7 +611,7 @@ func (sm *SyncManager) updateSyncPeer(state *peerSyncState) {
 	}
 
 	if sm.headersFirstMode {
-		sm.resetHeaderState(bestBlockHeader.Hash(), int32(bestBlockHeaderMeta.Height))
+		sm.resetHeaderState(bestBlockHeader.Hash(), int32(bestBlockHeaderMeta.Height)) // nolint:gosec
 	}
 
 	sm.startSync()
@@ -903,9 +903,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// the block heights over other peers who's invs may have been ignored
 	// if we are actively syncing while the chain is not yet current or
 	// who may have lost the lock announcement race.
-	var heightUpdate int32
-
-	var blkHashUpdate *chainhash.Hash
+	var (
+		heightUpdate  int32
+		blkHashUpdate *chainhash.Hash
+	)
 
 	if peer == sm.syncPeer {
 		sm.syncPeerState.lastBlockTime = time.Now()
@@ -919,6 +920,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	if err != nil {
 		return errors.NewServiceError("failed to get best block header", err)
 	}
+
 	heightUpdate = int32(bestBlockHeaderMeta.Height)
 	blkHashUpdate = bestBlockHeader.Hash()
 
@@ -1142,6 +1144,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 					"disconnecting", node.height,
 					node.hash, peer.Addr(),
 					sm.nextCheckpoint.Hash)
+
 				peer.Disconnect()
 
 				return
@@ -1505,8 +1508,7 @@ out:
 // connected peers.
 func (sm *SyncManager) handleBlockchainNotification(notification *ubsvblockchain.Notification) {
 	if notification.Type == model.NotificationType_Block {
-		// A block has been accepted into the blockchain.  Relay it to other
-		// peers.
+		// A block has been accepted into the blockchain.  Relay it to other peers.
 		// Don't relay if we are not current. Other peers that are
 		// current should already know about it.
 		if !sm.current() {

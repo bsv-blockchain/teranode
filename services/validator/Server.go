@@ -91,7 +91,6 @@ func (v *Server) Init(ctx context.Context) (err error) {
 
 // Start function
 func (v *Server) Start(ctx context.Context) error {
-
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
@@ -133,6 +132,7 @@ func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 		// no workers, nothing to do
 		return
 	}
+
 	v.logger.Infof("[Validator Server] starting Kafka listener")
 
 	consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
@@ -150,12 +150,12 @@ func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 	v.logger.Infof("[Validator] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
 
 	if err := util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "blockassembly", nil, consumerCount, true, func(msg util.KafkaMessage) error {
-		//startTime := time.Now()
-		//currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
-		//if err != nil {
+		// startTime := time.Now()
+		// currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
+		// if err != nil {
 		//	v.logger.Errorf("[Validator] Failed to get current state: %s", err)
 		//	// TODO: how to handle it gracefully?
-		//}
+		// }
 
 		currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
 		if err != nil {
@@ -187,8 +187,8 @@ func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
 			return err
 		}
 
-		//prometheusProcessedTransactions.Inc()
-		//prometheusTransactionDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
+		// prometheusProcessedTransactions.Inc()
+		// prometheusTransactionDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 		return nil
 	}); err != nil {
 		v.logger.Errorf("[Validator] failed to start Kafka listener: %s", err)
@@ -220,6 +220,7 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 			log.Print("no more data")
 			break
 		}
+
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
 			return status.Errorf(codes.Unknown, "cannot receive chunk data: %v", err)
@@ -254,9 +255,11 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	defer deferFn()
 
 	transactionData := req.GetTransactionData()
+
 	tx, err := bt.NewTxFromBytes(transactionData)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
+
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
 		}, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
@@ -268,6 +271,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	err = v.validator.Validate(ctx, tx, req.BlockHeight)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
+
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
 			Txid:  tx.TxIDChainHash().CloneBytes(),

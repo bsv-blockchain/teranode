@@ -400,7 +400,8 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				continue
 			}
 
-			if notification.Type == model.NotificationType_Block {
+			switch notification.Type {
+			case model.NotificationType_Block:
 				_, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
 				// // _, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 				// // // block, err := s.blockchainClient.GetBlock(ctx, notification.Hash)
@@ -425,7 +426,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				if err := s.P2PNode.Publish(ctx, blockTopicName, msgBytes); err != nil {
 					s.logger.Errorf("publish error: %v", err)
 				}
-			} else if notification.Type == model.NotificationType_MiningOn {
+			case model.NotificationType_MiningOn:
 				header, meta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 				if err != nil {
 					s.logger.Errorf("error getting block header for MiningOnMessage: %v", err)
@@ -454,7 +455,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				if err := s.P2PNode.Publish(ctx, miningOnTopicName, msgBytes); err != nil {
 					s.logger.Errorf("publish error: %v", err)
 				}
-			} else if notification.Type == model.NotificationType_Subtree {
+			case model.NotificationType_Subtree:
 				// if it's a subtree notification send it on the subtree channel.
 				subtreeMessage = p2p.SubtreeMessage{
 					Hash:       hash.String(),

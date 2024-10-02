@@ -77,6 +77,7 @@ func New(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL) (*Store,
 		if err != nil {
 			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
 		}
+
 		s.expirationMillis = expiration64 * 1000
 
 		// // Create a goroutine to remove transactions that are marked with a tombstone time
@@ -134,6 +135,7 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	if err != nil {
 		return http.StatusServiceUnavailable, details, err
 	}
+
 	return http.StatusOK, details, nil
 }
 

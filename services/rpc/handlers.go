@@ -87,7 +87,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	baseBlockReply := &btcjson.GetBlockBaseVerboseResult{
 		Hash:          c.Hash,
-		Version:       int32(b.Header.Version),
+		Version:       int32(b.Header.Version), // nolint:gosec
 		VersionHex:    fmt.Sprintf("%08x", b.Header.Version),
 		MerkleRoot:    b.Header.HashMerkleRoot.String(),
 		PreviousHash:  b.Header.HashPrevBlock.String(),
@@ -95,7 +95,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		Time:          int64(b.Header.Timestamp),
 		Confirmations: int64(1 + bestBlockMeta.Height - b.Height),
 		Height:        int64(b.Height),
-		Size:          int32(len(blkBytes)),
+		Size:          int32(len(blkBytes)), // nolint:gosec
 		Bits:          b.Header.Bits.String(),
 		Difficulty:    diff,
 		NextHash:      nextBlock.Hash().String(),
@@ -263,7 +263,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 
 	// Set the Locktime, if given.
 	if c.LockTime != nil {
-		mtx.LockTime = uint32(*c.LockTime)
+		mtx.LockTime = uint32(*c.LockTime) // nolint:gosec
 	}
 
 	// Return the serialized and hex-encoded transaction.  Note that this

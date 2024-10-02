@@ -252,7 +252,7 @@ type server struct {
 	utxoStore        utxostore.Store
 	subtreeStore     blob.Store
 	blockValidation  blockvalidation.Interface
-	assetHttpAddress string
+	assetHTTPAddress string
 }
 
 // serverPeer extends the peer to maintain state shared by the server and
@@ -1167,7 +1167,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
 
-	url := fmt.Sprintf("%s/block_legacy/%s", s.assetHttpAddress, hash.String())
+	url := fmt.Sprintf("%s/block_legacy/%s", s.assetHTTPAddress, hash.String())
 	blockBytes, err := util.DoHTTPRequest(s.ctx, url, nil)
 	if err != nil {
 		sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
@@ -2321,7 +2321,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		utxoStore:            utxoStore,
 		subtreeStore:         subtreeStore,
 		blockValidation:      blockValidation,
-		assetHttpAddress:     assetHttpAddress,
+		assetHTTPAddress:     assetHttpAddress,
 	}
 
 	s.syncManager, err = netsync.New(
