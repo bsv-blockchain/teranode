@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -38,8 +39,8 @@ type Validator struct {
 	saveInParallel                bool
 	blockAssemblyDisabled         bool
 	stats                         *gocore.Stat
-	txMetaKafkaProducerClient     *util.KafkaProducerClient
-	rejectedTxKafkaProducerClient *util.KafkaProducerClient
+	txMetaKafkaProducerClient     *kafka.KafkaAsyncProducer
+	rejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
 }
 
 func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interface, error) {
@@ -71,8 +72,8 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		// only start the kafka producer if there are workers listening
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
-			v.txMetaKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*util.KafkaProducerClient, error) {
-				return util.NewAsyncProducer(v.logger, txmetaKafkaURL, make(chan []byte, 10000))
+			v.txMetaKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
+				return kafka.NewKafkaAsyncProducer(v.logger, txmetaKafkaURL, make(chan []byte, 10000))
 			}, retry.WithMessage("[Validator] error starting kafka producer for txMeta"))
 			if err != nil {
 				v.logger.Fatalf("[Validator] failed to start kafka producer for txMeta: %v", err)
@@ -91,8 +92,8 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		// only start the kafka producer if there are workers listening
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
-			v.rejectedTxKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*util.KafkaProducerClient, error) {
-				return util.NewAsyncProducer(v.logger, rejectedTxKafkaURL, make(chan []byte, 10000))
+			v.rejectedTxKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
+				return kafka.NewKafkaAsyncProducer(v.logger, rejectedTxKafkaURL, make(chan []byte, 10000))
 			}, retry.WithMessage("[Validator] error starting kafka producer for rejected Txs"))
 			if err != nil {
 				v.logger.Fatalf("[Validator] failed to start kafka producer for rejected Txs: %v", err)

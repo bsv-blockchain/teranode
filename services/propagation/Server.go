@@ -29,6 +29,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
@@ -54,7 +55,7 @@ type PropagationServer struct {
 	txStore                      blob.Store
 	validator                    validator.Interface
 	blockchainClient             blockchain.ClientI
-	validatorKafkaProducerClient *util.KafkaProducerClient
+	validatorKafkaProducerClient *kafka.KafkaAsyncProducer
 }
 
 // New will return a server instance with the logger stored within it
@@ -168,8 +169,8 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 
 	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
 	if workers > 0 {
-		ps.validatorKafkaProducerClient, err = retry.Retry(ctx, ps.logger, func() (*util.KafkaProducerClient, error) {
-			return util.NewAsyncProducer(ps.logger, validatortxsKafkaURL, make(chan []byte, 10_000))
+		ps.validatorKafkaProducerClient, err = retry.Retry(ctx, ps.logger, func() (*kafka.KafkaAsyncProducer, error) {
+			return kafka.NewKafkaAsyncProducer(ps.logger, validatortxsKafkaURL, make(chan []byte, 10_000))
 		}, retry.WithMessage("[Propagation Server] error starting kafka producer"))
 		if err != nil {
 			ps.logger.Errorf("[Propagation Server] error starting kafka producer: %v", err)

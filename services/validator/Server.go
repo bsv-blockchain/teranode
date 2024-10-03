@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -36,7 +37,7 @@ type Server struct {
 	stats            *gocore.Stat
 	ctx              context.Context
 	blockchainClient blockchain.ClientI
-	consumerClient   *util.KafkaConsumerClient
+	consumerClient   *kafka.KafkaConsumerGroup
 }
 
 // NewServer will return a server instance with the logger stored within it
@@ -112,7 +113,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 
 		v.logger.Infof("[Validator] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
 
-		kafkaMessageHandler := func(msg util.KafkaMessage) error {
+		kafkaMessageHandler := func(msg kafka.KafkaMessage) error {
 			currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
 			if err != nil {
 				v.logger.Errorf("[Validator] Failed to get current state: %s", err)
@@ -145,7 +146,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 
 			return nil
 		}
-		v.consumerClient, err = util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+		v.consumerClient, err = kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
 			Logger:            v.logger,
 			URL:               kafkaURL,
 			GroupID:           "blockassembly",

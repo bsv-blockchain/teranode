@@ -25,6 +25,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -60,7 +61,7 @@ type Server struct {
 	catchupCh           chan processBlockCatchup
 	blockValidation     *BlockValidation
 	SetTxMetaQ          *util.LockFreeQ[[][]byte]
-	kafkaConsumerClient *util.KafkaConsumerClient
+	kafkaConsumerClient *kafka.KafkaConsumerGroup
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
@@ -264,7 +265,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		// By using the fixed "blockvalidation" group ID, we ensure that only one instance of this service will process the block messages.
 		u.logger.Infof("Starting %d Kafka consumers for block messages", consumerCount)
 
-		client, err := util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+		client, err := kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
 			Logger:            u.logger,
 			URL:               blocksKafkaURL,
 			GroupID:           "blockvalidation",
@@ -282,8 +283,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-func (u *Server) consumerMessageHandler(ctx context.Context) func(msg util.KafkaMessage) error {
-	return func(msg util.KafkaMessage) error {
+func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.KafkaMessage) error {
+	return func(msg kafka.KafkaMessage) error {
 		errCh := make(chan error, 1)
 		go func() {
 			errCh <- u.blockHandler(msg)
@@ -315,7 +316,7 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg util.Kafka
 	}
 }
 
-func (u *Server) blockHandler(msg util.KafkaMessage) error {
+func (u *Server) blockHandler(msg kafka.KafkaMessage) error {
 	if msg.Message == nil {
 		return nil
 	}

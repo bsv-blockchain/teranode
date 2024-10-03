@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/p2p"
 	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
@@ -43,9 +44,9 @@ type Server struct {
 	AssetHTTPAddressURL           string
 	e                             *echo.Echo
 	notificationCh                chan *notificationMsg
-	rejectedTxKafkaConsumerClient *util.KafkaConsumerClient
-	subtreeKafkaProducerClient    *util.KafkaProducerClient
-	blocksKafkaProducerClient     *util.KafkaProducerClient
+	rejectedTxKafkaConsumerClient *kafka.KafkaConsumerGroup
+	subtreeKafkaProducerClient    *kafka.KafkaAsyncProducer
+	blocksKafkaProducerClient     *kafka.KafkaAsyncProducer
 }
 
 func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Server, error) {
@@ -173,8 +174,8 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 
 	if found {
-		s.subtreeKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*util.KafkaProducerClient, error) {
-			return util.NewAsyncProducer(s.logger, subtreesKafkaURL, make(chan []byte, 10))
+		s.subtreeKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
+			return kafka.NewKafkaAsyncProducer(s.logger, subtreesKafkaURL, make(chan []byte, 10))
 		}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
 		if err != nil {
 			s.logger.Fatalf("[P2P] failed to start kafka subtree producer: %v", err)
@@ -190,8 +191,8 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 
 	if found {
-		s.blocksKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*util.KafkaProducerClient, error) {
-			return util.NewAsyncProducer(s.logger, blocksKafkaURL, make(chan []byte, 10))
+		s.blocksKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
+			return kafka.NewKafkaAsyncProducer(s.logger, blocksKafkaURL, make(chan []byte, 10))
 		}, retry.WithMessage("[P2P] error starting kafka block producer"))
 		if err != nil {
 			s.logger.Fatalf("[P2P] failed to start kafka block producer: %v", err)
@@ -228,7 +229,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
 		// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 		// Therefore, autocommit is set to true.
-		rejectedTxHandler := func(msg util.KafkaMessage) error {
+		rejectedTxHandler := func(msg kafka.KafkaMessage) error {
 			hash, err := chainhash.NewHash(msg.Message.Value[:chainhash.HashSize])
 			if err != nil {
 				s.logger.Errorf("error getting chainhash from string %s: %v", msg.Message.Value[:chainhash.HashSize], err)
@@ -260,7 +261,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 			return nil
 		}
-		s.rejectedTxKafkaConsumerClient, err = util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+		s.rejectedTxKafkaConsumerClient, err = kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
 			Logger:            s.logger,
 			URL:               rejectedTxKafkaURL,
 			GroupID:           groupID,

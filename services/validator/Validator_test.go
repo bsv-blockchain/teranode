@@ -15,6 +15,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
@@ -95,10 +96,10 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		blockAssembler: BlockAssemblyStore{},
 		saveInParallel: true,
 		stats:          gocore.NewStat("validator"),
-		txMetaKafkaProducerClient: &util.KafkaProducerClient{
+		txMetaKafkaProducerClient: &kafka.KafkaAsyncProducer{
 			PublishChannel: make(chan []byte, 1),
 		},
-		rejectedTxKafkaProducerClient: &util.KafkaProducerClient{
+		rejectedTxKafkaProducerClient: &kafka.KafkaAsyncProducer{
 			PublishChannel: make(chan []byte, 1),
 		},
 	}
@@ -132,10 +133,10 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		blockAssembler: nil,
 		saveInParallel: true,
 		stats:          gocore.NewStat("validator"),
-		txMetaKafkaProducerClient: &util.KafkaProducerClient{
+		txMetaKafkaProducerClient: &kafka.KafkaAsyncProducer{
 			PublishChannel: make(chan []byte, 1),
 		},
-		rejectedTxKafkaProducerClient: &util.KafkaProducerClient{
+		rejectedTxKafkaProducerClient: &kafka.KafkaAsyncProducer{
 			PublishChannel: make(chan []byte, 1),
 		},
 	}

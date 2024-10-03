@@ -7,10 +7,11 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func (u *Server) subtreeHandler(msg util.KafkaMessage) error {
+func (u *Server) subtreeHandler(msg kafka.KafkaMessage) error {
 	if msg.Message != nil {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()

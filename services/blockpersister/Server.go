@@ -8,8 +8,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/google/uuid"
 	"github.com/ordishs/gocore"
 )
@@ -23,7 +23,7 @@ type Server struct {
 	utxoStore                      utxo.Store
 	stats                          *gocore.Stat
 	blockchainClient               blockchain.ClientI
-	blocksFinalKafkaConsumerClient *util.KafkaConsumerClient
+	blocksFinalKafkaConsumerClient *kafka.KafkaConsumerGroup
 }
 
 func New(
@@ -94,7 +94,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		groupID := "blockpersister-" + uuid.New().String()
 
 		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the blocksFinal messages.
-		kafkaMessageHandler := func(msg util.KafkaMessage) error {
+		kafkaMessageHandler := func(msg kafka.KafkaMessage) error {
 			// this does manual commit so we need to implement error handling and differentiate between errors
 			errCh := make(chan error, 1)
 			go func() {
@@ -130,7 +130,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 			u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for block persister block handler, marking Kafka message as completed.\n", msg, err)
 			return nil
 		}
-		u.blocksFinalKafkaConsumerClient, err = util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+		u.blocksFinalKafkaConsumerClient, err = kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
 			Logger:            u.logger,
 			URL:               blocksFinalKafkaURL,
 			GroupID:           groupID,

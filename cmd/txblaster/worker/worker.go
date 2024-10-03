@@ -13,8 +13,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/coinbase"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/p2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libsv/go-bk/bec"
@@ -105,7 +105,7 @@ type Worker struct {
 	iterations        int
 	coinbaseClient    *coinbase.Client
 	distributors      []*distributor.Distributor
-	kafkaProducer     util.KafkaProducerI
+	kafkaProducer     kafka.KafkaProducerI
 	kafkaTopic        string
 	ipv6MulticastConn *net.UDPConn
 	ipv6MulticastChan chan Ipv6MulticastMsg
@@ -127,7 +127,7 @@ func NewWorker(
 	iterations int,
 	coinbaseClient *coinbase.Client,
 	txDistributors []*distributor.Distributor,
-	kafkaProducer util.KafkaProducerI,
+	kafkaProducer kafka.KafkaProducerI,
 	kafkaTopic string,
 	ipv6MulticastConn *net.UDPConn,
 	ipv6MulticastChan chan Ipv6MulticastMsg,

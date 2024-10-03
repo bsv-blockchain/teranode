@@ -19,6 +19,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libsv/go-bt/v2"
@@ -48,7 +49,7 @@ type Blockchain struct {
 	newBlock           chan struct{}
 	difficulty         *Difficulty
 	chainParams        *chaincfg.Params
-	blockKafkaProducer util.KafkaProducerI
+	blockKafkaProducer kafka.KafkaProducerI
 	stats              *gocore.Stat
 	finiteStateMachine *fsm.FSM
 }
@@ -123,7 +124,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	if err == nil && ok {
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
 
-		if _, b.blockKafkaProducer, err = util.ConnectToKafka(blocksKafkaURL); err != nil {
+		if _, b.blockKafkaProducer, err = kafka.ConnectToKafka(blocksKafkaURL); err != nil {
 			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
 		}
 	}

@@ -10,7 +10,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
 	"github.com/bitcoin-sv/ubsv/tracing"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/quorum"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
@@ -23,7 +23,7 @@ var (
 	q    *quorum.Quorum
 )
 
-func (u *Server) blocksFinalHandler(msg util.KafkaMessage) error {
+func (u *Server) blocksFinalHandler(msg kafka.KafkaMessage) error {
 	var err error
 
 	once.Do(func() {

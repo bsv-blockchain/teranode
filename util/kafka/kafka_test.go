@@ -1,4 +1,4 @@
-package util
+package kafka
 
 import (
 	"context"
@@ -112,7 +112,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	// err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
 	// require.NoError(t, err)
 
-	producerClient, err := NewAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
+	producerClient, err := NewKafkaAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
 	require.NoError(t, err)
 
 	go producerClient.Start(ctx)
@@ -187,7 +187,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	producerClient, err := NewAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
+	producerClient, err := NewKafkaAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
 	require.NoError(t, err)
 
 	go producerClient.Start(ctx)
@@ -308,7 +308,7 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	// err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
 	// require.NoError(t, err)
 
-	producerClient, err := NewAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
+	producerClient, err := NewKafkaAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
 	require.NoError(t, err)
 
 	go producerClient.Start(ctx)

@@ -21,6 +21,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/quorum"
 	"github.com/google/uuid"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -46,8 +47,8 @@ type Server struct {
 	prioritySubtreeCheckActiveMap     map[string]bool
 	prioritySubtreeCheckActiveMapLock sync.Mutex
 	blockchainClient                  blockchain.ClientI
-	subtreeConsumerClient             *util.KafkaConsumerClient
-	txmetaConsumerClient              *util.KafkaConsumerClient
+	subtreeConsumerClient             *kafka.KafkaConsumerGroup
+	txmetaConsumerClient              *kafka.KafkaConsumerGroup
 }
 
 var (
@@ -193,7 +194,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		u.logger.Infof("Starting %d Kafka consumers for subtree messages", consumerCount)
 
 		// Autocommit is disabled for subtree messages, so that we can commit the message only after the subtree has been processed.
-		subtreeHandler := func(msg util.KafkaMessage) error {
+		subtreeHandler := func(msg kafka.KafkaMessage) error {
 			errCh := make(chan error, 1)
 			go func() {
 				errCh <- u.subtreeHandler(msg)
@@ -236,7 +237,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				return ctx.Err()
 			}
 		}
-		client, err := util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+		client, err := kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
 			Logger:            u.logger,
 			URL:               subtreesKafkaURL,
 			GroupID:           "subtreevalidation",
@@ -279,7 +280,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
 		// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 		// Therefore, autocommit is set to true.
-		u.txmetaConsumerClient, err = util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+		u.txmetaConsumerClient, err = kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
 			Logger:            u.logger,
 			URL:               txmetaKafkaURL,
 			GroupID:           groupID,

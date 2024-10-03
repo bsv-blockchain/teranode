@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func (u *Server) txmetaHandler(msg util.KafkaMessage) error {
+func (u *Server) txmetaHandler(msg kafka.KafkaMessage) error {
 	if msg.Message != nil && len(msg.Message.Value) > chainhash.HashSize {
 		startTime := time.Now()
 
