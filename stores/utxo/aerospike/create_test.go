@@ -92,7 +92,7 @@ func TestStore_getBinsToStore(t *testing.T) {
 		require.NoError(t, err)
 
 		// external should be set by the aerospike create function for huge txs
-		external := tx.Size() > MaxTxSizeInStoreInBytes
+		external := len(tx.ExtendedBytes()) > MaxTxSizeInStoreInBytes
 
 		bins, err := s.getBinsToStore(tx, 0, nil, external, tx.TxIDChainHash(), false)
 		require.NoError(t, err)

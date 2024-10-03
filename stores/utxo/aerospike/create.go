@@ -137,20 +137,21 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 		external := s.externalizeAllTransactions
 
 		// also check whether the tx is too big and needs to be stored externally
-		var size int
+		var extendedSize int
 
 		if len(batch[idx].tx.Inputs) == 0 {
 			// This is a partial transaction, and we calculate the size of the outputs only
 			for _, output := range batch[idx].tx.Outputs {
 				if output != nil {
-					size += len(output.Bytes())
+					extendedSize += len(output.Bytes())
 				}
 			}
 		} else {
-			size = batch[idx].tx.Size()
+			// we cannot use tx.Size() here, because it doesn't include the extended data for the inputs
+			extendedSize = len(batch[idx].tx.ExtendedBytes())
 		}
 
-		if size > MaxTxSizeInStoreInBytes {
+		if extendedSize > MaxTxSizeInStoreInBytes {
 			external = true
 		}
 
@@ -355,10 +356,11 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 
 func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool) ([][]*aerospike.Bin, error) {
 	var (
-		fee        uint64
-		utxoHashes []*chainhash.Hash
-		err        error
-		size       int
+		fee          uint64
+		utxoHashes   []*chainhash.Hash
+		err          error
+		size         int
+		extendedSize int
 	)
 
 	if len(tx.Outputs) == 0 {
@@ -370,6 +372,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		utxoHashes, err = utxo.GetUtxoHashes(tx, txHash)
 	} else {
 		size = tx.Size()
+		extendedSize = len(tx.ExtendedBytes())
 		fee, utxoHashes, err = utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
 	}
 
@@ -431,6 +434,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		// nolint: gosec
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
 		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(size)),
+		aerospike.NewBin("extendedSizeInBytes", aerospike.NewIntegerValue(extendedSize)),
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
 		aerospike.NewBin("isCoinbase", tx.IsCoinbase()),
 	}
