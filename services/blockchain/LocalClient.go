@@ -122,6 +122,10 @@ func (c LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.H
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
 }
 
+func (c LocalClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	return c.store.CheckBlockIsInCurrentChain(ctx, blockIDs)
+}
+
 func (c LocalClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeadersFromHeight(ctx, height, limit)
 }

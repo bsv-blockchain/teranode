@@ -43,6 +43,8 @@ type Store interface {
 	SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 	GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error)
+	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
+
 	// legacy endpoints
 	LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error)
 	ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*file.File, error)

@@ -327,12 +327,30 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 	bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
 	u.recentBlocksBloomFiltersMu.Unlock()
 
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
+	oldBlockIDs := &sync.Map{}
+	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDs, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats); !ok {
 		if iErr := u.blockchainClient.InvalidateBlock(ctx, block.Header.Hash()); err != nil {
 			u.logger.Errorf("[BlockValidation:start][%s][InvalidateBlock] failed to invalidate block: %s", block.String(), iErr)
 		}
 
 		return errors.NewServiceError("[BlockValidation:start][%s] InvalidateBlock block is not valid", block.String(), err)
+	}
+
+	referencedOldBlockIDs, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+
+	// Check if the old blocks are part of the current chain
+	if hasTransactionsReferencingOldBlocks {
+		// Flag to check if the old blocks are part of the current chain
+		var blocksPartOfCurrentChain bool
+
+		blocksPartOfCurrentChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, referencedOldBlockIDs)
+		if err != nil {
+			return errors.NewServiceError("[BlockValidation][%s] failed to check if old blocks are part of the current chain", block.String(), err)
+		}
+
+		if !blocksPartOfCurrentChain {
+			return errors.NewBlockInvalidError("[BlockValidation][%s] block is not valid, transactions refer old blocks (%v) that are not part of our current chain", block.String(), referencedOldBlockIDs)
+		}
 	}
 
 	return nil
@@ -613,6 +631,8 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	var optimisticMiningWg sync.WaitGroup
 
+	oldBlockIDs := &sync.Map{}
+
 	if useOptimisticMining {
 		// make sure the proof of work is enough
 		headerValid, _, err := block.Header.HasMetTargetDifficulty()
@@ -674,19 +694,38 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
 			u.recentBlocksBloomFiltersMu.Unlock()
 
-			if ok, err := block.Valid(callerSpan.Ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+			if ok, err := block.Valid(callerSpan.Ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDs, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 				u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 				if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrProcessing) {
 					// storage or processing error, block is not really invalid, but we need to re-validate
 					u.ReValidateBlock(block, baseURL)
 				} else {
-					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", block.String(), err)
 					// TODO TEMP disable invalidation in the scaling test
-
+					//      Since the invalidation is disabled, here we are not invalidating the block
+					// 		Consider enabling the invalidation in the future
 					// if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
 					//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
 					//}
+					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", block.String(), err)
+				}
+			}
+
+			referencedOldBlockIDs, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+
+			// Check if the old blocks are part of the current chain
+			if hasTransactionsReferencingOldBlocks {
+				// Flag to check if the old blocks are part of the current chain
+				var blocksPartOfCurrentChain bool
+				// TODO: what to do with the error here other than logging?
+				blocksPartOfCurrentChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, referencedOldBlockIDs)
+				if err != nil {
+					u.logger.Errorf("[ValidateBlock][%s] failed to check if old blocks are part of the current chain: %v", block.String(), err)
+				}
+
+				if !blocksPartOfCurrentChain {
+					// TODO TEMP disable invalidation in the scaling test. Re-enable in the future
+					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid, transactions refer old blocks (%v) that are not part of our current chain", block.String())
 				}
 			}
 		}()
@@ -720,8 +759,25 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		bloomFilters = append(bloomFilters, u.recentBlocksBloomFilters...)
 		u.recentBlocksBloomFiltersMu.Unlock()
 
-		if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
+		if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDs, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats); !ok {
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
+		}
+
+		referencedOldBlockIDs, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+
+		// Check if the old blocks are part of the current chain
+		if hasTransactionsReferencingOldBlocks {
+			// Flag to check if the old blocks are part of the current chain
+			var blocksPartOfCurrentChain bool
+
+			blocksPartOfCurrentChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, referencedOldBlockIDs)
+			if err != nil {
+				return errors.NewServiceError("[ValidateBlock][%s] failed to check if old blocks are part of the current chain", block.String(), err)
+			}
+
+			if !blocksPartOfCurrentChain {
+				return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid, transactions refer old blocks (%v) that are not part of our current chain", block.String(), referencedOldBlockIDs)
+			}
 		}
 
 		u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
@@ -854,7 +910,9 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees DONE", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
-	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
+	oldBlockIDs := &sync.Map{}
+
+	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDs, bloomFilters, blockData.blockHeaders, blockData.blockHeaderIDs, u.bloomFilterStats); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) {
@@ -862,8 +920,25 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 			return err
 		} else {
 			if err = u.blockchainClient.InvalidateBlock(ctx, blockData.block.Header.Hash()); err != nil {
-				u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), err)
+				u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), err)
 			}
+		}
+	}
+
+	referencedOldBlockIDs, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+
+	// Check if the old blocks are part of the current chain
+	if hasTransactionsReferencingOldBlocks {
+		// Flag to check if the old blocks are part of the current chain
+		var blocksPartOfCurrentChain bool
+
+		blocksPartOfCurrentChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, referencedOldBlockIDs)
+		if err != nil {
+			return errors.NewServiceError("[ReValidateBlock][%s] failed to check if old blocks are part of the current chain", blockData.block.String(), err)
+		}
+
+		if !blocksPartOfCurrentChain {
+			return errors.NewBlockInvalidError("[ReValidateBlock][%s] block is not valid, transactions refer old blocks (%v) that are not part of our current chain", blockData.block.String(), referencedOldBlockIDs)
 		}
 	}
 

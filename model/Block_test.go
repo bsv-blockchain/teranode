@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -271,13 +272,17 @@ func TestBlock_ValidWithOneTransaction(t *testing.T) {
 		currentChainIDs[i] = uint32(i)
 	}
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
-	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, nil, currentChain, currentChainIDs, NewBloomStats())
+	oldBlockIDs := &sync.Map{}
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
+
+	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
 func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
-	util.SkipVeryLongTests(t)
+	// util.SkipVeryLongTests(t)
 	fileDir = "./test-generated_test_data/"
 	fileNameTemplate = fileDir + "subtree-%d.bin"
 	fileNameTemplateMerkleHashes = fileDir + "subtree-merkle-hashes.bin"
@@ -325,9 +330,13 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs, NewBloomStats())
+	oldBlockIDs := &sync.Map{}
+	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.NoError(t, err)
 	require.True(t, v)
+
+	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
 func TestBlock_WithDuplicateTransaction(t *testing.T) {
@@ -446,9 +455,13 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	currentChain[0].HashPrevBlock = &chainhash.Hash{}
 
 	// check if the block is valid, we expect an error because of the duplicate transaction
-	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, nil, currentChain, currentChainIDs, NewBloomStats())
+	oldBlockIDs := &sync.Map{}
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, cachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, NewBloomStats())
 	require.Error(t, err)
 	require.False(t, v)
+
+	_, hasTransactionsReferencingOldBlocks := util.ConvertSyncMapToUint32Slice(oldBlockIDs)
+	require.False(t, hasTransactionsReferencingOldBlocks)
 }
 
 func TestGetAndValidateSubtrees(t *testing.T) {
@@ -548,8 +561,9 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 			txHash:       *tx.TxIDChainHash(),
 		}
 
-		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.NoError(t, err)
+		require.True(t, len(oldBlockIDs) == 0)
 	})
 
 	t.Run("test parent is not in a previous block", func(t *testing.T) {
@@ -559,10 +573,14 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 			txHash:       *txParent.TxIDChainHash(),
 		}
 
-		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.Error(t, err)
-		e := err.(*errors.Error)
-		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code(), "expected error code ERR_BLOCK_INVALID")
+		require.True(t, len(oldBlockIDs) == 0)
+
+		var e *errors.Error
+
+		errors.As(err, &e)
+		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code, "expected error code ERR_BLOCK_INVALID")
 	})
 
 	t.Run("test parent has no block ID", func(t *testing.T) {
@@ -573,10 +591,14 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 			txHash:       *tx.TxIDChainHash(),
 		}
 
-		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.Error(t, err)
-		e := err.(*errors.Error)
-		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code(), "expected error code ERR_BLOCK_INVALID")
+		require.True(t, len(oldBlockIDs) == 0)
+
+		var e *errors.Error
+
+		errors.As(err, &e)
+		require.Equal(t, errors.ERR_BLOCK_INVALID, e.Code, "expected error code ERR_BLOCK_INVALID")
 	})
 
 	t.Run("test parent is not in store so assume is in a previous block", func(t *testing.T) {
@@ -586,8 +608,8 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 			txHash:       *tx.TxIDChainHash(),
 		}
 
-		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
-		fmt.Println("returned err: ", err)
+		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		require.True(t, len(oldBlockIDs) == 0)
 		require.NoError(t, err)
 	})
 
@@ -599,7 +621,8 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 			txHash:       *tx.TxIDChainHash(),
 		}
 
-		err = block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+		require.True(t, len(oldBlockIDs) > 0)
 		require.NoError(t, err)
 	})
 

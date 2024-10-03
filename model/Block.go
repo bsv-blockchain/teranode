@@ -419,7 +419,8 @@ func (b *Block) String() string {
 	return fmt.Sprintf("Block %s (height: %d, txCount: %d, size: %d", b.Hash().String(), b.Height, b.TransactionCount, b.SizeInBytes)
 }
 
-func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
+func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore blob.Store, txMetaStore utxo.Store, oldBlockIDs *sync.Map,
+	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) (bool, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "Block:Valid",
 		tracing.WithHistogram(prometheusBlockValid),
 		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
@@ -551,7 +552,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 		}
 
 		if !legacyLimitedBlockValidation {
-			err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats)
+			err = b.validOrderAndBlessed(ctx, logger, txMetaStore, subtreeStore, recentBlocksBloomFilters, currentChain, currentBlockHeaderIDs, bloomStats, oldBlockIDs)
 			if err != nil {
 				return false, err
 			}
@@ -647,8 +648,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context) error {
 }
 
 func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, subtreeStore blob.Store,
-	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats) error {
-
+	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats, oldBlockIDs *sync.Map) error {
 	if b.txMap == nil {
 		return errors.NewStorageError("[BLOCK][%s] txMap is nil, cannot check transaction order", b.Hash().String())
 	}
@@ -820,7 +820,15 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 					parentTxStruct := parentTxStruct
 
 					parentG.Go(func() error {
-						return b.checkParentExistsOnChain(gCtx, logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+						oldParentBlockIDs, err := b.checkParentExistsOnChain(gCtx, logger, txMetaStore, parentTxStruct, currentBlockHeaderIDsMap)
+
+						if len(oldParentBlockIDs) > 0 {
+							for _, blockID := range oldParentBlockIDs {
+								oldBlockIDs.Store(blockID, struct{}{})
+							}
+						}
+
+						return err
 					})
 				}
 
@@ -841,29 +849,30 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	return nil
 }
 
-func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) error {
+func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) ([]uint32, error) {
 	// check whether the parent transaction has already been mined in a block on our chain
 	// we need to get back to the txMetaStore for this, to make sure we have the latest data
 	// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 	// for the first situation we don't start validating the current block until the parent is validated.
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
 	parentTxMeta, err := getParentTxMeta(gCtx, txMetaStore, parentTxStruct)
+
+	var oldBlockIDs []uint32
+
 	if err != nil {
-		return err
+		return oldBlockIDs, err
 	}
 
 	if parentTxMeta == nil || parentTxMeta.IsCoinbase {
-		return nil
+		return oldBlockIDs, nil
 	}
 
 	if len(parentTxMeta.BlockIDs) > 0 && parentTxMeta.BlockIDs[0] == GenesisBlockID {
 		// when blockIds[0] is GenesisBlockID, it means the transaction was imported from a restore and is on a valid chain
-		return nil
+		return oldBlockIDs, nil
 	}
 
 	// check whether the parent is on our current chain (of 100 blocks), it should be, because the tx meta is still in the store
-	// TODO it is possible that the parent is much mich older, and does not exist on the current chain of last 100 blocks
-	//      maybe check whether the block ID in the parent is older (lower number) than the lowest blockID in the current chain map?
 	foundInPreviousBlocks, minBlockID := filterCurrentBlockHeaderIDsMap(parentTxMeta, currentBlockHeaderIDsMap)
 
 	if len(foundInPreviousBlocks) == 0 && minBlockID > 0 {
@@ -878,15 +887,19 @@ func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Lo
 			// parent is from a block that is older than the 100 blocks we have in the current chain
 			// we can ignore this, as the parent is not on our current chain
 			logger.Warnf("[BLOCK][%s] parent transaction %s of tx %s is over 100 blocks ago - skipping", b.Hash().String(), parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
-			return nil
+
+			// we need to return parentTxMeta.BlockIDs back to validator, which can check if those blocks are part of our chain
+			oldBlockIDs = append(oldBlockIDs, parentTxMeta.BlockIDs...)
+
+			return oldBlockIDs, nil
 		}
 	}
 
 	if len(foundInPreviousBlocks) != 1 {
-		return ErrCheckParentExistsOnChain(gCtx, currentBlockHeaderIDsMap, parentTxMeta, txMetaStore, parentTxStruct, b, foundInPreviousBlocks)
+		return oldBlockIDs, ErrCheckParentExistsOnChain(gCtx, currentBlockHeaderIDsMap, parentTxMeta, txMetaStore, parentTxStruct, b, foundInPreviousBlocks)
 	}
 
-	return nil
+	return oldBlockIDs, nil
 }
 
 func ErrCheckParentExistsOnChain(gCtx context.Context, currentBlockHeaderIDsMap map[uint32]struct{}, parentTxMeta *meta.Data, txMetaStore utxo.Store, parentTxStruct missingParentTx, b *Block, foundInPreviousBlocks map[uint32]struct{}) error {

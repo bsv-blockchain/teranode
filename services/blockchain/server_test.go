@@ -302,5 +302,8 @@ func (s *mockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash
 
 func (s *mockStore) ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*file.File, error) {
 	panic("not implemented")
+}
 
+func (s *mockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	panic("not implemented")
 }
