@@ -2,6 +2,7 @@ package blockpersister
 
 import (
 	"context"
+	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -24,6 +25,7 @@ type Server struct {
 	stats                          *gocore.Stat
 	blockchainClient               blockchain.ClientI
 	blocksFinalKafkaConsumerClient *kafka.KafkaConsumerGroup
+	kafkaHealthURL                 *url.URL
 }
 
 func New(
@@ -76,7 +78,7 @@ func (u *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
-		{Name: "BlocksFinalKafkaConsumer", Check: u.blocksFinalKafkaConsumerClient.CheckKafkaHealth},
+		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, u.kafkaHealthURL)},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -87,6 +89,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	blocksFinalKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
 	if err == nil && ok {
+		u.kafkaHealthURL = blocksFinalKafkaURL
 		u.logger.Infof("Starting Kafka consumer for blocksFinal messages")
 
 		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.

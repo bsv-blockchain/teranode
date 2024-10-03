@@ -2,7 +2,6 @@ package kafka
 
 import (
 	"context"
-	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -299,16 +298,4 @@ func (kc *KafkaConsumer) handleMessagesWithAutoCommit(session sarama.ConsumerGro
 
 	// Auto-commit is implied, so we don't need to explicitly mark the message here
 	return nil
-}
-
-func (k *KafkaConsumerGroup) CheckKafkaHealth(ctx context.Context) (int, string, error) {
-	if k == nil {
-		return http.StatusOK, "Kafka consumer group not initialized", nil
-	}
-
-	if k.LastMessageStatus.Success {
-		return http.StatusOK, "OK", nil
-	}
-
-	return http.StatusServiceUnavailable, "Last message failed", k.LastMessageStatus.Error
 }

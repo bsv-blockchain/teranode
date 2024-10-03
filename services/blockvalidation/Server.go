@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"runtime"
 	"slices"
 	"strconv"
@@ -62,7 +63,7 @@ type Server struct {
 	blockValidation     *BlockValidation
 	SetTxMetaQ          *util.LockFreeQ[[][]byte]
 	kafkaConsumerClient *kafka.KafkaConsumerGroup
-
+	kafkaHealthURL      *url.URL
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
 	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
@@ -109,7 +110,7 @@ func (u *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "TxStore", Check: u.txStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
-		{Name: "BlockKafkaConsumer", Check: u.kafkaConsumerClient.CheckKafkaHealth},
+		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, u.kafkaHealthURL)},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -237,6 +238,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksConfig")
 	if err == nil && ok {
+		u.kafkaHealthURL = blocksKafkaURL
 		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.
 		// subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
 		// g.SetLimit(subtreeConcurrency)

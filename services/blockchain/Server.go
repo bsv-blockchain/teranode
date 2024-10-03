@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/looplab/fsm"
@@ -52,6 +53,7 @@ type Blockchain struct {
 	blockKafkaProducer kafka.KafkaProducerI
 	stats              *gocore.Stat
 	finiteStateMachine *fsm.FSM
+	kafkaHealthURL     *url.URL
 }
 
 // New will return a server instance with the logger stored within it
@@ -89,6 +91,7 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 func (b *Blockchain) Health(ctx context.Context) (int, string, error) {
 	checks := []health.Check{
 		{Name: "BlockchainStore", Check: b.store.Health},
+		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, b.kafkaHealthURL)},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -122,6 +125,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 
 	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
 	if err == nil && ok {
+		b.kafkaHealthURL = blocksKafkaURL
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
 
 		if _, b.blockKafkaProducer, err = kafka.NewKafkaProducer(blocksKafkaURL); err != nil {

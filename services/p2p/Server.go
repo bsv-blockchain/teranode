@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -47,6 +48,7 @@ type Server struct {
 	rejectedTxKafkaConsumerClient *kafka.KafkaConsumerGroup
 	subtreeKafkaProducerClient    *kafka.KafkaAsyncProducer
 	blocksKafkaProducerClient     *kafka.KafkaAsyncProducer
+	kafkaHealthURL                *url.URL
 }
 
 func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Server, error) {
@@ -142,9 +144,7 @@ func (s *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
 		{Name: "BlockValidationClient", Check: s.blockValidationClient.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)},
-		{Name: "RejectedTxKafkaConsumer", Check: s.rejectedTxKafkaConsumerClient.CheckKafkaHealth},
-		{Name: "BlocksKafkaProducer", Check: s.blocksKafkaProducerClient.CheckKafkaHealth},
-		{Name: "SubtreeKafkaProducer", Check: s.subtreeKafkaProducerClient.CheckKafkaHealth},
+		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, s.kafkaHealthURL)},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -174,6 +174,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 
 	if found {
+		s.kafkaHealthURL = subtreesKafkaURL
 		s.subtreeKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
 			return kafka.NewKafkaAsyncProducer(s.logger, subtreesKafkaURL, make(chan []byte, 10))
 		}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
@@ -191,6 +192,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 
 	if found {
+		s.kafkaHealthURL = blocksKafkaURL
 		s.blocksKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
 			return kafka.NewKafkaAsyncProducer(s.logger, blocksKafkaURL, make(chan []byte, 10))
 		}, retry.WithMessage("[P2P] error starting kafka block producer"))
@@ -204,6 +206,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 	rejectedTxKafkaURL, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
 	if err == nil && ok {
+		s.kafkaHealthURL = rejectedTxKafkaURL
 		var partitions int
 
 		if partitions, err = strconv.Atoi(rejectedTxKafkaURL.Query().Get("partitions")); err != nil {

@@ -3,6 +3,7 @@ package subtreevalidation
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strconv"
 	"sync"
@@ -49,6 +50,7 @@ type Server struct {
 	blockchainClient                  blockchain.ClientI
 	subtreeConsumerClient             *kafka.KafkaConsumerGroup
 	txmetaConsumerClient              *kafka.KafkaConsumerGroup
+	kafkaHealthURL                    *url.URL
 }
 
 var (
@@ -136,8 +138,7 @@ func (u *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
-		{Name: "SubtreeKafkaConsumer", Check: u.subtreeConsumerClient.CheckKafkaHealth},
-		{Name: "TxMetaKafkaConsumer", Check: u.txmetaConsumerClient.CheckKafkaHealth},
+		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, u.kafkaHealthURL)},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -165,6 +166,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err == nil && ok {
+		u.kafkaHealthURL = subtreesKafkaURL
 		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.
 		// subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
 		// g.SetLimit(subtreeConcurrency)
@@ -255,6 +257,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
 	if err == nil && ok {
+		u.kafkaHealthURL = txmetaKafkaURL
 		var partitions int
 
 		if partitions, err = strconv.Atoi(txmetaKafkaURL.Query().Get("partitions")); err != nil {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"syscall"
 	"time"
@@ -38,6 +39,7 @@ type Server struct {
 	ctx              context.Context
 	blockchainClient blockchain.ClientI
 	consumerClient   *kafka.KafkaConsumerGroup
+	kafkaHealthURL   *url.URL
 }
 
 // NewServer will return a server instance with the logger stored within it
@@ -58,7 +60,7 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "UTXOStore", Check: v.utxoStore.Health},
 		{Name: "Validator", Check: v.validator.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(v.blockchainClient)},
-		{Name: "Kafka", Check: v.consumerClient.CheckKafkaHealth},
+		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, v.kafkaHealthURL)},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -90,6 +92,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 
 	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
 	if err == nil && ok {
+		v.kafkaHealthURL = kafkaURL
 		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
 
 		workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)

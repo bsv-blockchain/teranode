@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -56,6 +57,7 @@ type PropagationServer struct {
 	validator                    validator.Interface
 	blockchainClient             blockchain.ClientI
 	validatorKafkaProducerClient *kafka.KafkaAsyncProducer
+	kafkaHealthURL               *url.URL
 }
 
 // New will return a server instance with the logger stored within it
@@ -77,7 +79,7 @@ func (ps *PropagationServer) Health(ctx context.Context) (int, string, error) {
 		{Name: "ValidatorClient", Check: ps.validator.Health},
 		{Name: "TxStore", Check: ps.txStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(ps.blockchainClient)},
-		{Name: "KafkaValidatorProducer", Check: ps.validatorKafkaProducerClient.CheckKafkaHealth},
+		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, ps.kafkaHealthURL)},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -169,6 +171,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 
 	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
 	if workers > 0 {
+		ps.kafkaHealthURL = validatortxsKafkaURL
 		ps.validatorKafkaProducerClient, err = retry.Retry(ctx, ps.logger, func() (*kafka.KafkaAsyncProducer, error) {
 			return kafka.NewKafkaAsyncProducer(ps.logger, validatortxsKafkaURL, make(chan []byte, 10_000))
 		}, retry.WithMessage("[Propagation Server] error starting kafka producer"))

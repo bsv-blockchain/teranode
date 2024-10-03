@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ type Validator struct {
 	stats                         *gocore.Stat
 	txMetaKafkaProducerClient     *kafka.KafkaAsyncProducer
 	rejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
+	kafkaHealthURL                *url.URL
 }
 
 func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interface, error) {
@@ -72,6 +74,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		// only start the kafka producer if there are workers listening
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
+			v.kafkaHealthURL = txmetaKafkaURL
 			v.txMetaKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
 				return kafka.NewKafkaAsyncProducer(v.logger, txmetaKafkaURL, make(chan []byte, 10000))
 			}, retry.WithMessage("[Validator] error starting kafka producer for txMeta"))
@@ -92,6 +95,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		// only start the kafka producer if there are workers listening
 		// this can be used to disable the kafka producer, by just setting workers to 0
 		if workers > 0 {
+			v.kafkaHealthURL = rejectedTxKafkaURL
 			v.rejectedTxKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
 				return kafka.NewKafkaAsyncProducer(v.logger, rejectedTxKafkaURL, make(chan []byte, 10000))
 			}, retry.WithMessage("[Validator] error starting kafka producer for rejected Txs"))
@@ -142,8 +146,7 @@ func (v *Validator) Health(ctx context.Context) (int, string, error) {
 	checks := []health.Check{
 		{Name: "BlockHeight", Check: checkBlockHeight},
 		{Name: "UTXOStore", Check: v.utxoStore.Health},
-		{Name: "TxMetaKafkaProducer", Check: v.txMetaKafkaProducerClient.CheckKafkaHealth},
-		{Name: "RejectedTxKafkaProducer", Check: v.rejectedTxKafkaProducerClient.CheckKafkaHealth},
+		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, v.kafkaHealthURL)},
 	}
 
 	return health.CheckAll(ctx, checks)
