@@ -87,7 +87,7 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 	suite.T().Log("BitcoinTestFramework setup completed")
 }
 
-func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsSkipChecks(settingsMap map[string]string, composeFiles []string) {
+func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsSkipChecks(settingsMap map[string]string, composeFiles []string, skipClientHandles bool) {
 	var err error
 
 	suite.ComposeFiles = composeFiles
@@ -111,9 +111,11 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsSkipChecks(s
 		suite.T().Fatal(err)
 	}
 
-	err = suite.Framework.GetClientHandles()
-	if err != nil {
-		suite.T().Fatal(err)
+	if !skipClientHandles {
+		err = suite.Framework.GetClientHandles()
+		if err != nil {
+			suite.T().Fatal(err)
+		}
 	}
 
 	suite.T().Log("BitcoinTestFramework setup completed")
