@@ -2,8 +2,10 @@ package aerospike
 
 import (
 	_ "embed"
+	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v7"
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
@@ -80,4 +82,33 @@ func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, fu
 	}
 
 	return nil
+}
+
+func (s *Store) parseLuaReturnValue(returnValue string) (luaReturnMessage, error) {
+	rets := luaReturnMessage{}
+
+	r := strings.Split(returnValue, ":")
+
+	if len(r) > 0 {
+		rets.returnValue = luaReturnValue(r[0])
+	}
+
+	if len(r) > 1 {
+		if len(r[1]) == 32 {
+			hash, err := chainhash.NewHashFromStr(r[1])
+			if err != nil {
+				return rets, errors.NewProcessingError("error parsing spendingTxID %s", r[1], err)
+			}
+
+			rets.spendingTxID = hash
+		} else {
+			rets.signal = luaReturnValue(r[1])
+		}
+	}
+
+	if len(r) > 2 {
+		rets.external = r[2] == string(LuaExternal)
+	}
+
+	return rets, nil
 }
