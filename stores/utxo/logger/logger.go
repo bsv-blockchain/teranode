@@ -101,9 +101,9 @@ func (s *Store) GetMedianBlockTime() uint32 {
 	return res
 }
 
-func (s *Store) Health(ctx context.Context) (int, string, error) {
+func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	s.logger.Infof("[UTXOStore][logger][Health] : %s", caller())
-	return s.store.Health(ctx)
+	return s.store.Health(ctx, checkLiveness)
 }
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {

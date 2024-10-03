@@ -391,7 +391,7 @@ func TestHealth(t *testing.T) {
 		store, err := NewLustreStore(ulogger.TestLogger{}, s3Client, tempDir, persistDir)
 		require.NoError(t, err)
 
-		status, message, err := store.Health(context.Background())
+		status, message, err := store.Health(context.Background(), false)
 		assert.Equal(t, http.StatusOK, status)
 		assert.Equal(t, "Lustre blob Store healthy", message)
 		assert.NoError(t, err)
@@ -407,7 +407,7 @@ func TestHealth(t *testing.T) {
 		err = os.RemoveAll("./nonexistent")
 		require.NoError(t, err)
 
-		status, message, err := store.Health(context.Background())
+		status, message, err := store.Health(context.Background(), false)
 		assert.Equal(t, http.StatusServiceUnavailable, status)
 		assert.Contains(t, message, "Main path issue")
 		assert.NoError(t, err)
@@ -423,7 +423,7 @@ func TestHealth(t *testing.T) {
 		err = os.RemoveAll(filepath.Join(tempDir, "nonexistentpersist"))
 		require.NoError(t, err)
 
-		status, message, err := store.Health(context.Background())
+		status, message, err := store.Health(context.Background(), false)
 		assert.Equal(t, http.StatusServiceUnavailable, status)
 		assert.Contains(t, message, "Persist subdirectory issue")
 		assert.NoError(t, err)
@@ -434,7 +434,7 @@ func TestHealth(t *testing.T) {
 		store, err := NewLustreStore(ulogger.TestLogger{}, s3Client, tempDir, persistDir)
 		require.NoError(t, err)
 
-		status, message, err := store.Health(context.Background())
+		status, message, err := store.Health(context.Background(), false)
 		assert.Equal(t, http.StatusServiceUnavailable, status)
 		assert.Contains(t, message, "S3 client issue")
 		assert.NoError(t, err)
@@ -452,7 +452,7 @@ func TestHealth(t *testing.T) {
 		err = os.RemoveAll(filepath.Join(tempDir, "nonexistentpersist"))
 		require.NoError(t, err)
 
-		status, message, err := store.Health(context.Background())
+		status, message, err := store.Health(context.Background(), false)
 		assert.Equal(t, http.StatusServiceUnavailable, status)
 		assert.Contains(t, message, "Main path issue")
 		assert.Contains(t, message, "Persist subdirectory issue")

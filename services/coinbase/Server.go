@@ -40,13 +40,24 @@ func New(logger ulogger.Logger, blockchainClient bc.ClientI) *Server {
 	}
 }
 
-func (s *Server) Health(ctx context.Context) (int, string, error) {
+func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
 		{Name: "FSM", Check: bc.CheckFSM(s.blockchainClient)},
 	}
 
-	return health.CheckAll(ctx, checks)
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*coinbase_api.HealthResponse, error) {
@@ -57,7 +68,7 @@ func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*coinbase_ap
 	)
 	defer deferFn()
 
-	status, details, err := s.Health(ctx)
+	status, details, err := s.Health(ctx, false)
 
 	return &coinbase_api.HealthResponse{
 		Ok:        status == http.StatusOK,

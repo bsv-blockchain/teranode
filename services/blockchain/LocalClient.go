@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -32,20 +33,26 @@ func NewLocalClient(logger ulogger.Logger, store blockchain.Store, subtreeStore 
 	}, nil
 }
 
-func (c LocalClient) Health(ctx context.Context) (int, string, error) {
-	if status, msg, err := c.store.Health(ctx); err != nil {
-		return status, msg, err
+func (c LocalClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
 	}
 
-	if status, msg, err := c.subtreeStore.Health(ctx); err != nil {
-		return status, msg, err
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
+	checks := []health.Check{
+		{Name: "BlockchainStore", Check: c.store.Health},
+		{Name: "SubtreeStore", Check: c.subtreeStore.Health},
+		{Name: "UTXOStore", Check: c.utxoStore.Health},
 	}
 
-	if status, msg, err := c.utxoStore.Health(ctx); err != nil {
-		return status, msg, err
-	}
+	return health.CheckAll(ctx, checkLiveness, checks)
 
-	return http.StatusOK, "OK", nil
 }
 
 func (c LocalClient) AddBlock(ctx context.Context, block *model.Block, peerID string) error {

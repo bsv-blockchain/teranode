@@ -88,7 +88,7 @@ func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error) {
 	})
 
 	e.GET("/health", func(c echo.Context) error {
-		_, details, err := repo.Health(c.Request().Context())
+		_, details, err := repo.Health(c.Request().Context(), false)
 		logger.Debugf("[Asset_http] Health check")
 
 		if err != nil {

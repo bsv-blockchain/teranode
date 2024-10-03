@@ -9,7 +9,7 @@ import (
 )
 
 type Store interface {
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
 	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 	GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error)

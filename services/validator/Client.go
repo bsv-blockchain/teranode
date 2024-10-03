@@ -84,7 +84,18 @@ func (c *Client) Stop() {
 	// TODO
 }
 
-func (c *Client) Health(ctx context.Context) (int, string, error) {
+func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	res, err := c.client.HealthGRPC(ctx, &validator_api.EmptyMessage{})
 	if !res.Ok || err != nil {
 		return http.StatusFailedDependency, res.Details, errors.UnwrapGRPC(err)

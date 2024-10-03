@@ -202,7 +202,7 @@ type mockStore struct {
 	block *model.Block
 }
 
-func (s *mockStore) Health(ctx context.Context) (int, string, error) {
+func (s *mockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "OK", nil
 }
 

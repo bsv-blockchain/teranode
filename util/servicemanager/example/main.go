@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils/servicemanager"
@@ -22,7 +23,7 @@ func NewService(name string) *SampleService {
 	}
 }
 
-func (s *SampleService) Health(ctx context.Context) (int, string, error) {
+func (s *SampleService) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return 0, "", nil
 }
 

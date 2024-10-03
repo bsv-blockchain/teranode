@@ -37,7 +37,7 @@ func (ns *NullStore) GetBlockHeight() (uint32, error) {
 	return 0, nil
 }
 
-func (ns *NullStore) Health(ctx context.Context) (int, string, error) {
+func (ns *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return 0, "Validator test Null Store", nil
 }
 

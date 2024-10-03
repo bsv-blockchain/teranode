@@ -50,7 +50,7 @@ type MockSubtreeValidationClient struct {
 	server *subtreevalidation.Server
 }
 
-func (m *MockSubtreeValidationClient) Health(ctx context.Context) (int, string, error) {
+func (m *MockSubtreeValidationClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return 0, "MockValidator", nil
 }
 

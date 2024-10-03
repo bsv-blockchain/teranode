@@ -9,17 +9,17 @@ import (
 
 type Check struct {
 	Name  string
-	Check func(context.Context) (int, string, error)
+	Check func(context.Context, bool) (int, string, error)
 }
 
-func CheckAll(ctx context.Context, checks []Check) (int, string, error) {
+func CheckAll(ctx context.Context, checkLiveness bool, checks []Check) (int, string, error) {
 	var (
 		overallStatus = http.StatusOK
 		messages      = make([]string, 0, len(checks))
 	)
 
 	for _, check := range checks {
-		status, message, err := check.Check(ctx)
+		status, message, err := check.Check(ctx, checkLiveness)
 		if err != nil || status != http.StatusOK {
 			overallStatus = http.StatusServiceUnavailable
 		}

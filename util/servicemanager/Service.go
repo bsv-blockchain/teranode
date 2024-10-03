@@ -7,5 +7,5 @@ type Service interface {
 	Init(ctx context.Context) error
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 }

@@ -14,7 +14,7 @@ type MockValidatorClient struct {
 	TxMetaStore     utxo.Store
 }
 
-func (m *MockValidatorClient) Health(ctx context.Context) (int, string, error) {
+func (m *MockValidatorClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return 0, "MockValidator", nil
 }
 

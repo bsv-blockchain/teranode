@@ -176,29 +176,26 @@ func main() {
 	util.RegisterPrometheusMetrics()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		status, details, err := sm.HealthHandler(ctx)
-		if err != nil {
-			w.WriteHeader(status)
+	healthFunc := func(liveness bool) func(http.ResponseWriter, *http.Request) {
+		return func(w http.ResponseWriter, r *http.Request) {
+			status, details, err := sm.HealthHandler(ctx, liveness)
+			if err != nil {
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(details))
+				return
+			}
+
+			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(details))
-			return
 		}
+	}
+	mux.HandleFunc("/health", healthFunc(false))
+	mux.HandleFunc("/health/readiness", healthFunc(false))
+	mux.HandleFunc("/health/liveness", healthFunc(true))
 
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(details))
-	})
-
-	// backwards compatibility (using old healthcheck endpoint on 9091)
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		status, details, err := sm.HealthHandler(ctx)
-		if err != nil {
-			w.WriteHeader(status)
-			_, _ = w.Write([]byte(details))
-			return
-		}
-
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(details))
+		_, _ = w.Write([]byte("STOP USING THIS ENDPOINT - use port 8000/health/readiness or 8000/health/liveness"))
 	})
 
 	port, ok := gocore.Config().GetInt("health_check_port", 8000)

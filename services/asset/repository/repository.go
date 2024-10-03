@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
-	"strings"
+	"net/http"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/health"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -62,40 +62,27 @@ func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Sto
 	}, nil
 }
 
-func (repo *Repository) Health(ctx context.Context) (int, string, error) {
-	var sb strings.Builder
-
-	errs := make([]error, 0)
-
-	code, details, err := repo.TxStore.Health(ctx)
-	if err != nil {
-		errs = append(errs, err)
-		_, _ = sb.WriteString(fmt.Sprintf("TxStore: BAD %d - %q: %v\n", code, details, err))
-	} else {
-		_, _ = sb.WriteString(fmt.Sprintf("TxStore: GOOD %d - %q\n", code, details))
+func (repo *Repository) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
 	}
 
-	code, details, err = repo.UtxoStore.Health(ctx)
-	if err != nil {
-		errs = append(errs, err)
-		_, _ = sb.WriteString(fmt.Sprintf("UTXOStore: BAD %d - %q: %v\n", code, details, err))
-	} else {
-		_, _ = sb.WriteString(fmt.Sprintf("UTXOStore: GOOD %d - %q\n", code, details))
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: repo.BlockchainClient.Health},
+		{Name: "UtxoStore", Check: repo.UtxoStore.Health},
+		{Name: "TxStore", Check: repo.TxStore.Health},
+		{Name: "SubtreeStore", Check: repo.SubtreeStore.Health},
+		{Name: "BlockPersisterStore", Check: repo.BlockPersisterStore.Health},
 	}
 
-	code, details, err = repo.SubtreeStore.Health(ctx)
-	if err != nil {
-		errs = append(errs, err)
-		_, _ = sb.WriteString(fmt.Sprintf("SubtreeStore: BAD %d - %q: %v\n", code, details, err))
-	} else {
-		_, _ = sb.WriteString(fmt.Sprintf("SubtreeStore: GOOD %d - %q\n", code, details))
-	}
-
-	if len(errs) > 0 {
-		return -1, sb.String(), errors.NewUnknownError("Health errors occurred")
-	}
-
-	return 0, sb.String(), nil
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {

@@ -70,7 +70,7 @@ func WithSetCoinbase(b bool) CreateOption {
 // Store is the interface for the UTXO map store
 type Store interface {
 	// CRUD functions
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 
 	Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error)
 	Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error)
@@ -104,7 +104,7 @@ var _ Store = &MockUtxostore{}
 
 type MockUtxostore struct{}
 
-func (mu *MockUtxostore) Health(ctx context.Context) (int, string, error) {
+func (mu *MockUtxostore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return 0, "Validator test", nil
 }
 func (mu *MockUtxostore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error) {

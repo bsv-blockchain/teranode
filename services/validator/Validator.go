@@ -113,11 +113,22 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 	return v, nil
 }
 
-func (v *Validator) Health(ctx context.Context) (int, string, error) {
+func (v *Validator) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	start, stat, _ := tracing.NewStatFromContext(ctx, "Health", v.stats)
 	defer stat.AddTime(start)
 
-	checkBlockHeight := func(ctx context.Context) (int, string, error) {
+	checkBlockHeight := func(ctx context.Context, checkLiveness bool) (int, string, error) {
 		var (
 			sb  strings.Builder
 			err error
@@ -149,7 +160,7 @@ func (v *Validator) Health(ctx context.Context) (int, string, error) {
 		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, v.kafkaHealthURL)},
 	}
 
-	return health.CheckAll(ctx, checks)
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (v *Validator) GetBlockHeight() uint32 {

@@ -41,7 +41,7 @@ func New(logger ulogger.Logger) *Memory {
 	}
 }
 
-func (m *Memory) Health(_ context.Context) (int, string, error) {
+func (m *Memory) Health(_ context.Context, _ bool) (int, string, error) {
 	return http.StatusOK, "Memory Store available", nil
 }
 

@@ -182,12 +182,12 @@ func (sm *ServiceManager) Wait() error {
 	return err // This is the original error
 }
 
-func (sm *ServiceManager) HealthHandler(ctx context.Context) (int, string, error) {
+func (sm *ServiceManager) HealthHandler(ctx context.Context, checkLiveness bool) (int, string, error) {
 	overallStatus := http.StatusOK
 	msgs := make([]string, 0, len(sm.services))
 
 	for _, service := range sm.services {
-		status, details, err := service.instance.Health(ctx)
+		status, details, err := service.instance.Health(ctx, checkLiveness)
 
 		if err != nil || status != http.StatusOK {
 			overallStatus = http.StatusServiceUnavailable

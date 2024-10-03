@@ -37,7 +37,7 @@ func NewDumbPropagationServer() *DumbPropagationServer {
 	}
 }
 
-func (ps *DumbPropagationServer) Health(ctx context.Context) (int, string, error) {
+func (ps *DumbPropagationServer) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return 0, "", nil
 }
 

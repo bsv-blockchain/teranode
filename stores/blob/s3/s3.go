@@ -107,7 +107,7 @@ func New(logger ulogger.Logger, s3URL *url.URL, opts ...options.StoreOption) (*S
 	return s, nil
 }
 
-func (g *S3) Health(ctx context.Context) (int, string, error) {
+func (g *S3) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	_, err := g.Exists(ctx, []byte("Health"))
 	if err != nil {
 		return http.StatusServiceUnavailable, "S3 Store unavailable", err

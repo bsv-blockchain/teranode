@@ -26,7 +26,7 @@ func New(opts ...options.StoreOption) *Memory {
 	}
 }
 
-func (m *Memory) Health(ctx context.Context) (int, string, error) {
+func (m *Memory) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return 0, "Memory Store", nil
 }
 

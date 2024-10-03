@@ -54,7 +54,18 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blo
 	}
 }
 
-func (v *Server) Health(ctx context.Context) (int, string, error) {
+func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: v.blockchainClient.Health},
 		{Name: "UTXOStore", Check: v.utxoStore.Health},
@@ -63,7 +74,7 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, v.kafkaHealthURL)},
 	}
 
-	return health.CheckAll(ctx, checks)
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
@@ -74,7 +85,7 @@ func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) 
 	)
 	defer deferFn()
 
-	status, details, err := v.Health(ctx)
+	status, details, err := v.Health(ctx, false)
 
 	return &validator_api.HealthResponse{
 		Ok:      status == http.StatusOK,

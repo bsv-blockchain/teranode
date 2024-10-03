@@ -13,7 +13,7 @@ import (
 )
 
 type Store interface {
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	GetDB() *usql.DB
 	GetDBEngine() util.SQLEngine
 	GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error)

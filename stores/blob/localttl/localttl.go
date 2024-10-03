@@ -11,7 +11,7 @@ import (
 )
 
 type blobStore interface {
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error)
 	Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error)
 	GetHead(ctx context.Context, key []byte, nrOfBytes int, opts ...options.FileOption) ([]byte, error)
@@ -43,13 +43,13 @@ func New(logger ulogger.Logger, ttlStore, blobStore blobStore, opts ...options.S
 	return b, nil
 }
 
-func (l *LocalTTL) Health(ctx context.Context) (int, string, error) {
-	n, resp, err := l.ttlStore.Health(ctx)
+func (l *LocalTTL) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	n, resp, err := l.ttlStore.Health(ctx, checkLiveness)
 	if err != nil || n <= 0 {
 		return n, resp, err
 	}
 
-	return l.blobStore.Health(ctx)
+	return l.blobStore.Health(ctx, checkLiveness)
 }
 
 func (l *LocalTTL) Close(_ context.Context) error {

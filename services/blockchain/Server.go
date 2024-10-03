@@ -88,13 +88,24 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 	}, nil
 }
 
-func (b *Blockchain) Health(ctx context.Context) (int, string, error) {
+func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "BlockchainStore", Check: b.store.Health},
 		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, b.kafkaHealthURL)},
 	}
 
-	return health.CheckAll(ctx, checks)
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
@@ -105,7 +116,7 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 	)
 	defer deferFn()
 
-	status, details, err := b.Health(ctx)
+	status, details, err := b.Health(ctx, false)
 	return &blockchain_api.HealthResponse{
 		Ok:        status == http.StatusOK,
 		Details:   details,

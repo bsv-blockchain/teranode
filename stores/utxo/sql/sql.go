@@ -126,7 +126,7 @@ func (s *Store) GetMedianBlockTime() uint32 {
 	return s.medianBlockTime.Load()
 }
 
-func (s *Store) Health(ctx context.Context) (int, string, error) {
+func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	details := fmt.Sprintf("SQL Engine is %s", s.engine)
 
 	var num int

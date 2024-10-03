@@ -7,6 +7,6 @@ import (
 )
 
 type ClientI interface {
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	RequestFunds(ctx context.Context, address string, disableDistribute bool) (*bt.Tx, error)
 }

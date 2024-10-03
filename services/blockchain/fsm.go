@@ -130,8 +130,8 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	return finiteStateMachine
 }
 
-func CheckFSM(blockchainClient ClientI) func(ctx context.Context) (int, string, error) {
-	return func(ctx context.Context) (int, string, error) {
+func CheckFSM(blockchainClient ClientI) func(ctx context.Context, checkLiveness bool) (int, string, error) {
+	return func(ctx context.Context, checkLiveness bool) (int, string, error) {
 		state, err := blockchainClient.GetFSMCurrentState(ctx)
 		if err != nil {
 			return http.StatusServiceUnavailable, "failed to check FSM state", err

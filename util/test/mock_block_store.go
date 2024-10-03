@@ -2,11 +2,12 @@ package test
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -24,7 +25,7 @@ func New(logger ulogger.Logger) (*BlobStoreStub, error) {
 	}, nil
 }
 
-func (n *BlobStoreStub) Health(_ context.Context) (int, string, error) {
+func (n *BlobStoreStub) Health(_ context.Context, _ bool) (int, string, error) {
 	return 0, "BlobStoreStub Store", nil
 }
 

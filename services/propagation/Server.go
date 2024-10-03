@@ -73,7 +73,18 @@ func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.In
 	}
 }
 
-func (ps *PropagationServer) Health(ctx context.Context) (int, string, error) {
+func (ps *PropagationServer) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: ps.blockchainClient.Health},
 		{Name: "ValidatorClient", Check: ps.validator.Health},
@@ -82,7 +93,7 @@ func (ps *PropagationServer) Health(ctx context.Context) (int, string, error) {
 		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, ps.kafkaHealthURL)},
 	}
 
-	return health.CheckAll(ctx, checks)
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
@@ -93,7 +104,7 @@ func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.
 	)
 	defer deferFn()
 
-	status, details, err := ps.Health(ctx)
+	status, details, err := ps.Health(ctx, false)
 
 	return &propagation_api.HealthResponse{
 		Ok:        status == http.StatusOK,

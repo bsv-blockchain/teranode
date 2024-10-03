@@ -335,8 +335,8 @@ func (t *TxMetaCache) GetCacheStats() *CacheStats {
 	}
 }
 
-func (t *TxMetaCache) Health(ctx context.Context) (int, string, error) {
-	return t.utxoStore.Health(ctx)
+func (t *TxMetaCache) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	return t.utxoStore.Health(ctx, checkLiveness)
 }
 
 func (t *TxMetaCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {

@@ -2,6 +2,7 @@ package blockpersister
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -71,7 +72,18 @@ func New(
 	return u
 }
 
-func (u *Server) Health(ctx context.Context) (int, string, error) {
+func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: u.blockchainClient.Health},
 		{Name: "BlockStore", Check: u.blockStore.Health},
@@ -81,7 +93,7 @@ func (u *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, u.kafkaHealthURL)},
 	}
 
-	return health.CheckAll(ctx, checks)
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (u *Server) Init(ctx context.Context) (err error) {

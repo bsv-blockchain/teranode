@@ -10,7 +10,7 @@ import (
 )
 
 type ClientI interface {
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	AddBlock(ctx context.Context, block *model.Block, peerID string) error
 	SendNotification(ctx context.Context, notification *blockchain_api.Notification) error
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error)
@@ -86,7 +86,7 @@ type MockBlockchain struct {
 // --------------------------------------------
 // mockBlockchain
 // --------------------------------------------
-func (s *MockBlockchain) Health(ctx context.Context) (int, string, error) {
+func (s *MockBlockchain) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "OK", nil
 }
 func (s *MockBlockchain) AddBlock(ctx context.Context, block *model.Block, peerID string) error {

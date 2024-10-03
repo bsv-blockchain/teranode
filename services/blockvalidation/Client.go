@@ -49,7 +49,18 @@ func NewClient(ctx context.Context, logger ulogger.Logger, source string) (*Clie
 	return client, nil
 }
 
-func (s *Client) Health(ctx context.Context) (int, string, error) {
+func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	resp, err := s.apiClient.HealthGRPC(ctx, &blockvalidation_api.EmptyMessage{})
 	if !resp.Ok || err != nil {
 		return http.StatusFailedDependency, resp.Details, errors.UnwrapGRPC(err)

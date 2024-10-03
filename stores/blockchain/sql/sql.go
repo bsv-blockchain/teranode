@@ -78,7 +78,7 @@ func New(logger ulogger.Logger, storeURL *url.URL) (*SQL, error) {
 	return s, nil
 }
 
-func (s *SQL) Health(ctx context.Context) (int, string, error) {
+func (s *SQL) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	// Check if the database connection is alive
 	err := s.db.PingContext(ctx)
 	if err != nil {

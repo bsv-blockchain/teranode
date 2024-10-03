@@ -426,7 +426,7 @@ func newLocalSubtreeStore() *localSubtreeStore {
 	}
 }
 
-func (l localSubtreeStore) Health(_ context.Context) (int, string, error) {
+func (l localSubtreeStore) Health(_ context.Context, _ bool) (int, string, error) {
 	return 0, "", nil
 }
 
@@ -499,7 +499,7 @@ func New(logger ulogger.Logger) (*BlobStoreStub, error) {
 	}, nil
 }
 
-func (n *BlobStoreStub) Health(_ context.Context) (int, string, error) {
+func (n *BlobStoreStub) Health(_ context.Context, _ bool) (int, string, error) {
 	return 0, "BlobStoreStub Store", nil
 }
 

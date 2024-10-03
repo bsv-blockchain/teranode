@@ -82,14 +82,25 @@ func NewMiner(ctx context.Context, logger ulogger.Logger, blockchainClient block
 	}, nil
 }
 
-func (m *Miner) Health(ctx context.Context) (int, string, error) {
+func (m *Miner) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: m.blockchainClient.Health},
 		{Name: "BlockAssemblyClient", Check: m.blockAssemblyClient.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(m.blockchainClient)},
 	}
 
-	return health.CheckAll(ctx, checks)
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (m *Miner) Init(ctx context.Context) error {

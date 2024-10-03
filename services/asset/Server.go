@@ -2,6 +2,7 @@ package asset
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/asset/centrifuge_impl"
@@ -44,7 +45,18 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, 
 	return s
 }
 
-func (v *Server) Health(ctx context.Context) (int, string, error) {
+func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "UTXOStore", Check: v.utxoStore.Health},
 		{Name: "TxStore", Check: v.txStore.Health},
@@ -53,7 +65,7 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "FSM", Check: blockchain.CheckFSM(v.blockchainClient)},
 	}
 
-	return health.CheckAll(ctx, checks)
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {

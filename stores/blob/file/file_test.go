@@ -430,7 +430,7 @@ func TestFileHealth(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test
-		status, message, err := f.Health(context.Background())
+		status, message, err := f.Health(context.Background(), false)
 
 		// Assert
 		require.NoError(t, err)
@@ -453,7 +453,7 @@ func TestFileHealth(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test
-		status, message, err := f.Health(context.Background())
+		status, message, err := f.Health(context.Background(), false)
 
 		// Assert
 		require.Error(t, err)
@@ -479,7 +479,7 @@ func TestFileHealth(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test
-		status, message, err := f.Health(context.Background())
+		status, message, err := f.Health(context.Background(), false)
 
 		// Assert
 		require.Error(t, err)
@@ -505,7 +505,7 @@ func TestFileHealth(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test
-		status, message, err := f.Health(context.Background())
+		status, message, err := f.Health(context.Background(), false)
 
 		// Assert
 		require.Error(t, err)

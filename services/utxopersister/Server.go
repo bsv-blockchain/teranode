@@ -3,6 +3,7 @@ package utxopersister
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -81,7 +82,18 @@ func NewDirect(
 	}, nil
 }
 
-func (s *Server) Health(ctx context.Context) (int, string, error) {
+func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
 		{Name: "BlockchainStore", Check: s.blockchainStore.Health},
@@ -89,7 +101,7 @@ func (s *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)},
 	}
 
-	return health.CheckAll(ctx, checks)
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (s *Server) Init(ctx context.Context) (err error) {

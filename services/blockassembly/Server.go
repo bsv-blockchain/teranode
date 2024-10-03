@@ -93,7 +93,18 @@ func New(logger ulogger.Logger, txStore blob.Store, utxoStore utxostore.Store, s
 	return ba
 }
 
-func (ba *BlockAssembly) Health(ctx context.Context) (int, string, error) {
+func (ba *BlockAssembly) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if checkLiveness {
+		// Add liveness checks here. Don't include dependency checks.
+		// If the service is stuck return http.StatusServiceUnavailable
+		// to indicate a restart is needed
+		return http.StatusOK, "OK", nil
+	}
+
+	// Add readiness checks here. Include dependency checks.
+	// If any dependency is not ready, return http.StatusServiceUnavailable
+	// If all dependencies are ready, return http.StatusOK
+	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "BlockchainClient", Check: ba.blockchainClient.Health},
 		{Name: "SubtreeStore", Check: ba.subtreeStore.Health},
@@ -102,7 +113,7 @@ func (ba *BlockAssembly) Health(ctx context.Context) (int, string, error) {
 		{Name: "FSM", Check: blockchain.CheckFSM(ba.blockchainClient)},
 	}
 
-	return health.CheckAll(ctx, checks)
+	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
 func (ba *BlockAssembly) HealthGRPC(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.HealthResponse, error) {
@@ -113,7 +124,7 @@ func (ba *BlockAssembly) HealthGRPC(ctx context.Context, _ *blockassembly_api.Em
 	)
 	defer deferFn()
 
-	status, details, err := ba.Health(ctx)
+	status, details, err := ba.Health(ctx, false)
 	return &blockassembly_api.HealthResponse{
 		Ok:        status == http.StatusOK,
 		Details:   details,

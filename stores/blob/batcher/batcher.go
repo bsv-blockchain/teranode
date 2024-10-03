@@ -35,7 +35,7 @@ type BatchItem struct {
 }
 
 type blobStoreSetter interface {
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error
 }
 
@@ -158,9 +158,9 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	return nil
 }
 
-func (b *Batcher) Health(ctx context.Context) (int, string, error) {
+func (b *Batcher) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	// just pass the health of the underlying blob store
-	return b.blobStore.Health(ctx)
+	return b.blobStore.Health(ctx, checkLiveness)
 }
 
 func (b *Batcher) Close(_ context.Context) error {

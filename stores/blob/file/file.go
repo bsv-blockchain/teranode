@@ -197,7 +197,7 @@ func cleanExpiredFiles(s *File) {
 	}
 }
 
-func (s *File) Health(_ context.Context) (int, string, error) {
+func (s *File) Health(_ context.Context, _ bool) (int, string, error) {
 	// Check if the path exists
 	if _, err := os.Stat(s.path); os.IsNotExist(err) {
 		return http.StatusInternalServerError, "File Store: Path does not exist", err

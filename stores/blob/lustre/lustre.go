@@ -90,7 +90,7 @@ func NewLustreStore(logger ulogger.Logger, s3Client s3Store, dir string, persist
 	return lustreStore, nil
 }
 
-func (s *Lustre) Health(ctx context.Context) (int, string, error) {
+func (s *Lustre) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	var issues []string
 
 	// Check main path

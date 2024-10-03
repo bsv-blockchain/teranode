@@ -44,7 +44,7 @@ func (m *NullStore) GetMedianBlockTime() uint32 {
 	return m.medianBlockTime
 }
 
-func (m *NullStore) Health(ctx context.Context) (int, string, error) {
+func (m *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "NullStore Store available", nil
 }
 

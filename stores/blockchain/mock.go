@@ -25,7 +25,7 @@ func NewMockStore() *MockStore {
 	}
 }
 
-func (m MockStore) Health(ctx context.Context) (int, string, error) {
+func (m MockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "OK", nil
 }
 

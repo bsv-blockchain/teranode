@@ -14,7 +14,7 @@ import (
 KafkaHealthChecker is a function that checks the health of a Kafka cluster.
 It returns a function that can be used to check the health of a Kafka cluster.
 */
-func KafkaHealthChecker(ctx context.Context, kafkaURL *url.URL) func(ctx context.Context) (int, string, error) {
+func KafkaHealthChecker(ctx context.Context, kafkaURL *url.URL) func(ctx context.Context, checkLiveness bool) (int, string, error) {
 	/*
 		There isn't a built-in way to check the health of a Kafka cluster.
 		So, we need to connect to the cluster and check if we can connect to it.
@@ -26,7 +26,7 @@ func KafkaHealthChecker(ctx context.Context, kafkaURL *url.URL) func(ctx context
 		that if we can connect to the brokers then the cluster is healthy.
 		Not perfect but it's something.
 	*/
-	return func(ctx context.Context) (int, string, error) {
+	return func(ctx context.Context, checkLiveness bool) (int, string, error) {
 		if kafkaURL == nil {
 			return http.StatusOK, "Kafka is not configured - skipping health check", nil
 		}

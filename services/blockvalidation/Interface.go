@@ -12,7 +12,7 @@ import (
 )
 
 type Interface interface {
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseUrl string, waitToComplete bool) error
 	ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32) error
 	SubtreeFound(ctx context.Context, subtreeHash *chainhash.Hash, baseUrl string) error
@@ -29,7 +29,7 @@ var _ Interface = &MockBlockValidation{}
 
 type MockBlockValidation struct{}
 
-func (mv *MockBlockValidation) Health(ctx context.Context) (int, string, error) {
+func (mv *MockBlockValidation) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "OK", nil
 }
 

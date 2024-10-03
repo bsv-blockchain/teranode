@@ -86,7 +86,7 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPBlobServer) handleHealth(w http.ResponseWriter, r *http.Request) {
-	status, msg, err := s.store.Health(r.Context())
+	status, msg, err := s.store.Health(r.Context(), false)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

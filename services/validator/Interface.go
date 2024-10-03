@@ -7,7 +7,7 @@ import (
 )
 
 type Interface interface {
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) error
 	GetBlockHeight() uint32
 	GetMedianBlockTime() uint32
@@ -18,7 +18,7 @@ var _ Interface = &MockValidator{}
 
 type MockValidator struct{}
 
-func (mv *MockValidator) Health(ctx context.Context) (int, string, error) {
+func (mv *MockValidator) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return 0, "Mock Validator", nil
 }
 

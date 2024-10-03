@@ -24,7 +24,7 @@ func New(logger ulogger.Logger, opts ...options.StoreOption) (*Null, error) {
 	}, nil
 }
 
-func (n *Null) Health(_ context.Context) (int, string, error) {
+func (n *Null) Health(_ context.Context, _ bool) (int, string, error) {
 	return http.StatusOK, "Null Store", nil
 }
 

@@ -18,7 +18,7 @@ func NewLocalSubtreeStore() *TestSubtreeStore {
 	}
 }
 
-func (l TestSubtreeStore) Health(_ context.Context) (int, string, error) {
+func (l TestSubtreeStore) Health(_ context.Context, _ bool) (int, string, error) {
 	return 0, "", nil
 }
 

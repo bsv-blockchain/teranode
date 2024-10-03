@@ -7,7 +7,7 @@ import (
 )
 
 type Interface interface {
-	Health(ctx context.Context) (int, string, error)
+	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	CheckSubtree(ctx context.Context, hash chainhash.Hash, baseURL string, blockHeight uint32, blockHash *chainhash.Hash) error
 }
 
@@ -15,7 +15,7 @@ var _ Interface = &MockSubtreeValidation{}
 
 type MockSubtreeValidation struct{}
 
-func (mv *MockSubtreeValidation) Health(ctx context.Context) (int, string, error) {
+func (mv *MockSubtreeValidation) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return 0, "MockValidator", nil
 }
 
