@@ -1,0 +1,39 @@
+@startuml
+participant "P2P" as P2P
+participant "Alert Service" as AlertService
+participant "UTXO Store" as UTXOStore
+database "UTXO Datastore" as DB
+
+P2P -> AlertService: AddToConsensusBlacklist(funds)
+activate AlertService
+
+loop for each fund in funds
+    AlertService -> UTXOStore: Get(ctx, txHash)
+    activate UTXOStore
+    UTXOStore -> DB: Fetch transaction data
+    DB --> UTXOStore: Return transaction data
+    UTXOStore --> AlertService: Return transaction metadata
+    deactivate UTXOStore
+
+    AlertService -> AlertService: Calculate UTXO hash
+
+    AlertService -> UTXOStore: FreezeUTXOs(ctx, [spend])
+    activate UTXOStore
+    UTXOStore -> DB: Mark UTXO as frozen
+    DB --> UTXOStore: Confirm update
+    UTXOStore --> AlertService: Confirm freeze
+    deactivate UTXOStore
+
+    alt freeze successful
+        AlertService -> AlertService: Add to processed list
+    else freeze failed
+        AlertService -> AlertService: Add to notProcessed list with error
+    end
+end
+
+AlertService --> P2P: Return BlacklistResponse
+deactivate AlertService
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

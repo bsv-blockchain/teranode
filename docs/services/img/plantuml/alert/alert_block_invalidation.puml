@@ -1,0 +1,42 @@
+@startuml
+participant "P2P" as P2P
+participant "Alert Service" as AlertService
+participant "Blockchain Client" as BlockchainClient
+database "Blockchain Store" as BlockchainStore
+participant "Block Assembly" as BlockAssembly
+
+P2P -> AlertService: InvalidateBlock(blockHash)
+activate AlertService
+
+AlertService -> BlockchainClient: InvalidateBlock(ctx, blockHash)
+activate BlockchainClient
+
+BlockchainClient -> BlockchainStore: Mark block as invalid
+BlockchainStore --> BlockchainClient: Confirm invalidation
+
+BlockchainClient -> BlockchainStore: Retrieve transactions from invalidated block
+BlockchainStore --> BlockchainClient: Return transactions
+
+loop for each transaction in invalidated block
+    BlockchainClient -> BlockchainClient: Validate transaction
+    alt transaction is valid
+        BlockchainClient -> BlockAssembly: Add transaction for\nre-inclusion in blocks
+        BlockAssembly --> BlockchainClient: Confirm addition
+    end
+end
+
+BlockchainClient -> BlockchainStore: Get previous block
+BlockchainStore --> BlockchainClient: Return previous block
+
+BlockchainClient -> BlockchainClient: Set chain tip to previous block
+
+BlockchainClient --> AlertService: Confirm block invalidation
+deactivate BlockchainClient
+
+AlertService --> P2P: Return invalidation result
+deactivate AlertService
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+
+@enduml

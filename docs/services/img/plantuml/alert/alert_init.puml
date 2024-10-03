@@ -1,0 +1,47 @@
+@startuml
+participant "Main" as Main
+participant "Alert Service" as AlertService
+participant "Config" as Config
+participant "Datastore" as Datastore
+database "Database" as DB
+participant "P2P Server" as P2PServer
+
+Main -> AlertService: New(logger, blockchainClient,\nutxoStore, blockassemblyClient)
+activate AlertService
+
+AlertService -> AlertService: initPrometheusMetrics()
+
+Main -> AlertService: Init(ctx)
+activate AlertService
+
+AlertService -> Config: Load configuration
+Config --> AlertService: Return configuration
+
+AlertService -> Datastore: Initialize(config)
+Datastore -> DB: Connect and setup
+DB --> Datastore: Confirm connection
+Datastore --> AlertService: Datastore ready
+
+AlertService -> AlertService: Create genesis alert
+AlertService -> DB: Store genesis alert
+DB --> AlertService: Confirm storage
+
+AlertService -> Config: Verify RPC connection (if enabled)
+Config --> AlertService: Confirm RPC connection
+
+AlertService --> Main: Init complete
+deactivate AlertService
+
+Main -> AlertService: Start(ctx)
+activate AlertService
+
+AlertService -> P2PServer: NewServer(config)
+P2PServer --> AlertService: P2P Server instance
+
+AlertService -> P2PServer: Start(ctx)
+P2PServer --> AlertService: P2P Server started
+
+AlertService --> Main: Service started
+deactivate AlertService
+
+@enduml

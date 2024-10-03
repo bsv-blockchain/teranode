@@ -1,0 +1,46 @@
+@startuml
+participant "P2P" as P2P
+participant "Alert Service" as AlertService
+participant "UTXO Store" as UTXOStore
+database "Datastore" as DB
+
+P2P -> AlertService: AddToConfiscationTransactionWhitelist(txs)
+activate AlertService
+
+loop for each transaction in txs
+    AlertService -> AlertService: Parse transaction from hex
+
+    loop for each input in transaction
+        AlertService -> UTXOStore: Get(ctx, parentTxHash)
+        activate UTXOStore
+        UTXOStore -> DB: Fetch parent transaction data
+        DB --> UTXOStore: Return parent transaction data
+        UTXOStore --> AlertService: Return parent transaction metadata
+        deactivate UTXOStore
+
+        AlertService -> AlertService: Calculate old UTXO hash
+        AlertService -> AlertService: Extract public key from input
+        AlertService -> AlertService: Create new locking script
+        AlertService -> AlertService: Calculate new UTXO hash
+
+        AlertService -> UTXOStore: ReAssignUTXO(ctx, oldUtxo, newUtxo)
+        activate UTXOStore
+        UTXOStore -> DB: Update UTXO assignment
+        DB --> UTXOStore: Confirm update
+        UTXOStore --> AlertService: Confirm reassignment
+        deactivate UTXOStore
+
+        alt reassignment successful
+            AlertService -> AlertService: Add to processed list
+        else reassignment failed
+            AlertService -> AlertService: Add to notProcessed list with error
+        end
+    end
+end
+
+AlertService --> P2P: Return AddToConfiscationTransactionWhitelistResponse
+deactivate AlertService
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
