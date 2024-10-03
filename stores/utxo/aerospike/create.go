@@ -434,7 +434,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		// nolint: gosec
 		aerospike.NewBin("fee", aerospike.NewIntegerValue(int(fee))),
 		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(size)),
-		aerospike.NewBin("extendedSizeInBytes", aerospike.NewIntegerValue(extendedSize)),
+		aerospike.NewBin("extendedSize", aerospike.NewIntegerValue(extendedSize)),
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
 		aerospike.NewBin("isCoinbase", tx.IsCoinbase()),
 	}
