@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister/filestorer"
@@ -69,6 +70,7 @@ type UTXOSet struct {
 	utxoCount       uint64
 	deletionCount   uint64
 	stats           *gocore.Stat
+	mu              sync.Mutex // Add this line
 }
 
 func NewUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash, blockHeight uint32) (*UTXOSet, error) {
@@ -237,7 +239,11 @@ func GetUTXOSetHeaderFromReader(reader io.Reader) (string, *chainhash.Hash, uint
 	return magic, blockHash, blockHeight, previousBlockHash, nil
 }
 
+// ProcessTx makes the method thread-safe
 func (us *UTXOSet) ProcessTx(tx *bt.Tx) error {
+	us.mu.Lock()
+	defer us.mu.Unlock()
+
 	if !tx.IsCoinbase() {
 		for _, input := range tx.Inputs {
 			if err := us.delete(&UTXODeletion{input.PreviousTxIDChainHash(), input.PreviousTxOutIndex}); err != nil {
