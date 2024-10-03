@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -36,16 +35,17 @@ var (
 )
 
 type Server struct {
-	P2PNode               *p2p.P2PNode
-	logger                ulogger.Logger
-	bitcoinProtocolID     string
-	blockchainClient      blockchain.ClientI
-	blockValidationClient *blockvalidation.Client
-	AssetHTTPAddressURL   string
-	e                     *echo.Echo
-	notificationCh        chan *notificationMsg
-	subtreeCh             chan []byte
-	blockCh               chan []byte
+	P2PNode                       *p2p.P2PNode
+	logger                        ulogger.Logger
+	bitcoinProtocolID             string
+	blockchainClient              blockchain.ClientI
+	blockValidationClient         *blockvalidation.Client
+	AssetHTTPAddressURL           string
+	e                             *echo.Echo
+	notificationCh                chan *notificationMsg
+	rejectedTxKafkaConsumerClient *util.KafkaConsumerClient
+	subtreeKafkaProducerClient    *util.KafkaProducerClient
+	blocksKafkaProducerClient     *util.KafkaProducerClient
 }
 
 func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Server, error) {
@@ -133,48 +133,6 @@ func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient bloc
 		blockchainClient:  blockchainClient,
 	}
 
-	subtreesKafkaURL, err, found := gocore.Config().GetURL("kafka_subtreesConfig")
-	if err != nil {
-		return nil, errors.NewConfigurationError("[P2P] error getting kafka url", err)
-	}
-
-	if found {
-		p2pServer.subtreeCh = make(chan []byte, 10)
-
-		go func() {
-			_, err := retry.Retry(ctx, logger, func() (interface{}, error) {
-				return nil, util.StartAsyncProducer(logger, subtreesKafkaURL, p2pServer.subtreeCh)
-			}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
-			if err != nil {
-				logger.Fatalf("[P2P] failed to start kafka subtree producer: %v", err)
-				return
-			}
-		}()
-
-		logger.Infof("[P2P] connected to kafka at %s", subtreesKafkaURL.Host)
-	}
-
-	blocksKafkaURL, err, found := gocore.Config().GetURL("kafka_blocksConfig")
-	if err != nil {
-		return nil, errors.NewConfigurationError("[P2P] error getting kafka url", err)
-	}
-
-	if found {
-		p2pServer.blockCh = make(chan []byte, 10)
-
-		go func() {
-			_, err := retry.Retry(ctx, logger, func() (interface{}, error) {
-				return nil, util.StartAsyncProducer(logger, blocksKafkaURL, p2pServer.blockCh)
-			}, retry.WithMessage("[P2P] error starting kafka block producer"))
-			if err != nil {
-				logger.Fatalf("[P2P] failed to start kafka block producer: %v", err)
-				return
-			}
-		}()
-
-		logger.Infof("[P2P] connected to kafka at %s", subtreesKafkaURL.Host)
-	}
-
 	return p2pServer, nil
 }
 
@@ -183,6 +141,9 @@ func (s *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
 		{Name: "BlockValidationClient", Check: s.blockValidationClient.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)},
+		{Name: "RejectedTxKafkaConsumer", Check: s.rejectedTxKafkaConsumerClient.CheckKafkaHealth},
+		{Name: "BlocksKafkaProducer", Check: s.blocksKafkaProducerClient.CheckKafkaHealth},
+		{Name: "SubtreeKafkaProducer", Check: s.subtreeKafkaProducerClient.CheckKafkaHealth},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -205,6 +166,40 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 
 	s.AssetHTTPAddressURL = AssetHTTPAddressURL.String()
+
+	subtreesKafkaURL, err, found := gocore.Config().GetURL("kafka_subtreesConfig")
+	if err != nil {
+		return errors.NewConfigurationError("[P2P] error getting kafka url", err)
+	}
+
+	if found {
+		s.subtreeKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*util.KafkaProducerClient, error) {
+			return util.NewAsyncProducer(s.logger, subtreesKafkaURL, make(chan []byte, 10))
+		}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
+		if err != nil {
+			s.logger.Fatalf("[P2P] failed to start kafka subtree producer: %v", err)
+			return
+		}
+
+		s.logger.Infof("[P2P] connected to kafka at %s", subtreesKafkaURL.Host)
+	}
+
+	blocksKafkaURL, err, found := gocore.Config().GetURL("kafka_blocksConfig")
+	if err != nil {
+		return errors.NewConfigurationError("[P2P] error getting kafka url", err)
+	}
+
+	if found {
+		s.blocksKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*util.KafkaProducerClient, error) {
+			return util.NewAsyncProducer(s.logger, blocksKafkaURL, make(chan []byte, 10))
+		}, retry.WithMessage("[P2P] error starting kafka block producer"))
+		if err != nil {
+			s.logger.Fatalf("[P2P] failed to start kafka block producer: %v", err)
+			return
+		}
+
+		s.logger.Infof("[P2P] connected to kafka at %s", blocksKafkaURL.Host)
+	}
 
 	rejectedTxKafkaURL, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
 	if err == nil && ok {
@@ -233,7 +228,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
 		// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 		// Therefore, autocommit is set to true.
-		go s.startKafkaListener(ctx, rejectedTxKafkaURL, groupID, consumerCount, true, func(msg util.KafkaMessage) error {
+		rejectedTxHandler := func(msg util.KafkaMessage) error {
 			hash, err := chainhash.NewHash(msg.Message.Value[:chainhash.HashSize])
 			if err != nil {
 				s.logger.Errorf("error getting chainhash from string %s: %v", msg.Message.Value[:chainhash.HashSize], err)
@@ -264,7 +259,19 @@ func (s *Server) Init(ctx context.Context) (err error) {
 			}
 
 			return nil
+		}
+		s.rejectedTxKafkaConsumerClient, err = util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+			Logger:            s.logger,
+			URL:               rejectedTxKafkaURL,
+			GroupID:           groupID,
+			ConsumerCount:     consumerCount,
+			AutoCommitEnabled: true,
+			ConsumerFn:        rejectedTxHandler,
 		})
+
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", rejectedTxKafkaURL.String(), err)
+		}
 	}
 
 	return nil
@@ -272,6 +279,10 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 func (s *Server) Start(ctx context.Context) error {
 	s.logger.Infof("P2P service starting")
+
+	go s.rejectedTxKafkaConsumerClient.Start(ctx)
+	go s.subtreeKafkaProducerClient.Start(ctx)
+	go s.blocksKafkaProducerClient.Start(ctx)
 
 	var err error
 
@@ -632,11 +643,11 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 	}
 
 	// send block to kafka, if configured
-	if s.blockCh != nil {
+	if s.blocksKafkaProducerClient != nil {
 		b := make([]byte, 0, chainhash.HashSize+len(blockMessage.DataHubUrl))
 		b = append(b, hash.CloneBytes()...)
 		b = append(b, []byte(blockMessage.DataHubUrl)...)
-		s.blockCh <- b
+		s.blocksKafkaProducerClient.PublishChannel <- b
 	}
 }
 
@@ -676,11 +687,11 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		return
 	}
 
-	if s.subtreeCh != nil {
+	if s.subtreeKafkaProducerClient != nil {
 		b := make([]byte, 0, chainhash.HashSize+len(subtreeMessage.DataHubUrl))
 		b = append(b, hash.CloneBytes()...)
 		b = append(b, []byte(subtreeMessage.DataHubUrl)...)
-		s.subtreeCh <- b
+		s.subtreeKafkaProducerClient.PublishChannel <- b
 	} else {
 		if err = s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl); err != nil {
 			s.logger.Errorf("[p2p] error validating subtree from %s: %v", subtreeMessage.DataHubUrl, err)
@@ -716,13 +727,5 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 		Miner:        miningOnMessage.Miner,
 		SizeInBytes:  miningOnMessage.SizeInBytes,
 		TxCount:      miningOnMessage.TxCount,
-	}
-}
-
-func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, autoCommit bool, fn func(msg util.KafkaMessage) error) {
-	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
-
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, autoCommit, fn); err != nil {
-		u.logger.Errorf("Failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
 	}
 }

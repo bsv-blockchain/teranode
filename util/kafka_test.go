@@ -84,8 +84,6 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	workerCh := make(chan KafkaMessage)
-
 	testContainer := &TestContainerWrapper{}
 
 	err := testContainer.RunContainer(4)
@@ -114,20 +112,24 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	// err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
 	// require.NoError(t, err)
 
-	kafkaChan := make(chan []byte, 10000)
-	go func() {
-		err = StartAsyncProducer(ulogger.TestLogger{}, kafkaURL, kafkaChan)
-		require.NoError(t, err)
-	}()
+	producerClient, err := NewAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
+	require.NoError(t, err)
+
+	go producerClient.Start(ctx)
 
 	numberOfMessages := 100
-	go produceMessages(nil, kafkaChan, numberOfMessages)
+	go produceMessages(nil, producerClient.PublishChannel, numberOfMessages)
 
 	var wg sync.WaitGroup
 	wg.Add(numberOfMessages)
 
-	go func() {
-		err = StartKafkaGroupListener(ctx, ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, 1, true, func(message KafkaMessage) error {
+	listenerClient, err := NewKafkaGroupListener(ctx, KafkaListenerConfig{
+		Logger:            ulogger.TestLogger{},
+		URL:               kafkaURL,
+		GroupID:           "kafka_test",
+		ConsumerCount:     1,
+		AutoCommitEnabled: true,
+		ConsumerFn: func(message KafkaMessage) error {
 			msgInt, err := byteArrayToIntFromString(message.Message.Value)
 			require.NoError(t, err)
 
@@ -137,21 +139,18 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 
 			// fmt.Println("received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
 			wg.Done()
-			// convert following to int string(message.Message.Value)
 			return nil
-
-		})
-		require.NoError(t, err)
-	}()
+		},
+	})
+	require.NoError(t, err)
+	go listenerClient.Start(ctx)
 	wg.Wait()
 }
 
 func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	t.Parallel()
-	_, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	workerCh := make(chan KafkaMessage)
 
 	// Initialize your TestContainerWrapper
 	testContainer := &TestContainerWrapper{}
@@ -188,11 +187,10 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	kafkaChan := make(chan []byte, 10000)
-	go func() {
-		err = StartAsyncProducer(ulogger.TestLogger{}, kafkaURL, kafkaChan)
-		require.NoError(t, err)
-	}()
+	producerClient, err := NewAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
+	require.NoError(t, err)
+
+	go producerClient.Start(ctx)
 
 	counter := 0
 
@@ -238,7 +236,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	// Send 10 messages
 	wgP := sync.WaitGroup{}
 	wgP.Add(10)
-	go produceMessages(&wgP, kafkaChan, 10)
+	go produceMessages(&wgP, producerClient.PublishChannel, 10)
 	wgP.Wait()
 
 	// Run test cases
@@ -249,10 +247,17 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 			wg.Add(10)
 
 			// Start the Kafka group listener for the current test case
-			go func() {
-				err := StartKafkaGroupListener(ctx, ulogger.NewZeroLogger("test"), kafkaURL, "kafka_test", workerCh, 1, false, tCase.consumerClosure)
-				require.NoError(t, err)
-			}()
+			client, err := NewKafkaGroupListener(ctx, KafkaListenerConfig{
+				Logger:            ulogger.NewZeroLogger("test"),
+				URL:               kafkaURL,
+				GroupID:           "kafka_test",
+				ConsumerCount:     1,
+				AutoCommitEnabled: false,
+				ConsumerFn:        tCase.consumerClosure,
+			})
+			require.NoError(t, err)
+
+			go client.Start(ctx)
 
 			wg.Wait()
 
@@ -264,10 +269,8 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 
 func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) {
 	t.Parallel()
-	_, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // shuts down listener
-
-	workerCh := make(chan KafkaMessage)
 
 	// Initialize your TestContainerWrapper
 	testContainer := &TestContainerWrapper{}
@@ -305,16 +308,15 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	// err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
 	// require.NoError(t, err)
 
-	kafkaChan := make(chan []byte, 10000)
-	go func() {
-		err := StartAsyncProducer(ulogger.TestLogger{}, kafkaURL, kafkaChan)
-		require.NoError(t, err)
-	}()
+	producerClient, err := NewAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
+	require.NoError(t, err)
+
+	go producerClient.Start(ctx)
 
 	numberOfMessages := 2
 	wg := sync.WaitGroup{}
 	wg.Add(numberOfMessages)
-	go produceMessages(&wg, kafkaChan, numberOfMessages)
+	go produceMessages(&wg, producerClient.PublishChannel, numberOfMessages)
 	wg.Wait()
 
 	c := make(chan struct{})
@@ -324,10 +326,17 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
 	}
 
-	go func() {
-		err := StartKafkaGroupListener(context.Background(), ulogger.TestLogger{}, kafkaURL, "kafka_test", workerCh, 1, false, errClosure)
-		require.NoError(t, err)
-	}()
+	client, err := NewKafkaGroupListener(context.Background(), KafkaListenerConfig{
+		Logger:            ulogger.TestLogger{},
+		URL:               kafkaURL,
+		GroupID:           "kafka_test",
+		ConsumerCount:     1,
+		AutoCommitEnabled: false,
+		ConsumerFn:        errClosure,
+	})
+	require.NoError(t, err)
+
+	go client.Start(context.Background())
 
 	count := 0
 	for count < numberOfMessages*4 { // each message is processed 4 times before offset commit

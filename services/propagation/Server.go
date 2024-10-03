@@ -29,6 +29,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -48,12 +49,12 @@ var (
 // PropagationServer type carries the logger within it
 type PropagationServer struct {
 	propagation_api.UnsafePropagationAPIServer
-	logger             ulogger.Logger
-	stats              *gocore.Stat
-	txStore            blob.Store
-	validator          validator.Interface
-	validatorKafkaChan chan []byte
-	blockchainClient   blockchain.ClientI
+	logger                       ulogger.Logger
+	stats                        *gocore.Stat
+	txStore                      blob.Store
+	validator                    validator.Interface
+	blockchainClient             blockchain.ClientI
+	validatorKafkaProducerClient *util.KafkaProducerClient
 }
 
 // New will return a server instance with the logger stored within it
@@ -75,6 +76,7 @@ func (ps *PropagationServer) Health(ctx context.Context) (int, string, error) {
 		{Name: "ValidatorClient", Check: ps.validator.Health},
 		{Name: "TxStore", Check: ps.txStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(ps.blockchainClient)},
+		{Name: "KafkaValidatorProducer", Check: ps.validatorKafkaProducerClient.CheckKafkaHealth},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -166,14 +168,16 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 
 	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
 	if workers > 0 {
-		ps.validatorKafkaChan = make(chan []byte, 10_000)
-		go func() {
-			// TODO (GOKHAN): add retry
-			if err := util.StartAsyncProducer(ps.logger, validatortxsKafkaURL, ps.validatorKafkaChan); err != nil {
-				ps.logger.Errorf("[Propagation Server] error starting kafka producer: %v", err)
-				return
-			}
-		}()
+		ps.validatorKafkaProducerClient, err = retry.Retry(ctx, ps.logger, func() (*util.KafkaProducerClient, error) {
+			return util.NewAsyncProducer(ps.logger, validatortxsKafkaURL, make(chan []byte, 10_000))
+		}, retry.WithMessage("[Propagation Server] error starting kafka producer"))
+		if err != nil {
+			ps.logger.Errorf("[Propagation Server] error starting kafka producer: %v", err)
+			return
+		}
+
+		go ps.validatorKafkaProducerClient.Start(ctx)
+
 		ps.logger.Infof("[Propagation Server] connected to kafka for sending transactions to validator at %s", validatortxsKafkaURL)
 	}
 
@@ -446,14 +450,14 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
-	if ps.validatorKafkaChan != nil {
+	if ps.validatorKafkaProducerClient != nil {
 		validatorData := &validator.TxValidationData{
 			Tx:     req.Tx,
 			Height: util.GenesisActivationHeight,
 		}
 
 		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
-		ps.validatorKafkaChan <- validatorData.Bytes()
+		ps.validatorKafkaProducerClient.PublishChannel <- validatorData.Bytes()
 	} else {
 		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 

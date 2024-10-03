@@ -3,7 +3,6 @@ package subtreevalidation
 import (
 	"context"
 	"net/http"
-	"net/url"
 	"runtime"
 	"strconv"
 	"sync"
@@ -47,6 +46,8 @@ type Server struct {
 	prioritySubtreeCheckActiveMap     map[string]bool
 	prioritySubtreeCheckActiveMapLock sync.Mutex
 	blockchainClient                  blockchain.ClientI
+	subtreeConsumerClient             *util.KafkaConsumerClient
+	txmetaConsumerClient              *util.KafkaConsumerClient
 }
 
 var (
@@ -134,6 +135,8 @@ func (u *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
+		{Name: "SubtreeKafkaConsumer", Check: u.subtreeConsumerClient.CheckKafkaHealth},
+		{Name: "TxMetaKafkaConsumer", Check: u.txmetaConsumerClient.CheckKafkaHealth},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -158,30 +161,6 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *subtreevalidation_api.EmptyM
 
 func (u *Server) Init(ctx context.Context) (err error) {
 	initPrometheusMetrics()
-
-	return nil
-}
-
-// Start function
-func (u *Server) Start(ctx context.Context) error {
-	// Check if we need to Restore. If so, move FSM to the Restore state
-	// Restore will block and wait for RUN event to be manually sent
-	// TODO: think if we can automate transition to RUN state after restore is complete.
-	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
-	if fsmStateRestore {
-		// Send Restore event to FSM
-		err := u.blockchainClient.Restore(ctx)
-		if err != nil {
-			u.logger.Errorf("[Subtreevalidation] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
-		}
-
-		// Wait for node to finish Restoring.
-		// this means FSM got a RUN event and transitioned to RUN state
-		// this will block
-		u.logger.Infof("[Subtreevalidation] Node is restoring, waiting for FSM to transition to Running state")
-		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
-		u.logger.Infof("[Subtreevalidation] Node finished restoring and has transitioned to Running state, continuing to start Subtreevalidation service")
-	}
 
 	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err == nil && ok {
@@ -212,8 +191,9 @@ func (u *Server) Start(ctx context.Context) error {
 
 		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
 		u.logger.Infof("Starting %d Kafka consumers for subtree messages", consumerCount)
+
 		// Autocommit is disabled for subtree messages, so that we can commit the message only after the subtree has been processed.
-		go u.startKafkaListener(ctx, subtreesKafkaURL, "subtreevalidation", consumerCount, false, func(msg util.KafkaMessage) error {
+		subtreeHandler := func(msg util.KafkaMessage) error {
 			errCh := make(chan error, 1)
 			go func() {
 				errCh <- u.subtreeHandler(msg)
@@ -255,7 +235,21 @@ func (u *Server) Start(ctx context.Context) error {
 			case <-ctx.Done():
 				return ctx.Err()
 			}
+		}
+		client, err := util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+			Logger:            u.logger,
+			URL:               subtreesKafkaURL,
+			GroupID:           "subtreevalidation",
+			ConsumerCount:     consumerCount,
+			AutoCommitEnabled: false,
+			ConsumerFn:        subtreeHandler,
 		})
+
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", subtreesKafkaURL.String(), err)
+		}
+
+		u.subtreeConsumerClient = client
 	}
 
 	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
@@ -285,25 +279,56 @@ func (u *Server) Start(ctx context.Context) error {
 		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
 		// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 		// Therefore, autocommit is set to true.
-		go u.startKafkaListener(ctx, txmetaKafkaURL, groupID, consumerCount, true, u.txmetaHandler)
+		u.txmetaConsumerClient, err = util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+			Logger:            u.logger,
+			URL:               txmetaKafkaURL,
+			GroupID:           groupID,
+			ConsumerCount:     consumerCount,
+			AutoCommitEnabled: true,
+			ConsumerFn:        u.txmetaHandler,
+		})
+
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", subtreesKafkaURL.String(), err)
+		}
+	}
+
+	return nil
+}
+
+// Start function
+func (u *Server) Start(ctx context.Context) error {
+	// start kafka consumers
+	go u.subtreeConsumerClient.Start(ctx)
+	go u.txmetaConsumerClient.Start(ctx)
+
+	// Check if we need to Restore. If so, move FSM to the Restore state
+	// Restore will block and wait for RUN event to be manually sent
+	// TODO: think if we can automate transition to RUN state after restore is complete.
+	fsmStateRestore := gocore.Config().GetBool("fsm_state_restore", false)
+	if fsmStateRestore {
+		// Send Restore event to FSM
+		err := u.blockchainClient.Restore(ctx)
+		if err != nil {
+			u.logger.Errorf("[Subtreevalidation] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
+		}
+
+		// Wait for node to finish Restoring.
+		// this means FSM got a RUN event and transitioned to RUN state
+		// this will block
+		u.logger.Infof("[Subtreevalidation] Node is restoring, waiting for FSM to transition to Running state")
+		_ = u.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
+		u.logger.Infof("[Subtreevalidation] Node finished restoring and has transitioned to Running state, continuing to start Subtreevalidation service")
 	}
 
 	// this will block
-	if err = util.StartGRPCServer(ctx, u.logger, "subtreevalidation", func(server *grpc.Server) {
+	if err := util.StartGRPCServer(ctx, u.logger, "subtreevalidation", func(server *grpc.Server) {
 		subtreevalidation_api.RegisterSubtreeValidationAPIServer(server, u)
 	}); err != nil {
 		return err
 	}
 
 	return nil
-}
-
-func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, autoCommit bool, fn func(msg util.KafkaMessage) error) {
-	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
-
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, autoCommit, fn); err != nil {
-		u.logger.Errorf("Failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
-	}
 }
 
 func (u *Server) Stop(_ context.Context) error {

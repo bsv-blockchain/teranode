@@ -189,7 +189,7 @@ func (sm *ServiceManager) HealthHandler(ctx context.Context) (int, string, error
 	for _, service := range sm.services {
 		status, details, err := service.instance.Health(ctx)
 
-		if err != nil {
+		if err != nil || status != http.StatusOK {
 			overallStatus = http.StatusServiceUnavailable
 		}
 

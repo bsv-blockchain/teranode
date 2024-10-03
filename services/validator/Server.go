@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"syscall"
 	"time"
@@ -37,6 +36,7 @@ type Server struct {
 	stats            *gocore.Stat
 	ctx              context.Context
 	blockchainClient blockchain.ClientI
+	consumerClient   *util.KafkaConsumerClient
 }
 
 // NewServer will return a server instance with the logger stored within it
@@ -57,6 +57,7 @@ func (v *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "UTXOStore", Check: v.utxoStore.Health},
 		{Name: "Validator", Check: v.validator.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(v.blockchainClient)},
+		{Name: "Kafka", Check: v.consumerClient.CheckKafkaHealth},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -86,6 +87,77 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("could not create validator", err)
 	}
 
+	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
+	if err == nil && ok {
+		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
+
+		workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
+		if workers < 1 {
+			// no workers, nothing to do
+			return nil
+		}
+		v.logger.Infof("[Validator Server] starting Kafka listener")
+
+		consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
+		if consumerRatio < 1 {
+			consumerRatio = 1
+		}
+
+		partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
+
+		consumerCount := partitions / consumerRatio
+		if consumerCount < 0 {
+			consumerCount = 1
+		}
+
+		v.logger.Infof("[Validator] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
+
+		kafkaMessageHandler := func(msg util.KafkaMessage) error {
+			currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
+			if err != nil {
+				v.logger.Errorf("[Validator] Failed to get current state: %s", err)
+				return err
+			}
+			for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
+				v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
+				time.Sleep(1 * time.Second) // Wait and check again in 1 second
+			}
+
+			data, err := NewTxValidationDataFromBytes(msg.Message.Value)
+			if err != nil {
+				prometheusInvalidTransactions.Inc()
+				v.logger.Errorf("[Validator] Failed to decode kafka message: %s", err)
+				return err
+			}
+
+			tx, err := bt.NewTxFromBytes(data.Tx)
+			if err != nil {
+				prometheusInvalidTransactions.Inc()
+				v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
+				return err
+			}
+
+			if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil {
+				prometheusInvalidTransactions.Inc()
+				v.logger.Errorf("[Validator] Invalid tx: %s", err)
+				return err
+			}
+
+			return nil
+		}
+		v.consumerClient, err = util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+			Logger:            v.logger,
+			URL:               kafkaURL,
+			GroupID:           "blockassembly",
+			ConsumerCount:     consumerCount,
+			AutoCommitEnabled: true,
+			ConsumerFn:        kafkaMessageHandler,
+		})
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", kafkaURL.String(), err)
+		}
+	}
+
 	return nil
 }
 
@@ -110,11 +182,7 @@ func (v *Server) Start(ctx context.Context) error {
 		v.logger.Infof("[Validator] Node finished restoring and has transitioned to Running state, continuing to start Transaction Validator service")
 	}
 
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
-	if err == nil && ok {
-		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
-		go v.startKafkaListener(ctx, kafkaURL)
-	}
+	go v.consumerClient.Start(ctx)
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
@@ -124,75 +192,6 @@ func (v *Server) Start(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
-	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
-	if workers < 1 {
-		// no workers, nothing to do
-		return
-	}
-
-	v.logger.Infof("[Validator Server] starting Kafka listener")
-
-	consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
-	if consumerRatio < 1 {
-		consumerRatio = 1
-	}
-
-	partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
-
-	consumerCount := partitions / consumerRatio
-	if consumerCount < 0 {
-		consumerCount = 1
-	}
-
-	v.logger.Infof("[Validator] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
-
-	if err := util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "blockassembly", nil, consumerCount, true, func(msg util.KafkaMessage) error {
-		// startTime := time.Now()
-		// currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
-		// if err != nil {
-		//	v.logger.Errorf("[Validator] Failed to get current state: %s", err)
-		//	// TODO: how to handle it gracefully?
-		// }
-
-		currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
-		if err != nil {
-			v.logger.Errorf("[Validator] Failed to get current state: %s", err)
-			return err
-		}
-		for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
-			v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
-			time.Sleep(1 * time.Second) // Wait and check again in 1 second
-		}
-
-		data, err := NewTxValidationDataFromBytes(msg.Message.Value)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] Failed to decode kafka message: %s", err)
-			return err
-		}
-
-		tx, err := bt.NewTxFromBytes(data.Tx)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
-			return err
-		}
-
-		if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] Invalid tx: %s", err)
-			return err
-		}
-
-		// prometheusProcessedTransactions.Inc()
-		// prometheusTransactionDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-		return nil
-	}); err != nil {
-		v.logger.Errorf("[Validator] failed to start Kafka listener: %s", err)
-	}
 }
 
 func (v *Server) Stop(_ context.Context) error {

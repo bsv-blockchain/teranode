@@ -2,7 +2,6 @@ package blockpersister
 
 import (
 	"context"
-	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -17,13 +16,14 @@ import (
 
 // Server type carries the logger within it
 type Server struct {
-	ctx              context.Context
-	logger           ulogger.Logger
-	blockStore       blob.Store
-	subtreeStore     blob.Store
-	utxoStore        utxo.Store
-	stats            *gocore.Stat
-	blockchainClient blockchain.ClientI
+	ctx                            context.Context
+	logger                         ulogger.Logger
+	blockStore                     blob.Store
+	subtreeStore                   blob.Store
+	utxoStore                      utxo.Store
+	stats                          *gocore.Stat
+	blockchainClient               blockchain.ClientI
+	blocksFinalKafkaConsumerClient *util.KafkaConsumerClient
 }
 
 func New(
@@ -76,6 +76,7 @@ func (u *Server) Health(ctx context.Context) (int, string, error) {
 		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
+		{Name: "BlocksFinalKafkaConsumer", Check: u.blocksFinalKafkaConsumerClient.CheckKafkaHealth},
 	}
 
 	return health.CheckAll(ctx, checks)
@@ -83,6 +84,64 @@ func (u *Server) Health(ctx context.Context) (int, string, error) {
 
 func (u *Server) Init(ctx context.Context) (err error) {
 	initPrometheusMetrics()
+
+	blocksFinalKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
+	if err == nil && ok {
+		u.logger.Infof("Starting Kafka consumer for blocksFinal messages")
+
+		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
+		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
+		groupID := "blockpersister-" + uuid.New().String()
+
+		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the blocksFinal messages.
+		kafkaMessageHandler := func(msg util.KafkaMessage) error {
+			// this does manual commit so we need to implement error handling and differentiate between errors
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- u.blocksFinalHandler(msg)
+			}()
+
+			err := <-errCh
+			// if err is nil, it means function is successfully executed, return nil.
+			if err == nil {
+				return nil
+			}
+
+			if errors.Is(err, errors.ErrBlockExists) {
+				// if block exists, it is not an error, so return nil to mark message as committed.
+				return nil
+			}
+
+			// currently, the following cases are considered recoverable:
+			// ERR_STORAGE_ERROR, ERR_SERVICE_ERROR
+			// all other cases, including but not limited to, are considered as unrecoverable:
+			// ERR_PROCESSING, ERR_BLOCK_EXISTS, ERR_INVALID_ARGUMENT
+
+			// If error is not nil, check if the error is a recoverable error.
+			// If it is a recoverable error, then return the error, so that it kafka message is not marked as committed.
+			// So the message will be consumed again.
+			if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) {
+				u.logger.Errorf("blocksFinalHandler failed: %v", err)
+				return err
+			}
+
+			// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
+			// kafka message should be committed, so return nil to mark message.
+			u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for block persister block handler, marking Kafka message as completed.\n", msg, err)
+			return nil
+		}
+		u.blocksFinalKafkaConsumerClient, err = util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+			Logger:            u.logger,
+			URL:               blocksFinalKafkaURL,
+			GroupID:           groupID,
+			ConsumerCount:     1,
+			AutoCommitEnabled: false,
+			ConsumerFn:        kafkaMessageHandler,
+		})
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", blocksFinalKafkaURL.String(), err)
+		}
+	}
 
 	return nil
 }
@@ -130,52 +189,7 @@ func (u *Server) Start(ctx context.Context) error {
 		u.logger.Infof("[Block Persister] Node finished restoring and has transitioned to Running state, continuing to start Block Persister service")
 	}
 
-	blocksFinalKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
-	if err == nil && ok {
-		u.logger.Infof("Starting Kafka consumer for blocksFinal messages")
-
-		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
-		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
-		groupID := "blockpersister-" + uuid.New().String()
-
-		// By using the fixed "blockpersister" group ID, we ensure that only one instance of this service will process the blocksFinal messages.
-		go u.startKafkaListener(ctx, blocksFinalKafkaURL, groupID, 1, func(msg util.KafkaMessage) error {
-			// this does manual commit so we need to implement error handling and differentiate between errors
-			errCh := make(chan error, 1)
-			go func() {
-				errCh <- u.blocksFinalHandler(msg)
-			}()
-
-			err := <-errCh
-			// if err is nil, it means function is successfully executed, return nil.
-			if err == nil {
-				return nil
-			}
-
-			if errors.Is(err, errors.ErrBlockExists) {
-				// if block exists, it is not an error, so return nil to mark message as committed.
-				return nil
-			}
-
-			// currently, the following cases are considered recoverable:
-			// ERR_STORAGE_ERROR, ERR_SERVICE_ERROR
-			// all other cases, including but not limited to, are considered as unrecoverable:
-			// ERR_PROCESSING, ERR_BLOCK_EXISTS, ERR_INVALID_ARGUMENT
-
-			// If error is not nil, check if the error is a recoverable error.
-			// If it is a recoverable error, then return the error, so that it kafka message is not marked as committed.
-			// So the message will be consumed again.
-			if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) {
-				u.logger.Errorf("blocksFinalHandler failed: %v", err)
-				return err
-			}
-
-			// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
-			// kafka message should be committed, so return nil to mark message.
-			u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for block persister block handler, marking Kafka message as completed.\n", msg, err)
-			return nil
-		})
-	}
+	go u.blocksFinalKafkaConsumerClient.Start(ctx)
 
 	// http.HandleFunc("GET /block/", func(w http.ResponseWriter, req *http.Request) {
 	// 	hashStr := req.PathValue("hash")
@@ -217,15 +231,6 @@ func (u *Server) Start(ctx context.Context) error {
 	<-ctx.Done()
 
 	return nil
-}
-
-func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, fn func(msg util.KafkaMessage) error) {
-	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
-
-	// Auto commit is disabled for all Kafka listeners for blockpersister, we want to manually commit.
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, false, fn); err != nil {
-		u.logger.Errorf("Failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
-	}
 }
 
 func (u *Server) Stop(_ context.Context) error {
