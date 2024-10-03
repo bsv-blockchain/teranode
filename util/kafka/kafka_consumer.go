@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
@@ -39,8 +40,7 @@ type KafkaConsumerGroup struct {
 
 // StartKafkaGroupListener Autocommit is enabled/disabled according to the parameter fed in the function.
 // We DO NOT read autocommit parameter from the URL.
-func NewKafkaGroupListener(ctx context.Context, cfg KafkaListenerConfig) (*KafkaConsumerGroup, error) {
-
+func NewKafkaConsumeGroup(ctx context.Context, cfg KafkaListenerConfig) (*KafkaConsumerGroup, error) {
 	if cfg.URL == nil {
 		return nil, errors.NewConfigurationError("kafka URL is not set", nil)
 	}
@@ -150,8 +150,8 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context) {
 						if errors.Is(err, context.Canceled) {
 							k.Config.Logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, k.Config.GroupID)
 						} else {
-							k.Config.Logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
 							// Consider delay before retry or exit based on error type
+							k.Config.Logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
 						}
 					}
 				}
@@ -214,22 +214,22 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 	// The `ConsumeClaim` itself is called within a goroutine, see:
 	// https://github.com/Shopify/sarama/blob/main/consumer_group.go#L27-L29
 	ctx := context.Background()
+
 	for {
 		select {
 		case message := <-claim.Messages():
-
 			if message == nil {
 				// Received a nil message, skip
-
 				continue
 			}
 			// Handle the first message
-			//fmt.Printf("Handling first message: topic = %s, partition = %d, offset = %d, key = %s, value = %s\n", message.Topic, message.Partition, message.Offset, string(message.Key), string(message.Value))
+			// fmt.Printf("Handling first message: topic = %s, partition = %d, offset = %d, key = %s, value = %s\n", message.Topic, message.Partition, message.Offset, string(message.Key), string(message.Value))
 			if kc.autoCommitEnabled {
 				_ = kc.handleMessagesWithAutoCommit(session, message)
 			} else {
 				_ = kc.handleMessageWithManualCommit(ctx, session, message)
 			}
+
 			messageCount := 1 // Start with 1 message already received.
 			// Handle further messages up to a maximum of 1000.
 		InnerLoop:
@@ -287,6 +287,7 @@ func (kc *KafkaConsumer) handleMessageWithManualCommit(ctx context.Context, sess
 	// kc.logger.Infof("Committing offset: %v", message.Offset)
 	// Commit the message offset, processing is successful
 	session.MarkMessage(message, "")
+
 	return nil
 }
 
@@ -298,4 +299,16 @@ func (kc *KafkaConsumer) handleMessagesWithAutoCommit(session sarama.ConsumerGro
 
 	// Auto-commit is implied, so we don't need to explicitly mark the message here
 	return nil
+}
+
+func (k *KafkaConsumerGroup) CheckKafkaHealth(ctx context.Context) (int, string, error) {
+	if k == nil {
+		return http.StatusOK, "Kafka consumer group not initialized", nil
+	}
+
+	if k.LastMessageStatus.Success {
+		return http.StatusOK, "OK", nil
+	}
+
+	return http.StatusServiceUnavailable, "Last message failed", k.LastMessageStatus.Error
 }

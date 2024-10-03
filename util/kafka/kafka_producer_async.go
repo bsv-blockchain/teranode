@@ -157,18 +157,6 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context) {
 	c.Producer.AsyncClose()
 }
 
-func (c *KafkaConsumerGroup) CheckKafkaHealth(ctx context.Context) (int, string, error) {
-	if c == nil {
-		return http.StatusOK, "Kafka consumer group not initialized", nil
-	}
-
-	if c.LastMessageStatus.Success {
-		return http.StatusOK, "OK", nil
-	}
-
-	return http.StatusServiceUnavailable, "Last message failed", c.LastMessageStatus.Error
-}
-
 func (c *KafkaAsyncProducer) CheckKafkaHealth(ctx context.Context) (int, string, error) {
 	if c == nil {
 		return http.StatusOK, "Kafka producer not initialized", nil

@@ -146,7 +146,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 
 			return nil
 		}
-		v.consumerClient, err = kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
+		v.consumerClient, err = kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
 			Logger:            v.logger,
 			URL:               kafkaURL,
 			GroupID:           "blockassembly",

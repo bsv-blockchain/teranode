@@ -124,7 +124,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	if err == nil && ok {
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
 
-		if _, b.blockKafkaProducer, err = kafka.ConnectToKafka(blocksKafkaURL); err != nil {
+		if _, b.blockKafkaProducer, err = kafka.NewKafkaProducer(blocksKafkaURL); err != nil {
 			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
 		}
 	}

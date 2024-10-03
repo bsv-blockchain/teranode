@@ -91,13 +91,13 @@ func (k *SyncKafkaProducer) Send(key []byte, data []byte) error {
 	return err
 }
 
-func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, error) {
-	brokersUrl := strings.Split(kafkaURL.Host, ",")
+func NewKafkaProducer(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, error) {
+	brokersURL := strings.Split(kafkaURL.Host, ",")
 
 	config := sarama.NewConfig()
 	config.Version = sarama.V2_1_0_0
 
-	clusterAdmin, err := sarama.NewClusterAdmin(brokersUrl, config)
+	clusterAdmin, err := sarama.NewClusterAdmin(brokersURL, config)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error while creating cluster admin", err)
 	}
@@ -126,7 +126,7 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 
 	flushBytes := util.GetQueryParamInt(kafkaURL, "flush_bytes", 1024)
 
-	producer, err := ConnectProducer(brokersUrl, topic, int32(partitions), flushBytes)
+	producer, err := ConnectProducer(brokersURL, topic, int32(partitions), flushBytes)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("unable to connect to kafka", err)
 	}
@@ -146,6 +146,7 @@ func ConnectProducer(brokersURL []string, topic string, partitions int32, flushB
 	if len(flushBytes) > 0 {
 		flush = flushBytes[0]
 	}
+
 	config.Producer.Flush.Bytes = flush
 
 	// NewSyncProducer creates a new SyncProducer using the given broker addresses and configuration.

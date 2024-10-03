@@ -265,7 +265,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		// By using the fixed "blockvalidation" group ID, we ensure that only one instance of this service will process the block messages.
 		u.logger.Infof("Starting %d Kafka consumers for block messages", consumerCount)
 
-		client, err := kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
+		client, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
 			Logger:            u.logger,
 			URL:               blocksKafkaURL,
 			GroupID:           "blockvalidation",

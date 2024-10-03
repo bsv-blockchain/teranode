@@ -130,7 +130,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 			u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for block persister block handler, marking Kafka message as completed.\n", msg, err)
 			return nil
 		}
-		u.blocksFinalKafkaConsumerClient, err = kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
+		u.blocksFinalKafkaConsumerClient, err = kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
 			Logger:            u.logger,
 			URL:               blocksFinalKafkaURL,
 			GroupID:           groupID,

@@ -72,6 +72,7 @@ func (t *TestContainerWrapper) CleanUp() error {
 	if err := t.container.Terminate(ctx); err != nil {
 		return errors.NewConfigurationError("could not terminate the container: %w", err)
 	}
+
 	return nil
 }
 
@@ -81,6 +82,7 @@ func (t *TestContainerWrapper) GetBrokerAddresses() []string {
 
 func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -123,7 +125,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numberOfMessages)
 
-	listenerClient, err := NewKafkaGroupListener(ctx, KafkaListenerConfig{
+	listenerClient, err := NewKafkaConsumeGroup(ctx, KafkaListenerConfig{
 		Logger:            ulogger.TestLogger{},
 		URL:               kafkaURL,
 		GroupID:           "kafka_test",
@@ -247,7 +249,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 			wg.Add(10)
 
 			// Start the Kafka group listener for the current test case
-			client, err := NewKafkaGroupListener(ctx, KafkaListenerConfig{
+			client, err := NewKafkaConsumeGroup(ctx, KafkaListenerConfig{
 				Logger:            ulogger.NewZeroLogger("test"),
 				URL:               kafkaURL,
 				GroupID:           "kafka_test",
@@ -326,7 +328,7 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
 	}
 
-	client, err := NewKafkaGroupListener(context.Background(), KafkaListenerConfig{
+	client, err := NewKafkaConsumeGroup(context.Background(), KafkaListenerConfig{
 		Logger:            ulogger.TestLogger{},
 		URL:               kafkaURL,
 		GroupID:           "kafka_test",

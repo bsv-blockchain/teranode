@@ -261,7 +261,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 			return nil
 		}
-		s.rejectedTxKafkaConsumerClient, err = kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
+		s.rejectedTxKafkaConsumerClient, err = kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
 			Logger:            s.logger,
 			URL:               rejectedTxKafkaURL,
 			GroupID:           groupID,

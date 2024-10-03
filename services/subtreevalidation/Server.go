@@ -237,7 +237,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				return ctx.Err()
 			}
 		}
-		client, err := kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
+		client, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
 			Logger:            u.logger,
 			URL:               subtreesKafkaURL,
 			GroupID:           "subtreevalidation",
@@ -280,7 +280,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
 		// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 		// Therefore, autocommit is set to true.
-		u.txmetaConsumerClient, err = kafka.NewKafkaGroupListener(ctx, kafka.KafkaListenerConfig{
+		u.txmetaConsumerClient, err = kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
 			Logger:            u.logger,
 			URL:               txmetaKafkaURL,
 			GroupID:           groupID,
