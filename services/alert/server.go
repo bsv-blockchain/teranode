@@ -20,7 +20,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/mrz1836/go-datastore"
 	"github.com/ordishs/gocore"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -57,8 +59,32 @@ func New(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore u
 	}
 }
 
-func (s *Server) Health(_ context.Context) (int, string, error) {
-	return 0, "", nil
+func (s *Server) Health(ctx context.Context) (int, string, error) {
+	checks := []health.Check{
+		{Name: "BlockassemblyClient", Check: s.blockassemblyClient.Health},
+		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
+		{Name: "UTXOStore", Check: s.utxoStore.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)},
+	}
+
+	return health.CheckAll(ctx, checks)
+}
+
+func (s *Server) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*alert_api.HealthResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+		tracing.WithParentStat(s.stats),
+		tracing.WithCounter(prometheusHealth),
+		tracing.WithLogMessage(s.logger, "[HealthGRPC] called"),
+	)
+	defer deferFn()
+
+	status, details, err := s.Health(ctx)
+
+	return &alert_api.HealthResponse{
+		Ok:        status == http.StatusOK,
+		Details:   details,
+		Timestamp: timestamppb.New(time.Now()),
+	}, errors.WrapGRPC(err)
 }
 
 func (s *Server) Init(ctx context.Context) (err error) {
@@ -115,25 +141,6 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func (s *Server) HealthGRPC(_ context.Context, _ *emptypb.Empty) (*alert_api.HealthResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		s.stats.NewStat("Health_grpc").AddTime(start)
-	}()
-
-	prometheusHealth.Inc()
-
-	ok := true
-	if !s.p2pServer.Connected() || s.p2pServer.ActivePeers() == 0 {
-		ok = false
-	}
-
-	return &alert_api.HealthResponse{
-		Ok:        ok,
-		Timestamp: timestamppb.New(time.Now()),
-	}, nil
 }
 
 // LoadDependencies will load the configuration and services

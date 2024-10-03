@@ -2,6 +2,8 @@ package blockchain
 
 import (
 	"context"
+	"net/http"
+
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -126,4 +128,38 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	}
 
 	return finiteStateMachine
+}
+
+func CheckFSM(blockchainClient ClientI) func(ctx context.Context) (int, string, error) {
+	return func(ctx context.Context) (int, string, error) {
+		state, err := blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			return http.StatusServiceUnavailable, "failed to check FSM state", err
+		}
+
+		var (
+			status int
+		)
+
+		switch *state {
+		case blockchain_api.FSMStateType_CATCHINGBLOCKS:
+			status = http.StatusOK
+		case blockchain_api.FSMStateType_CATCHINGTXS:
+			status = http.StatusOK
+		case blockchain_api.FSMStateType_LEGACYSYNCING:
+			status = http.StatusOK
+		case blockchain_api.FSMStateType_RESTORING:
+			status = http.StatusOK
+		case blockchain_api.FSMStateType_RUNNING:
+			status = http.StatusOK
+		case blockchain_api.FSMStateType_STOPPED:
+			status = http.StatusServiceUnavailable
+		case blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE:
+			status = http.StatusServiceUnavailable
+		default:
+			status = http.StatusOK
+		}
+
+		return status, state.String(), nil
+	}
 }

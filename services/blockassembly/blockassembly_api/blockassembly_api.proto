@@ -6,6 +6,8 @@ package blockassembly_api;
 
 import "model/model.proto";
 
+import "google/protobuf/timestamp.proto";
+
 /*
  * The Block Assembly Service is responsible for assembling new blocks and adding them to the blockchain.
  */
@@ -45,7 +47,7 @@ message EmptyMessage {}
 message HealthResponse {
   bool ok = 1; // true if the service is healthy
   string details = 2; // optional, human-readable details
-  uint32 timestamp = 3; // unix timestamp
+  google.protobuf.Timestamp timestamp = 3; // unix timestamp
 }
 
 // Request for adding a new chaintip and height information.

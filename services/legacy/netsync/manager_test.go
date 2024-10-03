@@ -21,7 +21,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
@@ -73,10 +72,6 @@ func (ctx *testContext) Setup(config *testConfig) error {
 	if err != nil {
 		return fmt.Errorf("failed to create block validation client: %v", err)
 	}
-	subtreeValidationClient, err := subtreevalidation.NewClient(context.Background(), ulogger.TestLogger{}, "manager_test")
-	if err != nil {
-		return fmt.Errorf("failed to create subtree validation client: %v", err)
-	}
 
 	syncMgr, err := netsync.New(context.Background(),
 		ulogger.TestLogger{},
@@ -84,7 +79,6 @@ func (ctx *testContext) Setup(config *testConfig) error {
 		validatorClient,
 		utxoStore,
 		subtreeStore,
-		subtreeValidationClient,
 		blockvalidationClient,
 		&netsync.Config{
 			PeerNotifier: peerNotifier,

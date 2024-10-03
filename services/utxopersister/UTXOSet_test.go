@@ -194,7 +194,7 @@ func checkAdditions(t *testing.T, ud *UTXOSet) {
 }
 
 func checkDeletions(t *testing.T, ud *UTXOSet) {
-	r, err := ud.GetUTXODeletionsReader()
+	r, err := ud.GetUTXODeletionsReader(context.Background())
 	require.NoError(t, err)
 
 	defer r.Close()

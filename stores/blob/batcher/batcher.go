@@ -19,7 +19,7 @@ import (
 
 type Batcher struct {
 	logger           ulogger.Logger
-	blobStore        BlobStore
+	blobStore        blobStoreSetter
 	sizeInBytes      int
 	writeKeys        bool
 	queue            *util.LockFreeQ[BatchItem]
@@ -34,12 +34,12 @@ type BatchItem struct {
 	// next  atomic.Pointer[BatchItem]
 }
 
-type BlobStore interface {
+type blobStoreSetter interface {
 	Health(ctx context.Context) (int, string, error)
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error
 }
 
-func New(logger ulogger.Logger, blobStore BlobStore, sizeInBytes int, writeKeys bool) *Batcher {
+func New(logger ulogger.Logger, blobStore blobStoreSetter, sizeInBytes int, writeKeys bool) *Batcher {
 	b := &Batcher{
 		logger:           logger,
 		blobStore:        blobStore,
@@ -52,8 +52,11 @@ func New(logger ulogger.Logger, blobStore BlobStore, sizeInBytes int, writeKeys 
 	}
 
 	go func() {
-		var batchItem *BatchItem
-		var err error
+		var (
+			batchItem *BatchItem
+			err       error
+		)
+
 		for {
 			select {
 			case <-b.queueCtx.Done():
@@ -80,10 +83,12 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 	// check whether our batch would overflow the size limit, or is zero, which means we have 1 big transaction
 	currentPos := len(b.currentBatch)
 	dataSize := len(batchItem.value)
+
 	if currentPos+dataSize > b.sizeInBytes && currentPos > 0 {
 		if err := b.writeBatch(b.currentBatch, b.currentBatchKeys); err != nil {
 			return errors.NewStorageError("error writing batch", err)
 		}
+
 		b.currentBatch = make([]byte, 0, b.sizeInBytes)
 		b.currentBatchKeys = make([]byte, 0, b.sizeInBytes)
 	}
@@ -99,8 +104,8 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 
 		copy(key[:hashLength], batchItem.hash[:])
 
-		binary.BigEndian.PutUint32(key[hashLength:hashLength+4], uint32(currentPos))
-		binary.BigEndian.PutUint32(key[hashLength+4:hashLength+8], uint32(dataSize))
+		binary.BigEndian.PutUint32(key[hashLength:hashLength+4], uint32(currentPos)) // nolint:gosec
+		binary.BigEndian.PutUint32(key[hashLength+4:hashLength+8], uint32(dataSize)) // nolint:gosec
 
 		hexKey := hex.EncodeToString(key)
 		hexKey += "\n"
@@ -115,7 +120,7 @@ func (b *Batcher) processBatchItem(batchItem *BatchItem) error {
 func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	batchKey := make([]byte, 4)
 	// add the current time as the first bytes
-	binary.BigEndian.PutUint32(batchKey, uint32(time.Now().Unix()))
+	binary.BigEndian.PutUint32(batchKey, uint32(time.Now().Unix())) // nolint:gosec
 	// add a random string as the next bytes, to prevent conflicting filenames from other pods
 	randBytes := make([]byte, 4)
 	_, _ = rand.Read(randBytes)
@@ -130,6 +135,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 		if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), currentBatch, options.WithFileExtension("data")); err != nil {
 			return errors.NewStorageError("error putting batch", err)
 		}
+
 		return nil
 	})
 
@@ -140,9 +146,9 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 			if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), batchKeys, options.WithFileExtension("keys")); err != nil {
 				return errors.NewStorageError("error putting batch keys", err)
 			}
+
 			return nil
 		})
-
 	}
 
 	if err := g.Wait(); err != nil {
@@ -168,6 +174,7 @@ func (b *Batcher) Close(_ context.Context) error {
 		if batchItem == nil {
 			break
 		}
+
 		if err := b.processBatchItem(batchItem); err != nil {
 			b.logger.Errorf("error processing batch item in Close: %v", err)
 		}

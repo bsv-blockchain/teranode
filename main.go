@@ -175,12 +175,51 @@ func main() {
 
 	util.RegisterPrometheusMetrics()
 
-	http.Handle("/health", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
-	}))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		status, details, err := sm.HealthHandler(ctx)
+		if err != nil {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(details))
+			return
+		}
 
-	if err = sm.Wait(); err != nil {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(details))
+	})
+
+	// backwards compatibility (using old healthcheck endpoint on 9091)
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		status, details, err := sm.HealthHandler(ctx)
+		if err != nil {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(details))
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(details))
+	})
+
+	port, ok := gocore.Config().GetInt("health_check_port", 8000)
+	if !ok {
+		logger.Warnf("health_check_port not set in config, using default port 8000")
+	}
+
+	server := &http.Server{
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: mux,
+	}
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Fatalf("Error starting server: %v", err)
+		}
+	}()
+
+	logger.Infof("Health check endpoint listening on http://localhost:%d/health", port)
+
+	if err := sm.Wait(); err != nil {
 		logger.Errorf("services failed: %v", err)
 	}
 
@@ -280,7 +319,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, mainSubtreestore, mainUtxoStore)
+		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore)
 		if err != nil {
 			return err
 		}

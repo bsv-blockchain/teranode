@@ -3,12 +3,11 @@ package util
 import (
 	"context"
 	"encoding/binary"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -141,7 +140,7 @@ func ConnectToKafka(kafkaURL *url.URL) (sarama.ClusterAdmin, KafkaProducerI, err
 	return clusterAdmin, producer, nil
 }
 
-func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushBytes ...int) (KafkaProducerI, error) {
+func ConnectProducer(brokersURL []string, topic string, partitions int32, flushBytes ...int) (KafkaProducerI, error) {
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
 	config.Producer.Return.Errors = true
@@ -156,7 +155,7 @@ func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushB
 	config.Producer.Flush.Bytes = flush
 
 	// NewSyncProducer creates a new SyncProducer using the given broker addresses and configuration.
-	conn, err := sarama.NewSyncProducer(brokersUrl, config)
+	conn, err := sarama.NewSyncProducer(brokersURL, config)
 	if err != nil {
 		return nil, err
 	}
@@ -166,97 +165,27 @@ func ConnectProducer(brokersUrl []string, topic string, partitions int32, flushB
 		Partitions: partitions,
 		Topic:      topic,
 	}, nil
-
-	//conn, err := sarama.NewAsyncProducer(brokersUrl, config)
-	//if err != nil {
-	//	return nil, err
-	//}
-
-	//return &AsyncKafkaProducer{
-	//	Producer:   conn,
-	//	Partitions: partitions,
-	//	Topic:      topic,
-	//}, nil
 }
 
-/*
-StartKafkaListener will start a single consumer
-*/
-func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, workers int,
-	service string, groupID string, autoCommitEnabled bool, workerFn func(ctx context.Context, key []byte, data []byte) error) {
+type MessageStatus struct {
+	Success bool
+	Error   error
+	Time    time.Time
+}
 
-	// create the workers to process all messages
-	n := atomic.Uint64{}
-	workerCh := make(chan KafkaMessage)
-	for i := 0; i < workers; i++ {
-		go func() {
-			var err error
-			for {
-				select {
-				case <-ctx.Done():
-					logger.Infof("[%s] Stopping Kafka worker", service)
-					return
-				case msg := <-workerCh:
-					if err = workerFn(ctx, msg.Message.Key, msg.Message.Value); err != nil {
-						// TODO do we need to retry locally?
-						logger.Errorf("[%s] Failed to process block final: %s", service, err)
-					} else {
-						// mark the message after no error
-						msg.Session.MarkMessage(msg.Message, "")
-						// msg.Session.Commit()
-						n.Add(1)
-					}
-				}
-			}
-		}()
-	}
+type KafkaListenerConfig struct {
+	Logger            ulogger.Logger
+	URL               *url.URL
+	GroupID           string
+	ConsumerCount     int
+	AutoCommitEnabled bool
+	ConsumerFn        func(message KafkaMessage) error
+}
 
-	go func() {
-		clusterAdmin, _, err := ConnectToKafka(kafkaURL)
-		if err != nil {
-			logger.Fatalf("[%s] unable to connect to kafka: %s", service, err)
-		}
-		defer func() { _ = clusterAdmin.Close() }()
-
-		topic := kafkaURL.Path[1:]
-		var partitions int
-		if partitions, err = strconv.Atoi(kafkaURL.Query().Get("partitions")); err != nil {
-			logger.Fatalf("[%s] unable to parse Kafka partitions: %s", service, err)
-		}
-		if partitions < 0 || partitions > int(^uint32(0)>>1) { // Check for int32 overflow
-			logger.Fatalf("[%s] partitions value out of range for int32: %d", service, partitions)
-		}
-
-		var replicationFactor int
-		if replicationFactor, err = strconv.Atoi(kafkaURL.Query().Get("replication")); err != nil {
-			logger.Fatalf("[%s] unable to parse Kafka replication factor: %s", service, err)
-		}
-		if replicationFactor < 0 || replicationFactor > int(^uint16(0)>>1) { // Check for int16 overflow
-			logger.Fatalf("[%s] replication factor value out of range for int16: %d", service, replicationFactor)
-		}
-
-		retentionPeriod := GetQueryParam(kafkaURL, "retention", "600000") // 10 minutes
-
-		if err := clusterAdmin.CreateTopic(topic, &sarama.TopicDetail{
-			//nolint:gosec // G109: Potential Integer Overflow
-			NumPartitions: int32(partitions),
-			//nolint:gosec // G109: Potential Integer Overflow
-			ReplicationFactor: int16(replicationFactor),
-			ConfigEntries: map[string]*string{
-				"retention.ms": &retentionPeriod, // Set the retention period
-			},
-		}, false); err != nil {
-			if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
-				logger.Fatalf("[%s] unable to create topic: %s", service, err)
-			}
-		}
-		logger.Infof("[Kafka] starting group listener for topic %s on address: %s", topic, kafkaURL.String())
-
-		err = StartKafkaGroupListener(ctx, logger, kafkaURL, groupID, workerCh, 1, autoCommitEnabled)
-		if err != nil {
-			logger.Errorf("[%s] Kafka listener failed to start: %s", service, err)
-		}
-	}()
+type KafkaConsumerClient struct {
+	Config            KafkaListenerConfig
+	ConsumerGroup     sarama.ConsumerGroup
+	LastMessageStatus MessageStatus
 }
 
 // txMetaCache : autocommit should be enabled - true, we CAN miss.
@@ -266,8 +195,27 @@ func StartKafkaListener(ctx context.Context, logger ulogger.Logger, kafkaURL *ur
 
 // StartKafkaGroupListener Autocommit is enabled/disabled according to the parameter fed in the function.
 // We DO NOT read autocommit parameter from the URL.
-func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaURL *url.URL, groupID string, workerCh chan KafkaMessage, consumerCount int, autoCommitEnabled bool,
-	consumerClosure ...func(KafkaMessage) error) error {
+func NewKafkaGroupListener(ctx context.Context, cfg KafkaListenerConfig) (*KafkaConsumerClient, error) {
+
+	if cfg.URL == nil {
+		return nil, errors.NewConfigurationError("kafka URL is not set", nil)
+	}
+
+	if cfg.ConsumerCount <= 0 {
+		return nil, errors.NewConfigurationError("consumer count must be greater than 0", nil)
+	}
+
+	if cfg.ConsumerFn == nil {
+		return nil, errors.NewConfigurationError("consumer function is not set", nil)
+	}
+
+	if cfg.Logger == nil {
+		return nil, errors.NewConfigurationError("logger is not set", nil)
+	}
+
+	if cfg.GroupID == "" {
+		return nil, errors.NewConfigurationError("group ID is not set", nil)
+	}
 
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
@@ -275,48 +223,78 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 	// https://github.com/IBM/sarama/issues/1689
 	// https://github.com/IBM/sarama/pull/1699
 	// Default value for config.Consumer.Offsets.AutoCommit.Enable is true.
-	if !autoCommitEnabled {
+	if !cfg.AutoCommitEnabled {
 		config.Consumer.Offsets.AutoCommit.Enable = false
 	}
 
-	replay := GetQueryParamInt(kafkaURL, "replay", 0)
+	replay := GetQueryParamInt(cfg.URL, "replay", 0)
 	if replay == 1 {
 		config.Consumer.Offsets.Initial = sarama.OffsetOldest
 	}
 
+	brokersURL := strings.Split(cfg.URL.Host, ",")
+
+	clusterAdmin, err := sarama.NewClusterAdmin(brokersURL, config)
+	if err != nil {
+		return nil, errors.NewConfigurationError("error while creating cluster admin", err)
+	}
+	defer func(clusterAdmin sarama.ClusterAdmin) {
+		_ = clusterAdmin.Close()
+	}(clusterAdmin)
+
+	consumerGroup, err := sarama.NewConsumerGroup(brokersURL, cfg.GroupID, config)
+	if err != nil {
+		return nil, errors.NewServiceError("error creating consumer group client", err)
+	}
+
+	client := &KafkaConsumerClient{
+		Config:        cfg,
+		ConsumerGroup: consumerGroup,
+		LastMessageStatus: MessageStatus{
+			Success: true,
+			Time:    time.Now(),
+			Error:   nil,
+		},
+	}
+
+	return client, nil
+}
+
+func (k *KafkaConsumerClient) Start(ctx context.Context) {
+	if k == nil {
+		return
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
-	// ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		<-signals
-		cancel()
+		for err := range k.ConsumerGroup.Errors() {
+			k.Config.Logger.Errorf("Kafka consumer error: %v", err)
+			k.LastMessageStatus = MessageStatus{
+				Success: false,
+				Error:   err,
+				Time:    time.Now(),
+			}
+		}
 	}()
 
-	var consumerClosureFunc func(KafkaMessage) error
+	consumerFunc := func(message KafkaMessage) error {
+		k.LastMessageStatus = MessageStatus{
+			Success: true,
+			Error:   nil,
+			Time:    time.Now(),
+		}
 
-	if len(consumerClosure) > 0 {
-		consumerClosureFunc = consumerClosure[0]
-	} else {
-		consumerClosureFunc = nil
+		return k.Config.ConsumerFn(message)
 	}
 
-	brokersUrl := strings.Split(kafkaURL.Host, ",")
+	topics := []string{k.Config.URL.Path[1:]}
 
-	client, err := sarama.NewConsumerGroup(brokersUrl, groupID, config)
-	if err != nil {
-		cancel()
-		return errors.NewServiceError("error creating consumer group client", err)
-	}
-
-	topics := []string{kafkaURL.Path[1:]}
-
-	for i := 0; i < consumerCount; i++ {
+	for i := 0; i < k.Config.ConsumerCount; i++ {
 		go func(consumerIndex int) {
 			// defer consumer.Close() // Ensure cleanup, if necessary
-			logger.Infof("[kafka] Starting consumer [%d] for group %s on topic %s \n", consumerIndex, groupID, topics[0])
+			k.Config.Logger.Infof("[kafka] Starting consumer [%d] for group %s on topic %s \n", consumerIndex, k.Config.GroupID, topics[0])
 
 			for {
 				select {
@@ -324,11 +302,11 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 					// Context cancelled, exit goroutine
 					return
 				default:
-					if err := client.Consume(ctx, topics, NewKafkaConsumer(workerCh, autoCommitEnabled, consumerClosureFunc)); err != nil {
+					if err := k.ConsumerGroup.Consume(ctx, topics, NewKafkaConsumer(k.Config.AutoCommitEnabled, consumerFunc)); err != nil {
 						if errors.Is(err, context.Canceled) {
-							logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, groupID)
+							k.Config.Logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, k.Config.GroupID)
 						} else {
-							logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
+							k.Config.Logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
 							// Consider delay before retry or exit based on error type
 						}
 					}
@@ -337,27 +315,38 @@ func StartKafkaGroupListener(ctx context.Context, logger ulogger.Logger, kafkaUR
 		}(i)
 	}
 
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-signals
+		cancel()
+	}()
+
 	select {
 	case <-signals:
-		logger.Infof("[kafka] Received signal, shutting down consumers for group %s", groupID)
+		k.Config.Logger.Infof("[kafka] Received signal, shutting down consumers for group %s", k.Config.GroupID)
 		cancel() // Ensure the context is canceled
 	case <-ctx.Done():
-		logger.Infof("[kafka] Context done, shutting down consumer for %s", groupID)
+		k.Config.Logger.Infof("[kafka] Context done, shutting down consumer for %s", k.Config.GroupID)
 	}
 
-	if err = client.Close(); err != nil {
-		logger.Errorf("[Kafka] %s: error closing client: %v", groupID, err)
+	if err := k.ConsumerGroup.Close(); err != nil {
+		k.Config.Logger.Errorf("[Kafka] %s: error closing client: %v", k.Config.GroupID, err)
 	}
-
-	return nil
 }
 
-func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte) error {
+type KafkaProducerClient struct {
+	Config            KafkaListenerConfig
+	Producer          sarama.AsyncProducer
+	LastMessageStatus MessageStatus
+	PublishChannel    chan []byte
+}
+
+func NewAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte) (*KafkaProducerClient, error) {
 	logger.Debugf("Starting async kafka producer for %v", kafkaURL)
 	topic := kafkaURL.Path[1:]
-	brokersUrl := strings.Split(kafkaURL.Host, ",")
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	brokersURL := strings.Split(kafkaURL.Host, ",")
 
 	config := sarama.NewConfig()
 	config.Producer.Return.Successes = true
@@ -370,9 +359,9 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 	// config.Producer.RequiredAcks = sarama.NoResponse // Equivalent to 'acks=0'
 	// config.Producer.Return.Successes = false
 
-	clusterAdmin, err := sarama.NewClusterAdmin(brokersUrl, config)
+	clusterAdmin, err := sarama.NewClusterAdmin(brokersURL, config)
 	if err != nil {
-		return errors.NewConfigurationError("error while creating cluster admin", err)
+		return nil, errors.NewConfigurationError("error while creating cluster admin", err)
 	}
 	defer func(clusterAdmin sarama.ClusterAdmin) {
 		_ = clusterAdmin.Close()
@@ -394,42 +383,114 @@ func StartAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte
 		},
 	}, false); err != nil {
 		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
-			return errors.NewProcessingError("unable to create topic", err)
+			return nil, errors.NewProcessingError("unable to create topic", err)
 		}
 	}
 
-	producer, err := sarama.NewAsyncProducer(brokersUrl, config)
+	producer, err := sarama.NewAsyncProducer(brokersURL, config)
 	if err != nil {
 		logger.Fatalf("Failed to start Sarama producer: %v", err)
 	}
-	defer producer.AsyncClose()
+
+	client := &KafkaProducerClient{
+		Producer: producer,
+		Config: KafkaListenerConfig{
+			Logger: logger,
+			URL:    kafkaURL,
+		},
+		LastMessageStatus: MessageStatus{
+			Success: true,
+			Time:    time.Now(),
+			Error:   nil,
+		},
+		PublishChannel: ch,
+	}
+
+	return client, nil
+}
+
+func (c *KafkaProducerClient) Start(ctx context.Context) {
+	if c == nil {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	topic := c.Config.URL.Path[1:]
 
 	// Start a goroutine to handle successful message deliveries
 	go func() {
-		for range producer.Successes() {
-			// Handle successful deliveries here, e.g., log them
+		for range c.Producer.Successes() {
+			c.LastMessageStatus = MessageStatus{
+				Success: true,
+				Error:   nil,
+				Time:    time.Now(),
+			}
 		}
 	}()
 
 	// Start a goroutine to handle errors
 	go func() {
-		for err := range producer.Errors() {
-			logger.Errorf("Failed to deliver message: %v", err)
+		for err := range c.Producer.Errors() {
+			c.Config.Logger.Errorf("Failed to deliver message: %v", err)
+			c.LastMessageStatus = MessageStatus{
+				Success: false,
+				Error:   err,
+				Time:    time.Now(),
+			}
 		}
 	}()
 	// Sending a batch of 50 messages asynchronously
 	go func() {
-		for msgBytes := range ch {
+		for msgBytes := range c.PublishChannel {
 			message := &sarama.ProducerMessage{
 				Topic: topic,
 				Value: sarama.StringEncoder(msgBytes),
 			}
-			producer.Input() <- message
+			c.Producer.Input() <- message
 		}
 	}()
 
-	// Wait for a signal to exit
-	<-signals
-	logger.Debugf("Shutting down producer %v ...", kafkaURL)
-	return nil
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-signals
+		cancel()
+	}()
+
+	select {
+	case <-signals:
+		c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %v ...", c.Config.URL)
+		cancel() // Ensure the context is canceled
+	case <-ctx.Done():
+		c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
+	}
+
+	c.Producer.AsyncClose()
+}
+
+func (c *KafkaConsumerClient) CheckKafkaHealth(ctx context.Context) (int, string, error) {
+	if c == nil {
+		return http.StatusOK, "Kafka consumer group not initialized", nil
+	}
+
+	if c.LastMessageStatus.Success {
+		return http.StatusOK, "OK", nil
+	}
+
+	return http.StatusServiceUnavailable, "Last message failed", c.LastMessageStatus.Error
+}
+
+func (c *KafkaProducerClient) CheckKafkaHealth(ctx context.Context) (int, string, error) {
+	if c == nil {
+		return http.StatusOK, "Kafka producer not initialized", nil
+	}
+
+	if c.LastMessageStatus.Success {
+		return http.StatusOK, "OK", nil
+	}
+
+	return http.StatusServiceUnavailable, "Last message failed", c.LastMessageStatus.Error
 }

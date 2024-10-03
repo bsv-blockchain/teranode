@@ -2,30 +2,26 @@ package util
 
 import (
 	"context"
+	"time"
+
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/retry"
-	"time"
 
 	"github.com/IBM/sarama"
 )
 
 // KafkaConsumer represents a Sarama consumer group consumer
 type KafkaConsumer struct {
-	workerCh          chan KafkaMessage
 	consumerClosure   func(KafkaMessage) error
 	autoCommitEnabled bool
 	logger            ulogger.Logger
 }
 
-func NewKafkaConsumer(workerCh chan KafkaMessage, autoCommitEnabled bool, consumerClosure ...func(message KafkaMessage) error) *KafkaConsumer {
+func NewKafkaConsumer(autoCommitEnabled bool, consumerClosureOrNil func(message KafkaMessage) error) *KafkaConsumer {
 	consumer := &KafkaConsumer{
-		workerCh:          workerCh,
+		consumerClosure:   consumerClosureOrNil,
 		autoCommitEnabled: autoCommitEnabled,
 		logger:            ulogger.New("kafka_consumer"),
-	}
-
-	if len(consumerClosure) > 0 {
-		consumer.consumerClosure = consumerClosure[0]
 	}
 
 	return consumer
@@ -104,23 +100,18 @@ func (kc *KafkaConsumer) handleMessageWithManualCommit(ctx context.Context, sess
 	msg := KafkaMessage{Message: message, Session: session}
 	// kc.logger.Infof("Processing message with offset: %v", message.Offset)
 
-	if kc.consumerClosure != nil {
-		// execute consumer closure
-		if err := kc.consumerClosure(msg); err != nil {
-			// if the error is not nil, start retry logic
-			_, err = retry.Retry(ctx, kc.logger, func() (any, error) {
-				return struct{}{}, kc.consumerClosure(msg)
-			}, retry.WithRetryCount(3), retry.WithBackoffMultiplier(2),
-				retry.WithBackoffDurationType(time.Second), retry.WithMessage("[kafka_consumer] retrying to process message..."))
+	// execute consumer closure
+	if err := kc.consumerClosure(msg); err != nil {
+		// if the error is not nil, start retry logic
+		_, err = retry.Retry(ctx, kc.logger, func() (any, error) {
+			return struct{}{}, kc.consumerClosure(msg)
+		}, retry.WithRetryCount(3), retry.WithBackoffMultiplier(2),
+			retry.WithBackoffDurationType(time.Second), retry.WithMessage("[kafka_consumer] retrying to process message..."))
 
-			// if we still can't process the message, log the error and skip to the next message
-			if err != nil {
-				kc.logger.Errorf("[kafka_consumer] error processing kafka message, skipping: %v", message)
-			}
+		// if we still can't process the message, log the error and skip to the next message
+		if err != nil {
+			kc.logger.Errorf("[kafka_consumer] error processing kafka message, skipping: %v", message)
 		}
-	} else {
-		// if no error, send the message to the worker channel
-		kc.workerCh <- msg
 	}
 
 	// kc.logger.Infof("Committing offset: %v", message.Offset)
@@ -132,12 +123,8 @@ func (kc *KafkaConsumer) handleMessageWithManualCommit(ctx context.Context, sess
 func (kc *KafkaConsumer) handleMessagesWithAutoCommit(session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage) error {
 	msg := KafkaMessage{Message: message, Session: session}
 
-	if kc.consumerClosure != nil {
-		// we don't check the error here as we are auto committing
-		_ = kc.consumerClosure(msg)
-	} else {
-		kc.workerCh <- msg
-	}
+	// we don't check the error here as we are auto committing
+	_ = kc.consumerClosure(msg)
 
 	// Auto-commit is implied, so we don't need to explicitly mark the message here
 	return nil

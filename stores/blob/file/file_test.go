@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -413,4 +414,102 @@ func TestFileSetHashPrefixOverride(t *testing.T) {
 
 	// Even though the option is set to 1, the URL hashPrefix should override it
 	require.Equal(t, 2, f.options.HashPrefix)
+}
+
+func TestFileHealth(t *testing.T) {
+	t.Run("healthy state", func(t *testing.T) {
+		// Setup
+		tempDir, err := os.MkdirTemp("", "test-health")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
+		require.NoError(t, err)
+
+		// Test
+		status, message, err := f.Health(context.Background())
+
+		// Assert
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, status)
+		require.Equal(t, "File Store: Healthy", message)
+	})
+
+	t.Run("non-existent path", func(t *testing.T) {
+		// Setup
+		nonExistentPath := "./path/that/does/not/exist"
+		u, err := url.Parse("file://" + nonExistentPath)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
+		require.NoError(t, err)
+
+		// creating a New store will create the folder
+		// so we need to remove it before we test
+		err = os.RemoveAll(nonExistentPath)
+		require.NoError(t, err)
+
+		// Test
+		status, message, err := f.Health(context.Background())
+
+		// Assert
+		require.Error(t, err)
+		require.Equal(t, http.StatusInternalServerError, status)
+		require.Equal(t, "File Store: Path does not exist", message)
+	})
+
+	t.Run("read-only directory", func(t *testing.T) {
+		// Setup
+		tempDir, err := os.MkdirTemp("", "test-health-readonly")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		// Make the directory read-only
+		err = os.Chmod(tempDir, 0555)
+		require.NoError(t, err)
+		defer os.Chmod(tempDir, 0755) // Restore permissions for cleanup
+
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
+		require.NoError(t, err)
+
+		// Test
+		status, message, err := f.Health(context.Background())
+
+		// Assert
+		require.Error(t, err)
+		require.Equal(t, http.StatusInternalServerError, status)
+		require.Equal(t, "File Store: Unable to create temporary file", message)
+	})
+
+	t.Run("write permission denied", func(t *testing.T) {
+		// Setup
+		tempDir, err := os.MkdirTemp("", "test-health-write-denied")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		// Make the directory read-only
+		err = os.Chmod(tempDir, 0555)
+		require.NoError(t, err)
+		defer os.Chmod(tempDir, 0755) // Restore permissions for cleanup
+
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
+		require.NoError(t, err)
+
+		// Test
+		status, message, err := f.Health(context.Background())
+
+		// Assert
+		require.Error(t, err)
+		require.Equal(t, http.StatusInternalServerError, status)
+		require.Equal(t, "File Store: Unable to create temporary file", message)
+	})
 }

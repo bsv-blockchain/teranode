@@ -35,10 +35,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
-	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -247,13 +247,12 @@ type server struct {
 	cfCheckptCachesMtx sync.RWMutex
 
 	// ubsv additions
-	logger            ulogger.Logger
-	blockchainClient  blockchain.ClientI
-	utxoStore         utxostore.Store
-	subtreeStore      blob.Store
-	subtreeValidation subtreevalidation.Interface
-	blockValidation   blockvalidation.Interface
-	assetHttpAddress  string
+	logger           ulogger.Logger
+	blockchainClient blockchain.ClientI
+	utxoStore        utxostore.Store
+	subtreeStore     blob.Store
+	blockValidation  blockvalidation.Interface
+	assetHTTPAddress string
 }
 
 // serverPeer extends the peer to maintain state shared by the server and
@@ -414,6 +413,10 @@ func hasServices(advertised, desired wire.ServiceFlag) bool {
 // and is used to negotiate the protocol version details as well as kick start
 // the communications.
 func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgReject {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnVersion",
+		tracing.WithHistogram(peerServerMetrics["OnVersion"]),
+	)
+
 	// Update the address manager with the advertised services for outbound
 	// connections in case they have changed.  This is not done for inbound
 	// connections to help prevent malicious behavior and is skipped when
@@ -508,6 +511,10 @@ func (sp *serverPeer) OnVersion(_ *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 // pool up to the maximum inventory allowed per message.  When the peer has a
 // bloom filter loaded, the contents are filtered accordingly.
 func (sp *serverPeer) OnMemPool(_ *peer.Peer, _ *wire.MsgMemPool) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnMemPool",
+		tracing.WithHistogram(peerServerMetrics["OnMemPool"]),
+	)
+
 	// we do not support onMempool requests
 	// normally this would only be sent with bloom filtering on, which we do not support
 	sp.server.logger.Warnf("Ignoring mempool request from %v -- bloom filtering is not supported", sp)
@@ -519,6 +526,10 @@ func (sp *serverPeer) OnMemPool(_ *peer.Peer, _ *wire.MsgMemPool) {
 // handler this does not serialize all transactions through a single thread
 // transactions don't rely on the previous one in a linear fashion like blocks.
 func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnTx",
+		tracing.WithHistogram(peerServerMetrics["OnTx"]),
+	)
+
 	if cfg.BlocksOnly {
 		sp.server.logger.Infof("Ignoring tx %v from %v - blocksonly enabled", msg.TxHash(), sp)
 		return
@@ -542,7 +553,11 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 
 // OnBlock is invoked when a peer receives a block bitcoin message. It
 // blocks until the bitcoin block has been fully processed.
-func (sp *serverPeer) OnBlock(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
+func (sp *serverPeer) OnBlock(_ *peer.Peer, msg *wire.MsgBlock, buf []byte) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnBlock",
+		tracing.WithHistogram(peerServerMetrics["OnBlock"]),
+	)
+
 	// Convert the raw MsgBlock to a bsvutil.Block which provides some
 	// convenience methods and things such as hash caching.
 	block := bsvutil.NewBlockFromBlockAndBytes(msg, buf)
@@ -578,11 +593,15 @@ func (sp *serverPeer) OnBlock(p *peer.Peer, msg *wire.MsgBlock, buf []byte) {
 	}
 }
 
-// OnInv is invoked when a peer receives an inv bitcoin message and is
-// used to examine the inventory being advertised by the remote peer and react
+// OnInv is invoked when a peer receives an inv bitcoin message and
+// is used to examine the inventory being advertised by the remote peer and react
 // accordingly.  We pass the message down to blockmanager which will call
 // QueueMessage with any appropriate responses.
 func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnInv",
+		tracing.WithHistogram(peerServerMetrics["OnInv"]),
+	)
+
 	if !cfg.BlocksOnly {
 		if len(msg.InvList) > 0 {
 			sp.server.syncManager.QueueInv(msg, sp.Peer)
@@ -616,12 +635,20 @@ func (sp *serverPeer) OnInv(_ *peer.Peer, msg *wire.MsgInv) {
 // OnHeaders is invoked when a peer receives a headers bitcoin
 // message.  The message is passed down to the sync manager.
 func (sp *serverPeer) OnHeaders(_ *peer.Peer, msg *wire.MsgHeaders) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnHeaders",
+		tracing.WithHistogram(peerServerMetrics["OnHeaders"]),
+	)
+
 	sp.server.syncManager.QueueHeaders(msg, sp.Peer)
 }
 
 // OnGetData is invoked when a peer receives a getdata bitcoin message and
 // is used to deliver block and transaction information.
 func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetData",
+		tracing.WithHistogram(peerServerMetrics["OnGetData"]),
+	)
+
 	numAdded := 0
 	notFound := wire.NewMsgNotFound()
 
@@ -696,6 +723,10 @@ func (sp *serverPeer) OnGetData(_ *peer.Peer, msg *wire.MsgGetData) {
 // OnGetBlocks is invoked when a peer receives a getblocks bitcoin
 // message.
 func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetBlocks",
+		tracing.WithHistogram(peerServerMetrics["OnGetBlocks"]),
+	)
+
 	// Find the most recent known block in the best chain based on the block
 	// locator and fetch all of the block hashes after it until either
 	// wire.MaxBlocksPerMsg have been fetched or the provided stop hash is
@@ -753,6 +784,10 @@ func (sp *serverPeer) OnGetBlocks(_ *peer.Peer, msg *wire.MsgGetBlocks) {
 // OnGetHeaders is invoked when a peer receives a getheaders bitcoin
 // message.
 func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetHeaders",
+		tracing.WithHistogram(peerServerMetrics["OnGetHeaders"]),
+	)
+
 	// Ignore OnGetHeaders requests if not in sync.
 	if !sp.server.syncManager.IsCurrent() {
 		return
@@ -807,7 +842,7 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 	if sp.server.services&wire.SFNodeBloom != wire.SFNodeBloom {
 		// Ban the peer if the protocol version is high enough that the
 		// peer is knowingly violating the protocol and banning is
-		// enabled.
+		// enabled.  This is done to prevent fingerprinting attacks.
 		//
 		// NOTE: Even though the addBanScore function already examines
 		// whether or not banning is enabled, it is checked here as well
@@ -839,6 +874,10 @@ func (sp *serverPeer) enforceNodeBloomFlag(cmd string) bool {
 // lower than provided value are inventoried to them.  The peer will be
 // disconnected if an invalid fee filter value is provided.
 func (sp *serverPeer) OnFeeFilter(_ *peer.Peer, msg *wire.MsgFeeFilter) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnFeeFilter",
+		tracing.WithHistogram(peerServerMetrics["OnFeeFilter"]),
+	)
+
 	// Check that the passed minimum fee is a valid amount.
 	if msg.MinFee < 0 || msg.MinFee > bsvutil.MaxSatoshi {
 		sp.server.logger.Debugf("Peer %v sent an invalid feefilter '%v' -- "+
@@ -882,6 +921,10 @@ func (sp *serverPeer) OnFilterLoad(_ *peer.Peer, msg *wire.MsgFilterLoad) {
 // and is used to provide the peer with known addresses from the address
 // manager.
 func (sp *serverPeer) OnGetAddr(_ *peer.Peer, msg *wire.MsgGetAddr) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnGetAddr",
+		tracing.WithHistogram(peerServerMetrics["OnGetAddr"]),
+	)
+
 	// Don't return any addresses when running on the simulation test
 	// network.  This helps prevent the network from becoming another
 	// public test network since it will not be able to learn about other
@@ -928,6 +971,10 @@ func (sp *serverPeer) OnGetAddr(_ *peer.Peer, msg *wire.MsgGetAddr) {
 // OnAddr is invoked when a peer receives an addr bitcoin message and is
 // used to notify the server about advertised addresses.
 func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnAddr",
+		tracing.WithHistogram(peerServerMetrics["OnAddr"]),
+	)
+
 	// Ignore addresses when running on the simulation test network.  This
 	// helps prevent the network from becoming another public test network
 	// since it will not be able to learn about other peers that have not
@@ -976,23 +1023,39 @@ func (sp *serverPeer) OnAddr(_ *peer.Peer, msg *wire.MsgAddr) {
 
 // OnReject logs all reject messages received from the remote peer.
 func (sp *serverPeer) OnReject(p *peer.Peer, msg *wire.MsgReject) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnReject",
+		tracing.WithHistogram(peerServerMetrics["OnReject"]),
+	)
+
 	sp.server.logger.Warnf("Received reject message from peer %s, code: %s, reason: %s", p, msg.Code.String(), msg.Reason)
 }
 
 // OnNotFound logs all not found messages received from the remote peer.
 func (sp *serverPeer) OnNotFound(p *peer.Peer, msg *wire.MsgNotFound) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnNotFound",
+		tracing.WithHistogram(peerServerMetrics["OnNotFound"]),
+	)
+
 	sp.server.logger.Warnf("Received not found message from peer %s, %d not found invs", p, len(msg.InvList))
 }
 
 // OnRead is invoked when a peer receives a message and it is used to update
 // the bytes received by the server.
 func (sp *serverPeer) OnRead(_ *peer.Peer, bytesRead int, msg wire.Message, err error) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnRead",
+		tracing.WithHistogram(peerServerMetrics["OnRead"]),
+	)
+
 	sp.server.AddBytesReceived(uint64(bytesRead))
 }
 
 // OnWrite is invoked when a peer sends a message and it is used to update
 // the bytes sent by the server.
 func (sp *serverPeer) OnWrite(_ *peer.Peer, bytesWritten int, msg wire.Message, err error) {
+	_, _, _ = tracing.StartTracing(sp.ctx, "serverPeer.OnWrite",
+		tracing.WithHistogram(peerServerMetrics["OnWrite"]),
+	)
+
 	sp.server.AddBytesSent(uint64(bytesWritten))
 }
 
@@ -1104,7 +1167,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
 
-	url := fmt.Sprintf("%s/block_legacy/%s", s.assetHttpAddress, hash.String())
+	url := fmt.Sprintf("%s/block_legacy/%s", s.assetHTTPAddress, hash.String())
 	blockBytes, err := util.DoHTTPRequest(s.ctx, url, nil)
 	if err != nil {
 		sp.server.logger.Infof("Unable to fetch requested block %v: %v", hash, err)
@@ -1523,7 +1586,12 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			peers = append(peers, sp)
 		})
 		msg.reply <- peers
-
+		// peers := make([]*serverPeer, 0, state.Count())
+		// state.forAllPeers(func(sp *serverPeer) {
+		// 	if sp.Connected() {
+		// 		peers = append(peers, sp)
+		// 	}
+		// })
 	case connectNodeMsg:
 		// TODO: duplicate oneshots?
 		// Limit max number of total peers.
@@ -1755,12 +1823,13 @@ func (s *server) peerHandler() {
 	s.addrManager.Start()
 	s.syncManager.Start()
 
-	s.logger.Infof("Starting peer handler")
+	s.logger.Infof("[Peer Handler] Starting...")
+	defer s.wg.Done()
 
 	state := &peerState{
 		inboundPeers:    make(map[int32]*serverPeer),
-		persistentPeers: make(map[int32]*serverPeer),
 		outboundPeers:   make(map[int32]*serverPeer),
+		persistentPeers: make(map[int32]*serverPeer),
 		banned:          make(map[string]time.Time),
 		outboundGroups:  make(map[string]int),
 		connectionCount: make(map[string]int),
@@ -1973,17 +2042,14 @@ cleanup:
 
 // Start begins accepting connections from peers.
 func (s *server) Start() {
+
 	// Already started?
 	if atomic.AddInt32(&s.started, 1) != 1 {
 		return
 	}
 
-	s.logger.Infof("Starting server")
-
-	// Start the peer handler which in turn starts the address and block
-	// managers.
 	s.wg.Add(1)
-	go s.peerHandler()
+	s.peerHandler()
 
 	if s.nat != nil {
 		s.wg.Add(1)
@@ -2097,6 +2163,25 @@ func parseListeners(addrs []string) ([]net.Addr, error) {
 	}
 	return netAddrs, nil
 }
+func (s *server) getPeers() []*serverPeer {
+	replyChan := make(chan []*serverPeer, 1)
+
+	select {
+	case s.query <- getPeersMsg{reply: replyChan}:
+		s.logger.Debugf("getPeers: Query message sent successfully")
+	default:
+		s.logger.Errorf("getPeers: Failed to send query message, channel full")
+		return nil
+	}
+
+	select {
+	case peers := <-replyChan:
+		return peers
+	case <-time.After(5 * time.Second):
+		s.logger.Warnf("getPeers: Timeout waiting for peer list")
+		return nil
+	}
+}
 
 func (s *server) upnpUpdateThread() {
 	// Go off immediately to prevent code duplication, thereafter we renew
@@ -2156,9 +2241,8 @@ out:
 // connections from peers.
 func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockchainClient blockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
-	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
+	blockValidation blockvalidation.Interface,
 	listenAddrs []string, chainParams *chaincfg.Params, assetHttpAddress string) (*server, error) {
-
 	// init config
 	c, _, err := loadConfig(logger)
 	if err != nil {
@@ -2236,9 +2320,8 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		blockchainClient:     blockchainClient,
 		utxoStore:            utxoStore,
 		subtreeStore:         subtreeStore,
-		subtreeValidation:    subtreeValidation,
 		blockValidation:      blockValidation,
-		assetHttpAddress:     assetHttpAddress,
+		assetHTTPAddress:     assetHttpAddress,
 	}
 
 	s.syncManager, err = netsync.New(
@@ -2248,7 +2331,6 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		validationClient,
 		utxoStore,
 		subtreeStore,
-		subtreeValidation,
 		blockValidation,
 		&netsync.Config{
 			PeerNotifier:            &s,

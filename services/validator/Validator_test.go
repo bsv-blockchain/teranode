@@ -91,19 +91,23 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 			policy:      NewPolicySettings(),
 			chainParams: chaincfg.GetChainParamsFromConfig(),
 		},
-		utxoStore:           utxoStore,
-		blockAssembler:      BlockAssemblyStore{},
-		saveInParallel:      true,
-		stats:               gocore.NewStat("validator"),
-		txMetaKafkaChan:     make(chan []byte, 1),
-		rejectedTxKafkaChan: make(chan []byte, 1),
+		utxoStore:      utxoStore,
+		blockAssembler: BlockAssemblyStore{},
+		saveInParallel: true,
+		stats:          gocore.NewStat("validator"),
+		txMetaKafkaProducerClient: &util.KafkaProducerClient{
+			PublishChannel: make(chan []byte, 1),
+		},
+		rejectedTxKafkaProducerClient: &util.KafkaProducerClient{
+			PublishChannel: make(chan []byte, 1),
+		},
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, len(v.txMetaKafkaChan), "txMetaKafkaChan should have 1 message")
-	require.Equal(t, 0, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should be empty")
+	require.Equal(t, 1, len(v.txMetaKafkaProducerClient.PublishChannel), "txMetaKafkaChan should have 1 message")
+	require.Equal(t, 0, len(v.rejectedTxKafkaProducerClient.PublishChannel), "rejectedTxKafkaChan should be empty")
 }
 
 func TestValidate_RejectedTransactionChannel(t *testing.T) {
@@ -124,19 +128,23 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 			policy:      NewPolicySettings(),
 			chainParams: chaincfg.GetChainParamsFromConfig(),
 		},
-		utxoStore:           utxoStore,
-		blockAssembler:      nil,
-		saveInParallel:      true,
-		stats:               gocore.NewStat("validator"),
-		txMetaKafkaChan:     make(chan []byte, 1),
-		rejectedTxKafkaChan: make(chan []byte, 1),
+		utxoStore:      utxoStore,
+		blockAssembler: nil,
+		saveInParallel: true,
+		stats:          gocore.NewStat("validator"),
+		txMetaKafkaProducerClient: &util.KafkaProducerClient{
+			PublishChannel: make(chan []byte, 1),
+		},
+		rejectedTxKafkaProducerClient: &util.KafkaProducerClient{
+			PublishChannel: make(chan []byte, 1),
+		},
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.Error(t, err)
 
-	require.Equal(t, 0, len(v.txMetaKafkaChan), "txMetaKafkaChan should be empty")
-	require.Equal(t, 1, len(v.rejectedTxKafkaChan), "rejectedTxKafkaChan should have 1 message")
+	require.Equal(t, 0, len(v.txMetaKafkaProducerClient.PublishChannel), "txMetaKafkaChan should be empty")
+	require.Equal(t, 1, len(v.rejectedTxKafkaProducerClient.PublishChannel), "rejectedTxKafkaChan should have 1 message")
 }
 
 func TestValidate_InValidDoubleSpendTx(t *testing.T) {

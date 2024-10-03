@@ -3,12 +3,10 @@ package validator
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"log"
-	"net/url"
+	"net/http"
 	"os"
-	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -37,6 +36,7 @@ type Server struct {
 	stats            *gocore.Stat
 	ctx              context.Context
 	blockchainClient blockchain.ClientI
+	consumerClient   *util.KafkaConsumerClient
 }
 
 // NewServer will return a server instance with the logger stored within it
@@ -52,7 +52,31 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blo
 }
 
 func (v *Server) Health(ctx context.Context) (int, string, error) {
-	return 0, "", nil
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: v.blockchainClient.Health},
+		{Name: "UTXOStore", Check: v.utxoStore.Health},
+		{Name: "Validator", Check: v.validator.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(v.blockchainClient)},
+		{Name: "Kafka", Check: v.consumerClient.CheckKafkaHealth},
+	}
+
+	return health.CheckAll(ctx, checks)
+}
+
+func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+		tracing.WithParentStat(v.stats),
+		tracing.WithCounter(prometheusHealth),
+		tracing.WithLogMessage(v.logger, "[HealthGRPC] called"),
+	)
+	defer deferFn()
+
+	status, details, err := v.Health(ctx)
+
+	return &validator_api.HealthResponse{
+		Ok:      status == http.StatusOK,
+		Details: details,
+	}, errors.WrapGRPC(err)
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {
@@ -63,12 +87,82 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewServiceError("could not create validator", err)
 	}
 
+	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
+	if err == nil && ok {
+		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
+
+		workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
+		if workers < 1 {
+			// no workers, nothing to do
+			return nil
+		}
+		v.logger.Infof("[Validator Server] starting Kafka listener")
+
+		consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
+		if consumerRatio < 1 {
+			consumerRatio = 1
+		}
+
+		partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
+
+		consumerCount := partitions / consumerRatio
+		if consumerCount < 0 {
+			consumerCount = 1
+		}
+
+		v.logger.Infof("[Validator] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
+
+		kafkaMessageHandler := func(msg util.KafkaMessage) error {
+			currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
+			if err != nil {
+				v.logger.Errorf("[Validator] Failed to get current state: %s", err)
+				return err
+			}
+			for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
+				v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
+				time.Sleep(1 * time.Second) // Wait and check again in 1 second
+			}
+
+			data, err := NewTxValidationDataFromBytes(msg.Message.Value)
+			if err != nil {
+				prometheusInvalidTransactions.Inc()
+				v.logger.Errorf("[Validator] Failed to decode kafka message: %s", err)
+				return err
+			}
+
+			tx, err := bt.NewTxFromBytes(data.Tx)
+			if err != nil {
+				prometheusInvalidTransactions.Inc()
+				v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
+				return err
+			}
+
+			if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil {
+				prometheusInvalidTransactions.Inc()
+				v.logger.Errorf("[Validator] Invalid tx: %s", err)
+				return err
+			}
+
+			return nil
+		}
+		v.consumerClient, err = util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+			Logger:            v.logger,
+			URL:               kafkaURL,
+			GroupID:           "blockassembly",
+			ConsumerCount:     consumerCount,
+			AutoCommitEnabled: true,
+			ConsumerFn:        kafkaMessageHandler,
+		})
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", kafkaURL.String(), err)
+		}
+	}
+
 	return nil
 }
 
 // Start function
 func (v *Server) Start(ctx context.Context) error {
-
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
@@ -88,11 +182,7 @@ func (v *Server) Start(ctx context.Context) error {
 		v.logger.Infof("[Validator] Node finished restoring and has transitioned to Running state, continuing to start Transaction Validator service")
 	}
 
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
-	if err == nil && ok {
-		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
-		go v.startKafkaListener(ctx, kafkaURL)
-	}
+	go v.consumerClient.Start(ctx)
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
@@ -104,120 +194,12 @@ func (v *Server) Start(ctx context.Context) error {
 	return nil
 }
 
-func (v *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL) {
-	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
-	if workers < 1 {
-		// no workers, nothing to do
-		return
-	}
-	v.logger.Infof("[Validator Server] starting Kafka listener")
-
-	consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
-	if consumerRatio < 1 {
-		consumerRatio = 1
-	}
-
-	partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
-
-	consumerCount := partitions / consumerRatio
-	if consumerCount < 0 {
-		consumerCount = 1
-	}
-
-	v.logger.Infof("[Validator] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
-
-	if err := util.StartKafkaGroupListener(ctx, v.logger, kafkaURL, "blockassembly", nil, consumerCount, true, func(msg util.KafkaMessage) error {
-		//startTime := time.Now()
-		//currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
-		//if err != nil {
-		//	v.logger.Errorf("[Validator] Failed to get current state: %s", err)
-		//	// TODO: how to handle it gracefully?
-		//}
-
-		currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
-		if err != nil {
-			v.logger.Errorf("[Validator] Failed to get current state: %s", err)
-			return err
-		}
-		for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
-			v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
-			time.Sleep(1 * time.Second) // Wait and check again in 1 second
-		}
-
-		data, err := NewTxValidationDataFromBytes(msg.Message.Value)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] Failed to decode kafka message: %s", err)
-			return err
-		}
-
-		tx, err := bt.NewTxFromBytes(data.Tx)
-		if err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
-			return err
-		}
-
-		if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil {
-			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] Invalid tx: %s", err)
-			return err
-		}
-
-		//prometheusProcessedTransactions.Inc()
-		//prometheusTransactionDuration.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
-		return nil
-	}); err != nil {
-		v.logger.Errorf("[Validator] failed to start Kafka listener: %s", err)
-	}
-}
-
 func (v *Server) Stop(_ context.Context) error {
 	if v.kafkaSignal != nil {
 		v.kafkaSignal <- syscall.SIGTERM
 	}
 
 	return nil
-}
-
-func (v *Server) HealthGRPC(_ context.Context, _ *validator_api.EmptyMessage) (*validator_api.HealthResponse, error) {
-	start := gocore.CurrentTime()
-	defer func() {
-		prometheusHealth.Inc()
-		v.stats.NewStat("Health", true).AddTime(start)
-	}()
-
-	var sb strings.Builder
-	errs := make([]error, 0)
-
-	blockHeight := v.validator.GetBlockHeight()
-	if blockHeight == 0 {
-		err := errors.NewProcessingError("error getting blockHeight from validator: 0")
-		errs = append(errs, err)
-		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v\n", err))
-	} else {
-		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
-	}
-
-	if blockHeight <= 0 {
-		errs = append(errs, errors.NewProcessingError("blockHeight <= 0"))
-		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d\n", blockHeight))
-	} else {
-		_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
-	}
-
-	if len(errs) > 0 {
-		return &validator_api.HealthResponse{
-			Ok:        false,
-			Details:   sb.String(),
-			Timestamp: uint32(time.Now().Unix()),
-		}, errs[0]
-	}
-
-	return &validator_api.HealthResponse{
-		Ok:        true,
-		Timestamp: uint32(time.Now().Unix()),
-	}, nil
 }
 
 func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_ValidateTransactionStreamServer) error {
@@ -237,6 +219,7 @@ func (v *Server) ValidateTransactionStream(stream validator_api.ValidatorAPI_Val
 			log.Print("no more data")
 			break
 		}
+
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
 			return status.Errorf(codes.Unknown, "cannot receive chunk data: %v", err)
@@ -271,9 +254,11 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	defer deferFn()
 
 	transactionData := req.GetTransactionData()
+
 	tx, err := bt.NewTxFromBytes(transactionData)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
+
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
 		}, status.Errorf(codes.Internal, "cannot read transaction data: %v", err)
@@ -285,6 +270,7 @@ func (v *Server) ValidateTransaction(ctx context.Context, req *validator_api.Val
 	err = v.validator.Validate(ctx, tx, req.BlockHeight)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
+
 		return &validator_api.ValidateTransactionResponse{
 			Valid: false,
 			Txid:  tx.TxIDChainHash().CloneBytes(),

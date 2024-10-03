@@ -701,13 +701,13 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 					// storage or processing error, block is not really invalid, but we need to re-validate
 					u.ReValidateBlock(block, baseURL)
 				} else {
-					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", block.String(), err)
 					// TODO TEMP disable invalidation in the scaling test
 					//      Since the invalidation is disabled, here we are not invalidating the block
 					// 		Consider enabling the invalidation in the future
 					// if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
 					//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
 					//}
+					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid: %v", block.String(), err)
 				}
 			}
 
@@ -720,18 +720,12 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				// TODO: what to do with the error here other than logging?
 				blocksPartOfCurrentChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, referencedOldBlockIDs)
 				if err != nil {
-					u.logger.Errorf("[_][%s] failed to check if old blocks are part of the current chain", block.String(), err)
+					u.logger.Errorf("[ValidateBlock][%s] failed to check if old blocks are part of the current chain: %v", block.String(), err)
 				}
 
 				if !blocksPartOfCurrentChain {
-					// TODO return errors.NewBlockInvalidError("[_][%s] block is not valid, transactions refer old blocks (%v) that are not part of our current chain", block.String(), referencedOldBlockIDs)
-
-					// TODO TEMP disable invalidation in the scaling test
+					// TODO TEMP disable invalidation in the scaling test. Re-enable in the future
 					u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] block is invalid, transactions refer old blocks (%v) that are not part of our current chain", block.String())
-
-					// if err = u.blockchainClient.InvalidateBlock(validateCtx, block.Header.Hash()); err != nil {
-					//	u.logger.Errorf("[ValidateBlock][%s][InvalidateBlock] failed to invalidate block: %v", block.String(), err)
-					//}
 				}
 			}
 		}()

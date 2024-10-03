@@ -55,14 +55,18 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 		),
 		tracing.WithTag("blockHash", block.Hash().String()),
 		tracing.WithTag("peer", peer.String()),
+		tracing.WithHistogram(prometheusLegacyNetsyncHandleBlockDirect),
 	)
 	defer func() {
+		// set the block height gauge in the prometheus metrics
+		prometheusLegacyNetsyncBlockHeight.Set(float64(blockHeight))
+
 		deferFn(err)
 	}()
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
-	if err := block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
+	if err = block.MsgBlock().Header.Serialize(&headerBytes); err != nil {
 		return errors.NewProcessingError("failed to serialize header", err)
 	}
 
@@ -132,6 +136,7 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 			teranodeBlock.Hash().String(),
 			teranodeBlock.Height,
 		),
+		tracing.WithHistogram(prometheusLegacyNetsyncProcessBlock),
 	)
 	defer func() {
 		deferFn(err)
@@ -164,6 +169,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			block.Height(),
 			len(block.Transactions()),
 		),
+		tracing.WithHistogram(prometheusLegacyNetsyncPrepareSubtrees),
 	)
 	defer func() {
 		if r := recover(); r != nil {
@@ -278,7 +284,9 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 }
 
 func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactionsLegacyMode")
+	ctx, _, deferFn := tracing.StartTracing(ctx, "validateTransactionsLegacyMode",
+		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactionsLegacyMode),
+	)
 	defer func() {
 		deferFn(err)
 	}()
@@ -303,6 +311,7 @@ func (sm *SyncManager) validateTransactionsLegacyMode(ctx context.Context, txMap
 func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "createUtxos",
 		tracing.WithLogMessage(sm.logger, "[createUtxos] called for block %s / height %d", block.Hash(), block.Height()),
+		tracing.WithHistogram(prometheusLegacyNetsyncCreateUtxos),
 	)
 
 	defer func() {
@@ -349,6 +358,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[chainhash.Hash]*txMapWrapper, block *bsvutil.Block) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "preValidateTransactions",
 		tracing.WithLogMessage(sm.logger, "[preValidateTransactions] called for block %s / height %d", block.Hash(), block.Height()),
+		tracing.WithHistogram(prometheusLegacyNetsyncPreValidateTransactions),
 	)
 
 	defer func() {
@@ -372,6 +382,11 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 		txHash := txHash
 
 		g.Go(func() error {
+			timeStart := time.Now()
+			defer func() {
+				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
+			}()
+
 			// call the validator to validate the transaction, but skip the utxo creation
 			return sm.validationClient.Validate(gCtx, txMap[txHash].tx, uint32(block.Height()), validator.WithSkipUtxoCreation(true))
 		})
@@ -387,6 +402,7 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32, blockTxsPerLevel map[uint32][]*bt.Tx, block *bsvutil.Block) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "validateTransactions",
 		tracing.WithLogMessage(sm.logger, "[validateTransactions] called for block %s / height %d", block.Hash(), block.Height()),
+		tracing.WithHistogram(prometheusLegacyNetsyncValidateTransactions),
 	)
 
 	defer func() {
@@ -400,6 +416,8 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 	spendBatcherSize, _ := gocore.Config().GetInt("utxostore_spendBatcherSize", 1024)
 	spendBatcherConcurrency, _ := gocore.Config().GetInt("utxostore_spendBatcherConcurrency", 32)
 
+	var timeStart time.Time
+
 	// try to pre-validate the transactions through the validation, to speed up subtree validation later on.
 	// This allows us to process all the transactions in parallel. The levels indicate the number of parents in the block.
 	for i := uint32(0); i <= maxLevel; i++ {
@@ -408,7 +426,10 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 		if len(blockTxsPerLevel[i]) < 10 {
 			// if we have less than 10 transactions on a certain level, we can process them immediately by triggering the batcher
 			for txIdx := range blockTxsPerLevel[i] {
+				timeStart = time.Now()
 				_ = sm.validationClient.Validate(ctx, blockTxsPerLevel[i][txIdx], uint32(block.Height()))
+
+				prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 			}
 
 			sm.validationClient.TriggerBatcher()
@@ -421,6 +442,11 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 				txIdx := txIdx
 
 				g.Go(func() error {
+					timeStart := time.Now()
+					defer func() {
+						prometheusLegacyNetsyncBlockTxValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
+					}()
+
 					// send to validation, but only if the parent is not in the same block
 					_ = sm.validationClient.Validate(gCtx, blockTxsPerLevel[i][txIdx], uint32(block.Height()))
 
@@ -441,6 +467,7 @@ func (sm *SyncManager) validateTransactions(ctx context.Context, maxLevel uint32
 func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Block, txMap map[chainhash.Hash]*txMapWrapper) (err error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "extendTransactions",
 		tracing.WithLogMessage(sm.logger, "[extendTransactions] called for block %s / height %d", block.Hash(), block.Height()),
+		tracing.WithHistogram(prometheusLegacyNetsyncExtendTransactions),
 	)
 
 	defer func() {
@@ -646,6 +673,14 @@ func (sm *SyncManager) prepareTxsPerLevel(ctx context.Context, block *bsvutil.Bl
 }
 
 func (sm *SyncManager) extendTransaction(ctx context.Context, tx *bt.Tx, txMap map[chainhash.Hash]*txMapWrapper) error {
+	timeStart := time.Now()
+	defer func() {
+		prometheusLegacyNetsyncBlockTxSize.Observe(float64(tx.Size()))
+		prometheusLegacyNetsyncBlockTxNrInputs.Observe(float64(len(tx.Inputs)))
+		prometheusLegacyNetsyncBlockTxNrOutputs.Observe(float64(len(tx.Outputs)))
+		prometheusLegacyNetsyncBlockTxExtend.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
+	}()
+
 	previousOutputs := make([]*meta.PreviousOutput, 0, len(tx.Inputs))
 
 	txWrapper, found := txMap[*tx.TxIDChainHash()]

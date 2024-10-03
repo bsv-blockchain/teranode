@@ -2,15 +2,15 @@ package blockchain
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type ClientI interface {
-	Health(ctx context.Context) (*blockchain_api.HealthResponse, error)
+	Health(ctx context.Context) (int, string, error)
 	AddBlock(ctx context.Context, block *model.Block, peerID string) error
 	SendNotification(ctx context.Context, notification *blockchain_api.Notification) error
 	GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error)
@@ -86,12 +86,8 @@ type MockBlockchain struct {
 // --------------------------------------------
 // mockBlockchain
 // --------------------------------------------
-func (s *MockBlockchain) Health(ctx context.Context) (*blockchain_api.HealthResponse, error) {
-	return &blockchain_api.HealthResponse{
-		Ok:        true,
-		Details:   "Mock Blockchain",
-		Timestamp: timestamppb.Now(),
-	}, nil
+func (s *MockBlockchain) Health(ctx context.Context) (int, string, error) {
+	return http.StatusOK, "OK", nil
 }
 func (s *MockBlockchain) AddBlock(ctx context.Context, block *model.Block, peerID string) error {
 	s.block = block

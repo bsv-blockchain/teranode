@@ -2,6 +2,8 @@ package coinbase
 
 import (
 	"context"
+	"net/http"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/services/coinbase/coinbase_api"
@@ -56,8 +58,13 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	}, nil
 }
 
-func (c *Client) Health(ctx context.Context) (*coinbase_api.HealthResponse, error) {
-	return c.client.HealthGRPC(ctx, &emptypb.Empty{})
+func (c *Client) Health(ctx context.Context) (int, string, error) {
+	res, err := c.client.HealthGRPC(ctx, &emptypb.Empty{})
+	if !res.Ok || err != nil {
+		return http.StatusFailedDependency, res.Details, errors.UnwrapGRPC(err)
+	}
+
+	return http.StatusOK, res.Details, nil
 }
 
 // RequestFunds implements ClientI.

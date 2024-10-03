@@ -3,6 +3,7 @@ package null
 import (
 	"context"
 	"io"
+	"net/http"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -24,7 +25,7 @@ func New(logger ulogger.Logger, opts ...options.StoreOption) (*Null, error) {
 }
 
 func (n *Null) Health(_ context.Context) (int, string, error) {
-	return 0, "Null Store", nil
+	return http.StatusOK, "Null Store", nil
 }
 
 func (n *Null) Close(_ context.Context) error {

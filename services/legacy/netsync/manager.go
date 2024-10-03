@@ -202,6 +202,7 @@ func (sps *syncPeerState) validNetworkSpeed(minSyncPeerNetworkSpeed uint64) int 
 type orphanTxAndParents struct {
 	tx      *bt.Tx
 	parents map[chainhash.Hash]struct{}
+	addedAt time.Time
 }
 
 // updateNetwork updates the received bytes. Just tracks 2 ticks
@@ -396,7 +397,7 @@ func (sm *SyncManager) startSync() {
 		// not support the headers-first approach so do normal block
 		// downloads when in regression test mode.
 		if sm.nextCheckpoint != nil &&
-			int32(bestBlockHeaderMeta.Height) < sm.nextCheckpoint.Height &&
+			int32(bestBlockHeaderMeta.Height) < sm.nextCheckpoint.Height && // nolint:gosec
 			sm.chainParams != &chaincfg.RegressionNetParams {
 			err = bestPeer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
 			if err != nil {
@@ -522,7 +523,7 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
-	if sm.topBlock() == int32(bestBlockHeaderMeta.Height) {
+	if sm.topBlock() == int32(bestBlockHeaderMeta.Height) { // nolint:gosec
 		// Update the time and violations to prevent disconnects.
 		sm.syncPeerState.lastBlockTime = time.Now()
 		sm.syncPeerState.violations = 0
@@ -590,7 +591,7 @@ func (sm *SyncManager) clearRequestedState(state *peerSyncState) {
 }
 
 // updateSyncPeer picks a new peer to sync from.
-func (sm *SyncManager) updateSyncPeer(state *peerSyncState) {
+func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 	sm.logger.Infof("Updating sync peer, last block: %v, violations: %v", sm.syncPeerState.lastBlockTime, sm.syncPeerState.violations)
 
 	// Disconnect from the misbehaving peer.
@@ -610,7 +611,7 @@ func (sm *SyncManager) updateSyncPeer(state *peerSyncState) {
 	}
 
 	if sm.headersFirstMode {
-		sm.resetHeaderState(bestBlockHeader.Hash(), int32(bestBlockHeaderMeta.Height))
+		sm.resetHeaderState(bestBlockHeader.Hash(), int32(bestBlockHeaderMeta.Height)) // nolint:gosec
 	}
 
 	sm.startSync()
@@ -618,6 +619,11 @@ func (sm *SyncManager) updateSyncPeer(state *peerSyncState) {
 
 // handleTxMsg handles transaction messages from all peers.
 func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
+	ctx, _, _ := tracing.StartTracing(sm.ctx, "handleTxMsg",
+		tracing.WithHistogram(prometheusLegacyNetsyncHandleTxMsg),
+		tracing.WithDebugLogMessage(sm.logger, "handling transaction message for %s", tmsg.tx.Hash()),
+	)
+
 	peer := tmsg.peer
 
 	state, exists := sm.peerStates[peer]
@@ -653,10 +659,13 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 		sm.logger.Errorf("Failed to create transaction from bytes: %v", err)
 		return
 	}
-	// TODO what to do with transactions coming in out of order?
-	// the old node put them into the orphan mempool and accepted them when the parent came in
+
 	// TODO should we be sending these transactions to the propagation service (Kafka), instead of Validation?
-	err = sm.validationClient.Validate(sm.ctx, btTx, uint32(sm.topBlock()))
+	timeStart := time.Now()
+	// nolint:gosec
+	err = sm.validationClient.Validate(ctx, btTx, uint32(sm.topBlock()))
+
+	prometheusLegacyNetsyncHandleTxMsgValidate.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	// Remove transaction from request maps. Either the mempool/chain
 	// already knows about it and as such we shouldn't have any more
@@ -681,6 +690,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 				sm.orphanTxs.Set(*txHash, &orphanTxAndParents{
 					tx:      btTx,
 					parents: txParents,
+					addedAt: time.Now(),
 				})
 			}
 
@@ -711,7 +721,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 
 	// process any orphan transactions that were waiting for this transaction to be accepted
 	// this is a recursive call, but the orphan pool should be limited in size
-	sm.processOrphanTransactions(sm.ctx, btTx.TxIDChainHash(), &acceptedTxs)
+	sm.processOrphanTransactions(ctx, btTx.TxIDChainHash(), &acceptedTxs)
 
 	if len(acceptedTxs) > 0 {
 		sm.peerNotifier.AnnounceNewTransactions(acceptedTxs)
@@ -721,7 +731,9 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 // processOrphanTransactions recursively processes orphan transactions that were waiting for a transaction to be accepted
 func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *chainhash.Hash, acceptedTxs *[]*chainhash.Hash) {
 	// check whether any transaction in the orphan pool has this transaction as a parent
-	_, _, deferFn := tracing.StartTracing(ctx, "processOrphanTransactions")
+	ctx, _, deferFn := tracing.StartTracing(ctx, "processOrphanTransactions",
+		tracing.WithHistogram(prometheusLegacyNetsyncProcessOrphanTransactions),
+	)
 	defer deferFn()
 
 	// first we get all the orphan transactions, this will not block the orphan tx pool while processing
@@ -735,7 +747,7 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 
 		// validate the orphan transaction
 		// nolint:gosec
-		err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, uint32(sm.topBlock()))
+		err := sm.validationClient.Validate(ctx, orphanTx.tx, uint32(sm.topBlock()))
 		if err != nil {
 			if errors.Is(err, errors.ErrTxMissingParent) {
 				// silently exit, we will accept this transaction when the parent comes in
@@ -753,6 +765,9 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 
 		// remove the orphan transaction from the orphan pool
 		sm.orphanTxs.Delete(*txHash)
+
+		// add the time it took to process the orphan transaction to the histogram
+		prometheusLegacyNetsyncOrphanTime.Observe(float64(time.Since(orphanTx.addedAt).Microseconds()) / 1_000_000)
 
 		// process any orphan transactions that were waiting for this transaction to be accepted
 		sm.processOrphanTransactions(ctx, orphanTx.tx.TxIDChainHash(), acceptedTxs)
@@ -888,9 +903,10 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// the block heights over other peers who's invs may have been ignored
 	// if we are actively syncing while the chain is not yet current or
 	// who may have lost the lock announcement race.
-	var heightUpdate int32
-
-	var blkHashUpdate *chainhash.Hash
+	var (
+		heightUpdate  int32
+		blkHashUpdate *chainhash.Hash
+	)
 
 	if peer == sm.syncPeer {
 		sm.syncPeerState.lastBlockTime = time.Now()
@@ -904,6 +920,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	if err != nil {
 		return errors.NewServiceError("failed to get best block header", err)
 	}
+
 	heightUpdate = int32(bestBlockHeaderMeta.Height)
 	blkHashUpdate = bestBlockHeader.Hash()
 
@@ -1127,6 +1144,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 					"disconnecting", node.height,
 					node.hash, peer.Addr(),
 					sm.nextCheckpoint.Hash)
+
 				peer.Disconnect()
 
 				return
@@ -1490,8 +1508,7 @@ out:
 // connected peers.
 func (sm *SyncManager) handleBlockchainNotification(notification *ubsvblockchain.Notification) {
 	if notification.Type == model.NotificationType_Block {
-		// A block has been accepted into the blockchain.  Relay it to other
-		// peers.
+		// A block has been accepted into the blockchain.  Relay it to other peers.
 		// Don't relay if we are not current. Other peers that are
 		// current should already know about it.
 		if !sm.current() {
@@ -1647,8 +1664,11 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 // block, tx, and inv updates.
 func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
-	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
+	blockValidation blockvalidation.Interface,
 	config *Config) (*SyncManager, error) {
+
+	initPrometheusMetrics()
+
 	sm := SyncManager{
 		ctx:          ctx,
 		peerNotifier: config.PeerNotifier,
@@ -1668,13 +1688,12 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 		minSyncPeerNetworkSpeed: config.MinSyncPeerNetworkSpeed,
 
 		// ubsv stores etc.
-		logger:            logger,
-		blockchainClient:  blockchainClient,
-		validationClient:  validationClient,
-		utxoStore:         utxoStore,
-		subtreeStore:      subtreeStore,
-		subtreeValidation: subtreeValidation,
-		blockValidation:   blockValidation,
+		logger:           logger,
+		blockchainClient: blockchainClient,
+		validationClient: validationClient,
+		utxoStore:        utxoStore,
+		subtreeStore:     subtreeStore,
+		blockValidation:  blockValidation,
 	}
 
 	// set an eviction function for orphan transactions
@@ -1690,6 +1709,23 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 
 		return true
 	})
+
+	// add the number of orphan transactions to the prometheus metric
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+
+		for {
+			select {
+			case <-sm.quit:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// update the number of orphan transactions
+				prometheusLegacyNetsyncOrphans.Set(float64(sm.orphanTxs.Len()))
+			}
+		}
+	}()
 
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {

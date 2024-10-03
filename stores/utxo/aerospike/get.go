@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
 	"github.com/libsv/go-bt/v2"
@@ -238,7 +239,7 @@ func (s *Store) addAbstractedBins(bins []string) []string {
 	return bins
 }
 
-func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, fields ...string) error {
+func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, fields ...string) error {
 	var err error
 
 	batchPolicy := util.GetAerospikeBatchPolicy()
@@ -293,7 +294,7 @@ func (s *Store) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaDat
 
 			external, ok := bins["external"].(bool)
 			if ok && external {
-				if externalTx, err = s.getTxFromExternalStore(items[idx].Hash); err != nil {
+				if externalTx, err = s.getTxFromExternalStore(ctx, items[idx].Hash); err != nil {
 					items[idx].Err = err
 
 					continue
@@ -399,6 +400,7 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, outpoints []*meta.Pre
 }
 
 func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
+	ctx := context.Background()
 	start := gocore.CurrentTime()
 	defer func() {
 		previousOutputsDecorateStat.AddTimeForRange(start, len(batch))
@@ -475,7 +477,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		external, ok := bins["external"].(bool)
 		if ok && external {
-			if previousTx, err = s.getTxFromExternalStore(previousTxHash); err != nil {
+			if previousTx, err = s.getTxFromExternalStore(ctx, previousTxHash); err != nil {
 				txErrors[previousTxHash] = err
 
 				continue
@@ -523,7 +525,11 @@ func sendErrorAndClose(errCh chan error, err error) {
 	close(errCh)
 }
 
-func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, error) {
+func (s *Store) getTxFromExternalStore(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
+	ctx, _, _ = tracing.StartTracing(ctx, "getTxFromExternalStore",
+		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
+	)
+
 	// Check the cache first
 	if tx, ok := externalTxCache.Get(previousTxHash); ok {
 		return tx, nil
@@ -533,7 +539,7 @@ func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, e
 
 	// Get the raw transaction from the externalStore...
 	reader, err := s.externalStore.GetIoReader(
-		context.TODO(),
+		ctx,
 		previousTxHash[:],
 		options.WithFileExtension(ext),
 	)
@@ -542,7 +548,7 @@ func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, e
 		ext = "outputs"
 
 		reader, err = s.externalStore.GetIoReader(
-			context.TODO(),
+			ctx,
 			previousTxHash[:],
 			options.WithFileExtension(ext),
 		)
@@ -558,9 +564,7 @@ func (s *Store) getTxFromExternalStore(previousTxHash chainhash.Hash) (*bt.Tx, e
 			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read tx from reader: %w", previousTxHash.String(), err)
 		}
 	} else {
-		var uw *utxopersister.UTXOWrapper
-
-		uw, err := utxopersister.NewUTXOWrapperFromReader(context.Background(), reader)
+		uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, reader)
 		if err != nil {
 			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read outputs from reader: %w", previousTxHash.String(), err)
 		}

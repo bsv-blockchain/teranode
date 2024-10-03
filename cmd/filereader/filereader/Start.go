@@ -2,7 +2,6 @@ package filereader
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/binary"
 	"flag"
@@ -186,7 +185,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 		}
 
 		if filename != stdin {
-			if err := printFooter(r, "utxo"); err != nil {
+			if err := utxopersister.PrintFooter(r, "utxo"); err != nil {
 				return errors.NewProcessingError(errCouldNotReadFooter, err)
 			}
 		}
@@ -232,7 +231,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 		}
 
 		if filename != stdin {
-			if err := printFooter(r, "utxo"); err != nil {
+			if err := utxopersister.PrintFooter(r, "utxo"); err != nil {
 				return errors.NewProcessingError(errCouldNotReadFooter, err)
 			}
 		}
@@ -289,7 +288,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 		}
 
 		if filename != stdin {
-			if err := printFooter(r, "tx"); err != nil {
+			if err := utxopersister.PrintFooter(r, "tx"); err != nil {
 				return errors.NewProcessingError(errCouldNotReadFooter, err)
 			}
 		}
@@ -336,7 +335,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 		}
 
 		if filename != stdin {
-			if err := printFooter(r, "utxo"); err != nil {
+			if err := utxopersister.PrintFooter(r, "utxo"); err != nil {
 				return errors.NewProcessingError(errCouldNotReadFooter, err)
 			}
 		}
@@ -540,53 +539,4 @@ func getBlockStore(logger ulogger.Logger) blob.Store {
 	}
 
 	return blockStore
-}
-
-func printFooter(r io.Reader, label string) error {
-	f, ok := r.(*os.File)
-	if !ok {
-		fmt.Printf("seek is not supported\n")
-		return nil
-	}
-
-	// The end of the file should have the EOF marker at the end (32 bytes)
-	// and the txCount uint64 and the utxoCount uint64 (each 8 bytes)
-	_, err := f.Seek(-48, io.SeekEnd)
-	if err != nil {
-		return errors.NewProcessingError("error seeking to EOF marker", err)
-	}
-
-	b := make([]byte, 48)
-	if _, err := io.ReadFull(f, b); err != nil {
-		return errors.NewProcessingError("error reading EOF marker", err)
-	}
-
-	if !bytes.Equal(b[0:32], utxopersister.EOFMarker) {
-		return errors.NewProcessingError("EOF marker not found")
-	}
-
-	fmt.Printf("EOF marker found\n")
-
-	txCount := binary.LittleEndian.Uint64(b[32:40])
-	utxoCount := binary.LittleEndian.Uint64(b[40:48])
-
-	fmt.Printf("record count: %16s\n", formatNumber(txCount))
-	fmt.Printf("%s count:   %16s\n", label, formatNumber(utxoCount))
-
-	return nil
-}
-
-func formatNumber(n uint64) string {
-	in := fmt.Sprintf("%d", n)
-	out := make([]string, 0, len(in)+(len(in)-1)/3)
-
-	for i, c := range in {
-		if i > 0 && (len(in)-i)%3 == 0 {
-			out = append(out, ",")
-		}
-
-		out = append(out, string(c))
-	}
-
-	return strings.Join(out, "")
 }

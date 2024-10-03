@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -157,8 +158,13 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address st
 	return c, nil
 }
 
-func (c *Client) Health(ctx context.Context) (*blockchain_api.HealthResponse, error) {
-	return c.client.HealthGRPC(ctx, &emptypb.Empty{})
+func (c *Client) Health(ctx context.Context) (int, string, error) {
+	resp, err := c.client.HealthGRPC(ctx, &emptypb.Empty{})
+	if !resp.Ok || err != nil {
+		return http.StatusFailedDependency, resp.Details, errors.UnwrapGRPC(err)
+	}
+
+	return http.StatusOK, resp.Details, nil
 }
 
 func (c *Client) AddBlock(ctx context.Context, block *model.Block, peerID string) error {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"runtime"
 	"slices"
 	"strconv"
@@ -25,6 +24,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -33,6 +33,7 @@ import (
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type processBlockFound struct {
@@ -49,16 +50,17 @@ type processBlockCatchup struct {
 // Server type carries the logger within it
 type Server struct {
 	blockvalidation_api.UnimplementedBlockValidationAPIServer
-	logger           ulogger.Logger
-	blockchainClient blockchain.ClientI
-	subtreeStore     blob.Store
-	txStore          blob.Store
-	utxoStore        utxo.Store
-	validatorClient  validator.Interface
-	blockFoundCh     chan processBlockFound
-	catchupCh        chan processBlockCatchup
-	blockValidation  *BlockValidation
-	SetTxMetaQ       *util.LockFreeQ[[][]byte]
+	logger              ulogger.Logger
+	blockchainClient    blockchain.ClientI
+	subtreeStore        blob.Store
+	txStore             blob.Store
+	utxoStore           utxo.Store
+	validatorClient     validator.Interface
+	blockFoundCh        chan processBlockFound
+	catchupCh           chan processBlockCatchup
+	blockValidation     *BlockValidation
+	SetTxMetaQ          *util.LockFreeQ[[][]byte]
+	kafkaConsumerClient *util.KafkaConsumerClient
 
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
@@ -99,8 +101,34 @@ func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
 	return bVal
 }
 
-func (u *Server) Health(_ context.Context) (int, string, error) {
-	return 0, "", nil
+func (u *Server) Health(ctx context.Context) (int, string, error) {
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: u.blockchainClient.Health},
+		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
+		{Name: "TxStore", Check: u.txStore.Health},
+		{Name: "UTXOStore", Check: u.utxoStore.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
+		{Name: "BlockKafkaConsumer", Check: u.kafkaConsumerClient.CheckKafkaHealth},
+	}
+
+	return health.CheckAll(ctx, checks)
+}
+
+func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+		tracing.WithParentStat(u.stats),
+		tracing.WithCounter(prometheusBlockValidationHealth),
+		tracing.WithLogMessage(u.logger, "[HealthGRPC] called"),
+	)
+	defer deferFn()
+
+	status, details, err := u.Health(ctx)
+
+	return &blockvalidation_api.HealthResponse{
+		Ok:        status == http.StatusOK,
+		Details:   details,
+		Timestamp: timestamppb.Now(),
+	}, errors.WrapGRPC(err)
 }
 
 func (u *Server) Init(ctx context.Context) (err error) {
@@ -235,48 +263,55 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 		// By using the fixed "blockvalidation" group ID, we ensure that only one instance of this service will process the block messages.
 		u.logger.Infof("Starting %d Kafka consumers for block messages", consumerCount)
-		// Autocommit is disabled for block messages, so that we can commit the message only after the subtree has been processed.
-		go u.startKafkaListener(ctx, blocksKafkaURL, "blockvalidation", consumerCount, false, func(msg util.KafkaMessage) error {
-			errCh := make(chan error, 1)
-			go func() {
-				errCh <- u.blockHandler(msg)
-			}()
 
-			select {
-			// error handling
-			case err := <-errCh:
-				// if err is nil, it means function is successfully executed, return nil.
-				if err == nil {
-					return nil
-				}
-
-				// if error is not nil, check if the error is a recoverable error.
-				// If the error is a recoverable error, then return the error, so that it kafka message is not marked as committed.
-				// So the message will be consumed again.
-				if errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContextCanceled) || errors.Is(err, errors.ErrExternal) {
-					u.logger.Errorf("Recoverable error (%v) processing kafka message %v for handling block, returning error, thus not marking Kafka message as complete.\n", msg, err)
-					return err
-				}
-
-				// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
-				// kafka message should be committed, so return nil to mark message.
-				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling block, marking Kafka message as completed.\n", msg, err)
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-
+		client, err := util.NewKafkaGroupListener(ctx, util.KafkaListenerConfig{
+			Logger:            u.logger,
+			URL:               blocksKafkaURL,
+			GroupID:           "blockvalidation",
+			ConsumerCount:     consumerCount,
+			AutoCommitEnabled: false,
+			ConsumerFn:        u.consumerMessageHandler(ctx),
 		})
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", blocksKafkaURL.String(), err)
+		}
+
+		u.kafkaConsumerClient = client
 	}
 
 	return nil
 }
 
-func (u *Server) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int, autoCommit bool, fn func(msg util.KafkaMessage) error) {
-	u.logger.Infof("starting Kafka on address: %s", kafkaURL.String())
+func (u *Server) consumerMessageHandler(ctx context.Context) func(msg util.KafkaMessage) error {
+	return func(msg util.KafkaMessage) error {
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- u.blockHandler(msg)
+		}()
 
-	if err := util.StartKafkaGroupListener(ctx, u.logger, kafkaURL, groupID, nil, consumerCount, autoCommit, fn); err != nil {
-		u.logger.Errorf("Failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
+		select {
+		// error handling
+		case err := <-errCh:
+			// if err is nil, it means function is successfully executed, return nil.
+			if err == nil {
+				return nil
+			}
+
+			// if error is not nil, check if the error is a recoverable error.
+			// If the error is a recoverable error, then return the error, so that it kafka message is not marked as committed.
+			// So the message will be consumed again.
+			if errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContextCanceled) || errors.Is(err, errors.ErrExternal) {
+				u.logger.Errorf("Recoverable error (%v) processing kafka message %v for handling block, returning error, thus not marking Kafka message as complete.\n", msg, err)
+				return err
+			}
+
+			// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
+			// kafka message should be committed, so return nil to mark message.
+			u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling block, marking Kafka message as completed.\n", msg, err)
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
@@ -387,6 +422,9 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 // Start function
 func (u *Server) Start(ctx context.Context) error {
 
+	// start blocks kafka consumer
+	go u.kafkaConsumerClient.Start(ctx)
+
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
 	// TODO: think if we can automate transition to RUN state after restore is complete.
@@ -495,20 +533,6 @@ func (u *Server) Stop(_ context.Context) error {
 	u.processSubtreeNotify.Stop()
 
 	return nil
-}
-
-func (u *Server) HealthGRPC(_ context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.HealthResponse, error) {
-	start, stat, _ := tracing.NewStatFromContext(context.Background(), "Health", u.stats)
-	defer func() {
-		stat.AddTime(start)
-	}()
-
-	prometheusBlockValidationHealth.Inc()
-
-	return &blockvalidation_api.HealthResponse{
-		Ok:        true,
-		Timestamp: uint32(time.Now().Unix()),
-	}, nil
 }
 
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {

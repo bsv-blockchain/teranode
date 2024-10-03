@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // DumbPropagationServer type carries the logger within it
@@ -73,7 +74,7 @@ func (ps *DumbPropagationServer) HealthGRPC(_ context.Context, _ *propagation_ap
 
 	return &propagation_api.HealthResponse{
 		Ok:        true,
-		Timestamp: time.Now().Unix(),
+		Timestamp: timestamppb.Now(),
 	}, nil
 }
 

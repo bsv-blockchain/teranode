@@ -2,6 +2,7 @@ package blockvalidation
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -48,13 +49,13 @@ func NewClient(ctx context.Context, logger ulogger.Logger, source string) (*Clie
 	return client, nil
 }
 
-func (s *Client) Health(ctx context.Context) (bool, error) {
-	_, err := s.apiClient.HealthGRPC(ctx, &blockvalidation_api.EmptyMessage{})
-	if err != nil {
-		return false, err
+func (s *Client) Health(ctx context.Context) (int, string, error) {
+	resp, err := s.apiClient.HealthGRPC(ctx, &blockvalidation_api.EmptyMessage{})
+	if !resp.Ok || err != nil {
+		return http.StatusFailedDependency, resp.Details, errors.UnwrapGRPC(err)
 	}
 
-	return true, nil
+	return http.StatusOK, resp.Details, nil
 }
 
 func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseUrl string, waitToComplete bool) error {

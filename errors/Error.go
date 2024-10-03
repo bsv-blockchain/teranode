@@ -18,10 +18,22 @@ type ErrData interface {
 }
 
 type Error struct {
-	Code       ERR
-	Message    string
-	WrappedErr error
-	Data       ErrData
+	code       ERR
+	message    string
+	wrappedErr error
+	data       ErrData
+}
+
+type Interface interface {
+	Error() string
+	Is(target error) bool
+	As(target interface{}) bool
+	Unwrap() error
+
+	Code() ERR
+	Message() string
+	WrappedErr() error
+	Data() ErrData
 }
 
 func (e *Error) Error() string {
@@ -31,23 +43,22 @@ func (e *Error) Error() string {
 	}
 
 	dataMsg := ""
-	if e.Data != nil {
-		dataMsg = e.Data.Error() // Call Error() on the ErrorData
+	if e.Data() != nil {
+		dataMsg = e.data.Error() // Call Error() on the ErrorData
 	}
 
-	if e.WrappedErr == nil {
+	if e.WrappedErr() == nil {
 		if dataMsg == "" {
-			return fmt.Sprintf("Error: %s, (error code: %d), Message: %v", e.Code.Enum(), e.Code, e.Message)
+			return fmt.Sprintf("Error: %s, (error code: %d), Message: %v", e.code.Enum(), e.code, e.message)
 		}
-
-		return fmt.Sprintf("%d: %v, data: %s", e.Code, e.Message, dataMsg)
+		return fmt.Sprintf("%d: %v, data: %s", e.code, e.message, dataMsg)
 	}
 
 	if dataMsg == "" {
-		return fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v", e.Code.Enum(), e.Code, e.Message, e.WrappedErr)
+		return fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v", e.code.Enum(), e.code, e.message, e.wrappedErr)
 	}
 
-	return fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v, Data: %s", e.Code.Enum(), e.Code, e.Message, e.WrappedErr, dataMsg)
+	return fmt.Sprintf("Error: %s (error code: %d), Message: %v, Wrapped err: %v, Data: %s", e.code.Enum(), e.code, e.message, e.wrappedErr, dataMsg)
 }
 
 // Is reports whether error codes match.
@@ -62,11 +73,11 @@ func (e *Error) Is(target error) bool {
 		return strings.Contains(e.Error(), target.Error())
 	}
 
-	if e.Code == targetError.Code {
+	if e.code == targetError.code {
 		return true
 	}
 
-	if e.WrappedErr == nil {
+	if e.wrappedErr == nil {
 		return false
 	}
 
@@ -93,20 +104,19 @@ func (e *Error) As(target interface{}) bool {
 	}
 
 	// check if Data matches the target type
-	if e.Data != nil {
-		if data, ok := e.Data.(error); ok {
+	if e.data != nil {
+		if data, ok := e.data.(error); ok {
 			return errors.As(data, target)
 		}
 	}
 
 	// Recursively check the wrapped error if there is one
-	if e.WrappedErr != nil {
+	if e.wrappedErr != nil {
 		// use reflect to see if the value is nil. If it is, return false
-		if reflect.ValueOf(e.WrappedErr).IsNil() {
+		if reflect.ValueOf(e.wrappedErr).IsNil() {
 			return false
 		}
-
-		return errors.As(e.WrappedErr, target)
+		return errors.As(e.wrappedErr, target)
 	}
 
 	// Also check any further unwrapped errors
@@ -121,8 +131,35 @@ func (e *Error) Unwrap() error {
 	if e == nil {
 		return nil
 	}
+	return e.wrappedErr
+}
 
-	return e.WrappedErr
+func (e *Error) Code() ERR {
+	if e == nil {
+		return ERR_UNKNOWN
+	}
+	return e.code
+}
+
+func (e *Error) Message() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
+func (e *Error) WrappedErr() error {
+	if e == nil {
+		return nil
+	}
+	return e.wrappedErr
+}
+
+func (e *Error) Data() ErrData {
+	if e == nil {
+		return nil
+	}
+	return e.data
 }
 
 func New(code ERR, message string, params ...interface{}) *Error {
@@ -136,7 +173,7 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			wErr = err
 			params = params[:len(params)-1]
 		} else if err, ok := lastParam.(error); ok {
-			wErr = &Error{Message: err.Error()}
+			wErr = &Error{message: err.Error()}
 			params = params[:len(params)-1]
 		}
 	}
@@ -151,22 +188,23 @@ func New(code ERR, message string, params ...interface{}) *Error {
 	// Check if the code exists in the ErrorConstants enum
 	if _, ok := ERR_name[int32(code)]; !ok {
 		returnErr := &Error{
-			Code:    code,
-			Message: "invalid error code",
+			code:    code,
+			message: "invalid error code",
 		}
 		if wErr != nil {
-			returnErr.WrappedErr = wErr
+			returnErr.wrappedErr = wErr
 		}
 
 		return returnErr
 	}
 
 	returnErr := &Error{
-		Code:    code,
-		Message: message,
+		code:    code,
+		message: message,
+		//WrappedErr: wErr,
 	}
 	if wErr != nil {
-		returnErr.WrappedErr = wErr
+		returnErr.wrappedErr = wErr
 	}
 
 	return returnErr
@@ -183,8 +221,8 @@ func WrapGRPC(err error) error {
 	// If the error is an "*Error", get all wrapped errors, and wrap with gRPC details
 	if castedErr, ok := err.(*Error); ok {
 		// check if the error is already wrapped, don't wrap it with gRPC details
-		if castedErr.WrappedErr != nil {
-			if _, ok := status.FromError(castedErr.WrappedErr); ok {
+		if castedErr.wrappedErr != nil {
+			if _, ok := status.FromError(castedErr.wrappedErr); ok {
 				return err // Already wrapped, skip further wrapping
 			}
 		}
@@ -192,33 +230,33 @@ func WrapGRPC(err error) error {
 		var wrappedErrDetails []protoadapt.MessageV1
 		// If the error is already an *Error, wrap it with gRPC details
 		details, pbError := anypb.New(&TError{
-			Code:    castedErr.Code,
-			Message: castedErr.Message,
+			Code:    castedErr.code,
+			Message: castedErr.message,
 		})
 		if pbError != nil {
 			err2 := &Error{
 				// TODO: add grpc construction error type
-				Code:       ERR_ERROR,
-				Message:    "error serializing TError to protobuf Any",
-				WrappedErr: err,
+				code:       ERR_ERROR,
+				message:    "error serializing TError to protobuf Any",
+				wrappedErr: err,
 			}
 
 			return err2
 		}
 
 		wrappedErrDetails = append(wrappedErrDetails, details)
-		if castedErr.WrappedErr != nil {
-			currWrappedErr := castedErr.WrappedErr
+		if castedErr.wrappedErr != nil {
+			currWrappedErr := castedErr.wrappedErr
 			for currWrappedErr != nil {
 				if err, ok := currWrappedErr.(*Error); ok {
 
 					details, _ := anypb.New(&TError{
-						Code:    err.Code,
-						Message: err.Message,
+						Code:    err.code,
+						Message: err.message,
 					})
 
 					wrappedErrDetails = append(wrappedErrDetails, details)
-					currWrappedErr = err.WrappedErr
+					currWrappedErr = err.wrappedErr
 				} else {
 					details, _ := anypb.New(&TError{
 						Code:    ERR_ERROR,
@@ -233,15 +271,15 @@ func WrapGRPC(err error) error {
 		//	fmt.Println("Details for the error is: ", wrappedErrDetails[i])
 		// }
 
-		st := status.New(ErrorCodeToGRPCCode(castedErr.Code), castedErr.Message)
+		st := status.New(ErrorCodeToGRPCCode(castedErr.code), castedErr.message)
 		st, detailsErr := st.WithDetails(wrappedErrDetails...)
 
 		if detailsErr != nil {
 			err2 := &Error{
 				// TODO: add grpc construction error type
-				Code:       ERR_ERROR,
-				Message:    "error adding details to the error's gRPC status",
-				WrappedErr: err,
+				code:       ERR_ERROR,
+				message:    "error adding details to the error's gRPC status",
+				wrappedErr: err,
 			}
 
 			return err2
@@ -250,7 +288,7 @@ func WrapGRPC(err error) error {
 		return st.Err()
 	}
 
-	st := status.New(ErrorCodeToGRPCCode(ErrUnknown.Code), ErrUnknown.Message)
+	st := status.New(ErrorCodeToGRPCCode(ErrUnknown.code), ErrUnknown.message)
 	details, _ := anypb.New(&TError{
 		Code:    ERR_ERROR,
 		Message: err.Error(),
@@ -261,38 +299,73 @@ func WrapGRPC(err error) error {
 		// the following should not be used.
 		return &Error{
 			// TODO: add grpc construction error type
-			Code:       ERR_ERROR,
-			Message:    "error adding details to the error's gRPC status",
-			WrappedErr: err,
+			code:       ERR_ERROR,
+			message:    "error adding details to the error's gRPC status",
+			wrappedErr: err,
 		}
 	}
 
 	return &Error{
-		Code:       ERR_ERROR,
-		Message:    err.Error(),
-		WrappedErr: st.Err(),
+		code:       ERR_ERROR,
+		message:    err.Error(),
+		wrappedErr: st.Err(),
 	}
 }
 
-func UnwrapGRPC(err error) *Error {
+func UnwrapGRPC(err error) Interface {
 	if err == nil {
 		return nil
 	}
 
+	// if castedErr, ok := err.(*Error); ok {
+	// 	st, ok := status.FromError(castedErr.wrappedErr)
+	// 	if !ok {
+	// 		return castedErr // Not a gRPC status error
+	// 	}
+
+	// 	var prevErr, currErr *Error
+	// 	// var toBeWrappedErr *Error
+
+	// 	for i := len(st.Details()) - 1; i >= 0; i-- {
+	// 		// Cast the protoadapt.MessageV1 to *anypb.Any, which is what we need to unmarshal
+	// 		detail := st.Details()[i]
+	// 		detailAny, ok := detail.(*anypb.Any)
+
+	// 		if !ok {
+	// 			fmt.Println("This should not happen, detail is not of type anypb.Any")
+	// 			continue // If the detail isn't of the expected type, skip it
+	// 		}
+
+	// 		var customDetails TError
+	// 		if err := anypb.UnmarshalTo(detailAny, &customDetails, proto.UnmarshalOptions{}); err == nil {
+	// 			currErr = New(customDetails.Code, customDetails.Message)
+
+	// 			// if we moved up higher in the hierarchy
+	// 			if prevErr != nil {
+	// 				currErr.wrappedErr = prevErr
+	// 			}
+
+	// 			prevErr = currErr
+	// 		}
+	// 	}
+
+	// 	return currErr
+	// }
+	// If the error is not an "*Error", but "error", unwrap details
 	st, ok := status.FromError(err)
 	if !ok {
 		// return err // Not a gRPC status error
 		return &Error{
-			Code:       ERR_ERROR,
-			Message:    "error unwrapping gRPC details",
-			WrappedErr: err,
+			code:       ERR_ERROR,
+			message:    "error unwrapping gRPC details",
+			wrappedErr: err,
 		}
 	}
 
 	if len(st.Details()) == 0 {
 		return &Error{
-			Code:    ERR_ERROR,
-			Message: err.Error(),
+			code:    ERR_ERROR,
+			message: err.Error(),
 		}
 	}
 
@@ -314,7 +387,7 @@ func UnwrapGRPC(err error) *Error {
 
 			// if we moved up higher in the hierarchy
 			if prevErr != nil {
-				currErr.WrappedErr = prevErr
+				currErr.wrappedErr = prevErr
 			}
 
 			prevErr = currErr

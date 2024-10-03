@@ -5,8 +5,10 @@ import (
 	"context"
 	"io"
 	"io/fs"
+	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -364,11 +366,134 @@ func TestFileNameForPersist(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "data/subtreestore/sub/79/79656b", filename)
 
-	filename, err = store.getFileNameForSet([]byte("key"))
+	var opts []options.FileOption
+
+	filename, err = store.getFilenameForSet([]byte("key"), opts)
 	require.NoError(t, err)
 	assert.Equal(t, "data/persist/sub/79/79656b", filename)
 
-	filename, err = store.getFileNameForSet([]byte("key"), options.WithTTL(2*time.Second))
+	opts = append(opts, options.WithTTL(2*time.Second))
+
+	filename, err = store.getFilenameForSet([]byte("key"), opts)
 	require.NoError(t, err)
 	assert.Equal(t, "data/sub/79/79656b", filename)
+}
+
+func TestHealth(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "lustre_health_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	persistDir := "persist"
+
+	t.Run("Healthy state", func(t *testing.T) {
+		s3Client := NewHealthyS3StoreMock()
+		store, err := NewLustreStore(ulogger.TestLogger{}, s3Client, tempDir, persistDir)
+		require.NoError(t, err)
+
+		status, message, err := store.Health(context.Background())
+		assert.Equal(t, http.StatusOK, status)
+		assert.Equal(t, "Lustre blob Store healthy", message)
+		assert.NoError(t, err)
+	})
+
+	t.Run("Main path issue", func(t *testing.T) {
+		s3Client := NewHealthyS3StoreMock()
+		store, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "./nonexistent", persistDir)
+		require.NoError(t, err)
+
+		// creating a new LustreStore will create the ./nonexistent folder
+		// so we need to delete it before we can test
+		err = os.RemoveAll("./nonexistent")
+		require.NoError(t, err)
+
+		status, message, err := store.Health(context.Background())
+		assert.Equal(t, http.StatusServiceUnavailable, status)
+		assert.Contains(t, message, "Main path issue")
+		assert.NoError(t, err)
+	})
+
+	t.Run("Persist subdirectory issue", func(t *testing.T) {
+		s3Client := NewHealthyS3StoreMock()
+		store, err := NewLustreStore(ulogger.TestLogger{}, s3Client, tempDir, "./nonexistentpersist")
+		require.NoError(t, err)
+
+		// creating a new LustreStore will create the ./nonexistent folder
+		// so we need to delete it before we can test
+		err = os.RemoveAll(filepath.Join(tempDir, "nonexistentpersist"))
+		require.NoError(t, err)
+
+		status, message, err := store.Health(context.Background())
+		assert.Equal(t, http.StatusServiceUnavailable, status)
+		assert.Contains(t, message, "Persist subdirectory issue")
+		assert.NoError(t, err)
+	})
+
+	t.Run("S3 client issue", func(t *testing.T) {
+		s3Client := NewUnhealthyS3StoreMock()
+		store, err := NewLustreStore(ulogger.TestLogger{}, s3Client, tempDir, persistDir)
+		require.NoError(t, err)
+
+		status, message, err := store.Health(context.Background())
+		assert.Equal(t, http.StatusServiceUnavailable, status)
+		assert.Contains(t, message, "S3 client issue")
+		assert.NoError(t, err)
+	})
+
+	t.Run("Multiple issues", func(t *testing.T) {
+		s3Client := NewUnhealthyS3StoreMock()
+		store, err := NewLustreStore(ulogger.TestLogger{}, s3Client, "./nonexistent", "./nonexistentpersist")
+		require.NoError(t, err)
+
+		// creating a new LustreStore will create the ./nonexistent folder
+		// so we need to delete it before we can test
+		err = os.RemoveAll("./nonexistent")
+		require.NoError(t, err)
+		err = os.RemoveAll(filepath.Join(tempDir, "nonexistentpersist"))
+		require.NoError(t, err)
+
+		status, message, err := store.Health(context.Background())
+		assert.Equal(t, http.StatusServiceUnavailable, status)
+		assert.Contains(t, message, "Main path issue")
+		assert.Contains(t, message, "Persist subdirectory issue")
+		assert.Contains(t, message, "S3 client issue")
+		assert.NoError(t, err)
+	})
+}
+
+// Mock S3 stores for testing
+type HealthyS3StoreMock struct{}
+
+func NewHealthyS3StoreMock() *HealthyS3StoreMock {
+	return &HealthyS3StoreMock{}
+}
+
+func (s *HealthyS3StoreMock) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	return nil, nil
+}
+
+func (s *HealthyS3StoreMock) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+	return nil, nil
+}
+
+func (s *HealthyS3StoreMock) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
+	return false, nil
+}
+
+type UnhealthyS3StoreMock struct{}
+
+func NewUnhealthyS3StoreMock() *UnhealthyS3StoreMock {
+	return &UnhealthyS3StoreMock{}
+}
+
+func (s *UnhealthyS3StoreMock) Get(ctx context.Context, key []byte, opts ...options.FileOption) ([]byte, error) {
+	return nil, nil
+}
+
+func (s *UnhealthyS3StoreMock) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
+	return nil, nil
+}
+
+func (s *UnhealthyS3StoreMock) Exists(ctx context.Context, key []byte, opts ...options.FileOption) (bool, error) {
+	return false, assert.AnError
 }

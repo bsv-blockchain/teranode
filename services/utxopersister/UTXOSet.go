@@ -110,6 +110,15 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, bl
 }
 
 func GetUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
+	return &UTXOSet{
+		ctx:       ctx,
+		logger:    logger,
+		blockHash: *blockHash,
+		store:     store,
+	}, nil
+}
+
+func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
 	us := &UTXOSet{
 		ctx:       ctx,
 		logger:    logger,
@@ -125,6 +134,15 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, bl
 
 	if exists {
 		return nil, nil
+	}
+
+	return us, nil
+}
+
+func GetUTXOSetWithDeletionsMap(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
+	us, err := GetUTXOSetWithExistCheck(ctx, logger, store, blockHash)
+	if err != nil {
+		return nil, err
 	}
 
 	deletionsMap, err := us.GetUTXODeletionsMap(ctx)
@@ -369,8 +387,8 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 	return r, nil
 }
 
-func (us *UTXOSet) GetUTXODeletionsReader() (io.ReadCloser, error) {
-	r, err := us.store.GetIoReader(us.ctx, us.blockHash[:], options.WithFileExtension(deletionsExtension), options.WithTTL(0))
+func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, error) {
+	r, err := us.store.GetIoReader(ctx, us.blockHash[:], options.WithFileExtension(deletionsExtension), options.WithTTL(0))
 	if err != nil {
 		return nil, errors.NewStorageError("error getting utxo-deletions reader", err)
 	}
@@ -445,7 +463,7 @@ func (us *UTXOSet) GetUTXODeletionsMap(ctx context.Context) (map[[32]byte][]uint
 	)
 	defer deferFn()
 
-	r, err := us.GetUTXODeletionsReader()
+	r, err := us.GetUTXODeletionsReader(ctx)
 	if err != nil {
 		return nil, errors.NewStorageError("error getting reader for %s.%s", us.blockHash, deletionsExtension, err)
 	}
@@ -651,10 +669,10 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, previousBlockHash *chainha
 	return nil
 }
 
-func (us *UTXOSet) GetUTXOSetReader(optionalBlockHash ...chainhash.Hash) (io.ReadCloser, error) {
+func (us *UTXOSet) GetUTXOSetReader(optionalBlockHash ...*chainhash.Hash) (io.ReadCloser, error) {
 	blockHash := us.blockHash
 	if len(optionalBlockHash) > 0 {
-		blockHash = optionalBlockHash[0]
+		blockHash = *optionalBlockHash[0]
 	}
 
 	return us.store.GetIoReader(us.ctx, blockHash[:], options.WithFileExtension(utxosetExtension))

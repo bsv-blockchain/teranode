@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"sync/atomic"
@@ -76,6 +77,7 @@ func New(ctx context.Context, logger ulogger.Logger, storeUrl *url.URL) (*Store,
 		if err != nil {
 			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
 		}
+
 		s.expirationMillis = expiration64 * 1000
 
 		// // Create a goroutine to remove transactions that are marked with a tombstone time
@@ -128,11 +130,13 @@ func (s *Store) Health(ctx context.Context) (int, string, error) {
 	details := fmt.Sprintf("SQL Engine is %s", s.engine)
 
 	var num int
+
 	err := s.db.QueryRowContext(ctx, "SELECT 1").Scan(&num)
 	if err != nil {
-		return -1, details, err
+		return http.StatusServiceUnavailable, details, err
 	}
-	return 0, details, nil
+
+	return http.StatusOK, details, nil
 }
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {

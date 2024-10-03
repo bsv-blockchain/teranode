@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -44,7 +45,15 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, 
 }
 
 func (v *Server) Health(ctx context.Context) (int, string, error) {
-	return 0, "", nil
+	checks := []health.Check{
+		{Name: "UTXOStore", Check: v.utxoStore.Health},
+		{Name: "TxStore", Check: v.txStore.Health},
+		{Name: "BlockPersisterStore", Check: v.blockPersisterStore.Health},
+		{Name: "BlockchainClient", Check: v.blockchainClient.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(v.blockchainClient)},
+	}
+
+	return health.CheckAll(ctx, checks)
 }
 
 func (v *Server) Init(ctx context.Context) (err error) {

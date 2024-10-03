@@ -10,14 +10,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/pem"
-	"fmt"
 	"io"
 	"log"
 	"math/big"
 	"net"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -30,16 +28,18 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/health"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	http3 "github.com/quic-go/quic-go/http3"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var (
-	propagationStat = gocore.NewStat("propagation")
 
 	// ipv6 multicast constants
 	maxDatagramSize = 512 // 100 * 1024 * 1024
@@ -48,13 +48,13 @@ var (
 
 // PropagationServer type carries the logger within it
 type PropagationServer struct {
-	status atomic.Uint32
 	propagation_api.UnsafePropagationAPIServer
-	logger             ulogger.Logger
-	txStore            blob.Store
-	validator          validator.Interface
-	validatorKafkaChan chan []byte
-	blockchainClient   blockchain.ClientI
+	logger                       ulogger.Logger
+	stats                        *gocore.Stat
+	txStore                      blob.Store
+	validator                    validator.Interface
+	blockchainClient             blockchain.ClientI
+	validatorKafkaProducerClient *util.KafkaProducerClient
 }
 
 // New will return a server instance with the logger stored within it
@@ -63,6 +63,7 @@ func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.In
 
 	return &PropagationServer{
 		logger:           logger,
+		stats:            gocore.NewStat("propagation"),
 		txStore:          txStore,
 		validator:        validatorClient,
 		blockchainClient: blockchainClient,
@@ -70,11 +71,35 @@ func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.In
 }
 
 func (ps *PropagationServer) Health(ctx context.Context) (int, string, error) {
-	return 0, "", nil
+	checks := []health.Check{
+		{Name: "BlockchainClient", Check: ps.blockchainClient.Health},
+		{Name: "ValidatorClient", Check: ps.validator.Health},
+		{Name: "TxStore", Check: ps.txStore.Health},
+		{Name: "FSM", Check: blockchain.CheckFSM(ps.blockchainClient)},
+		{Name: "KafkaValidatorProducer", Check: ps.validatorKafkaProducerClient.CheckKafkaHealth},
+	}
+
+	return health.CheckAll(ctx, checks)
+}
+
+func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
+		tracing.WithParentStat(ps.stats),
+		tracing.WithHistogram(prometheusHealth),
+		tracing.WithLogMessage(ps.logger, "[HealthGRPC] called"),
+	)
+	defer deferFn()
+
+	status, details, err := ps.Health(ctx)
+
+	return &propagation_api.HealthResponse{
+		Ok:        status == http.StatusOK,
+		Details:   details,
+		Timestamp: timestamppb.Now(),
+	}, errors.WrapGRPC(err)
 }
 
 func (ps *PropagationServer) Init(_ context.Context) (err error) {
-	ps.status.Store(1)
 	return nil
 }
 
@@ -133,8 +158,6 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		}()
 	}
 
-	ps.status.Store(2)
-
 	//  kafka channel setup
 	validatortxsKafkaURL, _, found := gocore.Config().GetURL("kafka_validatortxsConfig")
 	if !found {
@@ -145,14 +168,16 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 
 	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
 	if workers > 0 {
-		ps.validatorKafkaChan = make(chan []byte, 10_000)
-		go func() {
-			// TODO (GOKHAN): add retry
-			if err := util.StartAsyncProducer(ps.logger, validatortxsKafkaURL, ps.validatorKafkaChan); err != nil {
-				ps.logger.Errorf("[Propagation Server] error starting kafka producer: %v", err)
-				return
-			}
-		}()
+		ps.validatorKafkaProducerClient, err = retry.Retry(ctx, ps.logger, func() (*util.KafkaProducerClient, error) {
+			return util.NewAsyncProducer(ps.logger, validatortxsKafkaURL, make(chan []byte, 10_000))
+		}, retry.WithMessage("[Propagation Server] error starting kafka producer"))
+		if err != nil {
+			ps.logger.Errorf("[Propagation Server] error starting kafka producer: %v", err)
+			return
+		}
+
+		go ps.validatorKafkaProducerClient.Start(ctx)
+
 		ps.logger.Infof("[Propagation Server] connected to kafka for sending transactions to validator at %s", validatortxsKafkaURL)
 	}
 
@@ -327,98 +352,8 @@ func (ps *PropagationServer) Stop(_ context.Context) error {
 	return nil
 }
 
-func (ps *PropagationServer) storeHealth(ctx context.Context) (int, string, error) {
-	var sb strings.Builder
-
-	errs := make([]error, 0)
-
-	code, details, err := ps.txStore.Health(ctx)
-	if err != nil {
-		errs = append(errs, err)
-		_, _ = sb.WriteString(fmt.Sprintf("TxStore: BAD %d - %q: %v\n", code, details, err))
-	} else {
-		_, _ = sb.WriteString(fmt.Sprintf("TxStore: GOOD %d - %q\n", code, details))
-	}
-
-	code, details, err = ps.validator.Health(ctx)
-	if err != nil {
-		errs = append(errs, err)
-		_, _ = sb.WriteString(fmt.Sprintf("Validator: BAD %d - %q: %v\n", code, details, err))
-	} else {
-		_, _ = sb.WriteString(fmt.Sprintf("Validator: GOOD %d - %q\n", code, details))
-	}
-
-	localValidator := gocore.Config().GetBool("useLocalValidator", false)
-	if localValidator {
-		ps.logger.Infof("[propagation] Using local validator")
-
-		blockHeight := ps.validator.GetBlockHeight()
-		if blockHeight == 0 {
-			err = errors.NewProcessingError("error getting blockHeight from validator: 0")
-			errs = append(errs, err)
-			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %v\n", err))
-		} else {
-			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
-		}
-
-		if blockHeight <= 0 {
-			errs = append(errs, errors.NewError("blockHeight <= 0"))
-			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: BAD: %d\n", blockHeight))
-		} else {
-			_, _ = sb.WriteString(fmt.Sprintf("BlockHeight: GOOD: %d\n", blockHeight))
-		}
-	}
-
-	if len(errs) > 0 {
-		return -1, sb.String(), errors.NewError("Health errors occurred")
-	}
-
-	return 0, sb.String(), nil
-}
-
-func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.EmptyMessage) (*propagation_api.HealthResponse, error) {
-	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
-		tracing.WithParentStat(propagationStat),
-		tracing.WithHistogram(prometheusHealth),
-		tracing.WithLogMessage(ps.logger, "[HealthGRPC] called"),
-	)
-	defer deferFn()
-
-	status := ps.status.Load()
-
-	if status != 2 {
-		return &propagation_api.HealthResponse{
-			Ok:        false,
-			Details:   fmt.Sprintf("Propagation server is not ready (Status=%d)", status),
-			Timestamp: time.Now().Unix(),
-		}, nil
-	}
-
-	code, details, err := ps.storeHealth(ctx)
-	if err != nil {
-		return &propagation_api.HealthResponse{
-			Ok:        false,
-			Details:   details,
-			Timestamp: time.Now().Unix(),
-		}, err
-	}
-
-	if code != 0 {
-		return &propagation_api.HealthResponse{
-			Ok:        false,
-			Details:   details,
-			Timestamp: time.Now().Unix(),
-		}, nil
-	}
-
-	return &propagation_api.HealthResponse{
-		Ok:        true,
-		Timestamp: time.Now().Unix(),
-	}, nil
-}
-
-func (ps *PropagationServer) ProcessTransactionHex(cntxt context.Context, req *propagation_api.ProcessTransactionHexRequest) (*propagation_api.EmptyMessage, error) {
-	start, stat, ctx := tracing.NewStatFromContext(cntxt, "ProcessTransactionHex", propagationStat)
+func (ps *PropagationServer) ProcessTransactionHex(ctx context.Context, req *propagation_api.ProcessTransactionHexRequest) (*propagation_api.EmptyMessage, error) {
+	start, stat, _ := tracing.NewStatFromContext(ctx, "ProcessTransactionHex", ps.stats)
 	defer func() {
 		stat.AddTime(start)
 	}()
@@ -443,7 +378,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 
 func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "ProcessTransactionBatch",
-		tracing.WithParentStat(propagationStat),
+		tracing.WithParentStat(ps.stats),
 		tracing.WithHistogram(prometheusProcessedTransactionBatch),
 		tracing.WithDebugLogMessage(ps.logger, "[ProcessTransactionBatch] called for %d transactions", len(req.Tx)),
 	)
@@ -484,7 +419,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 
 func (ps *PropagationServer) processTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) error {
 	_, _, deferFn := tracing.StartTracing(ctx, "processTransaction",
-		tracing.WithParentStat(propagationStat),
+		tracing.WithParentStat(ps.stats),
 	)
 	defer deferFn()
 
@@ -515,14 +450,14 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		return errors.NewStorageError("[ProcessTransaction][%s] failed to save transaction", btTx.TxIDChainHash(), err)
 	}
 
-	if ps.validatorKafkaChan != nil {
+	if ps.validatorKafkaProducerClient != nil {
 		validatorData := &validator.TxValidationData{
 			Tx:     req.Tx,
 			Height: util.GenesisActivationHeight,
 		}
 
 		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
-		ps.validatorKafkaChan <- validatorData.Bytes()
+		ps.validatorKafkaProducerClient.PublishChannel <- validatorData.Bytes()
 	} else {
 		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 
@@ -545,7 +480,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.PropagationAPI_ProcessTransactionStreamServer) error {
 	start := gocore.CurrentTime()
 	defer func() {
-		propagationStat.NewStat("ProcessTransactionStream", true).AddTime(start)
+		ps.stats.NewStat("ProcessTransactionStream", true).AddTime(start)
 	}()
 
 	for {
@@ -568,7 +503,7 @@ func (ps *PropagationServer) ProcessTransactionStream(stream propagation_api.Pro
 func (ps *PropagationServer) ProcessTransactionDebug(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
 	start := gocore.CurrentTime()
 	defer func() {
-		propagationStat.NewStat("ProcessTransactionDebug", true).AddTime(start)
+		ps.stats.NewStat("ProcessTransactionDebug", true).AddTime(start)
 	}()
 
 	btTx, err := bt.NewTxFromBytes(req.Tx)

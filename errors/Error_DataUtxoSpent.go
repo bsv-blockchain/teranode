@@ -25,7 +25,6 @@ func NewUtxoSpentErr(txID chainhash.Hash, spendingTxID chainhash.Hash, t time.Ti
 	}
 
 	e := New(ERR_TX_ALREADY_EXISTS, "utxoSpentErrStruct.Error()", err)
-	e.Data = utxoSpentErrStruct
-
+	e.data = utxoSpentErrStruct
 	return e
 }

@@ -33,6 +33,10 @@ var (
 	prometheusTxMetaAerospikeMapSetMinedBatchN    prometheus.Counter
 	prometheusTxMetaAerospikeMapSetMinedBatchErrN prometheus.Counter
 
+	// metrics for external transactions
+	prometheusTxMetaAerospikeMapGetExternal prometheus.Histogram
+	prometheusTxMetaAerospikeMapSetExternal prometheus.Histogram
+
 	prometheusMetricsInitOnce sync.Once
 )
 
@@ -184,6 +188,24 @@ func _initPrometheusMetrics() {
 			Name:    "aerospike_utxo_spend_batch_size",
 			Help:    "Size of utxo spend batch",
 			Buckets: util.MetricsBucketsSizeSmall,
+		},
+	)
+
+	prometheusTxMetaAerospikeMapGetExternal = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "aerospike",
+			Name:      "get_external",
+			Help:      "Duration of getting an external transaction from the blob store",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusTxMetaAerospikeMapSetExternal = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "aerospike",
+			Name:      "set_external",
+			Help:      "Duration of setting an external transaction to the blob store",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 }

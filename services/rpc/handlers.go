@@ -87,7 +87,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	baseBlockReply := &btcjson.GetBlockBaseVerboseResult{
 		Hash:          c.Hash,
-		Version:       int32(b.Header.Version),
+		Version:       int32(b.Header.Version), // nolint:gosec
 		VersionHex:    fmt.Sprintf("%08x", b.Header.Version),
 		MerkleRoot:    b.Header.HashMerkleRoot.String(),
 		PreviousHash:  b.Header.HashPrevBlock.String(),
@@ -95,7 +95,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		Time:          int64(b.Header.Timestamp),
 		Confirmations: int64(1 + bestBlockMeta.Height - b.Height),
 		Height:        int64(b.Height),
-		Size:          int32(len(blkBytes)),
+		Size:          int32(len(blkBytes)), // nolint:gosec
 		Bits:          b.Header.Bits.String(),
 		Difficulty:    diff,
 		NextHash:      nextBlock.Hash().String(),
@@ -263,7 +263,7 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 
 	// Set the Locktime, if given.
 	if c.LockTime != nil {
-		mtx.LockTime = uint32(*c.LockTime)
+		mtx.LockTime = uint32(*c.LockTime) // nolint:gosec
 	}
 
 	// Return the serialized and hex-encoded transaction.  Note that this
@@ -468,6 +468,120 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, _ interface{}, 
 		"time":          mc.Time,
 		"height":        mc.Height,
 		"merkleProof":   merkleProofStrings,
+	}
+
+	return jsonMap, nil
+}
+
+func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetpeerinfo",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetpeerinfo),
+		tracing.WithLogMessage(s.logger, "[handleGetpeerinfo] called"),
+	)
+	defer deferFn()
+
+	peerInfo, err := s.peerClient.GetPeers(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	infos := make([]*btcjson.GetPeerInfoResult, 0, len(peerInfo.Peers))
+
+	for _, p := range peerInfo.Peers {
+		info := &btcjson.GetPeerInfoResult{
+			ID:        p.Id,
+			Addr:      p.Addr,
+			AddrLocal: p.AddrLocal,
+			// Services:       fmt.Sprintf("%08d", uint64(statsSnap.Services)),
+			ServicesStr: p.Services,
+			// RelayTxes:      !p.IsTxRelayDisabled(),
+			LastSend:       p.LastSend,
+			LastRecv:       p.LastRecv,
+			BytesSent:      p.BytesSent,
+			BytesRecv:      p.BytesReceived,
+			ConnTime:       p.ConnTime,
+			PingTime:       float64(p.PingTime),
+			TimeOffset:     p.TimeOffset,
+			Version:        p.Version,
+			SubVer:         p.SubVer,
+			Inbound:        p.Inbound,
+			StartingHeight: p.StartingHeight,
+			CurrentHeight:  p.CurrentHeight,
+			BanScore:       p.Banscore,
+			Whitelisted:    p.Whitelisted,
+			FeeFilter:      p.FeeFilter,
+			// SyncNode:       p.ID == syncPeerID,
+		}
+		// if p.ToPeer().LastPingNonce() != 0 {
+		// 	wait := float64(time.Since(p.LastPingTime).Nanoseconds())
+		// 	// We actually want microseconds.
+		// 	info.PingWait = wait / 1000
+		// }
+		infos = append(infos, info)
+	}
+
+	// return peerInfo, nil
+	return infos, nil
+}
+
+func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetblockchaininfo",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetblockchaininfo),
+		tracing.WithLogMessage(s.logger, "[handleGetblockchaininfo] called"),
+	)
+	defer deferFn()
+
+	bestBlockHeader, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		s.logger.Errorf("error getting best block header: %v", err)
+	}
+
+	jsonMap := map[string]interface{}{
+		"chain":                s.chainParams.Name,
+		"blocks":               bestBlockMeta.Height,
+		"headers":              863341,
+		"bestblockhash":        bestBlockHeader.Hash().String(),
+		"difficulty":           bestBlockHeader.Bits.CalculateDifficulty(),
+		"mediantime":           0,
+		"verificationprogress": 0,
+		"chainwork":            "",
+		"pruned":               false, // the minimum relay fee for non-free transactions in BSV/KB
+		"softforks":            []interface{}{},
+	}
+
+	return jsonMap, nil
+}
+
+// handleGetInfo returns a JSON object containing various state info.
+func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetInfo",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetinfo),
+		tracing.WithLogMessage(s.logger, "[handleGetInfo] called"),
+	)
+	defer deferFn()
+
+	height, _, err := s.blockchainClient.GetBestHeightAndTime(ctx)
+	if err != nil {
+		s.logger.Errorf("error getting best height and time: %v", err)
+
+		height = 0
+	}
+
+	jsonMap := map[string]interface{}{
+		"version":         1,                                  // the version of the server
+		"protocolversion": wire.ProtocolVersion,               // the latest supported protocol version
+		"blocks":          height,                             // the number of blocks processed
+		"timeoffset":      1,                                  // the time offset
+		"connections":     1,                                  // the number of connected peers
+		"proxy":           "host:port",                        // the proxy used by the server
+		"difficulty":      1,                                  // the current target difficulty
+		"testnet":         s.chainParams.Net == wire.TestNet3, // whether or not server is using testnet
+		"stn":             s.chainParams.Net == wire.STN,      // whether or not server is using stn
+		"relayfee":        100,                                // the minimum relay fee for non-free transactions in BSV/KB
+
 	}
 
 	return jsonMap, nil
