@@ -325,7 +325,7 @@ func TestAerospike(t *testing.T) {
 			aero.NewValue(32), // ttl
 		)
 		require.NoError(t, aErr)
-		assert.Equal(t, LuaOk, ret)
+		assert.Equal(t, LuaOk, luaReturnValue(ret.(string)))
 
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
@@ -363,7 +363,7 @@ func TestAerospike(t *testing.T) {
 				aero.NewValue(32), // ttl
 			)
 			require.NoError(t, aErr)
-			assert.Equal(t, LuaOk, ret)
+			assert.Equal(t, LuaOk, luaReturnValue(ret.(string)))
 		}
 
 		value, err := client.Get(util.GetAerospikeReadPolicy(), txKey)

@@ -47,14 +47,15 @@ func TestStore_getBinsToStore(t *testing.T) {
 		var blockIDs []uint32
 
 		expectedBinValues := map[string]aerospike.Value{
-			"version":     aerospike.NewIntegerValue(int(tx.Version)),
-			"locktime":    aerospike.NewIntegerValue(int(tx.LockTime)),
-			"fee":         aerospike.NewIntegerValue(187),
-			"sizeInBytes": aerospike.NewIntegerValue(tx.Size()),
-			"spentUtxos":  aerospike.NewIntegerValue(0),
-			"nrUtxos":     aerospike.NewIntegerValue(2),
-			"nrRecords":   aerospike.NewIntegerValue(1),
-			"isCoinbase":  aerospike.BoolValue(false),
+			"version":      aerospike.NewIntegerValue(int(tx.Version)),
+			"locktime":     aerospike.NewIntegerValue(int(tx.LockTime)),
+			"fee":          aerospike.NewIntegerValue(187),
+			"sizeInBytes":  aerospike.NewIntegerValue(tx.Size()),
+			"extendedSize": aerospike.NewIntegerValue(len(tx.ExtendedBytes())),
+			"spentUtxos":   aerospike.NewIntegerValue(0),
+			"nrUtxos":      aerospike.NewIntegerValue(2),
+			"nrRecords":    aerospike.NewIntegerValue(1),
+			"isCoinbase":   aerospike.BoolValue(false),
 			"utxos": aerospike.NewListValue([]interface{}{
 				aerospike.BytesValue(utxos[0].CloneBytes()),
 				aerospike.BytesValue(utxos[1].CloneBytes()),
