@@ -95,7 +95,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	start := time.Now()
-	ctx, stat, deferFn := tracing.StartTracing(context.Background(), "sendStoreBatch",
+	ctx, stat, deferFn := tracing.StartTracing(s.ctx, "sendStoreBatch",
 		tracing.WithParentStat(gocoreStat),
 		tracing.WithHistogram(prometheusUtxoCreateBatch),
 	)

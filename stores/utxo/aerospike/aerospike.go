@@ -26,9 +26,6 @@ import (
 
 const MaxTxSizeInStoreInBytes = 32 * 1024
 
-const LuaOk = "OK"
-const LuaError = "ERROR"
-
 var (
 	binNames = []string{
 		"spendable",
@@ -47,6 +44,7 @@ type batcherIfc[T any] interface {
 }
 
 type Store struct {
+	ctx                        context.Context // store the global context for things that run in the background
 	url                        *url.URL
 	client                     *uaerospike.Client
 	namespace                  string
@@ -65,7 +63,7 @@ type Store struct {
 	externalizeAllTransactions bool
 }
 
-func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
+func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	initPrometheusMetrics()
 
 	if gocore.Config().GetBool("aerospike_debug", true) {
@@ -119,6 +117,7 @@ func New(logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
 	}
 
 	s := &Store{
+		ctx:                        ctx,
 		url:                        aerospikeURL,
 		client:                     client,
 		namespace:                  namespace,

@@ -4,7 +4,6 @@ package aerospike
 
 import (
 	"context"
-	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -52,40 +51,47 @@ func (s *Store) unSpendLua(spend *utxo.Spend) error {
 	// nolint gosec
 	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout/uint32(s.utxoBatchSize))
 
-	key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
-	if err != nil {
-		prometheusUtxoMapErrors.WithLabelValues("Reset", err.Error()).Inc()
-		return errors.NewProcessingError("error in aerospike NewKey", err)
+	key, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
+	if aErr != nil {
+		prometheusUtxoMapErrors.WithLabelValues("Reset", aErr.Error()).Inc()
+		return errors.NewProcessingError("error in aerospike NewKey", aErr)
 	}
 
 	offset := s.calculateOffsetForOutput(spend.Vout)
 
-	ret, err := s.client.Execute(policy, key, luaPackage, "unSpend",
+	ret, aErr := s.client.Execute(policy, key, luaPackage, "unSpend",
 		aerospike.NewIntegerValue(int(offset)), // vout adjusted for utxoBatchSize
 		aerospike.NewValue(spend.UTXOHash[:]),  // utxo hash
 	)
-
-	if err != nil {
-		prometheusUtxoMapErrors.WithLabelValues("Reset", err.Error()).Inc()
-		return errors.NewStorageError("error in aerospike unspend record", err)
+	if aErr != nil {
+		prometheusUtxoMapErrors.WithLabelValues("Reset", aErr.Error()).Inc()
+		return errors.NewStorageError("error in aerospike unspend record", aErr)
 	}
 
 	responseMsg, ok := ret.(string)
 	if !ok {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "response not string").Inc()
-		return errors.NewStorageError("error in aerospike unspend record", err)
+		return errors.NewStorageError("error in aerospike unspend record", aErr)
 	}
 
-	responseMsgParts := strings.Split(responseMsg, ":")
-	switch responseMsgParts[0] {
+	resp, err := s.parseLuaReturnValue(responseMsg)
+	if err != nil {
+		prometheusUtxoMapErrors.WithLabelValues("Reset", "error parsing response").Inc()
+		return errors.NewProcessingError("error parsing response %s", responseMsg, err)
+	}
+
+	switch resp.returnValue {
 	case LuaOk:
-		if len(responseMsgParts) > 1 && responseMsgParts[1] == "NOTALLSPENT" {
+		if resp.signal == LuaNotAllSpent {
 			go func() {
-				_, err := s.incrementNrRecords(spend.TxID, 1)
-				if err != nil {
+				if _, err := s.incrementNrRecords(spend.TxID, 1); err != nil {
 					s.logger.Errorf("error incrementing nrRecords for tx %s: %v", spend.TxID.String(), err)
 				}
 			}()
+
+			if resp.external {
+				go s.setTTLExternalTransaction(s.ctx, spend.TxID, 0)
+			}
 		}
 
 	case LuaError:

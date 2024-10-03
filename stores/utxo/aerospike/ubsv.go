@@ -7,15 +7,45 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 //go:embed ubsv.lua
 var ubsvLUA []byte
 
-var luaPackage = "ubsv_v16" // N.B. Do not have any "." in this string
+var luaPackage = "ubsv_v17" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = util.CoinbasePlaceholder[:]
+
+type luaReturnValue string
+
+func (l *luaReturnValue) ToString() string {
+	if l == nil {
+		return ""
+	}
+
+	return string(*l)
+}
+
+type luaReturnMessage struct {
+	returnValue  luaReturnValue
+	signal       luaReturnValue
+	spendingTxID *chainhash.Hash
+	external     bool
+}
+
+const (
+	LuaOk          luaReturnValue = "OK"
+	LuaTTLSet      luaReturnValue = "TTLSET"
+	LuaSpent       luaReturnValue = "SPENT"
+	LuaExternal    luaReturnValue = "EXTERNAL"
+	LuaAllSpent    luaReturnValue = "ALLSPENT"
+	LuaNotAllSpent luaReturnValue = "NOTALLSPENT"
+	LuaFrozen      luaReturnValue = "FROZEN"
+	LuaTxNotFound  luaReturnValue = "TX not found"
+	LuaError       luaReturnValue = "ERROR"
+)
 
 func registerLuaIfNecessary(logger ulogger.Logger, client *uaerospike.Client, funcName string, funcBytes []byte) error {
 	udfs, err := client.ListUDF(nil)

@@ -4,7 +4,6 @@ package aerospike
 
 import (
 	"context"
-	"strings"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/aerospike/aerospike-client-go/v7/types"
@@ -73,14 +72,18 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blo
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
 				responseMsg, ok := response.Bins["SUCCESS"].(string)
 				if ok {
-					responseMsgParts := strings.Split(responseMsg, ":")
-
-					switch responseMsgParts[0] {
-					case LuaOk:
-						okUpdates++
-					default:
+					responseMsgParts, err := s.parseLuaReturnValue(responseMsg)
+					if err != nil {
 						nrErrors++
-						errs = errors.NewError("aerospike batchRecord %s bins[SUCCESS] msg: %s", hashes[idx].String(), responseMsg, errors.Join(errs, batchRecord.BatchRec().Err))
+						errs = errors.NewError("aerospike batchRecord %s parseLuaReturnValue error: %s", hashes[idx].String(), errors.Join(errs, err))
+					} else {
+						switch responseMsgParts.returnValue {
+						case LuaOk:
+							okUpdates++
+						default:
+							nrErrors++
+							errs = errors.NewError("aerospike batchRecord %s bins[SUCCESS] msg: %s", hashes[idx].String(), responseMsg, errors.Join(errs, batchRecord.BatchRec().Err))
+						}
 					}
 				}
 			} else {

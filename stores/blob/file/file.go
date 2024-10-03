@@ -336,14 +336,16 @@ func (s *File) constructFilenameWithTTL(hash []byte, opts []options.FileOption) 
 }
 
 func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts ...options.FileOption) error {
-	fileName, err := s.constructFilenameWithTTL(key, opts)
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, key)
 	if err != nil {
 		return errors.NewStorageError("[File] failed to get file name", err)
 	}
 
 	if newTTL == 0 {
 		// delete the ttl file
-		if err := os.Remove(fileName + ".ttl"); err != nil {
+		if err = os.Remove(fileName + ".ttl"); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return nil
 			}
@@ -351,15 +353,28 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 			return errors.NewStorageError("[File] failed to remove ttl file", err)
 		}
 
+		s.fileTTLsMu.Lock()
+		delete(s.fileTTLs, fileName)
+		s.fileTTLsMu.Unlock()
+
 		return nil
+	}
+
+	// make sure the file exists
+	if _, err = os.Stat(fileName); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return errors.ErrNotFound
+		}
+
+		return errors.NewStorageError("[File][%s] failed to get file info", fileName, err)
 	}
 
 	// write bytes to file
 	ttl := time.Now().Add(newTTL).UTC()
 
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
-		return errors.NewStorageError("[File] [%s] failed to write ttl to file", fileName, err)
+	if err = os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
+		return errors.NewStorageError("[File][%s] failed to write ttl to file", fileName, err)
 	}
 
 	s.fileTTLsMu.Lock()

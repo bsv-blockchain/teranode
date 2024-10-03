@@ -400,7 +400,6 @@ func (s *Store) PreviousOutputsDecorate(_ context.Context, outpoints []*meta.Pre
 }
 
 func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
-	ctx := context.Background()
 	start := gocore.CurrentTime()
 	defer func() {
 		previousOutputsDecorateStat.AddTimeForRange(start, len(batch))
@@ -477,7 +476,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 
 		external, ok := bins["external"].(bool)
 		if ok && external {
-			if previousTx, err = s.getTxFromExternalStore(ctx, previousTxHash); err != nil {
+			if previousTx, err = s.getTxFromExternalStore(s.ctx, previousTxHash); err != nil {
 				txErrors[previousTxHash] = err
 
 				continue
@@ -603,7 +602,7 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 	retries := 0
 
 	for {
-		if err := s.BatchDecorate(context.Background(), items); err != nil {
+		if err := s.BatchDecorate(s.ctx, items); err != nil {
 			if retries < 3 {
 				retries++
 

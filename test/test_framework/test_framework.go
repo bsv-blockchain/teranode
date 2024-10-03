@@ -240,7 +240,7 @@ func (b *BitcoinTestFramework) GetClientHandles() error {
 		}
 
 		logger.Infof("utxoStoreUrl: %s", utxoStoreURL.String())
-		b.Nodes[i].UtxoStore, err = utxostore.New(logger, utxoStoreURL)
+		b.Nodes[i].UtxoStore, err = utxostore.New(b.Context, logger, utxoStoreURL)
 
 		if err != nil {
 			return errors.NewConfigurationError("error creating utxostore %w", err)

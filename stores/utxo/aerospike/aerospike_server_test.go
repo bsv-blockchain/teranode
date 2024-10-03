@@ -1267,7 +1267,7 @@ func initAerospike(t *testing.T) (*aero.Client, *Store, context.Context, func())
 
 	// ubsv db client
 	var db *Store
-	db, err = New(ulogger.TestLogger{}, aeroURL)
+	db, err = New(ctx, ulogger.TestLogger{}, aeroURL)
 	require.NoError(t, err)
 
 	db.client = &uaerospike.Client{Client: client}

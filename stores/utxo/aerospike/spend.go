@@ -4,12 +4,12 @@ package aerospike
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -89,7 +89,7 @@ func (s *Store) spend(ctx context.Context, spends []*utxo.Spend) (err error) {
 
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	start := time.Now()
-	_, stat, deferFn := tracing.StartTracing(context.Background(), "sendSpendBatchLua",
+	ctx, stat, deferFn := tracing.StartTracing(s.ctx, "sendSpendBatchLua",
 		tracing.WithParentStat(gocoreStat),
 		tracing.WithHistogram(prometheusUtxoSpendBatch),
 	)
@@ -203,55 +203,42 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			if response != nil && response.Bins != nil && response.Bins["SUCCESS"] != nil {
 				responseMsg, ok := response.Bins["SUCCESS"].(string)
 				if ok {
-					responseMsgParts := strings.Split(responseMsg, ":")
-					switch responseMsgParts[0] {
+					res, err := s.parseLuaReturnValue(responseMsg)
+					if err != nil {
+						for _, batchItem := range batchByKey {
+							idx := batchItem["idx"].(int)
+							batch[idx].done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] could not parse response: %v", txID.String(), err)
+						}
+					}
+
+					switch res.returnValue {
 					case LuaOk:
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
 							batch[idx].done <- nil
 						}
 
-						if len(responseMsgParts) > 1 && responseMsgParts[1] == "ALLSPENT" {
+						if res.signal == LuaAllSpent {
 							// all utxos in this record are spent so we decrement the nrRecords in the master record
 							// we do this in a separate go routine to avoid blocking the batcher
-							go func() {
-								res, err := s.incrementNrRecords(txID, -1)
-								if err != nil {
-									// TODO if this goes wrong, we never decrement the nrRecords and the record will never be deleted
-									s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to decrement nrRecords: %v", txID.String(), err)
-								}
-
-								if r, ok := res.(string); ok {
-									if r == "OK:TTLSET" {
-										// TODO - we should TTL all the pagination records for this TX
-									}
-								}
-							}()
+							go s.handleAllSpent(ctx, txID)
 						}
 
-					case "FROZEN":
+					case LuaFrozen:
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
 							batch[idx].done <- errors.NewFrozenError("[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
 						}
 
-					case "SPENT":
-						// spent by another transaction
-						spendingTxID, hashErr := chainhash.NewHashFromStr(responseMsgParts[1])
-						if hashErr != nil {
-							for _, batchItem := range batchByKey {
-								idx := batchItem["idx"].(int)
-								batch[idx].done <- errors.NewProcessingError("[SPEND_BATCH_LUA][%s] could not parse spending tx hash: %w", txID.String(), hashErr)
-							}
-						}
+					case LuaSpent:
 						// TODO we need to be able to send the spending TX ID in the error down the line
 						//      this is very indiscriminate, we need to know which output was spent by which tx
 						for _, batchItem := range batchByKey {
 							idx := batchItem["idx"].(int)
-							batch[idx].done <- utxo.NewErrSpent(batch[idx].spend.TxID, batch[idx].spend.Vout, batch[idx].spend.UTXOHash, spendingTxID)
+							batch[idx].done <- utxo.NewErrSpent(batch[idx].spend.TxID, batch[idx].spend.Vout, batch[idx].spend.UTXOHash, res.spendingTxID)
 						}
 					case LuaError:
-						if len(responseMsgParts) > 1 && responseMsgParts[1] == "TX not found" {
+						if res.signal == LuaTxNotFound {
 							for _, batchItem := range batchByKey {
 								idx := batchItem["idx"].(int)
 								batch[idx].done <- errors.NewTxNotFoundError("[SPEND_BATCH_LUA][%s] transaction not found, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsg)
@@ -259,7 +246,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 						} else {
 							for _, batchItem := range batchByKey {
 								idx := batchItem["idx"].(int)
-								batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, responseMsgParts[1])
+								batch[idx].done <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in LUA spend batch record, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, res.signal)
 							}
 						}
 					default:
@@ -279,6 +266,31 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	}
 
 	stat.NewStat("postBatchOperate").AddTime(start)
+}
+
+func (s *Store) handleAllSpent(ctx context.Context, txID *chainhash.Hash) {
+	res, err := s.incrementNrRecords(txID, -1)
+	if err != nil {
+		// TODO if this goes wrong, we never decrement the nrRecords and the record will never be deleted
+		s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to decrement nrRecords: %v", txID.String(), err)
+	}
+
+	if r, ok := res.(string); ok {
+		ret, err := s.parseLuaReturnValue(r) // always returns len 3
+		if err != nil {
+			s.logger.Errorf("[SPEND_BATCH_LUA][%s] failed to parse LUA return value: %v", txID.String(), err)
+		} else if ret.returnValue == LuaOk {
+			if ret.signal == LuaTTLSet {
+				// TODO - we should TTL all the pagination records for this TX
+				_ = ret.signal
+			}
+
+			if ret.external {
+				// add ttl to the externally stored transaction, if applicable
+				s.setTTLExternalTransaction(ctx, txID, time.Duration(s.expiration)*time.Second)
+			}
+		}
+	}
 }
 
 func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) (interface{}, error) {
@@ -301,4 +313,25 @@ func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) (interfa
 	}
 
 	return res, nil
+}
+
+func (s *Store) setTTLExternalTransaction(ctx context.Context, txid *chainhash.Hash, newTTL time.Duration) {
+	if err := s.externalStore.SetTTL(ctx,
+		txid[:],
+		newTTL,
+		options.WithFileExtension("tx"),
+	); err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			// did not find the tx, try the outputs
+			if err = s.externalStore.SetTTL(ctx,
+				txid[:],
+				newTTL,
+				options.WithFileExtension("outputs"),
+			); err != nil {
+				s.logger.Errorf("[ttlExternalTransaction][%s] failed to set TTL for external transaction outputs: %v", txid, err)
+			}
+		} else {
+			s.logger.Errorf("[ttlExternalTransaction][%s] failed to set TTL for external transaction: %v", txid, err)
+		}
+	}
 }

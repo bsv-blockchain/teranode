@@ -204,8 +204,14 @@ function unSpend(rec, offset, utxoHash)
         local nrUtxos = rec['nrUtxos']
         local spentUtxos = rec['spentUtxos']
 
+        -- Check if all the UTXOs were spent, which means the record had been marked as all spent
+        -- the NOTALLSPENT signal sends back to the caller the information that not all UTXOs are spent (anymore)
         if nrUtxos == spentUtxos then
-            signal = ":NOTALLSPENT"
+            if rec['external'] then
+                signal = ":NOTALLSPENT:EXTERNAL"
+            else
+                signal = ":NOTALLSPENT"
+            end
         end
 
         -- Update the record
@@ -575,7 +581,11 @@ function setTTL(rec, ttl)
         if nrRecords == 1 and blockIDs and #blockIDs > 0 and rec['spentUtxos'] == rec['nrUtxos'] then
             -- Set the TTL for the record
             record.set_ttl(rec, ttl)
-            signal = ":TTLSET"
+            if rec['external'] then
+                signal = ":TTLSET:EXTERNAL"
+            else
+                signal = ":TTLSET"
+            end
         else
             -- Remove any existing TTL by setting it to -1 (never expire)
             record.set_ttl(rec, -1)

@@ -12,7 +12,7 @@ import (
 )
 
 func init() {
-	availableDatabases["aerospike"] = func(_ context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
-		return aerospike.New(logger, url)
+	availableDatabases["aerospike"] = func(ctx context.Context, logger ulogger.Logger, url *url.URL) (utxo.Store, error) {
+		return aerospike.New(ctx, logger, url)
 	}
 }
