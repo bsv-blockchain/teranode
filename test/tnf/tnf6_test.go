@@ -1,4 +1,4 @@
-////go:build tnftests
+//go:build tnftests
 
 // How to run this test:
 // $ cd test/tnf/
