@@ -1001,6 +1001,11 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 }
 
 func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	// check whether the FSM is already in the RUNNING state
+	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_RUNNING.String()) {
+		return &emptypb.Empty{}, nil
+	}
+
 	req := &blockchain_api.SendFSMEventRequest{
 		Event: blockchain_api.FSMEventType_RUN,
 	}
@@ -1015,6 +1020,11 @@ func (b *Blockchain) Run(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty,
 }
 
 func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	// check whether the FSM is already in the CATCHINGBLOCKS state
+	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_CATCHINGBLOCKS.String()) {
+		return &emptypb.Empty{}, nil
+	}
+
 	req := &blockchain_api.SendFSMEventRequest{
 		Event: blockchain_api.FSMEventType_CATCHUPBLOCKS,
 	}
@@ -1029,6 +1039,11 @@ func (b *Blockchain) CatchUpBlocks(ctx context.Context, _ *emptypb.Empty) (*empt
 }
 
 func (b *Blockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	// check whether the FSM is already in the CATCHINGTXS state
+	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_CATCHINGTXS.String()) {
+		return &emptypb.Empty{}, nil
+	}
+
 	req := &blockchain_api.SendFSMEventRequest{
 		Event: blockchain_api.FSMEventType_CATCHUPTXS,
 	}
@@ -1048,6 +1063,11 @@ func (b *Blockchain) CatchUpTransactions(ctx context.Context, _ *emptypb.Empty) 
 }
 
 func (b *Blockchain) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	// check whether the FSM is already in the RESTORING state
+	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_RESTORING.String()) {
+		return &emptypb.Empty{}, nil
+	}
+
 	req := &blockchain_api.SendFSMEventRequest{
 		Event: blockchain_api.FSMEventType_RESTORE,
 	}
@@ -1062,6 +1082,11 @@ func (b *Blockchain) Restore(ctx context.Context, _ *emptypb.Empty) (*emptypb.Em
 }
 
 func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	// check whether the FSM is already in the LEGACYSYNC state
+	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_LEGACYSYNCING.String()) {
+		return &emptypb.Empty{}, nil
+	}
+
 	req := &blockchain_api.SendFSMEventRequest{
 		Event: blockchain_api.FSMEventType_LEGACYSYNC,
 	}
@@ -1072,10 +1097,15 @@ func (b *Blockchain) LegacySync(ctx context.Context, _ *emptypb.Empty) (*emptypb
 		return nil, err
 	}
 
-	return nil, nil
+	return &emptypb.Empty{}, nil
 }
 
 func (b *Blockchain) Unavailable(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
+	// check whether the FSM is already in the UNAVAILABLE state
+	if b.finiteStateMachine.Is(blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE.String()) {
+		return &emptypb.Empty{}, nil
+	}
+
 	req := &blockchain_api.SendFSMEventRequest{
 		Event: blockchain_api.FSMEventType_UNAVAILABLE,
 	}
