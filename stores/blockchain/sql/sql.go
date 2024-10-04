@@ -337,15 +337,18 @@ type blockchainCache struct {
 	existsCache map[chainhash.Hash]bool
 	chain       []chainhash.Hash
 	mutex       sync.RWMutex
+	cacheSize   int
 }
 
 func NewBlockchainCache() *blockchainCache {
+	cacheSize, _ := gocore.Config().GetInt("blockchain_store_cache_size", 200)
 	return &blockchainCache{
 		enabled:     gocore.Config().GetBool("blockchain_store_cache_enabled", true),
-		headers:     make(map[chainhash.Hash]*model.BlockHeader, 100),
-		metas:       make(map[chainhash.Hash]*model.BlockHeaderMeta, 100),
-		existsCache: make(map[chainhash.Hash]bool, 100),
-		chain:       make([]chainhash.Hash, 0, 100),
+		headers:     make(map[chainhash.Hash]*model.BlockHeader, cacheSize),
+		metas:       make(map[chainhash.Hash]*model.BlockHeaderMeta, cacheSize),
+		existsCache: make(map[chainhash.Hash]bool, cacheSize),
+		chain:       make([]chainhash.Hash, 0, cacheSize),
+		cacheSize:   cacheSize,
 		mutex:       sync.RWMutex{},
 	}
 }
@@ -386,7 +389,7 @@ func (c *blockchainCache) addBlockHeader(blockHeader *model.BlockHeader, blockHe
 		c.chain = append(c.chain, *blockHeader.Hash())
 
 		// only keep last 200 blocks in cache
-		if len(c.chain) >= 200 {
+		if len(c.chain) >= c.cacheSize {
 			oldestHash := c.chain[0]
 			delete(c.headers, oldestHash)
 			delete(c.metas, oldestHash)
@@ -407,9 +410,9 @@ func (c *blockchainCache) RebuildBlockchain(blockHeaders []*model.BlockHeader, b
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	c.headers = make(map[chainhash.Hash]*model.BlockHeader, 100)
-	c.metas = make(map[chainhash.Hash]*model.BlockHeaderMeta, 100)
-	c.existsCache = make(map[chainhash.Hash]bool, 100)
+	c.headers = make(map[chainhash.Hash]*model.BlockHeader, c.cacheSize)
+	c.metas = make(map[chainhash.Hash]*model.BlockHeaderMeta, c.cacheSize)
+	c.existsCache = make(map[chainhash.Hash]bool, c.cacheSize)
 	c.chain = c.chain[:0]
 
 	if blockHeaders == nil {
@@ -441,7 +444,7 @@ func (s *SQL) ResetBlocksCache(ctx context.Context) error {
 		blockHeaderMetas []*model.BlockHeaderMeta
 	)
 
-	blockHeaders, blockHeaderMetas, err = s.GetBlockHeaders(ctx, bestBlockHeader.Hash(), 100)
+	blockHeaders, blockHeaderMetas, err = s.GetBlockHeaders(ctx, bestBlockHeader.Hash(), uint64(s.blocksCache.cacheSize))
 	if err != nil {
 		return err
 	}
