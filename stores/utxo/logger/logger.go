@@ -108,7 +108,7 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	data, err := s.store.Create(ctx, tx, blockHeight, opts...)
-	s.logger.Infof("[UTXOStore][logger][Create] tx %s blockHeight %d data %v err %v : %s", tx.TxIDChainHash(), blockHeight, data, err, caller())
+	s.logger.Infof("[UTXOStore][logger][Create] tx %s coinbase %t blockHeight %d data %v err %v : %s", tx.TxIDChainHash(), tx.IsCoinbase(), blockHeight, data, err, caller())
 
 	return data, err
 }
