@@ -14,10 +14,11 @@ import (
 )
 
 type Memory struct {
-	mu       sync.RWMutex
-	blobs    map[[32]byte][]byte
-	options  *options.Options
-	Counters map[string]int
+	mu         sync.RWMutex
+	blobs      map[[32]byte][]byte
+	options    *options.Options
+	Counters   map[string]int
+	countersMu sync.Mutex
 }
 
 func New(opts ...options.StoreOption) *Memory {
@@ -29,7 +30,9 @@ func New(opts ...options.StoreOption) *Memory {
 }
 
 func (m *Memory) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	m.countersMu.Lock()
 	m.Counters["health"]++
+	m.countersMu.Unlock()
 
 	return 0, "Memory Store", nil
 }
@@ -39,7 +42,9 @@ func (m *Memory) Close(_ context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.countersMu.Lock()
 	m.Counters["close"]++
+	m.countersMu.Unlock()
 
 	// noop
 	return nil
@@ -84,7 +89,9 @@ func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...opt
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.countersMu.Lock()
 	m.Counters["set"]++
+	m.countersMu.Unlock()
 
 	m.blobs[storeKey] = value
 
@@ -120,7 +127,9 @@ func (m *Memory) Get(_ context.Context, hash []byte, opts ...options.FileOption)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	m.countersMu.Lock()
 	m.Counters["get"]++
+	m.countersMu.Unlock()
 
 	bytes, ok := m.blobs[storeKey]
 	if !ok {
@@ -140,7 +149,9 @@ func (m *Memory) GetHead(_ context.Context, hash []byte, nrOfBytes int, opts ...
 		return b, nil
 	}
 
+	m.countersMu.Lock()
 	m.Counters["getHead"]++
+	m.countersMu.Unlock()
 
 	return b[:nrOfBytes], nil
 }
@@ -153,7 +164,9 @@ func (m *Memory) Exists(_ context.Context, hash []byte, opts ...options.FileOpti
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	m.countersMu.Lock()
 	m.Counters["exists"]++
+	m.countersMu.Unlock()
 
 	_, ok := m.blobs[storeKey]
 
@@ -168,7 +181,9 @@ func (m *Memory) Del(_ context.Context, hash []byte, opts ...options.FileOption)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.countersMu.Lock()
 	m.Counters["del"]++
+	m.countersMu.Unlock()
 
 	delete(m.blobs, storeKey)
 
