@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -83,8 +84,21 @@ func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) 
 // getMissingTransactionsBatch gets a batch of transactions from the network
 // NOTE: it does not return the transactions in the same order as the txHashes
 func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash *chainhash.Hash, txHashes []utxo.UnresolvedMetaData, baseURL string) ([]*bt.Tx, error) {
+	log := false
+
+	utxoStoreURL, ok := gocore.Config().Get("utxostore")
+	if ok && strings.Contains(utxoStoreURL, "logging=true") {
+		// we are logging every utxostore create/spend/delete so we need to log every tx request here too for easier debugging
+		log = true
+	}
+
 	txIDBytes := make([]byte, 32*len(txHashes))
+
 	for idx, txHash := range txHashes {
+		if log {
+			u.logger.Debugf("[getMissingTransactionsBatch][%s][%s] adding tx hash %d to request", subtreeHash.String(), txHash.Hash.String(), idx)
+		}
+
 		copy(txIDBytes[idx*32:(idx+1)*32], txHash.Hash[:])
 	}
 
