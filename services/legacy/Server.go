@@ -213,26 +213,16 @@ func (s *Server) Start(ctx context.Context) error {
 		s.logger.Errorf("[Legacy Server] failed to send Legacy Sync event to the FSM [%v]", err)
 	}
 
-	go func() {
-		<-ctx.Done()
-		_ = s.server.Stop()
-	}()
+	s.logger.Infof("[Legacy Server] Starting internal server...")
+	s.server.Start()
+	s.logger.Infof("[Legacy Server] Internal server started")
 
-	go func() {
-		s.logger.Infof("[Legacy Server] Starting internal server...")
-		s.server.Start()
-		s.logger.Infof("[Legacy Server] Internal server started")
-	}()
-
-	go func() {
-		// this will block
-		if err := util.StartGRPCServer(ctx, s.logger, "legacy", func(server *grpc.Server) {
-			peer_api.RegisterPeerServiceServer(server, s)
-		}); err != nil {
-			s.logger.Errorf("[Legacy Server] failed to start GRPC server [%v]", err)
-			return // errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] can't start GRPC server", err))
-		}
-	}()
+	// this will block
+	if err = util.StartGRPCServer(ctx, s.logger, "legacy", func(server *grpc.Server) {
+		peer_api.RegisterPeerServiceServer(server, s)
+	}); err != nil {
+		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] can't start GRPC server", err))
+	}
 
 	return nil
 }
