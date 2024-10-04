@@ -80,11 +80,21 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 
 				txMeta, err = h.repository.GetTransactionMeta(c.Request().Context(), &node.Hash)
 				if err != nil {
-					h.logger.Errorf("[GetSubtreeTxs][%s] error getting transaction meta: %s", node.Hash.String(), err.Error())
+					// NewTxNotFoundError
+					if errors.Is(err, errors.ErrTxNotFound) {
+						h.logger.Infof("[GetSubtreeTxs][%s] not found in utxo store", node.Hash.String())
+					} else {
+						h.logger.Warnf("[GetSubtreeTxs][%s] error getting transaction meta: %s", node.Hash.String(), err.Error())
+					}
+
+					continue
+				}
+				if txMeta == nil {
+					h.logger.Warnf("[GetSubtreeTxs][%s] txMeta is nil", node.Hash.String())
 					continue
 				}
 				if txMeta.Tx == nil {
-					h.logger.Errorf("[GetSubtreeTxs][%s] transaction meta is nil", node.Hash.String())
+					h.logger.Warnf("[GetSubtreeTxs][%s] txMeta.Tx is nil", node.Hash.String())
 					continue
 				}
 				subtreeData.InputsCount = len(txMeta.Tx.Inputs)
