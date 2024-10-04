@@ -6,8 +6,10 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/labstack/echo/v4"
+	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
@@ -78,29 +80,37 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 					TxID:  node.Hash.String(),
 				}
 
-				txMeta, err = h.repository.GetTransactionMeta(c.Request().Context(), &node.Hash)
-				if err != nil {
-					// NewTxNotFoundError
-					if errors.Is(err, errors.ErrTxNotFound) {
-						h.logger.Infof("[GetSubtreeTxs][%s] not found in utxo store", node.Hash.String())
-					} else {
-						h.logger.Warnf("[GetSubtreeTxs][%s] error getting transaction meta: %s", node.Hash.String(), err.Error())
+				if model.CoinbasePlaceholderHash.Equal(node.Hash) {
+					txMeta = &meta.Data{
+						Tx:         bt.NewTx(),
+						IsCoinbase: true,
 					}
+					txMeta.Tx.SetTxHash(model.CoinbasePlaceholderHash)
+				} else {
+					txMeta, err = h.repository.GetTransactionMeta(c.Request().Context(), &node.Hash)
+					if err != nil {
+						// NewTxNotFoundError
+						if errors.Is(err, errors.ErrTxNotFound) {
+							h.logger.Infof("[GetSubtreeTxs][%s] not found in utxo store", node.Hash.String())
+						} else {
+							h.logger.Warnf("[GetSubtreeTxs][%s] error getting transaction meta: %s", node.Hash.String(), err.Error())
+						}
 
-					continue
+						continue
+					}
+					if txMeta == nil {
+						h.logger.Warnf("[GetSubtreeTxs][%s] txMeta is nil", node.Hash.String())
+						continue
+					}
+					if txMeta.Tx == nil {
+						h.logger.Warnf("[GetSubtreeTxs][%s] txMeta.Tx is nil", node.Hash.String())
+						continue
+					}
+					subtreeData.InputsCount = len(txMeta.Tx.Inputs)
+					subtreeData.OutputsCount = len(txMeta.Tx.Outputs)
+					subtreeData.Size = int(txMeta.SizeInBytes)
+					subtreeData.Fee = int(txMeta.Fee)
 				}
-				if txMeta == nil {
-					h.logger.Warnf("[GetSubtreeTxs][%s] txMeta is nil", node.Hash.String())
-					continue
-				}
-				if txMeta.Tx == nil {
-					h.logger.Warnf("[GetSubtreeTxs][%s] txMeta.Tx is nil", node.Hash.String())
-					continue
-				}
-				subtreeData.InputsCount = len(txMeta.Tx.Inputs)
-				subtreeData.OutputsCount = len(txMeta.Tx.Outputs)
-				subtreeData.Size = int(txMeta.SizeInBytes)
-				subtreeData.Fee = int(txMeta.Fee)
 
 				data = append(data, subtreeData)
 			}
