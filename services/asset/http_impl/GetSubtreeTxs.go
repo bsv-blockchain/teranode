@@ -66,6 +66,7 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 			data := make([]SubtreeTx, 0, limit)
 
 			var txMeta *meta.Data
+
 			for i := offset; i < offset+limit; i++ {
 				if i >= subtree.Length() {
 					break
@@ -77,13 +78,19 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 					TxID:  node.Hash.String(),
 				}
 
-				txMeta, _ = h.repository.GetTransactionMeta(c.Request().Context(), &node.Hash)
-				if txMeta != nil {
-					subtreeData.InputsCount = len(txMeta.Tx.Inputs)
-					subtreeData.OutputsCount = len(txMeta.Tx.Outputs)
-					subtreeData.Size = int(txMeta.SizeInBytes)
-					subtreeData.Fee = int(txMeta.Fee)
+				txMeta, err = h.repository.GetTransactionMeta(c.Request().Context(), &node.Hash)
+				if err != nil {
+					h.logger.Errorf("[GetSubtreeTxs][%s] error getting transaction meta: %s", node.Hash.String(), err.Error())
+					continue
 				}
+				if txMeta.Tx == nil {
+					h.logger.Errorf("[GetSubtreeTxs][%s] transaction meta is nil", node.Hash.String())
+					continue
+				}
+				subtreeData.InputsCount = len(txMeta.Tx.Inputs)
+				subtreeData.OutputsCount = len(txMeta.Tx.Outputs)
+				subtreeData.Size = int(txMeta.SizeInBytes)
+				subtreeData.Fee = int(txMeta.Fee)
 
 				data = append(data, subtreeData)
 			}

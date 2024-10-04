@@ -113,7 +113,7 @@ func (repo *Repository) GetBlockGraphData(ctx context.Context, periodMillis uint
 func (repo *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	repo.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 
-	txMeta, err := repo.UtxoStore.GetMeta(ctx, hash)
+	txMeta, err := repo.UtxoStore.Get(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
