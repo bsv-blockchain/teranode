@@ -826,7 +826,7 @@ func (u *Server) getBlockHeaders(ctx context.Context, hash *chainhash.Hash, base
 	)
 	defer deferFn()
 
-	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers/%s", baseUrl, hash.String()))
+	blockHeadersBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/headers/%s?n=200", baseUrl, hash.String()))
 	if err != nil {
 		return nil, errors.NewProcessingError("[getBlockHeaders][%s] failed to get block headers from peer", hash.String(), err)
 	}
