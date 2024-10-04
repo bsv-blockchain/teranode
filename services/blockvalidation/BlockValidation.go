@@ -606,22 +606,6 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 
 	u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
-	// TODO is this wrong? This block might not be on our chain.
-	// Add the coinbase transaction to the metaTxStore
-	// don't be tempted to rely on BlockAssembly to do this.
-	// We need to be sure that the coinbase transaction is stored before we try and do setMinedMulti().
-	u.logger.Debugf("[ValidateBlock][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), block.Height, block.CoinbaseTx.TxIDChainHash().String())
-
-	if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height); err != nil {
-		if errors.Is(err, errors.ErrTxAlreadyExists) {
-			u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
-		} else {
-			return errors.NewTxError("[ValidateBlock][%s] error storing utxos", block.Header.Hash().String(), err)
-		}
-	}
-
-	u.logger.Debugf("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
-
 	useOptimisticMining := u.optimisticMining
 	if len(disableOptimisticMining) > 0 {
 		// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
