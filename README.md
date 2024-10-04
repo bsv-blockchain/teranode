@@ -140,6 +140,9 @@ Detailed Node Service documentation:
 + [Block Assembly Service](docs/services/blockAssembly.md)
 
 + [Blockchain Service](docs/services/blockchain.md)
++
++ [Alert Service](docs/services/alert.md)
+
 
 Store Documentation:
 
