@@ -1,0 +1,106 @@
+package aerospike
+
+import (
+	"context"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/magiconair/properties/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
+)
+
+func TestStore_getTxFromExternalStore(t *testing.T) {
+	ctx := context.Background()
+
+	client, _, _, deferFn := initAerospike(t)
+	defer deferFn()
+
+	t.Run("TestStore_getTxFromExternalStore", func(t *testing.T) {
+		s := &Store{
+			externalStore:   memory.New(),
+			externalTxCache: util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute),
+			client:          &uaerospike.Client{Client: client},
+			namespace:       aerospikeNamespace,
+			setName:         aerospikeSet,
+		}
+
+		// read a sample transaction from testdata and store it in the external store
+		f, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+		require.NoError(t, err)
+
+		txFromFile, err := bt.NewTxFromString(string(f))
+		require.NoError(t, err)
+
+		txHash := txFromFile.TxIDChainHash()
+		txBytes := txFromFile.Bytes()
+
+		err = s.externalStore.Set(ctx, txHash.CloneBytes(), txBytes, options.WithFileExtension("tx"))
+		require.NoError(t, err)
+
+		// Test fetching the transaction from the external store
+		fetchedTx, err := s.getTxFromExternalStore(ctx, *txHash)
+		require.NoError(t, err)
+		require.NotNil(t, fetchedTx)
+		require.Equal(t, txFromFile.Version, fetchedTx.Version)
+		require.Equal(t, txFromFile.LockTime, fetchedTx.LockTime)
+		require.Equal(t, len(txFromFile.Inputs), len(fetchedTx.Inputs))
+		require.Equal(t, len(txFromFile.Outputs), len(fetchedTx.Outputs))
+		require.Equal(t, txFromFile.Outputs[0].Satoshis, fetchedTx.Outputs[0].Satoshis)
+		require.Equal(t, txFromFile.Outputs[0].LockingScript, fetchedTx.Outputs[0].LockingScript)
+	})
+
+	t.Run("TestStore_getTxFromExternalStore concurrent", func(t *testing.T) {
+		s := &Store{
+			externalStore:   memory.New(),
+			externalTxCache: util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute),
+			client:          &uaerospike.Client{Client: client},
+			namespace:       aerospikeNamespace,
+			setName:         aerospikeSet,
+		}
+
+		// read a sample transaction from testdata and store it in the external store
+		f, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+		require.NoError(t, err)
+
+		txFromFile, err := bt.NewTxFromString(string(f))
+		require.NoError(t, err)
+
+		txHash := txFromFile.TxIDChainHash()
+		txBytes := txFromFile.Bytes()
+
+		err = s.externalStore.Set(ctx, txHash.CloneBytes(), txBytes, options.WithFileExtension("tx"))
+		require.NoError(t, err)
+
+		// Test fetching the transaction from the external store concurrently
+		g := errgroup.Group{}
+		for i := 0; i < 100; i++ {
+			g.Go(func() error {
+				fetchedTx, err := s.getTxFromExternalStore(ctx, *txHash)
+				if err != nil {
+					return err
+				}
+
+				require.NotNil(t, fetchedTx)
+
+				return nil
+			})
+		}
+
+		err = g.Wait()
+		require.NoError(t, err)
+
+		// check how often the external store was accessed
+		memStore, ok := s.externalStore.(*memory.Memory)
+		require.True(t, ok)
+		assert.Equal(t, memStore.Counters["set"], 1)
+		assert.Equal(t, memStore.Counters["get"], 1)
+	})
+}

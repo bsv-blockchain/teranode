@@ -3,6 +3,7 @@
 package aerospike
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"time"
@@ -20,14 +21,12 @@ import (
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"golang.org/x/exp/slices"
 )
 
 var (
 	gocoreStat                  = gocore.NewStat("Aerospike")
-	externalTxCache             = expiringmap.New[chainhash.Hash, *bt.Tx](1 * time.Minute)
 	previousOutputsDecorateStat = gocoreStat.NewStat("PreviousOutputsDecorate").AddRanges(0, 1, 100, 1_000, 10_000, 100_000)
 )
 
@@ -529,63 +528,65 @@ func (s *Store) getTxFromExternalStore(ctx context.Context, previousTxHash chain
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
 	)
 
-	// Check the cache first
-	if tx, ok := externalTxCache.Get(previousTxHash); ok {
-		return tx, nil
-	}
+	result, err := s.externalTxCache.GetOrSet(previousTxHash, func() (*bt.Tx, error) {
+		ext := "tx"
 
-	ext := "tx"
-
-	// Get the raw transaction from the externalStore...
-	reader, err := s.externalStore.GetIoReader(
-		ctx,
-		previousTxHash[:],
-		options.WithFileExtension(ext),
-	)
-	if err != nil {
-		// Try to get the data from an output file instead
-		ext = "outputs"
-
-		reader, err = s.externalStore.GetIoReader(
+		// Get the raw transaction from the externalStore...
+		reader, err := s.externalStore.GetIoReader(
 			ctx,
 			previousTxHash[:],
 			options.WithFileExtension(ext),
 		)
 		if err != nil {
-			return nil, errors.NewStorageError("[getTxFromExternalStore][%s] could not get tx from external store", previousTxHash.String(), err)
-		}
-	}
+			// Try to get the data from an output file instead
+			ext = "outputs"
 
-	tx := &bt.Tx{}
-
-	if ext == "tx" {
-		if _, err = tx.ReadFrom(reader); err != nil {
-			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read tx from reader: %w", previousTxHash.String(), err)
-		}
-	} else {
-		uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, reader)
-		if err != nil {
-			return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read outputs from reader: %w", previousTxHash.String(), err)
-		}
-
-		utxos := utxopersister.PadUTXOsWithNil(uw.UTXOs)
-
-		tx.Outputs = make([]*bt.Output, len(utxos))
-
-		for _, u := range uw.UTXOs {
-			s := bscript.NewFromBytes(u.Script)
-
-			tx.Outputs[u.Index] = &bt.Output{
-				Satoshis:      u.Value,
-				LockingScript: s,
+			reader, err = s.externalStore.GetIoReader(
+				ctx,
+				previousTxHash[:],
+				options.WithFileExtension(ext),
+			)
+			if err != nil {
+				return nil, errors.NewStorageError("[getTxFromExternalStore][%s] could not get tx from external store", previousTxHash.String(), err)
 			}
 		}
+
+		tx := &bt.Tx{}
+
+		// create a buffer for the reader
+		bufferedReader := bufio.NewReaderSize(reader, 1*1024*1024) // 1MB buffer
+
+		if ext == "tx" {
+			if _, err = tx.ReadFrom(bufferedReader); err != nil {
+				return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read tx from reader: %w", previousTxHash.String(), err)
+			}
+		} else {
+			uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, bufferedReader)
+			if err != nil {
+				return nil, errors.NewTxInvalidError("[getTxFromExternalStore][%s] could not read outputs from reader: %w", previousTxHash.String(), err)
+			}
+
+			utxos := utxopersister.PadUTXOsWithNil(uw.UTXOs)
+
+			tx.Outputs = make([]*bt.Output, len(utxos))
+
+			for _, u := range uw.UTXOs {
+				lockingScript := bscript.NewFromBytes(u.Script)
+
+				tx.Outputs[u.Index] = &bt.Output{
+					Satoshis:      u.Value,
+					LockingScript: lockingScript,
+				}
+			}
+		}
+
+		return tx, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	// Cache the tx
-	externalTxCache.Set(previousTxHash, tx)
-
-	return tx, nil
+	return result, nil
 }
 
 func (s *Store) sendGetBatch(batch []*batchGetItem) {

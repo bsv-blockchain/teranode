@@ -105,57 +105,66 @@ func TestStore_getBinsToStore(t *testing.T) {
 	})
 }
 
+func setupStore(t *testing.T, client *aerospike.Client) *Store {
+	return &Store{
+		utxoBatchSize: 100,
+		externalStore: memory.New(),
+		client:        &uaerospike.Client{Client: client},
+		namespace:     aerospikeNamespace,
+		setName:       aerospikeSet,
+	}
+}
+
+func readTransaction(t *testing.T, filePath string) *bt.Tx {
+	txHex, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+
+	tx, err := bt.NewTxFromString(string(txHex))
+	require.NoError(t, err)
+
+	return tx
+}
+
+func prepareBatchStoreItem(t *testing.T, s *Store, tx *bt.Tx, blockHeight uint32, blockIDs []uint32) (*batchStoreItem, [][]*aerospike.Bin) {
+	txHash := tx.TxIDChainHash()
+	isCoinbase := tx.IsCoinbase()
+
+	binsToStore, err := s.getBinsToStore(tx, blockHeight, blockIDs, true, txHash, isCoinbase)
+	require.NoError(t, err)
+	require.NotNil(t, binsToStore)
+
+	bItem := &batchStoreItem{
+		txHash:      txHash,
+		isCoinbase:  isCoinbase,
+		tx:          tx,
+		blockHeight: blockHeight,
+		blockIDs:    blockIDs,
+		done:        make(chan error, 1),
+	}
+
+	return bItem, binsToStore
+}
+
 func TestStore_storeTransactionExternally(t *testing.T) {
 	ctx := context.Background()
-
 	client, db, _, deferFn := initAerospike(t)
 	defer deferFn()
 
 	t.Run("TestStore_storeTransactionExternally", func(t *testing.T) {
-		s := &Store{
-			utxoBatchSize: 100,
-			externalStore: memory.New(),
-			client:        &uaerospike.Client{Client: client},
-			namespace:     aerospikeNamespace,
-			setName:       aerospikeSet,
-		}
-
+		s := setupStore(t, client)
 		initPrometheusMetrics()
 
-		// read hex file from os
-		txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
-		require.NoError(t, err)
-
-		tx, err := bt.NewTxFromString(string(txHex))
-		require.NoError(t, err)
-
-		txHash := tx.TxIDChainHash()
-		isCoinbase := tx.IsCoinbase()
-		blockHeight := uint32(0)
-		blockIDs := []uint32{}
-
-		binsToStore, err := s.getBinsToStore(tx, blockHeight, blockIDs, true, txHash, isCoinbase)
-		require.NoError(t, err)
-		require.NotNil(t, binsToStore)
-
-		bItem := &batchStoreItem{
-			txHash:      txHash,
-			isCoinbase:  isCoinbase,
-			tx:          tx,
-			blockHeight: blockHeight,
-			blockIDs:    blockIDs,
-			done:        make(chan error, 1),
-		}
+		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{})
 
 		go s.storeTransactionExternally(ctx, bItem, binsToStore)
 
-		err = <-bItem.done
+		err := <-bItem.done
 		require.NoError(t, err)
 
-		key, err := aerospike.NewKey(db.namespace, db.setName, txHash.CloneBytes())
+		key, err := aerospike.NewKey(db.namespace, db.setName, bItem.txHash.CloneBytes())
 		require.NoError(t, err)
 
-		// check the record and external store
 		value, err := client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 
@@ -163,9 +172,7 @@ func TestStore_storeTransactionExternally(t *testing.T) {
 		assert.Nil(t, value.Bins["inputs"])
 		assert.Nil(t, value.Bins["outputs"])
 
-		exists, err := s.externalStore.Exists(ctx, txHash.CloneBytes(),
-			options.WithFileExtension("tx"),
-		)
+		exists, err := s.externalStore.Exists(ctx, bItem.txHash.CloneBytes(), options.WithFileExtension("tx"))
 		require.NoError(t, err)
 		assert.True(t, exists)
 	})
@@ -173,55 +180,24 @@ func TestStore_storeTransactionExternally(t *testing.T) {
 
 func TestStore_storePartialTransactionExternally(t *testing.T) {
 	ctx := context.Background()
-
 	client, db, _, deferFn := initAerospike(t)
 	defer deferFn()
 
 	t.Run("TestStore_storePartialTransactionExternally", func(t *testing.T) {
-		s := &Store{
-			utxoBatchSize: 100,
-			externalStore: memory.New(),
-			client:        &uaerospike.Client{Client: client},
-			namespace:     aerospikeNamespace,
-			setName:       aerospikeSet,
-		}
-
+		s := setupStore(t, client)
 		initPrometheusMetrics()
 
-		// read hex file from os
-		txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
-		require.NoError(t, err)
-
-		tx, err := bt.NewTxFromString(string(txHex))
-		require.NoError(t, err)
-
-		txHash := tx.TxIDChainHash()
-		isCoinbase := tx.IsCoinbase()
-		blockHeight := uint32(0)
-		blockIDs := []uint32{}
-
-		binsToStore, err := s.getBinsToStore(tx, blockHeight, blockIDs, true, txHash, isCoinbase)
-		require.NoError(t, err)
-		require.NotNil(t, binsToStore)
-
-		bItem := &batchStoreItem{
-			txHash:      txHash,
-			isCoinbase:  isCoinbase,
-			tx:          tx,
-			blockHeight: blockHeight,
-			blockIDs:    blockIDs,
-			done:        make(chan error, 1),
-		}
+		tx := readTransaction(t, "testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+		bItem, binsToStore := prepareBatchStoreItem(t, s, tx, 0, []uint32{})
 
 		go s.storePartialTransactionExternally(ctx, bItem, binsToStore)
 
-		err = <-bItem.done
+		err := <-bItem.done
 		require.NoError(t, err)
 
-		key, err := aerospike.NewKey(db.namespace, db.setName, txHash.CloneBytes())
+		key, err := aerospike.NewKey(db.namespace, db.setName, bItem.txHash.CloneBytes())
 		require.NoError(t, err)
 
-		// check the record and external store
 		value, err := client.Get(util.GetAerospikeReadPolicy(), key)
 		require.NoError(t, err)
 
@@ -229,9 +205,7 @@ func TestStore_storePartialTransactionExternally(t *testing.T) {
 		assert.Nil(t, value.Bins["inputs"])
 		assert.Nil(t, value.Bins["outputs"])
 
-		exists, err := s.externalStore.Exists(ctx, txHash.CloneBytes(),
-			options.WithFileExtension("outputs"),
-		)
+		exists, err := s.externalStore.Exists(ctx, bItem.txHash.CloneBytes(), options.WithFileExtension("outputs"))
 		require.NoError(t, err)
 		assert.True(t, exists)
 	})

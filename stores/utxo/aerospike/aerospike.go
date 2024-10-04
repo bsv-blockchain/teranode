@@ -21,6 +21,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	batcher "github.com/bitcoin-sv/ubsv/util/batcher_temp"
 	"github.com/bitcoin-sv/ubsv/util/uaerospike"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
 )
 
@@ -61,6 +63,7 @@ type Store struct {
 	externalStore              blob.Store
 	utxoBatchSize              int
 	externalizeAllTransactions bool
+	externalTxCache            *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
 }
 
 func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*Store, error) {
@@ -127,6 +130,7 @@ func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*St
 		externalStore:              externalStore,
 		utxoBatchSize:              utxoBatchSize,
 		externalizeAllTransactions: gocore.Config().GetBool("utxostore_externalizeAllTransactions", false),
+		externalTxCache:            util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute),
 	}
 
 	storeBatchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
