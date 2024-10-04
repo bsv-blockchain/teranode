@@ -2,10 +2,11 @@ package model
 
 import (
 	"context"
-	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/tracing"
 	"sync"
 	"time"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/tracing"
 
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -131,17 +132,21 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 	g.SetLimit(maxMinedRoutines)
 
 	maxRetries := 10
+
 	for subtreeIdx, subtree := range block.SubtreeSlices {
 		subtreeIdx := subtreeIdx
 		subtree := subtree
+
 		g.Go(func() error {
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
+
 			for idx := 0; idx < len(subtree.Nodes); idx++ {
-				if subtreeIdx == 0 && idx == 0 {
-					if subtree.Nodes[idx].Hash.IsEqual(CoinbasePlaceholderHash) {
-						continue
+				if subtree.Nodes[idx].Hash.IsEqual(CoinbasePlaceholderHash) {
+					if subtreeIdx != 0 || idx != 0 {
+						logger.Warnf("[UpdateTxMinedStatus][%s] bad coinbase placeholder position within block - subtree #%d, node #%d - ignoring", block.Hash().String(), subtreeIdx, idx)
 					}
-					logger.Warnf("[UpdateTxMinedStatus][%s] first tx in block is not coinbase tx: %s", block.Hash().String(), subtree.Nodes[idx].Hash.String())
+
+					continue
 				}
 
 				hashes = append(hashes, &subtree.Nodes[idx].Hash)
@@ -149,6 +154,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 				if idx > 0 && idx%maxMinedBatchSize == 0 {
 					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, batch %d, for subtree %s in block %d", block.Hash().String(), len(hashes), idx/maxMinedBatchSize, block.Subtrees[subtreeIdx].String(), blockID)
 					retries := 0
+
 					for {
 						if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
 							if retries >= maxRetries {
@@ -170,6 +176,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 
 			if len(hashes) > 0 {
 				retries := 0
+
 				for {
 					logger.Debugf("[UpdateTxMinedStatus][%s] SetMinedMulti for %d hashes, remainder batch, for subtree %s in block %d", block.Hash().String(), len(hashes), block.Subtrees[subtreeIdx].String(), blockID)
 					if err := txMetaStore.SetMinedMulti(gCtx, hashes, blockID); err != nil {
