@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 )
