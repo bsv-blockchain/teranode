@@ -53,13 +53,15 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		return nil, errors.NewServiceError("failed to create block assembly client", err)
 	}
 
+	// Get the type of verificator from config
+	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+	if !ok {
+		scriptValidator = "scriptVerificatorGoBt"
+	}
+
 	v := &Validator{
-		logger: logger,
-		txValidator: TxValidator{
-			logger:      logger,
-			policy:      NewPolicySettings(),
-			chainParams: chaincfg.GetChainParamsFromConfig(),
-		},
+		logger:         logger,
+		txValidator:    NewTxValidator(scriptValidator, logger, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
 		utxoStore:      store,
 		blockAssembler: ba,
 		saveInParallel: true,
@@ -529,7 +531,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	return v.txValidator.ValidateTransaction(tx, blockHeight)
+	return v.txValidator.VerifyScript(tx, blockHeight)
 }
 
 func feesToBtFeeQuote(minMiningFee float64) *bt.FeeQuote {

@@ -11,7 +11,9 @@ import (
 	gobdk "github.com/bitcoin-sv/bdk/module/gobdk"
 	bdkconfig "github.com/bitcoin-sv/bdk/module/gobdk/config"
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2"
 )
 
@@ -27,26 +29,65 @@ type bdkDebugVerification struct {
 }
 
 func init() {
-	// Set the validator function to use the go-bdk script validation
-	log.Println("Script Validation using GoBDK version : ", gobdk.BDK_VERSION_STRING())
-	validatorFunc = checkScriptsWithGoBDK
-
-	//"main";"test";"regtest";"stn";
-	bdkScriptConfig := bdkconfig.ScriptConfig{
-		ChainNetwork: "main",
-		// MaxOpsPerScriptPolicy:        uint64(10000),
-		// MaxScriptNumLengthPolicy:     uint64(20000),
-		// MaxScriptSizePolicy:          uint64(4294967295), // MAX_SCRIPT_SIZE_AFTER_GENESIS
-		// MaxPubKeysPerMultiSig:        uint64(40000),
-		// MaxStackMemoryUsageConsensus: uint64(500000),
-		// MaxStackMemoryUsagePolicy:    uint64(600000),
-	}
-
-	bdkscript.SetGlobalScriptConfig(bdkScriptConfig)
+	ScriptVerificatorFactory["scriptVerificatorGoBDK"] = newScriptVerificatorGoBDK
+	log.Println("Registered ScriptVerificatorGoBt")
 }
 
-// checkScriptsWithGoBDK verifies script using GoBDK
-func checkScriptsWithGoBDK(tv *TxValidator, tx *bt.Tx, blockHeight uint32) error {
+// getChainNameFromParams map the chain name from the ubsv way to bsv C++ code.
+func getBDKChainNameFromParams(pa *chaincfg.Params) string {
+	// ubsv : mainnet  testnet3  regtest  stn
+	// bdk  :    main      test  regtest  stn
+	chainNameMap := map[string]string{
+		"mainnet":  "main",
+		"stn":      "stn",
+		"testnet3": "test",
+		"regtest":  "regtest",
+	}
+
+	return chainNameMap[pa.Name]
+}
+
+func newScriptVerificatorGoBDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxValidator {
+	log.Println("Use Script Verificator with Go-BDK, version : ", gobdk.BDK_VERSION_STRING())
+
+	bdkScriptConfig := bdkconfig.ScriptConfig{
+		ChainNetwork:                 getBDKChainNameFromParams(pa),
+		MaxOpsPerScriptPolicy:        uint64(po.MaxOpsPerScriptPolicy),
+		MaxScriptNumLengthPolicy:     uint64(po.MaxScriptNumLengthPolicy),
+		MaxScriptSizePolicy:          uint64(po.MaxScriptSizePolicy),
+		MaxPubKeysPerMultiSig:        uint64(po.MaxPubKeysPerMultisigPolicy),
+		MaxStackMemoryUsageConsensus: uint64(po.MaxStackMemoryUsageConsensus),
+		MaxStackMemoryUsagePolicy:    uint64(po.MaxStackMemoryUsagePolicy),
+	}
+	bdkscript.SetGlobalScriptConfig(bdkScriptConfig)
+
+	return &scriptVerificatorGoBDK{
+		logger: l,
+		policy: po,
+		params: pa,
+	}
+}
+
+type scriptVerificatorGoBDK struct {
+	logger ulogger.Logger
+	policy *PolicySettings
+	params *chaincfg.Params
+}
+
+func (v *scriptVerificatorGoBDK) Logger() ulogger.Logger {
+	return v.logger
+}
+
+func (v *scriptVerificatorGoBDK) Params() *chaincfg.Params {
+	return v.params
+}
+
+func (v *scriptVerificatorGoBDK) PolicySettings() *PolicySettings {
+	return v.policy
+}
+
+// VerifyScript verifies script using Go-BDK
+func (v *scriptVerificatorGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (err error) {
 
 	for i, in := range tx.Inputs {
 		if in.PreviousTxScript == nil || in.UnlockingScript == nil {
@@ -86,7 +127,7 @@ func checkScriptsWithGoBDK(tv *TxValidator, tx *bt.Tx, blockHeight uint32) error
 
 			errorLogMsg := fmt.Sprintf("Failed to verify script in go-bdk, error : \n\n%v\n\n", string(errLogData))
 			//fmt.Println(errorLogMsg)
-			tv.logger.Warnf(errorLogMsg)
+			v.logger.Warnf(errorLogMsg)
 			return errors.NewTxInvalidError("Failed to verify script: %w", errV)
 		}
 	}
