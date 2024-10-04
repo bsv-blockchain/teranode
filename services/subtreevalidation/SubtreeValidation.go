@@ -82,19 +82,19 @@ func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) 
 
 // getMissingTransactionsBatch gets a batch of transactions from the network
 // NOTE: it does not return the transactions in the same order as the txHashes
-func (u *Server) getMissingTransactionsBatch(ctx context.Context, txHashes []utxo.UnresolvedMetaData, baseURL string) ([]*bt.Tx, error) {
+func (u *Server) getMissingTransactionsBatch(ctx context.Context, subtreeHash *chainhash.Hash, txHashes []utxo.UnresolvedMetaData, baseURL string) ([]*bt.Tx, error) {
 	txIDBytes := make([]byte, 32*len(txHashes))
 	for idx, txHash := range txHashes {
 		copy(txIDBytes[idx*32:(idx+1)*32], txHash.Hash[:])
 	}
 
 	// do http request to baseUrl + txHash.String()
-	u.logger.Debugf("[getMissingTransactionsBatch] getting %d txs from other miner %s", len(txHashes), baseURL)
+	u.logger.Debugf("[getMissingTransactionsBatch][%s] getting %d txs from other miner %s", subtreeHash.String(), len(txHashes), baseURL)
 	url := fmt.Sprintf("%s/txs", baseURL)
 
 	body, err := util.DoHTTPRequestBodyReader(ctx, url, txIDBytes)
 	if err != nil {
-		return nil, errors.NewExternalError("[getMissingTransactionsBatch] failed to do http request", err)
+		return nil, errors.NewExternalError("[getMissingTransactionsBatch][%s] failed to do http request", subtreeHash.String(), err)
 	}
 
 	defer body.Close()
@@ -111,14 +111,14 @@ func (u *Server) getMissingTransactionsBatch(ctx context.Context, txHashes []utx
 				break
 			}
 			// Not recoverable, returning processing error
-			return nil, errors.NewProcessingError("[getMissingTransactionsBatch] failed to read transaction from body", err)
+			return nil, errors.NewProcessingError("[getMissingTransactionsBatch][%s] failed to read transaction from body", subtreeHash.String(), err)
 		}
 
 		missingTxs = append(missingTxs, tx)
 	}
 
 	if len(missingTxs) != len(txHashes) {
-		return nil, errors.NewProcessingError("[getMissingTransactionsBatch] missing tx count mismatch: missing=%d, txHashes=%d", len(missingTxs), len(txHashes))
+		return nil, errors.NewProcessingError("[getMissingTransactionsBatch][%s] missing tx count mismatch: missing=%d, txHashes=%d", subtreeHash.String(), len(missingTxs), len(txHashes))
 	}
 
 	return missingTxs, nil
@@ -154,20 +154,20 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 	return tx, nil
 }
 
-func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32) (txMeta *meta.Data, err error) {
+func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash *chainhash.Hash, tx *bt.Tx, blockHeight uint32) (txMeta *meta.Data, err error) {
 	ctx, stat, deferFn := tracing.StartTracing(ctx, "getMissingTransaction",
 		tracing.WithHistogram(prometheusSubtreeValidationBlessMissingTransaction),
 	)
 	defer deferFn()
 
 	if tx == nil {
-		return nil, errors.NewTxInvalidError("[blessMissingTransaction] tx is nil")
+		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s] tx is nil", subtreeHash.String())
 	}
 
-	u.logger.Debugf("[blessMissingTransaction][%s] called", tx.TxID())
+	u.logger.Debugf("[blessMissingTransaction][%s][%s] called", subtreeHash.String(), tx.TxID())
 
 	if tx.IsCoinbase() {
-		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s] transaction is coinbase", tx.TxID())
+		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s][%s] transaction is coinbase", subtreeHash.String(), tx.TxID())
 	}
 
 	// validate the transaction in the validation service
@@ -177,7 +177,7 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 	err = u.validatorClient.Validate(ctx, tx, blockHeight)
 	if err != nil {
 		// TODO what to do here? This could be a double spend and the transaction needs to be marked as conflicting
-		return nil, errors.NewServiceError("[blessMissingTransaction][%s] failed to validate transaction", tx.TxID(), err)
+		return nil, errors.NewServiceError("[blessMissingTransaction][%s][%s] failed to validate transaction", subtreeHash.String(), tx.TxID(), err)
 	}
 
 	start := gocore.CurrentTime()
@@ -186,12 +186,12 @@ func (u *Server) blessMissingTransaction(ctx context.Context, tx *bt.Tx, blockHe
 	stat.NewStat("getTxMeta").AddTime(start)
 
 	if err != nil {
-		return nil, errors.NewServiceError("[blessMissingTransaction][%s] failed to get tx meta", tx.TxID(), err)
+		return nil, errors.NewServiceError("[blessMissingTransaction][%s][%s] failed to get tx meta", subtreeHash.String(), tx.TxID(), err)
 	}
 
 	// Not recoverable, returning processing error
 	if txMeta == nil {
-		return nil, errors.NewProcessingError("[blessMissingTransaction][%s] tx meta is nil", tx.TxID())
+		return nil, errors.NewProcessingError("[blessMissingTransaction][%s][%s] tx meta is nil", subtreeHash.String(), tx.TxID())
 	}
 
 	return txMeta, nil
@@ -565,7 +565,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 	} else {
 		u.logger.Infof("[validateSubtree][%s] fetching %d missing txs", subtreeHash.String(), len(missingTxHashes))
 
-		missingTxs, err = u.getMissingTransactions(ctx, missingTxHashes, baseURL)
+		missingTxs, err = u.getMissingTransactions(ctx, subtreeHash, missingTxHashes, baseURL)
 		if err != nil {
 			return errors.NewProcessingError("[validateSubtree][%s] failed to get missing transactions", subtreeHash.String(), err)
 		}
@@ -596,7 +596,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash *ch
 			}
 
 			g.Go(func() error {
-				txMeta, err := u.blessMissingTransaction(gCtx, mTx.tx, blockHeight)
+				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, mTx.tx, blockHeight)
 				if err != nil {
 					return errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), mTx.tx.TxIDChainHash().String(), err)
 				}
@@ -762,7 +762,7 @@ func (u *Server) getMissingTransactionsFromFile(ctx context.Context, subtreeHash
 	return missingTxs, nil
 }
 
-func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []utxo.UnresolvedMetaData,
+func (u *Server) getMissingTransactions(ctx context.Context, subtreeHash *chainhash.Hash, missingTxHashes []utxo.UnresolvedMetaData,
 	baseUrl string) (missingTxs []missingTx, err error) {
 
 	// transactions have to be returned in the same order as they were requested
@@ -781,16 +781,16 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []u
 		missingTxHashesBatch := missingTxHashes[i:util.Min(i+batchSize, len(missingTxHashes))]
 
 		g.Go(func() error {
-			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, missingTxHashesBatch, baseUrl)
+			missingTxsBatch, err := u.getMissingTransactionsBatch(gCtx, subtreeHash, missingTxHashesBatch, baseUrl)
 			if err != nil {
-				return errors.NewProcessingError("[getMissingTransactions] failed to get missing transactions batch", err)
+				return errors.NewProcessingError("[getMissingTransactions][%s] failed to get missing transactions batch", subtreeHash.String(), err)
 			}
 
 			missingTxsMu.Lock()
 			for _, tx := range missingTxsBatch {
 				if tx == nil {
 					missingTxsMu.Unlock()
-					return errors.NewProcessingError("[getMissingTransactions] #1 missing transaction is nil")
+					return errors.NewProcessingError("[getMissingTransactions][%s] #1 missing transaction is nil", subtreeHash.String())
 				}
 				missingTxsMap[*tx.TxIDChainHash()] = tx
 			}
@@ -801,7 +801,7 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []u
 	}
 
 	if err = g.Wait(); err != nil {
-		return nil, errors.NewProcessingError("[getMissingTransaction] failed to get all transactions", err)
+		return nil, errors.NewProcessingError("[getMissingTransaction][%s] failed to get all transactions", subtreeHash.String(), err)
 	}
 
 	// populate the missingTx slice with the tx data
@@ -810,18 +810,18 @@ func (u *Server) getMissingTransactions(ctx context.Context, missingTxHashes []u
 	for _, mTx := range missingTxHashes {
 		tx, ok := missingTxsMap[mTx.Hash]
 		if !ok {
-			return nil, errors.NewProcessingError("[getMissingTransaction] missing transaction [%s]", mTx.Hash.String())
+			return nil, errors.NewProcessingError("[getMissingTransaction][%s] missing transaction [%s]", subtreeHash.String(), mTx.Hash.String())
 		}
 
 		if tx == nil {
-			return nil, errors.NewProcessingError("[getMissingTransaction] #3 missing transaction is nil [%s]", mTx.Hash.String())
+			return nil, errors.NewProcessingError("[getMissingTransaction][%s] #3 missing transaction is nil [%s]", subtreeHash.String(), mTx.Hash.String())
 		}
 
 		missingTxs = append(missingTxs, missingTx{tx: tx, idx: mTx.Idx})
 	}
 
 	if len(missingTxs) != len(missingTxHashes) {
-		return nil, errors.NewProcessingError("[getMissingTransaction] missing tx count mismatch: missing=%d, txHashes=%d", len(missingTxs), len(missingTxHashes))
+		return nil, errors.NewProcessingError("[getMissingTransaction][%s] missing tx count mismatch: missing=%d, txHashes=%d", subtreeHash.String(), len(missingTxs), len(missingTxHashes))
 	}
 
 	return missingTxs, nil
