@@ -37,6 +37,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		,b.tx_count
 		,b.size_in_bytes
 		,b.coinbase_tx
+		,b.chain_work
 		FROM blocks b
 		WHERE invalid = false
 		ORDER BY chain_work DESC, peer_id ASC, id ASC
@@ -66,6 +67,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		&blockHeaderMeta.TxCount,
 		&blockHeaderMeta.SizeInBytes,
 		&coinbaseBytes,
+		&blockHeaderMeta.Chainwork,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewStorageError("error in GetBestBlockHeader", err)

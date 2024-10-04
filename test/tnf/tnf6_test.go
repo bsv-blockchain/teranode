@@ -1,4 +1,4 @@
-//go:build tnftests
+////go:build tnftests
 
 // How to run this test:
 // $ cd test/tnf/
@@ -7,12 +7,11 @@
 package tnf
 
 import (
-	"fmt"
+	"math/big"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/test/setup"
-	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
@@ -24,20 +23,26 @@ type TNFTestSuite struct {
 func (suite *TNFTestSuite) InitSuite() {
 	suite.SettingsMap = map[string]string{
 		"SETTINGS_CONTEXT_1": "docker.ci.ubsv1.tnf6",
-		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tnf6",
+		"SETTINGS_CONTEXT_2": "docker.ci.ubsv2.tnf6.stage1",
 		"SETTINGS_CONTEXT_3": "docker.ci.ubsv3.tnf6",
 	}
 }
 
 const (
-	NodeURL1 = "http://localhost:18090"
-	NodeURL2 = "http://localhost:28090"
-	NodeURL3 = "http://localhost:38090"
+	NodeURL1 = "http://localhost:10090"
+	NodeURL2 = "http://localhost:12090"
+	NodeURL3 = "http://localhost:14090"
+)
+
+const (
+	miner1 = "/m1-eu/"
+	miner2 = "/m2-us/"
+	miner3 = "/m3-asia/"
 )
 
 func (suite *TNFTestSuite) SetupTest() {
 	suite.InitSuite()
-	suite.BitcoinTestSuite.SetupTestWithCustomSettingsDoNotReset(suite.SettingsMap)
+	suite.BitcoinTestSuite.SetupTestWithCustomSettings(suite.SettingsMap)
 }
 
 func (suite *TNFTestSuite) TearDownTest() {
@@ -48,6 +53,7 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	t := suite.T()
 	cluster := suite.Framework
 	logger := cluster.Logger
+	settingsMap := suite.SettingsMap
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -59,41 +65,94 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 
 	ctx := cluster.Context
 
-	time.Sleep(10 * time.Second)
+	blockchainNode1 := cluster.Nodes[0].BlockchainClient
+	header1, meta1, _ := blockchainNode1.GetBestBlockHeader(ctx)
+	logger.Infof("Best block header on Node 1: %s", header1.Hash().String())
 
-	blockchain := cluster.Nodes[0].BlockchainClient
-	header, _, _ := blockchain.GetBestBlockHeader(ctx)
-	fmt.Printf("Best block header: %v\n", header.Hash())
-	err := blockchain.InvalidateBlock(ctx, header.Hash())
+	chainWork1 := new(big.Int).SetBytes(meta1.Chainwork)
+	logger.Infof("Chainwork bytes on Node 1: %v", meta1.Chainwork)
+	logger.Infof("Chainwork on Node 1: %v", chainWork1)
 
-	if err != nil {
-		t.Errorf("Failed to invalidate block: %v", err)
+	blockchainNode2 := cluster.Nodes[1].BlockchainClient
+	headerInvalidate, meta2, _ := blockchainNode2.GetBestBlockHeader(ctx)
+
+	logger.Infof("Best block header on Miner 2: %s", headerInvalidate.Hash().String())
+
+	chainWork2 := new(big.Int).SetBytes(meta2.Chainwork)
+	logger.Infof("Chainwork on Node 2: %v", chainWork2)
+
+	blockchainNode3 := cluster.Nodes[2].BlockchainClient
+
+	header3, meta3, _ := blockchainNode3.GetBestBlockHeader(ctx)
+	logger.Infof("Best block header on Node 3: %s", header3.Hash().String())
+
+	chainWork3 := new(big.Int).SetBytes(meta3.Chainwork)
+	logger.Infof("Chainwork on Node 3: %v", chainWork3)
+
+	time.Sleep(60 * time.Second)
+
+	// Stage 2
+	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ci.ubsv2.tnf6.stage2"
+	if err := cluster.RestartNodes(settingsMap); err != nil {
+		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
-	header1, _, _ := cluster.Nodes[2].BlockchainClient.GetBestBlockHeader(ctx)
-	blockchain1 := cluster.Nodes[2].BlockchainClient
-	err = blockchain1.InvalidateBlock(ctx, header1.Hash())
+	time.Sleep(2 * time.Second)
 
-	if err != nil {
-		t.Errorf("Failed to invalidate block: %v", err)
+	blockchainNode1 = cluster.Nodes[0].BlockchainClient
+	header1, meta1, _ = blockchainNode1.GetBestBlockHeader(ctx)
+	miner := meta1.Miner
+
+	logger.Infof("Best block header on node1: %s", header1.Hash().String())
+	logger.Infof("Best block Miner on node 1: %v", miner)
+
+	if miner == miner2 {
+		logger.Infof("Invalidating block on Miner 1")
+
+		err := blockchainNode1.InvalidateBlock(ctx, header1.Hash())
+		if err != nil {
+			t.Errorf("Failed to invalidate block: %v", err)
+		}
 	}
 
-	time.Sleep(20 * time.Second)
+	blockchainNode2 = cluster.Nodes[1].BlockchainClient
+	header2, meta2, _ := blockchainNode2.GetBestBlockHeader(ctx)
+	miner = meta2.Miner
 
-	_, errMine0 := helper.MineBlock(ctx, cluster.Nodes[0].BlockassemblyClient, logger)
-	if errMine0 != nil {
-		t.Errorf("Failed to mine block: %v", errMine0)
+	logger.Infof("Best block header on node 2: %s", header2.Hash().String())
+	logger.Infof("Best block Miner on node 2: %v", miner)
+
+	if miner == miner2 {
+		logger.Infof("Invalidating block on Miner 2")
+
+		err := blockchainNode2.InvalidateBlock(ctx, header2.Hash())
+		if err != nil {
+			t.Errorf("Failed to invalidate block: %v", err)
+		}
 	}
 
-	header1, _, _ = blockchain1.GetBestBlockHeader(ctx)
-	fmt.Printf("Best block header1: %v\n", header1.Hash())
+	blockchainNode3 = cluster.Nodes[2].BlockchainClient
+	header3, meta3, _ = blockchainNode3.GetBestBlockHeader(ctx)
+	miner = meta3.Miner
 
-	header, _, _ = blockchain.GetBestBlockHeader(ctx)
-	fmt.Printf("Best block header: %v\n", header.Hash())
+	logger.Infof("Best block header on node 3: %s", header3.Hash().String())
+	logger.Infof("Best block Miner node 3: %v", miner)
 
-	assert.NotEqual(t, header.Hash(), header1.Hash(), "Blocks are equal")
+	if miner == miner2 {
+		logger.Infof("Invalidating block on Miner 3")
+
+		err := blockchainNode3.InvalidateBlock(ctx, header3.Hash())
+		if err != nil {
+			t.Errorf("Failed to invalidate block: %v", err)
+		}
+	}
+
+	header1, _, _ = blockchainNode1.GetBestBlockHeader(ctx)
+
+	header3, _, _ = blockchainNode3.GetBestBlockHeader(ctx)
+
+	assert.Equal(t, header1.Hash(), header3.Hash(), "Blocks should be equal")
 }
-
 func TestTNFTestSuite(t *testing.T) {
 	suite.Run(t, new(TNFTestSuite))
 }

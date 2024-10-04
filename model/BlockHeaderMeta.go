@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/binary"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 )
 
@@ -13,6 +14,7 @@ type BlockHeaderMeta struct {
 	Miner       string `json:"miner"`         // Miner
 	BlockTime   uint32 `json:"block_time"`    // Time of the block.
 	Timestamp   uint32 `json:"timestamp"`     // Timestamp of the block.
+	Chainwork   []byte `json:"chainwork"`     // Chainwork of the block.
 }
 
 func (m *BlockHeaderMeta) Bytes() []byte {
