@@ -46,6 +46,97 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
+	return blockToJSON(ctx, b, *c.Verbosity, s)
+}
+
+// handleGetBlockByHeight implements the getblockbyheight command.
+func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBlockByHeight",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetBlockByHeight),
+		tracing.WithLogMessage(s.logger, "[handleGetBlockByHeight] called"),
+	)
+
+	defer deferFn()
+
+	c := cmd.(*btcjson.GetBlockByHeightCmd)
+
+	// Load the raw block bytes from the database.
+	b, err := s.blockchainClient.GetBlockByHeight(ctx, c.Height)
+	if err != nil {
+		return nil, err
+	}
+
+	return blockToJSON(ctx, b, *c.Verbosity, s)
+}
+
+// handleGetBlockHash implements the getblockhash command.
+func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBlockHash",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetBlockHash),
+		tracing.WithLogMessage(s.logger, "[handleGetBlockHash] called"),
+	)
+
+	defer deferFn()
+
+	c := cmd.(*btcjson.GetBlockHashCmd)
+
+	// Load the raw block bytes from the database.
+	b, err := s.blockchainClient.GetBlockByHeight(ctx, uint32(c.Index))
+	if err != nil {
+		return nil, err
+	}
+
+	return b.Hash().String(), nil
+}
+
+// handleGetBlockHash implements the getblockheader command.
+func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetBlockHeader",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetBlockHeader),
+		tracing.WithLogMessage(s.logger, "[handleGetBlockHeader] called"),
+	)
+
+	defer deferFn()
+
+	c := cmd.(*btcjson.GetBlockHeaderCmd)
+
+	ch, err := chainhash.NewHashFromStr(c.Hash)
+	if err != nil {
+		return nil, rpcDecodeHexError(c.Hash)
+	}
+	// Load the raw block bytes from the database.
+	b, meta, err := s.blockchainClient.GetBlockHeader(ctx, ch)
+	if err != nil {
+		return nil, err
+	}
+
+	if *c.Verbose {
+		diff := b.Bits.CalculateDifficulty()
+		diffFloat, _ := diff.Float64()
+		headerReply := &btcjson.GetBlockHeaderVerboseResult{
+			Hash:         b.Hash().String(),
+			Version:      int32(b.Version),
+			VersionHex:   fmt.Sprintf("%08x", b.Version),
+			PreviousHash: b.HashPrevBlock.String(),
+			Nonce:        uint64(b.Nonce),
+			Time:         int64(b.Timestamp),
+			Bits:         b.Bits.String(),
+			Difficulty:   diffFloat,
+			MerkleRoot:   b.HashMerkleRoot.String(),
+			// Confirmations: int64(1 + bestBlockMeta.Height - meta.Height),
+			Height: int32(meta.Height),
+		}
+
+		return headerReply, nil
+	}
+
+	return fmt.Sprintf("%x", b.Bytes()), nil
+}
+
+func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCServer) (interface{}, error) {
 	if b == nil {
 		return nil, &btcjson.RPCError{
 			Code:    btcjson.ErrRPCBlockNotFound,
@@ -60,7 +151,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	if *c.Verbosity == 0 {
+	if verbosity == 0 {
 		// Generate the JSON object and return it.
 		return hex.EncodeToString(blkBytes), nil
 	}
@@ -86,7 +177,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	diff, _ := b.Header.Bits.CalculateDifficulty().Float64()
 
 	baseBlockReply := &btcjson.GetBlockBaseVerboseResult{
-		Hash:          c.Hash,
+		Hash:          b.Hash().String(),
 		Version:       int32(b.Header.Version), // nolint:gosec
 		VersionHex:    fmt.Sprintf("%08x", b.Header.Version),
 		MerkleRoot:    b.Header.HashMerkleRoot.String(),
@@ -106,7 +197,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	// If verbose level does not match 0 or 1
 	// we can consider it 2 (current bitcoin core behavior)
-	if *c.Verbosity == 1 {
+	if verbosity == 1 {
 		// 	transactions := blk.Transactions()
 		// 	txNames := make([]string, len(transactions))
 		// 	for i, tx := range transactions {
@@ -525,6 +616,22 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	return infos, nil
 }
 
+func handleGetDifficulty(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetDifficulty",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetDifficulty),
+		tracing.WithLogMessage(s.logger, "[handleGetDifficulty] called"),
+	)
+	defer deferFn()
+
+	difficulty, err := s.blockAssemblyClient.GetCurrentDifficulty(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return difficulty, nil
+}
+
 func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "handleGetblockchaininfo",
 		tracing.WithParentStat(RPCStat),
@@ -607,6 +714,55 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 	s.logger.Debugf("in handleSubmitMiningSolution: ms: %+v", ms)
 
 	err = s.blockAssemblyClient.SubmitMiningSolution(ctx, ms)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+// handleInvalidateBlock implements the invalidateblock command.
+func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "handleInvalidateBlock",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleInvalidateBlock),
+		tracing.WithLogMessage(s.logger, "[handleInvalidateBlock] called"),
+	)
+	defer deferFn()
+
+	c := cmd.(*btcjson.InvalidateBlockCmd)
+
+	ch, err := chainhash.NewHashFromStr(c.BlockHash)
+	if err != nil {
+		return nil, rpcDecodeHexError(c.BlockHash)
+	}
+
+	err = s.blockchainClient.InvalidateBlock(ctx, ch)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+// handleReconsiderBlock implements the reconsiderblock command.
+func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "handleReconsiderBlock",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleReconsiderBlock),
+		tracing.WithLogMessage(s.logger, "[handleReconsiderBlock] called"),
+	)
+	defer deferFn()
+
+	c := cmd.(*btcjson.ReconsiderBlockCmd)
+
+	ch, err := chainhash.NewHashFromStr(c.BlockHash)
+	if err != nil {
+		return nil, rpcDecodeHexError(c.BlockHash)
+	}
+
+	// Load the raw block bytes from the database.
+	err = s.blockchainClient.RevalidateBlock(ctx, ch)
 	if err != nil {
 		return nil, err
 	}

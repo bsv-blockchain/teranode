@@ -133,6 +133,12 @@ type GetBlockCmd struct {
 	Verbosity *uint32 `jsonrpcdefault:"1"`
 }
 
+// GetBlockByHeightCmd defines the getblockbyheight JSON-RPC command.
+type GetBlockByHeightCmd struct {
+	Height    uint32
+	Verbosity *uint32 `jsonrpcdefault:"1"`
+}
+
 // NewGetBlockCmd returns a new instance which can be used to issue a getblock
 // JSON-RPC command.
 //
@@ -788,6 +794,7 @@ func init() {
 	MustRegisterCmd("getaddednodeinfo", (*GetAddedNodeInfoCmd)(nil), flags)
 	MustRegisterCmd("getbestblockhash", (*GetBestBlockHashCmd)(nil), flags)
 	MustRegisterCmd("getblock", (*GetBlockCmd)(nil), flags)
+	MustRegisterCmd("getblockbyheight", (*GetBlockByHeightCmd)(nil), flags)
 	MustRegisterCmd("getblockchaininfo", (*GetBlockChainInfoCmd)(nil), flags)
 	MustRegisterCmd("getblockcount", (*GetBlockCountCmd)(nil), flags)
 	MustRegisterCmd("getblockhash", (*GetBlockHashCmd)(nil), flags)

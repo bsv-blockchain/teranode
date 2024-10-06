@@ -113,16 +113,17 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getbestblock":          handleUnimplemented,
 	"getbestblockhash":      handleGetBestBlockHash,
 	"getblock":              handleGetBlock,
+	"getblockbyheight":      handleGetBlockByHeight,
 	"getblockchaininfo":     handleGetblockchaininfo,
 	"getblockcount":         handleUnimplemented,
-	"getblockhash":          handleUnimplemented,
-	"getblockheader":        handleUnimplemented,
+	"getblockhash":          handleGetBlockHash,
+	"getblockheader":        handleGetBlockHeader,
 	"getblocktemplate":      handleUnimplemented,
 	"getcfilter":            handleUnimplemented,
 	"getcfilterheader":      handleUnimplemented,
 	"getconnectioncount":    handleUnimplemented,
 	"getcurrentnet":         handleUnimplemented,
-	"getdifficulty":         handleUnimplemented,
+	"getdifficulty":         handleGetDifficulty,
 	"getgenerate":           handleUnimplemented,
 	"gethashespersec":       handleUnimplemented,
 	"getheaders":            handleUnimplemented,
@@ -139,7 +140,8 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"help":                  handleUnimplemented,
 	"node":                  handleUnimplemented,
 	"ping":                  handleUnimplemented,
-	"reconsiderblock":       handleUnimplemented,
+	"invalidateblock":       handleInvalidateBlock,
+	"reconsiderblock":       handleReconsiderBlock,
 	"searchrawtransactions": handleUnimplemented,
 	"sendrawtransaction":    handleSendRawTransaction,
 	"setgenerate":           handleUnimplemented,
@@ -211,8 +213,8 @@ var rpcUnimplemented = map[string]struct{}{
 	"getmempoolentry":  {},
 	"getnetworkinfo":   {},
 	"getwork":          {},
-	"invalidateblock":  {},
-	"preciousblock":    {},
+	// "invalidateblock":  {},
+	"preciousblock": {},
 }
 
 // Commands that are available to a limited user
@@ -1132,10 +1134,13 @@ func (s *RPCServer) Init(ctx context.Context) (err error) {
 	// rand.Seed(time.Now().UnixNano())
 	s.blockAssemblyClient, err = blockassembly.NewClient(ctx, s.logger)
 	if err != nil {
-		return err
+		return
 	}
 
 	s.peerClient, err = peer.NewClient(ctx, s.logger)
+	if err != nil {
+		return
+	}
 
 	network, _ := gocore.Config().Get("network", "mainnet")
 

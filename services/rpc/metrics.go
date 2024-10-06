@@ -11,6 +11,9 @@ import (
 var (
 	// prometheusHealth                     prometheus.Counter
 	prometheusHandleGetBlock             prometheus.Histogram
+	prometheusHandleGetBlockByHeight     prometheus.Histogram
+	prometheusHandleGetBlockHash         prometheus.Histogram
+	prometheusHandleGetBlockHeader       prometheus.Histogram
 	prometheusHandleGetBestBlockHash     prometheus.Histogram
 	prometheusHandleCreateRawTransaction prometheus.Histogram
 	prometheusHandleSendRawTransaction   prometheus.Histogram
@@ -20,6 +23,9 @@ var (
 	prometheusHandleGetpeerinfo          prometheus.Histogram
 	prometheusHandleGetblockchaininfo    prometheus.Histogram
 	prometheusHandleGetinfo              prometheus.Histogram
+	prometheusHandleGetDifficulty        prometheus.Histogram
+	prometheusHandleInvalidateBlock      prometheus.Histogram
+	prometheusHandleReconsiderBlock      prometheus.Histogram
 )
 
 var (
@@ -43,6 +49,30 @@ func _initPrometheusMetrics() {
 			Namespace: "rpc",
 			Name:      "get_block",
 			Help:      "Histogram of calls to handleGetBlock in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGetBlockByHeight = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "get_block_by_height",
+			Help:      "Histogram of calls to handleGetBlockByHeight in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGetBlockHash = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "get_block_hash",
+			Help:      "Histogram of calls to handleGetBlockHash in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGetBlockHeader = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "get_block_header",
+			Help:      "Histogram of calls to handleGetBlockHeader in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
@@ -115,6 +145,31 @@ func _initPrometheusMetrics() {
 			Namespace: "rpc",
 			Name:      "get_info",
 			Help:      "Histogram of calls to handleGetinfo in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusHandleGetDifficulty = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "get_difficulty",
+			Help:      "Histogram of calls to handleGetDifficulty in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleInvalidateBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "invalidate_block",
+			Help:      "Histogram of calls to handleInvalidateBlock in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleReconsiderBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "reconsider_block",
+			Help:      "Histogram of calls to handleReconsiderBlock in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

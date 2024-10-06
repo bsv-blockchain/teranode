@@ -7,6 +7,9 @@ use postman
 
 `{"method": "getblock", "params": ["000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", 1]}`
 
+`{"method": "getblockbyheight", "params": ["1", 1]}`
+
+
 `{"method": "getbestblockhash"}`
 
 `{"method": "createrawtransaction", "params": [[{"txid":"0000000000000000000000000000000000000000000000000000000000000000","vout":0}],{"148EznH7niCQRUcsrtDgBBKUfYDYESscUQ":12.5}]}`

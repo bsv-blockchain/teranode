@@ -27,6 +27,9 @@ service BlockAssemblyAPI {
   // Returns a mining candidate block, including the coinbase transaction, the subtrees, the root merkle proof and the block fees.
   rpc GetMiningCandidate (EmptyMessage) returns (model.MiningCandidate) {}
 
+  // Get the current difficulty of the blockchain.
+  rpc GetCurrentDifficulty (EmptyMessage) returns (GetCurrentDifficultyResponse) {}
+
   // Submits a mining solution to the blockchain.
   rpc SubmitMiningSolution (SubmitMiningSolutionRequest) returns (SubmitMiningSolutionResponse) {}
 
@@ -112,4 +115,9 @@ message StateMessage {
   int64 queueCount = 7; // the size of the queue
   uint32 currentHeight = 8; // the height of the chaintip
   string currentHash = 9; // the hash of the chaintip
+}
+
+// Response containing the current difficulty of the blockchain.
+message GetCurrentDifficultyResponse {
+  double difficulty = 1; // the current difficulty of the blockchain
 }

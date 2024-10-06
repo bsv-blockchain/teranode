@@ -696,6 +696,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		return nil, errors.WrapGRPC(
 			errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", jobID, block.Hash().String(), err))
 	}
+
 	ba.logger.Infof("[BlockAssembly][%s][%s] validating block DONE in %s", jobID, block.Header.Hash(), time.Since(startTime).String())
 
 	// TODO context was being canceled, is this hiding a different problem?
@@ -705,10 +706,10 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	}
 
 	// TODO why is this needed?
-	//_, err = ba.txMetaStore.Create(cntxt, block.CoinbaseTx)
-	//if err != nil {
+	// _, err = ba.txMetaStore.Create(cntxt, block.CoinbaseTx)
+	// if err != nil {
 	//	ba.logger.Errorf("[BlockAssembly] error storing coinbase tx in tx meta store: %v", err)
-	//}
+	// }
 
 	ba.logger.Infof("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
 	// add block to the blockchain
@@ -784,6 +785,7 @@ func (ba *BlockAssembly) removeSubtreesTTL(ctx context.Context, block *model.Blo
 	for _, subtreeHash := range block.Subtrees {
 		subtreeHashBytes := subtreeHash.CloneBytes()
 		subtreeHash := subtreeHash
+
 		g.Go(func() error {
 			// TODO this would be better as a batch operation
 			if err := ba.subtreeStore.SetTTL(gCtx, subtreeHashBytes, 0, options.WithFileExtension("subtree")); err != nil {
@@ -849,5 +851,14 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		QueueCount:            ba.blockAssembler.QueueLength(),
 		CurrentHeight:         ba.blockAssembler.bestBlockHeight.Load(),
 		CurrentHash:           ba.blockAssembler.bestBlockHeader.Load().Hash().String(),
+	}, nil
+}
+
+func (ba *BlockAssembly) GetCurrentDifficulty(ctx context.Context, _ *blockassembly_api.EmptyMessage) (resp *blockassembly_api.GetCurrentDifficultyResponse, err error) {
+	cd := ba.blockAssembler.currentDifficulty
+	dif := cd.CalculateDifficulty()
+	f, _ := dif.Float64()
+	return &blockassembly_api.GetCurrentDifficultyResponse{
+		Difficulty: f,
 	}, nil
 }

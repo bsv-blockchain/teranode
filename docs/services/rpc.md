@@ -59,6 +59,9 @@ The below table summarises the services supported in the current version:
 | version               | Supported  |
 | getminingcandidate    | Supported  |
 | submitminingsolution  | Supported  |
+| getblockchaininfo     | Supported  |
+| getinfo               | Supported  |
+| getpeerinfo           | Supported  |
 
 ### Unimplemented RPC Commands
 
@@ -72,7 +75,6 @@ The below table summarises the services supported in the current version:
 | generate                | Unimplemented|
 | getaddednodeinfo        | Unimplemented|
 | getbestblock            | Unimplemented|
-| getblockchaininfo       | Unimplemented|
 | getblockcount           | Unimplemented|
 | getblockhash            | Unimplemented|
 | getblockheader          | Unimplemented|
@@ -85,12 +87,10 @@ The below table summarises the services supported in the current version:
 | getgenerate             | Unimplemented|
 | gethashespersec         | Unimplemented|
 | getheaders              | Unimplemented|
-| getinfo                 | Unimplemented|
 | getmempoolinfo          | Unimplemented|
 | getmininginfo           | Unimplemented|
 | getnettotals            | Unimplemented|
 | getnetworkhashps        | Unimplemented|
-| getpeerinfo             | Unimplemented|
 | getrawmempool           | Unimplemented|
 | getrawtransaction       | Unimplemented|
 | gettxout                | Unimplemented|

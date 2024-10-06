@@ -25,6 +25,7 @@ const (
 	BlockAssemblyAPI_RemoveTx_FullMethodName                 = "/blockassembly_api.BlockAssemblyAPI/RemoveTx"
 	BlockAssemblyAPI_AddTxBatch_FullMethodName               = "/blockassembly_api.BlockAssemblyAPI/AddTxBatch"
 	BlockAssemblyAPI_GetMiningCandidate_FullMethodName       = "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate"
+	BlockAssemblyAPI_GetCurrentDifficulty_FullMethodName     = "/blockassembly_api.BlockAssemblyAPI/GetCurrentDifficulty"
 	BlockAssemblyAPI_SubmitMiningSolution_FullMethodName     = "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution"
 	BlockAssemblyAPI_DeDuplicateBlockAssembly_FullMethodName = "/blockassembly_api.BlockAssemblyAPI/DeDuplicateBlockAssembly"
 	BlockAssemblyAPI_ResetBlockAssembly_FullMethodName       = "/blockassembly_api.BlockAssemblyAPI/ResetBlockAssembly"
@@ -45,6 +46,8 @@ type BlockAssemblyAPIClient interface {
 	AddTxBatch(ctx context.Context, in *AddTxBatchRequest, opts ...grpc.CallOption) (*AddTxBatchResponse, error)
 	// Returns a mining candidate block, including the coinbase transaction, the subtrees, the root merkle proof and the block fees.
 	GetMiningCandidate(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*model.MiningCandidate, error)
+	// Get the current difficulty of the blockchain.
+	GetCurrentDifficulty(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetCurrentDifficultyResponse, error)
 	// Submits a mining solution to the blockchain.
 	SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error)
 	// De-duplicate transaction in block assembly subtree processor.
@@ -108,6 +111,16 @@ func (c *blockAssemblyAPIClient) GetMiningCandidate(ctx context.Context, in *Emp
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) GetCurrentDifficulty(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*GetCurrentDifficultyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCurrentDifficultyResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_GetCurrentDifficulty_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockAssemblyAPIClient) SubmitMiningSolution(ctx context.Context, in *SubmitMiningSolutionRequest, opts ...grpc.CallOption) (*SubmitMiningSolutionResponse, error) {
 	out := new(SubmitMiningSolutionResponse)
 	err := c.cc.Invoke(ctx, BlockAssemblyAPI_SubmitMiningSolution_FullMethodName, in, out, opts...)
@@ -158,6 +171,8 @@ type BlockAssemblyAPIServer interface {
 	AddTxBatch(context.Context, *AddTxBatchRequest) (*AddTxBatchResponse, error)
 	// Returns a mining candidate block, including the coinbase transaction, the subtrees, the root merkle proof and the block fees.
 	GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error)
+	// Get the current difficulty of the blockchain.
+	GetCurrentDifficulty(context.Context, *EmptyMessage) (*GetCurrentDifficultyResponse, error)
 	// Submits a mining solution to the blockchain.
 	SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error)
 	// De-duplicate transaction in block assembly subtree processor.
@@ -187,6 +202,9 @@ func (UnimplementedBlockAssemblyAPIServer) AddTxBatch(context.Context, *AddTxBat
 }
 func (UnimplementedBlockAssemblyAPIServer) GetMiningCandidate(context.Context, *EmptyMessage) (*model.MiningCandidate, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetMiningCandidate not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) GetCurrentDifficulty(context.Context, *EmptyMessage) (*GetCurrentDifficultyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCurrentDifficulty not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) SubmitMiningSolution(context.Context, *SubmitMiningSolutionRequest) (*SubmitMiningSolutionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SubmitMiningSolution not implemented")
@@ -303,6 +321,24 @@ func _BlockAssemblyAPI_GetMiningCandidate_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_GetCurrentDifficulty_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmptyMessage)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).GetCurrentDifficulty(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_GetCurrentDifficulty_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).GetCurrentDifficulty(ctx, req.(*EmptyMessage))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockAssemblyAPI_SubmitMiningSolution_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SubmitMiningSolutionRequest)
 	if err := dec(in); err != nil {
@@ -401,6 +437,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetMiningCandidate",
 			Handler:    _BlockAssemblyAPI_GetMiningCandidate_Handler,
+		},
+		{
+			MethodName: "GetCurrentDifficulty",
+			Handler:    _BlockAssemblyAPI_GetCurrentDifficulty_Handler,
 		},
 		{
 			MethodName: "SubmitMiningSolution",

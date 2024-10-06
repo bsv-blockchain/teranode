@@ -180,6 +180,17 @@ func (s *Client) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate
 	return res, nil
 }
 
+func (s *Client) GetCurrentDifficulty(ctx context.Context) (float64, error) {
+	req := &blockassembly_api.EmptyMessage{}
+
+	res, err := s.client.GetCurrentDifficulty(ctx, req)
+	if err != nil {
+		return 0, errors.UnwrapGRPC(err)
+	}
+
+	return res.Difficulty, nil
+}
+
 func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.MiningSolution) error {
 	_, err := s.client.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
 		Id:         solution.Id,
