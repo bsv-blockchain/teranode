@@ -191,7 +191,7 @@ func (sm *SyncManager) prepareSubtrees(ctx context.Context, block *bsvutil.Block
 			return nil, errors.NewSubtreeError("failed to create subtree", err)
 		}
 
-		if err = subtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
+		if err = subtree.AddCoinbaseNode(); err != nil {
 			return nil, errors.NewSubtreeError("failed to add coinbase placeholder", err)
 		}
 

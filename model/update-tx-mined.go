@@ -141,7 +141,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, txMetaStore
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 
 			for idx := 0; idx < len(subtree.Nodes); idx++ {
-				if subtree.Nodes[idx].Hash.IsEqual(CoinbasePlaceholderHash) {
+				if subtree.Nodes[idx].Hash.IsEqual(util.CoinbasePlaceholderHash) {
 					if subtreeIdx != 0 || idx != 0 {
 						logger.Warnf("[UpdateTxMinedStatus][%s] bad coinbase placeholder position within block - subtree #%d, node #%d - ignoring", block.Hash().String(), subtreeIdx, idx)
 					}

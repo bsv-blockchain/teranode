@@ -226,7 +226,7 @@ func Start() {
 				for nodeIdx, node := range subtree.Nodes {
 					nodeIdx := nodeIdx
 					node := node
-					if !model.CoinbasePlaceholderHash.Equal(node.Hash) {
+					if !util.CoinbasePlaceholderHash.Equal(node.Hash) {
 						logger.Debugf("checking transaction %s", node.Hash)
 
 						// check that the transaction does not already exist in another block

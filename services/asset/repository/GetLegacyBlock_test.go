@@ -448,7 +448,7 @@ func newBlock(ctx *testContext, t *testing.T, b blockInfo) (*model.Block, *util.
 
 	for i, tx := range b.txs {
 		if i == 0 {
-			require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+			require.NoError(t, subtree.AddCoinbaseNode())
 		} else {
 			require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 100, 0))
 			require.NoError(t, err)

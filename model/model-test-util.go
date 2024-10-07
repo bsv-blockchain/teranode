@@ -79,7 +79,7 @@ func generateTestBlock(transactionIdCount uint64, subtreeStore *localSubtreeStor
 	if err != nil {
 		return nil, err
 	}
-	_ = subtree.AddNode(CoinbasePlaceholder, 0, 0)
+	_ = subtree.AddCoinbaseNode()
 
 	var subtreeFile *os.File
 	var subtreeFileMerkleHashes *os.File

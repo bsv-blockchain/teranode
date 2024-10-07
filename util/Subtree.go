@@ -5,9 +5,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"io"
 	"math"
+
+	"github.com/bitcoin-sv/ubsv/errors"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -170,6 +171,10 @@ func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 		return errors.NewSubtreeError("subtree is full")
 	}
 
+	if node.Hash == CoinbasePlaceholder {
+		return errors.NewSubtreeError("[AddSubtreeNode] coinbase placeholder node should be added with AddCoinbaseNode, tree length is %d", len(st.Nodes))
+	}
+
 	// AddNode is not concurrency safe, so we can reuse the same byte arrays
 	//binary.LittleEndian.PutUint64(st.feeBytes, fee)
 	//st.feeHashBytes = append(node[:], st.feeBytes[:]...)
@@ -187,9 +192,29 @@ func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 	return nil
 }
 
+func (st *Subtree) AddCoinbaseNode() error {
+	if len(st.Nodes) != 0 {
+		return errors.NewSubtreeError("subtree should be empty before adding a coinbase node")
+	}
+
+	st.Nodes = append(st.Nodes, SubtreeNode{
+		Hash:        CoinbasePlaceholder,
+		Fee:         0,
+		SizeInBytes: 0,
+	})
+	st.rootHash = nil // reset rootHash
+	st.Fees = 0
+	st.SizeInBytes = 0
+
+	return nil
+}
+
 func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) error {
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return errors.NewSubtreeError("subtree is full")
+	}
+	if node == CoinbasePlaceholder {
+		return errors.NewSubtreeError("[AddNode] coinbase placeholder node should be added with AddCoinbaseNode, tree length is %d", len(st.Nodes))
 	}
 
 	// AddNode is not concurrency safe, so we can reuse the same byte arrays

@@ -115,7 +115,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	subtree, err := util.NewTreeByLeafCount(4)
 	require.NoError(t, err)
-	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+	require.NoError(t, subtree.AddCoinbaseNode())
 
 	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash2, 100, 0))
@@ -216,7 +216,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 
 	subtree, err := util.NewTreeByLeafCount(txCount)
 	require.NoError(t, err)
-	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+	require.NoError(t, subtree.AddCoinbaseNode())
 	fees := 0
 	for i := 0; i < txCount-1; i++ {
 		tx := newTx(uint32(i))
@@ -330,8 +330,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 
 	subtree, err := util.NewTreeByLeafCount(4)
 	require.NoError(t, err)
-	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
-	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.Error(t, subtree.AddCoinbaseNode())
 
 	nodeBytes, err := subtree.SerializeNodes()
 	require.NoError(t, err)
@@ -413,7 +413,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 
 	subtree, err := util.NewTreeByLeafCount(4)
 	require.NoError(t, err)
-	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*coinbase.TxIDChainHash(), 100, 0))
 
 	nodeBytes, err := subtree.SerializeNodes()
@@ -483,7 +483,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 
 	subtree, err := util.NewTreeByLeafCount(4)
 	require.NoError(t, err)
-	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+	require.NoError(t, subtree.AddCoinbaseNode())
 
 	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash2, 100, 0))
@@ -600,7 +600,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 	for i := 0; i < numBlocks; i++ {
 		subtree, err := util.NewTreeByLeafCount(4)
 		require.NoError(t, err)
-		require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+		require.NoError(t, subtree.AddCoinbaseNode())
 
 		require.NoError(t, subtree.AddNode(*hash1, 100, 0))
 		require.NoError(t, subtree.AddNode(*hash2, 100, 0))

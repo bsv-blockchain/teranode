@@ -56,7 +56,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 			{
 				Nodes: []util.SubtreeNode{
 					{
-						Hash: *CoinbasePlaceholderHash,
+						Hash: *util.CoinbasePlaceholderHash,
 					},
 					{
 						Hash: *tx1.TxIDChainHash(),

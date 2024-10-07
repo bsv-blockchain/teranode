@@ -362,7 +362,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	}
 
 	// first transaction is the coinbase transaction
-	_ = subtree.AddNode(CoinbasePlaceholder, 0, 0)
+	_ = subtree.AddNode(util.CoinbasePlaceholder, 0, 0)
 
 	// rest of transactions are random
 	for i := 0; i < leafCount-2; i++ {

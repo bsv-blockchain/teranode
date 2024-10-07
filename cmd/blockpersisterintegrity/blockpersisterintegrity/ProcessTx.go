@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
 	p_model "github.com/bitcoin-sv/ubsv/services/blockpersister/utxoset/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 )
 
@@ -39,18 +39,18 @@ func (tp *TxProcessor) ProcessTx(ctx context.Context, tx *bt.Tx) error {
 			return errors.NewBlockError("first transaction in a block must be a coinbase transaction")
 		}
 
-		// if !model.CoinbasePlaceholderHash.Equal(*tx.TxIDChainHash()) && !tx.IsCoinbase() {
+		// if !util.CoinbasePlaceholderHash.Equal(*tx.TxIDChainHash()) && !tx.IsCoinbase() {
 		// 	return fmt.Errorf("first transaction in a block must be a coinbase transaction")
 		// }
 		return nil
 	}
 
 	// make sure we don't have a coinbase transaction in the middle of the block
-	if model.CoinbasePlaceholderHash.Equal(*tx.TxIDChainHash()) || tx.IsCoinbase() {
+	if util.CoinbasePlaceholderHash.Equal(*tx.TxIDChainHash()) || tx.IsCoinbase() {
 		return errors.NewBlockError("coinbase transaction must be the first transaction in a block")
 	}
 
-	// if !model.CoinbasePlaceholderHash.Equal(*tx.TxIDChainHash()) {
+	// if !util.CoinbasePlaceholderHash.Equal(*tx.TxIDChainHash()) {
 	// logger.Debugf("checking transaction %s", *btTx.TxIDChainHash())
 
 	// check that the transaction does not already exist in another block

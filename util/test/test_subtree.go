@@ -4,10 +4,10 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/errors"
 	"os"
 
-	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/errors"
+
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -29,7 +29,7 @@ func GenerateTestSubtrees(subtreeStore *TestSubtreeStore, config *TestConfig) (*
 	if err != nil {
 		return nil, err
 	}
-	_ = subtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+	_ = subtree.AddCoinbaseNode()
 
 	var subtreeFile *os.File
 	//var subtreeFileMerkleHashes *os.File

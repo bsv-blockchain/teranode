@@ -10,7 +10,6 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v7"
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
@@ -277,7 +276,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 		err = batchRecord.BatchRec().Err
 		if err != nil {
 			items[idx].Data = nil
-			if !model.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
+			if !util.CoinbasePlaceholderHash.Equal(items[idx].Hash) {
 				if errors.Is(err, aerospike.ErrKeyNotFound) {
 					items[idx].Err = errors.NewTxNotFoundError("%v not found", items[idx].Hash)
 				} else {

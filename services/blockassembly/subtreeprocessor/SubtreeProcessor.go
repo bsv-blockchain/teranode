@@ -101,7 +101,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 		return nil, errors.NewInvalidArgumentError("error creating first subtree", err)
 	}
 	// We add a placeholder for the coinbase tx because we know this is the first subtree in the chain
-	if err := firstSubtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
+	if err := firstSubtree.AddCoinbaseNode(); err != nil {
 		return nil, errors.NewInvalidArgumentError("error adding coinbase placeholder to first subtree", err)
 	}
 
@@ -243,7 +243,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 						continue
 					}
 
-					if txReq.node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+					if txReq.node.Hash.Equal(*util.CoinbasePlaceholderHash) {
 						stp.logger.Errorf("[SubtreeProcessor] error adding node: skipping request to add coinbase tx placeholder")
 						continue
 					}
@@ -541,7 +541,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	stp.chainedSubtreeCount.Store(0)
 
 	// add first coinbase placeholder transaction
-	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+	_ = stp.currentSubtree.AddCoinbaseNode()
 
 	g, gCtx := errgroup.WithContext(ctx)
 	moveDownBlockConcurrency, _ := gocore.Config().GetInt("blockassembly_moveDownBlockConcurrency", 64)
@@ -605,7 +605,7 @@ func (stp *SubtreeProcessor) moveDownBlock(ctx context.Context, block *model.Blo
 	// add all the transactions from the previous state
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
-			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+			if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
 				_ = stp.addNode(node, true)
 			}
 		}
@@ -647,7 +647,7 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 	stp.chainedSubtreeCount.Store(0)
 
 	// add first coinbase placeholder transaction
-	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+	_ = stp.currentSubtree.AddCoinbaseNode()
 
 	g, gCtx := errgroup.WithContext(ctx)
 	moveDownBlockConcurrency, _ := gocore.Config().GetInt("blockassembly_moveDownBlockConcurrency", 64)
@@ -725,7 +725,7 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 	// add all the transactions from the previous state
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {
-			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+			if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
 				_ = stp.addNode(node, true)
 			}
 		}
@@ -825,7 +825,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 	stp.chainedSubtreeCount.Store(0)
 
 	// add first coinbase placeholder transaction
-	_ = stp.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+	_ = stp.currentSubtree.AddCoinbaseNode()
 
 	remainderStartTime := time.Now()
 	stp.logger.Infof("[moveUpBlock][%s] processing remainder tx hashes into subtrees", block.String())
@@ -861,7 +861,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		for _, subtree := range chainedSubtrees {
 			for _, node := range subtree.Nodes {
 				// TODO is all this needed? This adds a lot to the processing time
-				if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+				if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
 					if !coinbaseId.Equal(node.Hash) {
 						if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
 							if err = stp.removeMap.Delete(node.Hash); err != nil {
@@ -876,7 +876,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		}
 		for _, node := range currentSubtree.Nodes {
 			// TODO is all this needed? This adds a lot to the processing time
-			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+			if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
 				if !coinbaseId.Equal(node.Hash) {
 					if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
 						if err = stp.removeMap.Delete(node.Hash); err != nil {
@@ -1072,7 +1072,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	// add all found tx hashes to the final list, in order
 	for _, subtreeNodes := range remainderSubtrees {
 		for _, node := range subtreeNodes {
-			if !node.Hash.Equal(*model.CoinbasePlaceholderHash) {
+			if !node.Hash.Equal(*util.CoinbasePlaceholderHash) {
 				if removeMapLength > 0 && stp.removeMap.Exists(node.Hash) {
 					if err := stp.removeMap.Delete(node.Hash); err != nil {
 						stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())

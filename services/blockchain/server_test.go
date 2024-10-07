@@ -145,7 +145,7 @@ func setup(t *testing.T) *testContext {
 func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	subtree, err := util.NewTreeByLeafCount(2)
 	require.NoError(t, err)
-	require.NoError(t, subtree.AddNode(model.CoinbasePlaceholder, 0, 0))
+	require.NoError(t, subtree.AddCoinbaseNode())
 	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
 
 	_, err = ctx.utxoStore.Create(context.Background(), tx1, 0)

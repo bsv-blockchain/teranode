@@ -63,7 +63,7 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 			if err != nil {
 				return nil, err
 			}
-			_ = subtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+			_ = subtree.AddCoinbaseNode()
 
 			var subtreeFile *os.File
 			var subtreeFileMerkleHashes *os.File

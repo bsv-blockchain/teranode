@@ -164,7 +164,7 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, bl
 	}
 
 	for i := 0; i < len(txMetaSlice); i++ {
-		if model.CoinbasePlaceholderHash.Equal(txHashes[i]) {
+		if util.CoinbasePlaceholderHash.Equal(txHashes[i]) {
 			// The coinbase tx is not in the txmeta store so we add in a special coinbase placeholder tx
 			if i != 0 {
 				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] coinbase tx is not first in subtree (%d)", i)
@@ -216,7 +216,7 @@ func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, t
 
 				default:
 
-					if txHashes[i+j].Equal(*model.CoinbasePlaceholderHash) {
+					if txHashes[i+j].Equal(*util.CoinbasePlaceholderHash) {
 						// coinbase placeholder is not in the store
 						continue
 					}

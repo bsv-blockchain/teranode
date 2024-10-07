@@ -83,7 +83,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 			subtreeRequest := <-testItems.newSubtreeChan
 			subtree := subtreeRequest.Subtree
 			assert.NotNil(t, subtree)
-			assert.Equal(t, *model.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+			assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
 			assert.Equal(t, uint64(666), subtree.Fees)
 			wg.Done()
@@ -348,7 +348,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCBTx(t *testing.T) {
 			subtreeRequest := <-testItems.newSubtreeChan
 			subtree := subtreeRequest.Subtree
 			assert.NotNil(t, subtree)
-			assert.Equal(t, *model.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+			assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
 			assert.NotEqual(t, uint64(5000000556), subtree.Fees)
 			wg.Done()
@@ -356,7 +356,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCBTx(t *testing.T) {
 
 		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *model.CoinbasePlaceholderHash, Fee: 5000000000})
+		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *util.CoinbasePlaceholderHash, Fee: 5000000000})
 
 		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)

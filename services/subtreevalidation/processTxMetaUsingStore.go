@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -50,7 +49,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 
 					default:
 
-						if txHashes[i+j].Equal(*model.CoinbasePlaceholderHash) {
+						if txHashes[i+j].Equal(*util.CoinbasePlaceholderHash) {
 							// coinbase placeholder is not in the store
 							continue
 						}
@@ -110,7 +109,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					default:
 						txHash := txHashes[i+j]
 
-						if txHash.Equal(*model.CoinbasePlaceholderHash) {
+						if txHash.Equal(*util.CoinbasePlaceholderHash) {
 							// coinbase placeholder is not in the store
 							continue
 						}

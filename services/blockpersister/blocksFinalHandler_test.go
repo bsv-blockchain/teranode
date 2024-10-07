@@ -50,7 +50,7 @@ func newMockStore(txs []*bt.Tx) (*MockStore, error) {
 
 	for i, tx := range txs {
 		if i == 0 {
-			if err := subtree.AddNode(model.CoinbasePlaceholder, 0, 0); err != nil {
+			if err := subtree.AddCoinbaseNode(); err != nil {
 				return nil, err
 			}
 		} else {

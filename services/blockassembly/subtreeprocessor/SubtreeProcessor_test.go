@@ -705,7 +705,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		subtreeProcessor.currentSubtree, err = util.NewTree(4)
 		require.NoError(t, err)
 		subtreeProcessor.chainedSubtrees = make([]*util.Subtree, 0)
-		_ = subtreeProcessor.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+		_ = subtreeProcessor.currentSubtree.AddCoinbaseNode()
 
 		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, false)
 		require.NoError(t, err)
@@ -751,7 +751,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		subtreeProcessor.currentSubtree, err = util.NewTree(4)
 		require.NoError(t, err)
 		subtreeProcessor.chainedSubtrees = make([]*util.Subtree, 0)
-		_ = subtreeProcessor.currentSubtree.AddNode(model.CoinbasePlaceholder, 0, 0)
+		_ = subtreeProcessor.currentSubtree.AddCoinbaseNode()
 
 		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, false)
 		require.NoError(t, err)
@@ -1048,7 +1048,7 @@ func createSubtree(t *testing.T, length uint64, createCoinbase bool) *util.Subtr
 	require.NoError(t, err)
 	start := uint64(0)
 	if createCoinbase {
-		err = subtree.AddNode(*model.CoinbasePlaceholderHash, 0, 0)
+		err = subtree.AddCoinbaseNode()
 		require.NoError(t, err)
 		start = 1
 	}

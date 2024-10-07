@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/labstack/echo/v4"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -80,12 +80,12 @@ func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 					TxID:  node.Hash.String(),
 				}
 
-				if model.CoinbasePlaceholderHash.Equal(node.Hash) {
+				if util.CoinbasePlaceholderHash.Equal(node.Hash) {
 					txMeta = &meta.Data{
 						Tx:         bt.NewTx(),
 						IsCoinbase: true,
 					}
-					txMeta.Tx.SetTxHash(model.CoinbasePlaceholderHash)
+					txMeta.Tx.SetTxHash(util.CoinbasePlaceholderHash)
 				} else {
 					txMeta, err = h.repository.GetTransactionMeta(c.Request().Context(), &node.Hash)
 					if err != nil {

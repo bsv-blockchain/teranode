@@ -356,7 +356,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 
 		if verbose {
 			for i, node := range st.Nodes {
-				if block_model.CoinbasePlaceholderHash.IsEqual(&node.Hash) {
+				if util.CoinbasePlaceholderHash.IsEqual(&node.Hash) {
 					fmt.Printf(coinbasePlaceholderFormat, i)
 				} else {
 					fmt.Printf(nodeFormat, i, node.Hash)
@@ -396,7 +396,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 				switch {
 				case tx == nil:
 					fmt.Printf("%10d: <nil>\n", i)
-				case block_model.IsCoinbasePlaceHolderTx(tx):
+				case util.IsCoinbasePlaceHolderTx(tx):
 					fmt.Printf(coinbasePlaceholderFormat, i)
 				default:
 					fmt.Printf(nodeFormat, i, tx.TxIDChainHash())
@@ -512,7 +512,7 @@ func readSubtree(r io.Reader, verbose bool) uint32 {
 				os.Exit(1)
 			}
 
-			if block_model.IsCoinbasePlaceHolderTx(&tx) {
+			if util.IsCoinbasePlaceHolderTx(&tx) {
 				fmt.Printf(coinbasePlaceholderFormat, i)
 			} else {
 				fmt.Printf(nodeFormat, i, tx.TxIDChainHash())

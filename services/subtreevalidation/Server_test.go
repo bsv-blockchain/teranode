@@ -41,7 +41,7 @@ func TestOneTransaction(t *testing.T) {
 	subtrees[0], err = util.NewTree(1)
 	require.NoError(t, err)
 
-	err = subtrees[0].AddNode(model.CoinbasePlaceholder, 0, 0)
+	err = subtrees[0].AddCoinbaseNode()
 	require.NoError(t, err)
 
 	// blockValidationService, err := New(ulogger.TestLogger{}, nil, nil, nil, nil)
@@ -151,7 +151,7 @@ func TestMerkleRoot(t *testing.T) {
 	subtrees[1], err = util.NewTreeByLeafCount(2) // height = 1
 	require.NoError(t, err)
 
-	err = subtrees[0].AddNode(model.CoinbasePlaceholder, 0, 0)
+	err = subtrees[0].AddCoinbaseNode()
 	require.NoError(t, err)
 
 	hash1, err := chainhash.NewHashFromStr(txIds[1])

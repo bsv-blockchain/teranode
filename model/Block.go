@@ -258,7 +258,7 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock) (*Block, error) {
 		return nil, errors.NewSubtreeError("failed to create subtree", err)
 	}
 
-	if err = subtree.AddNode(CoinbasePlaceholder, 0, 0); err != nil {
+	if err = subtree.AddCoinbaseNode(); err != nil {
 		return nil, errors.NewSubtreeError("failed to add coinbase placeholder", err)
 	}
 	// TODO: support more than coinbase tx in the subtree
