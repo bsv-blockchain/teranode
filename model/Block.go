@@ -191,6 +191,7 @@ type Block struct {
 	subtreeSlicesMu sync.RWMutex
 	txMap           util.TxMap
 	medianTimestamp uint32
+	ID              uint32
 }
 
 type BlockBloomFilter struct {

@@ -20,13 +20,14 @@ func (s *SQL) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, erro
 
 	q := `
 		SELECT
-	     b.version
+		 b.ID
+	  ,b.version
 		,b.block_time
 		,b.n_bits
-	    ,b.nonce
+		,b.nonce
 		,b.previous_hash
 		,b.merkle_root
-	    ,b.tx_count
+	  ,b.tx_count
 		,b.size_in_bytes
 		,b.coinbase_tx
 		,b.subtree_count
@@ -68,6 +69,7 @@ func (s *SQL) getBlocksWithQuery(ctx context.Context, q string) ([]*model.Block,
 		}
 
 		if err = rows.Scan(
+			&block.ID,
 			&block.Header.Version,
 			&block.Header.Timestamp,
 			&nBits,

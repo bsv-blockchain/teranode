@@ -51,7 +51,8 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 
 	q := `
 		SELECT
-	   b.version
+		 b.id
+	  ,b.version
 		,b.block_time
 		,b.n_bits
 	  ,b.nonce
@@ -85,6 +86,7 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 	)
 
 	if err = s.db.QueryRowContext(ctx, q, blockHash[:]).Scan(
+		&block.ID,
 		&block.Header.Version,
 		&block.Header.Timestamp,
 		&nBits,
