@@ -340,8 +340,6 @@ ubsv/
 │
 ├── model/                        # Key model definitions for the project
 │
-├── native/                       # Native signature implementation for secp256k1
-│
 ├── scripts/                      # Various scripts
 │
 ├── services/                     # Directory containing all different Services

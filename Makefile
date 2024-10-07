@@ -56,39 +56,39 @@ build: build-ubsv-with-dashboard
 
 .PHONY: build-ubsv-with-dashboard
 build-ubsv-with-dashboard: set_debug_flags set_race_flag set_txmetacache_flag build-dashboard
-	go build $(RACE_FLAG) -tags aerospike,native,bdk,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+	go build $(RACE_FLAG) -tags aerospike,bdk,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
 .PHONY: build-ubsv
 build-ubsv: set_debug_flags set_race_flag set_txmetacache_flag
-	go build $(RACE_FLAG) -tags aerospike,native,bdk,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+	go build $(RACE_FLAG) -tags aerospike,bdk,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
 .PHONY: build-ubsv-no-debug
 build-ubsv-no-debug: set_txmetacache_flag
-	go build -a -tags aerospike,native,bdk,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -s -w" -gcflags "-l -B" -o ubsv_no_debug.run .
+	go build -a -tags aerospike,bdk,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -s -w" -gcflags "-l -B" -o ubsv_no_debug.run .
 
 .PHONY: build-ubsv-ci
 build-ubsv-ci: set_debug_flags set_race_flag set_txmetacache_flag
-	go build $(RACE_FLAG) -tags aerospike,native,bdk,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+	go build $(RACE_FLAG) -tags aerospike,bdk,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags set_race_flag
-	go build -tags aerospike,native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o chainintegrity.run ./cmd/chainintegrity/
+	go build -tags aerospike,bdk --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o chainintegrity.run ./cmd/chainintegrity/
 
 .PHONY: build-tx-blaster
 build-tx-blaster: set_debug_flags set_race_flag
-	go build $(RACE_FLAG) -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
+	go build $(RACE_FLAG) -tags bdk --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
 
 # .PHONY: build-propagation-blaster
 # build-propagation-blaster: set_debug_flags
-# 	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o propagationblaster.run ./cmd/propagation_blaster/
+# 	go build -tags bdk --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o propagationblaster.run ./cmd/propagation_blaster/
 
 # .PHONY: build-utxostore-blaster
 # build-utxostore-blaster: set_debug_flags
-# 	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o utxostoreblaster.run ./cmd/utxostore_blaster/
+# 	go build -tags bdk --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o utxostoreblaster.run ./cmd/utxostore_blaster/
 
 # .PHONY: build-s3-blaster
 # build-s3-blaster: set_debug_flags
-# 	go build -tags native --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o s3blaster.run ./cmd/s3_blaster/
+# 	go build -tags bdk --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o s3blaster.run ./cmd/s3_blaster/
 
 # .PHONY: build-blockassembly-blaster
 # build-blockassembly-blaster: set_debug_flags
