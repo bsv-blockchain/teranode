@@ -15,12 +15,14 @@ import (
 )
 
 func init() {
-	ScriptVerificatorFactory["scriptVerificatorGoSDK"] = newScriptVerificatorGoSDK
+	ScriptVerificatorFactory[VerificatorGoSDK] = newScriptVerificatorGoSDK
+
 	log.Println("Registered scriptVerificatorGoSDK")
 }
 
 func newScriptVerificatorGoSDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxValidator {
-	l.Infof("Use Script Verificator with Go-SDK")
+	l.Infof("Use Script Verificator with GoSDK")
+
 	return &scriptVerificatorGoSDK{
 		logger: l,
 		policy: po,
@@ -107,6 +109,7 @@ func goBt2GoSDKTransaction(tx *bt.Tx) *transaction.Transaction {
 	}
 
 	sdkTx.Inputs = make([]*transaction.TransactionInput, len(tx.Inputs))
+
 	for i, in := range tx.Inputs {
 		// clone the bytes of the unlocking script
 		unlockingScript := make([]byte, len(*in.UnlockingScript))

@@ -48,3 +48,5 @@ issues:
       linters:
         - depguard
         - forbidigo
+  exclude-dirs:
+    - vendor

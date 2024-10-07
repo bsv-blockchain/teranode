@@ -2,6 +2,7 @@ package validator
 
 import (
 	"encoding/binary"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 )
 

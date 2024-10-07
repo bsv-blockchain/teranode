@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	utxoMemorystore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/nullstore"
 	"github.com/bitcoin-sv/ubsv/tracing"
@@ -29,7 +28,7 @@ func BenchmarkValidator(b *testing.B) {
 		panic(err)
 	}
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+	v, err := New(context.Background(), ulogger.TestLogger{}, utxoMemorystore.New(ulogger.TestLogger{}))
 	if err != nil {
 		panic(err)
 	}
@@ -86,9 +85,9 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	initPrometheusMetrics()
 
 	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
 	if !ok {
-		scriptValidator = "scriptVerificatorGoBt"
+		scriptValidator = VerificatorGoBT
 	}
 
 	v := &Validator{
@@ -125,9 +124,9 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 	initPrometheusMetrics()
 
 	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
 	if !ok {
-		scriptValidator = "scriptVerificatorGoBt"
+		scriptValidator = VerificatorGoBT
 	}
 
 	v := &Validator{
@@ -173,9 +172,9 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 	var height uint32 = 257727
 
 	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
 	if !ok {
-		scriptValidator = "scriptVerificatorGoBt"
+		scriptValidator = VerificatorGoBT
 	}
 
 	v := &Validator{
@@ -189,7 +188,6 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 
 	err = v.validateTransaction(span.Ctx, tx, height)
 	require.NoError(t, err)
-
 }
 
 func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840cda6(t *testing.T) {
@@ -206,9 +204,9 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 	chainParams, _ := chaincfg.GetChainParams("mainnet")
 
 	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
 	if !ok {
-		scriptValidator = "scriptVerificatorGoBt"
+		scriptValidator = VerificatorGoBT
 	}
 
 	v := &Validator{
@@ -222,7 +220,6 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 
 	err = v.validateTransaction(span.Ctx, tx, height)
 	require.NoError(t, err)
-
 }
 
 func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d604(t *testing.T) {
@@ -237,9 +234,9 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	var height uint32 = 229369
 
 	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
 	if !ok {
-		scriptValidator = "scriptVerificatorGoBt"
+		scriptValidator = VerificatorGoBT
 	}
 
 	v := &Validator{
@@ -253,7 +250,6 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 
 	err = v.validateTransaction(span.Ctx, tx, height)
 	require.NoError(t, err)
-
 }
 
 // func TestValidateTxdad5ecab132387e8e9b4e0330910c71930e637d840a5818eb92928668e52bbe5(t *testing.T) {
@@ -286,16 +282,16 @@ var testTransactions = map[uint32]string{
 
 func TestValidateTransactions(t *testing.T) {
 	initPrometheusMetrics()
-	//interpreter.InjectExternalVerifySignatureFn(bdksecp256k1.VerifySignature) // Use import bdksecp256k1 "github.com/bitcoin-sv/bdk/module/gobdk/secp256k1"
+	// interpreter.InjectExternalVerifySignatureFn(bdksecp256k1.VerifySignature) // Use import bdksecp256k1 "github.com/bitcoin-sv/bdk/module/gobdk/secp256k1"
 
 	for height, txHex := range testTransactions {
 		tx, err := bt.NewTxFromString(txHex)
 		require.NoError(t, err)
 
 		// Get the type of verificator from config
-		scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+		scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
 		if !ok {
-			scriptValidator = "scriptVerificatorGoBt"
+			scriptValidator = VerificatorGoBT
 		}
 
 		v := &Validator{
@@ -324,9 +320,9 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 	var height uint32 = 249976
 
 	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
 	if !ok {
-		scriptValidator = "scriptVerificatorGoBt"
+		scriptValidator = VerificatorGoBT
 	}
 
 	v := &Validator{
@@ -340,12 +336,11 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 
 	err = v.validateTransaction(span.Ctx, tx, height)
 	require.NoError(t, err)
-
 }
 
 func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a363b7(t *testing.T) {
 	initPrometheusMetrics()
-	//interpreter.InjectExternalVerifySignatureFn(bdksecp256k1.VerifySignature) // Use import bdksecp256k1 "github.com/bitcoin-sv/bdk/module/gobdk/secp256k1"
+	// interpreter.InjectExternalVerifySignatureFn(bdksecp256k1.VerifySignature) // Use import bdksecp256k1 "github.com/bitcoin-sv/bdk/module/gobdk/secp256k1"
 
 	txid := "944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a363b7"
 	tx, err := bt.NewTxFromString("010000000000000000ef01b136c673a9b815af2bfdeccc9479deec3273ee98a188c26d3c14b5e6bfcbca0b010000006b48304502200241ac9536c536f21e522dec152e69674094b371b14c26edf706e1db0e6487190221008ee66bdafc7d39ee041e1425a7b2df780702e9b066c3a1e9715b03b23fbd99be41210373c9cb2feaa59dd208ad90dc4c8f32dac7a30a65e590fa16e2a421637927ae63feffffff4004fb0b000000001976a91471902a65346b0d951358ec9a1b306ecd36d284ae88ac0280969800000000001976a914dd37ee4ce93278fbc398abcda001d1d855841e0788ac3cd35d0b000000001976a914d04ad25d93764cf83aca0ca0c7cbb7ba8850f75888ac00000000")
@@ -355,9 +350,9 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 	var height uint32 = 478631
 
 	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
 	if !ok {
-		scriptValidator = "scriptVerificatorGoBt"
+		scriptValidator = VerificatorGoBT
 	}
 
 	v := &Validator{
@@ -371,7 +366,6 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 
 	err = v.validateTransaction(span.Ctx, tx, height)
 	require.NoError(t, err)
-
 }
 
 func TestIsFinal7b27e3ed7ebf878d985f5fcc35bfbf0e3116489ff75f5e7eec8480780975920c(t *testing.T) {
@@ -413,9 +407,9 @@ func Benchmark_validateInternal(b *testing.B) {
 	require.NoError(b, err)
 
 	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
 	if !ok {
-		scriptValidator = "scriptVerificatorGoBt"
+		scriptValidator = VerificatorGoBT
 	}
 
 	v := &Validator{

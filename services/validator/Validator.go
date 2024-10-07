@@ -54,9 +54,9 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 	}
 
 	// Get the type of verificator from config
-	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificator", "scriptVerificatorGoBt")
+	scriptValidator, ok := gocore.Config().Get("validator_scriptVerificationLibrary", VerificatorGoBT)
 	if !ok {
-		scriptValidator = "scriptVerificatorGoBt"
+		scriptValidator = VerificatorGoBT
 	}
 
 	v := &Validator{
@@ -80,6 +80,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 			v.txMetaKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
 				return kafka.NewKafkaAsyncProducer(v.logger, txmetaKafkaURL, make(chan []byte, 10000))
 			}, retry.WithMessage("[Validator] error starting kafka producer for txMeta"))
+
 			if err != nil {
 				v.logger.Fatalf("[Validator] failed to start kafka producer for txMeta: %v", err)
 				return nil, err
@@ -101,6 +102,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 			v.rejectedTxKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
 				return kafka.NewKafkaAsyncProducer(v.logger, rejectedTxKafkaURL, make(chan []byte, 10000))
 			}, retry.WithMessage("[Validator] error starting kafka producer for rejected Txs"))
+
 			if err != nil {
 				v.logger.Fatalf("[Validator] failed to start kafka producer for rejected Txs: %v", err)
 				return nil, err
@@ -257,6 +259,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				return nil
 			}
 		}
+
 		return errors.NewProcessingError("[Validate][%s] error spending utxos", txID, err)
 	}
 
@@ -317,6 +320,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			}
 
 			setSpan.RecordError(err)
+
 			return err
 		}
 	}
@@ -449,6 +453,7 @@ func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockass
 	if _, err := v.blockAssembler.Store(ctx, bData.TxIDChainHash, bData.Fee, bData.Size); err != nil {
 		e := errors.NewStorageError("error calling blockAssembler Store()", err)
 		traceSpan.RecordError(e)
+
 		return e
 	}
 

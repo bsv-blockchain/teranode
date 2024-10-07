@@ -23,6 +23,7 @@ type batchItem struct {
 	req  *validator_api.ValidateTransactionRequest
 	done chan error
 }
+
 type Client struct {
 	client       validator_api.ValidatorAPIClient
 	running      *atomic.Bool
@@ -34,7 +35,6 @@ type Client struct {
 }
 
 func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
-
 	grpcResolver, _ := gocore.Config().Get("grpc_resolver")
 	if grpcResolver == "k8s" {
 		logger.Infof("[VALIDATOR] Using k8s resolver for clients")
@@ -44,10 +44,11 @@ func NewClient(ctx context.Context, logger ulogger.Logger) (*Client, error) {
 		kuberesolver.RegisterInClusterWithSchema("k8s")
 	}
 
-	validator_grpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
-	conn, err := util.GetGRPCClient(ctx, validator_grpcAddress, &util.ConnectionOptions{
+	validatorGrpcAddress, _ := gocore.Config().Get("validator_grpcAddress")
+	conn, err := util.GetGRPCClient(ctx, validatorGrpcAddress, &util.ConnectionOptions{
 		MaxRetries: 3,
 	})
+
 	if err != nil {
 		return nil, err
 	}
@@ -158,6 +159,7 @@ func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	for _, item := range batch {
 		requests = append(requests, item.req)
 	}
+
 	txBatch := &validator_api.ValidateTransactionBatchRequest{
 		Transactions: requests,
 	}

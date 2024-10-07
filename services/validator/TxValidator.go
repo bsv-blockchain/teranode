@@ -33,11 +33,11 @@ var (
 	}
 )
 
-// type TxValidator struct {
-// 	logger      ulogger.Logger
-// 	policy      *PolicySettings
-// 	chainParams *chaincfg.Params
-// }
+const (
+	VerificatorGoBT  = "GoBT"
+	VerificatorGoSDK = "GoSDK"
+	VerificatorGoBDK = "GoBDK"
+)
 
 // TxValidator interface implement method to validate transactions
 type TxValidator interface {
@@ -59,7 +59,6 @@ var ScriptVerificatorFactory = make(map[string]TxValidatorCreator)
 
 // NewTxValidator lookup from the factory and return the appropriate TxValidator
 func NewTxValidator(creatorName string, logger ulogger.Logger, policy *PolicySettings, params *chaincfg.Params) TxValidator {
-
 	// If a creator was not registered to the factory, then return nil
 	if createTxValidator, ok := ScriptVerificatorFactory[creatorName]; ok {
 		return createTxValidator(logger, policy, params)
@@ -148,6 +147,7 @@ func checkOutputs(tv TxValidator, tx *bt.Tx, blockHeight uint32) error {
 
 	for index, output := range tx.Outputs {
 		isData := output.LockingScript.IsData()
+
 		switch {
 		// TODO there are transactions on-chain with 0 sat outputs WTF
 		case !isData && output.Satoshis > MaxSatoshis: // || (minOutput > 0 && output.Satoshis < minOutput)):
@@ -156,8 +156,9 @@ func checkOutputs(tv TxValidator, tx *bt.Tx, blockHeight uint32) error {
 			//  This is not enforced on a consensus level, but it is a good practice to not have non 0 value op returns
 			// 		"f77a391a62a128ba17559f3716dd7f68bb0a6df6ac3d10249f06323c1148ad03": {}, // non 0 value op return
 			//		"63518daaab78b7fd7488eb9b241f145c7b27cd43b86369aa38cdafa213e018c5": {}, // non 0 value op return
-			// return errors.NewTxInvalidError("transaction output %d has non 0 value op return (height=%d)", index, blockHeight)
+			return errors.NewTxInvalidError("transaction output %d has non 0 value op return (height=%d)", index, blockHeight)
 		}
+
 		total += output.Satoshis
 	}
 
@@ -170,6 +171,7 @@ func checkOutputs(tv TxValidator, tx *bt.Tx, blockHeight uint32) error {
 
 func checkInputs(tv TxValidator, tx *bt.Tx, blockHeight uint32) error {
 	total := uint64(0)
+
 	for index, input := range tx.Inputs {
 		if hex.EncodeToString(input.PreviousTxID()) == coinbaseTxID {
 			return errors.NewTxInvalidError("transaction input %d is a coinbase input", index)
@@ -186,6 +188,7 @@ func checkInputs(tv TxValidator, tx *bt.Tx, blockHeight uint32) error {
 		if input.PreviousTxSatoshis > MaxSatoshis {
 			return errors.NewTxInvalidError("transaction input %d satoshis is too high", index)
 		}
+
 		total += input.PreviousTxSatoshis
 	}
 
@@ -207,6 +210,7 @@ func checkTxSize(txSize int, policy *PolicySettings) error {
 		// no policy found for tx size, use max block size
 		maxTxSizePolicy = MaxBlockSize
 	}
+
 	if txSize > maxTxSizePolicy {
 		return errors.NewTxInvalidError("transaction size in bytes is greater than max tx size policy %d", maxTxSizePolicy)
 	}
@@ -235,9 +239,11 @@ func sigOpsCheck(tx *bt.Tx, policy *PolicySettings) error {
 	}
 
 	numSigOps := int64(0)
+
 	for _, input := range tx.Inputs {
 		parser := interpreter.DefaultOpcodeParser{}
 		parsedUnlockingScript, err := parser.Parse(input.PreviousTxScript)
+
 		if err != nil {
 			return err
 		}
@@ -260,11 +266,14 @@ func pushDataCheck(tx *bt.Tx) error {
 		if input.UnlockingScript == nil {
 			return errors.NewTxInvalidError("transaction input %d unlocking script is empty", index)
 		}
+
 		parser := interpreter.DefaultOpcodeParser{}
 		parsedUnlockingScript, err := parser.Parse(input.UnlockingScript)
+
 		if err != nil {
 			return err
 		}
+
 		if !parsedUnlockingScript.IsPushOnly() {
 			return errors.NewTxInvalidError("transaction input %d unlocking script is not push only", index)
 		}

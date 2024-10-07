@@ -111,6 +111,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 			// no workers, nothing to do
 			return nil
 		}
+
 		v.logger.Infof("[Validator Server] starting Kafka listener")
 
 		consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
@@ -131,8 +132,10 @@ func (v *Server) Init(ctx context.Context) (err error) {
 			currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
 			if err != nil {
 				v.logger.Errorf("[Validator] Failed to get current state: %s", err)
+
 				return err
 			}
+
 			for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
 				v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
 				time.Sleep(1 * time.Second) // Wait and check again in 1 second
@@ -142,6 +145,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 			if err != nil {
 				prometheusInvalidTransactions.Inc()
 				v.logger.Errorf("[Validator] Failed to decode kafka message: %s", err)
+
 				return err
 			}
 
@@ -149,12 +153,14 @@ func (v *Server) Init(ctx context.Context) (err error) {
 			if err != nil {
 				prometheusInvalidTransactions.Inc()
 				v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
+
 				return err
 			}
 
 			if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil {
 				prometheusInvalidTransactions.Inc()
 				v.logger.Errorf("[Validator] Invalid tx: %s", err)
+
 				return err
 			}
 
@@ -168,6 +174,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 			AutoCommitEnabled: true,
 			ConsumerFn:        kafkaMessageHandler,
 		})
+
 		if err != nil {
 			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", kafkaURL.String(), err)
 		}

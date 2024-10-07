@@ -12,12 +12,14 @@ import (
 )
 
 func init() {
-	ScriptVerificatorFactory["scriptVerificatorGoBt"] = newScriptVerificatorGoBt
-	log.Println("Registered ScriptVerificatorGoBt")
+	ScriptVerificatorFactory[VerificatorGoBT] = newScriptVerificatorGoBt
+
+	log.Println("Registered scriptVerificatorGoBt")
 }
 
 func newScriptVerificatorGoBt(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxValidator {
-	l.Infof("Use Script Verificator with GoBt")
+	l.Infof("Use Script Verificator with GoBT")
+
 	return &scriptVerificatorGoBt{
 		logger: l,
 		policy: po,

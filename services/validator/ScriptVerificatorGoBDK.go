@@ -29,8 +29,8 @@ type bdkDebugVerification struct {
 }
 
 func init() {
-	ScriptVerificatorFactory["scriptVerificatorGoBDK"] = newScriptVerificatorGoBDK
-	log.Println("Registered ScriptVerificatorGoBt")
+	ScriptVerificatorFactory[VerificatorGoBDK] = newScriptVerificatorGoBDK
+	log.Println("Registered scriptVerificatorGoBDK")
 }
 
 // getChainNameFromParams map the chain name from the ubsv way to bsv C++ code.
@@ -48,7 +48,7 @@ func getBDKChainNameFromParams(pa *chaincfg.Params) string {
 }
 
 func newScriptVerificatorGoBDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxValidator {
-	l.Infof("Use Script Verificator with Go-BDK, version : %v", gobdk.BDK_VERSION_STRING())
+	l.Infof("Use Script Verificator with GoBDK, version : %v", gobdk.BDK_VERSION_STRING())
 
 	bdkScriptConfig := bdkconfig.ScriptConfig{
 		ChainNetwork:                 getBDKChainNameFromParams(pa),
