@@ -461,7 +461,7 @@ func (s *Store) sendOutpointBatch(batch []*batchOutpoint) {
 		batchRecord := batchRecordIfc.BatchRec()
 		if batchRecord.Err != nil {
 			if errors.Is(batchRecord.Err, aerospike.ErrKeyNotFound) {
-				txErrors[previousTxHash] = errors.NewTxNotFoundError("could not find transaction in aerospike: %w", batchRecord.Err)
+				txErrors[previousTxHash] = errors.NewTxNotFoundError("could not find transaction %s in aerospike: %w", previousTxHash.String(), batchRecord.Err)
 			} else {
 				txErrors[previousTxHash] = errors.NewProcessingError("error in aerospike get outpoint batch record: %w", batchRecord.Err)
 			}
