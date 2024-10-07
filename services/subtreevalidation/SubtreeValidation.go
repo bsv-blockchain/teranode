@@ -394,7 +394,7 @@ func (u *Server) validateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	for idx, txHash := range txHashes {
 		// if placeholder just add it and continue
 		if idx == 0 && txHash.Equal(*util.CoinbasePlaceholderHash) {
-			err = subtree.AddNode(txHash, 0, 0)
+			err = subtree.AddCoinbaseNode()
 			if err != nil {
 				return errors.NewProcessingError("[validateSubtreeInternal][%s] failed to add coinbase placeholder node to subtree", v.SubtreeHash.String(), err)
 			}
