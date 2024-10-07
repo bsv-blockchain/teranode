@@ -105,4 +105,16 @@ Section to be completed.
 
 ## TEC
 
-    Section to be completed.
+As outlined in the Functional Requirements for Teranode reference document, the tests in the `/test/tec` folder check  Teranode's ability to recover from multiple types of errors, from incorrect settings to communication errors on the message channels between microservices. 
+
+The naming convention for files in this folder is as follows:
+
+`tec_blk_<number>_test.go` corresponds to the TEC-<number> test in the Functional Requirements for Teranode document.
+
+- TEC-BLK-1: Blockchain Service Reliability and Recoverability - Blockchain Service - Blockchain Store Failure
+- TEC-BLK-2: Blockchain Service Reliability and Recoverability - Blockchain Service - UTXO Store Failure
+- TEC-BLK-3: Blockchain Service Reliability and Recoverability - Blockchain Service - Block Assembly Failure
+- TEC-BLK-4: Blockchain Service Reliability and Recoverability - Blockchain Service - Block Validation Failure
+- TEC-BLK-5: Blockchain Service Reliability and Recoverability - Blockchain Service - P2P Service Failure
+- TEC-BLK-6: Blockchain Service Reliability and Recoverability - Blockchain Service - Asset Server Failure
+- TEC-BLK-7: Blockchain Service Reliability and Recoverability - Blockchain Service - Kafka Failure
