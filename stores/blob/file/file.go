@@ -384,6 +384,25 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 	return nil
 }
 
+func (s *File) GetTTL(_ context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, key)
+	if err != nil {
+		return 0, err
+	}
+
+	s.fileTTLsMu.Lock()
+	ttl, ok := s.fileTTLs[fileName]
+	s.fileTTLsMu.Unlock()
+
+	if !ok {
+		return 0, errors.ErrNotFound
+	}
+
+	return time.Until(ttl), nil
+}
+
 func (s *File) GetIoReader(_ context.Context, hash []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	merged := options.MergeOptions(s.options, opts)
 

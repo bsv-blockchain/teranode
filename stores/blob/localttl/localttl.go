@@ -19,6 +19,7 @@ type blobStore interface {
 	Set(ctx context.Context, key []byte, value []byte, opts ...options.FileOption) error
 	SetFromReader(ctx context.Context, key []byte, value io.ReadCloser, opts ...options.FileOption) error
 	SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...options.FileOption) error
+	GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error)
 	Del(ctx context.Context, key []byte, opts ...options.FileOption) error
 	Close(ctx context.Context) error
 }
@@ -116,6 +117,17 @@ func (l *LocalTTL) SetTTL(ctx context.Context, key []byte, duration time.Duratio
 
 	// delete from the blob store ?
 	return l.blobStore.Del(ctx, key, opts...)
+}
+
+func (l *LocalTTL) GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
+	ttl, err := l.ttlStore.GetTTL(ctx, key, opts...)
+	if err != nil {
+		// couldn't find it in the ttl store, try the blob store
+		l.logger.Errorf("LocalTTL.GetTTL miss for %s", utils.ReverseAndHexEncodeSlice(key))
+		return l.blobStore.GetTTL(ctx, key, opts...)
+	}
+
+	return ttl, nil
 }
 
 func (l *LocalTTL) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {

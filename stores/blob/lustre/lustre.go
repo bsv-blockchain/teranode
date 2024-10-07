@@ -311,6 +311,42 @@ func (s *Lustre) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts 
 	return os.Rename(persistedFilename, filename)
 }
 
+func (s *Lustre) GetTTL(_ context.Context, hash []byte, opts ...options.FileOption) (time.Duration, error) {
+	merged := options.MergeOptions(s.options, opts)
+
+	filename, err := merged.ConstructFilename(s.path, hash)
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = os.Stat(filename)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// check the persist sub dir
+			persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), hash)
+			if err != nil {
+				return 0, err
+			}
+
+			_, err = os.Stat(persistedFilename)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return 0, errors.ErrNotFound
+				}
+
+				return 0, errors.NewStorageError("[Lustre] failed to read data from persist file", err)
+			}
+
+			return 0, nil
+		}
+
+		return 0, errors.NewStorageError("[Lustre] failed to read data from file", err)
+	}
+
+	// file exists in the ttl dir, so we can return the default TTL
+	return *s.options.TTL, nil
+}
+
 func (s *Lustre) GetIoReader(ctx context.Context, hash []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	merged := options.MergeOptions(s.options, opts)
 

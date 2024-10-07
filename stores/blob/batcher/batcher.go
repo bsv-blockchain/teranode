@@ -214,6 +214,10 @@ func (b *Batcher) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...o
 	return errors.NewProcessingError("TTL is not supported in a batcher store")
 }
 
+func (b *Batcher) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
+	return 0, errors.NewProcessingError("TTL is not supported in a batcher store")
+}
+
 func (b *Batcher) GetIoReader(_ context.Context, _ []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	return nil, errors.NewStorageError("getIoReader is not supported in a batcher store")
 }

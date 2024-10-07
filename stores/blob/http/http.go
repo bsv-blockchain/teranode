@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -18,6 +19,7 @@ import (
 const (
 	blobURLFormat        = "%s/blob/%s?%s"
 	blobURLFormatWithTTL = blobURLFormat + "&ttl=%s"
+	blobURLFormatGetTTL  = blobURLFormat + "&getTTL=1"
 )
 
 type HTTPStore struct {
@@ -188,6 +190,45 @@ func (s *HTTPStore) SetTTL(ctx context.Context, key []byte, ttl time.Duration, o
 	}
 
 	return nil
+}
+
+func (s *HTTPStore) GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
+	encodedKey := base64.URLEncoding.EncodeToString(key)
+
+	query := options.FileOptionsToQuery(opts...)
+	url := fmt.Sprintf(blobURLFormatGetTTL, s.baseURL, encodedKey, query.Encode())
+
+	req, err := http.NewRequestWithContext(ctx, "PATCH", url, nil)
+	if err != nil {
+		return 0, errors.NewStorageError("[HTTPStore] GetTTL failed to create request", err)
+	}
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return 0, errors.NewStorageError("[HTTPStore] GetTTL failed", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, errors.ErrNotFound
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, errors.NewStorageError(fmt.Sprintf("[HTTPStore] GetTTL failed with status code %d", resp.StatusCode), nil)
+	}
+
+	ttl, err := io.ReadAll(req.Body)
+	if err != nil {
+		return 0, errors.NewStorageError("[HTTPStore] GetTTL failed to read response body", err)
+	}
+
+	// Parse the TTL from the response body, the ttl will be a string representation of an int
+	ttlInt, err := strconv.Atoi(string(ttl))
+	if err != nil {
+		return 0, errors.NewStorageError("[HTTPStore] GetTTL failed to parse response body int", err)
+	}
+
+	return time.Duration(ttlInt) * time.Second, nil
 }
 
 func (s *HTTPStore) Del(ctx context.Context, key []byte, opts ...options.FileOption) error {

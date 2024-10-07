@@ -44,6 +44,10 @@ func (n *Null) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...opti
 	return nil
 }
 
+func (n *Null) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
+	return 0, nil
+}
+
 func (n *Null) GetIoReader(_ context.Context, _ []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	return nil, errors.NewStorageError("failed to read data from file: no such file or directory")
 }

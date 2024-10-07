@@ -235,6 +235,19 @@ func (g *S3) SetTTL(ctx context.Context, key []byte, ttl time.Duration, opts ...
 	return nil
 }
 
+func (g *S3) GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
+	start := gocore.CurrentTime()
+	defer func() {
+		gocore.NewStat("prop_store_s3", true).NewStat("GetTTL").AddTime(start)
+	}()
+
+	traceSpan := tracing.Start(ctx, "s3:GetTTL")
+	defer traceSpan.Finish()
+
+	// TODO implement
+	return 0, nil
+}
+
 func (g *S3) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {
 	start := gocore.CurrentTime()
 	defer func() {

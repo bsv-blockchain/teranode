@@ -16,6 +16,7 @@ import (
 type Memory struct {
 	mu         sync.RWMutex
 	blobs      map[[32]byte][]byte
+	ttls       map[[32]byte]time.Time
 	options    *options.Options
 	Counters   map[string]int
 	countersMu sync.Mutex
@@ -24,6 +25,7 @@ type Memory struct {
 func New(opts ...options.StoreOption) *Memory {
 	return &Memory{
 		blobs:    make(map[[32]byte][]byte),
+		ttls:     make(map[[32]byte]time.Time),
 		options:  options.NewStoreOptions(opts...),
 		Counters: make(map[string]int),
 	}
@@ -95,12 +97,44 @@ func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...opt
 
 	m.blobs[storeKey] = value
 
+	if merged.TTL != nil && *merged.TTL > 0 {
+		m.ttls[storeKey] = time.Now().Add(*merged.TTL)
+	}
+
 	return nil
 }
 
 func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.FileOption) error {
-	// not supported in memory store yet
+	merged := options.MergeOptions(m.options, opts)
+
+	storeKey := hashKey(hash, merged)
+
+	if merged.TTL != nil {
+		if *merged.TTL > 0 {
+			m.ttls[storeKey] = time.Now().Add(*merged.TTL)
+		} else {
+			delete(m.ttls, storeKey)
+		}
+	}
+
 	return nil
+}
+
+func (m *Memory) GetTTL(_ context.Context, hash []byte, opts ...options.FileOption) (time.Duration, error) {
+	merged := options.MergeOptions(m.options, opts)
+
+	storeKey := hashKey(hash, merged)
+
+	if _, ok := m.blobs[storeKey]; !ok {
+		return 0, errors.ErrNotFound
+	}
+
+	ttl, ok := m.ttls[storeKey]
+	if !ok {
+		return 0, nil
+	}
+
+	return time.Until(ttl), nil
 }
 
 func (m *Memory) GetIoReader(ctx context.Context, key []byte, opts ...options.FileOption) (io.ReadCloser, error) {

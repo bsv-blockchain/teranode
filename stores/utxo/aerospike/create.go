@@ -117,6 +117,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 	var (
 		key         *aerospike.Key
 		binsToStore [][]*aerospike.Bin
+		hasUtxos    bool
 		err         error
 	)
 
@@ -155,7 +156,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			external = true
 		}
 
-		binsToStore, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, external, bItem.txHash, bItem.isCoinbase) // false is to say this is a normal record, not external.
+		binsToStore, hasUtxos, err = s.getBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, external, bItem.txHash, bItem.isCoinbase) // false is to say this is a normal record, not external.
 		if err != nil {
 			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not get bins to store", err))
 
@@ -173,10 +174,10 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 			if len(batch[idx].tx.Inputs) == 0 {
 				// This will also create the aerospike records
-				go s.storePartialTransactionExternally(ctx, batch[idx], binsToStore)
+				go s.storePartialTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
 			} else {
 				// This will also create the aerospike records
-				go s.storeTransactionExternally(ctx, batch[idx], binsToStore)
+				go s.storeTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
 			}
 
 			continue
@@ -206,11 +207,18 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 				timeStart := time.Now()
 
+				setOptions := []options.FileOption{options.WithFileExtension("outputs")}
+
+				if !hasUtxos {
+					// add a TTL to the external file, since there were no spendable utxos in the transaction
+					setOptions = append(setOptions, options.WithTTL(time.Duration(s.expiration)*time.Second))
+				}
+
 				if err = s.externalStore.Set(
 					ctx,
 					bItem.txHash[:],
 					wrapper.Bytes(),
-					options.WithFileExtension("outputs"),
+					setOptions...,
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing outputs to external store [%s]", bItem.txHash.String(), err))
 					// NOOP for this record
@@ -223,13 +231,22 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			} else {
 				timeStart := time.Now()
 
+				setOptions := []options.FileOption{
+					options.WithFileExtension("tx"),
+					options.WithAllowOverwrite(true),
+				}
+
+				if !hasUtxos {
+					// add a TTL to the external file, since there were no spendable utxos in the transaction
+					setOptions = append(setOptions, options.WithTTL(time.Duration(s.expiration)*time.Second))
+				}
+
 				// store the tx data externally, it is not in our aerospike record
 				if err = s.externalStore.Set(
 					ctx,
 					bItem.txHash[:],
 					bItem.tx.ExtendedBytes(),
-					options.WithFileExtension("tx"),
-					options.WithAllowOverwrite(true),
+					setOptions...,
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
 					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
 					// NOOP for this record
@@ -292,16 +309,16 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, err = s.getBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, true, batch[idx].txHash, batch[idx].isCoinbase) // true is to say this is a big record
+					binsToStore, hasUtxos, err = s.getBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, true, batch[idx].txHash, batch[idx].isCoinbase) // true is to say this is a big record
 					if err != nil {
 						utils.SafeSend[error](batch[idx].done, errors.NewProcessingError("could not get bins to store", err))
 						continue
 					}
 
 					if len(batch[idx].tx.Inputs) == 0 {
-						go s.storePartialTransactionExternally(ctx, batch[idx], binsToStore)
+						go s.storePartialTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
 					} else {
-						go s.storeTransactionExternally(ctx, batch[idx], binsToStore)
+						go s.storeTransactionExternally(ctx, batch[idx], binsToStore, hasUtxos)
 					}
 
 					continue
@@ -354,17 +371,18 @@ func (s *Store) splitIntoBatches(utxos []interface{}, commonBins []*aerospike.Bi
 	return batches
 }
 
-func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool) ([][]*aerospike.Bin, error) {
+func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32, external bool, txHash *chainhash.Hash, isCoinbase bool) ([][]*aerospike.Bin, bool, error) {
 	var (
 		fee          uint64
 		utxoHashes   []*chainhash.Hash
 		err          error
 		size         int
 		extendedSize int
+		hasUtxos     bool
 	)
 
 	if len(tx.Outputs) == 0 {
-		return nil, errors.NewProcessingError("tx %s has no outputs", txHash)
+		return nil, hasUtxos, errors.NewProcessingError("tx %s has no outputs", txHash)
 	}
 
 	if len(tx.Inputs) == 0 {
@@ -378,7 +396,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 
 	if err != nil {
 		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Store", err.Error()).Inc()
-		return nil, errors.NewProcessingError("failed to get fees and utxo hashes for %s: %v", txHash, err)
+		return nil, hasUtxos, errors.NewProcessingError("failed to get fees and utxo hashes for %s: %v", txHash, err)
 	}
 
 	var inputs []interface{}
@@ -428,6 +446,14 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		}
 	}
 
+	for _, u := range utxos {
+		// check whether at least one utxo is not nil
+		if u != nil {
+			hasUtxos = true
+			break
+		}
+	}
+
 	commonBins := []*aerospike.Bin{
 		aerospike.NewBin("version", aerospike.NewIntegerValue(int(tx.Version))),
 		aerospike.NewBin("locktime", aerospike.NewIntegerValue(int(tx.LockTime))),
@@ -466,18 +492,27 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		batches[0] = append(batches[0], aerospike.NewBin("outputs", outputs))
 	}
 
-	return batches, nil
+	return batches, hasUtxos, nil
 }
 
-func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStoreItem, binsToStore [][]*aerospike.Bin) {
+func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStoreItem, binsToStore [][]*aerospike.Bin, hasUtxos bool) {
 	timeStart := time.Now()
+
+	opts := []options.FileOption{
+		options.WithFileExtension("tx"),
+		options.WithAllowOverwrite(true),
+	}
+
+	if !hasUtxos {
+		// add a TTL to the external file, since there were no spendable utxos in the transaction
+		opts = append(opts, options.WithTTL(time.Duration(s.expiration)*time.Second))
+	}
 
 	if err := s.externalStore.Set(
 		ctx,
 		bItem.txHash[:],
 		bItem.tx.ExtendedBytes(),
-		options.WithFileExtension("tx"),
-		options.WithAllowOverwrite(true),
+		opts...,
 	); err != nil {
 		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
 
@@ -530,7 +565,7 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 	utils.SafeSend(bItem.done, nil)
 }
 
-func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *batchStoreItem, binsToStore [][]*aerospike.Bin) {
+func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *batchStoreItem, binsToStore [][]*aerospike.Bin, hasUtxos bool) {
 	nonNilOutputs := utxopersister.UnpadSlice(bItem.tx.Outputs)
 
 	wrapper := utxopersister.UTXOWrapper{
@@ -555,12 +590,21 @@ func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *ba
 
 	timeStart := time.Now()
 
+	opts := []options.FileOption{
+		options.WithFileExtension("outputs"),
+		options.WithAllowOverwrite(true),
+	}
+
+	if !hasUtxos {
+		// add a TTL to the external file, since there were no spendable utxos in the transaction
+		opts = append(opts, options.WithTTL(time.Duration(s.expiration)*time.Second))
+	}
+
 	if err := s.externalStore.Set(
 		ctx,
 		bItem.txHash[:],
 		wrapper.Bytes(),
-		options.WithFileExtension("outputs"),
-		options.WithAllowOverwrite(true),
+		opts...,
 	); err != nil {
 		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]", bItem.txHash.String(), err))
 

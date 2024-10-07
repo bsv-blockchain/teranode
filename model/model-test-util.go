@@ -475,6 +475,10 @@ func (l localSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration, 
 	panic("not implemented")
 }
 
+func (l localSubtreeStore) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
+	panic("not implemented")
+}
+
 func (l localSubtreeStore) Del(_ context.Context, _ []byte, opts ...options.FileOption) error {
 	panic("not implemented")
 }
@@ -517,6 +521,10 @@ func (n *BlobStoreStub) Set(_ context.Context, _ []byte, _ []byte, _ ...options.
 
 func (n *BlobStoreStub) SetTTL(_ context.Context, _ []byte, _ time.Duration, opts ...options.FileOption) error {
 	return nil
+}
+
+func (n *BlobStoreStub) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
+	return 0, nil
 }
 
 func (n *BlobStoreStub) GetIoReader(_ context.Context, _ []byte, opts ...options.FileOption) (io.ReadCloser, error) {

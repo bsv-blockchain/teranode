@@ -71,6 +71,10 @@ func (l TestSubtreeStore) SetTTL(_ context.Context, _ []byte, _ time.Duration, o
 	panic("not implemented")
 }
 
+func (l TestSubtreeStore) GetTTL(_ context.Context, _ []byte, opts ...options.FileOption) (time.Duration, error) {
+	panic("not implemented")
+}
+
 func (l TestSubtreeStore) Del(_ context.Context, _ []byte, _ ...options.FileOption) error {
 	panic("not implemented")
 }
