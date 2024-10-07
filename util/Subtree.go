@@ -9,7 +9,6 @@ import (
 	"math"
 
 	"github.com/bitcoin-sv/ubsv/errors"
-
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
@@ -171,7 +170,7 @@ func (st *Subtree) AddSubtreeNode(node SubtreeNode) error {
 		return errors.NewSubtreeError("subtree is full")
 	}
 
-	if node.Hash == CoinbasePlaceholder {
+	if node.Hash.Equal(CoinbasePlaceholder) {
 		return errors.NewSubtreeError("[AddSubtreeNode] coinbase placeholder node should be added with AddCoinbaseNode, tree length is %d", len(st.Nodes))
 	}
 
@@ -213,7 +212,8 @@ func (st *Subtree) AddNode(node chainhash.Hash, fee uint64, sizeInBytes uint64) 
 	if (len(st.Nodes) + 1) > st.treeSize {
 		return errors.NewSubtreeError("subtree is full")
 	}
-	if node == CoinbasePlaceholder {
+
+	if node.Equal(CoinbasePlaceholder) {
 		return errors.NewSubtreeError("[AddNode] coinbase placeholder node should be added with AddCoinbaseNode, tree length is %d", len(st.Nodes))
 	}
 

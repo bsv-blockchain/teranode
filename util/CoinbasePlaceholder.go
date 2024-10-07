@@ -5,19 +5,25 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-var CoinbasePlaceholder [32]byte
 var (
-	CoinbasePlaceholderHash   *chainhash.Hash
+	// CoinbasePlaceholder hard code this value to avoid having to calculate it every time
+	// to help the compiler optimize the code.
+	CoinbasePlaceholder = [32]byte{
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	}
+	CoinbasePlaceholderHashValue = chainhash.Hash(CoinbasePlaceholder)
+	CoinbasePlaceholderHash      = &CoinbasePlaceholderHashValue
+)
+
+var (
 	CoinbasePlaceholderTx     *bt.Tx
 	coinbasePlaceholderTxHash *chainhash.Hash
 )
 
 func init() {
-	for i := 0; i < len(CoinbasePlaceholder); i++ {
-		CoinbasePlaceholder[i] = 0xFF
-	}
-	CoinbasePlaceholderHash, _ = chainhash.NewHash(CoinbasePlaceholder[:])
-
 	CoinbasePlaceholderTx = bt.NewTx()
 	CoinbasePlaceholderTx.Version = 0xFFFFFFFF
 	CoinbasePlaceholderTx.LockTime = 0xFFFFFFFF

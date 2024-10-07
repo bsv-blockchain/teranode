@@ -1,6 +1,7 @@
 package util
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/libsv/go-bt/v2"
@@ -56,6 +57,19 @@ func TestExtractMiner2(t *testing.T) {
 func TestExtractMiner3(t *testing.T) {
 	miner := extractMiner("/taal.com")
 	assert.Equal(t, "/", miner) // This is the current behaviour. Should it be "/taal.com"?
+}
+
+func TestExtractMiner_514587(t *testing.T) {
+	tx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff14031bda07074125205a6ad8648d3b00009de70700ffffffff017777954a000000001976a9144770c259bc03c8dc36b853ed19fbb3514190be2e88ac00000000")
+	require.NoError(t, err)
+
+	miner, err := ExtractCoinbaseMiner(tx)
+	require.NoError(t, err)
+
+	expected, err := hex.DecodeString("074125205a6a3f643f3b00003f0700")
+	require.NoError(t, err)
+
+	assert.Equal(t, string(expected), miner)
 }
 
 func TestExtractCoinbaseHeight(t *testing.T) {
