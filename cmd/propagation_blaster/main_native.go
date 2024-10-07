@@ -1,4 +1,4 @@
-//go:build native
+//go:build bdk
 
 package main
 
@@ -11,14 +11,14 @@ import "C"
 import (
 	"log"
 
-	"github.com/bitcoin-sv/ubsv/native"
+	bdksecp256k1 "github.com/bitcoin-sv/bdk/module/gobdk/secp256k1"
 	"github.com/libsv/go-bt/v2/unlocker"
 	"github.com/ordishs/gocore"
 )
 
 func init() {
 	if gocore.Config().GetBool("use_cgo_signer", false) {
-		log.Println("Using CGO signer - SignMessage")
-		unlocker.InjectExternalSignerFn(native.SignMessage)
+		log.Println("Using BDK signer - SignMessage")
+		unlocker.InjectExternalSignerFn(bdksecp256k1.SignMessage)
 	}
 }
