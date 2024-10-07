@@ -3,6 +3,7 @@ package file
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils"
+	"golang.org/x/exp/rand"
 )
 
 type File struct {
@@ -261,7 +263,7 @@ func (s *File) SetFromReader(_ context.Context, key []byte, reader io.ReadCloser
 		}
 	}
 
-	tmpFilename := filename + ".tmp"
+	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, rand.Int())
 
 	// write the bytes from the reader to a file with the filename
 	file, err := os.Create(tmpFilename)
@@ -296,7 +298,7 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 		}
 	}
 
-	tmpFilename := filename + ".tmp"
+	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, rand.Int())
 
 	// write bytes to file
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)

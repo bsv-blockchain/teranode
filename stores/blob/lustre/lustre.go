@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob/s3"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/ordishs/go-utils"
+	"golang.org/x/exp/rand"
 )
 
 type s3Store interface {
@@ -189,7 +190,7 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 		}
 	}
 
-	tmpFilename := filename + ".tmp"
+	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, rand.Int())
 
 	// write the bytes from the reader to a f with the filename
 	f, err := os.Create(tmpFilename)
@@ -202,13 +203,7 @@ func (s *Lustre) SetFromReader(_ context.Context, key []byte, reader io.ReadClos
 		return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to write data to file", filename, err)
 	}
 
-	// rename the file to the final name
 	if err := os.Rename(tmpFilename, filename); err != nil {
-		if _, err := os.Stat(filename); err == nil {
-			// there is another thread/process creating the same Tx at the same time!!!!
-			return errors.NewBlobAlreadyExistsError("[Lustre][Set] [%s] already exists in store", filename)
-		}
-
 		return errors.NewStorageError("[Lustre][SetFromReader] [%s] failed to rename file from tmp", filename, err)
 	}
 
@@ -231,7 +226,7 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 		}
 	}
 
-	tmpFilename := filename + ".tmp"
+	tmpFilename := fmt.Sprintf("%s.%d.tmp", filename, rand.Int())
 
 	// write bytes to file
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
@@ -241,11 +236,6 @@ func (s *Lustre) Set(_ context.Context, hash []byte, value []byte, opts ...optio
 
 	// rename the file to the final name
 	if err := os.Rename(tmpFilename, filename); err != nil {
-		if _, err := os.Stat(filename); err == nil {
-			// there is another thread/process creating the same Tx at the same time!!!!
-			return errors.NewBlobAlreadyExistsError("[Lustre][Set] [%s] already exists in store", filename)
-		}
-
 		return errors.NewStorageError("[Lustre][Set] [%s] failed to rename file from tmp", filename, err)
 	}
 
