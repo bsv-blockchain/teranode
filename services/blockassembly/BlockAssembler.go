@@ -143,6 +143,13 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			meta                      *model.BlockHeaderMeta
 		)
 
+		// send out initial notification to check the best block header
+		go func() {
+			b.blockchainSubscriptionCh <- &blockchain.Notification{
+				Type: model.NotificationType_Block,
+			}
+		}()
+
 		b.currentRunningState.Store("running")
 		for {
 			select {
