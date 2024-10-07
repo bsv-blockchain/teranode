@@ -255,7 +255,7 @@ func createBlocks() error {
 		return err
 	}
 
-	err = subtree2.AddNode(*util.CoinbasePlaceholderHash, 0, 0)
+	err = subtree2.AddCoinbaseNode()
 	if err != nil {
 		return err
 	}
@@ -302,7 +302,7 @@ func createBlocks() error {
 		return err
 	}
 
-	err = subtree3.AddNode(*util.CoinbasePlaceholderHash, 0, 0)
+	err = subtree3.AddCoinbaseNode()
 	if err != nil {
 		return err
 	}
