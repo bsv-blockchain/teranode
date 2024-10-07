@@ -17,8 +17,8 @@ services:
       context: .
       dockerfile: local.Dockerfile
       args:
-        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-2db1b0e
-        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-2db1b0e
+        BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-4cce0e7
+        RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-4cce0e7
     entrypoint: ["pwd"]
 
   jaeger:
