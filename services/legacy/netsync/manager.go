@@ -1664,7 +1664,7 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 // block, tx, and inv updates.
 func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
-	blockValidation blockvalidation.Interface,
+	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
 	config *Config) (*SyncManager, error) {
 
 	initPrometheusMetrics()
@@ -1688,12 +1688,13 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 		minSyncPeerNetworkSpeed: config.MinSyncPeerNetworkSpeed,
 
 		// ubsv stores etc.
-		logger:           logger,
-		blockchainClient: blockchainClient,
-		validationClient: validationClient,
-		utxoStore:        utxoStore,
-		subtreeStore:     subtreeStore,
-		blockValidation:  blockValidation,
+		logger:            logger,
+		blockchainClient:  blockchainClient,
+		validationClient:  validationClient,
+		utxoStore:         utxoStore,
+		subtreeStore:      subtreeStore,
+		subtreeValidation: subtreeValidation,
+		blockValidation:   blockValidation,
 	}
 
 	// set an eviction function for orphan transactions

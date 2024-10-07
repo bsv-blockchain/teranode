@@ -11,8 +11,6 @@ import (
 	"testing"
 	"time"
 
-	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
-
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
@@ -21,7 +19,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
+	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -68,6 +68,8 @@ func (ctx *testContext) Setup(config *testConfig) error {
 
 	subtreeStore := blob_memory.New()
 
+	subtreeValidation := &subtreevalidation.MockSubtreeValidation{}
+
 	blockvalidationClient, err := blockvalidation.NewClient(context.Background(), ulogger.TestLogger{}, "manager_test")
 	if err != nil {
 		return fmt.Errorf("failed to create block validation client: %v", err)
@@ -79,6 +81,7 @@ func (ctx *testContext) Setup(config *testConfig) error {
 		validatorClient,
 		utxoStore,
 		subtreeStore,
+		subtreeValidation,
 		blockvalidationClient,
 		&netsync.Config{
 			PeerNotifier: peerNotifier,
