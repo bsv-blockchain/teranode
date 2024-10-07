@@ -640,6 +640,10 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
 		}
 
+		if err = u.addCoinbaseTransactionInLegacySync(ctx, block); err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to add coinbase transaction in legacy sync: %s", block.Header.Hash().String(), err)
+		}
+
 		// decouple the tracing context to not cancel the context when finalize the block processing in the background
 		callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleValidateBlock")
 		defer callerSpan.Finish()
@@ -782,9 +786,13 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 
 		u.logger.Infof("[ValidateBlock][%s] adding block to blockchain DONE", block.Hash().String())
+
+		if err = u.addCoinbaseTransactionInLegacySync(ctx, block); err != nil {
+			u.logger.Errorf("[ValidateBlock][%s] failed to add coinbase transaction in legacy sync: %s", block.Header.Hash().String(), err)
+		}
 	}
 
-	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
+	u.logger.Infof("[ValidateBlock][%s] storing coinbase in tx store: %s", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 
 	if err = u.txStore.Set(ctx, block.CoinbaseTx.TxIDChainHash()[:], block.CoinbaseTx.Bytes()); err != nil {
 		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%s]", block.Hash().String(), err)
@@ -827,6 +835,38 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		u.logger.Infof("[ValidateBlock][%s] creating bloom filter for the validated block", block.Hash().String())
 		u.createAppendBloomFilter(callerSpan.Ctx, block)
 		u.logger.Infof("[ValidateBlock][%s] creating bloom filter is DONE", block.Hash().String())
+	}
+
+	return nil
+}
+
+func (u *BlockValidation) addCoinbaseTransactionInLegacySync(ctx context.Context, block *model.Block) error {
+	currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get current state", block.Header.Hash().String(), err)
+	}
+
+	if currentState.Is(blockchain.FSMStateLEGACYSYNCING) {
+		// Add the coinbase transaction to the metaTxStore, but only in LEGACY SYNCING mode
+		u.logger.Debugf("[ValidateBlock][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), block.Height, block.CoinbaseTx.TxIDChainHash().String())
+
+		// get block ID from DB
+		ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
+		if err != nil {
+			return errors.NewServiceError("[ValidateBlock][%s] failed to get block header ids", block.Header.Hash().String(), err)
+		}
+
+		blockID := ids[0]
+
+		if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height, utxo.WithBlockIDs(blockID)); err != nil {
+			if errors.Is(err, errors.ErrTxAlreadyExists) {
+				u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
+			} else {
+				return errors.NewTxError("[ValidateBlock][%s] error storing utxos", block.Header.Hash().String(), err)
+			}
+		}
+
+		u.logger.Debugf("[ValidateBlock][%s] storeCoinbaseTx DONE", block.Header.Hash().String())
 	}
 
 	return nil
