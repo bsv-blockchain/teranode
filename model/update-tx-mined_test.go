@@ -98,7 +98,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 
 		txMeta, err := txMetaStore.Get(context.Background(), tx0.TxIDChainHash())
 		require.NoError(t, err)
-		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+		assert.Empty(t, txMeta.BlockIDs) // tx0 is a coinbase tx, so it should not have any block IDs set by the SetMinedMulti process - its done in the block assembly process at the point of creating the coinbasetx
 
 		txMeta, err = txMetaStore.Get(context.Background(), tx1.TxIDChainHash())
 		require.NoError(t, err)
