@@ -17,7 +17,7 @@ func init() {
 }
 
 func newScriptVerificatorGoBt(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxValidator {
-	log.Println("Use Script Verificator with GoBt")
+	l.Infof("Use Script Verificator with GoBt")
 	return &scriptVerificatorGoBt{
 		logger: l,
 		policy: po,

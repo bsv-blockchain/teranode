@@ -20,7 +20,7 @@ func init() {
 }
 
 func newScriptVerificatorGoSDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxValidator {
-	log.Println("Use Script Verificator with Go-SDK")
+	l.Infof("Use Script Verificator with Go-SDK")
 	return &scriptVerificatorGoSDK{
 		logger: l,
 		policy: po,

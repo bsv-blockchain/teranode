@@ -48,7 +48,7 @@ func getBDKChainNameFromParams(pa *chaincfg.Params) string {
 }
 
 func newScriptVerificatorGoBDK(l ulogger.Logger, po *PolicySettings, pa *chaincfg.Params) TxValidator {
-	log.Println("Use Script Verificator with Go-BDK, version : ", gobdk.BDK_VERSION_STRING())
+	l.Infof("Use Script Verificator with Go-BDK, version : %v", gobdk.BDK_VERSION_STRING())
 
 	bdkScriptConfig := bdkconfig.ScriptConfig{
 		ChainNetwork:                 getBDKChainNameFromParams(pa),
