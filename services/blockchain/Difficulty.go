@@ -7,6 +7,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"golang.org/x/exp/rand"
 
 	"time"
 
@@ -85,6 +86,12 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 		// Return minimum difficulty when more than the desired
 		// amount of time has elapsed without mining a block.
 		reductionTime := d.chainParams.MinDiffReductionTime.Seconds()
+
+		// Add a random additional time of +/- 1 minute
+		// this is to prevent testnet nodes all mining their own blocks at the same time
+		randomAdjustment := time.Duration(rand.Int63n(120)-60) * time.Second
+		reductionTime += randomAdjustment.Seconds()
+		d.logger.Debugf("Adjusted reduction time by %v seconds", randomAdjustment.Seconds())
 
 		allowMinTime := bestBlockHeader.Timestamp + uint32(reductionTime)
 		if now.Unix() > int64(allowMinTime) {
