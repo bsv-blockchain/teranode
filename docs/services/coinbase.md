@@ -4,9 +4,9 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-- [2.1. Block Processing ](#21-block-processing-)
+- [2.1. Block Processing and UTXO Splitting](#21-block-processing-and-utxo-splitting)
 - [2.2. Catching Up on Missing Parent Blocks](#22-catching-up-on-missing-parent-blocks)
-- [2.2. gRPC Methods](#22-grpc-methods)
+- [2.3. gRPC Methods](#23-grpc-methods)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology and specific Stores](#5-technology-and-specific-stores)
@@ -16,7 +16,9 @@
 
 ## 1. Description
 
-The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
+The Coinbase Serivce is a test-only service, and is not to be used in production. It's main purpose is to split Coinbase UTXOs into smaller UTXOs, and to manage the spendability of the rewards miners earn. This helps to increase the liquidity in a performance testing setup. This is not intended for production use.
+
+The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, split and record them, track their maturity, and manage the spendability of the rewards miners earn.
 
 In the Teranode context, the "coinbase transaction" is the first transaction in the first subtree of a block and is created by the Block Assembly. This transaction is unique in that it creates new coins from nothing as a reward for the miner's work in processing transactions and securing the network.
 
@@ -49,29 +51,62 @@ The Coinbase transaction is then processed, and the Coinbase UTXOs are stored in
 
 The Coinbase Service also tracks the maturity of the Coinbase UTXOs, ensuring that they are not spendable until they have matured.
 
-### 2.1. Block Processing
+### 2.1. Block Processing and UTXO Splitting
 
 ![coinbase_process_block.svg](img%2Fplantuml%2Fcoinbase%2Fcoinbase_process_block.svg)
 
-1. The Coinbase Service subscribes to the Asset Service, which notifies the Coinbase Service when a new block is found.
-2. The Coinbase Service then requests the block from the Asset Service.
-3. The block is stored in the Coinbase Blockchain store.
-4. The Coinbase Service then processes the Coinbase transaction, extracting the Coinbase UTXOs and storing them in the Coinbase store.
-5. The Coinbase Service then checks if any prior Coinbase UTXOs have matured (typically after 100 blocks have been mined on top of a Coinbase Tx), and if so, it marks them as spendable.
+1. The Coinbase Service subscribes to the Blockchain Service, which notifies the Coinbase Service when a new block is found.
+
+2. When notified of a new block, the Coinbase Service requests the block from the Blockchain Service.
+
+3. The Coinbase Service checks if the block already exists in its store. If it doesn't, it proceeds with processing.
+
+4. If the parent block is not known, the service initiates a catch-up process (detailed in section 2.2).
+
+5. The block is stored in the Coinbase Blockchain store.
+
+6. The Coinbase Service processes the Coinbase transaction from the block:
+    - It extracts the Coinbase UTXOs and stores them in the `coinbase_utxos` table.
+    - Only P2PKH (Pay to Public Key Hash) outputs matching the service's address are processed.
+
+7. The service checks for UTXOs that have matured (typically after 100 blocks have been mined on top of a Coinbase Tx):
+    - Matured UTXOs are marked as processed in the `coinbase_utxos` table.
+    - These processed UTXOs are then split into smaller UTXOs to increase liquidity.
+
+8. The UTXO splitting process:
+    - For each matured UTXO, a new transaction is created.
+    - The UTXO is split into multiple smaller outputs, each typically 10,000,000 satoshis (0.1 BSV).
+    - Any remaining amount is added as an additional output.
+    - The new transaction is signed using the service's private key.
+
+9. The split transaction is then distributed to the network using the distributor component.
+
+10. After successful distribution, the new, smaller UTXOs are recorded in the `spendable_utxos` table.
+
+11. The service updates its internal balance, reflecting the newly available spendable UTXOs.
+
+12. If configured, the service monitors the number of spendable UTXOs and can send notifications (e.g., to a Slack channel) if it falls below a specified threshold.
+
+This process ensures that large Coinbase rewards are broken down into more manageable amounts, increasing the liquidity and usability of the funds for testing purposes. The splitting of UTXOs also helps in simulating a more realistic transaction environment for performance testing.
+
 
 ### 2.2. Catching Up on Missing Parent Blocks
 
-When a block parent is unknown by the Service, a catch up process is triggered. This process requests the missing blocks from the Asset Service, and processes them in order to ensure that the Coinbase UTXOs are tracked correctly.
+When a block's parent is unknown by the Service, a catch-up process is triggered. This process requests the missing blocks from the Blockchain Service and processes them in order to ensure that the Coinbase UTXOs are tracked correctly.
 
 ![coinbase_catchup.svg](img%2Fplantuml%2Fcoinbase%2Fcoinbase_catchup.svg)
 
 1. The Coinbase Service identifies the missing parent blocks.
 2. Each block is processed, in order, by the Coinbase Service. The storeBlock() function was already described in the previous section.
 
-### 2.2. gRPC Methods
+### 2.3. gRPC Methods
 
 The Coinbase Service offers a number of gRPC methods that can be used for miners to interact with the Coinbase Service. You can read more about them in the [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions) section.
 
+- `Health: Checks the health status of the Coinbase Service.
+- `RequestFunds`: Allows requesting funds from the Coinbase Service.
+- `DistributeTransaction`: Distributes a transaction to the network.
+- `GetBalance`: Retrieves the current balance of spendable UTXOs.
 
 ## 3. gRPC Protobuf Definitions
 
@@ -110,13 +145,14 @@ In PostgreSQL, this is the data structure.
 
 Once a Coinbase UTXO has matured, it becomes spendable. The Coinbase Service will track the spendable Coinbase UTXOs in the database, so miners can claim them.
 
-| Column Name    | Data Type    | Description                                                            |
-|----------------|--------------|------------------------------------------------------------------------|
-| inserted_at    | TIMESTAMPTZ  | Timestamp of when the spendable record was created.                    |
-| txid           | BYTEA        | The transaction ID where the UTXO originated, stored in binary format. |
-| vout           | INTEGER      | The output index number of the UTXO within the transaction.            |
-| locking_script | BYTEA        | The script that defines the conditions needed to spend the UTXO.       |
-| satoshis       | BIGINT       | The amount of satoshis that the UTXO represents.                       |
+| Column Name    | Data Type   | Description                                                            |
+|----------------|-------------|------------------------------------------------------------------------|
+| id             | BIGSERIAL   | Unique identifier for the spendable UTXO record.                       |
+| inserted_at    | TIMESTAMPTZ | Timestamp of when the spendable record was created.                    |
+| txid           | BYTEA       | The transaction ID where the UTXO originated, stored in binary format. |
+| vout           | INTEGER     | The output index number of the UTXO within the transaction.            |
+| locking_script | BYTEA       | The script that defines the conditions needed to spend the UTXO.       |
+| satoshis       | BIGINT      | The amount of satoshis that the UTXO represents.                       |
 
 
 ## 5. Technology and specific Stores
@@ -189,24 +225,15 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 ## 8. Configuration options (settings flags)
 
-### Server and Client Configuration
-- **`coinbase_grpcListenAddress`**: Determines the gRPC server listen address for the Coinbase service. It is checked within the `Enabled()` function to decide if the Coinbase service should be active.
-- **`coinbase_store`**: URL for the Coinbase store, required for initializing the Coinbase service by connecting to the specified database for storing and managing Coinbase transactions and UTXOs.
-- **`coinbase_grpcAddress`**: Specifies the gRPC address for the Coinbase client, used for connecting to the Coinbase service from a client application.
-
-### Coinbase Configuration
-- **`coinbase_wallet_private_key`**: The private key associated with the Coinbase wallet, necessary for signing transactions and managing Coinbase UTXOs.
-- **`distributor_backoff_duration`**: Configures the backoff duration for the distributor, which is used when retrying failed transaction distributions.
-- **`distributor_max_retries`**: The maximum number of retry attempts for distributing transactions.
-- **`distributor_failure_tolerance`**: The failure tolerance level for the distributor, indicating how many distribution failures are acceptable before marking a distribution as failed.
-- **`blockchain_store_dbTimeoutMillis`**: The timeout in milliseconds for database operations within the blockchain store, impacting performance and responsiveness of data access and manipulation.
-- **`propagation_grpcAddresses`**: A list of gRPC addresses for peer services, used for network communication and data propagation among peers.
-- **`peerStatus_timeout`**: The timeout for peer status checks, ensuring timely validation of peer connectivity and synchronization status.
-- **`coinbase_wait_for_peers`**: A boolean flag indicating whether the Coinbase service should wait for peers to be in sync before proceeding with its operations.
-- **`coinbase_notification_threshold`**: The threshold for sending notifications about the Coinbase balance or UTXO count, used for monitoring and alerting purposes.
-- **`coinbase_should_wait`** and **`coinbase_wait_until_block`**: These settings control whether the Coinbase service should delay its start until the blockchain reaches a certain block height, ensuring synchronization with the network.
-
-### Miscellaneous Configuration
-- **`coinbase_assetGrpcAddress`** and **`asset_grpcAddress`**: Addresses for connecting to the asset service via gRPC. These are used for fetching blockchain data, such as blocks and transactions, necessary for Coinbase operations.
-- **`use_open_tracing`**: Indicates whether open tracing should be used for gRPC clients, aiding in monitoring and troubleshooting by tracing the request flow.
-- **`use_prometheus_grpc_metrics`**: Specifies whether Prometheus metrics should be collected for gRPC operations, useful for performance monitoring and analysis.
+- `coinbase_store`: URL for the Coinbase store.
+- `coinbase_wallet_private_key`: Private key for the Coinbase wallet.
+- `distributor_backoff_duration`: Backoff duration for the distributor.
+- `distributor_max_retries`: Maximum number of retry attempts for distributing transactions.
+- `distributor_failure_tolerance`: Failure tolerance level for the distributor.
+- `blockchain_store_dbTimeoutMillis`: Timeout for database operations.
+- `propagation_grpcAddresses`: List of gRPC addresses for peer services.
+- `peerStatus_timeout`: Timeout for peer status checks.
+- `coinbase_wait_for_peers`: Whether to wait for peers to be in sync before proceeding.
+- `coinbase_notification_threshold`: Threshold for sending notifications about the Coinbase balance or UTXO count.
+- `slack_channel`: Slack channel for notifications (if configured).
+- `clientName`: Name of the client for notifications.

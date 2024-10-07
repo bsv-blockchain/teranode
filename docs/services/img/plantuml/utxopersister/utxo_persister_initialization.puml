@@ -6,17 +6,38 @@ participant "Block Store" as BlockStore
 participant "Blockchain Client" as BlockchainClient
 participant "Blockchain Store" as BlockchainStore
 
-Server -> Server : Init()
+Server -> Server : New()
 activate Server
 
 Server -> BlockStore : Initialize
-Server -> BlockchainClient : Initialize (if indirect mode)
-Server -> BlockchainStore : Initialize (if direct mode)
+alt indirect mode
+    Server -> BlockchainClient : Initialize
+else direct mode
+    Server -> BlockchainStore : Initialize
+end
+
+Server -> Server : Init()
 Server -> Server : readLastHeight()
 
 deactivate Server
 
 Server -> Server : Start()
 activate Server
-Server --> Server : Start processing loop
+
+alt fsm_state_restore is true
+    Server -> BlockchainClient : Restore()
+    Server -> BlockchainClient : WaitForFSMtoTransitionToGivenState()
+end
+
+alt BlockchainClient is not nil
+    Server -> BlockchainClient : Subscribe()
+end
+
+Server -> Server : trigger("startup")
+Server --> Server : Enter processing loop
+
+deactivate Server
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
 @enduml

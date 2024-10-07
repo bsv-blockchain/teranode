@@ -12,14 +12,13 @@
 - [3.4. Txs](#34-txs)
 - [3.5. UTXOs](#35-utxos)
 4. [Use Cases](#4-use-cases)
-- [4.1. HTTP and Websockets](#41-http-and-websockets)
+- [4.1. HTTP ](#41-http-)
 - [4.1.1. getTransaction() and getTransactions()](#411-gettransaction-and-gettransactions)
 - [4.1.2. GetTransactionMeta()](#412-gettransactionmeta)
 - [4.1.3. GetSubtree()](#413-getsubtree)
 - [4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#414-getblockheaders-getblockheader-and-getbestblockheader)
 - [4.1.5. GetBlock() and GetLastNBlocks()](#415-getblock-and-getlastnblocks)
 - [4.1.6. GetUTXO() and GetUTXOsByTXID()](#416-getutxo-and-getutxosbytxid)
-- [4.1.7. Websocket Subscriptions](#417-websocket-subscriptions)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
@@ -75,8 +74,6 @@ The Asset Server is composed of the following components:
 * **UTXO Store**: Provides UTXO data to the Asset Server.
 * **Blob Store**: Provides Subtree and Extended TX data to the Asset Server, referred here as Subtree Store and TX Store.
 * **Blockchain Server**: Provides blockchain data (blocks and block headers) to the Asset Server.
-* **Coinbase Service**: Provides Coinbase data to the Asset Server.
-
 
 
 Finally, note that the Asset Server benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
@@ -221,9 +218,9 @@ More information on the UTXO structure and purpose can be found in the [Architec
 
 ## 4. Use Cases
 
-### 4.1. HTTP and Websockets
+### 4.1. HTTP
 
-The Asset Service exposes the following HTTP and Websocket methods:
+The Asset Service exposes the following HTTP methods:
 
 ### 4.1.1. getTransaction() and getTransactions()
 
@@ -256,39 +253,6 @@ The server also provides a legacy `/rest/hash/:hash.bin` endpoint for retrieving
 
 * For getting UTXOs by a transaction ID (/utxos/:hash/json), the HTTP Server requests transaction meta data from the UTXO Store using a transaction hash. Then for each output in the transaction, it queries the UtxoStore to get UTXO data for the corresponding output hash.
 
-### 4.1.7. Websocket Subscriptions
-
-The `HandleWebSocket(c)` (`services/asset/http_impl/HandleWebsocket.go`) function sets up a WebSocket server for handling real-time notifications. It involves managing client connections, broadcasting messages (including periodic pings), and handling client disconnections.
-
-1. **Initialization**: The function initializes three channels: `newClientCh` for new client connections, `deadClientCh` for client disconnections, and `notificationCh` for receiving notifications.
-
-2. **WebSocket Connection Handling**:
-    - When a new WebSocket client connects, it's added to the `clientChannels` map for message broadcasting.
-    - When a client disconnects, it is removed from the `clientChannels` map.
-
-3. **Notification Broadcasting**:
-    - The function listens for incoming notifications and pings on separate goroutines. Notice the noti
-    - When a new notification is received, it is marshaled into JSON and sent to all connected WebSocket clients.
-    - A ping message is sent to all clients every 30 seconds to maintain the WebSocket connection.
-
-4. **WebSocket Data Transmission**:
-    - The WebSocket server sends data to connected clients via the `clientChannels`.
-    - If an error occurs during message sending (e.g., if a client disconnects), the client is marked as dead and removed from active client channels.
-
-![asset_webserver_websocket.svg](img/plantuml/assetserver/asset_webserver_websocket.svg)
-
-To better understand the specific notifications being sent over the Websocket, we can go into the detail here:
-
-![asset_server_websocket_subscribe_notifications.svg](img/plantuml/assetserver/asset_server_websocket_subscribe_notifications.svg)
-
-1. The Asset Client subscribes to the Coinbase service. The Asset client expects to receive **Block, MiningOn, and Subtree** notifications.
-    * In all cases, a (block or subtree) hash is sent out. The Coinbase service can then request the full block or subtree from the Asset Server.
-    * In the current implementation, there is no difference between Block and MiningOn messages, as they are both hashed blocks.
-2. The Asset Server tracks the subscriber in the Subscriber Database.
-3. The Asset Server subscribes to the Blockchain Client, which sends back notifications for Block, MiningOn, and Subtree messages.
-4. Independently, the Blockchain Server adds a block (received from either the Block Assembly or Block Validation Services) and sends notifications (Block and MiningOn) to the Asset Server, which then forwards these to the Coinbase service.
-5. Concurrently, the Block Assembly Server, upon initialization and adding a new subtree, sends a Subtree notification to the Asset Server (via the Blockchain subscription), which again forwards it to the Coinbase service.
-
 
 ## 5. Technology
 
@@ -307,14 +271,9 @@ Key technologies involved:
     - Used for handling HTTP requests and routing, including upgrading HTTP connections to WebSocket connections.
     - Library: github.com/labstack/echo
 
-4. **WebSocket Protocol**:
-    - A TCP-based protocol that provides full-duplex communication channels over a single connection.
-    - Used for real-time data transfer between clients and the server, particularly useful for continuously updating the state of the network to connected clients.
-    - Library: github.com/gorilla/websocket
-
-5. **JSON (JavaScript Object Notation)**:
+4. **JSON (JavaScript Object Notation)**:
     - A lightweight data-interchange format, easy for humans to read and write, and easy for machines to parse and generate.
-    - Used for structuring data sent to and from clients, especially in contexts where WebSocket or HTTP is used.
+    - Used for structuring data sent to and from clients, especially in contexts where HTTP is used.
 
 
 ## 6. Directory Structure and Main Files
@@ -337,7 +296,6 @@ Key technologies involved:
 │   ├── GetTransactions.go     # Logic to retrieve multiple transactions.
 │   ├── GetUTXO.go             # Logic to retrieve UTXO data.
 │   ├── GetUTXOsByTXID.go      # Logic to retrieve UTXOs by a transaction ID.
-│   ├── HandleWebsocket.go     # Manages WebSocket connections.
 │   ├── Readmode.go            # Manages read-only mode settings.
 │   ├── blockHeaderResponse.go # Formats block header responses.
 │   ├── http.go                # Core HTTP implementation.
@@ -393,16 +351,12 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
    - `utxostore`: URL for the UTXO store.
       - Example: `utxostore=http://localhost:8080`
 
-5. **Coinbase Configuration**
-   - `coinbase_grpcAddress`: gRPC address for the Coinbase service.
-      - Example: `coinbase_grpcAddress=localhost:50051`
-
-6. **Block Validation Configuration**
+5. **Block Validation Configuration**
    - `blockvalidation_processTxMetaUsingStore_BatchSize`: Batch size for processing transaction metadata.
       - Example: `blockvalidation_processTxMetaUsingStore_BatchSize=1024`
    - `blockvalidation_processTxMetaUsingStor_Concurrency`: Concurrency level for processing transaction metadata.
       - Example: `blockvalidation_processTxMetaUsingStor_Concurrency=4`
 
-7. **Debugging Configuration**
+6. **Debugging Configuration**
    - `ECHO_DEBUG`: Enables or disables debug mode for the Echo framework.
       - Example: `ECHO_DEBUG=true`

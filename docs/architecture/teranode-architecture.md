@@ -707,7 +707,9 @@ The various microservices write directly to the data stores, but the asset servi
 
 ### 4.12. Coinbase Service
 
-The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, record them, track their maturity, and manage the spendability of the rewards miners earn.
+The Coinbase Serivce is a test only service, and is not used in production. It's main purpose is to split Coinbase UTXOs into smaller UTXOs, and to manage the spendability of the rewards miners earn. This helps to increase the liquidity in a performance testing setup. This is not intended for production use.
+
+The Coinbase Service is designed to monitor the blockchain for new coinbase transactions, split and record them, track their maturity, and manage the spendability of the rewards miners earn.
 
 In the Teranode BSV context, the "coinbase transaction" is the first transaction in the first subtree of a block and is created by the Block Assembly. This transaction is unique in that it creates new coins from nothing as a reward for the miner's work in processing transactions and securing the network.
 

@@ -73,7 +73,6 @@ The Teranode network behaviour is characterized by its proactive approach, with 
 - **Subtree and Block Validator**: Plays a pivotal role in confirming the integrity and validity of both subtrees and blocks.
 - **Blockchain Service**: Manages the addition of new blocks to the blockchain and maintains the blockchain database.
 - **Asset Service**: Serves as a gateway to various data elements, facilitating interactions with transactions, UTXOs, etc.
-- **Coinbase Service**: Monitors and manages coinbase transactions, playing a key role in miner reward distribution.
 - **Bootstrap**: Assists new nodes in integrating into the Teranode network by discovering peers.
 - **P2P Legacy Service**: Ensures compatibility and communication between BSV nodes and Teranodes.
 - **UTXO Store**: Focuses on tracking all spendable UTXOs, essential for validating new transactions.

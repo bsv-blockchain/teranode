@@ -1,26 +1,38 @@
 @startuml
 participant "Coinbase Server" as Co
 participant "Blockchain Store" as St
-participant "AssetClient" as AC
+participant "BlockchainClient" as BC
 
-loop
-    Co -> AC: GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
+Co -> Co: catchup(ctx, fromBlock, baseURL)
+activate Co
+
+loop while parent block unknown
+    Co -> BC: GetBlockHeaders(ctx, fromBlockHeaderHash, 1000)
+    BC --> Co: blockHeaders
 
     loop over blockHeaders
         Co -> St: GetBlockExists(ctx, blockHeader.Hash())
-        St -> Co: true / false
+        St --> Co: exists
         alt not exists
-            Co -> Co: append catchupBlockHeaders
+            Co -> Co: append to catchupBlockHeaders
+        else exists
+            Co -> Co: break loop
         end
     end
 end
 
-
 loop reverse over catchupBlockHeaders
-    Co -> AC: GetBlock(ctx, blockHeader.Hash())
-    AC --> Co: block
+    Co -> BC: GetBlock(ctx, blockHeader.Hash())
+    BC --> Co: block
     Co -> Co: storeBlock(ctx, block)
+    activate Co
+    Co -> St: StoreBlock(ctx, block, "")
+    St --> Co
+    Co -> Co: processCoinbase(ctx, blockId, block.Hash(), block.CoinbaseTx)
+    deactivate Co
 end
+
+deactivate Co
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 

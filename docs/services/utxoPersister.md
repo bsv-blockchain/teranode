@@ -36,7 +36,7 @@ The UTXO set file can be exported and used as an input for initializing the UTXO
     - When new files are detected, it triggers the UTXO set creation process.
 
 4. Progress Tracking:
-    - The service maintains a 'lastProcessed.dat' file to keep track of the last block height processed.
+    - The service maintains a `lastProcessed.dat` file to keep track of the last block height processed.
     - This ensures continuity and allows the service to resume from the correct point after restarts or interruptions.
 
 5. Efficient Data Handling:
@@ -61,47 +61,62 @@ The service interacts with the storage system to read and write necessary files 
 
 ![utxo_persister_initialization.svg](img/plantuml/utxopersister/utxo_persister_initialization.svg)
 
-The Service initialization is simple. It does instantiate a connection (blob store) to the block storage, shared with the block persister. It then creates a connection to either the Blockchain service, or the Blockchain store
+1. The service starts by creating connections to:
 
-After that, the services waits on a loop, monitoring the shared storage for new block files. When a new block file is detected, the service triggers the UTXO set creation process.
+   - A blob store (shared with the block persister) for file storage
+   - Either the Blockchain service or the Blockchain store for block information
+
+
+2. It reads the last processed height from `lastProcessed.dat`.
+
+3. The service then enters a loop, waiting for new blocks to process.
+
 
 ### 2.2 Receiving and Processing a new UTXO Set
 
 ![utxo_persister_processing_blocks.svg](img/plantuml/utxopersister/utxo_persister_processing_blocks.svg)
 
-1) **The Service detects a new block set of files**, and kicks off the process to create a new UTXO set.
+### 2.2 Processing Blocks and Creating UTXO Sets
 
+The UTXO Persister processes blocks and creates UTXO sets as follows:
 
-2) **GetUTXODiff()**:
+1) **Trigger and Block Height Check**:
+   - The service is triggered to process the next block (via notification, timer, or startup).
+   - It checks if the next block to process is at least 100 blocks behind the current best block height.
 
-- The server creates a UTXODiff object for the new block.
-- The UTXODiff retrieves UTXO additions and deletions from the BlockStore.
-- These additions and deletions represent the changes in the UTXO set for this block.
-- The UTXODiff processes these changes, preparing them for application to the UTXO set.
+2) **Block Headers Retrieval**:
+   - If processing is needed, the service retrieves block headers from either the Blockchain Store or Blockchain Client.
+   - It verifies the chain continuity using these headers.
 
+3) **Last Set Verification**:
+   - The service verifies the last UTXO set using `verifyLastSet()` to ensure data integrity.
 
-3) **CreateUTXOSet()**:
+4) **Block Range Consolidation**:
+   - A new Consolidator is created to process a range of blocks efficiently.
+   - The `ConsolidateBlockRange()` method is called to handle multiple blocks at once if needed.
 
-- The server calls this method on the UTXODiff to generate the new UTXO set.
-- The UTXODiff retrieves the previous block's UTXO set from the BlockStore.
-- It creates a new FileStorer to write the updated UTXO set.
+5) **UTXO Set Preparation**:
+   - The service calls `GetUTXOSetWithDeletionsMap()` to prepare the UTXO set for the new block.
+   - This retrieves the UTXO deletions from the Block Store and creates a deletions map.
 
-- For each UTXO:
-  - If it's in the previous set and not in the deletions, it's written to the new set.
-  - If it's in the additions, it's written to the new set.
+6) **UTXO Set Creation**:
+   - The `CreateUTXOSet()` method is called on the UTXOSet object.
+   - This method:
+      - Retrieves the previous block's UTXO set from the Block Store.
+      - Applies the deletions from the deletions map.
+      - Incorporates new UTXOs from the block's transactions.
+      - Writes the new UTXO set to the Block Store.
 
-- The FileStorer is closed, which triggers the writing of the UTXO set file to the BlockStore.
+7) **Cleanup**:
+   - If not skipped (based on configuration), the service deletes the previous block's UTXO set to save space.
 
+8) **Update Last Processed Height**:
+   - The service calls `writeLastHeight()` to update its record of the last processed block height.
 
+9) **Trigger Next Block Processing**:
+   - The service initiates the processing of the next block, continuing the cycle.
 
-4) **writeLastHeight()**:
-
-- The server updates its record of the last processed height, by writing the new block height to the lastProcessed.dat file.
-
-
-5) **Trigger next block processing**:
-
-- The server initiates the processing of the next block, continuing the cycle.
+If the current height is less than 100 blocks behind the best block height, the service waits for more confirmations before processing.
 
 
 ## 3. Data Model
@@ -112,25 +127,41 @@ After that, the services waits on a loop, monitoring the shared storage for new 
 
 
 2. **UTXO Components:**
-   Each UTXO contains the following information:
+   The UTXOs are stored in a hierarchical structure, with the following components:
 
+**UTXOWrapper**:
+   ```go
+   type UTXOWrapper struct {
+       TxID     chainhash.Hash
+       Height   uint32
+       Coinbase bool
+       UTXOs    []*UTXO
+   }
+   ```
+**UTXO**:
    ```go
    type UTXO struct {
-       TxID     *chainhash.Hash
-       Index    uint32
-       Value    uint64
-       Height   uint32
-       Script   []byte
-       Coinbase bool
+       Index  uint32
+       Value  uint64
+       Script []byte
    }
    ```
 
-   - **TxID**: The transaction ID where this UTXO was created (32 bytes)
-   - **Index**: The output index in the transaction (4 bytes)
-   - **Value**: The amount of cryptocurrency in this UTXO (8 bytes)
-   - **Height**: The block height where this UTXO was created (4 bytes)
-   - **Script**: The locking script that must be satisfied to spend this UTXO (variable length)
-   - **Coinbase**: A flag indicating whether this UTXO is from a coinbase transaction (1 bit, packed with Height)
+
+- **TxID**: The transaction ID where this UTXO was created (32 bytes)
+- **Index**: The output index in the transaction (4 bytes)
+- **Value**: The amount of cryptocurrency in this UTXO (8 bytes)
+- **Height**: The block height where this UTXO was created (4 bytes)
+- **Script**: The locking script that must be satisfied to spend this UTXO (variable length)
+- **Coinbase**: A flag indicating whether this UTXO is from a coinbase transaction (1 bit, packed with Height)
+
+
+
+
+
+
+
+
 
 
 3. **Binary Encoding:**
@@ -208,13 +239,12 @@ The Block Persister service is located in the `services/utxopersister` directory
 ├── UTXO.go
 │   Defines the UTXO (Unspent Transaction Output) data structure and related methods.
 │
+├── UTXOSet.go
+│   Implements the UTXOSet structure and related methods.
+│
 ├── UTXODeletion.go
 │   Implements the logic for UTXO deletions, which occur when UTXOs are spent in a transaction.
-│
-├── UTXODiff.go
-│   Implements the UTXODiff structure, which represents the difference in the UTXO set
-│   between two consecutive blocks.
-│
+|
 └── filestorer/
     │
     └── FileStorer.go
@@ -237,6 +267,7 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 The `utxopersister` service utilizes specific `gocore` settings for configuration, each serving a distinct purpose in the service's operation:
 
-1. **blockstore**
-- **Purpose:** Defines the URL for the persistence layer storing block, subtree and UTXO files.
-- **Usage:** Initializes the blob store component for data storage during the server setup.
+- `network`: Specifies the blockchain network (e.g., "mainnet").
+- `fsm_state_restore`: Boolean flag to indicate if the service should restore from a specific state.
+- `skip_delete`: Boolean flag to control whether previous block's UTXOSet should be deleted.
+- `utxoPersister_buffer_size`: Specifies the buffer size for readers (default "4KB").
