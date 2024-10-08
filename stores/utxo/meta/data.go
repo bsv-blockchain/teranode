@@ -179,7 +179,13 @@ func (d *Data) MetaBytes() []byte {
 
 func (d *Data) String() string {
 	return fmt.Sprintf("{TxID: %s, ParentTxHashes: %v, BlockIDs: %v, Fee: %d, SizeInBytes: %d, IsCoinbase: %t, LockTime: %d}",
-		d.Tx.TxIDChainHash(),
+		func() string {
+			if d.Tx == nil {
+				return "nil"
+			}
+
+			return d.Tx.TxIDChainHash().String()
+		}(),
 		d.ParentTxHashes,
 		d.BlockIDs,
 		d.Fee,
