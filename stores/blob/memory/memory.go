@@ -104,17 +104,15 @@ func (m *Memory) Set(ctx context.Context, hash []byte, value []byte, opts ...opt
 	return nil
 }
 
-func (m *Memory) SetTTL(_ context.Context, hash []byte, ttl time.Duration, opts ...options.FileOption) error {
+func (m *Memory) SetTTL(_ context.Context, hash []byte, newTTL time.Duration, opts ...options.FileOption) error {
 	merged := options.MergeOptions(m.options, opts)
 
 	storeKey := hashKey(hash, merged)
 
-	if merged.TTL != nil {
-		if *merged.TTL > 0 {
-			m.ttls[storeKey] = time.Now().Add(*merged.TTL)
-		} else {
-			delete(m.ttls, storeKey)
-		}
+	if newTTL > 0 {
+		m.ttls[storeKey] = time.Now().Add(newTTL)
+	} else {
+		delete(m.ttls, storeKey)
 	}
 
 	return nil

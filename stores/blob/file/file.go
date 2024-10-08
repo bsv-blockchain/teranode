@@ -332,6 +332,13 @@ func (s *File) constructFilenameWithTTL(hash []byte, opts []options.FileOption) 
 		s.fileTTLsMu.Lock()
 		s.fileTTLs[fileName] = ttl
 		s.fileTTLsMu.Unlock()
+	} else {
+		// delete ttl file, if it existed
+		_ = os.Remove(fileName + ".ttl")
+
+		s.fileTTLsMu.Lock()
+		delete(s.fileTTLs, fileName)
+		s.fileTTLsMu.Unlock()
 	}
 
 	return fileName, nil
@@ -386,7 +393,7 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 	return nil
 }
 
-func (s *File) GetTTL(_ context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
+func (s *File) GetTTL(ctx context.Context, key []byte, opts ...options.FileOption) (time.Duration, error) {
 	merged := options.MergeOptions(s.options, opts)
 
 	fileName, err := merged.ConstructFilename(s.path, key)
@@ -394,12 +401,21 @@ func (s *File) GetTTL(_ context.Context, key []byte, opts ...options.FileOption)
 		return 0, err
 	}
 
+	exists, err := s.Exists(ctx, key, opts...)
+	if err != nil {
+		return 0, err
+	}
+
+	if !exists {
+		return 0, errors.ErrNotFound
+	}
+
 	s.fileTTLsMu.Lock()
 	ttl, ok := s.fileTTLs[fileName]
 	s.fileTTLsMu.Unlock()
 
 	if !ok {
-		return 0, errors.ErrNotFound
+		return 0, nil
 	}
 
 	return time.Until(ttl), nil

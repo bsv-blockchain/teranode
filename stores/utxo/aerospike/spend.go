@@ -213,15 +213,21 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 
 					switch res.returnValue {
 					case LuaOk:
-						for _, batchItem := range batchByKey {
-							idx := batchItem["idx"].(int)
-							batch[idx].done <- nil
-						}
-
 						if res.signal == LuaAllSpent {
 							// all utxos in this record are spent so we decrement the nrRecords in the master record
 							// we do this in a separate go routine to avoid blocking the batcher
 							go s.handleAllSpent(ctx, txID)
+						} else if res.signal == LuaTTLSet {
+							// record has been set to expire, we need to set the TTL on the external transaction file
+							if res.external {
+								// add ttl to the externally stored transaction, if applicable
+								go s.setTTLExternalTransaction(ctx, txID, time.Duration(s.expiration)*time.Second)
+							}
+						}
+
+						for _, batchItem := range batchByKey {
+							idx := batchItem["idx"].(int)
+							batch[idx].done <- nil
 						}
 
 					case LuaFrozen:
@@ -283,11 +289,11 @@ func (s *Store) handleAllSpent(ctx context.Context, txID *chainhash.Hash) {
 			if ret.signal == LuaTTLSet {
 				// TODO - we should TTL all the pagination records for this TX
 				_ = ret.signal
-			}
 
-			if ret.external {
-				// add ttl to the externally stored transaction, if applicable
-				s.setTTLExternalTransaction(ctx, txID, time.Duration(s.expiration)*time.Second)
+				if ret.external {
+					// add ttl to the externally stored transaction, if applicable
+					s.setTTLExternalTransaction(ctx, txID, time.Duration(s.expiration)*time.Second)
+				}
 			}
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	aero "github.com/aerospike/aerospike-client-go/v7"
 	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/tests"
@@ -1273,6 +1274,8 @@ func initAerospike(t *testing.T) (*aero.Client, *Store, context.Context, func())
 	db.client = &uaerospike.Client{Client: client}
 	db.namespace = "test"
 	db.setName = "test"
+
+	db.externalStore = memory.New()
 
 	return client, db, ctx, func() {
 		client.Close()
