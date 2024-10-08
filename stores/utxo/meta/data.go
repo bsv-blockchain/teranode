@@ -178,6 +178,10 @@ func (d *Data) MetaBytes() []byte {
 }
 
 func (d *Data) String() string {
+	if d == nil {
+		return "nil"
+	}
+
 	return fmt.Sprintf("{TxID: %s, ParentTxHashes: %v, BlockIDs: %v, Fee: %d, SizeInBytes: %d, IsCoinbase: %t, LockTime: %d}",
 		func() string {
 			if d.Tx == nil {
