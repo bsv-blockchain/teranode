@@ -24,6 +24,8 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	var insertedAt CustomTime
+
 	q := `
 		SELECT
 		 b.id
@@ -69,7 +71,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		&blockHeaderMeta.SizeInBytes,
 		&coinbaseBytes,
 		&blockHeaderMeta.Chainwork,
-		&blockHeaderMeta.Timestamp,
+		&insertedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewStorageError("error in GetBestBlockHeader", err)
@@ -104,6 +106,8 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 		blockHeaderMeta.Miner = miner
 	}
+
+	blockHeaderMeta.Timestamp = uint32(insertedAt.Unix())
 
 	// Set the block time to the timestamp in the meta
 	blockHeaderMeta.BlockTime = blockHeader.Timestamp
