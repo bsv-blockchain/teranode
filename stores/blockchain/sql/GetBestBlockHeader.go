@@ -38,7 +38,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		,b.size_in_bytes
 		,b.coinbase_tx
 		,b.chain_work
-		,b.created_at
+		,b.inserted_at
 		FROM blocks b
 		WHERE invalid = false
 		ORDER BY chain_work DESC, peer_id ASC, id ASC
