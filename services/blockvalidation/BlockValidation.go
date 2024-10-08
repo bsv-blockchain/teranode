@@ -62,6 +62,7 @@ type BlockValidation struct {
 	stats                              *gocore.Stat
 	excessiveBlockSize                 int
 	lastUsedBaseURL                    string
+	maxPreviousBlockHeadersToCheck     uint64
 }
 
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
@@ -74,6 +75,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 	logger.Infof("optimisticMining = %v", optimisticMining)
 
 	excessiveblocksize, _ := gocore.Config().GetInt("excessiveblocksize", 0)
+	maxPreviousBlockHeadersToCheck, _ := gocore.Config().GetInt("blockvalidation_maxPreviousBlockHeadersToCheck", 100)
 
 	bv := &BlockValidation{
 		logger:                             logger,
@@ -100,6 +102,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 		stats:                              gocore.NewStat("blockvalidation"),
 		excessiveBlockSize:                 excessiveblocksize,
 		lastUsedBaseURL:                    "",
+		maxPreviousBlockHeadersToCheck:     uint64(maxPreviousBlockHeadersToCheck),
 	}
 
 	go func() {
@@ -311,12 +314,12 @@ func (u *BlockValidation) _(ctx context.Context, blockHash *chainhash.Hash) erro
 	}
 
 	// get all 100 previous block headers on the main chain
-	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, 100)
+	blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, u.maxPreviousBlockHeadersToCheck)
 	if err != nil {
 		return errors.NewServiceError("[BlockValidation:start][%s] failed to get block headers", block.String(), err)
 	}
 
-	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, 100)
+	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, u.maxPreviousBlockHeadersToCheck)
 	if err != nil {
 		return errors.NewServiceError("[BlockValidation:start][%s] failed to get block header ids", block.String(), err)
 	}
@@ -656,7 +659,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 			// get all 100 previous block headers on the main chain
 			u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
 
-			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(callerSpan.Ctx, block.Header.HashPrevBlock, 100)
+			blockHeaders, _, err := u.blockchainClient.GetBlockHeaders(callerSpan.Ctx, block.Header.HashPrevBlock, u.maxPreviousBlockHeadersToCheck)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 				u.ReValidateBlock(block, baseURL)
@@ -664,7 +667,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 				return
 			}
 
-			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(callerSpan.Ctx, block.Header.HashPrevBlock, 100)
+			blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(callerSpan.Ctx, block.Header.HashPrevBlock, u.maxPreviousBlockHeadersToCheck)
 			if err != nil {
 				u.logger.Errorf("[ValidateBlock][%s] failed to get block header ids: %s", block.String(), err)
 

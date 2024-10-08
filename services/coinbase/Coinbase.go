@@ -60,6 +60,7 @@ type Coinbase struct {
 	g                *errgroup.Group
 	gCtx             context.Context
 	stats            *gocore.Stat
+	minConfirmations uint64
 }
 
 // NewCoinbase builds on top of the blockchain store to provide a coinbase tracker
@@ -114,6 +115,8 @@ func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store block
 
 	waitForPeers := gocore.Config().GetBool("coinbase_wait_for_peers", false)
 
+	minConfirmations, _ := gocore.Config().GetInt("blockvalidation_maxPreviousBlockHeadersToCheck", 100)
+
 	g, gCtx := errgroup.WithContext(context.Background())
 	g.SetLimit(runtime.NumCPU())
 
@@ -138,6 +141,7 @@ func NewCoinbase(logger ulogger.Logger, blockchainClient bc.ClientI, store block
 		g:                g,
 		gCtx:             gCtx,
 		stats:            gocore.NewStat("coinbase"),
+		minConfirmations: uint64(minConfirmations),
 	}
 
 	threshold, found := gocore.Config().GetInt("coinbase_notification_threshold")
@@ -584,10 +588,10 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 				WHERE b.id != cb.id
 			)
 			SELECT id FROM ChainBlocks
-			WHERE height < (SELECT height - 110 FROM LongestChainTip)
+			WHERE height < (SELECT height - $2 FROM LongestChainTip)
 		)
 	`
-	if _, err := c.db.ExecContext(ctx, q, timestamp); err != nil {
+	if _, err := c.db.ExecContext(ctx, q, timestamp, c.minConfirmations); err != nil {
 		return errors.NewStorageError("could not update coinbase_utxos to be processed", err)
 	}
 
