@@ -3,6 +3,7 @@ package meta
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -174,4 +175,15 @@ func (d *Data) MetaBytes() []byte {
 	}
 
 	return buf
+}
+
+func (d *Data) String() string {
+	return fmt.Sprintf("{TxID: %s, ParentTxHashes: %v, BlockIDs: %v, Fee: %d, SizeInBytes: %d, IsCoinbase: %t, LockTime: %d}",
+		d.Tx.TxIDChainHash(),
+		d.ParentTxHashes,
+		d.BlockIDs,
+		d.Fee,
+		d.SizeInBytes,
+		d.IsCoinbase,
+		d.LockTime)
 }

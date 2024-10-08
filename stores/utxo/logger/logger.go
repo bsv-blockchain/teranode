@@ -108,7 +108,30 @@ func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, er
 
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	data, err := s.store.Create(ctx, tx, blockHeight, opts...)
-	s.logger.Infof("[UTXOStore][logger][Create] tx %s coinbase %t blockHeight %d data %v err %v : %s", tx.TxIDChainHash(), tx.IsCoinbase(), blockHeight, data, err, caller())
+	inputDetails := make([]string, len(tx.Inputs))
+
+	for i, input := range tx.Inputs {
+		inputDetails[i] = fmt.Sprintf("{Input %d: PreviousTxID %s, PreviousTxOutIndex %d, SequenceNumber %d}",
+			i, input.PreviousTxID(), input.PreviousTxOutIndex, input.SequenceNumber)
+	}
+
+	outputDetails := make([]string, len(tx.Outputs))
+	for i, output := range tx.Outputs {
+		outputDetails[i] = fmt.Sprintf("{Output %d: Satoshis %d, LockingScript %x}",
+			i, output.Satoshis, output.LockingScript)
+	}
+
+	s.logger.Infof("[UTXOStore][logger][Create] tx %s, inputs: [%s], outputs: [%s], isCoinbase %t, blockHeight %d, lockTime %d, version %d, data %s, err %v : %s",
+		tx.TxIDChainHash(),
+		strings.Join(inputDetails, ", "),
+		strings.Join(outputDetails, ", "),
+		tx.IsCoinbase(),
+		blockHeight,
+		tx.LockTime,
+		tx.Version,
+		data.String(),
+		err,
+		caller())
 
 	return data, err
 }
@@ -129,14 +152,28 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]strin
 
 func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
 	err := s.store.Spend(ctx, spends, blockHeight)
-	s.logger.Infof("[UTXOStore][logger][Spend] spends %v blockHeight %d err %v : %s", spends, blockHeight, err, caller())
+	spendDetails := make([]string, len(spends))
+
+	for i, spend := range spends {
+		spendDetails[i] = fmt.Sprintf("{SpendingTxID: %s, TxID: %s, Vout: %d}", spend.SpendingTxID, spend.TxID, spend.Vout)
+	}
+
+	s.logger.Infof("[UTXOStore][logger][Spend] spends: [%s], blockHeight: %d, err: %v : %s",
+		strings.Join(spendDetails, ", "), blockHeight, err, caller())
 
 	return err
 }
 
 func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 	err := s.store.UnSpend(ctx, spends)
-	s.logger.Infof("[UTXOStore][logger][UnSpend] spends %v err %v : %s", spends, caller())
+	spendDetails := make([]string, len(spends))
+
+	for i, spend := range spends {
+		spendDetails[i] = fmt.Sprintf("{SpendingTxID: %s, TxID: %s, Vout: %d}", spend.SpendingTxID, spend.TxID, spend.Vout)
+	}
+
+	s.logger.Infof("[UTXOStore][logger][UnSpend] spends: [%s], err: %v : %s",
+		strings.Join(spendDetails, ", "), err, caller())
 
 	return err
 }
