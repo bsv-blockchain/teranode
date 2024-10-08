@@ -46,6 +46,7 @@ var (
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
 	ErrBlobAlreadyExists          = New(ERR_BLOB_ALREADY_EXISTS, "blob already exists")
+	ErrBlockParentNotMined        = New(ERR_BLOCK_PARENT_NOT_MINED, "block parent not mined")
 )
 
 func NewUnknownError(message string, params ...interface{}) *Error {
@@ -155,4 +156,7 @@ func NewStateErrorError(message string, params ...interface{}) *Error {
 }
 func NewBlobAlreadyExistsError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOB_ALREADY_EXISTS, message, params...)
+}
+func NewBlockParentNotMinedError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_PARENT_NOT_MINED, message, params...)
 }

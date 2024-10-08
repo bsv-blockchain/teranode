@@ -884,7 +884,7 @@ func (u *BlockValidation) waitForParentToBeMined(ctx context.Context, block *mod
 		}
 
 		if !parentBlockMined {
-			return false, errors.NewBlockError("[BlockValidation:isParentMined][%s] parent block %s not mined yet", block.Hash().String(), block.Header.HashPrevBlock.String())
+			return false, errors.NewBlockParentNotMinedError("[BlockValidation:isParentMined][%s] parent block %s not mined yet", block.Hash().String(), block.Header.HashPrevBlock.String())
 		}
 
 		return true, nil
