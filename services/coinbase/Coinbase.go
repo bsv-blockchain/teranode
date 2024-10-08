@@ -653,7 +653,6 @@ func (c *Coinbase) createSpendingUtxos(ctx context.Context, timestamp time.Time)
 		// create the utxos in the background
 		// we don't have a method to revert anything that goes wrong anyway
 		c.g.Go(func() error {
-			c.logger.Infof("createSpendingUtxos coinbase: %s: utxo %d", utxo.TxIDHash, utxo.Vout)
 			if err := c.splitUtxo(c.gCtx, utxo); err != nil {
 				return errors.NewProcessingError("could not split utxo", err)
 			}
@@ -706,8 +705,10 @@ func (c *Coinbase) splitUtxo(ctx context.Context, utxo *bt.UTXO) error {
 		return errors.NewProcessingError("error filling splitting inputs", err)
 	}
 
+	c.logger.Infof("[splitUtxo] sending splitting tx %s for coinbase tx %s vout %d", tx.TxIDChainHash().String(), utxo.TxIDHash, utxo.Vout)
+
 	if _, err := c.distributor.SendTransaction(ctx, tx); err != nil {
-		return errors.NewServiceError("error sending splitting transaction %s", tx.TxIDChainHash().String(), err)
+		return errors.NewServiceError("error sending splitting tx %s for coinbase tx %s vout %d", tx.TxIDChainHash().String(), utxo.TxIDHash, utxo.Vout, err)
 	}
 
 	// Insert the spendable utxos....
