@@ -128,6 +128,11 @@ func (m MockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit 
 	panic("implement me")
 }
 
+func (m MockStore) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (m MockStore) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	//TODO implement me
 	panic("implement me")

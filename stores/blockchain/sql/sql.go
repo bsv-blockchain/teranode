@@ -511,6 +511,11 @@ func (c *blockchainCache) GetBlockHeadersFromHeight(height uint32, limit int) ([
 	return nil, nil
 }
 
+func (c *blockchainCache) GetBlockHeadersByHeight(startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta) {
+	// Not implemented
+	return nil, nil
+}
+
 func (c *blockchainCache) GetBlockHeaders(blockHashFrom *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()

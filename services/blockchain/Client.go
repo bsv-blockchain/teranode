@@ -488,6 +488,36 @@ func (c *Client) GetBlockHeadersFromHeight(ctx context.Context, height, limit ui
 	return headers, metas, nil
 }
 
+func (c *Client) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	resp, err := c.client.GetBlockHeadersByHeight(ctx, &blockchain_api.GetBlockHeadersByHeightRequest{
+		StartHeight: startHeight,
+		EndHeight:   endHeight,
+	})
+	if err != nil {
+		return nil, nil, errors.UnwrapGRPC(err)
+	}
+
+	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+	for _, headerBytes := range resp.BlockHeaders {
+		header, err := model.NewBlockHeaderFromBytes(headerBytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		headers = append(headers, header)
+	}
+
+	metas := make([]*model.BlockHeaderMeta, 0, len(resp.Metas))
+	for _, metaBytes := range resp.Metas {
+		meta, err := model.NewBlockHeaderMetaFromBytes(metaBytes)
+		if err != nil {
+			return nil, nil, err
+		}
+		metas = append(metas, meta)
+	}
+
+	return headers, metas, nil
+}
+
 func (c *Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	_, err := c.client.InvalidateBlock(ctx, &blockchain_api.InvalidateBlockRequest{
 		BlockHash: blockHash.CloneBytes(),

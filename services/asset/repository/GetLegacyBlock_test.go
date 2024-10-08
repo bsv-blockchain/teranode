@@ -341,6 +341,9 @@ func (s *mockStore) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Ha
 func (s *mockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	panic("not implemented")
 }
+func (s *mockStore) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	panic("not implemented")
+}
 func (s *mockStore) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
 	panic("not implemented")
 }
