@@ -13,7 +13,7 @@ type BlockHeaderMeta struct {
 	SizeInBytes uint64 `json:"size_in_bytes"` // Size of the block in bytes.
 	Miner       string `json:"miner"`         // Miner
 	BlockTime   uint32 `json:"block_time"`    // Time of the block.
-	Timestamp   uint32 `json:"timestamp"`     // Timestamp of the block.
+	Timestamp   uint32 `json:"timestamp"`     // Timestamp of creation of the block in the db.
 	Chainwork   []byte `json:"chainwork"`     // Chainwork of the block.
 }
 

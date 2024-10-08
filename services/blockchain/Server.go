@@ -595,6 +595,8 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 		TxCount:     meta.TxCount,
 		SizeInBytes: meta.SizeInBytes,
 		Miner:       meta.Miner,
+		BlockTime:   meta.BlockTime,
+		Timestamp:   meta.Timestamp,
 	}, nil
 }
 

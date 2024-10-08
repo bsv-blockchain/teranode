@@ -792,7 +792,7 @@ func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) boo
 	// minus24Hours := b.timeSource.AdjustedTime().Add(-24 * time.Hour).Unix()
 	minus24Hours := time.Now().Add(-24 * time.Hour).Unix()
 
-	return int64(bestBlockHeaderMeta.Timestamp) >= minus24Hours
+	return int64(bestBlockHeaderMeta.BlockTime) >= minus24Hours
 }
 
 // current returns true if we believe we are synced with our peers, false if we
@@ -800,24 +800,28 @@ func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) boo
 func (sm *SyncManager) current() bool {
 	_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
-		sm.logger.Errorf("failed to get best block header: %v", err)
+		sm.logger.Errorf("[current] failed to get best block header: %v", err)
 		return false
 	}
 
 	if !sm.isCurrent(bestBlockHeaderMeta) {
+		sm.logger.Debugf("[current] Chain is not current: %v", bestBlockHeaderMeta.Height)
 		return false
 	}
 
 	// if blockChain thinks we are current, and we have no syncPeer, it is probably right.
 	if sm.syncPeer == nil {
+		sm.logger.Debugf("[current] no sync peer, chain is current")
 		return true
 	}
 
 	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
 	if int32(bestBlockHeaderMeta.Height) < sm.syncPeer.LastBlock() {
+		sm.logger.Debugf("[current] Chain is not current, lower than sync peer block height: %v < %v", bestBlockHeaderMeta.Height, sm.syncPeer.LastBlock())
 		return false
 	}
 
+	sm.logger.Debugf("[current] Chain is current: %v", bestBlockHeaderMeta.Height)
 	return true
 }
 
