@@ -112,13 +112,13 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	for i, input := range tx.Inputs {
 		inputDetails[i] = fmt.Sprintf("{Input %d: PreviousTxID %s, PreviousTxOutIndex %d, SequenceNumber %d}",
-			i, input.PreviousTxID(), input.PreviousTxOutIndex, input.SequenceNumber)
+			i, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, input.SequenceNumber)
 	}
 
 	outputDetails := make([]string, len(tx.Outputs))
 	for i, output := range tx.Outputs {
-		outputDetails[i] = fmt.Sprintf("{Output %d: Satoshis %d, LockingScript %x}",
-			i, output.Satoshis, output.LockingScript)
+		outputDetails[i] = fmt.Sprintf("{Output %d: Satoshis %d}",
+			i, output.Satoshis)
 	}
 
 	s.logger.Infof("[UTXOStore][logger][Create] tx %s, inputs: [%s], outputs: [%s], isCoinbase %t, blockHeight %d, lockTime %d, version %d, data %s, err %v : %s",
