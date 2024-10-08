@@ -241,16 +241,6 @@ func (b *Blockchain) Start(ctx context.Context) error {
 		}()
 	}
 
-	testingInDockerWithoutLegacyServer := gocore.Config().GetBool("testing_in_docker_without_legacy_server", false)
-
-	if testingInDockerWithoutLegacyServer {
-		b.logger.Infof("[Blockchain] Testing in docker without legacy server")
-		_, err = b.Run(ctx, &emptypb.Empty{})
-		if err != nil {
-			b.logger.Errorf("[Blockchain] failed to send RUN event in docker environment: %v", err)
-		}
-	}
-
 	// this will block
 	if err := util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
