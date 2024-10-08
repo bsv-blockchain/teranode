@@ -9,7 +9,7 @@ import (
 )
 
 type UTXODeletion struct {
-	TxID  *chainhash.Hash
+	TxID  chainhash.Hash
 	Index uint32
 }
 
@@ -34,15 +34,11 @@ func NewUTXODeletionFromReader(r io.Reader) (*UTXODeletion, error) {
 		return &UTXODeletion{}, io.EOF
 	}
 
-	txID, err := chainhash.NewHash(b[:32])
-	if err != nil {
-		return nil, err
-	}
-
 	u := &UTXODeletion{
-		TxID:  txID,
 		Index: uint32(b[32]) | uint32(b[33])<<8 | uint32(b[34])<<16 | uint32(b[35])<<24,
 	}
+
+	copy(u.TxID[:], b[:32])
 
 	return u, nil
 }

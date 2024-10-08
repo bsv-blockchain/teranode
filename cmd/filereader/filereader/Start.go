@@ -33,9 +33,10 @@ const (
 	errEOFMarkerNotFound      = "ERROR: EOF marker not found\n"
 	eofMarkerFound            = "EOF marker found\n"
 	errCouldNotReadFooter     = "Could not read footer"
-	magicFormat               = "magic:                        %s\n"
-	blockHashFormat           = "block hash:                   %s\n"
-	blockHeightFormat         = "block height:                 %d\n"
+	magicFormat               = "magic:                     %s\n"
+	blockHashFormat           = "block hash:                %s\n"
+	blockHeightFormat         = "block height:              %d\n"
+	previousBlockHashFormat   = "previous block hash:       %s\n"
 )
 
 var (
@@ -132,7 +133,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 				return errors.NewProcessingError("error parsing previous block hash", err)
 			}
 
-			fmt.Printf("previous block hash:    %s\n", previousBlockHash)
+			fmt.Printf(previousBlockHashFormat, previousBlockHash)
 
 		default:
 			return errors.NewProcessingError("unknown file type")
@@ -155,7 +156,7 @@ func readFile(ctx context.Context, filename string, ext string, logger ulogger.L
 			fmt.Printf(magicFormat, magic)
 			fmt.Printf(blockHashFormat, blockHash)
 			fmt.Printf(blockHeightFormat, blockHeight)
-			fmt.Printf("previous block hash:    %s\n", previousBlockHash)
+			fmt.Printf(previousBlockHashFormat, previousBlockHash)
 			fmt.Println()
 		}
 

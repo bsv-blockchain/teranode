@@ -253,83 +253,75 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 		return 0, err
 	}
 
-	// Only process the next block if its height is more than 100 behind the current best block height
-	if bestBlockMeta.Height-s.lastHeight < 100 {
+	// Calculate the maximum height that can be processed.  This is the best block height minus 100 confirmations
+	maxHeight := bestBlockMeta.Height - 100
+
+	if s.lastHeight >= maxHeight {
 		s.logger.Infof("Waiting for 100 confirmations (height to process: %d, best block height: %d)", s.lastHeight, bestBlockMeta.Height)
 		return 1 * time.Minute, nil
 	}
 
-	// Get the last 2 block headers from this last processed height
 	if s.blockchainStore != nil {
-		headers, metas, err = s.blockchainStore.GetBlockHeadersFromHeight(ctx, s.lastHeight, 2)
+		headers, metas, err = s.blockchainStore.GetBlockHeadersByHeight(ctx, s.lastHeight, s.lastHeight)
 	} else {
-		headers, metas, err = s.blockchainClient.GetBlockHeadersFromHeight(ctx, s.lastHeight, 2)
+		headers, metas, err = s.blockchainClient.GetBlockHeadersByHeight(ctx, s.lastHeight, s.lastHeight)
 	}
 
 	if err != nil {
 		return 0, err
 	}
 
-	if len(headers) != 2 {
-		return 0, errors.NewProcessingError("2 headers should have been returned, got %d", len(headers))
+	if len(headers) != 1 {
+		return 0, errors.NewProcessingError("1 headers should have been returned, got %d", len(headers))
 	}
 
-	// Sanity check
-	if headers[0].HashPrevBlock.String() != headers[1].Hash().String() {
-		return 0, errors.NewProcessingError("[UTXOPersister] Previous block hash does not match current block hash for block %s height %d", headers[0].Hash(), metas[0].Height)
+	lastWrittenUTXOSetHash := headers[0].Hash()
+
+	if lastWrittenUTXOSetHash.String() != s.chainParams.GenesisHash.String() {
+		// GetStarting point
+		if err := s.verifyLastSet(ctx, lastWrittenUTXOSetHash); err != nil {
+			return 0, err
+		}
 	}
 
-	// GetStarting point
-	if err := s.verifyLastSet(ctx, headers[0].HashPrevBlock); err != nil {
+	c := NewConsolidator(s.logger, s.chainParams, s.blockchainStore, s.blockchainClient, s.blockStore, lastWrittenUTXOSetHash)
+
+	s.logger.Infof("Rolling up data from block height %d to %d", s.lastHeight, maxHeight)
+
+	if err := c.ConsolidateBlockRange(ctx, s.lastHeight, maxHeight); err != nil {
 		return 0, err
 	}
 
-	// Rollup a batch of deletions and additions
-	c := NewConsolidator(s.logger, s.blockchainStore, s.blockchainClient, s.blockStore)
-
-	if err := c.ConsolidateBlockRange(ctx, s.lastHeight, bestBlockMeta.Height-s.lastHeight); err != nil {
-		return 0, err
-	}
-
-	header := headers[0]
-	meta := metas[0]
-	hash := header.Hash()
-
-	previousBlockHash := header.HashPrevBlock
-	if previousBlockHash.String() == s.chainParams.GenesisHash.String() {
-		// Genesis block
-		previousBlockHash = nil
-	}
-
-	us, err := GetUTXOSetWithDeletionsMap(ctx, s.logger, s.blockStore, hash)
+	// At the end of this, we have a rollup of deletions and additions.  Add these to the last UTXOSet
+	us, err := GetUTXOSet(ctx, s.logger, s.blockStore, lastWrittenUTXOSetHash)
 	if err != nil {
-		return 0, errors.NewProcessingError("[UTXOPersister] Error getting UTXOSet for block %s height %d", hash, meta.Height, err)
+		return 0, errors.NewProcessingError("[UTXOPersister] Error getting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, metas[0].Height, err)
 	}
 
-	s.logger.Infof("Processing block %s height %d", hash, meta.Height)
+	s.logger.Infof("Processing block %s height %d", c.lastBlockHash, c.lastBlockHeight)
 
 	if us == nil {
-		s.logger.Infof("UTXOSet already exists for block %s height %d", hash, meta.Height)
+		s.logger.Infof("UTXOSet already exists for block %s height %d", c.lastBlockHash, c.lastBlockHeight)
 
-		s.lastHeight++
+		s.lastHeight = c.lastBlockHeight
 
 		return 0, s.writeLastHeight(ctx, s.lastHeight)
 	}
 
-	if err := us.CreateUTXOSet(ctx, previousBlockHash); err != nil {
-		return 0, errors.NewProcessingError("[UTXOPersister] Error processing UTXOSet for block %s height %d", hash, meta.Height, err)
+	if err := us.CreateUTXOSet(ctx, c); err != nil {
+		return 0, err
 	}
 
-	s.lastHeight++
+	s.lastHeight = c.lastBlockHeight
 
 	// Remove the previous block's UTXOSet
-	if previousBlockHash != nil && !gocore.Config().GetBool("skip_delete", false) {
-		if err := s.blockStore.Del(ctx, previousBlockHash[:], options.WithFileExtension(utxosetExtension)); err != nil {
-			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", previousBlockHash, meta.Height, err)
+	if lastWrittenUTXOSetHash.String() != s.chainParams.GenesisHash.String() && !gocore.Config().GetBool("skip_delete", false) {
+		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], options.WithFileExtension(utxosetExtension)); err != nil {
+			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
 		}
 
-		if err := s.blockStore.Del(ctx, previousBlockHash[:], options.WithFileExtension(utxosetExtension+".sha256")); err != nil {
-			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", previousBlockHash, meta.Height, err)
+		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], options.WithFileExtension(utxosetExtension+".sha256")); err != nil {
+			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
 		}
 	}
 

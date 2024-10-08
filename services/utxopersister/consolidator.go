@@ -5,63 +5,85 @@ import (
 	"io"
 	"sort"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/libsv/go-bt/v2/chainhash"
 )
 
 type headerIfc interface {
-	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 }
 
 type consolidator struct {
 	logger           ulogger.Logger
+	chainParams      *chaincfg.Params
 	blockchainStore  headerIfc
 	blockchainClient headerIfc
 	blockStore       blob.Store
-	insertCounter    uint64
-	deletions        map[*UTXODeletion]struct{}
-	additions        map[*UTXODeletion]*Addition
+	insertCounter    uint64 // Used to order the additions
+	additions        map[UTXODeletion]*Addition
+	deletions        map[UTXODeletion]struct{}
+	firstBlockHeight uint32 // The first block height in the range (startHeight)
+	// firstBlockHash    *chainhash.Hash
+	firstPreviousBlockHash *chainhash.Hash // This is the hash of the previous block of the first block in the range (will be used to copy the last UTXOSet)
+	lastBlockHeight        uint32
+	lastBlockHash          *chainhash.Hash // Used to name the new UTXOSet
+	previousBlockHash      *chainhash.Hash // Used to put in the header of the new UTXOSet
 }
 
 type Addition struct {
-	Height   uint32
-	Coinbase bool
 	Order    uint64
 	Value    uint64
+	Height   uint32
 	Script   []byte
+	Coinbase bool
 }
 
-func NewConsolidator(logger ulogger.Logger, blockchainStore headerIfc, blockchainClient headerIfc, blockStore blob.Store) *consolidator {
+func NewConsolidator(logger ulogger.Logger, chainParams *chaincfg.Params, blockchainStore headerIfc, blockchainClient headerIfc, blockStore blob.Store, previousBlockHash *chainhash.Hash) *consolidator {
 	return &consolidator{
-		logger:           logger,
-		blockchainStore:  blockchainStore,
-		blockchainClient: blockchainClient,
-		blockStore:       blockStore,
-		deletions:        make(map[*UTXODeletion]struct{}),
-		additions:        make(map[*UTXODeletion]*Addition),
+		logger:                 logger,
+		chainParams:            chainParams,
+		blockchainStore:        blockchainStore,
+		blockchainClient:       blockchainClient,
+		blockStore:             blockStore,
+		deletions:              make(map[UTXODeletion]struct{}),
+		additions:              make(map[UTXODeletion]*Addition),
+		firstPreviousBlockHash: previousBlockHash,
 	}
 }
 
 func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, endBlock uint32) error {
 	var (
 		headers []*model.BlockHeader
+		metas   []*model.BlockHeaderMeta
 		err     error
 	)
 
 	if c.blockchainStore != nil {
-		headers, _, err = c.blockchainStore.GetBlockHeadersFromHeight(ctx, endBlock, endBlock-startBlock)
+		headers, metas, err = c.blockchainStore.GetBlockHeadersByHeight(ctx, startBlock, endBlock)
 	} else {
-		headers, _, err = c.blockchainClient.GetBlockHeadersFromHeight(ctx, endBlock, endBlock-startBlock)
+		headers, metas, err = c.blockchainClient.GetBlockHeadersByHeight(ctx, startBlock, endBlock)
 	}
 
 	if err != nil {
 		return err
 	}
 
-	for i := len(headers) - 1; i >= 0; i-- {
+	c.firstBlockHeight = startBlock
+
+	for i := 0; i < len(headers); i++ {
 		header := headers[i]
+		meta := metas[i]
+
 		hash := header.Hash()
+		previousHash := header.HashPrevBlock
+		height := meta.Height
+
+		if hash.String() == c.chainParams.GenesisHash.String() {
+			continue
+		}
 
 		// Get the last 2 block headers from this last processed height
 		us, err := GetUTXOSetWithExistCheck(ctx, c.logger, c.blockStore, hash)
@@ -69,117 +91,171 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 			return err
 		}
 
-		if i != len(headers)-1 {
-			r, err := us.GetUTXODeletionsReader(ctx)
-			if err != nil {
-				return err
-			}
-
-			magic, blockHash, blockHeight, err := GetHeaderFromReader(r)
-			if err != nil {
-				return err
-			}
-
-			c.logger.Infof("magic: %s, blockHash: %s, blockHeight: %d\n", magic, blockHash, blockHeight)
-
-			// Ignore deletions for the first iteration
-			if err := c.processDeletions(ctx, r); err != nil {
-				return err
-			}
-		}
-
-		r, err := us.GetUTXOAdditionsReader(ctx)
+		r, err := us.GetUTXODeletionsReader(ctx)
 		if err != nil {
 			return err
 		}
 
-		magic, blockHash, blockHeight, err := GetHeaderFromReader(r)
+		if err := c.processDeletionsFromReader(ctx, r); err != nil {
+			return err
+		}
+
+		r, err = us.GetUTXOAdditionsReader(ctx)
 		if err != nil {
 			return err
 		}
 
-		c.logger.Infof("magic: %s, blockHash: %s, blockHeight: %d\n", magic, blockHash, blockHeight)
-
-		if err := c.processAdditions(ctx, r); err != nil {
+		if err := c.processAdditionsFromReader(ctx, r); err != nil {
 			return err
 		}
+
+		c.lastBlockHeight = height
+		c.lastBlockHash = hash
+		c.previousBlockHash = previousHash
 	}
 
 	return nil
 }
 
-func (c *consolidator) processDeletions(ctx context.Context, r io.ReadCloser) error {
-	for {
-		ud, err := NewUTXODeletionFromReader(r)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-
-			return err
-		}
-
-		// Check if the deletion is in the additions map
-		if _, exists := c.additions[ud]; exists {
-			delete(c.additions, ud)
-		} else {
-			c.deletions[ud] = struct{}{}
-		}
+func (c *consolidator) processDeletionsFromReader(ctx context.Context, r io.Reader) error {
+	if err := checkMagic(r, "U-D-1.0"); err != nil {
+		return err
 	}
 
-	return nil
-}
-
-func (c *consolidator) processAdditions(ctx context.Context, r io.ReadCloser) error {
 	for {
-		wrapper, err := NewUTXOWrapperFromReader(ctx, r)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-
-			return err
-		}
-
-		txid := &wrapper.TxID
-
-		// For each UTXO in the wrapper, check if it exists in the deletions map
-		for _, utxo := range wrapper.UTXOs {
-			key := &UTXODeletion{
-				TxID:  txid,
-				Index: utxo.Index,
-			}
-
-			// Check if the addition is in the deletions map
-			if _, exists := c.deletions[key]; exists {
-				delete(c.deletions, key)
-			} else {
-				c.additions[key] = &Addition{
-					Height:   wrapper.Height,
-					Coinbase: wrapper.Coinbase,
-					Order:    c.insertCounter,
-					Value:    utxo.Value,
-					Script:   utxo.Script,
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			outpoint, err := NewUTXODeletionFromReader(r)
+			if err != nil {
+				if err == io.EOF {
+					return nil
 				}
 
-				c.insertCounter++
+				return err
+			}
+
+			if _, exists := c.additions[*outpoint]; exists {
+				delete(c.additions, *outpoint)
+			} else {
+				c.deletions[*outpoint] = struct{}{}
 			}
 		}
 	}
+}
 
-	return nil
+func (c *consolidator) processAdditionsFromReader(ctx context.Context, r io.ReadCloser) error {
+	if err := checkMagic(r, "U-A-1.0"); err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			wrapper, err := NewUTXOWrapperFromReader(ctx, r)
+			if err != nil {
+				if err == io.EOF {
+					return nil
+				}
+
+				return err
+			}
+
+			txid := &wrapper.TxID
+
+			// For each UTXO in the wrapper, check if it exists in the deletions map
+			for _, utxo := range wrapper.UTXOs {
+				key := UTXODeletion{
+					TxID:  *txid,
+					Index: utxo.Index,
+				}
+
+				// Check if the addition is in the deletions map
+				if _, exists := c.deletions[key]; exists {
+					delete(c.deletions, key)
+				} else {
+					c.additions[key] = &Addition{
+						Height:   wrapper.Height,
+						Coinbase: wrapper.Coinbase,
+						Order:    c.insertCounter,
+						Value:    utxo.Value,
+						Script:   utxo.Script,
+					}
+
+					c.insertCounter++
+				}
+			}
+		}
+	}
+}
+
+type keyAndVal struct {
+	Key   UTXODeletion
+	Value *Addition
 }
 
 // Helper function to get sorted additions
-func GetSortedAdditions(additions map[[36]byte]Addition) []Addition {
-	sortedAdditions := make([]Addition, 0, len(additions))
-	for _, addition := range additions {
-		sortedAdditions = append(sortedAdditions, addition)
+func (c *consolidator) getSortedUTXOWrappers() []*UTXOWrapper {
+	sortedAdditions := make([]*keyAndVal, 0, len(c.additions))
+
+	for key, val := range c.additions {
+		sortedAdditions = append(sortedAdditions, &keyAndVal{
+			Key:   key,
+			Value: val,
+		})
 	}
 
 	sort.Slice(sortedAdditions, func(i, j int) bool {
-		return sortedAdditions[i].Order < sortedAdditions[j].Order
+		return sortedAdditions[i].Value.Order < sortedAdditions[j].Value.Order
 	})
 
-	return sortedAdditions
+	wrappers := make([]*UTXOWrapper, 0, len(sortedAdditions))
+
+	var (
+		wrapper *UTXOWrapper
+	)
+
+	for _, addition := range sortedAdditions {
+		if wrapper == nil || wrapper.TxID != addition.Key.TxID {
+			if wrapper != nil {
+				sort.Slice(wrapper.UTXOs, func(i, j int) bool {
+					return wrapper.UTXOs[i].Index < wrapper.UTXOs[j].Index
+				})
+
+				wrappers = append(wrappers, wrapper)
+			}
+
+			wrapper = &UTXOWrapper{
+				TxID:     addition.Key.TxID,
+				Height:   addition.Value.Height,
+				Coinbase: addition.Value.Coinbase,
+				UTXOs: []*UTXO{
+					{
+						Index:  addition.Key.Index,
+						Value:  addition.Value.Value,
+						Script: addition.Value.Script,
+					},
+				},
+			}
+		} else {
+			wrapper.UTXOs = append(wrapper.UTXOs, &UTXO{
+				Index:  addition.Key.Index,
+				Value:  addition.Value.Value,
+				Script: addition.Value.Script,
+			})
+		}
+	}
+
+	if wrapper != nil {
+		sort.Slice(wrapper.UTXOs, func(i, j int) bool {
+			return wrapper.UTXOs[i].Index < wrapper.UTXOs[j].Index
+		})
+
+		wrappers = append(wrappers, wrapper)
+	}
+
+	return wrappers
 }
