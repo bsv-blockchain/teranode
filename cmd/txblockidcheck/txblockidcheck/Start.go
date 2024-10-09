@@ -11,6 +11,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
@@ -64,7 +65,7 @@ func Start() {
 	}
 
 	var subtreeStore blob.Store
-	subtreeStore, err = blob.NewStore(logger, parseURL(subtreeStoreString))
+	subtreeStore, err = blob.NewStore(logger, parseURL(subtreeStoreString), options.WithHashPrefix(2))
 	if err != nil {
 		usage(err.Error())
 	}
