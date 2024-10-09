@@ -1047,6 +1047,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		i := i
 		if b.SubtreeSlices[i] == nil {
 			blockHash := b.Hash()
+			blockID := b.ID
 			subtreeHash := subtreeHash
 
 			g.Go(func() error {
@@ -1072,21 +1073,21 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 					gCtx,
 					logger,
 					findSubtree,
-					retry.WithMessage(fmt.Sprintf("[BLOCK][%s] failed to get subtree %s", blockHash, subtreeHash)),
+					retry.WithMessage(fmt.Sprintf("[BLOCK][%s][ID %d] failed to get subtree %s", blockHash, blockID, subtreeHash)),
 				)
 
 				if err != nil {
-					return errors.NewStorageError("[BLOCK][%s] failed to get subtree %s", blockHash, subtreeHash, err)
+					return errors.NewStorageError("[BLOCK][%s][ID %d] failed to get subtree %s", blockHash, blockID, subtreeHash, err)
 				}
 
 				err = subtree.DeserializeFromReader(subtreeReader)
 				if err != nil {
 					_, err = retry.Retry(gCtx, logger, func() (struct{}, error) {
 						return struct{}{}, subtree.DeserializeFromReader(subtreeReader)
-					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s] failed to deserialize subtree %s", blockHash, subtreeHash)))
+					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][ID %d] failed to deserialize subtree %s", blockHash, blockID, subtreeHash)))
 
 					if err != nil {
-						return errors.NewStorageError("[BLOCK][%s] failed to deserialize subtree %s", blockHash, subtreeHash, err)
+						return errors.NewStorageError("[BLOCK][%s][ID %d] failed to deserialize subtree %s", blockHash, blockID, subtreeHash, err)
 					}
 				}
 
@@ -1118,7 +1119,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 			subtreeSize = subtree.Length()
 		} else if subtree.Length() != subtreeSize && sIdx != nrOfSubtrees-1 {
 			// all subtrees need to be the same size as the first tree, except the last one
-			return errors.NewBlockInvalidError("[BLOCK][%s] subtree %d has length %d, expected %d", b.Hash().String(), sIdx, subtree.Length(), subtreeSize)
+			return errors.NewBlockInvalidError("[BLOCK][%s][ID %d] subtree %d has length %d, expected %d", b.Hash().String(), b.ID, sIdx, subtree.Length(), subtreeSize)
 		}
 	}
 
