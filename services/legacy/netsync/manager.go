@@ -30,7 +30,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils/expiringmap"
@@ -1811,7 +1811,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 
 		// start a go routine to start the kafka producer
 		go func() {
-			if err = util.StartAsyncProducer(sm.logger, legacyInvConfigURL, sm.legacyKafkaInvCh); err != nil {
+			if _, err = kafka.NewKafkaAsyncProducer(sm.logger, legacyInvConfigURL, sm.legacyKafkaInvCh); err != nil {
 				sm.logger.Errorf("[Legacy Manager] error starting kafka producer: %v", err)
 				return
 			}
@@ -1832,7 +1832,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 						sm.logger.Errorf("[Legacy Manager] failed to get current FSM state: %v", err)
 					}
 
-					if fsmState != nil && *fsmState == blockchain_api.FSMStateType_RUNNING {
+					if fsmState != nil && *fsmState == ubsvblockchain.FSMStateRUNNING {
 						kafkaControlChan <- true // start or continue the listener
 					} else {
 						kafkaControlChan <- false // stop the listener
@@ -1877,19 +1877,26 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 }
 
 func (sm *SyncManager) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int) {
-	if err := util.StartKafkaGroupListener(ctx, sm.logger, kafkaURL, groupID, nil, consumerCount, false, func(msg util.KafkaMessage) error {
-		wireInvMsg, err := sm.newInvFromBytes(msg.Message.Value)
-		if err != nil {
-			sm.logger.Errorf("failed to create INV message from Kafka message: %v", err)
-			return nil // ignore any errors, the message might be old and/or the peer is already disconnected
-		}
+	if _, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
+		Logger:            sm.logger,
+		URL:               kafkaURL,
+		GroupID:           groupID,
+		ConsumerCount:     consumerCount,
+		AutoCommitEnabled: false,
+		ConsumerFn: func(msg kafka.KafkaMessage) error {
+			wireInvMsg, err := sm.newInvFromBytes(msg.Message.Value)
+			if err != nil {
+				sm.logger.Errorf("failed to create INV message from Kafka message: %v", err)
+				return nil // ignore any errors, the message might be old and/or the peer is already disconnected
+			}
 
-		sm.logger.Debugf("Received INV message from Kafka: %v", wireInvMsg)
+			sm.logger.Debugf("Received INV message from Kafka: %v", wireInvMsg)
 
-		// Queue the INV message on the internal message channel
-		sm.msgChan <- wireInvMsg
+			// Queue the INV message on the internal message channel
+			sm.msgChan <- wireInvMsg
 
-		return nil
+			return nil
+		},
 	}); err != nil {
 		sm.logger.Errorf("failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
 	}
