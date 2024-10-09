@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"runtime"
 	"sort"
 	"strconv"
@@ -549,7 +548,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore b
 	if txMetaStore != nil {
 		legacyLimitedBlockValidation := gocore.Config().GetBool("legacy_limitedBlockValidation", false)
 		if legacyLimitedBlockValidation {
-			log.Printf("WARNING: legacyLimitedBlockValidation env: %v", legacyLimitedBlockValidation)
+			logger.Warnf("WARNING: legacyLimitedBlockValidation env: %v", legacyLimitedBlockValidation)
 		}
 
 		if !legacyLimitedBlockValidation {
