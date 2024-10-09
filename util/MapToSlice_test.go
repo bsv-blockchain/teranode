@@ -17,6 +17,7 @@ func TestConvertSyncMapToUint32Slice(t *testing.T) {
 
 	t.Run("Non-empty map", func(t *testing.T) {
 		var oldBlockIDs sync.Map
+
 		oldBlockIDs.Store(uint32(1), struct{}{})
 		oldBlockIDs.Store(uint32(2), struct{}{})
 		oldBlockIDs.Store(uint32(3), struct{}{})
