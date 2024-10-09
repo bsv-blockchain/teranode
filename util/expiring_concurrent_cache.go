@@ -9,9 +9,10 @@ import (
 )
 
 type ExpiringConcurrentCache[K comparable, V any] struct {
-	mu    sync.Mutex
-	cache *expiringmap.ExpiringMap[K, V]
-	wg    map[K]*sync.WaitGroup
+	mu        sync.RWMutex
+	cache     *expiringmap.ExpiringMap[K, V]
+	wg        map[K]*sync.WaitGroup
+	zeroValue V
 }
 
 func NewExpiringConcurrentCache[K comparable, V any](expiration time.Duration) *ExpiringConcurrentCache[K, V] {
@@ -22,48 +23,66 @@ func NewExpiringConcurrentCache[K comparable, V any](expiration time.Duration) *
 }
 
 func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, error)) (V, error) {
-	var zeroValue V
+	var (
+		val   V
+		found bool
+		err   error
+		wg    *sync.WaitGroup
+	)
 
-	c.mu.Lock()
+	// Start by acquiring a read lock
+	c.mu.RLock()
 
 	// Check if the value is already in the cache
-	if val, found := c.cache.Get(key); found {
+	if val, found = c.cache.Get(key); found {
+		c.mu.RUnlock()
+		return val, nil
+	}
+
+	// Upgrade to a write lock if the value is not found
+	c.mu.RUnlock()
+	c.mu.Lock()
+
+	// Check again to avoid race conditions
+	if val, found = c.cache.Get(key); found {
 		c.mu.Unlock()
 		return val, nil
 	}
 
 	// If not, check if there is an ongoing request
-	if wg, found := c.wg[key]; found {
+	if wg, found = c.wg[key]; found {
 		c.mu.Unlock()
-		wg.Wait()
+		wg.Wait() // Wait for the other goroutine to finish
 
-		if val, found := c.cache.Get(key); found {
+		if val, found = c.cache.Get(key); found {
 			return val, nil
 		}
 
-		return zeroValue, errors.NewProcessingError("cache: failed to get value after waiting")
+		return c.zeroValue, errors.NewProcessingError("cache: failed to get value after waiting")
 	}
 
-	// Otherwise, create a new WaitGroup for the key
-	wg := &sync.WaitGroup{}
+	// Create a new WaitGroup for the key
+	wg = &sync.WaitGroup{}
 	wg.Add(1)
 	c.wg[key] = wg
+
+	// Release the global lock, for others to wait on the wait group
 	c.mu.Unlock()
 
-	// Do the actual work
+	// Perform the fetch, with a lock on the cache
+	c.mu.Lock()
+
+	// Perform the fetch
 	result, err := fetchFunc()
 	if err != nil {
-		return zeroValue, err
+		return c.zeroValue, err
 	}
-
-	c.mu.Lock()
 
 	// Cache the result
 	c.cache.Set(key, result)
 
-	// Mark the wait group as done and remove it
-	wg.Done()
-	delete(c.wg, key)
+	wg.Done()         // Mark the wait group as done
+	delete(c.wg, key) // Remove it from the map
 
 	c.mu.Unlock()
 
