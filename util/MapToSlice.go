@@ -7,9 +7,9 @@ func ConvertSyncMapToUint32Slice(oldBlockIDs *sync.Map) ([]uint32, bool) {
 	// Flag to check if the oldBlockIDs map has elements
 	var hasTransactionsReferencingOldBlocks bool
 
-	oldBlockIDs.Range(func(key, value interface{}) bool {
+	oldBlockIDs.Range(func(key, _ interface{}) bool {
 		hasTransactionsReferencingOldBlocks = true
-		val := value.(uint32)
+		val := key.(uint32)
 		referencedOldBlockIDs = append(referencedOldBlockIDs, val)
 
 		return true // Continue iteration to collect all elements
