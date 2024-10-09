@@ -1,0 +1,45 @@
+@startuml
+title Seeder UTXO Processing
+
+participant "Seeder" as Seeder
+participant "File" as File
+participant "Channel" as Channel
+participant "Worker" as Worker
+participant "UTXOPersister" as UTPersister
+participant "UTXOStore" as UTXOStore
+
+activate Seeder
+
+Seeder -> UTXOStore: Initialize
+Seeder -> File: Open UTXO file
+Seeder -> UTPersister: GetUTXOSetHeaderFromReader()
+UTPersister --> Seeder: Magic number
+
+Seeder -> Seeder: Create UTXO channel
+Seeder -> Seeder: Start worker goroutines
+
+par Reader
+    loop until EOF
+        Seeder -> UTPersister: NewUTXOWrapperFromReader()
+        UTPersister --> Seeder: UTXO Wrapper
+        Seeder -> Channel: Send UTXO Wrapper
+        Seeder -> Seeder: Update processing stats
+    end
+also Workers
+    loop for each worker
+        Worker -> Channel: Receive UTXO Wrapper
+        Worker -> Worker: processUTXO()
+        Worker -> UTXOStore: Create()
+        UTXOStore --> Worker: UTXO stored
+    end
+end
+
+Seeder -> Seeder: Wait for all workers to finish
+Seeder -> Seeder: Log processing summary
+
+deactivate Seeder
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+
+@enduml

@@ -1,0 +1,35 @@
+@startuml
+title Seeder Service Initialization
+
+participant "Main" as Main
+participant "Seeder" as Seeder
+participant "Flag Parser" as FlagParser
+participant "OS" as OS
+participant "HTTP Server" as HTTP
+
+Main -> Seeder: Start()
+activate Seeder
+
+Seeder -> FlagParser: Parse command-line flags
+FlagParser --> Seeder: Parsed flags
+
+Seeder -> OS: Check file existence
+OS --> Seeder: File status
+
+Seeder -> Seeder: Set up signal handling
+Seeder -> HTTP: Start profiler server
+
+alt not skipHeaders
+    Seeder -> Seeder: processHeaders()
+end
+
+alt not skipUTXOs
+    Seeder -> Seeder: processUTXOs()
+end
+
+Seeder --> Main: Service completed
+deactivate Seeder
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
