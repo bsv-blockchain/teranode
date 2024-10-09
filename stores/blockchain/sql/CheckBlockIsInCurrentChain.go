@@ -4,9 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/tracing"
-	"strings"
 )
 
 /*
@@ -192,9 +193,11 @@ func (s *SQL) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32)
 
 	// Generate placeholders for blockIDs
 	blockIDPlaceholders := make([]string, len(blockIDs))
+
 	for i, id := range blockIDs {
 		placeholder := fmt.Sprintf("$%d", i+1)
 		blockIDPlaceholders[i] = fmt.Sprintf("SELECT %s::INTEGER AS id", placeholder)
+
 		args = append(args, id)
 	}
 

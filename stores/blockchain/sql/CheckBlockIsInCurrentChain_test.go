@@ -3,8 +3,6 @@ package sql
 import (
 	"context"
 	"fmt"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"net/url"
 	"testing"
 
@@ -13,6 +11,8 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
@@ -206,7 +206,6 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, isInChain)
 	})
-
 }
 
 func setupPostgresContainer(t *testing.T) (string, func()) {
