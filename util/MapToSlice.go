@@ -2,18 +2,18 @@ package util
 
 import "sync"
 
-func ConvertSyncMapToUint32Slice(oldBlockIDs *sync.Map) ([]uint32, bool) {
-	var referencedOldBlockIDs []uint32
-	// Flag to check if the oldBlockIDs map has elements
-	var hasTransactionsReferencingOldBlocks bool
+func ConvertSyncMapToUint32Slice(syncMap *sync.Map) ([]uint32, bool) {
+	var sliceWithMapElements []uint32
 
-	oldBlockIDs.Range(func(key, value interface{}) bool {
-		hasTransactionsReferencingOldBlocks = true
-		val := value.(uint32)
-		referencedOldBlockIDs = append(referencedOldBlockIDs, val)
+	mapHasAnyElements := false
 
-		return true // Continue iteration to collect all elements
+	syncMap.Range(func(key, _ interface{}) bool {
+		mapHasAnyElements = true
+		val := key.(uint32)
+		sliceWithMapElements = append(sliceWithMapElements, val)
+
+		return true
 	})
 
-	return referencedOldBlockIDs, hasTransactionsReferencingOldBlocks
+	return sliceWithMapElements, mapHasAnyElements
 }
