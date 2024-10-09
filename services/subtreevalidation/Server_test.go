@@ -62,6 +62,7 @@ func TestOneTransaction(t *testing.T) {
 	merkleRootHash := coinbaseTx.TxIDChainHash()
 	block := &model.Block{
 		Header: &model.BlockHeader{
+			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: merkleRootHash,
 		},
 		Subtrees:   subtreeHashes,
