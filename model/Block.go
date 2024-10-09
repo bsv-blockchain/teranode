@@ -1046,7 +1046,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	for i, subtreeHash := range b.Subtrees {
 		i := i
 		if b.SubtreeSlices[i] == nil {
-			blockHash := b.hash
+			blockHash := b.Hash()
 			subtreeHash := subtreeHash
 
 			g.Go(func() error {
