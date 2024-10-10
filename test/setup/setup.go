@@ -33,10 +33,9 @@ func (suite *BitcoinTestSuite) DefaultSettingsMap() map[string]string {
 }
 
 const (
-	NodeURL1  = "http://localhost:10090"
-	NodeURL87 = "http://localhost:10087"
-	NodeURL2  = "http://localhost:12090"
-	NodeURL3  = "http://localhost:14090"
+	NodeURL1 = "http://localhost:10090"
+	NodeURL2 = "http://localhost:12090"
+	NodeURL3 = "http://localhost:14090"
 )
 
 func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap map[string]string, composeFiles []string) {
@@ -80,38 +79,19 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 	}
 
 	suite.T().Logf("Sending initial RUN event to Node2")
+
 	err = suite.Framework.Nodes[1].BlockchainClient.Run(suite.Framework.Context)
 	if err != nil {
 		suite.T().Fatal(err)
 	}
 
 	suite.T().Logf("Sending initial RUN event to Node3")
+
 	err = suite.Framework.Nodes[2].BlockchainClient.Run(suite.Framework.Context)
 	if err != nil {
 		suite.T().Fatal(err)
 	}
-	/*
-		suite.T().Logf("Sending initial RUN event to 10087 %v", NodeURL87)
-		// send initial RUN event
-		_, err = SendFSMRunEvent(NodeURL87)
-		if err != nil {
-			suite.T().Fatal(err)
-		}
 
-		suite.T().Logf("Sending initial RUN event to %v", NodeURL2)
-		// send initial RUN event
-		_, err = SendFSMRunEvent(NodeURL2)
-		if err != nil {
-			suite.T().Fatal(err)
-		}
-
-		suite.T().Logf("Sending initial RUN event to %v", NodeURL3)
-		// send initial RUN event
-		_, err = SendFSMRunEvent(NodeURL3)
-		if err != nil {
-			suite.T().Fatal(err)
-		}
-	*/
 	err = helper.WaitForBlockHeight(NodeURL1, 200, 120)
 	if err != nil {
 		suite.T().Fatal(err)
@@ -129,13 +109,6 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 	}
 
 	suite.T().Log("BitcoinTestFramework setup completed")
-}
-
-func SendFSMRunEvent(url string) (string, error) {
-	method := "run"
-	params := []interface{}{}
-
-	return helper.CallRPC(url, method, params)
 }
 
 func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsSkipChecks(settingsMap map[string]string, composeFiles []string, skipClientHandles bool) {
@@ -189,10 +162,6 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsDoNotReset(s
 	}
 
 	err = helper.WaitForBlockHeight(NodeURL1, 300, 180)
-	if err != nil {
-		suite.T().Fatal(err)
-	}
-
 	if err != nil {
 		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
 	}

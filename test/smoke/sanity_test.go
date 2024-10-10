@@ -31,22 +31,18 @@ type SanityTestSuite struct {
 	setup.BitcoinTestSuite
 }
 
-//func (suite *SanityTestSuite) TearDownTest() {
-//}
+// func (suite *SanityTestSuite) TearDownTest() {
+// }
 
 func (suite *SanityTestSuite) TestShouldAllowFairTx() {
-	fmt.Println("TestShouldAllowFairTx beginning")
 	t := suite.T()
 	framework := suite.Framework
 	ctx := framework.Context
-
-	fmt.Println("creating logger")
 
 	url := "http://localhost:10090"
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
-	fmt.Println("creating distributor")
 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
 		distributor.WithRetryAttempts(3),
