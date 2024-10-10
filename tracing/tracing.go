@@ -167,15 +167,23 @@ func StartTracing(ctx context.Context, name string, setOptions ...Options) (cont
 			}
 
 			for _, l := range options.LogMessages {
-				if err != nil {
-					options.Logger.Errorf(l.message+done, l.args...)
-				} else {
-					switch {
-					case l.level == "WARN":
+				switch {
+				case l.level == "WARN":
+					if err != nil && options.Logger.LogLevel() == ulogger.LogLevelWarning {
+						options.Logger.Errorf(l.message+done, l.args...)
+					} else {
 						options.Logger.Warnf(l.message+done, l.args...)
-					case l.level == "DEBUG":
+					}
+				case l.level == "DEBUG":
+					if err != nil && options.Logger.LogLevel() == ulogger.LogLevelDebug {
+						options.Logger.Errorf(l.message+done, l.args...)
+					} else {
 						options.Logger.Debugf(l.message+done, l.args...)
-					default:
+					}
+				default:
+					if err != nil {
+						options.Logger.Errorf(l.message+done, l.args...)
+					} else {
 						options.Logger.Infof(l.message+done, l.args...)
 					}
 				}
