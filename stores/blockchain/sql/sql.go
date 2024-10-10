@@ -172,6 +172,16 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create idx_subtrees_set index", err)
 	}
 
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_height ON blocks (height);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_height index", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_parent_id index", err)
+	}
+
 	if _, err := db.Exec(`
 		CREATE OR REPLACE FUNCTION reverse_bytes_iter(bytes bytea, length int, midpoint int, index int)
 		RETURNS bytea AS
