@@ -31,8 +31,8 @@ type SanityTestSuite struct {
 	setup.BitcoinTestSuite
 }
 
-// func (suite *SanityTestSuite) TearDownTest() {
-// }
+//func (suite *SanityTestSuite) TearDownTest() {
+//}
 
 func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	fmt.Println("TestShouldAllowFairTx beginning")

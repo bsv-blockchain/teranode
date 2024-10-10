@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
@@ -64,27 +65,53 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
 	}
 
-	suite.T().Logf("Sending initial RUN event to 10087 %v", NodeURL87)
-	// send initial RUN event
-	_, err = SendFSMRunEvent(NodeURL87)
+	time.Sleep(2 * time.Second)
+
+	err = suite.Framework.GetClientHandles()
 	if err != nil {
 		suite.T().Fatal(err)
 	}
 
-	suite.T().Logf("Sending initial RUN event to %v", NodeURL2)
-	// send initial RUN event
-	_, err = SendFSMRunEvent(NodeURL2)
+	suite.T().Logf("Sending initial RUN event to Node1")
+
+	err = suite.Framework.Nodes[0].BlockchainClient.Run(suite.Framework.Context)
 	if err != nil {
 		suite.T().Fatal(err)
 	}
 
-	suite.T().Logf("Sending initial RUN event to %v", NodeURL3)
-	// send initial RUN event
-	_, err = SendFSMRunEvent(NodeURL3)
+	suite.T().Logf("Sending initial RUN event to Node2")
+	err = suite.Framework.Nodes[1].BlockchainClient.Run(suite.Framework.Context)
 	if err != nil {
 		suite.T().Fatal(err)
 	}
 
+	suite.T().Logf("Sending initial RUN event to Node3")
+	err = suite.Framework.Nodes[2].BlockchainClient.Run(suite.Framework.Context)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+	/*
+		suite.T().Logf("Sending initial RUN event to 10087 %v", NodeURL87)
+		// send initial RUN event
+		_, err = SendFSMRunEvent(NodeURL87)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+
+		suite.T().Logf("Sending initial RUN event to %v", NodeURL2)
+		// send initial RUN event
+		_, err = SendFSMRunEvent(NodeURL2)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+
+		suite.T().Logf("Sending initial RUN event to %v", NodeURL3)
+		// send initial RUN event
+		_, err = SendFSMRunEvent(NodeURL3)
+		if err != nil {
+			suite.T().Fatal(err)
+		}
+	*/
 	err = helper.WaitForBlockHeight(NodeURL1, 200, 120)
 	if err != nil {
 		suite.T().Fatal(err)
@@ -97,11 +124,6 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 
 	err = helper.WaitForBlockHeight(NodeURL3, 200, 120)
 
-	if err != nil {
-		suite.T().Fatal(err)
-	}
-
-	err = suite.Framework.GetClientHandles()
 	if err != nil {
 		suite.T().Fatal(err)
 	}
