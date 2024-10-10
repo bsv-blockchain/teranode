@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 
@@ -10,11 +11,16 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
+func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	t.Run("empty - no match", func(t *testing.T) {
-		storeURL, err := url.Parse("sqlitememory:///")
+		connStr, teardown := setupPostgresContainer(t)
+		defer teardown()
+
+		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
 		s, err := New(ulogger.TestLogger{}, storeURL)
@@ -28,7 +34,10 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("single block in chain", func(t *testing.T) {
-		storeURL, err := url.Parse("sqlitememory:///")
+		connStr, teardown := setupPostgresContainer(t)
+		defer teardown()
+
+		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
 		s, err := New(ulogger.TestLogger{}, storeURL)
@@ -40,22 +49,20 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 
 		_, metas, err := s.GetBlockHeaders(context.Background(), block1.Hash(), 1)
 		require.NoError(t, err)
-		// fmt.Println("Headers: ", headers)
-
-		// need to get block ID.
-		// one way is through the GetBlockHeaders function
 
 		// Check if block1 is in the chain, should return true
 		blockIDs := []uint32{metas[0].ID}
 		isInChain, err := s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
-		// fmt.Println("ERROR IS: ", err)
 
 		require.NoError(t, err)
 		assert.True(t, isInChain)
 	})
 
 	t.Run("multiple blocks in chain", func(t *testing.T) {
-		storeURL, err := url.Parse("sqlitememory:///")
+		connStr, teardown := setupPostgresContainer(t)
+		defer teardown()
+
+		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
 		s, err := New(ulogger.TestLogger{}, storeURL)
@@ -71,6 +78,7 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 		// get metas for block1 and block2
 		_, metas, err := s.GetBlockHeaders(context.Background(), block2.Hash(), 2)
 		require.NoError(t, err)
+
 		// Check if block1 and block2 are in the chain, should return true
 		blockIDs := []uint32{metas[0].ID, metas[1].ID}
 		isInChain, err := s.CheckBlockIsInCurrentChain(context.Background(), blockIDs)
@@ -79,7 +87,10 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("block not in chain", func(t *testing.T) {
-		storeURL, err := url.Parse("sqlitememory:///")
+		connStr, teardown := setupPostgresContainer(t)
+		defer teardown()
+
+		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
 		s, err := New(ulogger.TestLogger{}, storeURL)
@@ -97,7 +108,10 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("alternative block in branch", func(t *testing.T) {
-		storeURL, err := url.Parse("sqlitememory:///")
+		connStr, teardown := setupPostgresContainer(t)
+		defer teardown()
+
+		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
 		s, err := New(ulogger.TestLogger{}, storeURL)
@@ -144,7 +158,10 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("alternative block in correct chain", func(t *testing.T) {
-		storeURL, err := url.Parse("sqlitememory:///")
+		connStr, teardown := setupPostgresContainer(t)
+		defer teardown()
+
+		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
 
 		s, err := New(ulogger.TestLogger{}, storeURL)
@@ -189,4 +206,40 @@ func Test_CheckIfBlockIsInCurrentChain(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, isInChain)
 	})
+}
+
+func setupPostgresContainer(t *testing.T) (string, func()) {
+	ctx := context.Background()
+
+	req := testcontainers.ContainerRequest{
+		Image:        "postgres:13",
+		ExposedPorts: []string{"5432/tcp"},
+		Env: map[string]string{
+			"POSTGRES_USER":     "postgres",
+			"POSTGRES_PASSWORD": "password",
+			"POSTGRES_DB":       "testdb",
+		},
+		WaitingFor: wait.ForListeningPort("5432/tcp"),
+	}
+
+	postgresC, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	require.NoError(t, err)
+
+	host, err := postgresC.Host(ctx)
+	require.NoError(t, err)
+
+	port, err := postgresC.MappedPort(ctx, "5432")
+	require.NoError(t, err)
+
+	connStr := fmt.Sprintf("postgres://postgres:password@%s:%s/testdb?sslmode=disable", host, port.Port())
+
+	teardown := func() {
+		err := postgresC.Terminate(ctx)
+		require.NoError(t, err)
+	}
+
+	return connStr, teardown
 }
