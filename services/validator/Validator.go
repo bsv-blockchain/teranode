@@ -161,7 +161,7 @@ func (v *Validator) Health(ctx context.Context, checkLiveness bool) (int, string
 	checks := []health.Check{
 		{Name: "BlockHeight", Check: checkBlockHeight},
 		{Name: "UTXOStore", Check: v.utxoStore.Health},
-		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, v.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, v.kafkaHealthURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)

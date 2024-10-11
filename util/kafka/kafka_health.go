@@ -11,10 +11,10 @@ import (
 )
 
 /*
-KafkaHealthChecker is a function that checks the health of a Kafka cluster.
+HealthChecker is a function that checks the health of a Kafka cluster.
 It returns a function that can be used to check the health of a Kafka cluster.
 */
-func KafkaHealthChecker(ctx context.Context, kafkaURL *url.URL) func(ctx context.Context, checkLiveness bool) (int, string, error) {
+func HealthChecker(_ context.Context, kafkaURL *url.URL) func(ctx context.Context, checkLiveness bool) (int, string, error) {
 	/*
 		There isn't a built-in way to check the health of a Kafka cluster.
 		So, we need to connect to the cluster and check if we can connect to it.
@@ -44,9 +44,13 @@ func KafkaHealthChecker(ctx context.Context, kafkaURL *url.URL) func(ctx context
 		config.Metadata.Full = true
 		config.Metadata.AllowAutoTopicCreation = false
 
-		_, err := sarama.NewClusterAdmin(brokersURL, config)
+		kafkaClusterAdmin, err := sarama.NewClusterAdmin(brokersURL, config)
 		if err != nil {
 			return http.StatusServiceUnavailable, "Failed to connect to Kafka", err
+		}
+
+		if err = kafkaClusterAdmin.Close(); err != nil {
+			return http.StatusServiceUnavailable, "Failed to close Kafka connection", err
 		}
 
 		return http.StatusOK, "Kafka is healthy", nil

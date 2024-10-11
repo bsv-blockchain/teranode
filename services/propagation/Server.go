@@ -90,7 +90,7 @@ func (ps *PropagationServer) Health(ctx context.Context, checkLiveness bool) (in
 		{Name: "ValidatorClient", Check: ps.validator.Health},
 		{Name: "TxStore", Check: ps.txStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(ps.blockchainClient)},
-		{Name: "Kafka", Check: kafka.KafkaHealthChecker(ctx, ps.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, ps.kafkaHealthURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
