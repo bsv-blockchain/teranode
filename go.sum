@@ -836,8 +836,8 @@ github.com/ordishs/go-bt/v2 v2.2.12 h1:gdvc/HLbvnGSYACoDGAyDWGsGTowrndDeFAtE7SEc
 github.com/ordishs/go-bt/v2 v2.2.12/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
 github.com/ordishs/go-utils v1.0.51 h1:XgBphXkjoUxRdahzyNRpQ5NnB96ygkggIqqzX6ruaFo=
 github.com/ordishs/go-utils v1.0.51/go.mod h1:AlHKaGdyFidMIzXcltV/dPtcfoHlhcJl42H4d482dh8=
-github.com/ordishs/gocore v1.0.67 h1:+ziHNwHMntTQ+alKwZoIyaoex1HHTzhnOW/PF/OfcEc=
-github.com/ordishs/gocore v1.0.67/go.mod h1:k6BD/+c2Onli/SWyNYwBFqBXhEd8Bw2mSqYTBVQrenQ=
+github.com/ordishs/gocore v1.0.68 h1:BOSz94lOObUgsDxXyj8PWa/Mhyp/LWNN0jzoakPHjyo=
+github.com/ordishs/gocore v1.0.68/go.mod h1:k6BD/+c2Onli/SWyNYwBFqBXhEd8Bw2mSqYTBVQrenQ=
 github.com/orisano/pixelmatch v0.0.0-20220722002657-fb0b55479cde/go.mod h1:nZgzbfBr3hhjoZnS66nKrHmduYNpc34ny7RK4z5/HM0=
 github.com/outcaste-io/ristretto v0.2.3 h1:AK4zt/fJ76kjlYObOeNwh4T3asEuaCmp26pOvUOL9w0=
 github.com/outcaste-io/ristretto v0.2.3/go.mod h1:W8HywhmtlopSB1jeMg3JtdIhf+DYkLAr0VN/s4+MHac=

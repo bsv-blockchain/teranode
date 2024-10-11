@@ -134,7 +134,10 @@ func Freeze(t *testing.T, db utxostore.Store) {
 func ReAssign(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
-	_, err := db.Create(ctx, tx, 1000)
+	err := db.SetBlockHeight(101)
+	require.NoError(t, err)
+
+	_, err = db.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
 	// try to reassign, should fail, utxo has not yet been frozen
@@ -156,6 +159,21 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore.Status_OK), resp.Status)
 	require.Nil(t, resp.SpendingTxID)
+
+	// try to spend the old utxo, should fail
+	err = db.Spend(ctx, []*utxostore.Spend{testSpend0}, 0)
+	require.Error(t, err)
+
+	// try to spend the new utxo, should fail, block height not reached
+	err = db.Spend(ctx, []*utxostore.Spend{testSpend1}, 0)
+	require.Error(t, err)
+
+	err = db.SetBlockHeight(1101)
+	require.NoError(t, err)
+
+	// try to spend the new utxo, should succeed
+	err = db.Spend(ctx, []*utxostore.Spend{testSpend1}, 0)
+	require.NoError(t, err)
 }
 
 func Sanity(t *testing.T, db utxostore.Store) {

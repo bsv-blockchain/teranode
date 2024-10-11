@@ -9,6 +9,8 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
+const ReAssignedUtxoSpendableAfterBlocks = 1_000
+
 // Spend is a struct that holds the txid and vout of the output being spent, the hash of the utxohash
 // that being spent and the spending txid.
 type Spend struct {

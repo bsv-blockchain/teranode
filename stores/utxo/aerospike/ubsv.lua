@@ -37,6 +37,11 @@ function spend(rec, offset, utxoHash, spendingTxID, currentBlockHeight, ttl)
         return "ERROR:UTXO not found for offset " .. offset
     end
 
+    local utxoSpendableIn = rec['utxoSpendableIn']
+    if utxoSpendableIn and utxoSpendableIn[offset] and utxoSpendableIn[offset] < currentBlockHeight then
+        return "ERROR:UTXO is not spendable until block " .. utxoSpendableIn[offset]
+    end
+
     -- The first 32 bytes are the utxoHash
     local existingUTXOHash = bytes.get_bytes(utxo, 1, 32) -- NB - lua arrays are 1-based!!!!
 
@@ -110,6 +115,12 @@ function spendMulti(rec, spends, currentBlockHeight, ttl)
         local utxo = utxos[offset+1] -- NB - lua arrays are 1-based!!!!
         if utxo == nil then
             return "ERROR:UTXO not found for offset " .. offset
+        end
+
+        if rec['utxoSpendableIn'] then
+            if rec['utxoSpendableIn'][offset] and rec['utxoSpendableIn'][offset] >= currentBlockHeight then
+                return "ERROR:UTXO is not spendable until block " .. rec['utxoSpendableIn'][offset]
+            end
         end
 
         -- The first 32 bytes are the utxoHash
@@ -399,7 +410,7 @@ end
 -- | | |  __/ (_| \__ \__ \ | (_| | | | |
 -- |_|  \___|\__,_|___/___/_|\__, |_| |_|
 --                           |___/
-function reassign(rec, offset, utxoHash, newUtxoHash)
+function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfter)
     if not aerospike:exists(rec) then
         return "ERROR:TX not found"
     end
@@ -451,10 +462,19 @@ function reassign(rec, offset, utxoHash, newUtxoHash)
         rec['reassignments'] = list()
     end
 
+    if rec['utxoSpendableIn'] == nil then
+        rec['utxoSpendableIn'] = map()
+    end
+
     -- append the new utxoHash to the reassignments list
-    local reassignments = rec['reassignments']
-    reassignments[#reassignments + 1] = map { offset = offset, utxoHash = utxoHash, newUtxoHash = newUtxoHash }
-    rec['reassignments'] = reassignments
+    rec['reassignments'][#rec['reassignments'] + 1] = map {
+        offset = offset,
+        utxoHash = utxoHash,
+        newUtxoHash = newUtxoHash,
+        blockHeight = blockHeight
+    }
+
+    rec['utxoSpendableIn'][offset] = blockHeight + spendableAfter
 
     -- increase the nr of utxos in this record, to make sure it is never ttl'ed, even if all utxos are spent
     rec['nrUtxos'] = rec['nrUtxos'] + 1

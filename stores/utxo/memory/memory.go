@@ -16,11 +16,12 @@ import (
 )
 
 type memoryData struct {
-	tx        *bt.Tx
-	lockTime  uint32
-	blockIDs  []uint32
-	utxoMap   map[chainhash.Hash]*chainhash.Hash
-	frozenMap map[chainhash.Hash]bool
+	tx              *bt.Tx
+	lockTime        uint32
+	blockIDs        []uint32
+	utxoMap         map[chainhash.Hash]*chainhash.Hash
+	utxoSpendableIn map[uint32]uint32
+	frozenMap       map[chainhash.Hash]bool
 }
 
 type Memory struct {
@@ -67,11 +68,12 @@ func (m *Memory) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts
 	}
 
 	m.txs[*txHash] = &memoryData{
-		tx:        tx,
-		lockTime:  tx.LockTime,
-		blockIDs:  make([]uint32, 0),
-		utxoMap:   make(map[chainhash.Hash]*chainhash.Hash),
-		frozenMap: make(map[chainhash.Hash]bool),
+		tx:              tx,
+		lockTime:        tx.LockTime,
+		blockIDs:        make([]uint32, 0),
+		utxoMap:         make(map[chainhash.Hash]*chainhash.Hash),
+		utxoSpendableIn: map[uint32]uint32{},
+		frozenMap:       make(map[chainhash.Hash]bool),
 	}
 
 	if len(options.BlockIDs) > 0 {
@@ -162,7 +164,7 @@ func (m *Memory) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }
 
-func (m *Memory) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
+func (m *Memory) Spend(_ context.Context, spends []*utxo.Spend, blockHeight uint32) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
@@ -184,12 +186,19 @@ func (m *Memory) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight ui
 			continue
 		}
 
+		tx := m.txs[*spend.TxID]
+
 		// check utxo is frozen
-		if m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] {
+		if tx.frozenMap[*spend.UTXOHash] {
 			return errors.NewFrozenError("%v is frozen", spend.TxID)
 		}
 
-		m.txs[*spend.TxID].utxoMap[*spend.UTXOHash] = spend.SpendingTxID
+		// check utxo is spendable
+		if tx.utxoSpendableIn[spend.Vout] != 0 && m.txs[*spend.TxID].utxoSpendableIn[spend.Vout] > m.blockHeight.Load() {
+			return errors.NewLockTimeError("%v is not spendable until %d", spend.TxID, m.txs[*spend.TxID].utxoSpendableIn[spend.Vout])
+		}
+
+		tx.utxoMap[*spend.UTXOHash] = spend.SpendingTxID
 	}
 
 	return nil
@@ -334,18 +343,21 @@ func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 	return nil
 }
 
-func (m *Memory) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend) error {
+func (m *Memory) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend) error {
 	m.txsMu.Lock()
 	defer m.txsMu.Unlock()
 
 	// check whether the utxo is frozen
-	if !m.txs[*utxo.TxID].frozenMap[*utxo.UTXOHash] {
-		return errors.NewFrozenError("%v is not frozen", utxo.TxID)
+	if !m.txs[*oldUtxo.TxID].frozenMap[*oldUtxo.UTXOHash] {
+		return errors.NewFrozenError("%v is not frozen", oldUtxo.TxID)
 	}
 
+	// set the spendable block height of the re-assigned utxo
+	m.txs[*oldUtxo.TxID].utxoSpendableIn[newUtxo.Vout] = m.blockHeight.Load() + utxo.ReAssignedUtxoSpendableAfterBlocks
+
 	// re-assign the utxo to the new utxo
-	delete(m.txs[*utxo.TxID].utxoMap, *utxo.UTXOHash)
-	m.txs[*utxo.TxID].utxoMap[*newUtxo.UTXOHash] = nil
+	delete(m.txs[*oldUtxo.TxID].utxoMap, *oldUtxo.UTXOHash)
+	m.txs[*oldUtxo.TxID].utxoMap[*newUtxo.UTXOHash] = nil
 
 	return nil
 }

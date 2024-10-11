@@ -19,11 +19,11 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) erro
               AND o.transaction_id = t.id AND o.idx = $2
         `
 
-		var id int
-
-		var spendingTxID []byte
-
-		var frozen bool
+		var (
+			id           int
+			spendingTxID []byte
+			frozen       bool
+		)
 
 		if err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&id, &frozen, &spendingTxID); err != nil {
 			return err
@@ -65,9 +65,10 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) er
               AND o.transaction_id = t.id AND o.idx = $2
         `
 
-		var id int
-
-		var frozen bool
+		var (
+			id     int
+			frozen bool
+		)
 
 		if err := s.db.QueryRowContext(ctx, q, spend.TxID[:], spend.Vout).Scan(&id, &frozen); err != nil {
 			return err
@@ -101,9 +102,10 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
               AND o.transaction_id = t.id AND o.idx = $2
         `
 
-	var id int
-
-	var frozen bool
+	var (
+		id     int
+		frozen bool
+	)
 
 	if err := s.db.QueryRowContext(ctx, q, utxo.TxID[:], utxo.Vout).Scan(&id, &frozen); err != nil {
 		return err
@@ -113,16 +115,18 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
 		return errors.NewFrozenError("transaction %s:%d is not frozen", utxo.SpendingTxID, utxo.Vout)
 	}
 
+	spendableIn := s.GetBlockHeight() + utxostore.ReAssignedUtxoSpendableAfterBlocks
+
 	// re-assign the UTXO to the new UTXO
 	q = `
         UPDATE outputs 
-        SET utxo_hash = $1, frozen = false
-        WHERE transaction_id = $2 
-          AND idx = $3 
+        SET utxo_hash = $1, frozen = false, spendableIn = $2
+        WHERE transaction_id = $3
+          AND idx = $4
           AND spending_transaction_id IS NULL
           AND frozen = true
     `
-	if _, err := s.db.ExecContext(ctx, q, newUtxo.UTXOHash[:], id, utxo.Vout); err != nil {
+	if _, err := s.db.ExecContext(ctx, q, newUtxo.UTXOHash[:], spendableIn, id, utxo.Vout); err != nil {
 		return err
 	}
 

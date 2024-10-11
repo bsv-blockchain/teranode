@@ -126,9 +126,9 @@ func (s *Store) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 }
 
 // ReAssignUTXO will reassign the transaction output idx UTXO to a new UTXO
-func (s *Store) ReAssignUTXO(_ context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend) error {
+func (s *Store) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *utxo.Spend) error {
 	// nolint: gosec
-	keySource := uaerospike.CalculateKeySource(utxo.TxID, utxo.Vout/uint32(s.utxoBatchSize))
+	keySource := uaerospike.CalculateKeySource(oldUtxo.TxID, oldUtxo.Vout/uint32(s.utxoBatchSize))
 
 	aeroKey, aErr := aerospike.NewKey(s.namespace, s.setName, keySource)
 	if aErr != nil {
@@ -139,9 +139,11 @@ func (s *Store) ReAssignUTXO(_ context.Context, utxo *utxo.Spend, newUtxo *utxo.
 
 	batchRecords := []aerospike.BatchRecordIfc{
 		aerospike.NewBatchUDF(batchUDFPolicy, aeroKey, luaPackage, "reassign",
-			aerospike.NewValue(s.calculateOffsetForOutput(utxo.Vout)),
-			aerospike.NewValue(utxo.UTXOHash[:]),
+			aerospike.NewValue(s.calculateOffsetForOutput(oldUtxo.Vout)),
+			aerospike.NewValue(oldUtxo.UTXOHash[:]),
 			aerospike.NewValue(newUtxo.UTXOHash[:]),
+			aerospike.NewIntegerValue(int(s.blockHeight.Load())),
+			aerospike.NewIntegerValue(utxo.ReAssignedUtxoSpendableAfterBlocks),
 		),
 	}
 
