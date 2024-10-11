@@ -264,30 +264,32 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 		}
 
 		for addr, propagationServer := range d.propagationServers {
-			a := addr // Create a local copy
-			p := propagationServer
+			address := addr // Create a local copy
+			propagationServerClient := propagationServer
 
 			wg.Add(1)
 
-			addr := addr
-			go func() {
+			// addr := addr
+			go func(address string, propagationServerClient *propagation.Client) {
 				start1, stat1, ctx1 := tracing.NewStatFromContext(ctx, addr, stat)
 				defer func() {
 					wg.Done()
 					stat1.AddTime(start1)
 				}()
 
+				var err error
+
 				var retries int32
 				backoff := d.backoff
 
 				for {
 					ctx1, cancel := context.WithTimeout(ctx1, timeout)
-					err = p.ProcessTransaction(ctx1, tx)
+					err = propagationServerClient.ProcessTransaction(ctx1, tx)
 					cancel()
 
 					if err == nil {
 						responseWrapperCh <- &ResponseWrapper{
-							Addr:     a,
+							Addr:     address,
 							Retries:  retries,
 							Duration: time.Since(start),
 						}
@@ -296,7 +298,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 						if errors.Is(err, errors.ErrTxInvalid) {
 							// There is no point retrying a bad transaction
 							responseWrapperCh <- &ResponseWrapper{
-								Addr:     a,
+								Addr:     address,
 								Retries:  0,
 								Duration: time.Since(start),
 								Error:    err,
@@ -305,14 +307,14 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 						}
 
 						deadline, _ := ctx1.Deadline()
-						d.logger.Warnf("error sending transaction %s to %s failed (deadline %s, duration %s), retrying: %v", tx.TxIDChainHash().String(), a, time.Until(deadline), time.Since(start), err)
+						d.logger.Warnf("error sending transaction %s to %s failed (deadline %s, duration %s), retrying: %v", tx.TxIDChainHash().String(), address, time.Until(deadline), time.Since(start), err)
 						if retries < d.attempts {
 							retries++
 							time.Sleep(backoff)
 							backoff *= 2
 						} else {
 							responseWrapperCh <- &ResponseWrapper{
-								Addr:     a,
+								Addr:     address,
 								Retries:  retries,
 								Duration: time.Since(start),
 								Error:    err,
@@ -321,7 +323,7 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 						}
 					}
 				}
-			}()
+			}(address, propagationServerClient)
 		}
 		wg.Wait()
 
