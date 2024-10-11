@@ -17,14 +17,16 @@ var (
 	utxoHash0, _ = util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
 	utxoHash1, _ = util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[1], 1)
 	testSpend0   = &utxostore.Spend{
-		TxID:     tx.TxIDChainHash(),
-		Vout:     0,
-		UTXOHash: utxoHash0,
+		TxID:         tx.TxIDChainHash(),
+		Vout:         0,
+		UTXOHash:     utxoHash0,
+		SpendingTxID: TXHash,
 	}
 	testSpend1 = &utxostore.Spend{
-		TxID:     tx.TxIDChainHash(),
-		Vout:     0,
-		UTXOHash: utxoHash1,
+		TxID:         tx.TxIDChainHash(),
+		Vout:         0,
+		UTXOHash:     utxoHash1,
+		SpendingTxID: TXHash,
 	}
 	TXHash   = tx.TxIDChainHash()
 	Hash, _  = chainhash.NewHashFromStr("5e3bc5947f48cec766090aa17f309fd16259de029dcef5d306b514848c9687c7")
