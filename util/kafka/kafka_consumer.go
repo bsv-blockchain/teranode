@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -30,6 +31,7 @@ type KafkaConsumerGroup struct {
 	Config            KafkaListenerConfig
 	ConsumerGroup     sarama.ConsumerGroup
 	LastMessageStatus MessageStatus
+	mu                sync.Mutex
 }
 
 // txMetaCache : autocommit should be enabled - true, we CAN miss.
@@ -114,20 +116,24 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context) {
 	go func() {
 		for err := range k.ConsumerGroup.Errors() {
 			k.Config.Logger.Errorf("Kafka consumer error: %v", err)
+			k.mu.Lock()
 			k.LastMessageStatus = MessageStatus{
 				Success: false,
 				Error:   err,
 				Time:    time.Now(),
 			}
+			k.mu.Unlock()
 		}
 	}()
 
 	consumerFunc := func(message KafkaMessage) error {
+		k.mu.Lock()
 		k.LastMessageStatus = MessageStatus{
 			Success: true,
 			Error:   nil,
 			Time:    time.Now(),
 		}
+		k.mu.Unlock()
 
 		return k.Config.ConsumerFn(message)
 	}

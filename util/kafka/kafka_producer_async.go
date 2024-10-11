@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ type KafkaAsyncProducer struct {
 	Config            KafkaListenerConfig
 	Producer          sarama.AsyncProducer
 	LastMessageStatus MessageStatus
+	mu                sync.Mutex
 	PublishChannel    chan []byte
 }
 
@@ -107,11 +109,13 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context) {
 	// Start a goroutine to handle successful message deliveries
 	go func() {
 		for range c.Producer.Successes() {
+			c.mu.Lock()
 			c.LastMessageStatus = MessageStatus{
 				Success: true,
 				Error:   nil,
 				Time:    time.Now(),
 			}
+			c.mu.Unlock()
 		}
 	}()
 
@@ -119,11 +123,13 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context) {
 	go func() {
 		for err := range c.Producer.Errors() {
 			c.Config.Logger.Errorf("Failed to deliver message: %v", err)
+			c.mu.Lock()
 			c.LastMessageStatus = MessageStatus{
 				Success: false,
 				Error:   err,
 				Time:    time.Now(),
 			}
+			c.mu.Unlock()
 		}
 	}()
 	// Sending a batch of 50 messages asynchronously
