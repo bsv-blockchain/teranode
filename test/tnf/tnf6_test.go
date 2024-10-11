@@ -69,8 +69,8 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	header1, meta1, _ := blockchainNode1.GetBestBlockHeader(ctx)
 	logger.Infof("Best block header on Node 1: %s", header1.Hash().String())
 
-	chainWork1 := new(big.Int).SetBytes(meta1.Chainwork)
-	logger.Infof("Chainwork bytes on Node 1: %v", meta1.Chainwork)
+	chainWork1 := new(big.Int).SetBytes(meta1.ChainWork)
+	logger.Infof("Chainwork bytes on Node 1: %v", meta1.ChainWork)
 	logger.Infof("Chainwork on Node 1: %v", chainWork1)
 
 	blockchainNode2 := cluster.Nodes[1].BlockchainClient
@@ -78,7 +78,7 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 
 	logger.Infof("Best block header on Miner 2: %s", headerInvalidate.Hash().String())
 
-	chainWork2 := new(big.Int).SetBytes(meta2.Chainwork)
+	chainWork2 := new(big.Int).SetBytes(meta2.ChainWork)
 	logger.Infof("Chainwork on Node 2: %v", chainWork2)
 
 	blockchainNode3 := cluster.Nodes[2].BlockchainClient
@@ -86,7 +86,7 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 	header3, meta3, _ := blockchainNode3.GetBestBlockHeader(ctx)
 	logger.Infof("Best block header on Node 3: %s", header3.Hash().String())
 
-	chainWork3 := new(big.Int).SetBytes(meta3.Chainwork)
+	chainWork3 := new(big.Int).SetBytes(meta3.ChainWork)
 	logger.Infof("Chainwork on Node 3: %v", chainWork3)
 
 	time.Sleep(60 * time.Second)
@@ -147,7 +147,9 @@ func (suite *TNFTestSuite) TestInvalidateBlock() {
 		}
 	}
 
-	header1, _, _ = blockchainNode1.GetBestBlockHeader(ctx)
+	header1, meta1, _ = blockchainNode1.GetBestBlockHeader(ctx)
+	logger.Infof("meta1: %v", meta1)
+	assert.NotEqual(t, meta1.Miner, miner2, "Should not be Miner 2")
 
 	header3, _, _ = blockchainNode3.GetBestBlockHeader(ctx)
 

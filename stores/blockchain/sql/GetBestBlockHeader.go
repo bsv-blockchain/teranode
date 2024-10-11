@@ -70,7 +70,7 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		&blockHeaderMeta.TxCount,
 		&blockHeaderMeta.SizeInBytes,
 		&coinbaseBytes,
-		&blockHeaderMeta.Chainwork,
+		&blockHeaderMeta.ChainWork,
 		&insertedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

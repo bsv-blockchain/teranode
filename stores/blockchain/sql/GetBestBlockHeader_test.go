@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"encoding/hex"
 	"net/url"
 	"testing"
 
@@ -53,6 +54,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		assert.Equal(t, uint32(1231469744), tip.Timestamp)
 		assert.Equal(t, []byte{0xff, 0xff, 0x0, 0x1d}, tip.Bits.CloneBytes())
 		assert.Equal(t, uint32(1639830024), tip.Nonce)
+		assert.Equal(t, "0300030003000000000000000000000000000000000000000000000000000000", hex.EncodeToString(meta.ChainWork))
 	})
 
 	t.Run("multiple tips", func(t *testing.T) {

@@ -14,7 +14,7 @@ type BlockHeaderMeta struct {
 	Miner       string `json:"miner"`         // Miner
 	BlockTime   uint32 `json:"block_time"`    // Time of the block.
 	Timestamp   uint32 `json:"timestamp"`     // Timestamp of creation of the block in the db.
-	Chainwork   []byte `json:"chainwork"`     // Chainwork of the block.
+	ChainWork   []byte `json:"chainwork"`     // ChainWork of the block.
 }
 
 func (m *BlockHeaderMeta) Bytes() []byte {

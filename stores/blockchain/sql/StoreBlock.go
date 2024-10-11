@@ -24,19 +24,19 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	newBlockID, height, err := s.storeBlock(ctx, block, peerID, opts...)
+	newBlockID, height, chainWork, err := s.storeBlock(ctx, block, peerID, opts...)
 	if err != nil {
 		return 0, height, err
 	}
 
- var miner string
- if block.CoinbaseTx != nil && block.CoinbaseTx.OutputCount() != 0 {
-   var err error
-	  miner, err = util.ExtractCoinbaseMiner(block.CoinbaseTx)
-	  if err != nil {
-		   s.logger.Errorf("error extracting mine from coinbase tx: %v", err)
-	  }
- }
+	var miner string
+	if block.CoinbaseTx != nil && block.CoinbaseTx.OutputCount() != 0 {
+		var err error
+		miner, err = util.ExtractCoinbaseMiner(block.CoinbaseTx)
+		if err != nil {
+			s.logger.Errorf("error extracting mine from coinbase tx: %v", err)
+		}
+	}
 
 	meta := &model.BlockHeaderMeta{
 		// nolint: gosec
@@ -45,6 +45,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		TxCount:     block.TransactionCount,
 		SizeInBytes: block.SizeInBytes,
 		Miner:       miner,
+		ChainWork:   chainWork,
 		// BlockTime   uint32 `json:"block_time"`    // Time of the block.
 		// Timestamp   uint32 `json:"timestamp"`     // Timestamp of the block.
 	}
@@ -61,7 +62,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 	return newBlockID, height, nil
 }
 
-func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, error) {
+func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) (uint64, uint32, []byte, error) {
 	var (
 		err                  error
 		previousBlockID      uint64
@@ -159,10 +160,10 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 			&previousBlockInvalid,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return 0, 0, errors.NewStorageError("error storing block %s as previous block %s not found", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
+				return 0, 0, nil, errors.NewStorageError("error storing block %s as previous block %s not found", block.Hash().String(), block.Header.HashPrevBlock.String(), err)
 			}
 
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 
 		height = previousHeight + 1
@@ -177,12 +178,12 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 					if height < 227835 {
 						s.logger.Warnf("failed to extract coinbase height for block %s: %v", block.Hash(), err)
 					} else {
-						return 0, 0, err
+						return 0, 0, nil, err
 					}
 				}
 
 				if height >= 227835 && blockHeight != height {
-					return 0, 0, errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
+					return 0, 0, nil, errors.NewStorageError("coinbase transaction height (%d) does not match block height (%d)", blockHeight, height)
 				}
 			}
 		}
@@ -190,17 +191,17 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 
 	subtreeBytes, err := block.SubTreeBytes()
 	if err != nil {
-		return 0, 0, errors.NewStorageError("failed to get subtree bytes", err)
+		return 0, 0, nil, errors.NewStorageError("failed to get subtree bytes", err)
 	}
 
 	chainWorkHash, err := chainhash.NewHash(bt.ReverseBytes(previousChainWork))
 	if err != nil {
-		return 0, 0, errors.NewProcessingError("failed to convert chain work hash", err)
+		return 0, 0, nil, errors.NewProcessingError("failed to convert chain work hash", err)
 	}
 
 	cumulativeChainWork, err := getCumulativeChainWork(chainWorkHash, block)
 	if err != nil {
-		return 0, 0, errors.NewProcessingError("failed to calculate cumulative chain work", err)
+		return 0, 0, nil, errors.NewProcessingError("failed to calculate cumulative chain work", err)
 	}
 
 	var coinbaseBytes []byte
@@ -233,32 +234,32 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 		// check whether this is a postgres exists constraint error
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" { // Duplicate constraint violation
-			return 0, 0, errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+			return 0, 0, nil, errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
 		}
 
 		// check whether this is a sqlite exists constraint error
 		var sqliteErr *sqlite.Error
 		if errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite_errors.SQLITE_CONSTRAINT {
-			return 0, 0, errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
+			return 0, 0, nil, errors.NewBlockExistsError("block already exists in the database: %s", block.Hash().String(), err)
 		}
 
 		// otherwise, return the generic error
-		return 0, 0, errors.NewStorageError("failed to store block", err)
+		return 0, 0, nil, errors.NewStorageError("failed to store block", err)
 	}
 
 	defer rows.Close()
 
 	rowFound := rows.Next()
 	if !rowFound {
-		return 0, 0, errors.NewBlockExistsError("block already exists: %s", block.Hash())
+		return 0, 0, nil, errors.NewBlockExistsError("block already exists: %s", block.Hash())
 	}
 
 	var newBlockID uint64
 	if err = rows.Scan(&newBlockID); err != nil {
-		return 0, 0, errors.NewStorageError("failed to scan new block id", err)
+		return 0, 0, nil, errors.NewStorageError("failed to scan new block id", err)
 	}
 
-	return newBlockID, height, nil
+	return newBlockID, height, cumulativeChainWork.CloneBytes(), nil
 }
 
 func getCumulativeChainWork(chainWork *chainhash.Hash, block *model.Block) (*chainhash.Hash, error) {
