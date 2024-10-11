@@ -82,27 +82,27 @@ func (s *Store) SetBlockHeight(blockHeight uint32) error {
 
 func (s *Store) GetBlockHeight() uint32 {
 	height := s.store.GetBlockHeight()
-	s.logger.Infof("[UTXOStore][logger][GetBlockHeight] %d : %s", height, caller())
+	s.logger.Debugf("[UTXOStore][logger][GetBlockHeight] %d : %s", height, caller())
 
 	return height
 }
 
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	err := s.store.SetMedianBlockTime(medianTime)
-	s.logger.Infof("[UTXOStore][logger][SetMedianBlockTime] medianTime %d err %v : %s", medianTime, err, caller())
+	s.logger.Debugf("[UTXOStore][logger][SetMedianBlockTime] medianTime %d err %v : %s", medianTime, err, caller())
 
 	return err
 }
 
 func (s *Store) GetMedianBlockTime() uint32 {
 	res := s.store.GetMedianBlockTime()
-	s.logger.Infof("[UTXOStore][logger][GetMedianBlockTime] %d : %s", res, caller())
+	s.logger.Debugf("[UTXOStore][logger][GetMedianBlockTime] %d : %s", res, caller())
 
 	return res
 }
 
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	s.logger.Infof("[UTXOStore][logger][Health] : %s", caller())
+	s.logger.Debugf("[UTXOStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx, checkLiveness)
 }
 
@@ -121,7 +121,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 			i, output.Satoshis)
 	}
 
-	s.logger.Infof("[UTXOStore][logger][Create] tx %s, inputs: [%s], outputs: [%s], isCoinbase %t, blockHeight %d, lockTime %d, version %d, data %s, err %v : %s",
+	s.logger.Debugf("[UTXOStore][logger][Create] tx %s, inputs: [%s], outputs: [%s], isCoinbase %t, blockHeight %d, lockTime %d, version %d, data %s, err %v : %s",
 		tx.TxIDChainHash(),
 		strings.Join(inputDetails, ", "),
 		strings.Join(outputDetails, ", "),
@@ -138,14 +138,14 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	data, err := s.store.GetMeta(ctx, hash)
-	s.logger.Infof("[UTXOStore][logger][GetMeta] hash %s data %v err %v : %s", hash.String(), data, err, caller())
+	s.logger.Debugf("[UTXOStore][logger][GetMeta] hash %s data %v err %v : %s", hash.String(), data, err, caller())
 
 	return data, err
 }
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...[]string) (*meta.Data, error) {
 	data, err := s.store.Get(ctx, hash, fields...)
-	s.logger.Infof("[UTXOStore][logger][Get] hash %s, fields %v data %v err %v : %s", hash.String(), fields, data, err, caller())
+	s.logger.Debugf("[UTXOStore][logger][Get] hash %s, fields %v data %v err %v : %s", hash.String(), fields, data, err, caller())
 
 	return data, err
 }
@@ -158,7 +158,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 		spendDetails[i] = fmt.Sprintf("{SpendingTxID: %s, TxID: %s, Vout: %d}", spend.SpendingTxID, spend.TxID, spend.Vout)
 	}
 
-	s.logger.Infof("[UTXOStore][logger][Spend] spends: [%s], blockHeight: %d, err: %v : %s",
+	s.logger.Debugf("[UTXOStore][logger][Spend] spends: [%s], blockHeight: %d, err: %v : %s",
 		strings.Join(spendDetails, ", "), blockHeight, err, caller())
 
 	return err
@@ -172,7 +172,7 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 		spendDetails[i] = fmt.Sprintf("{SpendingTxID: %s, TxID: %s, Vout: %d}", spend.SpendingTxID, spend.TxID, spend.Vout)
 	}
 
-	s.logger.Infof("[UTXOStore][logger][UnSpend] spends: [%s], err: %v : %s",
+	s.logger.Debugf("[UTXOStore][logger][UnSpend] spends: [%s], err: %v : %s",
 		strings.Join(spendDetails, ", "), err, caller())
 
 	return err
@@ -180,56 +180,56 @@ func (s *Store) UnSpend(ctx context.Context, spends []*utxostore.Spend) error {
 
 func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	err := s.store.Delete(ctx, hash)
-	s.logger.Infof("[UTXOStore][logger][Delete] hash %s err %v : %s", hash.String(), err, caller())
+	s.logger.Debugf("[UTXOStore][logger][Delete] hash %s err %v : %s", hash.String(), err, caller())
 
 	return err
 }
 
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, blockID uint32) error {
 	err := s.store.SetMinedMulti(ctx, hashes, blockID)
-	s.logger.Infof("[UTXOStore][logger][SetMinedMulti] hashes %v blockID %d err %v : %s", hashes, blockID, err, caller())
+	s.logger.Debugf("[UTXOStore][logger][SetMinedMulti] hashes %v blockID %d err %v : %s", hashes, blockID, err, caller())
 
 	return err
 }
 
 func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	resp, err := s.store.GetSpend(ctx, spend)
-	s.logger.Infof("[UTXOStore][logger][GetSpend] spend %v resp %v err %v : %s", spend, resp, err, caller())
+	s.logger.Debugf("[UTXOStore][logger][GetSpend] spend %v resp %v err %v : %s", spend, resp, err, caller())
 
 	return resp, err
 }
 
 func (s *Store) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...string) error {
 	err := s.store.BatchDecorate(ctx, unresolvedMetaDataSlice, fields...)
-	s.logger.Infof("[UTXOStore][logger][BatchDecorate] unresolvedMetaDataSlice %v, fields %v err %v : %s", unresolvedMetaDataSlice, fields, err, caller())
+	s.logger.Debugf("[UTXOStore][logger][BatchDecorate] unresolvedMetaDataSlice %v, fields %v err %v : %s", unresolvedMetaDataSlice, fields, err, caller())
 
 	return err
 }
 
 func (s *Store) PreviousOutputsDecorate(ctx context.Context, outpoints []*meta.PreviousOutput) error {
 	err := s.store.PreviousOutputsDecorate(ctx, outpoints)
-	s.logger.Infof("[UTXOStore][logger][PreviousOutputsDecorate] outpoints %v err %v : %s", outpoints, err, caller())
+	s.logger.Debugf("[UTXOStore][logger][PreviousOutputsDecorate] outpoints %v err %v : %s", outpoints, err, caller())
 
 	return err
 }
 
 func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) error {
 	err := s.store.FreezeUTXOs(ctx, spends)
-	s.logger.Infof("[UTXOStore][logger][FreezeUTXOs] spends %v err %v : %s", spends, err, caller())
+	s.logger.Debugf("[UTXOStore][logger][FreezeUTXOs] spends %v err %v : %s", spends, err, caller())
 
 	return err
 }
 
 func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) error {
 	err := s.store.UnFreezeUTXOs(ctx, spends)
-	s.logger.Infof("[UTXOStore][logger][UnFreezeUTXOs] spends %v err %v : %s", spends, err, caller())
+	s.logger.Debugf("[UTXOStore][logger][UnFreezeUTXOs] spends %v err %v : %s", spends, err, caller())
 
 	return err
 }
 
 func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo *utxostore.Spend) error {
 	err := s.store.ReAssignUTXO(ctx, utxo, newUtxo)
-	s.logger.Infof("[UTXOStore][logger][ReAssignUTXO] utxo %v newUtxo %v err %v : %s", utxo, newUtxo, err, caller())
+	s.logger.Debugf("[UTXOStore][logger][ReAssignUTXO] utxo %v newUtxo %v err %v : %s", utxo, newUtxo, err, caller())
 
 	return err
 }
