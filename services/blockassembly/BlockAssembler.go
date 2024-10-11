@@ -236,7 +236,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 							err:             err,
 						})
 					}
-
 				}
 				// stat.AddTime(start)
 				b.currentRunningState.Store("running")
@@ -318,7 +317,6 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 	if err != nil {
 		b.logger.Errorf("[BlockAssembler][%s] error setting current chain: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
-
 }
 
 func (b *BlockAssembler) GetCurrentRunningState() string {
@@ -504,6 +502,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// Get the hash of the last subtree in the list...
 	// We do this by using the same subtree processor logic to get the top tree hash.
 	id := &chainhash.Hash{}
+
 	if len(subtrees) > 0 {
 		topTree, err := util.NewIncompleteTreeByLeafCount(len(subtrees))
 		if err != nil {
@@ -518,6 +517,23 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	nBits, err := b.getNextNbits()
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if nBits == nil {
+		if b.currentDifficulty != nil {
+			b.logger.Warnf("nextNbits is nil. Setting to current difficulty")
+			nBits = b.currentDifficulty
+		} else {
+			b.logger.Warnf("nextNbits and current difficulty are nil. Setting to pow limit bits")
+			bitsBytes := make([]byte, 4)
+			binary.LittleEndian.PutUint32(bitsBytes, b.chainParams.PowLimitBits)
+
+			nBits, err = model.NewNBitFromSlice(bitsBytes)
+			if err != nil {
+				return nil, nil, errors.NewBlockInvalidError("failed to create NBit from Bits", err)
+			}
+			b.currentDifficulty = nBits
+		}
 	}
 
 	var coinbaseMerkleProofBytes [][]byte

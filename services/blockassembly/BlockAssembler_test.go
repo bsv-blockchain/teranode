@@ -79,6 +79,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		var wg sync.WaitGroup
 		wg.Add(1)
+
 		go func() {
 			subtreeRequest := <-testItems.newSubtreeChan
 			subtree := subtreeRequest.Subtree
@@ -174,23 +175,23 @@ var (
 		Nonce:          4,
 		Bits:           *bits,
 	}
-	blockHeader2_alt = &model.BlockHeader{
+	blockHeader2Alt = &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  blockHeader1.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          12,
 		Bits:           *bits,
 	}
-	blockHeader3_alt = &model.BlockHeader{
+	blockHeader3Alt = &model.BlockHeader{
 		Version:        1,
-		HashPrevBlock:  blockHeader2_alt.Hash(),
+		HashPrevBlock:  blockHeader2Alt.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          13,
 		Bits:           *bits,
 	}
-	blockHeader4_alt = &model.BlockHeader{
+	blockHeader4Alt = &model.BlockHeader{
 		Version:        1,
-		HashPrevBlock:  blockHeader3_alt.Hash(),
+		HashPrevBlock:  blockHeader3Alt.Hash(),
 		HashMerkleRoot: &chainhash.Hash{},
 		Nonce:          14,
 		Bits:           *bits,
@@ -234,14 +235,14 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		require.NoError(t, err)
 		err = items.addBlock(blockHeader4)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader2_alt)
+		err = items.addBlock(blockHeader2Alt)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader3_alt)
+		err = items.addBlock(blockHeader3Alt)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader4_alt)
+		err = items.addBlock(blockHeader4Alt)
 		require.NoError(t, err)
 
-		moveDownBlockHeaders, moveUpBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4_alt)
+		moveDownBlockHeaders, moveUpBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4Alt)
 		require.NoError(t, err)
 
 		assert.Len(t, moveDownBlockHeaders, 3)
@@ -250,9 +251,9 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 		assert.Equal(t, blockHeader2.Hash(), moveDownBlockHeaders[2].Hash())
 
 		assert.Len(t, moveUpBlockHeaders, 3)
-		assert.Equal(t, blockHeader2_alt.Hash(), moveUpBlockHeaders[0].Hash())
-		assert.Equal(t, blockHeader3_alt.Hash(), moveUpBlockHeaders[1].Hash())
-		assert.Equal(t, blockHeader4_alt.Hash(), moveUpBlockHeaders[2].Hash())
+		assert.Equal(t, blockHeader2Alt.Hash(), moveUpBlockHeaders[0].Hash())
+		assert.Equal(t, blockHeader3Alt.Hash(), moveUpBlockHeaders[1].Hash())
+		assert.Equal(t, blockHeader4Alt.Hash(), moveUpBlockHeaders[2].Hash())
 	})
 
 	t.Run("getReorgBlocks - missing block", func(t *testing.T) {
