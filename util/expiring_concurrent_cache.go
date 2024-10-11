@@ -72,6 +72,13 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, err
 	// Perform the fetch, with a lock on the cache
 	c.mu.Lock()
 
+	defer func() {
+		wg.Done()         // Mark the wait group as done
+		delete(c.wg, key) // Remove it from the map
+
+		c.mu.Unlock()
+	}()
+
 	// Perform the fetch
 	result, err := fetchFunc()
 	if err != nil {
@@ -80,11 +87,6 @@ func (c *ExpiringConcurrentCache[K, V]) GetOrSet(key K, fetchFunc func() (V, err
 
 	// Cache the result
 	c.cache.Set(key, result)
-
-	wg.Done()         // Mark the wait group as done
-	delete(c.wg, key) // Remove it from the map
-
-	c.mu.Unlock()
 
 	return result, nil
 }
