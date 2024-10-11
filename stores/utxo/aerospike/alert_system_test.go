@@ -124,7 +124,8 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 	})
 	t.Run("ReAssignUTXO", func(t *testing.T) {
-		var err error
+		err := db.SetBlockHeight(101)
+		require.NoError(t, err)
 
 		utxoRec := &utxo.Spend{
 			TxID:         txID,
@@ -206,12 +207,19 @@ func TestAlertSystem(t *testing.T) {
 
 		reassignmentMap, ok := reassignment[0].(map[interface{}]interface{})
 		require.True(t, ok)
-		require.Len(t, reassignmentMap, 3)
+		require.Len(t, reassignmentMap, 4)
 
 		// check the reassignment record
 		assert.Equal(t, utxoHash0[:], reassignmentMap["utxoHash"])
 		assert.Equal(t, 0, reassignmentMap["offset"])
 		assert.Equal(t, utxoHash1[:], reassignmentMap["newUtxoHash"])
+		assert.Equal(t, 101, reassignmentMap["blockHeight"])
+
+		utxoSpendableIn, ok := rec.Bins["utxoSpendableIn"].(map[interface{}]interface{})
+		require.True(t, ok)
+
+		// check the utxoSpendableIn record
+		assert.Equal(t, 1101, utxoSpendableIn[0])
 
 		// check the nrUtxos has been incremented
 		nrUtxos, ok := rec.Bins["nrUtxos"].(int)
@@ -221,6 +229,13 @@ func TestAlertSystem(t *testing.T) {
 		// try to spend the UTXO with the original hash - should fail
 		err = db.Spend(context.Background(), []*utxo.Spend{utxoRec}, 0)
 		require.Error(t, err)
+
+		// try to spend the UTXO with the new hash - should fail, block height has not been reached
+		err = db.Spend(context.Background(), []*utxo.Spend{newUtxoRec}, 0)
+		require.Error(t, err, "UTXO is not spendable yet")
+
+		err = db.SetBlockHeight(1101)
+		require.NoError(t, err)
 
 		// try to spend the UTXO with the new hash
 		err = db.Spend(context.Background(), []*utxo.Spend{newUtxoRec}, 0)

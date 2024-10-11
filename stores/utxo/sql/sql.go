@@ -489,6 +489,10 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 		}
 	}()
 
+	if blockHeight == 0 {
+		blockHeight = s.GetBlockHeight()
+	}
+
 	txn, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -505,6 +509,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 		,o.utxo_hash
 		,o.spending_transaction_id
 		,o.frozen
+		,o.spendableIn
 		FROM outputs o
 		JOIN transactions t ON o.transaction_id = t.id
 		WHERE t.hash = $1
@@ -541,17 +546,16 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 				continue
 			}
 
-			var transactionId int
+			var (
+				transactionID          int
+				coinbaseSpendingHeight uint32
+				utxoHash               []byte
+				spendingTransactionID  []byte
+				frozen                 bool
+				spendableIn            *uint32
+			)
 
-			var coinbaseSpendingHeight uint32
-
-			var utxoHash []byte
-
-			var spendingTransactionID []byte
-
-			var frozen bool
-
-			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionId, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID, &frozen)
+			err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(&transactionID, &coinbaseSpendingHeight, &utxoHash, &spendingTransactionID, &frozen, &spendableIn)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
@@ -562,6 +566,12 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 			// If the utxo is frozen, it cannot be spent
 			if frozen {
 				return errors.NewFrozenError("[Spend] utxo is frozen for %s:%d", spend.TxID, spend.Vout)
+			}
+
+			if spendableIn != nil {
+				if *spendableIn > 0 && blockHeight < *spendableIn {
+					return errors.NewStorageError("[Spend] utxo %s:%d is not spendable until %d", spend.TxID, spend.Vout, *spendableIn)
+				}
 			}
 
 			// Check if the utxo is already spent
@@ -579,7 +589,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 				return errors.NewStorageError("[Spend]coinbase utxo not ready to spend for %s:%d", spend.TxID, spend.Vout)
 			}
 
-			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionId, spend.Vout)
+			result, err := txn.ExecContext(ctx, q2, spend.SpendingTxID[:], transactionID, spend.Vout)
 			if err != nil {
 				return errors.NewStorageError("[Spend] failed: UPDATE outputs: error spending utxo for %s:%d: %v", spend.TxID, spend.Vout, err)
 			}
@@ -597,7 +607,7 @@ func (s *Store) Spend(ctx context.Context, spends []*utxo.Spend, blockHeight uin
 				// Now mark the transaction as tombstoned if there are no more unspent outputs
 				tombstoneTime := time.Now().Add(time.Duration(s.expirationMillis)*time.Millisecond).UnixNano() / 1e6
 
-				if _, err := txn.ExecContext(ctx, q3, transactionId, tombstoneTime); err != nil {
+				if _, err := txn.ExecContext(ctx, q3, transactionID, tombstoneTime); err != nil {
 					return errors.NewStorageError("[Spend] failed UPDATE transactions: utxo already spent for %s:%d", spend.TxID, spend.Vout)
 				}
 			}
@@ -969,6 +979,7 @@ func createPostgresSchema(db *usql.DB) error {
         ,utxo_hash 			      BYTEA NOT NULL
         ,spending_transaction_id  BYTEA
         ,frozen                   BOOLEAN DEFAULT FALSE
+        ,spendableIn              INT
         ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
@@ -1044,6 +1055,7 @@ func createSqliteSchema(db *usql.DB) error {
         ,utxo_hash                BLOB NOT NULL
         ,spending_transaction_id  BLOB
         ,frozen                   BOOLEAN DEFAULT FALSE
+        ,spendableIn              INT
         ,PRIMARY KEY (transaction_id, idx)
 	  );
 	`); err != nil {
