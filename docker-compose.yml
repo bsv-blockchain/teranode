@@ -314,3 +314,14 @@ services:
       - prometheus-1
       - prometheus-2
       - prometheus-3
+
+  grpc-client:
+    build:
+      context: .
+      dockerfile: Dockerfile.grpc-client
+    depends_on:
+      - ubsv-1
+      - ubsv-2
+      - ubsv-3
+    networks:
+      - ubsv-network

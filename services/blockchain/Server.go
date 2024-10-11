@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/looplab/fsm"
@@ -46,6 +47,7 @@ type Blockchain struct {
 	newSubscriptions   chan subscriber
 	deadSubscriptions  chan subscriber
 	subscribers        map[subscriber]bool
+	subscribersMu      sync.RWMutex
 	notifications      chan *blockchain_api.Notification
 	newBlock           chan struct{}
 	difficulty         *Difficulty
@@ -172,7 +174,9 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
 
 			case s := <-b.newSubscriptions:
+				b.subscribersMu.Lock()
 				b.subscribers[s] = true
+				b.subscribersMu.Unlock()
 			//	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
 
 			case s := <-b.deadSubscriptions:
@@ -239,16 +243,6 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				b.logger.Errorf("[Blockchain] failed to start http server: %v", err)
 			}
 		}()
-	}
-
-	testingInDockerWithoutLegacyServer := gocore.Config().GetBool("testing_in_docker_without_legacy_server", false)
-
-	if testingInDockerWithoutLegacyServer {
-		b.logger.Infof("[Blockchain] Testing in docker without legacy server")
-		_, err = b.Run(ctx, &emptypb.Empty{})
-		if err != nil {
-			b.logger.Errorf("[Blockchain] failed to send RUN event in docker environment: %v", err)
-		}
 	}
 
 	// this will block
@@ -722,7 +716,10 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 		source:       req.Source,
 	}
 
-	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", req.Source, len(b.subscribers))
+	b.subscribersMu.RLock()
+	noOfSubscribers := len(b.subscribers)
+	b.subscribersMu.RUnlock()
+	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", req.Source, noOfSubscribers)
 
 	for {
 		select {

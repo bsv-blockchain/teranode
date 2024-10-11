@@ -1,0 +1,31 @@
+# Use Debian as the base image
+FROM debian:stable-slim
+
+# Install necessary packages
+RUN apt-get update && apt-get install -y \
+    wget \
+    netcat-openbsd \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the version of grpcurl you want to install
+ENV GRPCURL_VERSION=1.8.8
+
+# Download and install grpcurl
+RUN wget https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz \
+    && tar -zxvf grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz \
+    && mv grpcurl /usr/local/bin/ \
+    && chmod +x /usr/local/bin/grpcurl \
+    && rm grpcurl_${GRPCURL_VERSION}_linux_x86_64.tar.gz
+
+# Set the working directory
+WORKDIR /app
+
+# Copy your script into the Docker image
+COPY grpc_client.sh /app/grpc_client.sh
+
+# Ensure the script is executable
+RUN chmod +x /app/grpc_client.sh
+
+# Set the entrypoint to execute your script
+ENTRYPOINT ["/app/grpc_client.sh"]

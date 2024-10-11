@@ -43,7 +43,6 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 
 	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
 	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
-
 	txDistributor, _ := distributor.NewDistributor(ctx, logger,
 		distributor.WithBackoffDuration(200*time.Millisecond),
 		distributor.WithRetryAttempts(3),

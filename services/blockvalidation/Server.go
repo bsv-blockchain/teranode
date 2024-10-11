@@ -699,7 +699,6 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 
 	// this is a bit of a hack, but we need to turn off optimistic mining when in legacy mode
 	if baseUrl == "legacy" {
-		// GOKHAN THIS IS CALLED AND ERROR IS AFTER THIS. but no error message just grpc messages
 		err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats, true)
 	} else {
 		err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)

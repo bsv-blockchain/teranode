@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
@@ -63,6 +64,34 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
 	}
 
+	time.Sleep(2 * time.Second)
+
+	err = suite.Framework.GetClientHandles()
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	suite.T().Logf("Sending initial RUN event to Node1")
+
+	err = suite.Framework.Nodes[0].BlockchainClient.Run(suite.Framework.Context)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	suite.T().Logf("Sending initial RUN event to Node2")
+
+	err = suite.Framework.Nodes[1].BlockchainClient.Run(suite.Framework.Context)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	suite.T().Logf("Sending initial RUN event to Node3")
+
+	err = suite.Framework.Nodes[2].BlockchainClient.Run(suite.Framework.Context)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
 	err = helper.WaitForBlockHeight(NodeURL1, 200, 120)
 	if err != nil {
 		suite.T().Fatal(err)
@@ -75,11 +104,6 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 
 	err = helper.WaitForBlockHeight(NodeURL3, 200, 120)
 
-	if err != nil {
-		suite.T().Fatal(err)
-	}
-
-	err = suite.Framework.GetClientHandles()
 	if err != nil {
 		suite.T().Fatal(err)
 	}
@@ -105,10 +129,6 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsSkipChecks(s
 	suite.Framework, err = helper.SetupBitcoinTestFramework(suite.ComposeFiles, suite.SettingsMap)
 	if err != nil {
 		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
-	}
-
-	if err != nil {
-		suite.T().Fatal(err)
 	}
 
 	if !skipClientHandles {
@@ -142,10 +162,6 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsDoNotReset(s
 	}
 
 	err = helper.WaitForBlockHeight(NodeURL1, 300, 180)
-	if err != nil {
-		suite.T().Fatal(err)
-	}
-
 	if err != nil {
 		suite.T().Fatalf("Failed to set up BitcoinTestFramework: %v", err)
 	}
