@@ -8,14 +8,15 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/btcjson"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bt/v2"
@@ -33,7 +34,7 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	)
 	defer deferFn()
 
-	c := cmd.(*btcjson.GetBlockCmd)
+	c := cmd.(*bsvjson.GetBlockCmd)
 
 	ch, err := chainhash.NewHashFromStr(c.Hash)
 	if err != nil {
@@ -59,7 +60,7 @@ func handleGetBlockByHeight(ctx context.Context, s *RPCServer, cmd interface{}, 
 
 	defer deferFn()
 
-	c := cmd.(*btcjson.GetBlockByHeightCmd)
+	c := cmd.(*bsvjson.GetBlockByHeightCmd)
 
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlockByHeight(ctx, c.Height)
@@ -80,7 +81,7 @@ func handleGetBlockHash(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 
 	defer deferFn()
 
-	c := cmd.(*btcjson.GetBlockHashCmd)
+	c := cmd.(*bsvjson.GetBlockHashCmd)
 
 	// Load the raw block bytes from the database.
 	b, err := s.blockchainClient.GetBlockByHeight(ctx, uint32(c.Index))
@@ -101,7 +102,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 
 	defer deferFn()
 
-	c := cmd.(*btcjson.GetBlockHeaderCmd)
+	c := cmd.(*bsvjson.GetBlockHeaderCmd)
 
 	ch, err := chainhash.NewHashFromStr(c.Hash)
 	if err != nil {
@@ -116,7 +117,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 	if *c.Verbose {
 		diff := b.Bits.CalculateDifficulty()
 		diffFloat, _ := diff.Float64()
-		headerReply := &btcjson.GetBlockHeaderVerboseResult{
+		headerReply := &bsvjson.GetBlockHeaderVerboseResult{
 			Hash:         b.Hash().String(),
 			Version:      int32(b.Version),
 			VersionHex:   fmt.Sprintf("%08x", b.Version),
@@ -138,8 +139,8 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 
 func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCServer) (interface{}, error) {
 	if b == nil {
-		return nil, &btcjson.RPCError{
-			Code:    btcjson.ErrRPCBlockNotFound,
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCBlockNotFound,
 			Message: "Block not found",
 		}
 	}
@@ -176,7 +177,7 @@ func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCSe
 
 	diff, _ := b.Header.Bits.CalculateDifficulty().Float64()
 
-	baseBlockReply := &btcjson.GetBlockBaseVerboseResult{
+	baseBlockReply := &bsvjson.GetBlockBaseVerboseResult{
 		Hash:          b.Hash().String(),
 		Version:       int32(b.Header.Version), // nolint:gosec
 		VersionHex:    fmt.Sprintf("%08x", b.Header.Version),
@@ -204,14 +205,14 @@ func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCSe
 		// 		txNames[i] = tx.Hash().String()
 		// 	}
 
-		// 	blockReply = btcjson.GetBlockVerboseResult{
+		// 	blockReply = bsvjson.GetBlockVerboseResult{
 		// 		GetBlockBaseVerboseResult: baseBlockReply,
 
 		// 		Tx: txNames,
 		// 	}
 		// } else {
 		// 	txns := blk.Transactions()
-		// 	rawTxns := make([]btcjson.TxRawResult, len(txns))
+		// 	rawTxns := make([]bsvjson.TxRawResult, len(txns))
 		// 	for i, tx := range txns {
 		// 		rawTxn, err := createTxRawResult(params, tx.MsgTx(),
 		// 			tx.Hash().String(), blockHeader, hash.String(),
@@ -222,7 +223,7 @@ func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCSe
 		// 		rawTxns[i] = *rawTxn
 		// 	}
 
-		blockReply = btcjson.GetBlockVerboseTxResult{
+		blockReply = bsvjson.GetBlockVerboseTxResult{
 			GetBlockBaseVerboseResult: baseBlockReply,
 
 			// Tx: rawTxns,
@@ -251,6 +252,46 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 	return hash.String(), nil
 }
 
+// handleGetRawTransaction implements the getrawtransaction command.
+// TODO: this is not implemented correctly, it should return the transaction in the same format as bitcoind
+func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "handleGetRawTransaction",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetRawTransaction),
+		tracing.WithLogMessage(s.logger, "[handleGetRawTransaction] called"),
+	)
+	defer deferFn()
+
+	c := cmd.(*bsvjson.GetRawTransactionCmd)
+
+	if s.assetHttpURL == nil {
+		return nil, errors.NewConfigurationError("asset_httpURL is not set")
+	}
+
+	fullURL := s.assetHttpURL.ResolveReference(&url.URL{Path: fmt.Sprintf("/api/v1/tx/%s/hex", c.Txid)})
+
+	// Set up HTTP client with timeouts
+	client := &http.Client{
+		Timeout: time.Second * 10,
+	}
+
+	// Send an HTTP GET request to the URL
+	resp, err := client.Get(fullURL.String())
+	if err != nil {
+		return nil, errors.NewServiceError("Error: " + err.Error())
+	}
+	defer resp.Body.Close()
+
+	// Check the response status code
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.NewServiceError(fmt.Sprintf("Error: Unexpected status code %d", resp.StatusCode))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+
+	return body, nil
+}
+
 // handleCreateRawTransaction handles createrawtransaction commands.
 func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	_, _, deferFn := tracing.StartTracing(ctx, "handleCreateRawTransaction",
@@ -260,13 +301,13 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 	)
 	defer deferFn()
 
-	c := cmd.(*btcjson.CreateRawTransactionCmd)
+	c := cmd.(*bsvjson.CreateRawTransactionCmd)
 
 	// Validate the locktime, if given.
 	if c.LockTime != nil &&
 		(*c.LockTime < 0 || *c.LockTime > int64(wire.MaxTxInSequenceNum)) {
-		return nil, &btcjson.RPCError{
-			Code:    btcjson.ErrRPCInvalidParameter,
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
 			Message: "Locktime out of range",
 		}
 	}
@@ -297,8 +338,8 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 	for encodedAddr, amount := range c.Amounts {
 		// Ensure amount is in the valid range for monetary amounts.
 		if amount <= 0 || amount > bsvutil.MaxSatoshi {
-			return nil, &btcjson.RPCError{
-				Code:    btcjson.ErrRPCType,
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCType,
 				Message: "Invalid amount",
 			}
 		}
@@ -306,8 +347,8 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 		// Decode the provided address.
 		addr, err := bsvutil.DecodeAddress(encodedAddr, &chaincfg.MainNetParams)
 		if err != nil {
-			return nil, &btcjson.RPCError{
-				Code:    btcjson.ErrRPCInvalidAddressOrKey,
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCInvalidAddressOrKey,
 				Message: "Invalid address or key: " + err.Error(),
 			}
 		}
@@ -320,15 +361,15 @@ func handleCreateRawTransaction(ctx context.Context, s *RPCServer, cmd interface
 		case *bsvutil.AddressScriptHash:
 		case *bsvutil.LegacyAddressPubKeyHash: // TODO: support legacy addresses?
 		default:
-			return nil, &btcjson.RPCError{
-				Code:    btcjson.ErrRPCInvalidAddressOrKey,
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCInvalidAddressOrKey,
 				Message: `Invalid address or key`,
 			}
 		}
 
 		if !addr.IsForNet(&chaincfg.MainNetParams) {
-			return nil, &btcjson.RPCError{
-				Code: btcjson.ErrRPCInvalidAddressOrKey,
+			return nil, &bsvjson.RPCError{
+				Code: bsvjson.ErrRPCInvalidAddressOrKey,
 				Message: "Invalid address: " + encodedAddr +
 					" is for the wrong network",
 			}
@@ -378,7 +419,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	)
 	defer deferFn()
 
-	c := cmd.(*btcjson.SendRawTransactionCmd)
+	c := cmd.(*bsvjson.SendRawTransactionCmd)
 	// Deserialize and send off to tx relay
 	hexStr := c.HexTx
 	if len(hexStr)%2 != 0 {
@@ -394,8 +435,8 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// Use 0 for the tag to represent local node.
 	tx, err := bt.NewTxFromBytes(serializedTx)
 	if err != nil {
-		return nil, &btcjson.RPCError{
-			Code:    btcjson.ErrRPCDeserialization,
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCDeserialization,
 			Message: "TX rejected: " + err.Error(),
 		}
 	}
@@ -409,8 +450,8 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 	res, err := d.SendTransaction(context.Background(), tx)
 	if err != nil {
-		return nil, &btcjson.RPCError{
-			Code:    btcjson.ErrRPCInvalidParameter,
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
 			Message: "TX rejected: " + err.Error(),
 		}
 	}
@@ -420,7 +461,7 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 // handleGenerate handles generate commands.
 func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
-	c := cmd.(*btcjson.GenerateCmd)
+	c := cmd.(*bsvjson.GenerateCmd)
 	_, _, deferFn := tracing.StartTracing(ctx, "handleGenerate",
 		tracing.WithParentStat(RPCStat),
 		tracing.WithHistogram(prometheusHandleGenerate),
@@ -432,8 +473,8 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	// Respond with an error if there's virtually 0 chance of mining a block
 	// with the CPU.
 	if !s.chainParams.GenerateSupported {
-		return nil, &btcjson.RPCError{
-			Code: btcjson.ErrRPCDifficulty,
+		return nil, &bsvjson.RPCError{
+			Code: bsvjson.ErrRPCDifficulty,
 			Message: fmt.Sprintf("No support for `generate` on "+
 				"the current network, %s, as it's unlikely to "+
 				"be possible to mine a block with the CPU.",
@@ -442,8 +483,8 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	}
 
 	if c.NumBlocks == 0 {
-		return nil, &btcjson.RPCError{
-			Code:    btcjson.ErrRPCInternal.Code,
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInternal.Code,
 			Message: "Please request a nonzero number of blocks to generate.",
 		}
 	}
@@ -452,8 +493,8 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	if !ok {
 		s.logger.Warnf("MINER_HTTP_PORT not set in config")
 
-		return nil, &btcjson.RPCError{
-			Code:    btcjson.ErrRPCMisc,
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCMisc,
 			Message: "Can't contact miner",
 		}
 	}
@@ -484,8 +525,8 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	if err != nil {
 		s.logger.Errorf("The HTTP request failed with error %s\n", err)
 
-		return nil, &btcjson.RPCError{
-			Code:    btcjson.ErrRPCMisc,
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCMisc,
 			Message: "Can't contact miner",
 		}
 	}
@@ -505,8 +546,8 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 
 	// blockHashes, err := s.cfg.CPUMiner.GenerateNBlocks(c.NumBlocks)
 	// if err != nil {
-	// 	return nil, &btcjson.RPCError{
-	// 		Code:    btcjson.ErrRPCInternal.Code,
+	// 	return nil, &bsvjson.RPCError{
+	// 		Code:    bsvjson.ErrRPCInternal.Code,
 	// 		Message: herr.Error(),
 	// 	}
 	// }
@@ -577,10 +618,10 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		return nil, err
 	}
 
-	infos := make([]*btcjson.GetPeerInfoResult, 0, len(peerInfo.Peers))
+	infos := make([]*bsvjson.GetPeerInfoResult, 0, len(peerInfo.Peers))
 
 	for _, p := range peerInfo.Peers {
-		info := &btcjson.GetPeerInfoResult{
+		info := &bsvjson.GetPeerInfoResult{
 			ID:        p.Id,
 			Addr:      p.Addr,
 			AddrLocal: p.AddrLocal,
@@ -702,7 +743,7 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 	)
 	defer deferFn()
 
-	c := cmd.(*btcjson.SubmitMiningSolutionCmd)
+	c := cmd.(*bsvjson.SubmitMiningSolutionCmd)
 
 	ms := &model.MiningSolution{}
 
@@ -730,7 +771,7 @@ func handleInvalidateBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	)
 	defer deferFn()
 
-	c := cmd.(*btcjson.InvalidateBlockCmd)
+	c := cmd.(*bsvjson.InvalidateBlockCmd)
 
 	ch, err := chainhash.NewHashFromStr(c.BlockHash)
 	if err != nil {
@@ -754,7 +795,7 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	)
 	defer deferFn()
 
-	c := cmd.(*btcjson.ReconsiderBlockCmd)
+	c := cmd.(*bsvjson.ReconsiderBlockCmd)
 
 	ch, err := chainhash.NewHashFromStr(c.BlockHash)
 	if err != nil {

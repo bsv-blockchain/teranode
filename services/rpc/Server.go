@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"sync"
@@ -20,8 +21,8 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/services/legacy/btcjson"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
+	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/ordishs/gocore"
@@ -82,15 +83,15 @@ var (
 var (
 	// ErrRPCUnimplemented is an error returned to RPC clients when the
 	// provided command is recognized, but not implemented.
-	ErrRPCUnimplemented = &btcjson.RPCError{
-		Code:    btcjson.ErrRPCUnimplemented,
+	ErrRPCUnimplemented = &bsvjson.RPCError{
+		Code:    bsvjson.ErrRPCUnimplemented,
 		Message: "Command unimplemented",
 	}
 
 	// ErrRPCNoWallet is an error returned to RPC clients when the provided
 	// command is recognized as a wallet command.
-	ErrRPCNoWallet = &btcjson.RPCError{
-		Code:    btcjson.ErrRPCNoWallet,
+	ErrRPCNoWallet = &bsvjson.RPCError{
+		Code:    bsvjson.ErrRPCNoWallet,
 		Message: "This implementation does not implement wallet commands",
 	}
 )
@@ -134,7 +135,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getnetworkhashps":      handleUnimplemented,
 	"getpeerinfo":           handleGetpeerinfo,
 	"getrawmempool":         handleUnimplemented,
-	"getrawtransaction":     handleUnimplemented,
+	"getrawtransaction":     handleGetRawTransaction,
 	"gettxout":              handleUnimplemented,
 	"gettxoutproof":         handleUnimplemented,
 	"help":                  handleUnimplemented,
@@ -284,7 +285,7 @@ var rpcLimited = map[string]struct{}{
 // RPC server subsystem since internal errors really should not occur.  The
 // context parameter is only used in the log message and may be empty if it's
 // not needed.
-func internalRPCError(errStr, context string) *btcjson.RPCError {
+func internalRPCError(errStr, context string) *bsvjson.RPCError {
 	logStr := errStr
 	if context != "" {
 		logStr = context + ": " + errStr
@@ -292,13 +293,13 @@ func internalRPCError(errStr, context string) *btcjson.RPCError {
 
 	fmt.Print(logStr)
 
-	return btcjson.NewRPCError(btcjson.ErrRPCInternal.Code, errStr)
+	return bsvjson.NewRPCError(bsvjson.ErrRPCInternal.Code, errStr)
 }
 
 // rpcDecodeHexError is a convenience function for returning a nicely formatted
 // RPC error which indicates the provided hex string failed to decode.
-func rpcDecodeHexError(gotHex string) *btcjson.RPCError {
-	return btcjson.NewRPCError(btcjson.ErrRPCDecodeHexString,
+func rpcDecodeHexError(gotHex string) *bsvjson.RPCError {
+	return bsvjson.NewRPCError(bsvjson.ErrRPCDecodeHexString,
 		fmt.Sprintf("Argument must be hexadecimal string (not %q)",
 			gotHex))
 }
@@ -306,8 +307,8 @@ func rpcDecodeHexError(gotHex string) *btcjson.RPCError {
 // rpcNoTxInfoError is a convenience function for returning a nicely formatted
 // RPC error which indicates there is no information available for the provided
 // transaction hash.
-// func rpcNoTxInfoError(txHash *chainhash.Hash) *btcjson.RPCError {
-// 	return btcjson.NewRPCError(btcjson.ErrRPCNoTxInfo,
+// func rpcNoTxInfoError(txHash *chainhash.Hash) *bsvjson.RPCError {
+// 	return bsvjson.NewRPCError(bsvjson.ErrRPCNoTxInfo,
 // 		fmt.Sprintf("No information available about transaction %v",
 // 			txHash))
 // }
@@ -460,7 +461,7 @@ func handleAskWallet(ctx context.Context, s *RPCServer, cmd interface{}, closeCh
 
 // handleHelp implements the help command.
 // func handleHelp(s *rpcServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
-// 	c := cmd.(*btcjson.HelpCmd)
+// 	c := cmd.(*bsvjson.HelpCmd)
 
 // 	// Provide a usage overview of all commands when no specific command
 // 	// was specified.
@@ -483,8 +484,8 @@ func handleAskWallet(ctx context.Context, s *RPCServer, cmd interface{}, closeCh
 // 	// for commands that are unimplemented or related to wallet
 // 	// functionality.
 // 	if _, ok := rpcHandlers[command]; !ok {
-// 		return nil, &btcjson.RPCError{
-// 			Code:    btcjson.ErrRPCInvalidParameter,
+// 		return nil, &bsvjson.RPCError{
+// 			Code:    bsvjson.ErrRPCInvalidParameter,
 // 			Message: "Unknown command: " + command,
 // 		}
 // 	}
@@ -512,7 +513,7 @@ func handleStop(_ context.Context, s *RPCServer, cmd interface{}, closeChan <-ch
 //
 // NOTE: This is a btcsuite extension ported from github.com/decred/dcrd.
 func handleVersion(_ context.Context, s *RPCServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
-	result := map[string]btcjson.VersionResult{
+	result := map[string]bsvjson.VersionResult{
 		"btcdjsonrpcapi": {
 			VersionString: jsonrpcSemverString,
 			Major:         jsonrpcSemverMajor,
@@ -543,6 +544,7 @@ type RPCServer struct {
 	blockchainClient       blockchain.ClientI
 	blockAssemblyClient    *blockassembly.Client
 	peerClient             peer.ClientI
+	assetHttpURL           *url.URL
 	chainParams            *chaincfg.Params
 }
 
@@ -718,7 +720,7 @@ type parsedRPCCmd struct {
 	id     interface{}
 	method string
 	cmd    interface{}
-	err    *btcjson.RPCError
+	err    *bsvjson.RPCError
 }
 
 // standardCmdResult checks that a parsed command is a standard Bitcoin JSON-RPC
@@ -744,7 +746,7 @@ func (s *RPCServer) standardCmdResult(ctx context.Context, cmd *parsedRPCCmd, cl
 		goto handled
 	}
 
-	return nil, btcjson.ErrRPCMethodNotFound
+	return nil, bsvjson.ErrRPCMethodNotFound
 handled:
 
 	return handler(ctx, s, cmd.cmd, closeChan)
@@ -754,25 +756,25 @@ handled:
 // err field of the returned parsedRPCCmd struct will contain an RPC error that
 // is suitable for use in replies if the command is invalid in some way such as
 // an unregistered command or invalid parameters.
-func parseCmd(request *btcjson.Request) *parsedRPCCmd {
+func parseCmd(request *bsvjson.Request) *parsedRPCCmd {
 	var parsedCmd parsedRPCCmd
 	parsedCmd.id = request.ID
 	parsedCmd.method = request.Method
 
-	cmd, err := btcjson.UnmarshalCmd(request)
+	cmd, err := bsvjson.UnmarshalCmd(request)
 	if err != nil {
 		// When the error is because the method is not registered,
 		// produce a method not found RPC error.
-		if jerr, ok := err.(btcjson.Error); ok &&
-			jerr.ErrorCode == btcjson.ErrUnregisteredMethod {
-			parsedCmd.err = btcjson.ErrRPCMethodNotFound
+		if jerr, ok := err.(bsvjson.Error); ok &&
+			jerr.ErrorCode == bsvjson.ErrUnregisteredMethod {
+			parsedCmd.err = bsvjson.ErrRPCMethodNotFound
 			return &parsedCmd
 		}
 
 		// Otherwise, some type of invalid parameters is the
 		// cause, so produce the equivalent RPC error.
-		parsedCmd.err = btcjson.NewRPCError(
-			btcjson.ErrRPCInvalidParams.Code, err.Error())
+		parsedCmd.err = bsvjson.NewRPCError(
+			bsvjson.ErrRPCInvalidParams.Code, err.Error())
 
 		return &parsedCmd
 	}
@@ -784,19 +786,19 @@ func parseCmd(request *btcjson.Request) *parsedRPCCmd {
 
 // createMarshalledReply returns a new marshalled JSON-RPC response given the
 // passed parameters.  It will automatically convert errors that are not of
-// the type *btcjson.RPCError to the appropriate type as needed.
+// the type *bsvjson.RPCError to the appropriate type as needed.
 func createMarshalledReply(id, result interface{}, replyErr error) ([]byte, error) {
-	var jsonErr *btcjson.RPCError
+	var jsonErr *bsvjson.RPCError
 
 	if replyErr != nil {
-		if jErr, ok := replyErr.(*btcjson.RPCError); ok {
+		if jErr, ok := replyErr.(*bsvjson.RPCError); ok {
 			jsonErr = jErr
 		} else {
 			jsonErr = internalRPCError(replyErr.Error(), "")
 		}
 	}
 
-	return btcjson.MarshalResponse(id, result, jsonErr)
+	return bsvjson.MarshalResponse(id, result, jsonErr)
 }
 
 // jsonRPCRead handles reading and responding to RPC messages.
@@ -857,11 +859,11 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 
 	var result interface{}
 
-	var request btcjson.Request
+	var request bsvjson.Request
 
 	if err := json.Unmarshal(body, &request); err != nil {
-		jsonErr = &btcjson.RPCError{
-			Code:    btcjson.ErrRPCParse.Code,
+		jsonErr = &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCParse.Code,
 			Message: "Failed to parse request: " + err.Error(),
 		}
 	}
@@ -911,8 +913,8 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 		// Check if the user is limited and set error if method unauthorized
 		if !isAdmin {
 			if _, ok := rpcLimited[request.Method]; !ok {
-				jsonErr = &btcjson.RPCError{
-					Code:    btcjson.ErrRPCInvalidParams.Code,
+				jsonErr = &bsvjson.RPCError{
+					Code:    bsvjson.ErrRPCInvalidParams.Code,
 					Message: "limited user not authorized for this method",
 				}
 			}
@@ -1064,12 +1066,22 @@ func (s *RPCServer) Start(ctx context.Context) error {
 func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RPCServer, error) {
 	initPrometheusMetrics()
 
+	assetHttpAddress, ok := gocore.Config().Get("asset_httpAddress", "")
+	if !ok {
+		return nil, errors.NewConfigurationError("missing setting: asset_httpAddress")
+	}
+	parsedURL, err := url.ParseRequestURI(assetHttpAddress)
+	if err != nil {
+		return nil, errors.NewConfigurationError("Invalid URL", err)
+	}
+
 	rpc := RPCServer{
 		statusLines:            make(map[int]string),
 		requestProcessShutdown: make(chan struct{}),
 		logger:                 logger,
 		quit:                   make(chan int),
 		blockchainClient:       blockchainClient,
+		assetHttpURL:           parsedURL,
 	}
 
 	rpcUser, ok := gocore.Config().Get("rpc_user")

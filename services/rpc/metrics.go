@@ -15,6 +15,7 @@ var (
 	prometheusHandleGetBlockHash         prometheus.Histogram
 	prometheusHandleGetBlockHeader       prometheus.Histogram
 	prometheusHandleGetBestBlockHash     prometheus.Histogram
+	prometheusHandleGetRawTransaction    prometheus.Histogram
 	prometheusHandleCreateRawTransaction prometheus.Histogram
 	prometheusHandleSendRawTransaction   prometheus.Histogram
 	prometheusHandleGenerate             prometheus.Histogram
@@ -81,6 +82,14 @@ func _initPrometheusMetrics() {
 			Namespace: "rpc",
 			Name:      "get_best_block_hash",
 			Help:      "Histogram of calls to handleGetBestBlockHash in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGetRawTransaction = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "get_raw_transaction",
+			Help:      "Histogram of calls to handleGetRawTransaction in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
