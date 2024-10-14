@@ -109,9 +109,9 @@ services:
     depends_on:
       - kafka-shared
 
-  ubsv-1:
+  ubsv1:
     <<: *ubsv-base
-    container_name: ubsv-1
+    container_name: ubsv1
     depends_on:
       - kafka-shared
       - postgres
@@ -131,11 +131,11 @@ services:
         "/app/ubsv.run",
       ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ubsv1}
       logLevel: "DEBUG"
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      JAEGER_SERVICE_NAME: ubsv-1
+      # blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
+      # coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
+      JAEGER_SERVICE_NAME: ubsv1
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
     volumes:
@@ -150,9 +150,9 @@ services:
       - "19905:9905"
       - "19292:9292"
 
-  ubsv-2:
+  ubsv2:
     <<: *ubsv-base
-    container_name: ubsv-2
+    container_name: ubsv2
     depends_on:
       - kafka-shared
       - postgres
@@ -172,11 +172,11 @@ services:
         "/app/ubsv.run",
       ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ci.ubsv2}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ubsv2}
       logLevel: "DEBUG"
-      blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
-      coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
-      JAEGER_SERVICE_NAME: ubsv-2
+      # blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
+      # coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
+      JAEGER_SERVICE_NAME: ubsv2
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
     volumes:
@@ -190,9 +190,9 @@ services:
       - "29091:9091"
       - "29905:9905"
 
-  ubsv-3:
+  ubsv3:
     <<: *ubsv-base
-    container_name: ubsv-3
+    container_name: ubsv3
     depends_on:
       - kafka-shared
       - postgres
@@ -212,11 +212,11 @@ services:
         "/app/ubsv.run",
       ]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ci.ubsv3}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ubsv3}
       logLevel: "DEBUG"
-      blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
-      coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
-      JAEGER_SERVICE_NAME: ubsv-3
+      # blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
+      # coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
+      JAEGER_SERVICE_NAME: ubsv3
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
     volumes:
@@ -230,25 +230,19 @@ services:
       - "39091:9091"
       - "39905:9905"
 
-  tx-blaster-1:
+  txblaster1:
     <<: *ubsv-base
-    container_name: tx-blaster-1
+    container_name: txblaster1
     depends_on:
-      - ubsv-1
-      - ubsv-2
-      - ubsv-3
+      - ubsv1
+      - ubsv2
+      - ubsv3
     environment:
-      SETTINGS_CONTEXT: "docker.ci"
+      SETTINGS_CONTEXT: "docker.ubsv1"
       tx_blaster_profilerAddr: ":9092"
-      asset_httpAddress: "http://ubsv-1:8090"
-      propagation_grpcAddresses: ubsv-1:8084 | ubsv-2:8084 | ubsv-3:8084
-      coinbase_grpcAddress: ubsv-1:8093
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_assetGrpcAddress: ubsv-1:8091
       BLASTER_ARGS: "-workers=2"
-      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap-1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
-      propagation_quicAddresses: https://ubsv-1:8384 | https://ubsv-2:8384 | https://ubsv-3:8384
+      p2p_bootstrapAddresses: "/dns4/p2p-bootstrap1/tcp/9901/p2p/12D3KooWJ6kQHAR65xkA34NABsNVAJyVxPWh8JUSo1vtZsTyw4GD"
+      propagation_quicAddresses: https://ubsv1:8384 | https://ubsv2:8384 | https://ubsv3:8384
     command:
       [
         "/app/blaster.run",
@@ -265,8 +259,8 @@ services:
       - ./settings_local.conf:/app/settings_local.conf
       - ./data/txblaster1:/app/data
 
-  prometheus-1:
-    container_name: prometheus-1
+  prometheus1:
+    container_name: prometheus1
     image: prom/prometheus:v2.44.0
     mem_limit: 64m
     ports:
@@ -276,8 +270,8 @@ services:
     volumes:
       - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
-  prometheus-2:
-    container_name: prometheus-2
+  prometheus2:
+    container_name: prometheus2
     image: prom/prometheus:v2.44.0
     mem_limit: 64m
     ports:
@@ -287,8 +281,8 @@ services:
     volumes:
       - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
 
-  prometheus-3:
-    container_name: prometheus-3
+  prometheus3:
+    container_name: prometheus3
     image: prom/prometheus:v2.44.0
     mem_limit: 64m
     ports:
@@ -311,17 +305,17 @@ services:
       - ./deploy/dev/grafana/dashboards:/var/lib/grafana/dashboards
       - ./deploy/dev/grafana/grafana.db:/var/lib/grafana
     depends_on:
-      - prometheus-1
-      - prometheus-2
-      - prometheus-3
+      - prometheus1
+      - prometheus2
+      - prometheus3
 
   grpc-client:
     build:
       context: .
       dockerfile: Dockerfile.grpc-client
     depends_on:
-      - ubsv-1
-      - ubsv-2
-      - ubsv-3
+      - ubsv1
+      - ubsv2
+      - ubsv3
     networks:
       - ubsv-network

@@ -36,21 +36,21 @@ services:
     - ./deploy/dev/aerospike/aerospike-3.conf:/etc/aerospike.conf
     - ./data/aerospike-3/data:/opt/aerospike/data
 
-  ubsv-1:
+  ubsv1:
     depends_on:
       - aerospike-1
     entrypoint: ["/app/wait.sh", "aerospike-1", "3100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1"]
     volumes:
       - ./data/ubsv1/external:/app/data/ubsv1/external
 
-  ubsv-2:
+  ubsv2:
     depends_on:
       - aerospike-2
     entrypoint: ["/app/wait.sh", "aerospike-2", "3200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     volumes:
       - ./data/ubsv2/external:/app/data/ubsv2/external
 
-  ubsv-3:
+  ubsv3:
     depends_on:
       - aerospike-3
     entrypoint: ["/app/wait.sh", "aerospike-3", "3300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]

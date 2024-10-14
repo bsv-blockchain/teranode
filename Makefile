@@ -168,7 +168,7 @@ smoketests:
 ifdef no-build
 	@echo "Skipping build step."
 else
-	docker compose -f docker-compose.ci.build.yml build
+	docker compose -f docker-compose.e2etest.yml build
 endif
 ifdef no-reset
 	@echo "Skipping reset step."
@@ -186,7 +186,7 @@ ifdef test
 	SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -run $(word 2,$(subst ., ,$(test))) -v -tags $(test_tags)
 else
 	cd test/smoke && \
-	SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -v -tags functional
+	go test -v -tags functional
 endif
 
 

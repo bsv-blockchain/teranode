@@ -24,7 +24,7 @@ services:
     image: ubsv:latest
     build:
       context: .
-      dockerfile: local.Dockerfile
+      dockerfile: ci.Dockerfile
       args:
         BASE_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-build-3fed05f
         RUN_IMG: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/ubsv:base-run-3fed05f
@@ -114,9 +114,9 @@ services:
       - ./deploy/dev/aerospike/aerospike-tc-3.conf:/etc/aerospike.conf
       - ./data/test/aerospike-3/data:/opt/aerospike/data
 
-  ubsv-1:
+  ubsv1:
     <<: *ubsv-base
-    container_name: ubsv-1-test
+    container_name: ubsv1-test
     image: ubsv:latest
     depends_on:
       - aerospike-1
@@ -124,14 +124,8 @@ services:
       - kafka-shared
     entrypoint: ["/app/wait.sh", "aerospike-1", "13100", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1", "-faucet=1"]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ci.ubsv1.tc1}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_1:-docker.ubsv1.test}
       logLevel: "DEBUG"
-      blockchain_store: postgres://miner1:miner1@postgres:5432/ubsv1
-      coinbase_store: postgres://coinbase1:coinbase1@postgres:5432/coinbase1
-      utxostore: aerospike://aerospike-1:13100/test?set=utxo&expiration=1&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&externalStore=file://./data/ubsv1/external
-      JAEGER_SERVICE_NAME: ubsv-1
-      JAEGER_AGENT_HOST: jaeger
-      JAEGER_AGENT_PORT: 6831
     ports:
       - "10081-10097:8081-8097"
       - "10099:8099"
@@ -145,9 +139,9 @@ services:
       - ./data/test/ubsv1/blockstore:/app/data/blockstore
       - ./data/test/ubsv1/external:/app/data/ubsv1/external
 
-  ubsv-2:
+  ubsv2:
     <<: *ubsv-base
-    container_name: ubsv-2-test
+    container_name: ubsv2-test
     image: ubsv:latest
     depends_on:
       - aerospike-2
@@ -155,14 +149,8 @@ services:
       - kafka-shared
     entrypoint: ["/app/wait.sh", "aerospike-2", "13200", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ci.ubsv2.tc1}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_2:-docker.ubsv2.test}
       logLevel: "DEBUG"
-      blockchain_store: postgres://miner2:miner2@postgres:5432/ubsv2
-      coinbase_store: postgres://coinbase2:coinbase2@postgres:5432/coinbase2
-      utxostore: aerospike://aerospike-2:13200/test?set=utxo&expiration=1&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&externalStore=file://./data/ubsv2/external
-      JAEGER_SERVICE_NAME: ubsv-2
-      JAEGER_AGENT_HOST: jaeger
-      JAEGER_AGENT_PORT: 6831
     ports:
       - "12081-12097:8081-8097"
       - "12099:8099"
@@ -176,9 +164,9 @@ services:
       - ./data/test/ubsv2/blockstore:/app/data/blockstore
       - ./data/test/ubsv2/external:/app/data/ubsv2/external
 
-  ubsv-3:
+  ubsv3:
     <<: *ubsv-base
-    container_name: ubsv-3-test
+    container_name: ubsv3-test
     image: ubsv:latest
     depends_on:
       - aerospike-3
@@ -186,11 +174,8 @@ services:
       - kafka-shared
     entrypoint: ["/app/wait.sh", "aerospike-3", "13300", "2", "--", "/app/wait.sh", "postgres", "5432", "0", "--", "/app/wait.sh", "kafka-shared", "9092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1"]
     environment:
-      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ci.ubsv3.tc1}
+      SETTINGS_CONTEXT: ${SETTINGS_CONTEXT_3:-docker.ubsv3.test}
       logLevel: "DEBUG"
-      blockchain_store: postgres://miner3:miner3@postgres:5432/ubsv3
-      coinbase_store: postgres://coinbase3:coinbase3@postgres:5432/coinbase3
-      utxostore: aerospike://aerospike-3:13300/test?set=utxo&expiration=1&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&externalStore=file://./data/ubsv3/external
       JAEGER_SERVICE_NAME: ubsv-3
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
@@ -207,35 +192,38 @@ services:
       - ./data/test/ubsv3/blockstore:/app/data/blockstore
       - ./data/test/ubsv3/external:/app/data/ubsv3/external
 
-  prometheus-1:
-    container_name: prometheus-1-test
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "16090:9090"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
+  # prometheus-1:
+  #   container_name: prometheus-1-test
+  #   image: prom/prometheus:v2.44.0
+  #   scale: 0
+  #   mem_limit: 64m
+  #   ports:
+  #     - "16090:9090"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
-  prometheus-2:
-    container_name: prometheus-2-test
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "16091:9090"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
+  # prometheus-2:
+  #   container_name: prometheus-2-test
+  #   scale: 0
+  #   image: prom/prometheus:v2.44.0
+  #   mem_limit: 64m
+  #   ports:
+  #     - "16091:9090"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/prometheus/prometheus-2.yml:/etc/prometheus/prometheus.yml
 
-  prometheus-3:
-    container_name: prometheus-3-test
-    image: prom/prometheus:v2.44.0
-    mem_limit: 64m
-    ports:
-      - "16092:9090"
-    networks:
-      - ubsv-network
-    volumes:
-      - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml
+  # prometheus-3:
+  #   container_name: prometheus-3-test
+  #   scale: 0
+  #   image: prom/prometheus:v2.44.0
+  #   mem_limit: 64m
+  #   ports:
+  #     - "16092:9090"
+  #   networks:
+  #     - ubsv-network
+  #   volumes:
+  #     - ./deploy/dev/prometheus/prometheus-3.yml:/etc/prometheus/prometheus.yml

@@ -3,8 +3,7 @@
 // How to run each test:
 // Clean up docker containers before running the test manually
 // $ cd test/smoke/
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestSanityTestSuite$/TestShouldAllowFairTx$" -tags functional
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestSanityTestSuite$/TestShouldAllowFairTx_UseRpc$" -tags functional
+// $ go test -v -run "^TestSanityTestSuite$/TestShouldAllowFairTx$" -tags functional
 
 package test
 
@@ -13,10 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
 	"github.com/libsv/go-bk/wif"
 	"github.com/libsv/go-bt/v2"
@@ -28,7 +25,7 @@ import (
 )
 
 type SanityTestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 // func (suite *SanityTestSuite) TearDownTest() {
@@ -36,27 +33,20 @@ type SanityTestSuite struct {
 
 func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	t := suite.T()
-	framework := suite.Framework
-	ctx := framework.Context
-
+	testEnv := suite.TeranodeTestEnv
+	ctx := testEnv.Context
+	logger := testEnv.Logger
 	url := "http://localhost:10090"
 
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
-		distributor.WithFailureTolerance(0),
-	)
+	txDistributor := testEnv.Nodes[0].DistributorClient
 
-	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
-	fmt.Printf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
+	t.Logf("utxoBalanceBefore: %d\n", utxoBalanceBefore)
 
 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
 	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
 	if err != nil {
-
 		t.Errorf("Failed to decode Coinbase private key: %v", err)
 	}
 
@@ -115,24 +105,24 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		t.Errorf("Failed to send new transaction: %v", err)
 	}
 
-	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
+	t.Logf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
 	time.Sleep(10 * time.Second)
 
 	height, _ := helper.GetBlockHeight(url)
-	logger.Infof("Block height before mining: %d\n", height)
+	t.Logf("Block height before mining: %d\n", height)
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
-	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
+	t.Logf("utxoBalanceBefore: %d, utxoBalanceAfter: %d\n", utxoBalanceBefore, utxoBalanceAfter)
 
-	baClient := framework.Nodes[0].BlockassemblyClient
+	baClient := testEnv.Nodes[0].BlockassemblyClient
 	_, err = helper.MineBlock(ctx, baClient, logger)
 
 	if err != nil {
 		t.Errorf("Failed to mine block: %v", err)
 	}
 
-	blockStore := framework.Nodes[0].Blockstore
-	blockchainClient := framework.Nodes[0].BlockchainClient
+	blockStore := testEnv.Nodes[0].Blockstore
+	blockchainClient := testEnv.Nodes[0].BlockchainClient
 	bl := false
 	targetHeight := height + 1
 
@@ -143,8 +133,8 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		}
 
 		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
-		logger.Infof("Testing on Best block header: %v", header[0].Hash())
-		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), framework.Logger)
+		t.Logf("Testing on Best block header: %v", header[0].Hash())
+		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
 
 		if err != nil {
 			t.Errorf("error checking if tx exists in block: %v", err)
