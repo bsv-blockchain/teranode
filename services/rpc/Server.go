@@ -138,7 +138,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getrawtransaction":     handleGetRawTransaction,
 	"gettxout":              handleUnimplemented,
 	"gettxoutproof":         handleUnimplemented,
-	"help":                  handleUnimplemented,
+	"help":                  handleHelp,
 	"node":                  handleUnimplemented,
 	"ping":                  handleUnimplemented,
 	"invalidateblock":       handleInvalidateBlock,
@@ -546,6 +546,7 @@ type RPCServer struct {
 	peerClient             peer.ClientI
 	assetHttpURL           *url.URL
 	chainParams            *chaincfg.Params
+	helpCacher             *helpCacher
 }
 
 // httpStatusLine returns a response Status-Line (RFC 2616 Section 6.1)
@@ -1082,6 +1083,7 @@ func NewServer(logger ulogger.Logger, blockchainClient blockchain.ClientI) (*RPC
 		quit:                   make(chan int),
 		blockchainClient:       blockchainClient,
 		assetHttpURL:           parsedURL,
+		helpCacher:             newHelpCacher(),
 	}
 
 	rpcUser, ok := gocore.Config().Get("rpc_user")

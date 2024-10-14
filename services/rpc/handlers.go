@@ -198,6 +198,7 @@ func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCSe
 
 	// If verbose level does not match 0 or 1
 	// we can consider it 2 (current bitcoin core behavior)
+
 	if verbosity == 1 {
 		// 	transactions := blk.Transactions()
 		// 	txNames := make([]string, len(transactions))
@@ -809,6 +810,54 @@ func handleReconsiderBlock(ctx context.Context, s *RPCServer, cmd interface{}, _
 	}
 
 	return nil, nil
+}
+
+func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "handleHelp",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleHelp),
+		tracing.WithLogMessage(s.logger, "[handleHelp] called"),
+	)
+	defer deferFn()
+
+	c := cmd.(*bsvjson.HelpCmd)
+
+	// Provide a usage overview of all commands when no specific command
+	// was specified.
+	var command string
+	if c.Command != nil {
+		command = *c.Command
+	}
+
+	if command == "" {
+		usage, err := s.helpCacher.rpcUsage(false)
+		if err != nil {
+			context := "Failed to generate RPC usage"
+			return nil, internalRPCError(err.Error(), context)
+		}
+
+		return usage, nil
+	}
+
+	// Check that the command asked for is supported and implemented.  Only
+	// search the main list of handlers since help should not be provided
+	// for commands that are unimplemented or related to wallet
+	// functionality.
+	if _, ok := rpcHandlers[command]; !ok {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
+			Message: "Unknown command: " + command,
+		}
+	}
+
+	// Get the help for the command.
+	help, err := s.helpCacher.rpcMethodHelp(command)
+	if err != nil {
+		context := "Failed to generate help"
+		return nil, internalRPCError(err.Error(), context)
+	}
+
+	return help, nil
 }
 
 // messageToHex serializes a message to the wire protocol encoding using the

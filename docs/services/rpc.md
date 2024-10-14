@@ -175,7 +175,7 @@ The function accepts a `GenerateCmd` which contains the number of blocks to gene
 
 ```go
 // Sample usage within an RPC server setup
-command := &btcjson.GenerateCmd{NumBlocks: 10}
+command := &bsvjson.GenerateCmd{NumBlocks: 10}
 result, err := handleGenerate(rpcServerInstance, command, closeChannel)
 if err != nil {
     log.Fatalf("Failed to generate blocks: %v", err)
@@ -254,7 +254,7 @@ The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-sign
 ![rpc-send-raw-transaction.svg](img/plantuml/rpc/rpc-send-raw-transaction.svg)
 
 1. **Input Parsing**:
-  - The function receives a command (`btcjson.SendRawTransactionCmd`) which includes the hex-encoded string of the transaction.
+  - The function receives a command (`bsvjson.SendRawTransactionCmd`) which includes the hex-encoded string of the transaction.
   - It checks if the hexadecimal string has an odd length and prepends a "0" if necessary to ensure correct decoding.
 
 2. **Hex Decoding**:
@@ -298,7 +298,7 @@ The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining
 
 
 1. **Command Parsing**:
-  - The function receives a command (`btcjson.SubmitMiningSolutionCmd`) which includes a JSON string representing the mining solution.
+  - The function receives a command (`bsvjson.SubmitMiningSolutionCmd`) which includes a JSON string representing the mining solution.
 
 2. **JSON Unmarshaling**:
   - Attempts to unmarshal the JSON string into a `model.MiningSolution` struct.

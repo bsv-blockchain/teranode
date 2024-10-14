@@ -27,6 +27,7 @@ var (
 	prometheusHandleGetDifficulty        prometheus.Histogram
 	prometheusHandleInvalidateBlock      prometheus.Histogram
 	prometheusHandleReconsiderBlock      prometheus.Histogram
+	prometheusHandleHelp                 prometheus.Histogram
 )
 
 var (
@@ -179,6 +180,14 @@ func _initPrometheusMetrics() {
 			Namespace: "rpc",
 			Name:      "reconsider_block",
 			Help:      "Histogram of calls to handleReconsiderBlock in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleHelp = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "help",
+			Help:      "Histogram of calls to handleHelp in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
