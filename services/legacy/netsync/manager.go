@@ -1269,15 +1269,15 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		}
 	}
 
-	// by default, we do not process transactions
-	// only when we are in the running state we process transactions
-	processTransactions := false
+	// by default, we do not process transactions / blocks
+	// only when we are in the running state we process transaction and new block messages
+	processInvs := false
 
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
 		sm.logger.Errorf("Failed to get current FSM state: %v", err)
 	} else if fsmState != nil && *fsmState == ubsvblockchain.FSMStateRUNNING {
-		processTransactions = true
+		processInvs = true
 	}
 
 	// Request the advertised inventory if we don't already have it.  Also,
@@ -1285,14 +1285,16 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	// Finally, attempt to detect potential stalls due to long side chains
 	// we already have and request more blocks to prevent them.
 	for i, iv := range invVects {
+		if !processInvs {
+			// If we are not in running state, we are not interested in new transaction or block messages
+			sm.logger.Debugf("Ignoring inv message from %s, not in running state", peer)
+			continue
+		}
+
 		// Ignore unsupported inventory types.
 		switch iv.Type {
 		case wire.InvTypeBlock:
 		case wire.InvTypeTx:
-			if !processTransactions {
-				// If we are not in running state, we are not interested in transactions
-				continue
-			}
 		default:
 			continue
 		}
