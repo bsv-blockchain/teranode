@@ -871,6 +871,8 @@ func (p *Peer) PushGetBlocksMsg(locator blockchain.BlockLocator, stopHash *chain
 		beginHash = locator[0]
 	}
 
+	log.Debugf("PushGetBlocksMsg: locator=%v, stopHash=%v, peer=%s", locator, stopHash, p)
+
 	// Filter duplicate getblocks requests.
 	p.prevGetBlocksMtx.Lock()
 	isDuplicate := p.prevGetBlocksStop != nil && p.prevGetBlocksBegin != nil &&
@@ -915,7 +917,7 @@ func (p *Peer) PushGetHeadersMsg(locator blockchain.BlockLocator, stopHash *chai
 		beginHash = locator[0]
 	}
 
-	log.Debugf("PushGetHeadersMsg: locator=%v, stopHash=%v", locator, stopHash)
+	log.Debugf("PushGetHeadersMsg: locator=%v, stopHash=%v, peer=%s", locator, stopHash, p)
 
 	// Filter duplicate getheaders requests.
 	p.prevGetHdrsMtx.Lock()
