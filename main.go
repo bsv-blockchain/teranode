@@ -727,7 +727,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 		}
 
 		if err = sm.AddService("Legacy", legacy.New(
-			logger,
+			logger.New("legacy"),
 			blockchainClient,
 			validatorClient,
 			subtreeStore,

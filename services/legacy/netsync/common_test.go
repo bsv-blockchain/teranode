@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
@@ -109,10 +110,10 @@ func MakeConnectedPeers(inboundCfg peer.Config, outboundCfg peer.Config, index u
 		&SimpleAddr{net: "tcp", addr: fmt.Sprintf("10.0.1.%d:8333", index)},
 	)
 
-	inboundPeer := peer.NewInboundPeer(&inboundCfg)
+	inboundPeer := peer.NewInboundPeer(ulogger.TestLogger{}, &inboundCfg)
 	inboundPeer.AssociateConnection(conn1)
 
-	outboundPeer, err := peer.NewOutboundPeer(&outboundCfg,
+	outboundPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, &outboundCfg,
 		conn2.RemoteAddr().String())
 	if err != nil {
 		err = fmt.Errorf("failed to create new outbound peer: %v", err)

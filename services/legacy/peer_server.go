@@ -1763,7 +1763,7 @@ func (s *server) inboundPeerConnected(conn net.Conn) {
 		s.logger.Warnf("Cannot whitelist peer %v: %v", conn.RemoteAddr(), err)
 	}
 
-	sp.Peer = peer.NewInboundPeer(newPeerConfig(sp))
+	sp.Peer = peer.NewInboundPeer(s.logger, newPeerConfig(sp))
 	sp.AssociateConnection(conn)
 	go s.peerDoneHandler(sp)
 }
@@ -1775,7 +1775,7 @@ func (s *server) inboundPeerConnected(conn net.Conn) {
 // manager of the attempt.
 func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 	sp := newServerPeer(s, c.Permanent)
-	p, err := peer.NewOutboundPeer(newPeerConfig(sp), c.Addr.String())
+	p, err := peer.NewOutboundPeer(s.logger, newPeerConfig(sp), c.Addr.String())
 	if err != nil {
 		sp.server.logger.Debugf("Cannot create outbound peer %s: %v", c.Addr, err)
 		s.connManager.Disconnect(c.ID())

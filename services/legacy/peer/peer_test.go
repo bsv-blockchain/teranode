@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
@@ -296,10 +297,10 @@ func TestPeerConnection(t *testing.T) {
 					&conn{raddr: "10.0.0.1:8333"},
 					&conn{raddr: "10.0.0.2:8333"},
 				)
-				inPeer := peer.NewInboundPeer(peer1Cfg)
+				inPeer := peer.NewInboundPeer(ulogger.TestLogger{}, peer1Cfg)
 				inPeer.AssociateConnection(inConn)
 
-				outPeer, err := peer.NewOutboundPeer(peer2Cfg, "10.0.0.2:8333")
+				outPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, peer2Cfg, "10.0.0.2:8333")
 				if err != nil {
 					return nil, nil, err
 				}
@@ -322,10 +323,10 @@ func TestPeerConnection(t *testing.T) {
 					&conn{raddr: "10.0.0.1:8333", proxy: true},
 					&conn{raddr: "10.0.0.2:8333"},
 				)
-				inPeer := peer.NewInboundPeer(peer1Cfg)
+				inPeer := peer.NewInboundPeer(ulogger.TestLogger{}, peer1Cfg)
 				inPeer.AssociateConnection(inConn)
 
-				outPeer, err := peer.NewOutboundPeer(peer2Cfg, "10.0.0.2:8333")
+				outPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, peer2Cfg, "10.0.0.2:8333")
 				if err != nil {
 					return nil, nil, err
 				}
@@ -460,7 +461,7 @@ func TestPeerListeners(t *testing.T) {
 		&conn{raddr: "10.0.0.1:8333"},
 		&conn{raddr: "10.0.0.2:8333"},
 	)
-	inPeer := peer.NewInboundPeer(peerCfg)
+	inPeer := peer.NewInboundPeer(ulogger.TestLogger{}, peerCfg)
 	inPeer.AssociateConnection(inConn)
 
 	peerCfg.Listeners = peer.MessageListeners{
@@ -468,7 +469,7 @@ func TestPeerListeners(t *testing.T) {
 			verack <- struct{}{}
 		},
 	}
-	outPeer, err := peer.NewOutboundPeer(peerCfg, "10.0.0.1:8333")
+	outPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, peerCfg, "10.0.0.1:8333")
 	if err != nil {
 		t.Errorf("NewOutboundPeer: unexpected err %v\n", err)
 		return
@@ -628,7 +629,7 @@ func TestOutboundPeer(t *testing.T) {
 	r, w := io.Pipe()
 	c := &conn{raddr: "10.0.0.1:8333", Writer: w, Reader: r}
 
-	p, err := peer.NewOutboundPeer(peerCfg, "10.0.0.1:8333")
+	p, err := peer.NewOutboundPeer(ulogger.TestLogger{}, peerCfg, "10.0.0.1:8333")
 	if err != nil {
 		t.Errorf("NewOutboundPeer: unexpected err - %v\n", err)
 		return
@@ -684,7 +685,7 @@ func TestOutboundPeer(t *testing.T) {
 	peerCfg.NewestBlock = newestBlock
 	r1, w1 := io.Pipe()
 	c1 := &conn{raddr: "10.0.0.1:8333", Writer: w1, Reader: r1}
-	p1, err := peer.NewOutboundPeer(peerCfg, "10.0.0.1:8333")
+	p1, err := peer.NewOutboundPeer(ulogger.TestLogger{}, peerCfg, "10.0.0.1:8333")
 	if err != nil {
 		t.Errorf("NewOutboundPeer: unexpected err - %v\n", err)
 		return
@@ -714,7 +715,7 @@ func TestOutboundPeer(t *testing.T) {
 	peerCfg.Services = wire.SFNodeBloom
 	r2, w2 := io.Pipe()
 	c2 := &conn{raddr: "10.0.0.1:8333", Writer: w2, Reader: r2}
-	p2, err := peer.NewOutboundPeer(peerCfg, "10.0.0.1:8333")
+	p2, err := peer.NewOutboundPeer(ulogger.TestLogger{}, peerCfg, "10.0.0.1:8333")
 	if err != nil {
 		t.Errorf("NewOutboundPeer: unexpected err - %v\n", err)
 		return
@@ -782,7 +783,7 @@ func TestUnsupportedVersionPeer(t *testing.T) {
 		&conn{laddr: "10.0.0.2:8333", raddr: "10.0.0.1:8333"},
 	)
 
-	p, err := peer.NewOutboundPeer(peerCfg, "10.0.0.1:8333")
+	p, err := peer.NewOutboundPeer(ulogger.TestLogger{}, peerCfg, "10.0.0.1:8333")
 	if err != nil {
 		t.Fatalf("NewOutboundPeer: unexpected err - %v\n", err)
 	}
@@ -881,13 +882,17 @@ func TestDuplicateVersionMsg(t *testing.T) {
 		&conn{laddr: "10.0.0.1:9108", raddr: "10.0.0.2:9108"},
 		&conn{laddr: "10.0.0.2:9108", raddr: "10.0.0.1:9108"},
 	)
-	outPeer, err := peer.NewOutboundPeer(peerCfg, inConn.laddr)
+
+	outPeer, err := peer.NewOutboundPeer(ulogger.TestLogger{}, peerCfg, inConn.laddr)
 	if err != nil {
 		t.Fatalf("NewOutboundPeer: unexpected err: %v\n", err)
 	}
+
 	outPeer.AssociateConnection(outConn)
-	inPeer := peer.NewInboundPeer(peerCfg)
+
+	inPeer := peer.NewInboundPeer(ulogger.TestLogger{}, peerCfg)
 	inPeer.AssociateConnection(inConn)
+
 	// Wait for the veracks from the initial protocol version negotiation.
 	for i := 0; i < 2; i++ {
 		select {

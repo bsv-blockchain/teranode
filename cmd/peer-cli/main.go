@@ -14,6 +14,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/urfave/cli/v2"
 )
@@ -22,6 +23,7 @@ var p *peer.Peer
 var conn net.Conn
 var bsvPeerConnected chan bool
 var verack chan struct{}
+var logger = ulogger.New("peer-cli")
 
 func main() {
 	bsvPeerConnected = make(chan bool, 1)
@@ -91,7 +93,7 @@ func connect(c *cli.Context) error {
 
 	addr := c.String("address")
 	var err error
-	p, err = peer.NewOutboundPeer(peerCfg(), addr)
+	p, err = peer.NewOutboundPeer(logger, peerCfg(), addr)
 	if err != nil {
 		return err
 	}
@@ -251,7 +253,7 @@ func handleCommand(input string) {
 func reconnect(addr string) error {
 	fmt.Println("Attempting to reconnect...")
 	var err error
-	p, err = peer.NewOutboundPeer(peerCfg(), addr)
+	p, err = peer.NewOutboundPeer(logger, peerCfg(), addr)
 	if err != nil {
 		return err
 	}
