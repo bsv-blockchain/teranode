@@ -233,7 +233,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 
 				setOptions := []options.FileOption{
 					options.WithFileExtension("tx"),
-					options.WithAllowOverwrite(true),
+					// options.WithAllowOverwrite(true),
 				}
 
 				if !hasUtxos {
@@ -247,8 +247,12 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					bItem.txHash[:],
 					bItem.tx.ExtendedBytes(),
 					setOptions...,
-				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+				); err != nil {
+					if errors.Is(err, errors.ErrBlobAlreadyExists) {
+						utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("[sendStoreBatch] %v already exists in store", bItem.txHash.String()))
+					} else {
+						utils.SafeSend[error](bItem.done, errors.NewStorageError("[sendStoreBatch] error batch writing transaction to external store [%s]", bItem.txHash.String(), err))
+					}
 					// NOOP for this record
 					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
@@ -500,7 +504,7 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 
 	opts := []options.FileOption{
 		options.WithFileExtension("tx"),
-		options.WithAllowOverwrite(true),
+		// options.WithAllowOverwrite(true),
 	}
 
 	if !hasUtxos {
@@ -514,7 +518,11 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 		bItem.tx.ExtendedBytes(),
 		opts...,
 	); err != nil {
-		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing transaction to external store [%s]", bItem.txHash.String(), err))
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("[getBinsToStore] %v already exists in store", bItem.txHash.String()))
+		} else {
+			utils.SafeSend[error](bItem.done, errors.NewStorageError("[getBinsToStore] error writing transaction to external store [%s]", bItem.txHash.String(), err))
+		}
 
 		return
 	}
@@ -592,7 +600,7 @@ func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *ba
 
 	opts := []options.FileOption{
 		options.WithFileExtension("outputs"),
-		options.WithAllowOverwrite(true),
+		// options.WithAllowOverwrite(true),
 	}
 
 	if !hasUtxos {
@@ -606,7 +614,11 @@ func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *ba
 		wrapper.Bytes(),
 		opts...,
 	); err != nil {
-		utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing output to external store [%s]", bItem.txHash.String(), err))
+		if errors.Is(err, errors.ErrBlobAlreadyExists) {
+			utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("[storePartialTransactionExternally] %v already exists in store", bItem.txHash.String()))
+		} else {
+			utils.SafeSend[error](bItem.done, errors.NewStorageError("[storePartialTransactionExternally] error writing output to external store [%s]", bItem.txHash.String(), err))
+		}
 
 		return
 	}
