@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -341,7 +342,7 @@ func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 	}
 
 	// Convert the byte slice to a string
-	heightStr := string(b)
+	heightStr := strings.TrimSpace(string(b))
 
 	// Parse the string to a uint32
 	height, err := strconv.ParseUint(heightStr, 10, 32)
