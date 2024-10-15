@@ -834,6 +834,15 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 		return errors.NewServiceError("Received block message from unknown peer %s", peer)
 	}
 
+	legacySyncMode := false
+
+	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
+	if err != nil {
+		return errors.NewProcessingError("failed to get current FSM state: %v", err)
+	} else if fsmState != nil && *fsmState == ubsvblockchain.FSMStateLEGACYSYNCING {
+		legacySyncMode = true
+	}
+
 	// If we didn't ask for this block then the peer is misbehaving.
 	blockHash := bmsg.block.Hash()
 	if _, exists = state.requestedBlocks[*blockHash]; !exists {
@@ -885,17 +894,13 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// if not in Legacy Sync mode, we need to potentially download the block,
 	// promote block to the block validation via kafka (p2p -> blockvalidation message),
 	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
-	err := sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block)
-	if err != nil {
-		// log.Printf("SAO %v", err)
-		time.Sleep(5 * time.Second)
-		panic(err)
-		// if !(errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)) {
-		// 	peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
-		// }
-		// TODO - find a better way to handle this rather than panic
-		// should be an ubsv error
-		// return err
+	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block); err != nil {
+		serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
+		if !legacySyncMode && !serviceError {
+			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
+		}
+
+		return err
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
@@ -1269,15 +1274,16 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		}
 	}
 
-	// by default, we do not process transactions / blocks
-	// only when we are in the running state we process transaction and new block messages
-	processInvs := false
+	// by default, we do not process transactions
+	// only when we are in the running state we process transactions
+	processTransactions := false
 
 	fsmState, err := sm.blockchainClient.GetFSMCurrentState(sm.ctx)
 	if err != nil {
-		sm.logger.Errorf("Failed to get current FSM state: %v", err)
+		sm.logger.Errorf("failed to get current FSM state: %v", err)
+		return
 	} else if fsmState != nil && *fsmState == ubsvblockchain.FSMStateRUNNING {
-		processInvs = true
+		processTransactions = true
 	}
 
 	// Request the advertised inventory if we don't already have it.  Also,
@@ -1285,16 +1291,14 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	// Finally, attempt to detect potential stalls due to long side chains
 	// we already have and request more blocks to prevent them.
 	for i, iv := range invVects {
-		if !processInvs {
-			// If we are not in running state, we are not interested in new transaction or block messages
-			sm.logger.Debugf("Ignoring inv message from %s, not in running state", peer)
-			continue
-		}
-
 		// Ignore unsupported inventory types.
 		switch iv.Type {
 		case wire.InvTypeBlock:
 		case wire.InvTypeTx:
+			if !processTransactions {
+				// If we are not in running state, we are not interested in transactions
+				continue
+			}
 		default:
 			continue
 		}
