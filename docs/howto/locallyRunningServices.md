@@ -10,7 +10,7 @@ Execute all services in a single terminal window with the command below. Replace
 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 ```
 
-> **📝 Note:** Confirm that settings for your username are correctly established as outlined in the Installation Guide. If not yet done, please review it [here](developerSetup.md).
+> **📝 Note:** Confirm that settings for your username are correctly established as outlined in the Installation Guide. If not yet done, please review it [here](./developerSetup.md).
 >
 > **⚠️ Warning:** When using BadgerDB or SQLite, the data directory must be deleted before rerunning the services:
 >
