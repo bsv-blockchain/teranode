@@ -11,6 +11,7 @@ import (
 
 func main() {
 	var rootCmd = &cobra.Command{Use: "app"}
+
 	generate.AddGenerateCommand(rootCmd)
 	runner.AddRunCommand(rootCmd)
 

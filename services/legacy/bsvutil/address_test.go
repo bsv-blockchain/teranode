@@ -620,6 +620,7 @@ func TestAddresses(t *testing.T) {
 					test.name, saddr, decoded.ScriptAddress())
 				return
 			}
+
 			switch a := decoded.(type) {
 			case *bsvutil.AddressPubKeyHash:
 				if h := a.Hash160()[:]; !bytes.Equal(saddr, h) {
@@ -668,6 +669,7 @@ func TestAddresses(t *testing.T) {
 					return
 				}
 			}
+
 			continue
 		}
 

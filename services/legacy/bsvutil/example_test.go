@@ -8,7 +8,6 @@ import (
 )
 
 func ExampleAmount() {
-
 	a := bsvutil.Amount(0)
 	fmt.Println("Zero Satoshi:", a)
 
@@ -29,28 +28,32 @@ func ExampleNewAmount() {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(amountOne) //Output 1
+
+	fmt.Println(amountOne) // Output 1
 
 	amountFraction, err := bsvutil.NewAmount(0.01234567)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(amountFraction) //Output 2
+
+	fmt.Println(amountFraction) // Output 2
 
 	amountZero, err := bsvutil.NewAmount(0)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(amountZero) //Output 3
+
+	fmt.Println(amountZero) // Output 3
 
 	amountNaN, err := bsvutil.NewAmount(math.NaN())
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
-	fmt.Println(amountNaN) //Output 4
+
+	fmt.Println(amountNaN) // Output 4
 
 	// Output: 1 BSV
 	// 0.01234567 BSV
@@ -58,7 +61,7 @@ func ExampleNewAmount() {
 	// invalid bitcoin amount
 }
 
-func ExampleAmount_unitConversions() {
+func ExampleAmountUnitConversions() {
 	amount := bsvutil.Amount(44433322211100)
 
 	fmt.Println("Satoshi to kBSV:", amount.Format(bsvutil.AmountKiloBSV))

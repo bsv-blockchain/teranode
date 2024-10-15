@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	//"github.com/davecgh/go-spew/spew"
 )
 
 // TestNewTLSCertPair ensures the NewTLSCertPair function works as expected.

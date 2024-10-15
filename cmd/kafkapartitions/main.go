@@ -21,6 +21,7 @@ func main() {
 
 	config := os.Args[1]
 	partitionsStr := os.Args[2]
+
 	partitions, err := strconv.Atoi(partitionsStr)
 	if err != nil {
 		log.Fatalf("Invalid number of partitions: %v", err)
