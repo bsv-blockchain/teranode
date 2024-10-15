@@ -915,6 +915,8 @@ func (p *Peer) PushGetHeadersMsg(locator blockchain.BlockLocator, stopHash *chai
 		beginHash = locator[0]
 	}
 
+	log.Debugf("PushGetHeadersMsg: locator=%v, stopHash=%v", locator, stopHash)
+
 	// Filter duplicate getheaders requests.
 	p.prevGetHdrsMtx.Lock()
 	isDuplicate := p.prevGetHdrsStop != nil && p.prevGetHdrsBegin != nil &&
@@ -1812,6 +1814,8 @@ func (p *Peer) QueueMessage(msg wire.Message, doneChan chan<- struct{}) {
 func (p *Peer) QueueMessageWithEncoding(msg wire.Message, doneChan chan<- struct{},
 	encoding wire.MessageEncoding) {
 
+	log.Debugf("Queueing %v message for %s", msg.Command(), p)
+
 	// Avoid risk of deadlock if goroutine already exited.  The goroutine
 	// we will be sending to hangs around until it knows for a fact that
 	// it is marked as disconnected and *then* it drains the channels.
@@ -1837,6 +1841,8 @@ func (p *Peer) QueueInventory(invVect *wire.InvVect) {
 	if p.knownInventory.Exists(invVect) {
 		return
 	}
+
+	log.Debugf("Queueing %v inventory for %s", invVect, p)
 
 	// Avoid risk of deadlock if goroutine already exited.  The goroutine
 	// we will be sending to hangs around until it knows for a fact that

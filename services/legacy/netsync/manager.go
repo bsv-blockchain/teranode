@@ -318,6 +318,8 @@ func (sm *SyncManager) startSync() {
 		return
 	}
 
+	sm.logger.Debugf("startSync - Syncing from %v", sm.syncPeer)
+
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
 		sm.logger.Errorf("Failed to get best block header: %v", err)
