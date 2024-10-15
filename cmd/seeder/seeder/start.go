@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	// nolint:gci,gosec
@@ -107,21 +108,45 @@ func Start() {
 		logger.Errorf("%v", http.ListenAndServe(":6060", nil))
 	}()
 
+	wg := sync.WaitGroup{}
+
 	if !skipHeaders {
-		// Process the headers
-		if err := processHeaders(ctx, logger, headerFile); err != nil {
-			logger.Errorf("Failed to process headers: %v", err)
-			return
-		}
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			logger.Infof("Processing headers...")
+
+			// Process the headers
+			if err := processHeaders(ctx, logger, headerFile); err != nil {
+				logger.Errorf("Failed to process headers: %v", err)
+				return
+			}
+
+			logger.Infof("Finished processing headers")
+		}()
 	}
 
 	if !skipUTXOs {
-		// Process the UTXOs
-		if err := processUTXOs(ctx, logger, utxoFile); err != nil {
-			logger.Errorf("Failed to process UTXOs: %v", err)
-			return
-		}
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			logger.Infof("Processing UTXOs...")
+
+			// Process the UTXOs
+			if err := processUTXOs(ctx, logger, utxoFile); err != nil {
+				logger.Errorf("Failed to process UTXOs: %v", err)
+				return
+			}
+
+			logger.Infof("Finished processing UTXOs")
+		}()
 	}
+
+	wg.Wait()
 }
 
 func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile string) error {
