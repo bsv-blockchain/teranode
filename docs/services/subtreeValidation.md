@@ -60,7 +60,7 @@ Finally, note that the Subtree Validation service benefits of the use of Lustre 
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](../lustre_fs.svg)
+![lustre_fs.svg](../misc/lustre_fs.svg)
 
 
 
@@ -118,7 +118,7 @@ The validation process is as follows:
 
 ## 3. gRPC Protobuf Definitions
 
-The Subtree Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/subtreevalidationProto.md).
+The Subtree Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/subtreevalidationProto.md).
 
 
 ## 4. Data Model

@@ -67,7 +67,7 @@ Finally, note that the Block Validation service benefits of the use of Lustre Fs
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](../lustre_fs.svg)
+![lustre_fs.svg](../misc/lustre_fs.svg)
 
 
 ## 2. Functionality
@@ -172,7 +172,7 @@ The `BlockValidation` proceeds to mark all transactions within the block as "min
 
 ## 3. gRPC Protobuf Definitions
 
-The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/subtreevalidationProto.md).
+The Block Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/subtreevalidationProto.md).
 
 
 ## 4. Data Model

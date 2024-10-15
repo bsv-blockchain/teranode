@@ -366,7 +366,7 @@ Note:
 
 ## 4. gRPC Protobuf Definitions
 
-The Block Assembly Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/blockAssemblyProto.md).
+The Block Assembly Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/blockassemblyProto.md).
 
 
 ## 5. Technology

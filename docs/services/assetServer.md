@@ -80,7 +80,7 @@ Finally, note that the Asset Server benefits of the use of Lustre Fs (filesystem
 Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
 Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
 
-![lustre_fs.svg](../lustre_fs.svg)
+![lustre_fs.svg](../misc/lustre_fs.svg)
 
 
 ## 3. Data Model

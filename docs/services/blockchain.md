@@ -309,7 +309,7 @@ For further detail, we show here the sequence for the `SetBlockSubtreesSet` call
 
 ## 3. gRPC Protobuf Definitions
 
-The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/blockchainProto.md).
+The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/blockchainProto.md).
 
 
 ## 4. Data Model

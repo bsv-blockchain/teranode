@@ -261,7 +261,7 @@ When the TX Validator Service is running in the node, the P2P Service will subsc
 
 ## 3. gRPC Protobuf Definitions
 
-The Validator, when run as a service, uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](protobuf_docs/validatorProto.md).
+The Validator, when run as a service, uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../references/protobuf_docs/validatorProto.md).
 
 ## 4. Data Model
 

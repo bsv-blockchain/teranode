@@ -1,168 +1,173 @@
-# Protocol Documentation
+# GRPC Documentation - ValidatorAPI
 <a name="top"></a>
 
 ## Table of Contents
 
+- [validator_api.proto](#validator_api.proto)
+    - [EmptyMessage](#EmptyMessage)
+    - [GetBlockHeightResponse](#GetBlockHeightResponse)
+    - [GetMedianBlockTimeResponse](#GetMedianBlockTimeResponse)
+    - [HealthResponse](#HealthResponse)
+    - [ValidateTransactionBatchRequest](#ValidateTransactionBatchRequest)
+    - [ValidateTransactionBatchResponse](#ValidateTransactionBatchResponse)
+    - [ValidateTransactionRequest](#ValidateTransactionRequest)
+    - [ValidateTransactionResponse](#ValidateTransactionResponse)
 
-- [blockvalidation_api.proto](#blockvalidation_apiproto)
-  - [BlockFoundRequest](#blockfoundrequest)
-  - [EmptyMessage](#emptymessage)
-  - [GetSubtreeRequest](#getsubtreerequest)
-  - [GetSubtreeResponse](#getsubtreeresponse)
-  - [HealthResponse](#healthresponse)
-  - [SetTxMetaRequest](#settxmetarequest)
-  - [SetTxMetaResponse](#settxmetaresponse)
-  - [SubtreeFoundRequest](#subtreefoundrequest)
-  - [BlockValidationAPI](#blockvalidationapi)
+    - [ValidatorAPI](#ValidatorAPI)
+
 - [Scalar Value Types](#scalar-value-types)
 
 
-<a name="blockvalidation_api-proto"></a>
+
+<a name="validator_api.proto"></a>
 <p align="right"><a href="#top">Top</a></p>
 
-## blockvalidation_api.proto
+## validator_api.proto
 
 
 
-<a name="blockvalidation_api-BlockFoundRequest"></a>
-
-### BlockFoundRequest
-Request for notifying a found block.
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  | the hash of the found block |
-| base_url | [string](#string) |  | the base URL where the block can be accessed |
-
-
-
-
-
-
-<a name="blockvalidation_api-EmptyMessage"></a>
+<a name="EmptyMessage"></a>
 
 ### EmptyMessage
-A simple empty message.
+swagger:model EmptyMessage
 
 
 
 
 
 
-<a name="blockvalidation_api-GetSubtreeRequest"></a>
+<a name="GetBlockHeightResponse"></a>
 
-### GetSubtreeRequest
-Request for retrieving a subtree.
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  | the hash of the subtree to retrieve |
-
-
-
-
-
-
-<a name="blockvalidation_api-GetSubtreeResponse"></a>
-
-### GetSubtreeResponse
-Response for retrieving a subtree.
+### GetBlockHeightResponse
+swagger:model GetBlockHeightResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| subtree | [bytes](#bytes) |  | the retrieved subtree data |
+| height | [uint32](#uint32) |  |  |
 
 
 
 
 
 
-<a name="blockvalidation_api-HealthResponse"></a>
+<a name="GetMedianBlockTimeResponse"></a>
+
+### GetMedianBlockTimeResponse
+swagger:model GetMedianBlockTimeResponse
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| median_time | [uint32](#uint32) |  |  |
+
+
+
+
+
+
+<a name="HealthResponse"></a>
 
 ### HealthResponse
-Health status of the service.
+swagger:model HealthResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  | true if the service is healthy |
-| details | [string](#string) |  | optional, human-readable details |
-| timestamp | [uint32](#uint32) |  | unix timestamp |
+| ok | [bool](#bool) |  |  |
+| details | [string](#string) |  |  |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
 
 
 
 
 
 
-<a name="blockvalidation_api-SetTxMetaRequest"></a>
+<a name="ValidateTransactionBatchRequest"></a>
 
-### SetTxMetaRequest
-Request for setting transaction metadata.
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| data | [bytes](#bytes) | repeated | the metadata to set for transactions |
-
-
-
-
-
-
-<a name="blockvalidation_api-SetTxMetaResponse"></a>
-
-### SetTxMetaResponse
-Response for setting transaction metadata.
+### ValidateTransactionBatchRequest
+swagger:model ValidateTransactionBatchRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  | true if the operation was successful |
+| transactions | [ValidateTransactionRequest](#validator_api-ValidateTransactionRequest) | repeated |  |
 
 
 
 
 
 
-<a name="blockvalidation_api-SubtreeFoundRequest"></a>
+<a name="ValidateTransactionBatchResponse"></a>
 
-### SubtreeFoundRequest
-Request for notifying a found subtree.
+### ValidateTransactionBatchResponse
+swagger:model ValidateTransactionBatchResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  | the hash of the found subtree |
-| base_url | [string](#string) |  | the base URL where the subtree can be accessed |
+| valid | [bool](#bool) |  |  |
+| errors | [string](#string) | repeated |  |
 
 
 
 
 
 
+<a name="ValidateTransactionRequest"></a>
+
+### ValidateTransactionRequest
+swagger:model ValidateTransactionRequest
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| transaction_data | [bytes](#bytes) |  |  |
+| block_height | [uint32](#uint32) |  |  |
 
 
 
 
 
 
-<a name="blockvalidation_api-BlockValidationAPI"></a>
+<a name="ValidateTransactionResponse"></a>
 
-### BlockValidationAPI
+### ValidateTransactionResponse
+swagger:model ValidateTransactionResponse
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| valid | [bool](#bool) |  |  |
+| txid | [bytes](#bytes) |  |  |
+| reason | [string](#string) |  |  |
+
+
+
+
+
+ <!-- end messages -->
+
+ <!-- end enums -->
+
+ <!-- end HasExtensions -->
+
+
+<a name="ValidatorAPI"></a>
+
+### ValidatorAPI
 
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [EmptyMessage](#blockvalidation_api-EmptyMessage) | [HealthResponse](#blockvalidation_api-HealthResponse) | Returns the health status of the API. |
-| BlockFound | [BlockFoundRequest](#blockvalidation_api-BlockFoundRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) | Notifies that a block has been found. |
-| SubtreeFound | [SubtreeFoundRequest](#blockvalidation_api-SubtreeFoundRequest) | [EmptyMessage](#blockvalidation_api-EmptyMessage) | Notifies that a subtree has been found. |
-| Get | [GetSubtreeRequest](#blockvalidation_api-GetSubtreeRequest) | [GetSubtreeResponse](#blockvalidation_api-GetSubtreeResponse) | Retrieves a subtree by its hash. |
-| SetTxMeta | [SetTxMetaRequest](#blockvalidation_api-SetTxMetaRequest) | [SetTxMetaResponse](#blockvalidation_api-SetTxMetaResponse) | Sets metadata for transactions. |
+| HealthGRPC | [EmptyMessage](#validator_api-EmptyMessage) | [HealthResponse](#validator_api-HealthResponse) | Health returns the health of the API. |
+| ValidateTransaction | [ValidateTransactionRequest](#validator_api-ValidateTransactionRequest) | [ValidateTransactionResponse](#validator_api-ValidateTransactionResponse) |  |
+| ValidateTransactionBatch | [ValidateTransactionBatchRequest](#validator_api-ValidateTransactionBatchRequest) | [ValidateTransactionBatchResponse](#validator_api-ValidateTransactionBatchResponse) |  |
+| ValidateTransactionStream | [ValidateTransactionRequest](#validator_api-ValidateTransactionRequest) stream | [ValidateTransactionResponse](#validator_api-ValidateTransactionResponse) |  |
+| GetBlockHeight | [EmptyMessage](#validator_api-EmptyMessage) | [GetBlockHeightResponse](#validator_api-GetBlockHeightResponse) |  |
+| GetMedianBlockTime | [EmptyMessage](#validator_api-EmptyMessage) | [GetMedianBlockTimeResponse](#validator_api-GetMedianBlockTimeResponse) |  |
 
-
+ <!-- end services -->
 
 
 
@@ -185,3 +190,6 @@ Request for notifying a found subtree.
 | <a name="bool" /> bool |  | bool | boolean | boolean | bool | bool | boolean | TrueClass/FalseClass |
 | <a name="string" /> string | A string must always contain UTF-8 encoded or 7-bit ASCII text. | string | String | str/unicode | string | string | string | String (UTF-8) |
 | <a name="bytes" /> bytes | May contain any arbitrary sequence of bytes. | string | ByteString | str | []byte | ByteString | string | String (ASCII-8BIT) |
+
+
+---

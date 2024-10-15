@@ -1,102 +1,169 @@
-# Protocol Documentation
+# GRPC Documentation - PropagationAPI
 <a name="top"></a>
 
 ## Table of Contents
 
+- [propagation_api.proto](#propagation_api.proto)
+    - [EmptyMessage](#EmptyMessage)
+    - [GetRequest](#GetRequest)
+    - [GetResponse](#GetResponse)
+    - [HealthResponse](#HealthResponse)
+    - [ProcessTransactionBatchRequest](#ProcessTransactionBatchRequest)
+    - [ProcessTransactionBatchResponse](#ProcessTransactionBatchResponse)
+    - [ProcessTransactionHexRequest](#ProcessTransactionHexRequest)
+    - [ProcessTransactionRequest](#ProcessTransactionRequest)
 
-- [propagation_api.proto](#propagation_apiproto)
-  - [EmptyMessage](#emptymessage)
-  - [HealthResponse](#healthresponse)
-  - [ProcessTransactionHexRequest](#processtransactionhexrequest)
-  - [ProcessTransactionRequest](#processtransactionrequest)
-  - [PropagationAPI](#propagationapi)
+    - [PropagationAPI](#PropagationAPI)
+
 - [Scalar Value Types](#scalar-value-types)
 
 
-<a name="propagation_api-proto"></a>
+
+<a name="propagation_api.proto"></a>
 <p align="right"><a href="#top">Top</a></p>
 
 ## propagation_api.proto
 
 
 
-<a name="propagation_api-EmptyMessage"></a>
+<a name="EmptyMessage"></a>
 
 ### EmptyMessage
-Generic empty message.
+swagger:model EmptyMessage
 
 
 
 
 
 
-<a name="propagation_api-HealthResponse"></a>
+<a name="GetRequest"></a>
+
+### GetRequest
+swagger:model GetRequest
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| txid | [bytes](#bytes) |  |  |
+
+
+
+
+
+
+<a name="GetResponse"></a>
+
+### GetResponse
+swagger:model GetResponse
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| tx | [bytes](#bytes) |  |  |
+
+
+
+
+
+
+<a name="HealthResponse"></a>
 
 ### HealthResponse
-Health status of the service.
+swagger:model HealthResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  | true if the service is healthy |
-| details | [string](#string) |  | optional, human-readable details |
-| timestamp | [uint32](#uint32) |  | unix timestamp |
+| ok | [bool](#bool) |  |  |
+| details | [string](#string) |  |  |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
 
 
 
 
 
 
-<a name="propagation_api-ProcessTransactionHexRequest"></a>
+<a name="ProcessTransactionBatchRequest"></a>
+
+### ProcessTransactionBatchRequest
+swagger:model ProcessTransactionRequest
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| tx | [bytes](#bytes) | repeated |  |
+
+
+
+
+
+
+<a name="ProcessTransactionBatchResponse"></a>
+
+### ProcessTransactionBatchResponse
+swagger:model ProcessTransactionBatchResponse
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| error | [string](#string) | repeated |  |
+
+
+
+
+
+
+<a name="ProcessTransactionHexRequest"></a>
 
 ### ProcessTransactionHexRequest
-Request to process a transaction in hexadecimal format.
+swagger:model ProcessTransactionRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| tx | [string](#string) |  | Transaction data in hexadecimal format |
+| tx | [string](#string) |  |  |
 
 
 
 
 
 
-<a name="propagation_api-ProcessTransactionRequest"></a>
+<a name="ProcessTransactionRequest"></a>
 
 ### ProcessTransactionRequest
-Request to process a transaction.
+swagger:model ProcessTransactionRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| tx | [bytes](#bytes) |  | Transaction data |
+| tx | [bytes](#bytes) |  |  |
 
 
 
 
 
+ <!-- end messages -->
+
+ <!-- end enums -->
+
+ <!-- end HasExtensions -->
 
 
-
-
-
-
-
-<a name="propagation_api-PropagationAPI"></a>
+<a name="PropagationAPI"></a>
 
 ### PropagationAPI
-This service is designed to handle the processing and propagation of transactions in the network.
+
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [EmptyMessage](#propagation_api-EmptyMessage) | [HealthResponse](#propagation_api-HealthResponse) | Health check for the API. |
-| ProcessTransaction | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) | [EmptyMessage](#propagation_api-EmptyMessage) | Processes a transaction. |
-| ProcessTransactionHex | [ProcessTransactionHexRequest](#propagation_api-ProcessTransactionHexRequest) | [EmptyMessage](#propagation_api-EmptyMessage) | Processes a transaction provided in hexadecimal format. |
-| ProcessTransactionStream | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) stream | [EmptyMessage](#propagation_api-EmptyMessage) stream | Stream-based processing of transactions. |
-| ProcessTransactionDebug | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) | [EmptyMessage](#propagation_api-EmptyMessage) | Processes a transaction with additional debug information. |
+| HealthGRPC | [EmptyMessage](#propagation_api-EmptyMessage) | [HealthResponse](#propagation_api-HealthResponse) | Health returns the health of the API. |
+| ProcessTransaction | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) | [EmptyMessage](#propagation_api-EmptyMessage) |  |
+| ProcessTransactionBatch | [ProcessTransactionBatchRequest](#propagation_api-ProcessTransactionBatchRequest) | [ProcessTransactionBatchResponse](#propagation_api-ProcessTransactionBatchResponse) |  |
+| ProcessTransactionHex | [ProcessTransactionHexRequest](#propagation_api-ProcessTransactionHexRequest) | [EmptyMessage](#propagation_api-EmptyMessage) |  |
+| ProcessTransactionStream | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) stream | [EmptyMessage](#propagation_api-EmptyMessage) stream |  |
+| ProcessTransactionDebug | [ProcessTransactionRequest](#propagation_api-ProcessTransactionRequest) | [EmptyMessage](#propagation_api-EmptyMessage) |  |
 
-
+ <!-- end services -->
 
 
 
@@ -119,3 +186,6 @@ This service is designed to handle the processing and propagation of transaction
 | <a name="bool" /> bool |  | bool | boolean | boolean | bool | bool | boolean | TrueClass/FalseClass |
 | <a name="string" /> string | A string must always contain UTF-8 encoded or 7-bit ASCII text. | string | String | str/unicode | string | string | string | String (UTF-8) |
 | <a name="bytes" /> bytes | May contain any arbitrary sequence of bytes. | string | ByteString | str | []byte | ByteString | string | String (ASCII-8BIT) |
+
+
+---

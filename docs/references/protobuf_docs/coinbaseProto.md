@@ -1,144 +1,163 @@
-# Protocol Documentation
+# GRPC Documentation - CoinbaseAPI
 <a name="top"></a>
 
 ## Table of Contents
 
+- [coinbase_api.proto](#coinbase_api.proto)
+    - [DistributeTransactionRequest](#DistributeTransactionRequest)
+    - [DistributeTransactionResponse](#DistributeTransactionResponse)
+    - [GetBalanceResponse](#GetBalanceResponse)
+    - [HealthResponse](#HealthResponse)
+    - [RequestFundsRequest](#RequestFundsRequest)
+    - [RequestFundsResponse](#RequestFundsResponse)
+    - [ResponseWrapper](#ResponseWrapper)
 
-- [coinbase_api.proto](#coinbase_apiproto)
-  - [DistributeTransactionRequest](#distributetransactionrequest)
-  - [DistributeTransactionResponse](#distributetransactionresponse)
-  - [HealthResponse](#healthresponse)
-  - [RequestFundsRequest](#requestfundsrequest)
-  - [RequestFundsResponse](#requestfundsresponse)
-  - [ResponseWrapper](#responsewrapper)
-  - [CoinbaseAPI](#coinbaseapi)
+    - [CoinbaseAPI](#CoinbaseAPI)
+
 - [Scalar Value Types](#scalar-value-types)
 
 
 
-<a name="coinbase_api-proto"></a>
+<a name="coinbase_api.proto"></a>
 <p align="right"><a href="#top">Top</a></p>
 
 ## coinbase_api.proto
 
 
 
-<a name="coinbase_api-DistributeTransactionRequest"></a>
+<a name="DistributeTransactionRequest"></a>
 
 ### DistributeTransactionRequest
-Request to distribute a transaction across the network.
+swagger:model DistributeTransactionRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| tx | [bytes](#bytes) |  | Transaction to be distributed |
+| tx | [bytes](#bytes) |  |  |
 
 
 
 
 
 
-<a name="coinbase_api-DistributeTransactionResponse"></a>
+<a name="DistributeTransactionResponse"></a>
 
 ### DistributeTransactionResponse
-Response for distributing a transaction.
+swagger:model DistributeTransactionResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| txid | [string](#string) |  | Transaction ID of the distributed transaction |
-| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Timestamp of the operation |
-| responses | [ResponseWrapper](#coinbase_api-ResponseWrapper) | repeated | List of responses from different nodes |
+| txid | [string](#string) |  |  |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
+| responses | [ResponseWrapper](#coinbase_api-ResponseWrapper) | repeated |  |
 
 
 
 
 
 
-<a name="coinbase_api-HealthResponse"></a>
+<a name="GetBalanceResponse"></a>
+
+### GetBalanceResponse
+swagger:model GetBalanceResponse
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| number_of_utxos | [uint64](#uint64) |  |  |
+| total_satoshis | [uint64](#uint64) |  |  |
+
+
+
+
+
+
+<a name="HealthResponse"></a>
 
 ### HealthResponse
-Health status of the service.
+swagger:model HealthResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  | true if the service is healthy |
-| details | [string](#string) |  | optional, human-readable details |
-| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | unix timestamp |
+| ok | [bool](#bool) |  |  |
+| details | [string](#string) |  |  |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
 
 
 
 
 
 
-<a name="coinbase_api-RequestFundsRequest"></a>
+<a name="RequestFundsRequest"></a>
 
 ### RequestFundsRequest
-Request for funds to be sent to an address.
+swagger:model RequestFundsRequest
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| address | [string](#string) |  | Address to which funds are requested |
-| disableDistribute | [bool](#bool) |  | Flag to disable distribution of funds |
+| address | [string](#string) |  |  |
+| disableDistribute | [bool](#bool) |  |  |
 
 
 
 
 
 
-<a name="coinbase_api-RequestFundsResponse"></a>
+<a name="RequestFundsResponse"></a>
 
 ### RequestFundsResponse
-Response for a fund request.
+swagger:model RequestFundsResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| tx | [bytes](#bytes) |  | Transaction bytes of the funding transaction |
+| tx | [bytes](#bytes) |  |  |
 
 
 
 
 
 
-<a name="coinbase_api-ResponseWrapper"></a>
+<a name="ResponseWrapper"></a>
 
 ### ResponseWrapper
-Wrapper for response details.
+swagger:model ResponseWrapper
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| address | [string](#string) |  | Address involved in the response |
-| durationNanos | [int64](#int64) |  | Duration of the operation in nanoseconds |
-| retries | [int32](#int32) |  | Number of retries for the operation |
-| error | [string](#string) |  | Error message, if any |
+| address | [string](#string) |  |  |
+| durationNanos | [int64](#int64) |  |  |
+| retries | [int32](#int32) |  |  |
+| error | [string](#string) |  |  |
 
 
 
 
 
+ <!-- end messages -->
+
+ <!-- end enums -->
+
+ <!-- end HasExtensions -->
 
 
-
-
-
-
-
-<a name="coinbase_api-CoinbaseAPI"></a>
+<a name="CoinbaseAPI"></a>
 
 ### CoinbaseAPI
 
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [.google.protobuf.Empty](#google-protobuf-Empty) | [HealthResponse](#coinbase_api-HealthResponse) | Health check for the API. |
-| RequestFunds | [RequestFundsRequest](#coinbase_api-RequestFundsRequest) | [RequestFundsResponse](#coinbase_api-RequestFundsResponse) | Requests funds to a specific address. |
-| DistributeTransaction | [DistributeTransactionRequest](#coinbase_api-DistributeTransactionRequest) | [DistributeTransactionResponse](#coinbase_api-DistributeTransactionResponse) | Distributes a transaction across the network. |
+| HealthGRPC | [.google.protobuf.Empty](#google-protobuf-Empty) | [HealthResponse](#coinbase_api-HealthResponse) | Health returns the health of the API. |
+| RequestFunds | [RequestFundsRequest](#coinbase_api-RequestFundsRequest) | [RequestFundsResponse](#coinbase_api-RequestFundsResponse) |  |
+| DistributeTransaction | [DistributeTransactionRequest](#coinbase_api-DistributeTransactionRequest) | [DistributeTransactionResponse](#coinbase_api-DistributeTransactionResponse) |  |
+| GetBalance | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBalanceResponse](#coinbase_api-GetBalanceResponse) |  |
 
-
+ <!-- end services -->
 
 
 
@@ -161,3 +180,6 @@ Wrapper for response details.
 | <a name="bool" /> bool |  | bool | boolean | boolean | bool | bool | boolean | TrueClass/FalseClass |
 | <a name="string" /> string | A string must always contain UTF-8 encoded or 7-bit ASCII text. | string | String | str/unicode | string | string | string | String (UTF-8) |
 | <a name="bytes" /> bytes | May contain any arbitrary sequence of bytes. | string | ByteString | str | []byte | ByteString | string | String (ASCII-8BIT) |
+
+
+---

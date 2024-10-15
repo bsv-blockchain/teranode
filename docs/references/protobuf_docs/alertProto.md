@@ -1,102 +1,57 @@
-# Protocol Documentation
+# GRPC Documentation - AlertAPI
 <a name="top"></a>
 
 ## Table of Contents
 
-- [subtreevalidation_api.proto](#subtreevalidation_api-proto)
-    - [CheckSubtreeRequest](#subtreevalidation_api-CheckSubtreeRequest)
-    - [CheckSubtreeResponse](#subtreevalidation_api-CheckSubtreeResponse)
-    - [EmptyMessage](#subtreevalidation_api-EmptyMessage)
-    - [HealthResponse](#subtreevalidation_api-HealthResponse)
+- [alert_api.proto](#alert_api.proto)
+    - [HealthResponse](#HealthResponse)
 
-    - [SubtreeValidationAPI](#subtreevalidation_api-SubtreeValidationAPI)
+    - [AlertAPI](#AlertAPI)
 
 - [Scalar Value Types](#scalar-value-types)
 
 
 
-<a name="subtreevalidation_api-proto"></a>
+<a name="alert_api.proto"></a>
 <p align="right"><a href="#top">Top</a></p>
 
-## subtreevalidation_api.proto
+## alert_api.proto
 
 
 
-<a name="subtreevalidation_api-CheckSubtreeRequest"></a>
-
-### CheckSubtreeRequest
-CheckSubtreeRequest contains the request parameters for validating a subtree.
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| hash | [bytes](#bytes) |  | The hash of the subtree to be validated. |
-| base_url | [string](#string) |  | The base URL from where the subtree can be retrieved if necessary. |
-
-
-
-
-
-
-<a name="subtreevalidation_api-CheckSubtreeResponse"></a>
-
-### CheckSubtreeResponse
-CheckSubtreeResponse is the response for a subtree validation request.
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| blessed | [bool](#bool) |  | Indicates whether the subtree has passed validation. |
-
-
-
-
-
-
-<a name="subtreevalidation_api-EmptyMessage"></a>
-
-### EmptyMessage
-EmptyMessage is used for RPC methods that don&#39;t require input parameters.
-
-
-
-
-
-
-<a name="subtreevalidation_api-HealthResponse"></a>
+<a name="HealthResponse"></a>
 
 ### HealthResponse
-HealthResponse encapsulates the response for the health check of the API.
+swagger:model HealthResponse
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| ok | [bool](#bool) |  | Indicates whether the API is healthy. |
-| details | [string](#string) |  | Provides additional details on the health status. |
-| timestamp | [uint32](#uint32) |  | The timestamp of when the health check was performed. |
+| ok | [bool](#bool) |  |  |
+| details | [string](#string) |  |  |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  |  |
 
 
 
 
 
+ <!-- end messages -->
+
+ <!-- end enums -->
+
+ <!-- end HasExtensions -->
 
 
+<a name="AlertAPI"></a>
 
+### AlertAPI
 
-
-
-
-<a name="subtreevalidation_api-SubtreeValidationAPI"></a>
-
-### SubtreeValidationAPI
-SubtreeValidationAPI defines the RPC service for subtree validation operations.
 
 | Method Name | Request Type | Response Type | Description |
 | ----------- | ------------ | ------------- | ------------|
-| HealthGRPC | [EmptyMessage](#subtreevalidation_api-EmptyMessage) | [HealthResponse](#subtreevalidation_api-HealthResponse) | HealthGRPC checks the health of the Subtree Validation API service. |
-| CheckSubtree | [CheckSubtreeRequest](#subtreevalidation_api-CheckSubtreeRequest) | [CheckSubtreeResponse](#subtreevalidation_api-CheckSubtreeResponse) | CheckSubtree validates a given subtree to ensure its integrity and consistency. |
+| HealthGRPC | [.google.protobuf.Empty](#google-protobuf-Empty) | [HealthResponse](#alert_api-HealthResponse) | Health returns the health of the API. |
 
-
+ <!-- end services -->
 
 
 
@@ -119,3 +74,6 @@ SubtreeValidationAPI defines the RPC service for subtree validation operations.
 | <a name="bool" /> bool |  | bool | boolean | boolean | bool | bool | boolean | TrueClass/FalseClass |
 | <a name="string" /> string | A string must always contain UTF-8 encoded or 7-bit ASCII text. | string | String | str/unicode | string | string | string | String (UTF-8) |
 | <a name="bytes" /> bytes | May contain any arbitrary sequence of bytes. | string | ByteString | str | []byte | ByteString | string | String (ASCII-8BIT) |
+
+
+---
