@@ -399,8 +399,7 @@ func (sm *SyncManager) startSync() {
 		if sm.nextCheckpoint != nil &&
 			int32(bestBlockHeaderMeta.Height) < sm.nextCheckpoint.Height && // nolint:gosec
 			sm.chainParams != &chaincfg.RegressionNetParams {
-			err = bestPeer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash)
-			if err != nil {
+			if err = bestPeer.PushGetHeadersMsg(locator, sm.nextCheckpoint.Hash); err != nil {
 				sm.logger.Warnf("Failed to send getheaders message to peer %s: %v", bestPeer.Addr(), err)
 				return
 			}
@@ -409,8 +408,7 @@ func (sm *SyncManager) startSync() {
 
 			sm.logger.Infof("startSync - Downloading headers for blocks %d to %d from peer %s", bestBlockHeaderMeta.Height+1, sm.nextCheckpoint.Height, bestPeer.Addr())
 		} else {
-			err = bestPeer.PushGetBlocksMsg(locator, &zeroHash)
-			if err != nil {
+			if err = bestPeer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
 				sm.logger.Warnf("Failed to send getblocks message to peer %s: %v", bestPeer.Addr(), err)
 				return
 			}
@@ -827,6 +825,7 @@ func (sm *SyncManager) current() bool {
 
 // handleBlockMsg handles block messages from all peers.
 func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
+	sm.logger.Debugf("[handleBlockMsg][%s] received block from %s", bmsg.block.Hash(), bmsg.peer)
 	peer := bmsg.peer
 
 	state, exists := sm.peerStates[peer]
@@ -1074,6 +1073,7 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 // handleHeadersMsg handles block header messages from all peers.  Headers are
 // requested when performing a headers-first sync.
 func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
+	sm.logger.Debugf("[handleHeadersMsg] received headers message with %d headers from %s", len(hmsg.headers.Headers), hmsg.peer)
 	peer := hmsg.peer
 
 	_, exists := sm.peerStates[peer]
@@ -1223,6 +1223,7 @@ func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 // handleInvMsg handles inv messages from all peers.
 // We examine the inventory advertised by the remote peer and act accordingly.
 func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
+	sm.logger.Debugf("[handleInvMsg] received inv message with %d inv vectors from %s", len(imsg.inv.InvList), imsg.peer)
 	peer := imsg.peer
 
 	state, exists := sm.peerStates[peer]
@@ -1290,16 +1291,15 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	// Finally, attempt to detect potential stalls due to long side chains
 	// we already have and request more blocks to prevent them.
 	for i, iv := range invVects {
-		if !processInvs {
-			// If we are not in running state, we are not interested in new transaction or block messages
-			sm.logger.Debugf("Ignoring inv message from %s, not in running state", peer)
-			continue
-		}
-
 		// Ignore unsupported inventory types.
 		switch iv.Type {
 		case wire.InvTypeBlock:
 		case wire.InvTypeTx:
+			if !processInvs {
+				// If we are not in running state, we are not interested in new transaction or block messages
+				sm.logger.Debugf("Ignoring inv message from %s, not in running state", peer)
+				continue
+			}
 		default:
 			continue
 		}
