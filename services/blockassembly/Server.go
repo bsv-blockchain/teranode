@@ -120,7 +120,7 @@ func (ba *BlockAssembly) HealthGRPC(ctx context.Context, _ *blockassembly_api.Em
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithCounter(prometheusBlockAssemblyHealth),
-		tracing.WithLogMessage(ba.logger, "[HealthGRPC] called"),
+		tracing.WithDebugLogMessage(ba.logger, "[HealthGRPC] called"),
 	)
 	defer deferFn()
 

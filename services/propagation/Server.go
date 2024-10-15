@@ -100,7 +100,7 @@ func (ps *PropagationServer) HealthGRPC(ctx context.Context, _ *propagation_api.
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(ps.stats),
 		tracing.WithHistogram(prometheusHealth),
-		tracing.WithLogMessage(ps.logger, "[HealthGRPC] called"),
+		tracing.WithDebugLogMessage(ps.logger, "[HealthGRPC] called"),
 	)
 	defer deferFn()
 

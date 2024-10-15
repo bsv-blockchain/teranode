@@ -114,7 +114,7 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(b.stats),
 		tracing.WithCounter(prometheusBlockchainHealth),
-		tracing.WithLogMessage(b.logger, "[HealthGRPC] called"),
+		tracing.WithDebugLogMessage(b.logger, "[HealthGRPC] called"),
 	)
 	defer deferFn()
 

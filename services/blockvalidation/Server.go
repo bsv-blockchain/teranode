@@ -131,7 +131,7 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMes
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(u.stats),
 		tracing.WithCounter(prometheusBlockValidationHealth),
-		tracing.WithLogMessage(u.logger, "[HealthGRPC] called"),
+		tracing.WithDebugLogMessage(u.logger, "[HealthGRPC] called"),
 	)
 	defer deferFn()
 

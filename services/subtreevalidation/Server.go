@@ -159,7 +159,7 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *subtreevalidation_api.EmptyM
 	_, _, deferFn := tracing.StartTracing(ctx, "HealthGRPC",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusHealth),
-		tracing.WithLogMessage(u.logger, "[HealthGRPC] called"),
+		tracing.WithDebugLogMessage(u.logger, "[HealthGRPC] called"),
 	)
 	defer deferFn()
 
