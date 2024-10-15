@@ -293,7 +293,7 @@ func (s *File) Set(_ context.Context, hash []byte, value []byte, opts ...options
 	merged := options.MergeOptions(s.options, opts)
 
 	if !merged.AllowOverwrite {
-		if _, err := os.Stat(filename); err == nil {
+		if _, err = os.Stat(filename); err == nil {
 			return errors.NewBlobAlreadyExistsError("[File][Set] [%s] already exists in store", filename)
 		}
 	}
@@ -324,9 +324,17 @@ func (s *File) constructFilenameWithTTL(hash []byte, opts []options.FileOption) 
 	if merged.TTL != nil && *merged.TTL > 0 {
 		// write bytes to file
 		ttl := time.Now().Add(*merged.TTL)
+
+		ttlFilename := fileName + ".ttl"
+		ttlTempFilename := ttlFilename + ".tmp"
+
 		//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-		if err := os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
-			return "", errors.NewStorageError("failed to write ttl to file", err)
+		if err = os.WriteFile(ttlTempFilename, []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
+			return "", errors.NewStorageError("[File][%s] failed to write ttl to file", err)
+		}
+
+		if err = os.Rename(ttlTempFilename, ttlFilename); err != nil {
+			return "", errors.NewStorageError("[File][%s] failed to rename file from tmp", ttlFilename, err)
 		}
 
 		s.fileTTLsMu.Lock()
@@ -381,9 +389,16 @@ func (s *File) SetTTL(_ context.Context, key []byte, newTTL time.Duration, opts 
 	// write bytes to file
 	ttl := time.Now().Add(newTTL).UTC()
 
+	ttlFilename := fileName + ".ttl"
+	ttlTempFilename := ttlFilename + ".tmp"
+
 	//nolint:gosec // G306: Expect WriteFile permissions to be 0600 or less (gosec)
-	if err = os.WriteFile(fileName+".ttl", []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
-		return errors.NewStorageError("[File][%s] failed to write ttl to file", fileName, err)
+	if err = os.WriteFile(ttlTempFilename, []byte(ttl.Format(time.RFC3339)), 0644); err != nil {
+		return errors.NewStorageError("failed to write ttl to file", err)
+	}
+
+	if err = os.Rename(ttlTempFilename, ttlFilename); err != nil {
+		return errors.NewStorageError("[File][%s] failed to rename file from tmp", ttlFilename, err)
 	}
 
 	s.fileTTLsMu.Lock()
