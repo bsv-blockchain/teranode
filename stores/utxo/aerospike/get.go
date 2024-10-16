@@ -159,9 +159,9 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []string) (*me
 	return data.Data, data.Err
 }
 
-func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
+func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 	// nolint: gosec
-	tx := &bt.Tx{
+	tx = &bt.Tx{
 		Version:  uint32(bins["version"].(int)),
 		LockTime: uint32(bins["locktime"].(int)),
 	}
@@ -174,7 +174,7 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
 			input := inputInterface.([]byte)
 			tx.Inputs[i] = &bt.Input{}
 
-			_, err := tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
+			_, err = tx.Inputs[i].ReadFromExtended(bytes.NewReader(input))
 			if err != nil {
 				return nil, errors.NewTxInvalidError("could not read input: %v", err)
 			}
@@ -190,10 +190,9 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (*bt.Tx, error) {
 				continue
 			}
 
-			output := outputInterface.([]byte)
 			tx.Outputs[i] = &bt.Output{}
 
-			_, err := tx.Outputs[i].ReadFrom(bytes.NewReader(output))
+			_, err = tx.Outputs[i].ReadFrom(bytes.NewReader(outputInterface.([]byte)))
 			if err != nil {
 				return nil, errors.NewTxInvalidError("could not read output: %v", err)
 			}

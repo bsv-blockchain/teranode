@@ -130,7 +130,7 @@ func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*St
 		externalStore:              externalStore,
 		utxoBatchSize:              utxoBatchSize,
 		externalizeAllTransactions: gocore.Config().GetBool("utxostore_externalizeAllTransactions", false),
-		externalTxCache:            util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](1 * time.Minute),
+		externalTxCache:            util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](10 * time.Second),
 	}
 
 	storeBatchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)
