@@ -140,9 +140,9 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, bestBlockHeader *
 // the exported version uses the current best chain as the previous block node
 // while this function accepts any block node.
 func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock) (*model.NBit, error) {
+	lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
 	// If regest or simnet we don't adjust the difficulty
 	if d.chainParams.NoDifficultyAdjustment {
-		lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
 		d.logger.Debugf("no difficulty adjustment - returning %v", lastSuitableBits)
 		return lastSuitableBits, nil
 	}
@@ -202,12 +202,22 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 	// Calculate the projected work by multiplying the current work by the target time per block (in seconds).
 	projectedWork := new(big.Int).Mul(work, big.NewInt(int64(d.chainParams.TargetTimePerBlock.Seconds())))
 	// Divide the projected work by the actual time duration between the blocks to get the adjusted work.
+	// check if duration is zero
+	if duration == 0 {
+		d.logger.Debugf("duration is zero - returning %v", lastSuitableBits)
+		return lastSuitableBits, nil
+	}
 	pw := new(big.Int).Div(projectedWork, big.NewInt(duration))
 	// Calculate 2^256, which is the maximum possible value in a 256-bit space (used for Bitcoin's difficulty target).
 	e := new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil)
 	// Subtract the adjusted work from 2^256 to get the new numerator for the target calculation.
 	nt := new(big.Int).Sub(e, pw)
 	// Calculate the new target by dividing the result by the adjusted work. This gives the new difficulty target.
+	// check if pw is zero
+	if pw.Sign() == 0 {
+		d.logger.Debugf("pw is zero, - returning %v", lastSuitableBits)
+		return lastSuitableBits, nil
+	}
 	newTarget := new(big.Int).Div(nt, pw)
 
 	// clip again if above minimum target (too easy)
