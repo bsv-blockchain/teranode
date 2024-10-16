@@ -150,7 +150,7 @@ func (s *Server) RequestFunds(ctx context.Context, req *coinbase_api.RequestFund
 	ctx, _, deferFn := tracing.StartTracing(ctx, "RequestFunds",
 		tracing.WithParentStat(s.stats),
 		tracing.WithHistogram(prometheusRequestFunds),
-		tracing.WithLogMessage(s.logger, "[RequestFunds] called for %s", req.Address),
+		tracing.WithDebugLogMessage(s.logger, "[RequestFunds] called for %s", req.Address),
 	)
 	defer deferFn()
 
