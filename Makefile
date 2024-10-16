@@ -299,6 +299,14 @@ gen:
 	--go-grpc_opt=paths=source_relative \
 	services/legacy/peer_api/peer_api.proto
 
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
+	services/p2p/p2p_api/p2p_api.proto
+
 .PHONY: clean_gen
 clean_gen:
 	rm -f ./services/blockassembly/blockassembly_api/*.pb.go
@@ -311,6 +319,7 @@ clean_gen:
 	rm -f ./services/asset/asset_api/*.pb.go
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
 	rm -f ./services/legacy/peer_api/*.pb.go
+	rm -f ./services/p2p/p2p_api/*.pb.go
 	rm -f ./model/*.pb.go
 	rm -f ./ubsverrors/*.pb.go
 	rm -f ./stores/utxo/*.pb.go

@@ -198,7 +198,6 @@ func blockToJSON(ctx context.Context, b *model.Block, verbosity uint32, s *RPCSe
 
 	// If verbose level does not match 0 or 1
 	// we can consider it 2 (current bitcoin core behavior)
-
 	if verbosity == 1 {
 		// 	transactions := blk.Transactions()
 		// 	txNames := make([]string, len(transactions))
@@ -614,44 +613,74 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	)
 	defer deferFn()
 
-	peerInfo, err := s.peerClient.GetPeers(ctx)
+	peerCount := 0
+	// get legacy peer info
+	legacyPeerInfo, err := s.peerClient.GetPeers(ctx)
 	if err != nil {
-		return nil, err
+		// not critical -legacy service may not be running, so log as info
+		s.logger.Infof("error getting legacy peer info: %v", err)
+	} else {
+		peerCount += len(legacyPeerInfo.Peers)
 	}
 
-	infos := make([]*bsvjson.GetPeerInfoResult, 0, len(peerInfo.Peers))
+	// get new peer info
+	newPeerInfo, err := s.p2pClient.GetPeers(ctx)
+	if err != nil {
+		s.logger.Errorf("error getting new peer info: %v", err)
+	} else {
+		peerCount += len(newPeerInfo.Peers)
+	}
 
-	for _, p := range peerInfo.Peers {
-		info := &bsvjson.GetPeerInfoResult{
-			ID:        p.Id,
-			Addr:      p.Addr,
-			AddrLocal: p.AddrLocal,
-			// Services:       fmt.Sprintf("%08d", uint64(statsSnap.Services)),
-			ServicesStr: p.Services,
-			// RelayTxes:      !p.IsTxRelayDisabled(),
-			LastSend:       p.LastSend,
-			LastRecv:       p.LastRecv,
-			BytesSent:      p.BytesSent,
-			BytesRecv:      p.BytesReceived,
-			ConnTime:       p.ConnTime,
-			PingTime:       float64(p.PingTime),
-			TimeOffset:     p.TimeOffset,
-			Version:        p.Version,
-			SubVer:         p.SubVer,
-			Inbound:        p.Inbound,
-			StartingHeight: p.StartingHeight,
-			CurrentHeight:  p.CurrentHeight,
-			BanScore:       p.Banscore,
-			Whitelisted:    p.Whitelisted,
-			FeeFilter:      p.FeeFilter,
-			// SyncNode:       p.ID == syncPeerID,
+	for _, np := range newPeerInfo.Peers {
+		s.logger.Debugf("new peer: %v", np)
+	}
+
+	infos := make([]*bsvjson.GetPeerInfoResult, 0, peerCount)
+
+	if legacyPeerInfo != nil {
+		for _, p := range legacyPeerInfo.Peers {
+			info := &bsvjson.GetPeerInfoResult{
+				ID:        p.Id,
+				Addr:      p.Addr,
+				AddrLocal: p.AddrLocal,
+				// Services:       fmt.Sprintf("%08d", uint64(statsSnap.Services)),
+				ServicesStr: p.Services,
+				// RelayTxes:      !p.IsTxRelayDisabled(),
+				LastSend:       p.LastSend,
+				LastRecv:       p.LastRecv,
+				BytesSent:      p.BytesSent,
+				BytesRecv:      p.BytesReceived,
+				ConnTime:       p.ConnTime,
+				PingTime:       float64(p.PingTime),
+				TimeOffset:     p.TimeOffset,
+				Version:        p.Version,
+				SubVer:         p.SubVer,
+				Inbound:        p.Inbound,
+				StartingHeight: p.StartingHeight,
+				CurrentHeight:  p.CurrentHeight,
+				BanScore:       p.Banscore,
+				Whitelisted:    p.Whitelisted,
+				FeeFilter:      p.FeeFilter,
+				// SyncNode:       p.ID == syncPeerID,
+			}
+			// if p.ToPeer().LastPingNonce() != 0 {
+			// 	wait := float64(time.Since(p.LastPingTime).Nanoseconds())
+			// 	// We actually want microseconds.
+			// 	info.PingWait = wait / 1000
+			// }
+			infos = append(infos, info)
 		}
-		// if p.ToPeer().LastPingNonce() != 0 {
-		// 	wait := float64(time.Since(p.LastPingTime).Nanoseconds())
-		// 	// We actually want microseconds.
-		// 	info.PingWait = wait / 1000
-		// }
-		infos = append(infos, info)
+	}
+
+	if newPeerInfo != nil {
+		for _, p := range newPeerInfo.Peers {
+			info := &bsvjson.GetPeerInfoResult{
+				// ID:        p.Id,
+				Addr: p.Addr,
+				// AddrLocal: p.AddrLocal,
+			}
+			infos = append(infos, info)
+		}
 	}
 
 	// return peerInfo, nil
@@ -830,7 +859,7 @@ func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan str
 	}
 
 	if command == "" {
-		usage, err := s.helpCacher.rpcUsage(false)
+		usage, err := s.helpCacher.rpcUsage()
 		if err != nil {
 			context := "Failed to generate RPC usage"
 			return nil, internalRPCError(err.Error(), context)

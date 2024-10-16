@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+option go_package = "./;p2p_api";
+import "google/protobuf/empty.proto";
+
+package p2p_api;
+
+message Peer {
+  int32 id = 1;
+  string addr = 2;
+  string addrLocal = 3;
+  string services = 4;
+  int64 lastSend = 5;
+  int64 lastRecv = 6;
+  int64 sendSize = 7;
+  int64 recvSize = 8;
+  int64 sendMemory = 9;
+  bool pauseSend = 10;
+  bool unpauseSend = 11;
+  uint64 bytesSent = 12;
+  uint64 bytesReceived = 13;
+  int64 avgRecvBandwidth = 14;
+  string assocId = 15;
+  string streamPolicy = 16;
+  bool inbound = 17;
+  int64 connTime = 18;
+  int64 pingTime = 19;
+  int64 timeOffset = 20;
+  uint32 version = 21;
+  string subVer = 22;
+  int32 startingHeight = 23;
+  int32 currentHeight = 24;
+  int32 banscore = 25;
+  bool whitelisted = 26;
+  int64 feeFilter = 27;
+  }
+
+
+  message GetPeersResponse {
+    repeated Peer peers = 1;
+  }
+  
+  // Add new service for peer operations
+  service PeerService {
+    rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
+  }
+  

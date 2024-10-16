@@ -22,6 +22,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
+	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/health"
@@ -544,6 +545,7 @@ type RPCServer struct {
 	blockchainClient       blockchain.ClientI
 	blockAssemblyClient    *blockassembly.Client
 	peerClient             peer.ClientI
+	p2pClient              p2p.ClientI
 	assetHttpURL           *url.URL
 	chainParams            *chaincfg.Params
 	helpCacher             *helpCacher
@@ -1153,7 +1155,12 @@ func (s *RPCServer) Init(ctx context.Context) (err error) {
 
 	s.peerClient, err = peer.NewClient(ctx, s.logger)
 	if err != nil {
-		return
+		s.logger.Errorf("error initializing peer client: %v", err)
+	}
+
+	s.p2pClient, err = p2p.NewClient(ctx, s.logger)
+	if err != nil {
+		s.logger.Errorf("error initializing p2p client: %v", err)
 	}
 
 	network, _ := gocore.Config().Get("network", "mainnet")

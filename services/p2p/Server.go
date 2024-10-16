@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
+	"github.com/bitcoin-sv/ubsv/services/p2p/p2p_api"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
@@ -26,6 +27,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/gocore"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var (
@@ -37,6 +40,7 @@ var (
 )
 
 type Server struct {
+	p2p_api.UnimplementedPeerServiceServer
 	P2PNode                       *p2p.P2PNode
 	logger                        ulogger.Logger
 	bitcoinProtocolID             string
@@ -371,6 +375,13 @@ func (s *Server) Start(ctx context.Context) error {
 	go s.blockchainSubscriptionListener(ctx)
 
 	s.sendBestBlockMessage(ctx)
+
+	// this will block
+	if err = util.StartGRPCServer(ctx, s.logger, "p2p", func(server *grpc.Server) {
+		p2p_api.RegisterPeerServiceServer(server, s)
+	}); err != nil {
+		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Legacy] can't start GRPC server", err))
+	}
 
 	<-ctx.Done()
 
@@ -743,4 +754,35 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 		SizeInBytes:  miningOnMessage.SizeInBytes,
 		TxCount:      miningOnMessage.TxCount,
 	}
+}
+
+func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeersResponse, error) {
+	s.logger.Debugf("GetPeers called")
+
+	if s.P2PNode == nil {
+		return nil, errors.NewError("P2PNode is not initialized")
+	}
+
+	s.logger.Debugf("Creating reply channel")
+	serverPeers := s.P2PNode.ConnectedPeers()
+
+	resp := &p2p_api.GetPeersResponse{}
+
+	for _, sp := range serverPeers {
+		// s.logger.Debugf("peer: %v", sp.ID)
+		// s.logger.Debugf("peer: %v", sp.Addrs)
+		if sp.ID == s.P2PNode.HostID() {
+			continue
+		}
+
+		if len(sp.Addrs) == 0 {
+			continue
+		}
+
+		resp.Peers = append(resp.Peers, &p2p_api.Peer{
+			Addr: sp.Addrs[0].String(),
+		})
+	}
+
+	return resp, nil
 }

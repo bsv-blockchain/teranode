@@ -1,0 +1,48 @@
+package p2p
+
+import (
+	"context"
+
+	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/p2p/p2p_api"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/ordishs/gocore"
+	"google.golang.org/protobuf/types/known/emptypb"
+)
+
+type Client struct {
+	client p2p_api.PeerServiceClient
+	logger ulogger.Logger
+}
+
+func NewClient(ctx context.Context, logger ulogger.Logger) (ClientI, error) {
+	logger = logger.New("blkcC")
+
+	p2pGrpcAddress, ok := gocore.Config().Get("p2p_grpcAddress")
+	if !ok {
+		return nil, errors.NewConfigurationError("no p2p_grpcAddress setting found")
+	}
+
+	return NewClientWithAddress(ctx, logger, p2pGrpcAddress)
+}
+
+func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, address string) (ClientI, error) {
+	baConn, err := util.GetGRPCClient(ctx, address, &util.ConnectionOptions{
+		MaxRetries: 3,
+	})
+	if err != nil {
+		return nil, errors.NewServiceError("failed to init p2p service connection ", err)
+	}
+
+	c := &Client{
+		client: p2p_api.NewPeerServiceClient(baConn),
+		logger: logger,
+	}
+
+	return c, nil
+}
+
+func (c *Client) GetPeers(ctx context.Context) (*p2p_api.GetPeersResponse, error) {
+	return c.client.GetPeers(ctx, &emptypb.Empty{})
+}

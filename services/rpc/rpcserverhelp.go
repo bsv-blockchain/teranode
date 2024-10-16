@@ -354,7 +354,7 @@ var helpDescsEnUS = map[string]string{
 
 	// GetCurrentNetCmd help.
 	"getcurrentnet--synopsis": "Get bitcoin network the server is running on.",
-	"getcurrentnet--result0":  "The network identifer",
+	"getcurrentnet--result0":  "The network identifier",
 
 	// GetDifficultyCmd help.
 	"getdifficulty--synopsis": "Returns the proof-of-work difficulty as a multiple of the minimum difficulty.",
@@ -791,14 +791,16 @@ func (c *helpCacher) rpcMethodHelp(method string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	c.methodHelp[method] = help
+
 	return help, nil
 }
 
 // rpcUsage returns one-line usage for all support RPC commands.
 //
 // This function is safe for concurrent access.
-func (c *helpCacher) rpcUsage(includeWebsockets bool) (string, error) {
+func (c *helpCacher) rpcUsage() (string, error) {
 	c.Lock()
 	defer c.Unlock()
 
@@ -809,11 +811,13 @@ func (c *helpCacher) rpcUsage(includeWebsockets bool) (string, error) {
 
 	// Generate a list of one-line usage for every command.
 	usageTexts := make([]string, 0, len(rpcHandlers))
+
 	for k := range rpcHandlers {
 		usage, err := btcjson.MethodUsageText(k)
 		if err != nil {
 			return "", err
 		}
+
 		usageTexts = append(usageTexts, usage)
 	}
 
@@ -830,6 +834,7 @@ func (c *helpCacher) rpcUsage(includeWebsockets bool) (string, error) {
 
 	sort.Sort(sort.StringSlice(usageTexts))
 	c.usage = strings.Join(usageTexts, "\n")
+
 	return c.usage, nil
 }
 

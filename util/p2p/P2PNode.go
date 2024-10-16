@@ -26,6 +26,7 @@ import (
 	dRouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dUtil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/multiformats/go-multiaddr"
+	ma "github.com/multiformats/go-multiaddr"
 	"github.com/ordishs/gocore"
 )
 
@@ -604,4 +605,23 @@ func (s *P2PNode) streamHandler(ns network.Stream) {
 	if len(buf) > 0 {
 		s.logger.Debugf("[P2PNode] Received message: %s", string(buf))
 	}
+}
+
+type PeerInfo struct {
+	ID    peer.ID
+	Addrs []ma.Multiaddr
+}
+
+func (s *P2PNode) ConnectedPeers() []PeerInfo {
+	peerCount := s.host.Network().Peerstore().Peers().Len()
+	peers := make([]PeerInfo, peerCount)
+
+	for _, peerID := range s.host.Network().Peerstore().Peers() {
+		peers = append(peers, PeerInfo{
+			ID:    peerID,
+			Addrs: s.host.Network().Peerstore().PeerInfo(peerID).Addrs,
+		})
+	}
+
+	return peers
 }
