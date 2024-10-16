@@ -29,37 +29,6 @@ type KafkaProducerI interface {
 	Close() error
 }
 
-type AsyncKafkaProducer struct {
-	Producer   sarama.AsyncProducer
-	Topic      string
-	Partitions int32
-	client     sarama.ConsumerGroup
-}
-
-func (k *AsyncKafkaProducer) Close() error {
-	if err := k.Producer.Close(); err != nil {
-		return errors.NewServiceError("failed to close Kafka producer", err)
-	}
-
-	return nil
-}
-
-func (k *AsyncKafkaProducer) GetClient() sarama.ConsumerGroup {
-	return k.client
-}
-
-func (k *AsyncKafkaProducer) Send(key []byte, data []byte) error {
-	partition := binary.LittleEndian.Uint32(key) % uint32(k.Partitions)
-	k.Producer.Input() <- &sarama.ProducerMessage{
-		Topic:     k.Topic,
-		Key:       sarama.ByteEncoder(key),
-		Value:     sarama.ByteEncoder(data),
-		Partition: int32(partition),
-	}
-
-	return nil
-}
-
 type SyncKafkaProducer struct {
 	Producer   sarama.SyncProducer
 	Topic      string
