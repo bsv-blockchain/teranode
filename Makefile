@@ -159,7 +159,6 @@ nightly-tests:
 reset-data:
 	unzip data.zip
 	chmod -R u+w data
-	sleep 2
 
 .PHONY: smoketests
 
@@ -176,7 +175,6 @@ else
 	rm -rf data
 	unzip data.zip
 	chmod -R +x data
-	sleep 2
 endif
 ifdef kill-docker
 	docker compose -f docker-compose.yml down

@@ -97,6 +97,10 @@ func (c *Client) ProcessTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
+func (c *Client) TriggerBatcher() {
+	c.batcher.Trigger()
+}
+
 func (c *Client) ProcessTransactionBatch(ctx context.Context, batch []*batchItem) error {
 	txs := make([][]byte, 0, len(batch))
 	for _, tx := range batch {

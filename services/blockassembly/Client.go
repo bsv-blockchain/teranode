@@ -89,7 +89,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, blockAssem
 	sendBatchTimeout, _ := gocore.Config().GetInt("blockassembly_sendBatchTimeout", 100)
 
 	if batchSize > 0 {
-		logger.Infof("Using batch mode to send transactions to block assembly, batches: %d, timeout: %d", batchSize, sendBatchTimeout)
+		logger.Infof("Using batch mode to send transactions to block assembly, batches: %d, timeout: %dms", batchSize, sendBatchTimeout)
 	}
 
 	duration := time.Duration(sendBatchTimeout) * time.Millisecond

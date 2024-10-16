@@ -117,17 +117,23 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 			suite.T().Fatal(err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL1, 200, 120)
+		// Min height possible is 101
+		// whatever height you specify, make sure :
+		// mine_initial_blocks_count.docker = [height]
+		// blockvalidation_maxPreviousBlockHeadersToCheck = [height - 1]
+		height := uint32(101)
+
+		err = helper.WaitForBlockHeight(NodeURL1, height, 120)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL2, 200, 120)
+		err = helper.WaitForBlockHeight(NodeURL2, height, 120)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL3, 200, 120)
+		err = helper.WaitForBlockHeight(NodeURL3, height, 120)
 		if err != nil {
 			suite.T().Fatal(err)
 		}

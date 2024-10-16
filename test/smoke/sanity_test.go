@@ -104,9 +104,15 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	if err != nil {
 		t.Errorf("Failed to send new transaction: %v", err)
 	}
+	txDistributor.TriggerBatcher() // just in case there is a delay in processing txs
 
 	t.Logf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
-	time.Sleep(10 * time.Second)
+
+	delay, _ := gocore.Config().GetInt("double_spend_window_millis", 2000)
+	if delay != 0 {
+		t.Logf("Waiting %dms [block assembly has delay processing txs to catch double spends]\n", delay)
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+	}
 
 	height, _ := helper.GetBlockHeight(url)
 	t.Logf("Block height before mining: %d\n", height)
@@ -131,8 +137,10 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 		if err != nil {
 			t.Errorf("Failed to wait for block height: %v", err)
 		}
-
-		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+		header, meta, err := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+		if err != nil {
+			t.Errorf("Failed to get block headers: %v", err)
+		}
 		t.Logf("Testing on Best block header: %v", header[0].Hash())
 		bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, testEnv.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *newTx.TxIDChainHash(), logger)
 
