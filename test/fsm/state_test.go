@@ -2,9 +2,9 @@
 
 // How to run this test:
 // $ cd test/fsm/
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithStartAndStopNodes$" -tags functional
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithP2PSwitch$" -tags functional
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestFsmTestSuite$/TestTXCatchUpState_SendTXsToNode0$" -tags functional
+// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithStartAndStopNodes$" -tags functional
+// $ go test -v -run "^TestFsmTestSuite$/TestNodeCatchUpState_WithP2PSwitch$" -tags functional
+// $ go test -v -run "^TestFsmTestSuite$/TestTXCatchUpState_SendTXsToNode0$" -tags functional
 
 package test
 
@@ -16,16 +16,14 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
 
 type FsmTestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
 /* Description */
@@ -39,7 +37,7 @@ type FsmTestSuite struct {
 func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 	ctx := context.Background()
 	t := suite.T()
-	framework := suite.Framework
+	framework := suite.TeranodeTestEnv
 	logger := framework.Logger
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
@@ -52,16 +50,18 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
 
-	err := framework.StopNode("ubsv-2")
+	err := framework.StopNode("ubsv2")
 	if err != nil {
 		t.Errorf("Failed to stop node: %v", err)
 	}
 
 	for i := 0; i < 5; i++ {
-		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
+		hashes, err := helper.CreateAndSendTxs(ctx, framework.Nodes[0], 10)
+
 		if err != nil {
 			t.Errorf("Failed to create and send raw txs: %v", err)
 		}
+
 		logger.Infof("Hashes: %v", hashes)
 
 
@@ -73,7 +73,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 		}
 	}
 
-	err = framework.StartNode("ubsv-2")
+	err = framework.StartNode("ubsv2")
 	if err != nil {
 		t.Errorf("Failed to start node: %v", err)
 	}
@@ -93,8 +93,8 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 
 				mu.Lock()
 				if _, exists := stateSet[response]; !exists {
-
 					framework.Logger.Infof("New unique state: %v", response)
+
 					stateSet[response] = struct{}{} // Add the state to the set
 				}
 				mu.Unlock()
@@ -107,17 +107,19 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 	wg.Wait()
 
 	stateFound := false
+
 	for state := range stateSet {
 		if state == blockchain_api.FSMStateType(3) {
 			stateFound = true
 			break
 		}
 	}
-	assert.True(t, stateFound, "State 3 was not captured")
 
 	headerNode1, _, _ := blockchainNode1.GetBestBlockHeader(ctx)
 	headerNode0, _, _ := blockchainNode0.GetBestBlockHeader(ctx)
+
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
+	assert.True(t, stateFound, "State 3 was not captured")
 }
 
 /* Description */
@@ -129,10 +131,12 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 // The test captures the intermediate states of the 2nd node and checks if the node wa in the catch-up state
 func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 	t := suite.T()
-	framework := suite.Framework
+	framework := suite.TeranodeTestEnv
 	settingsMap := suite.SettingsMap
+	logger := framework.Logger
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockchainNode1 := framework.Nodes[1].BlockchainClient
+	ctx := framework.Context
 
 	var (
 		states []blockchain_api.FSMStateType
@@ -142,20 +146,33 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 	)
 
 	stateSet := make(map[blockchain_api.FSMStateType]struct{})
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.tc3"
-	if err := framework.RestartNodes(settingsMap); err != nil {
+
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test.stopP2P"
+	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
-	ctx := context.Background()
 
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("testRun", ulogger.WithLevel(logLevelStr))
+	err := framework.Nodes[0].BlockchainClient.Run(ctx)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	err = framework.Nodes[1].BlockchainClient.Run(ctx)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
+
+	err = framework.Nodes[2].BlockchainClient.Run(ctx)
+	if err != nil {
+		suite.T().Fatal(err)
+	}
 
 	for i := 0; i < 5; i++ {
-		hashes, err := helper.CreateAndSendRawTxs(ctx, framework.Nodes[0], 10)
+		hashes, err := helper.CreateAndSendTxs(ctx, framework.Nodes[0], 1)
 		if err != nil {
 			t.Errorf("Failed to create and send raw txs: %v", err)
 		}
+
 		logger.Infof("Hashes: %v", hashes)
 
 		baClient := framework.Nodes[0].BlockassemblyClient
@@ -166,8 +183,8 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 		}
 	}
 
-	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ci.ubsv2.tc1"
-	if err := framework.RestartNodes(settingsMap); err != nil {
+	settingsMap["SETTINGS_CONTEXT_2"] = "docker.ubsv2.test"
+	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
@@ -175,20 +192,24 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 	go func() {
 
 		defer wg.Done()
+
 		for {
 			select {
 			case <-done:
 				return
 
 			default:
-				response := blockchainNode1.GetFSMCurrentStateForE2ETestMode()
+				response, _ := blockchainNode1.GetFSMCurrentState(framework.Context)
+
 				mu.Lock()
-				if _, exists := stateSet[response]; !exists {
-					framework.Logger.Infof("New unique state: %v", response)
-					stateSet[response] = struct{}{} // Add the state to the set
+				if _, exists := stateSet[*response]; !exists {
+					logger.Infof("New unique state: %v", response)
+
+					stateSet[*response] = struct{}{} // Add the state to the set
 				}
+				logger.Infof("Current states: %v", stateSet)
 				mu.Unlock()
-				// time.Sleep(10 * time.Millisecond)
+				time.Sleep(1 * time.Second)
 			}
 		}
 	}()
@@ -205,12 +226,13 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 			break
 		}
 	}
-	assert.True(t, stateFound, "State 3 was not captured")
-	logger.Infof("Captured states: %v", states)
 
 	headerNode1, _, _ := blockchainNode1.GetBestBlockHeader(ctx)
 	headerNode0, _, _ := blockchainNode0.GetBestBlockHeader(ctx)
 	assert.Equal(t, headerNode0.Hash(), headerNode1.Hash(), "Best block headers are not equal")
+
+	logger.Infof("Captured states: %v", states)
+	assert.True(t, stateFound, "State 3 was not captured")
 }
 
 /* Description */
@@ -227,7 +249,7 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 // TODO - The prometheus metrics that were introduced earlier are not working as expected. Need to fix this.
 func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	t := suite.T()
-	framework := suite.Framework
+	framework := suite.TeranodeTestEnv
 	url := "http://localhost:10090"
 	logger := framework.Logger
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
@@ -257,7 +279,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	// 	t.Errorf("Failed to query prometheus metric: %v", err)
 	// }
 
-	hashesNode0, err := helper.CreateAndSendRawTxs(framework.Context, framework.Nodes[0], 20)
+	hashesNode0, err := helper.CreateAndSendTxs(framework.Context, framework.Nodes[0], 20)
 	if err != nil {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
@@ -323,7 +345,8 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 		if newHeight > height {
 			height = newHeight
 			logger.Infof("Testing at height: %v", height)
-			mBlock, _ := blockchainNode0.GetBlockByHeight(framework.Context, uint32(newHeight))
+
+			mBlock, _ := blockchainNode0.GetBlockByHeight(framework.Context, newHeight)
 
 			r, err = blockStore.GetIoReader(framework.Context, mBlock.Hash()[:], o...)
 			if err != nil {
@@ -347,6 +370,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 
 		time.Sleep(2 * time.Second)
 	}
+
 	assert.Equal(t, true, bl, "Test Tx not found in block")
 }
 

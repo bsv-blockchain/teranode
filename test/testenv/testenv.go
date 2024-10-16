@@ -47,7 +47,7 @@ type TeranodeTestClient struct {
 
 // NewTeraNodeTestEnv creates a new test environment with the provided Compose file paths.
 func NewTeraNodeTestEnv(composeFilePaths []string) *TeranodeTestEnv {
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
+	var logLevelStr, _ = gocore.Config().Get("logLevel.docker.test", "ERROR")
 	logger := ulogger.New("e2eTestRun", ulogger.WithLevel(logLevelStr))
 	ctx, cancel := context.WithCancel(context.Background())
 

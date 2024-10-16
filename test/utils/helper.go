@@ -25,6 +25,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
+	tenv "github.com/bitcoin-sv/ubsv/test/testenv"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -332,6 +333,7 @@ func MineBlockWithCandidate_rpc(ctx context.Context, rpcUrl string, miningCandid
 	return blockHash, nil
 }
 
+// TODO: Remove after all tests are fixed
 func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Hash, error) {
 
 	nilHash := chainhash.Hash{}
@@ -382,6 +384,59 @@ func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Has
 	return *newTx.TxIDChainHash(), nil
 }
 
+func CreateAndSendTx(ctx context.Context, node tenv.TeranodeTestClient) (chainhash.Hash, error) {
+
+	nilHash := chainhash.Hash{}
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+
+	coinbaseClient := node.CoinbaseClient
+
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Failed to request funds: %w", err)
+	}
+
+	_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Failed to send transaction: %w", err)
+	}
+
+	output := faucetTx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      faucetTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+
+	err = newTx.FromUTXOs(utxo)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
+	}
+
+	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Error adding output to transaction: %w", err)
+	}
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Error filling transaction inputs: %w", err)
+	}
+
+	_, err = node.DistributorClient.SendTransaction(ctx, newTx)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Failed to send new transaction: %w", err)
+	}
+
+	return *newTx.TxIDChainHash(), nil
+}
+
+// TODO: Remove after all tests are fixed
 func CreateAndSendRawTxToSliceOfNodes(ctx context.Context, nodes []tf.BitcoinNode) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
@@ -437,6 +492,62 @@ func CreateAndSendRawTxToSliceOfNodes(ctx context.Context, nodes []tf.BitcoinNod
 	return *newTx.TxIDChainHash(), nil
 }
 
+func CreateAndSendTxToSliceOfNodes(ctx context.Context, nodes []tenv.TeranodeTestClient) (chainhash.Hash, error) {
+	nilHash := chainhash.Hash{}
+	privateKey, _ := bec.NewPrivateKey(bec.S256())
+
+	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+
+	coinbaseClient := nodes[0].CoinbaseClient
+
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Failed to request funds: %w", err)
+	}
+
+	for _, node := range nodes {
+		_, err = node.DistributorClient.SendTransaction(ctx, faucetTx)
+		if err != nil {
+			return nilHash, errors.NewProcessingError("Failed to send transaction: %w", err)
+		}
+	}
+
+	output := faucetTx.Outputs[0]
+	utxo := &bt.UTXO{
+		TxIDHash:      faucetTx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+
+	if err != nil {
+		return nilHash, errors.NewProcessingError("error creating new transaction: %w", err)
+	}
+
+	err = newTx.AddP2PKHOutputFromAddress("1ApLMk225o7S9FvKwpNChB7CX8cknQT9Hy", 10000)
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Error adding output to transaction: %w", err)
+	}
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		return nilHash, errors.NewProcessingError("Error filling transaction inputs: %w", err)
+	}
+
+	for _, node := range nodes {
+		_, err = node.DistributorClient.SendTransaction(ctx, newTx)
+		if err != nil {
+			return nilHash, errors.NewProcessingError("Failed to send new transaction: %w", err)
+		}
+	}
+
+	return *newTx.TxIDChainHash(), nil
+}
+
+// TODO: Use tenv
 func CreateAndSendDoubleSpendTx(ctx context.Context, node []tf.BitcoinNode) (chainhash.Hash, error) {
 
 	nilHash := chainhash.Hash{}
@@ -523,6 +634,23 @@ func CreateAndSendRawTxs(ctx context.Context, node tf.BitcoinNode, count int) ([
 	return txHashes, nil
 }
 
+func CreateAndSendTxs(ctx context.Context, node tenv.TeranodeTestClient, count int) ([]chainhash.Hash, error) {
+	var txHashes []chainhash.Hash
+
+	for i := 0; i < count; i++ {
+		tx, err := CreateAndSendTx(ctx, node)
+		if err != nil {
+			return nil, errors.NewProcessingError("error creating raw transaction : %w", err)
+		}
+
+		txHashes = append(txHashes, tx)
+
+		time.Sleep(1 * time.Second) // Wait 10 seconds between transactions
+	}
+
+	return txHashes, nil
+}
+
 func CreateAndSendRawTxsConcurrently(ctx context.Context, node tf.BitcoinNode, count int) ([]chainhash.Hash, error) {
 	var wg sync.WaitGroup
 
@@ -576,6 +704,60 @@ func CreateAndSendRawTxsConcurrently(ctx context.Context, node tf.BitcoinNode, c
 	return txHashes, nil
 }
 
+func CreateAndSendTxsConcurrently(ctx context.Context, node tenv.TeranodeTestClient, count int) ([]chainhash.Hash, error) {
+	var wg sync.WaitGroup
+
+	var txHashes []chainhash.Hash
+
+	var errorsList []error
+
+	txErrors := make(chan error, count)
+	txResults := make(chan chainhash.Hash, count)
+
+	for i := 0; i < count; i++ {
+		wg.Add(1)
+
+		go func(index int) {
+			defer wg.Done()
+
+			tx, err := CreateAndSendTx(ctx, node)
+			if err != nil {
+				txErrors <- errors.NewProcessingError("error creating raw transaction: %w", err)
+				return
+			}
+			txResults <- tx
+		}(i)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	for {
+		select {
+		case err := <-txErrors:
+			if err != nil {
+				fmt.Printf("Error received: %s\n", err)
+				errorsList = append(errorsList, err)
+			}
+		case tx := <-txResults:
+			txHashes = append(txHashes, tx)
+		}
+
+		if len(txHashes)+len(errorsList) >= count {
+			break
+		}
+	}
+
+	if len(errorsList) > 0 {
+		return nil, errors.NewProcessingError("one or more errors occurred: %v", errorsList)
+	}
+
+	wg.Wait()
+	close(txErrors)
+	close(txResults)
+
+	return txHashes, nil
+}
+
+// TODO: Use tenv
 func UseCoinbaseUtxo(ctx context.Context, node tf.BitcoinNode, coinbaseTx *bt.Tx) (chainhash.Hash, error) {
 	nilHash := chainhash.Hash{}
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
@@ -641,6 +823,7 @@ func UseCoinbaseUtxo(ctx context.Context, node tf.BitcoinNode, coinbaseTx *bt.Tx
 
 // tx := response.Tx
 
+// TODO: Use tenv
 func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulogger.Logger, fees uint64) (bool, error) {
 	var defaultSathosis uint64 = 10000
 
@@ -723,15 +906,113 @@ func SendTXsWithDistributor(ctx context.Context, node tf.BitcoinNode, logger ulo
 	return true, nil
 }
 
+func SendTXsWithDistributorV2(ctx context.Context, node tenv.TeranodeTestClient, logger ulogger.Logger, fees uint64) (bool, error) {
+	var defaultSathosis uint64 = 10000
+
+	// Send transactions
+	txDistributor, _ := distributor.NewDistributor(ctx, logger,
+		distributor.WithBackoffDuration(200*time.Millisecond),
+		distributor.WithRetryAttempts(3),
+		distributor.WithFailureTolerance(0),
+	)
+
+	coinbaseClient := node.CoinbaseClient
+	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
+
+	coinbasePrivateKey, err := wif.DecodeWIF(coinbasePrivKey)
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to decode Coinbase private key: %v", err)
+	}
+
+	coinbaseAddr, _ := bscript.NewAddressFromPublicKey(coinbasePrivateKey.PrivKey.PubKey(), true)
+
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to generate private key: %v", err)
+	}
+
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to create address: %v", err)
+	}
+
+	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to request funds: %v", err)
+	}
+
+	_, err = txDistributor.SendTransaction(ctx, tx)
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to send transaction: %v", err)
+	}
+
+	fmt.Printf("Transaction sent: %s %v\n", tx.TxIDChainHash(), len(tx.Outputs))
+	fmt.Printf("TxOut: %v\n", tx.Outputs[0].Satoshis)
+
+	utxo := &bt.UTXO{
+		TxIDHash:      tx.TxIDChainHash(),
+		Vout:          uint32(0),
+		LockingScript: tx.Outputs[0].LockingScript,
+		Satoshis:      tx.Outputs[0].Satoshis,
+	}
+
+	newTx := bt.NewTx()
+	err = newTx.FromUTXOs(utxo)
+
+	if err != nil {
+		return false, errors.NewProcessingError("Error adding UTXO to transaction: %s\n", err)
+	}
+
+	if fees != 0 {
+		defaultSathosis -= defaultSathosis
+	}
+
+	err = newTx.AddP2PKHOutputFromAddress(coinbaseAddr.AddressString, defaultSathosis)
+	if err != nil {
+		return false, errors.NewProcessingError("Error adding output to transaction: %v", err)
+	}
+
+	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		return false, errors.NewProcessingError("Error filling transaction inputs: %v", err)
+	}
+
+	_, err = txDistributor.SendTransaction(ctx, newTx)
+	if err != nil {
+		return false, errors.NewProcessingError("Failed to send new transaction: %v", err)
+	}
+
+	fmt.Printf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
+	time.Sleep(5 * time.Second)
+
+	return true, nil
+}
+
 func GetBestBlock(ctx context.Context, node tf.BitcoinNode) (*block_model.Block, error) {
 	_, bbhmeta, errbb := node.BlockchainClient.GetBestBlockHeader(ctx)
 	if errbb != nil {
 		return nil, errors.NewProcessingError("Error getting best block header: %s\n", errbb)
 	}
+
 	block, errblock := node.BlockchainClient.GetBlockByHeight(ctx, bbhmeta.Height)
 	if errblock != nil {
 		return nil, errors.NewProcessingError("Error getting block by height: %s\n", errblock)
 	}
+
+	return block, nil
+}
+
+func GetBestBlockV2(ctx context.Context, node tenv.TeranodeTestClient) (*block_model.Block, error) {
+	_, bbhmeta, errbb := node.BlockchainClient.GetBestBlockHeader(ctx)
+	if errbb != nil {
+		return nil, errors.NewProcessingError("Error getting best block header: %s\n", errbb)
+	}
+
+	block, errblock := node.BlockchainClient.GetBlockByHeight(ctx, bbhmeta.Height)
+	if errblock != nil {
+		return nil, errors.NewProcessingError("Error getting block by height: %s\n", errblock)
+	}
+
 	return block, nil
 }
 

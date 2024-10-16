@@ -3,11 +3,11 @@
 // How to run each test:
 // Clean up docker containers before running the test manually
 // $ cd test/smoke/
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestUtxoTestSuite$/TestShouldAllowToSpendUtxos$" -tags utxo
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxos$" -tags utxo
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestUtxoTestSuite$/TestDeleteParentTx$" -tags utxo
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestUtxoTestSuite$/TestFreezeAndUnfreezeUtxos$" -tags utxo
-// $ SETTINGS_CONTEXT=docker.ci.tc1.run go test -v -run "^TestUtxoTestSuite$/TestShouldAllowToSpendUtxosAfterReassignment$" -tags utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowToSpendUtxos$" -tags utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxos$" -tags utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestDeleteParentTx$" -tags utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestFreezeAndUnfreezeUtxos$" -tags utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowToSpendUtxosAfterReassignment$" -tags utxo
 package test
 
 import (
@@ -16,9 +16,8 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/test/setup"
+	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
-	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
 	"github.com/libsv/go-bk/bec"
@@ -33,11 +32,11 @@ import (
 )
 
 type UtxoTestSuite struct {
-	setup.BitcoinTestSuite
+	arrange.TeranodeTestSuite
 }
 
-// func (suite *UtxoTestSuite) TearDownTest() {
-// }
+func (suite *UtxoTestSuite) TearDownTest() {
+}
 
 const url = "http://localhost:10090"
 
@@ -53,15 +52,11 @@ const url = "http://localhost:10090"
 // Verify the transaction is in the block
 func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 	t := suite.T()
-	framework := suite.Framework
+	framework := suite.TeranodeTestEnv
 	logger := framework.Logger
 	ctx := framework.Context
 
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
-		distributor.WithFailureTolerance(0),
-	)
+	txDistributor := &framework.Nodes[0].DistributorClient
 
 	coinbaseClient := framework.Nodes[0].CoinbaseClient
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
@@ -214,7 +209,7 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 }
 
 /* TestShouldAllowSpendAllUtxos tests that we can spend all UTXOs with multiple transactions */
-// Request Tx from faucet, it has 100+ faucets
+// Request Tx from faucet, it has 100+ outputs
 // Split the outputs into two parts
 // Create and send two transactions
 // Mine a block
@@ -225,15 +220,11 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 // utxostore_utxoBatchSize=50
 func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 	t := suite.T()
-	framework := suite.Framework
+	framework := suite.TeranodeTestEnv
 	logger := framework.Logger
 	ctx := framework.Context
 
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
-		distributor.WithFailureTolerance(0),
-	)
+	txDistributor := &framework.Nodes[0].DistributorClient
 
 	coinbaseClient := framework.Nodes[0].CoinbaseClient
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
@@ -335,33 +326,40 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 	assert.NoError(t, err, "Failed to mine block")
 
 	// Verify both transactions are in blocks
-	for i, tx := range []*bt.Tx{tx1, tx2} {
-		bl := false
-		targetHeight := height + 1
+	blTx1 := false
+	blTx2 := false
+	targetHeight := height + 1
 
-		for j := 0; j < 30; j++ {
-			err := helper.WaitForBlockHeight(url, targetHeight, 60)
-			assert.NoError(t, err, "Failed to wait for block height")
+	for j := 0; j < 30; j++ {
+		err := helper.WaitForBlockHeight(url, targetHeight, 60)
+		assert.NoError(t, err, "Failed to wait for block height")
 
-			header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
-			logger.Infof("Testing on Best block header: %v", header[0].Hash())
-			bl, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx.TxIDChainHash(), framework.Logger)
+		header, meta, _ := blockchainClient.GetBlockHeadersFromHeight(ctx, targetHeight, 1)
+		logger.Infof("Testing on Best block header: %v", header[0].Hash())
 
-			if err != nil {
-				logger.Errorf("Error checking if tx exists in block: %v", err)
-			}
-
-			if bl {
-				break
-			}
-
-			targetHeight++
-			_, err = helper.MineBlock(ctx, baClient, logger)
-			assert.NoError(t, err, "Failed to mine block")
+		if !blTx1 {
+		blTx1, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx1.TxIDChainHash(), framework.Logger)
 		}
 
-		assert.True(t, bl, "Transaction %d not found in block", i+1)
+		if !blTx2 {
+		blTx2, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx2.TxIDChainHash(), framework.Logger)
+		}
+
+		if err != nil {
+			logger.Errorf("Error checking if tx exists in block: %v", err)
+		}
+
+		if blTx1 && blTx2 {
+			break
+		}
+
+		targetHeight++
+		_, err = helper.MineBlock(ctx, baClient, logger)
+		assert.NoError(t, err, "Failed to mine block")
 	}
+
+	assert.True(t, blTx1, "Transaction %d not found in block", tx1.TxIDChainHash())
+	assert.True(t, blTx2, "Transaction %d not found in block", tx2.TxIDChainHash())
 
 	utxoBalanceAfter, _, _ := coinbaseClient.GetBalance(ctx)
 	logger.Infof("utxoBalanceBefore: %d, utxoBalanceAfter: %d", utxoBalanceBefore, utxoBalanceAfter)
@@ -370,19 +368,13 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 // nolint: gocognit
 func (suite *UtxoTestSuite) TestDeleteParentTx() {
 	t := suite.T()
-	framework := suite.Framework
+	framework := suite.TeranodeTestEnv
 	ctx := framework.Context
+	logger := framework.Logger
 
 	url := "http://localhost:10090"
 
-	var logLevelStr, _ = gocore.Config().Get("logLevel", "INFO")
-	logger := ulogger.New("test", ulogger.WithLevel(logLevelStr))
-
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
-		distributor.WithFailureTolerance(0),
-	)
+	txDistributor := framework.Nodes[0].DistributorClient
 
 	coinbaseClient := framework.Nodes[0].CoinbaseClient
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
@@ -516,21 +508,20 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 // Expect validation to fail
 func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 	t := suite.T()
-	framework := suite.Framework
+	framework := suite.TeranodeTestEnv
 	settingsMap := suite.SettingsMap
 	logger := framework.Logger
 	ctx := framework.Context
 
-	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ci.ubsv1.TestFreezeAndUnfreezeUtxos"
-	if err := framework.RestartNodes(settingsMap); err != nil {
+	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ubsv1.test.TestFreezeAndUnfreezeUtxos"
+	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
-	txDistributor, _ := distributor.NewDistributor(ctx, logger,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
-		distributor.WithFailureTolerance(0),
-	)
+	err := framework.InitializeTeranodeTestClients()
+	require.NoError(t, err, "Failed to initialize Teranode test clients")
+
+	txDistributor := framework.Nodes[0].DistributorClient
 
 	coinbaseClient := framework.Nodes[0].CoinbaseClient
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
@@ -558,6 +549,7 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 
 	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
 
+	time.Sleep(10 * time.Second)
 	baClient := framework.Nodes[0].BlockassemblyClient
 	blockStore := framework.Nodes[0].Blockstore
 	blockchainClient := framework.Nodes[0].BlockchainClient
@@ -711,13 +703,13 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 
 func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxosAfterReassignment() {
 	t := suite.T()
-	framework := suite.Framework
+	framework := suite.TeranodeTestEnv
 	settingsMap := suite.SettingsMap
 	logger := framework.Logger
 	ctx := framework.Context
 
-	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ci.ubsv1.TestFreezeAndUnfreezeUtxos"
-	if err := framework.RestartNodes(settingsMap); err != nil {
+	settingsMap["SETTINGS_CONTEXT_1"] = "docker.ubsv1.TestFreezeAndUnfreezeUtxos"
+	if err := framework.RestartDockerNodes(settingsMap); err != nil {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
