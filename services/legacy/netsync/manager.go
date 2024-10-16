@@ -376,8 +376,6 @@ func (sm *SyncManager) startSync() {
 			if err = sm.blockchainClient.Run(sm.ctx); err != nil {
 				sm.logger.Errorf("failed to set blockchain state to running: %v", err)
 			}
-
-			return
 		}
 
 		// Clear the requestedBlocks if the sync peer changes, otherwise
