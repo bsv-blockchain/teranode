@@ -978,8 +978,13 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	}
 	state := b.finiteStateMachine.Current()
 
-	// Log the state immediately after storing it
-	// b.logger.Infof("[Blockchain Server] state immediately after storing: %v", state)
+	// set the state in persistent storage
+	err = b.store.SetFSMState(ctx, state)
+	// we
+	if err != nil {
+		b.logger.Errorf("[Blockchain Server] Error setting the state in blockchain db: %v", err)
+
+	}
 
 	resp := &blockchain_api.GetFSMStateResponse{
 		State: blockchain_api.FSMStateType(blockchain_api.FSMStateType_value[state]),
