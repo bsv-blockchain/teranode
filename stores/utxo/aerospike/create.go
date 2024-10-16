@@ -247,12 +247,8 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 					bItem.txHash[:],
 					bItem.tx.ExtendedBytes(),
 					setOptions...,
-				); err != nil {
-					if errors.Is(err, errors.ErrBlobAlreadyExists) {
-						utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("[sendStoreBatch] %v already exists in store", bItem.txHash.String()))
-					} else {
-						utils.SafeSend[error](bItem.done, errors.NewStorageError("[sendStoreBatch] error batch writing transaction to external store [%s]", bItem.txHash.String(), err))
-					}
+				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+					utils.SafeSend[error](bItem.done, errors.NewStorageError("[sendStoreBatch] error batch writing transaction to external store [%s]", bItem.txHash.String(), err))
 					// NOOP for this record
 					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
@@ -517,13 +513,8 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 		bItem.txHash[:],
 		bItem.tx.ExtendedBytes(),
 		opts...,
-	); err != nil {
-		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("[getBinsToStore] %v already exists in store", bItem.txHash.String()))
-		} else {
-			utils.SafeSend[error](bItem.done, errors.NewStorageError("[getBinsToStore] error writing transaction to external store [%s]", bItem.txHash.String(), err))
-		}
-
+	); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		utils.SafeSend[error](bItem.done, errors.NewStorageError("[getBinsToStore] error writing transaction to external store [%s]", bItem.txHash.String(), err))
 		return
 	}
 
@@ -613,13 +604,8 @@ func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *ba
 		bItem.txHash[:],
 		wrapper.Bytes(),
 		opts...,
-	); err != nil {
-		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("[storePartialTransactionExternally] %v already exists in store", bItem.txHash.String()))
-		} else {
-			utils.SafeSend[error](bItem.done, errors.NewStorageError("[storePartialTransactionExternally] error writing output to external store [%s]", bItem.txHash.String(), err))
-		}
-
+	); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		utils.SafeSend[error](bItem.done, errors.NewStorageError("[storePartialTransactionExternally] error writing output to external store [%s]", bItem.txHash.String(), err))
 		return
 	}
 
