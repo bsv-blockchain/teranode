@@ -105,6 +105,7 @@ func createPostgresSchema(db *usql.DB) error {
       CREATE TABLE IF NOT EXISTS state (
 	    key            VARCHAR(32) PRIMARY KEY
 	    ,data          BYTEA NOT NULL
+        ,fsm_state	 VARCHAR(32) NULL
         ,inserted_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         ,updated_at    TIMESTAMPTZ NULL
 	  );
