@@ -105,7 +105,7 @@ func (s *SQL) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block
 		&subtreeBytes,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.ErrBlockNotFound
+			return nil, errors.NewBlockNotFoundError("failed to get block by height", err)
 		}
 
 		return nil, errors.NewStorageError("failed to get block by height", err)

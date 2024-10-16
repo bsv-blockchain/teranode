@@ -896,12 +896,18 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// promote block to the block validation via kafka (p2p -> blockvalidation message),
 	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
 	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block); err != nil {
+		if legacySyncMode && errors.Is(err, errors.ErrBlockNotFound) {
+			// previous block not found?
+			return err
+		}
+
 		serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
 		if !legacySyncMode && !serviceError {
 			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
 		}
 
-		return err
+		panic(err)
+		// return err
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
@@ -1369,7 +1375,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		case wire.InvTypeBlock:
 			// Request the block if there is not already a pending
 			// request.
-			if _, exists := sm.requestedBlocks[iv.Hash]; !exists {
+			if _, exists = sm.requestedBlocks[iv.Hash]; !exists {
 				sm.requestedBlocks[iv.Hash] = struct{}{}
 				sm.limitMap(sm.requestedBlocks, maxRequestedBlocks)
 
@@ -1382,7 +1388,7 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		case wire.InvTypeTx:
 			// Request the transaction if there is not already a
 			// pending request.
-			if _, exists := sm.requestedTxns[iv.Hash]; !exists {
+			if _, exists = sm.requestedTxns[iv.Hash]; !exists {
 				sm.requestedTxns[iv.Hash] = struct{}{}
 
 				sm.limitMap(sm.requestedTxns, maxRequestedTxns)

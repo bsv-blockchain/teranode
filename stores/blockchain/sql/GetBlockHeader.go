@@ -64,10 +64,10 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		&blockHeaderMeta.TxCount,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, errors.NewStorageError("error in GetBlockHeader", errors.ErrNotFound)
+			return nil, nil, errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound)
 		}
 
-		return nil, nil, err
+		return nil, nil, errors.NewStorageError("error in GetBlockHeader", err)
 	}
 
 	bits, _ := model.NewNBitFromSlice(nBits)

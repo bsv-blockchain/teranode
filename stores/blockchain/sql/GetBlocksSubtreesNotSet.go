@@ -84,7 +84,7 @@ func (s *SQL) getBlocksWithQuery(ctx context.Context, q string) ([]*model.Block,
 			&height,
 		); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return nil, errors.NewStorageError("error in GetBlock", err)
+				return blocks, nil
 			}
 
 			return nil, err

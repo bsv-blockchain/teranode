@@ -101,10 +101,10 @@ func (s *SQL) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.B
 		&subtreeBytes,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, 0, errors.NewStorageError("error in GetBlock", err)
+			return nil, 0, errors.NewBlockNotFoundError("error in GetBlock", err)
 		}
 
-		return nil, 0, err
+		return nil, 0, errors.NewStorageError("error in GetBlock", err)
 	}
 
 	bits, _ := model.NewNBitFromSlice(nBits)

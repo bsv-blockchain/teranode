@@ -74,10 +74,10 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		&insertedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, errors.NewStorageError("error in GetBestBlockHeader", err)
+			return nil, nil, errors.NewBlockNotFoundError("error in GetBestBlockHeader", err)
 		}
 
-		return nil, nil, err
+		return nil, nil, errors.NewStorageError("error in GetBestBlockHeader", err)
 	}
 
 	bits, _ := model.NewNBitFromSlice(nBits)

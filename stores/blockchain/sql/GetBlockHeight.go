@@ -34,10 +34,10 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, errors.NewStorageError("error in GetBlockHeight", err)
+			return 0, errors.NewBlockNotFoundError("error in GetBlockHeight", err)
 		}
 
-		return 0, err
+		return 0, errors.NewStorageError("error in GetBlockHeight", err)
 	}
 
 	return height, nil

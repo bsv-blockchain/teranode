@@ -52,10 +52,10 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// add not found error in error chain
-			return nil, errors.NewStorageError("error in Header", errors.ErrNotFound)
+			return nil, errors.NewBlockNotFoundError("error in GetHeader", errors.ErrNotFound)
 		}
 
-		return nil, errors.NewStorageError("error in Header", err)
+		return nil, errors.NewStorageError("error in GetHeader", err)
 	}
 
 	var err error
