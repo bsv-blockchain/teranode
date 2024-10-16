@@ -469,6 +469,14 @@ func (s *mockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []u
 	panic("not implemented")
 }
 
+func (s *mockStore) SetFSMState(ctx context.Context, fsmState string) error {
+	panic("not implemented")
+}
+
+func (s *mockStore) GetFSMState(ctx context.Context) (string, error) {
+	panic("not implemented")
+}
+
 type mockKafkaProducer struct {
 	messages [][]byte
 	mu       sync.Mutex
