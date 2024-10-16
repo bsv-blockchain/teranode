@@ -368,6 +368,18 @@ func (sm *SyncManager) startSync() {
 
 	// Start syncing from the best peer if one was selected.
 	if bestPeer != nil {
+		// check whether we are in sync with this peer and send RUNNING FSM state
+		// nolint:gosec // the height will never exceed int32.Max
+		if bestPeer.LastBlock() == int32(bestBlockHeaderMeta.Height) {
+			sm.logger.Infof("peer %v is at the same height as us, sending RUNNING and waiting for new blocks", bestPeer.Addr())
+
+			if err = sm.blockchainClient.Run(sm.ctx); err != nil {
+				sm.logger.Errorf("failed to set blockchain state to running: %v", err)
+			}
+
+			return
+		}
+
 		// Clear the requestedBlocks if the sync peer changes, otherwise
 		// we may ignore blocks we need that the last sync peer failed
 		// to send.
