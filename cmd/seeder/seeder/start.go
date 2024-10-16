@@ -20,8 +20,10 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/utxopersister"
+	"github.com/bitcoin-sv/ubsv/stores/blob"
+	blob_options "github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
-	"github.com/bitcoin-sv/ubsv/stores/blockchain/options"
+	blockchain_options "github.com/bitcoin-sv/ubsv/stores/blockchain/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxo_factory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -89,6 +91,7 @@ func Start() {
 	}
 
 	logger := ulogger.NewGoCoreLogger("seed")
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -220,8 +223,8 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile stri
 			ctx,
 			block,
 			"headers",
-			options.WithMinedSet(true),
-			options.WithSubtreesSet(true),
+			blockchain_options.WithMinedSet(true),
+			blockchain_options.WithSubtreesSet(true),
 		)
 		if err != nil {
 			return errors.NewProcessingError("Failed to add block", err)
@@ -230,7 +233,9 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile stri
 		headersProcessed++
 		txCount += header.TxCount
 
-		fmt.Printf("Processed block %d\n", header.Height)
+		if header.Height%1000 == 0 {
+			fmt.Printf("Processed to block height %d\n", header.Height)
+		}
 	}
 
 	logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(headersProcessed), formatNumber(txCount))
@@ -239,6 +244,28 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, headersFile stri
 }
 
 func processUTXOs(ctx context.Context, logger ulogger.Logger, utxoFile string) error {
+	blockStoreURL, err, found := gocore.Config().GetURL("blockstore")
+	if err != nil || !found {
+		return errors.NewConfigurationError("blockstore URL not found in config", err)
+	}
+
+	logger.Infof("Using blockStore at %s", blockStoreURL)
+
+	blockStore, err := blob.NewStore(logger, blockStoreURL)
+	if err != nil {
+		return errors.NewStorageError("Failed to create blockStore", err)
+	}
+
+	exists, err := blockStore.Exists(ctx, nil, blob_options.WithFilename("lastProcessed"), blob_options.WithFileExtension("dat"))
+	if err != nil {
+		return errors.NewStorageError("Failed to check if lastProcessed.dat exists", err)
+	}
+
+	if exists {
+		logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
+		return nil
+	}
+
 	utxoStoreURL, err, found := gocore.Config().GetURL("utxostore")
 	if err != nil || !found {
 		return errors.NewConfigurationError("utxostore URL not found in config", err)
@@ -278,7 +305,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, utxoFile string) e
 
 	reader := bufio.NewReader(f)
 
-	magic, _, _, _, err := utxopersister.GetUTXOSetHeaderFromReader(reader)
+	magic, _, height, _, err := utxopersister.GetUTXOSetHeaderFromReader(reader)
 	if err != nil {
 		return errors.NewProcessingError("Failed to read UTXO set header", err)
 	}
@@ -340,13 +367,17 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, utxoFile string) e
 		return nil
 	})
 
-	logger.Infof("Waiting for workers to finish")
-
 	if err := g.Wait(); err != nil {
 		return errors.NewProcessingError("Error in worker", err)
 	}
 
 	logger.Infof("All workers finished successfully")
+
+	heightStr := fmt.Sprintf("%d\n", height)
+
+	if err := blockStore.Set(ctx, nil, []byte(heightStr), blob_options.WithFilename("lastProcessed"), blob_options.WithFileExtension("dat")); err != nil {
+		return errors.NewStorageError("Failed to write height of %d to lastProcessed.dat", height, err)
+	}
 
 	return nil
 }
