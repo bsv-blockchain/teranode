@@ -302,10 +302,21 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 	block.Height = height
 
-	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
-
+	b.logger.Debugf("[BlockPersister] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
 	if b.blockKafkaProducer != nil {
-		go b.sendKafkaBlockMessage(ctx, block)
+		go func(block *model.Block) {
+			blockBytes, err := block.Bytes()
+			if err != nil {
+				b.logger.Errorf("[Blockchain] Error serializing block: %v", err)
+			} else {
+				b.logger.Debugf("[BlockPersister] sending block to kafka: %s", block.String())
+				// producer has built-in retry mechanism
+				if err = b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
+					// TODO: #938 Alter FSM state and keep going forever until it works and then reset the FSM state?
+					b.logger.Errorf("[Blockchain] Error sending block to kafka: %v", err)
+				}
+			}
+		}(block)
 	}
 
 	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
@@ -1261,65 +1272,4 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	}
 
 	return locator, nil
-}
-
-func (b *Blockchain) sendKafkaBlockMessage(ctx context.Context, block *model.Block) {
-	blockBytes, err := block.Bytes()
-	if err != nil {
-		b.logger.Errorf("[AddBlock] Error serializing block: %v", err)
-	} else {
-		b.logger.Debugf("[AddBlock] sending block to kafka: %s", block.String())
-
-		stateStart, err := b.GetFSMCurrentState(ctx, &emptypb.Empty{})
-		if err != nil {
-			b.logger.Errorf("[AddBlock] Error getting FSM current state: %v", err)
-		}
-
-		// Essential we get the message on Kafka topic
-		for { // KAFKA SEND
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				// producer has built-in retry mechanism but it doesn't retry forever
-				if err := b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
-					b.logger.Errorf("[AddBlock] Error sending block to kafka: %v", err)
-
-					for { // FSM RESOURCE_UNAVAILABLE
-						select {
-						case <-ctx.Done():
-							return
-						default:
-							b.logger.Infof("[AddBlock] setting FSM to RESOURCE_UNAVAILABLE")
-
-							if _, err := b.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_UNAVAILABLE}); err != nil {
-								b.logger.Errorf("[AddBlock] Error sending FSM event: %v", err)
-								time.Sleep(1 * time.Second)
-								continue // FSM RESOURCE_UNAVAILABLE
-							}
-						}
-						break // FSM RESOURCE_UNAVAILABLE
-					}
-
-					time.Sleep(1 * time.Second)
-					continue // KAFKA SEND
-				}
-			}
-			break // KAFKA SEND
-		}
-
-		stateEnd, err := b.GetFSMCurrentState(ctx, &emptypb.Empty{})
-		if err != nil {
-			b.logger.Errorf("[Blockchain] Error getting FSM current state: %v", err)
-		}
-
-		if stateStart.State != stateEnd.State {
-			b.logger.Infof("[AddBlock] sent block to kafka (after failed attempt(s)): %s", block.String())
-			b.logger.Infof("[AddBlock] reset FSM to %s", stateStart.State)
-
-			if _, err := b.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType(stateStart.State)}); err != nil {
-				b.logger.Errorf("[AddBlock] Error sending FSM event: %v", err)
-			}
-		}
-	}
 }
