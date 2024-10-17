@@ -588,7 +588,7 @@ func (c *Coinbase) processCoinbase(ctx context.Context, blockId uint64, blockHas
 				WHERE b.id != cb.id
 			)
 			SELECT id FROM ChainBlocks
-			WHERE height < (SELECT height - $2 FROM LongestChainTip)
+			WHERE height <= (SELECT height - $2 FROM LongestChainTip)
 		)
 	`
 	if _, err := c.db.ExecContext(ctx, q, timestamp, c.minConfirmations); err != nil {

@@ -40,7 +40,7 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.0.1
 	github.com/json-iterator/go v1.1.12
 	github.com/kpango/fastime v1.1.9
-	github.com/lib/pq v1.10.7
+	github.com/lib/pq v1.10.9
 	github.com/libp2p/go-libp2p v0.36.3
 	github.com/libp2p/go-libp2p-kad-dht v0.26.1
 	github.com/libp2p/go-libp2p-pubsub v0.11.0
@@ -122,6 +122,7 @@ require (
 	github.com/pion/webrtc/v3 v3.3.0 // indirect
 	github.com/r3labs/sse v0.0.0-20210224172625-26fe804710bc // indirect
 	github.com/skratchdot/open-golang v0.0.0-20200116055534-eef842397966 // indirect
+	github.com/testcontainers/testcontainers-go/modules/postgres v0.33.0 // indirect
 	github.com/tonistiigi/go-csvvalue v0.0.0-20240710180619-ddb21b71c0b4 // indirect
 	github.com/wlynxg/anet v0.0.3 // indirect
 	gopkg.in/cenkalti/backoff.v1 v1.1.0 // indirect

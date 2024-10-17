@@ -74,7 +74,7 @@ func (t *TeranodeTestEnv) SetupDockerNodes(envSettings map[string]string) error 
 			return err
 		}
 
-		time.Sleep(30 * time.Second)
+		// time.Sleep(30 * time.Second)
 
 		t.Compose = compose
 
@@ -268,7 +268,7 @@ func (t *TeranodeTestEnv) GetMappedPort(nodeName string, port nat.Port) (nat.Por
 
 // StopDockerNodes stops the Docker Compose services and removes volumes.
 func (t *TeranodeTestEnv) StopDockerNodes() error {
-	if t.Compose != nil {
+	if t != nil && t.Compose != nil && t.Context != nil {
 		return t.Compose.Down(t.Context)
 	}
 

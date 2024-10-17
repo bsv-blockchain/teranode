@@ -119,6 +119,14 @@ func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*St
 		return nil, errors.NewInvalidArgumentError("utxoBatchSize must be between 1 and %d", math.MaxUint32)
 	}
 
+	// the external tx cache is used to cache externally stored transactions for a short time after being read from
+	// the store. Transactions with lots of outputs, being spent at the same time, benefit greatly from this cache,
+	// since external cache takes care of concurrent reads to the same transaction.
+	var externalTxCache *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
+	if gocore.Config().GetBool("utxostore_useExternalTxCache", true) {
+		externalTxCache = util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](10 * time.Second)
+	}
+
 	s := &Store{
 		ctx:                        ctx,
 		url:                        aerospikeURL,
@@ -130,7 +138,7 @@ func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*St
 		externalStore:              externalStore,
 		utxoBatchSize:              utxoBatchSize,
 		externalizeAllTransactions: gocore.Config().GetBool("utxostore_externalizeAllTransactions", false),
-		externalTxCache:            util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](10 * time.Second),
+		externalTxCache:            externalTxCache,
 	}
 
 	storeBatchSize, _ := gocore.Config().GetInt("utxostore_storeBatcherSize", 256)

@@ -45,7 +45,9 @@ func (suite *TeranodeTestSuite) SetupTest() {
 
 func (suite *TeranodeTestSuite) TearDownTest() {
 	if err := TearDownTeranodeTestEnv(suite.TeranodeTestEnv); err != nil {
-		suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+		if suite.T() != nil && suite.TeranodeTestEnv != nil {
+			suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+		}
 	}
 
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
@@ -55,7 +57,9 @@ func (suite *TeranodeTestSuite) TearDownTest() {
 		suite.T().Fatal(err)
 	}
 
-	suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+	if suite.T() != nil && suite.TeranodeTestEnv != nil {
+		suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+	}
 }
 
 func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, composeFiles []string, skipSetUpTestClient bool) {
@@ -84,11 +88,13 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 
 	suite.TeranodeTestEnv, err = SetupTeranodeTestEnv(suite.ComposeFiles, suite.SettingsMap)
 	if err != nil {
-		suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+		if suite.T() != nil && suite.TeranodeTestEnv != nil {
+			suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+		}
 		suite.T().Fatalf("Failed to set up TeranodeTestEnv: %v", err)
 	}
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(10 * time.Second)
 
 	if !skipSetUpTestClient {
 		err = suite.TeranodeTestEnv.InitializeTeranodeTestClients()
@@ -117,17 +123,23 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 			suite.T().Fatal(err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL1, 200, 120)
+		// Min height possible is 101
+		// whatever height you specify, make sure :
+		// mine_initial_blocks_count.docker = [height]
+		// blockvalidation_maxPreviousBlockHeadersToCheck = [height - 1]
+		height := uint32(101)
+
+		err = helper.WaitForBlockHeight(NodeURL1, height, 120)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL2, 200, 120)
+		err = helper.WaitForBlockHeight(NodeURL2, height, 120)
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
-		err = helper.WaitForBlockHeight(NodeURL3, 200, 120)
+		err = helper.WaitForBlockHeight(NodeURL3, height, 120)
 		if err != nil {
 			suite.T().Fatal(err)
 		}

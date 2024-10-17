@@ -354,3 +354,9 @@ func (d *Distributor) SendTransaction(ctx context.Context, tx *bt.Tx) ([]*Respon
 		return responses, nil
 	}
 }
+
+func (d *Distributor) TriggerBatcher() {
+	for _, propagationServer := range d.propagationServers {
+		propagationServer.TriggerBatcher()
+	}
+}

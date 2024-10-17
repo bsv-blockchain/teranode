@@ -1,7 +1,7 @@
-# 🚀 Teranode
-> Unbounded BSV
+![teranode.png](docs/architecture/img/teranode.png)
 
-## Index
+
+## Table of Contents
 
 - [Tutorials](#tutorials)
 - [How-to Guides](#how-to-guides)
@@ -74,7 +74,7 @@
       - [Kafka](docs/kafka/kafka.md)
 
     - Commands:
-      - [Seeder Service](docs/commands/seeder.md)
+      - [UTXO Seeder](docs/commands/seeder.md)
       - [UTXO Blaster](docs/commands/utxoBlaster.md)
       - [TX Blaster](docs/commands/txBlaster.md)
       - [Propagation Blaster](docs/commands/propagationBlaster.md)
@@ -121,10 +121,8 @@
 8. [Network Consensus Rules](docs/references/networkConsensusRules.md)
 
 ## Additional Resources
-1. Glossary
-2. Troubleshooting Guide
-3. FAQ
-4. Contributing to Teranode
+1. [Glossary](docs/references/glossary.md)
+2. Contributing to Teranode
 5. License Information
 
 ---

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
@@ -99,6 +100,7 @@ func EnrichStandardWOC(tx *bt.Tx) error {
 }
 
 func fetchTransactionHex(txIDHex string) (string, error) {
+	time.Sleep(500 * time.Millisecond) // overcome rate limit 3 RPS
 	resp, err := http.Get(fmt.Sprintf("https://api.whatsonchain.com/v1/bsv/main/tx/%s/hex", txIDHex))
 	if err != nil {
 		return "", err
