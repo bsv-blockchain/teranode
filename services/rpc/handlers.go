@@ -899,11 +899,12 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	)
 	defer deferFn()
 
-	banList := p2p.NewBanList(s.logger)
+	banList, err := p2p.NewBanList(s.logger)
+	if err != nil {
+		return nil, err
+	}
 
 	var subnet *net.IPNet
-
-	var err error
 
 	c := cmd.(*bsvjson.SetBanCmd)
 
@@ -931,7 +932,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			expirationTime = time.Now().Add(24 * time.Hour)
 		}
 
-		err = banList.Add(c.IPOrSubnet, expirationTime)
+		err = banList.Add(ctx, c.IPOrSubnet, expirationTime)
 		if err != nil {
 			return nil, &bsvjson.RPCError{
 				Code:    bsvjson.ErrRPCInvalidParameter,
@@ -941,7 +942,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 		s.logger.Debugf("Added ban for %s until %v", subnet.String(), expirationTime)
 	case "remove":
-		err = banList.Remove(c.IPOrSubnet)
+		err = banList.Remove(ctx, c.IPOrSubnet)
 		if err != nil {
 			return nil, &bsvjson.RPCError{
 				Code:    bsvjson.ErrRPCInvalidParameter,

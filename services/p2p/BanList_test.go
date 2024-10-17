@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,6 +9,16 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/stretchr/testify/require"
 )
+
+func setupBanList(t *testing.T) (*BanList, error) {
+	banList, err := NewBanList(ulogger.TestLogger{})
+	require.NoError(t, err)
+
+	err = banList.Init(context.Background())
+	require.NoError(t, err)
+
+	return banList, err
+}
 
 func TestHandleSetBanAdd(t *testing.T) {
 	tests := []struct {
@@ -36,12 +47,12 @@ func TestHandleSetBanAdd(t *testing.T) {
 			isSubnet: true,
 		},
 	}
-
-	banList := NewBanList(ulogger.TestLogger{})
+	banList, err := setupBanList(t)
+	require.NoError(t, err)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := banList.Add(tt.args.IPOrSubnet, time.Now().Add(time.Duration(tt.args.BanTime)*time.Second))
+			err := banList.Add(context.Background(), tt.args.IPOrSubnet, time.Now().Add(time.Duration(tt.args.BanTime)*time.Second))
 			require.NoError(t, err)
 
 			banInfo, exists := banList.bannedPeers[tt.args.IPOrSubnet]
@@ -60,14 +71,14 @@ func TestHandleSetBanAdd(t *testing.T) {
 }
 
 func TestIsBanned(t *testing.T) {
-	banList := NewBanList(ulogger.TestLogger{})
-
+	banList, err := setupBanList(t)
+	require.NoError(t, err)
 	// Add a banned IP
-	err := banList.Add("192.168.1.1", time.Now().Add(3600*time.Second))
+	err = banList.Add(context.Background(), "192.168.1.1", time.Now().Add(3600*time.Second))
 	require.NoError(t, err)
 
 	// Add a banned subnet
-	err = banList.Add("10.0.0.0/24", time.Now().Add(3600*time.Second))
+	err = banList.Add(context.Background(), "10.0.0.0/24", time.Now().Add(3600*time.Second))
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -93,14 +104,15 @@ func TestIsBanned(t *testing.T) {
 }
 
 func TestRemoveBan(t *testing.T) {
-	banList := NewBanList(ulogger.TestLogger{})
+	banList, err := setupBanList(t)
+	require.NoError(t, err)
 
 	// Add a banned IP
-	err := banList.Add("192.168.1.1", time.Now().Add(3600*time.Second))
+	err = banList.Add(context.Background(), "192.168.1.1", time.Now().Add(3600*time.Second))
 	require.NoError(t, err)
 
 	// Add a banned subnet
-	err = banList.Add("10.0.0.0/24", time.Now().Add(3600*time.Second))
+	err = banList.Add(context.Background(), "10.0.0.0/24", time.Now().Add(3600*time.Second))
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -116,7 +128,7 @@ func TestRemoveBan(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := banList.Remove(tt.ipOrSubnet)
+			err := banList.Remove(context.Background(), tt.ipOrSubnet)
 			require.NoError(t, err)
 
 			_, exists := banList.bannedPeers[tt.ipOrSubnet]

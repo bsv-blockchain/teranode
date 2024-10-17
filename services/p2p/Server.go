@@ -208,6 +208,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 	if found {
 		s.kafkaHealthURL = blocksKafkaURL
+
 		s.blocksKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
 			return kafka.NewKafkaAsyncProducer(s.logger, blocksKafkaURL, make(chan *kafka.Message, 10))
 		}, retry.WithMessage("[P2P] error starting kafka block producer"))
@@ -222,6 +223,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	rejectedTxKafkaURL, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
 	if err == nil && ok {
 		s.kafkaHealthURL = rejectedTxKafkaURL
+
 		var partitions int
 
 		if partitions, err = strconv.Atoi(rejectedTxKafkaURL.Query().Get("partitions")); err != nil {
