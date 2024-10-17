@@ -1,7 +1,7 @@
 # 🚀 Teranode
 > Unbounded BSV
 
-## Index
+## Table of Contents
 
 - [Tutorials](#tutorials)
 - [How-to Guides](#how-to-guides)
@@ -121,10 +121,8 @@
 8. [Network Consensus Rules](docs/references/networkConsensusRules.md)
 
 ## Additional Resources
-1. Glossary
-2. Troubleshooting Guide
-3. FAQ
-4. Contributing to Teranode
+1. [Glossary](docs/references/glossary.md)
+2. Contributing to Teranode
 5. License Information
 
 ---
