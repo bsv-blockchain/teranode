@@ -2,6 +2,8 @@ package blockchain
 
 import (
 	"context"
+	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/ordishs/gocore"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -65,4 +67,40 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 		require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
 		require.True(t, fsm.Can(blockchain_api.FSMEventType_STOP.String()))
 	})
+}
+
+func Test_GetSetFSMStateFromStore(t *testing.T) {
+	ctx := context.Background()
+	logger := mock_logger.NewTestLogger()
+
+	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
+	require.NoError(t, err)
+
+	blockchainClient, err := New(ctx, logger, blockchainStore)
+	require.NoError(t, err)
+
+	fsm := blockchainClient.NewFiniteStateMachine()
+	require.NotNil(t, fsm)
+	require.Equal(t, "STOPPED", fsm.Current())
+	require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
+
+	t.Run("Set and Get FSM State", func(t *testing.T) {
+		err = blockchainClient.store.SetFSMState(ctx, string(FSMStateCATCHINGBLOCKS))
+		require.NoError(t, err)
+		state, err := blockchainClient.store.GetFSMState(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "RUNNING", state)
+	})
+
+	//t.Run("Set and Get FSM State with invalid state", func(t *testing.T) {
+	//	err = blockchainClient.SetFSMState(ctx, "INVALID")
+	//	require.Error(t, err)
+	//	state, err := blockchainClient.GetFSMState(ctx)
+	//	require.NoError(t, err)
+	//	require.Equal(t, "STOPPED", state)
+	//})
 }
