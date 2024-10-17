@@ -55,7 +55,9 @@ func (suite *TeranodeTestSuite) TearDownTest() {
 		suite.T().Fatal(err)
 	}
 
-	suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+	if suite.T() != nil && suite.TeranodeTestEnv != nil {
+		suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+	}
 }
 
 func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, composeFiles []string, skipSetUpTestClient bool) {
