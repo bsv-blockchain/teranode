@@ -56,6 +56,7 @@ type Blockchain struct {
 	stats              *gocore.Stat
 	finiteStateMachine *fsm.FSM
 	kafkaHealthURL     *url.URL
+	AppCtx             context.Context
 }
 
 // New will return a server instance with the logger stored within it
@@ -87,6 +88,7 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 		difficulty:        d,
 		chainParams:       params,
 		stats:             gocore.NewStat("blockchain"),
+		AppCtx:            ctx,
 	}, nil
 }
 
@@ -305,7 +307,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
 
 	if b.blockKafkaProducer != nil {
-		go b.sendKafkaBlockMessage(ctx, block)
+		go b.sendKafkaBlockMessage(block)
 	}
 
 	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
@@ -1263,7 +1265,8 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	return locator, nil
 }
 
-func (b *Blockchain) sendKafkaBlockMessage(ctx context.Context, block *model.Block) {
+func (b *Blockchain) sendKafkaBlockMessage(block *model.Block) {
+	ctx := b.AppCtx
 	blockBytes, err := block.Bytes()
 	if err != nil {
 		b.logger.Errorf("[AddBlock] Error serializing block: %v", err)

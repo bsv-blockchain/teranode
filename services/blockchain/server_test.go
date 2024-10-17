@@ -186,7 +186,7 @@ func Test_sendKafkaBlockMessage(t *testing.T) {
 	mockProducer := new(mockKafkaProducer)
 	ctx.server.blockKafkaProducer = mockProducer
 
-	ctx.server.sendKafkaBlockMessage(context.Background(), mockBlock)
+	ctx.server.sendKafkaBlockMessage(mockBlock)
 
 	// to get this far means it's not stuck in an endless loop
 	require.Equal(t, 1, len(mockProducer.messages))
@@ -226,7 +226,7 @@ func Test_sendKafkaBlockMessage_TemporaryError(t *testing.T) {
 
 	// Start sending Kafka message
 	go func() {
-		ctx.server.sendKafkaBlockMessage(context.Background(), mockBlock)
+		ctx.server.sendKafkaBlockMessage(mockBlock)
 		done <- true
 	}()
 
