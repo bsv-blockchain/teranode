@@ -2,8 +2,10 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +47,7 @@ func New(logger ulogger.Logger, storeURL *url.URL) (*SQL, error) {
 		return nil, errors.NewStorageError("failed to init sql db", err)
 	}
 
+	fmt.Println("Store URL: ", storeURL.Scheme)
 	switch util.SQLEngine(storeURL.Scheme) {
 	case util.Postgres:
 		if err = createPostgresSchema(db); err != nil {
@@ -215,16 +218,29 @@ func createPostgresSchema(db *usql.DB) error {
 }
 
 func createSqliteSchema(db *usql.DB) error {
+	fmt.Println("here")
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS state (
 		 key            VARCHAR(32) PRIMARY KEY
 	    ,data           BLOB NOT NULL
+	    ,fsm_state      VARCHAR(32) NULL
         ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         ,updated_at     TEXT NULL
 	  );
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create blocks table", err)
+	}
+
+	// Check if 'fsm_state' column exists, and add it if it doesn't
+	if _, err := db.Exec(`
+        ALTER TABLE state ADD COLUMN fsm_state VARCHAR(32) NULL;
+    `); err != nil {
+		// Ignore "duplicate column name" error (SQLite code 1)
+		if !strings.Contains(err.Error(), "duplicate column name: fsm_state") {
+			_ = db.Close()
+			return errors.NewStorageError("could not alter state table to add fsm_state column", err)
+		}
 	}
 
 	if _, err := db.Exec(`
