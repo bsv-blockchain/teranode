@@ -1,5 +1,5 @@
-# 🚀 Teranode
-> Unbounded BSV
+![teranode.png](docs/architecture/img/teranode.png)
+
 
 ## Table of Contents
 
@@ -74,7 +74,7 @@
       - [Kafka](docs/kafka/kafka.md)
 
     - Commands:
-      - [Seeder Service](docs/commands/seeder.md)
+      - [UTXO Seeder](docs/commands/seeder.md)
       - [UTXO Blaster](docs/commands/utxoBlaster.md)
       - [TX Blaster](docs/commands/txBlaster.md)
       - [Propagation Blaster](docs/commands/propagationBlaster.md)

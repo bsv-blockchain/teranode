@@ -71,3 +71,5 @@ end
 end
 blockValidation -[#red]-> txStore : Set(coinbase tx)
 end
+
+@enduml
