@@ -1,4 +1,4 @@
-////go:build rpc
+//go:build rpc
 
 // go test -v -run "^TestRPCTestSuite$/TestRPCGetBlockchainInfo$" -tags rpc
 
