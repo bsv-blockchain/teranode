@@ -146,6 +146,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"reconsiderblock":       handleReconsiderBlock,
 	"searchrawtransactions": handleUnimplemented,
 	"sendrawtransaction":    handleSendRawTransaction,
+	"setban":                handleSetBan,
 	"setgenerate":           handleUnimplemented,
 	"stop":                  handleStop,
 	"submitblock":           handleUnimplemented,

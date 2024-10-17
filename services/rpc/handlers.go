@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util/distributor"
@@ -777,7 +779,7 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 
 	ms := &model.MiningSolution{}
 
-	err := json.Unmarshal([]byte(c.JsonString), ms)
+	err := json.Unmarshal([]byte(c.JSONString), ms)
 	if err != nil {
 		return nil, err
 	}
@@ -887,6 +889,75 @@ func handleHelp(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan str
 	}
 
 	return help, nil
+}
+
+func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "handleSetBan",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleSetBan),
+		tracing.WithLogMessage(s.logger, "[handleSetBan] called"),
+	)
+	defer deferFn()
+
+	banList := p2p.NewBanList(s.logger)
+
+	var subnet *net.IPNet
+
+	var err error
+
+	c := cmd.(*bsvjson.SetBanCmd)
+
+	s.logger.Debugf("in handleSetBan: c: %+v", c)
+
+	if c.IPOrSubnet == "" {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
+			Message: "IPOrSubnet is required",
+		}
+	}
+
+	// Handle the command
+	switch c.Command {
+	case "add":
+		var expirationTime time.Time
+		if c.Absolute {
+			expirationTime = time.Unix(c.BanTime, 0)
+		} else {
+			expirationTime = time.Now().Add(time.Duration(c.BanTime) * time.Second)
+		}
+
+		// If BanTime is 0, use a default ban time (e.g., 24 hours)
+		if c.BanTime == 0 {
+			expirationTime = time.Now().Add(24 * time.Hour)
+		}
+
+		err = banList.Add(c.IPOrSubnet, expirationTime)
+		if err != nil {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCInvalidParameter,
+				Message: "Failed to add ban",
+			}
+		}
+
+		s.logger.Debugf("Added ban for %s until %v", subnet.String(), expirationTime)
+	case "remove":
+		err = banList.Remove(c.IPOrSubnet)
+		if err != nil {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCInvalidParameter,
+				Message: "Failed to remove ban",
+			}
+		}
+
+		s.logger.Debugf("Removed ban for %s", c.IPOrSubnet)
+	default:
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInvalidParameter,
+			Message: "Invalid command. Must be 'add' or 'remove'.",
+		}
+	}
+
+	return nil, nil
 }
 
 // messageToHex serializes a message to the wire protocol encoding using the

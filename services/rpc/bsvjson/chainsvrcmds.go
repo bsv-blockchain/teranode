@@ -676,6 +676,24 @@ func NewSetGenerateCmd(generate bool, genProcLimit *int) *SetGenerateCmd {
 	}
 }
 
+// SetBanCmd defines the setban JSON-RPC command.
+type SetBanCmd struct {
+	IPOrSubnet string
+	Command    string
+	BanTime    int64
+	Absolute   bool
+}
+
+// NewSetBanCmd returns a new instance which can be used to issue a setban JSON-RPC command.
+func NewSetBanCmd(ipOrSubnet string, command string, banTime int64, absolute bool) *SetBanCmd {
+	return &SetBanCmd{
+		IPOrSubnet: ipOrSubnet,
+		Command:    command,
+		BanTime:    banTime,
+		Absolute:   absolute,
+	}
+}
+
 // StopCmd defines the stop JSON-RPC command.
 type StopCmd struct{}
 
@@ -782,7 +800,7 @@ func NewVerifyTxOutProofCmd(proof string) *VerifyTxOutProofCmd {
 type GetMiningCandidateCmd struct{}
 
 type SubmitMiningSolutionCmd struct {
-	JsonString string
+	JSONString string
 }
 
 func init() {
@@ -831,6 +849,7 @@ func init() {
 	MustRegisterCmd("reconsiderblock", (*ReconsiderBlockCmd)(nil), flags)
 	MustRegisterCmd("searchrawtransactions", (*SearchRawTransactionsCmd)(nil), flags)
 	MustRegisterCmd("sendrawtransaction", (*SendRawTransactionCmd)(nil), flags)
+	MustRegisterCmd("setban", (*SetBanCmd)(nil), flags)
 	MustRegisterCmd("setgenerate", (*SetGenerateCmd)(nil), flags)
 	MustRegisterCmd("stop", (*StopCmd)(nil), flags)
 	MustRegisterCmd("submitblock", (*SubmitBlockCmd)(nil), flags)

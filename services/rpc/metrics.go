@@ -28,6 +28,7 @@ var (
 	prometheusHandleInvalidateBlock      prometheus.Histogram
 	prometheusHandleReconsiderBlock      prometheus.Histogram
 	prometheusHandleHelp                 prometheus.Histogram
+	prometheusHandleSetBan               prometheus.Histogram
 )
 
 var (
@@ -188,6 +189,14 @@ func _initPrometheusMetrics() {
 			Namespace: "rpc",
 			Name:      "help",
 			Help:      "Histogram of calls to handleHelp in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleSetBan = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "rpc",
+			Name:      "set_ban",
+			Help:      "Histogram of calls to handleSetBan in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

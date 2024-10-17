@@ -124,7 +124,7 @@ Authentication is performed using HTTP Basic Auth.
 
 ## Error Handling
 
-Errors are wrapped in `btcjson.RPCError` structures, providing standardized error codes and messages as per the Bitcoin Core RPC specification.
+Errors are wrapped in `bsvjson.RPCError` structures, providing standardized error codes and messages as per the Bitcoin Core RPC specification.
 
 ## Concurrency
 

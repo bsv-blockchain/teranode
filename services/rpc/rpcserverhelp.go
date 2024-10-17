@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bitcoinsv/bsvd/btcjson"
+	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
 )
 
 // helpDescsEnUS defines the English descriptions used for the help strings.
@@ -688,6 +688,32 @@ var helpDescsEnUS = map[string]string{
 	"versionresult-patch":         "The patch component of the JSON-RPC API version",
 	"versionresult-prerelease":    "Prerelease info about the current build",
 	"versionresult-buildmetadata": "Metadata about the current build",
+
+	// SetBan help
+	"setban-synopsis": "Attempts add or remove a IP/Subnet from the banned list.",
+	"setban-subnet":   "The IP/Subnet (see getpeerinfo for nodes ip) with a optional netmask (default is /32 = single ip)",
+	"setban-command":  "add|remove",
+	"setban-bantime":  "time in seconds how long (or until when if [absolute] is set) the ip is banned (0 or empty means using the default time of 24h which can also be overwritten by the -bantime startup argument)",
+	"setban-absolute": "If set, the bantime must be a absolute timestamp in seconds since epoch (Jan 1 1970 GMT)",
+
+	// GetBlockByHeightCmd help
+	"getblockbyheight-synopsis":  "Returns information about a block by block height.",
+	"getblockbyheight-height":    "The block height",
+	"getblockbyheight-verbosity": "0 (RAW_BLOCK) for hex encoded data, 1 (DECODE_HEADER) for a json object, 2 (DECODE_TRANSACTIONS) for json object with transaction data and 3 (DECODE_HEADER_AND_COINBASE) for a json object with coinbase only",
+	"getblockbyheight-result0":   "A string that is serialized, hex-encoded data for block 'hash'.",
+	"getblockbyheight-result1":   "An Object with information about block <hash>.",
+	"getblockbyheight-result2":   "An Object with information about block <hash> and information about each transaction.",
+	"getblockbyheight-result3":   "A json object with block information and the coinbase transaction.",
+
+	// SubmitMiningSolution help
+	"submitminingcandidate-synopsis": "Attempts to submit a new block to the network.",
+	"submitminingcandidate-id":       "ID from getminingcandidate RPC",
+	"submitminingcandidate-nonce":    "Miner generated nonce",
+	"submitminingcandidate-coinbase": "Modified Coinbase transaction",
+	"submitminingcandidate-time":     "Block time",
+	"submitminingcandidate-version":  "Block version",
+	"submitminingcandidate--result0": "Nothing on success, error string if block was rejected.",
+	"submitminingcandidate--result1": "Identical to submitblock.",
 }
 
 // rpcResultTypes specifies the result types that each RPC command can return.
@@ -697,19 +723,19 @@ var rpcResultTypes = map[string][]interface{}{
 	"addnode":               nil,
 	"createrawtransaction":  {(*string)(nil)},
 	"debuglevel":            {(*string)(nil), (*string)(nil)},
-	"decoderawtransaction":  {(*btcjson.TxRawDecodeResult)(nil)},
-	"decodescript":          {(*btcjson.DecodeScriptResult)(nil)},
+	"decoderawtransaction":  {(*bsvjson.TxRawDecodeResult)(nil)},
+	"decodescript":          {(*bsvjson.DecodeScriptResult)(nil)},
 	"estimatefee":           {(*float64)(nil)},
 	"generate":              {(*[]string)(nil)},
-	"getaddednodeinfo":      {(*[]string)(nil), (*[]btcjson.GetAddedNodeInfoResult)(nil)},
-	"getbestblock":          {(*btcjson.GetBestBlockResult)(nil)},
+	"getaddednodeinfo":      {(*[]string)(nil), (*[]bsvjson.GetAddedNodeInfoResult)(nil)},
+	"getbestblock":          {(*bsvjson.GetBestBlockResult)(nil)},
 	"getbestblockhash":      {(*string)(nil)},
-	"getblock":              {(*string)(nil), (*btcjson.GetBlockVerboseResult)(nil), (*btcjson.GetBlockVerboseTxResult)(nil)},
+	"getblock":              {(*string)(nil), (*bsvjson.GetBlockVerboseResult)(nil), (*bsvjson.GetBlockVerboseTxResult)(nil)},
 	"getblockcount":         {(*int64)(nil)},
 	"getblockhash":          {(*string)(nil)},
-	"getblockheader":        {(*string)(nil), (*btcjson.GetBlockHeaderVerboseResult)(nil)},
-	"getblocktemplate":      {(*btcjson.GetBlockTemplateResult)(nil), (*string)(nil), nil},
-	"getblockchaininfo":     {(*btcjson.GetBlockChainInfoResult)(nil)},
+	"getblockheader":        {(*string)(nil), (*bsvjson.GetBlockHeaderVerboseResult)(nil)},
+	"getblocktemplate":      {(*bsvjson.GetBlockTemplateResult)(nil), (*string)(nil), nil},
+	"getblockchaininfo":     {(*bsvjson.GetBlockChainInfoResult)(nil)},
 	"getcfilter":            {(*string)(nil)},
 	"getcfilterheader":      {(*string)(nil)},
 	"getconnectioncount":    {(*int32)(nil)},
@@ -718,35 +744,36 @@ var rpcResultTypes = map[string][]interface{}{
 	"getgenerate":           {(*bool)(nil)},
 	"gethashespersec":       {(*float64)(nil)},
 	"getheaders":            {(*[]string)(nil)},
-	"getinfo":               {(*btcjson.InfoChainResult)(nil)},
-	"getmempoolinfo":        {(*btcjson.GetMempoolInfoResult)(nil)},
-	"getmininginfo":         {(*btcjson.GetMiningInfoResult)(nil)},
-	"getnettotals":          {(*btcjson.GetNetTotalsResult)(nil)},
+	"getinfo":               {(*bsvjson.InfoChainResult)(nil)},
+	"getmempoolinfo":        {(*bsvjson.GetMempoolInfoResult)(nil)},
+	"getmininginfo":         {(*bsvjson.GetMiningInfoResult)(nil)},
+	"getnettotals":          {(*bsvjson.GetNetTotalsResult)(nil)},
 	"getnetworkhashps":      {(*float64)(nil)},
-	"getpeerinfo":           {(*[]btcjson.GetPeerInfoResult)(nil)},
-	"getrawmempool":         {(*[]string)(nil), (*btcjson.GetRawMempoolVerboseResult)(nil)},
-	"getrawtransaction":     {(*string)(nil), (*btcjson.TxRawResult)(nil)},
-	"gettxout":              {(*btcjson.GetTxOutResult)(nil)},
+	"getpeerinfo":           {(*[]bsvjson.GetPeerInfoResult)(nil)},
+	"getrawmempool":         {(*[]string)(nil), (*bsvjson.GetRawMempoolVerboseResult)(nil)},
+	"getrawtransaction":     {(*string)(nil), (*bsvjson.TxRawResult)(nil)},
+	"gettxout":              {(*bsvjson.GetTxOutResult)(nil)},
 	"gettxoutproof":         {(*string)(nil)},
 	"node":                  nil,
 	"help":                  {(*string)(nil), (*string)(nil)},
 	"ping":                  nil,
 	"reconsiderblock":       nil,
-	"searchrawtransactions": {(*string)(nil), (*[]btcjson.SearchRawTransactionsResult)(nil)},
+	"searchrawtransactions": {(*string)(nil), (*[]bsvjson.SearchRawTransactionsResult)(nil)},
 	"sendrawtransaction":    {(*string)(nil)},
+	"setban":                nil,
 	"setgenerate":           nil,
 	"stop":                  {(*string)(nil)},
 	"submitblock":           {nil, (*string)(nil)},
 	"uptime":                {(*int64)(nil)},
-	"validateaddress":       {(*btcjson.ValidateAddressChainResult)(nil)},
+	"validateaddress":       {(*bsvjson.ValidateAddressChainResult)(nil)},
 	"verifychain":           {(*bool)(nil)},
 	"verifymessage":         {(*bool)(nil)},
 	"verifytxoutproof":      {(*[]string)(nil)},
-	"version":               {(*map[string]btcjson.VersionResult)(nil)},
+	"version":               {(*map[string]bsvjson.VersionResult)(nil)},
 
 	// Websocket commands.
 	"loadtxfilter":              nil,
-	"session":                   {(*btcjson.SessionResult)(nil)},
+	"session":                   {(*bsvjson.SessionResult)(nil)},
 	"notifyblocks":              nil,
 	"stopnotifyblocks":          nil,
 	"notifynewtransactions":     nil,
@@ -756,7 +783,7 @@ var rpcResultTypes = map[string][]interface{}{
 	"notifyspent":               nil,
 	"stopnotifyspent":           nil,
 	"rescan":                    nil,
-	"rescanblocks":              {(*[]btcjson.RescannedBlock)(nil)},
+	"rescanblocks":              {(*[]bsvjson.RescannedBlock)(nil)},
 }
 
 // helpCacher provides a concurrent safe type that provides help and usage for
@@ -787,7 +814,7 @@ func (c *helpCacher) rpcMethodHelp(method string) (string, error) {
 	}
 
 	// Generate, cache, and return the help.
-	help, err := btcjson.GenerateHelp(method, helpDescsEnUS, resultTypes...)
+	help, err := bsvjson.GenerateHelp(method, helpDescsEnUS, resultTypes...)
 	if err != nil {
 		return "", err
 	}
@@ -813,7 +840,7 @@ func (c *helpCacher) rpcUsage() (string, error) {
 	usageTexts := make([]string, 0, len(rpcHandlers))
 
 	for k := range rpcHandlers {
-		usage, err := btcjson.MethodUsageText(k)
+		usage, err := bsvjson.MethodUsageText(k)
 		if err != nil {
 			return "", err
 		}
@@ -824,7 +851,7 @@ func (c *helpCacher) rpcUsage() (string, error) {
 	// Include websockets commands if requested.
 	// if includeWebsockets {
 	// 	for k := range wsHandlers {
-	// 		usage, err := btcjson.MethodUsageText(k)
+	// 		usage, err := bsvjson.MethodUsageText(k)
 	// 		if err != nil {
 	// 			return "", err
 	// 		}
