@@ -127,8 +127,6 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxos() {
 
 	logger.Infof("First Transaction created with output[0] of faucet sent: %s %s\n", firstTx.TxIDChainHash(), firstTx.TxID())
 
-	time.Sleep(10 * time.Second)
-
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d\n", height)
 
@@ -317,8 +315,6 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 	assert.NoError(t, err, "Failed to create and send second transaction")
 	logger.Infof("Second Transaction sent: %s %s", tx2.TxIDChainHash(), tx2.TxID())
 
-	time.Sleep(10 * time.Second)
-
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d", height)
 
@@ -338,11 +334,11 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxos() {
 		logger.Infof("Testing on Best block header: %v", header[0].Hash())
 
 		if !blTx1 {
-		blTx1, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx1.TxIDChainHash(), framework.Logger)
+			blTx1, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx1.TxIDChainHash(), framework.Logger)
 		}
 
 		if !blTx2 {
-		blTx2, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx2.TxIDChainHash(), framework.Logger)
+			blTx2, err = helper.CheckIfTxExistsInBlock(ctx, blockStore, framework.Nodes[0].BlockstoreURL, header[0].Hash()[:], meta[0].Height, *tx2.TxIDChainHash(), framework.Logger)
 		}
 
 		if err != nil {
@@ -444,7 +440,6 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 	}
 
 	logger.Infof("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())
-	time.Sleep(10 * time.Second)
 
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d\n", height)
@@ -549,7 +544,6 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 
 	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
 
-	time.Sleep(10 * time.Second)
 	baClient := framework.Nodes[0].BlockassemblyClient
 	blockStore := framework.Nodes[0].Blockstore
 	blockchainClient := framework.Nodes[0].BlockchainClient
@@ -646,8 +640,6 @@ func (suite *UtxoTestSuite) TestFreezeAndUnfreezeUtxos() {
 	// Create and send transaction with the unfrozen spends
 	tx1, err := createAndSendTx(faucetTx.Outputs[:firstSet], 0)
 	assert.NoError(t, err, "Failed to create and send first transaction")
-
-	time.Sleep(10 * time.Second)
 
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d", height)
@@ -788,8 +780,6 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxosAfterReassignment() {
 
 	logger.Infof("First Transaction created with output[0] of faucet sent: %s %s\n", firstTx.TxIDChainHash(), firstTx.TxID())
 
-	time.Sleep(10 * time.Second)
-
 	height, _ := helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d\n", height)
 
@@ -859,8 +849,6 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxosAfterReassignment() {
 	require.NoError(t, err, "Failed to send reassign transaction")
 
 	logger.Infof("Reassignment Transaction created with output[0] of faucet sent: %s %s\n", reassignTx.TxIDChainHash(), reassignTx.TxID())
-
-	time.Sleep(10 * time.Second)
 
 	height, _ = helper.GetBlockHeight(url)
 	logger.Infof("Block height before mining: %d\n", height)
