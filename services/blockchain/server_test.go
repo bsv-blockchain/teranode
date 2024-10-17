@@ -37,10 +37,6 @@ import (
 func Test_AddBlock(t *testing.T) {
 	ctx := setup(t)
 
-	if _, err := ctx.server.SendFSMEvent(context.Background(), &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_RUN}); err != nil {
-		t.Fatalf("Failed to set FSM to RUNNING: %v", err)
-	}
-
 	// Create a mock block
 	mockBlk := mockBlock(ctx, t)
 
@@ -81,16 +77,6 @@ func Test_AddBlock(t *testing.T) {
 	assert.Equal(t, subtreeHashes, addedBlock.SubtreeHashes)
 	assert.Equal(t, mockBlk.TransactionCount, addedBlock.TransactionCount)
 	assert.Equal(t, mockBlk.SizeInBytes, addedBlock.SizeInBytes)
-
-	// Verify that the Kafka message was sent
-	time.Sleep(10 * time.Millisecond) // kafka producer is async, so we need to sleep to ensure the message is sent
-	require.Equal(t, 1, len(ctx.kafkaProducer.messages))
-
-	// Verify that the FSM is in the RUNNING state
-	resp, err := ctx.server.GetFSMCurrentState(c, &emptypb.Empty{})
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, blockchain_api.FSMStateType_RUNNING, resp.State, "Expected FSM state did not match")
 }
 
 func Test_GetBlock(t *testing.T) {
@@ -178,99 +164,11 @@ func Test_GetFSMCurrentState(t *testing.T) {
 	// }
 }
 
-func Test_sendKafkaBlockMessage(t *testing.T) {
-	// Setup
-	ctx := setup(t)
-	mockBlock := mockBlock(ctx, t)
-
-	mockProducer := new(mockKafkaProducer)
-	ctx.server.blockKafkaProducer = mockProducer
-
-	ctx.server.sendKafkaBlockMessage(mockBlock)
-
-	// to get this far means it's not stuck in an endless loop
-	require.Equal(t, 1, len(mockProducer.messages))
-}
-
-func Test_sendKafkaBlockMessage_TemporaryError(t *testing.T) {
-	// Setup
-	ctx := setup(t)
-	mockBlock := mockBlock(ctx, t)
-
-	// Create a mock producer that fails initially and succeeds after 1 second
-	mockProducer := &mockKafkaProducerWithTemporaryError{
-		successAfter: time.Now().Add(1 * time.Second),
-	}
-	ctx.server.blockKafkaProducer = mockProducer
-
-	// Start a goroutine to check FSM state transitions
-	var stateTransitions []blockchain_api.FSMStateType
-	stateChan := make(chan blockchain_api.FSMStateType)
-	done := make(chan bool)
-
-	go func() {
-		for {
-			select {
-			case state := <-stateChan:
-				stateTransitions = append(stateTransitions, state)
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	// Set initial FSM state to RUNNING
-	state, err := ctx.server.SendFSMEvent(context.Background(), &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_RUN})
-	require.NoError(t, err)
-	stateChan <- state.State
-
-	// Start sending Kafka message
-	go func() {
-		ctx.server.sendKafkaBlockMessage(mockBlock)
-		done <- true
-	}()
-
-	// Check FSM state every 100ms
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	timeout := time.After(2 * time.Second)
-
-	for {
-		select {
-		case <-ticker.C:
-			state, err := ctx.server.GetFSMCurrentState(context.Background(), &emptypb.Empty{})
-			require.NoError(t, err)
-			stateChan <- state.State
-		case <-timeout:
-			t.Fatal("Test timed out")
-		case <-done:
-			close(stateChan)
-			close(done)
-			goto TestAssertions
-		}
-	}
-
-TestAssertions:
-
-	// Verify state transitions
-	require.GreaterOrEqual(t, len(stateTransitions), 3, "Expected at least 3 state transitions")
-	assert.Equal(t, blockchain_api.FSMStateType_RUNNING, stateTransitions[0], "Initial state should be RUNNING")
-	assert.Contains(t, stateTransitions, blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE, "State should have transitioned to RESOURCE_UNAVAILABLE")
-	finalState, err := ctx.server.GetFSMCurrentState(context.Background(), &emptypb.Empty{})
-	require.NoError(t, err)
-	require.Equal(t, blockchain_api.FSMStateType_RUNNING, finalState.State, "Expected final state to be RUNNING")
-
-	// Verify that the Kafka message was sent
-	assert.Equal(t, int32(1), atomic.LoadInt32(&mockProducer.messagesSent), "Expected 1 Kafka message to be sent")
-}
-
 type testContext struct {
-	server        *Blockchain
-	subtreeStore  blob.Store
-	utxoStore     utxo.Store
-	logger        ulogger.Logger
-	kafkaProducer *mockKafkaProducer
+	server       *Blockchain
+	subtreeStore blob.Store
+	utxoStore    utxo.Store
+	logger       ulogger.Logger
 }
 
 func setup(t *testing.T) *testContext {
@@ -279,24 +177,17 @@ func setup(t *testing.T) *testContext {
 	subtreeStore := blob_memory.New()
 	utxoStore := utxo_memory.New(logger)
 	store := mockStore{}
-	kafkaProducer := &mockKafkaProducer{
-		messages: make([][]byte, 0),
-	}
 
 	server, err := New(context.Background(), logger, &store)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
 
-	server.blockKafkaProducer = kafkaProducer
-	require.NoError(t, server.Init(context.Background()))
-
 	return &testContext{
-		server:        server,
-		subtreeStore:  subtreeStore,
-		utxoStore:     utxoStore,
-		logger:        logger,
-		kafkaProducer: kafkaProducer,
+		server:       server,
+		subtreeStore: subtreeStore,
+		utxoStore:    utxoStore,
+		logger:       logger,
 	}
 }
 

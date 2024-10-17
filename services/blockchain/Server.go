@@ -41,22 +41,23 @@ type subscriber struct {
 // Blockchain type carries the logger within it
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	addBlockChan       chan *blockchain_api.AddBlockRequest
-	store              blockchain_store.Store
-	logger             ulogger.Logger
-	newSubscriptions   chan subscriber
-	deadSubscriptions  chan subscriber
-	subscribers        map[subscriber]bool
-	subscribersMu      sync.RWMutex
-	notifications      chan *blockchain_api.Notification
-	newBlock           chan struct{}
-	difficulty         *Difficulty
-	chainParams        *chaincfg.Params
-	blockKafkaProducer kafka.KafkaProducerI
-	stats              *gocore.Stat
-	finiteStateMachine *fsm.FSM
-	kafkaHealthURL     *url.URL
-	AppCtx             context.Context
+	addBlockChan            chan *blockchain_api.AddBlockRequest
+	store                   blockchain_store.Store
+	logger                  ulogger.Logger
+	newSubscriptions        chan subscriber
+	deadSubscriptions       chan subscriber
+	subscribers             map[subscriber]bool
+	subscribersMu           sync.RWMutex
+	notifications           chan *blockchain_api.Notification
+	newBlock                chan struct{}
+	difficulty              *Difficulty
+	chainParams             *chaincfg.Params
+	blockKafkaAsyncProducer *kafka.KafkaAsyncProducer
+	kafkaChan               chan *kafka.Message
+	stats                   *gocore.Stat
+	finiteStateMachine      *fsm.FSM
+	kafkaHealthURL          *url.URL
+	AppCtx                  context.Context
 }
 
 // New will return a server instance with the logger stored within it
@@ -143,9 +144,13 @@ func (b *Blockchain) Start(ctx context.Context) error {
 		b.kafkaHealthURL = blocksKafkaURL
 		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
 
-		if _, b.blockKafkaProducer, err = kafka.NewKafkaProducer(blocksKafkaURL); err != nil {
+		b.kafkaChan = make(chan *kafka.Message, 100)
+
+		if b.blockKafkaAsyncProducer, err = kafka.NewKafkaAsyncProducer(b.logger, blocksKafkaURL, b.kafkaChan); err != nil {
 			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
 		}
+
+		go b.blockKafkaAsyncProducer.Start(ctx)
 	}
 
 	go func() {
@@ -304,10 +309,20 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 	block.Height = height
 
-	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
+	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blockKafkaAsyncProducer != nil)
 
-	if b.blockKafkaProducer != nil {
-		go b.sendKafkaBlockMessage(block)
+	if b.blockKafkaAsyncProducer != nil {
+		key := block.Header.Hash().CloneBytes()
+		value, err := block.Bytes()
+		if err != nil {
+			b.logger.Errorf("[AddBlock] error creating block bytes: %v", err)
+			return nil, errors.WrapGRPC(err)
+		}
+
+		b.kafkaChan <- &kafka.Message{
+			Key:   key,
+			Value: value,
+		}
 	}
 
 	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
@@ -1263,66 +1278,4 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	}
 
 	return locator, nil
-}
-
-func (b *Blockchain) sendKafkaBlockMessage(block *model.Block) {
-	ctx := b.AppCtx
-	blockBytes, err := block.Bytes()
-	if err != nil {
-		b.logger.Errorf("[AddBlock] Error serializing block: %v", err)
-	} else {
-		b.logger.Debugf("[AddBlock] sending block to kafka: %s", block.String())
-
-		stateStart, err := b.GetFSMCurrentState(ctx, &emptypb.Empty{})
-		if err != nil {
-			b.logger.Errorf("[AddBlock] Error getting FSM current state: %v", err)
-		}
-
-		// Essential we get the message on Kafka topic
-		for { // KAFKA SEND
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				// producer has built-in retry mechanism but it doesn't retry forever
-				if err := b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
-					b.logger.Errorf("[AddBlock] Error sending block to kafka: %v", err)
-
-					for { // FSM RESOURCE_UNAVAILABLE
-						select {
-						case <-ctx.Done():
-							return
-						default:
-							b.logger.Infof("[AddBlock] setting FSM to RESOURCE_UNAVAILABLE")
-
-							if _, err := b.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_UNAVAILABLE}); err != nil {
-								b.logger.Errorf("[AddBlock] Error sending FSM event: %v", err)
-								time.Sleep(1 * time.Second)
-								continue // FSM RESOURCE_UNAVAILABLE
-							}
-						}
-						break // FSM RESOURCE_UNAVAILABLE
-					}
-
-					time.Sleep(1 * time.Second)
-					continue // KAFKA SEND
-				}
-			}
-			break // KAFKA SEND
-		}
-
-		stateEnd, err := b.GetFSMCurrentState(ctx, &emptypb.Empty{})
-		if err != nil {
-			b.logger.Errorf("[Blockchain] Error getting FSM current state: %v", err)
-		}
-
-		if stateStart.State != stateEnd.State {
-			b.logger.Infof("[AddBlock] sent block to kafka (after failed attempt(s)): %s", block.String())
-			b.logger.Infof("[AddBlock] reset FSM to %s", stateStart.State)
-
-			if _, err := b.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType(stateStart.State)}); err != nil {
-				b.logger.Errorf("[AddBlock] Error sending FSM event: %v", err)
-			}
-		}
-	}
 }

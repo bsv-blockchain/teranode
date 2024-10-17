@@ -98,10 +98,10 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		saveInParallel: true,
 		stats:          gocore.NewStat("validator"),
 		txMetaKafkaProducerClient: &kafka.KafkaAsyncProducer{
-			PublishChannel: make(chan []byte, 1),
+			PublishChannel: make(chan *kafka.Message, 1),
 		},
 		rejectedTxKafkaProducerClient: &kafka.KafkaAsyncProducer{
-			PublishChannel: make(chan []byte, 1),
+			PublishChannel: make(chan *kafka.Message, 1),
 		},
 	}
 
@@ -137,10 +137,10 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		saveInParallel: true,
 		stats:          gocore.NewStat("validator"),
 		txMetaKafkaProducerClient: &kafka.KafkaAsyncProducer{
-			PublishChannel: make(chan []byte, 1),
+			PublishChannel: make(chan *kafka.Message, 1),
 		},
 		rejectedTxKafkaProducerClient: &kafka.KafkaAsyncProducer{
-			PublishChannel: make(chan []byte, 1),
+			PublishChannel: make(chan *kafka.Message, 1),
 		},
 	}
 
