@@ -247,6 +247,15 @@ func (b *Blockchain) Start(ctx context.Context) error {
 		}()
 	}
 
+	// Set the FSM to the latest state
+	stateStr, err := b.store.GetFSMState(ctx)
+	if err != nil {
+		b.logger.Errorf("[Blockchain] Error getting FSM state: %v", err)
+	} else {
+		b.logger.Infof("[Blockchain] Last FSM to state: %s", stateStr)
+		b.finiteStateMachine.SetState(stateStr)
+	}
+
 	// this will block
 	if err = util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
 		blockchain_api.RegisterBlockchainAPIServer(server, b)
@@ -980,7 +989,7 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 
 	// set the state in persistent storage
 	err = b.store.SetFSMState(ctx, state)
-	// we
+	// check if there was an error setting the state
 	if err != nil {
 		b.logger.Errorf("[Blockchain Server] Error setting the state in blockchain db: %v", err)
 
