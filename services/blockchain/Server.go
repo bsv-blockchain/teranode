@@ -62,7 +62,6 @@ type Blockchain struct {
 
 // New will return a server instance with the logger stored within it
 func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store) (*Blockchain, error) {
-
 	initPrometheusMetrics()
 
 	network, _ := gocore.Config().Get("network", "mainnet")
@@ -130,7 +129,6 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 }
 
 func (b *Blockchain) Init(_ context.Context) error {
-
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
 	return nil
@@ -138,7 +136,6 @@ func (b *Blockchain) Init(_ context.Context) error {
 
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
-
 	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
 	if err == nil && ok {
 		b.kafkaHealthURL = blocksKafkaURL
@@ -170,8 +167,10 @@ func (b *Blockchain) Start(ctx context.Context) error {
 
 					for sub := range b.subscribers {
 						b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
+
 						go func(s subscriber) {
 							b.logger.Debugf("[Blockchain] Sending notification to %s: %s", s.source, notification.Stringify())
+
 							if err := s.subscription.Send(notification); err != nil {
 								b.deadSubscriptions <- s
 							}
@@ -469,7 +468,6 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 	blockInfo, err := b.store.GetLastNBlocks(ctx, request.NumberOfBlocks, request.IncludeOrphans, request.FromHeight)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
-
 	}
 
 	return &blockchain_api.GetLastNBlocksResponse{
@@ -1205,7 +1203,8 @@ func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty)
 
 	return &blockchain_api.GetBestHeightAndTimeResponse{
 		Height: meta.Height,
-		Time:   uint32(medianTimestamp.Unix()),
+		//nolint:gosec // Intentionally ignoring potential overflow for this specific use case
+		Time: uint32(medianTimestamp.Unix()),
 	}, nil
 }
 
@@ -1219,7 +1218,6 @@ func safeClose[T any](ch chan T) {
 
 func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
-
 	if blockHeaderHash == nil {
 		// return genesis block
 		genesisBlock, err := store.GetBlockByHeight(ctx, 0)
@@ -1236,18 +1234,20 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	// numbers are derived.
 	var maxEntries uint8
 	if blockHeaderHeight <= 12 {
-		maxEntries = uint8(blockHeaderHeight) + 1
+		//nolint:gosec // Intentionally ignoring potential overflow for this specific use case
+		maxEntries = uint8(blockHeaderHeight + 1)
 	} else {
 		// Requested hash itself + previous 10 entries + genesis block.
 		// Then floor(log2(height-10)) entries for the skip portion.
-		adjustedHeight := uint32(blockHeaderHeight) - 10
+		adjustedHeight := blockHeaderHeight - 10
 		maxEntries = 12 + fastLog2Floor(adjustedHeight)
 	}
 	locator := make([]*chainhash.Hash, 0, maxEntries)
 
-	step := int32(1)
+	step := uint32(1)
 	ancestorBlockHeaderHash := blockHeaderHash
-	ancestorBlockHeight := int32(blockHeaderHeight) // this needs to be signed
+	ancestorBlockHeight := blockHeaderHeight // this needs to be signed
+
 	for ancestorBlockHeaderHash != nil {
 		locator = append(locator, ancestorBlockHeaderHash)
 
@@ -1258,12 +1258,12 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 
 		// Calculate height of previous node to include ensuring the
 		// final node is the genesis block.
-		height := int32(ancestorBlockHeight) - step
+		height := ancestorBlockHeight - step
 		if height < 0 {
 			height = 0
 		}
 
-		ancestorBlock, err := store.GetBlockByHeight(ctx, uint32(height))
+		ancestorBlock, err := store.GetBlockByHeight(ctx, height)
 		if err != nil {
 			return nil, err
 		}
