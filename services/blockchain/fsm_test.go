@@ -89,11 +89,11 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 	require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
 
 	t.Run("Set and Get FSM State", func(t *testing.T) {
-		err = blockchainClient.store.SetFSMState(ctx, string(FSMStateCATCHINGBLOCKS))
+		err = blockchainClient.store.SetFSMState(ctx, FSMStateCATCHINGBLOCKS.String())
 		require.NoError(t, err)
 		state, err := blockchainClient.store.GetFSMState(ctx)
 		require.NoError(t, err)
-		require.Equal(t, "RUNNING", state)
+		require.Equal(t, "CATCHINGBLOCKS", state)
 	})
 
 	//t.Run("Set and Get FSM State with invalid state", func(t *testing.T) {
