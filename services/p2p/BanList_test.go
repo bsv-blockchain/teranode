@@ -21,6 +21,10 @@ func setupBanList(t *testing.T) (*BanList, error) {
 }
 
 func TestHandleSetBanAdd(t *testing.T) {
+	banTime := int64(3600)
+	absolute := false
+	banTime2 := int64(7200)
+	absolute2 := true
 	tests := []struct {
 		name     string
 		args     *bsvjson.SetBanCmd
@@ -31,8 +35,8 @@ func TestHandleSetBanAdd(t *testing.T) {
 			args: &bsvjson.SetBanCmd{
 				Command:    "add",
 				IPOrSubnet: "127.0.0.1",
-				BanTime:    3600, // 1 hour
-				Absolute:   false,
+				BanTime:    &banTime,
+				Absolute:   &absolute,
 			},
 			isSubnet: false,
 		},
@@ -41,8 +45,8 @@ func TestHandleSetBanAdd(t *testing.T) {
 			args: &bsvjson.SetBanCmd{
 				Command:    "add",
 				IPOrSubnet: "127.0.0.0/24",
-				BanTime:    7200, // 2 hours
-				Absolute:   false,
+				BanTime:    &banTime2,
+				Absolute:   &absolute2,
 			},
 			isSubnet: true,
 		},
@@ -52,13 +56,13 @@ func TestHandleSetBanAdd(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := banList.Add(context.Background(), tt.args.IPOrSubnet, time.Now().Add(time.Duration(tt.args.BanTime)*time.Second))
+			err := banList.Add(context.Background(), tt.args.IPOrSubnet, time.Now().Add(time.Duration(*tt.args.BanTime)*time.Second))
 			require.NoError(t, err)
 
 			banInfo, exists := banList.bannedPeers[tt.args.IPOrSubnet]
 			require.True(t, exists)
 
-			expectedExpiration := time.Now().Add(time.Duration(tt.args.BanTime) * time.Second)
+			expectedExpiration := time.Now().Add(time.Duration(*tt.args.BanTime) * time.Second)
 			require.WithinDuration(t, expectedExpiration, banInfo.ExpirationTime, time.Second)
 
 			if tt.isSubnet {

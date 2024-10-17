@@ -680,12 +680,12 @@ func NewSetGenerateCmd(generate bool, genProcLimit *int) *SetGenerateCmd {
 type SetBanCmd struct {
 	IPOrSubnet string
 	Command    string
-	BanTime    int64
-	Absolute   bool
+	BanTime    *int64
+	Absolute   *bool
 }
 
 // NewSetBanCmd returns a new instance which can be used to issue a setban JSON-RPC command.
-func NewSetBanCmd(ipOrSubnet string, command string, banTime int64, absolute bool) *SetBanCmd {
+func NewSetBanCmd(ipOrSubnet string, command string, banTime *int64, absolute *bool) *SetBanCmd {
 	return &SetBanCmd{
 		IPOrSubnet: ipOrSubnet,
 		Command:    command,

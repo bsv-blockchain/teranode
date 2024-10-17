@@ -921,14 +921,14 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	switch c.Command {
 	case "add":
 		var expirationTime time.Time
-		if c.Absolute {
-			expirationTime = time.Unix(c.BanTime, 0)
+		if c.Absolute != nil && *c.Absolute {
+			expirationTime = time.Unix(*c.BanTime, 0)
 		} else {
-			expirationTime = time.Now().Add(time.Duration(c.BanTime) * time.Second)
+			expirationTime = time.Now().Add(time.Duration(*c.BanTime) * time.Second)
 		}
 
 		// If BanTime is 0, use a default ban time (e.g., 24 hours)
-		if c.BanTime == 0 {
+		if *c.BanTime == 0 {
 			expirationTime = time.Now().Add(24 * time.Hour)
 		}
 
