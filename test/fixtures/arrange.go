@@ -88,7 +88,7 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 		suite.T().Fatalf("Failed to set up TeranodeTestEnv: %v", err)
 	}
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(10 * time.Second)
 
 	if !skipSetUpTestClient {
 		err = suite.TeranodeTestEnv.InitializeTeranodeTestClients()
