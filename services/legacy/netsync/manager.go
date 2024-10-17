@@ -371,7 +371,7 @@ func (sm *SyncManager) startSync() {
 		// check whether we are in sync with this peer and send RUNNING FSM state
 		// nolint:gosec // the height will never exceed int32.Max
 		if bestPeer.LastBlock() == int32(bestBlockHeaderMeta.Height) {
-			sm.logger.Infof("peer %v is at the same height as us, sending RUNNING and waiting for new blocks", bestPeer.Addr())
+			sm.logger.Infof("peer %v is at the same height %d as us, sending RUNNING", bestPeer.Addr(), bestPeer.LastBlock())
 
 			if err = sm.blockchainClient.Run(sm.ctx); err != nil {
 				sm.logger.Errorf("failed to set blockchain state to running: %v", err)
@@ -939,7 +939,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	}
 
 	// When the block is not an orphan, log information about it and update the chain state.
-	sm.logger.Infof("Accepted block %v", blockHash)
+	sm.logger.Infof("accepted block %v", blockHash)
 
 	// Update this peer's latest block height, for future potential sync node candidacy.
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
@@ -959,7 +959,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// if we're syncing the chain from scratch.
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
-		sm.logger.Infof("Peer %s reports new height %d, current %v", peer.Addr(), heightUpdate, sm.current())
+		sm.logger.Infof("peer %s reports new height %d, current %v", peer.Addr(), heightUpdate, sm.current())
 
 		if sm.current() { // used to check for isOrphan || sm.current()
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
