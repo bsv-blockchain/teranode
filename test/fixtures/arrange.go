@@ -45,7 +45,9 @@ func (suite *TeranodeTestSuite) SetupTest() {
 
 func (suite *TeranodeTestSuite) TearDownTest() {
 	if err := TearDownTeranodeTestEnv(suite.TeranodeTestEnv); err != nil {
-		suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+		if suite.T() != nil && suite.TeranodeTestEnv != nil {
+			suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+		}
 	}
 
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
@@ -86,7 +88,9 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 
 	suite.TeranodeTestEnv, err = SetupTeranodeTestEnv(suite.ComposeFiles, suite.SettingsMap)
 	if err != nil {
-		suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+		if suite.T() != nil && suite.TeranodeTestEnv != nil {
+			suite.T().Cleanup(suite.TeranodeTestEnv.Cancel)
+		}
 		suite.T().Fatalf("Failed to set up TeranodeTestEnv: %v", err)
 	}
 
