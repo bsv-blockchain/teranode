@@ -312,6 +312,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 	if b.blockKafkaAsyncProducer != nil {
 		key := block.Header.Hash().CloneBytes()
+
 		value, err := block.Bytes()
 		if err != nil {
 			b.logger.Errorf("[AddBlock] error creating block bytes: %v", err)
