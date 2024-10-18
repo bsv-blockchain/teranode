@@ -136,63 +136,27 @@ func (b *Blockchain) Init(_ context.Context) error {
 
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
-	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
-	if err == nil && ok {
-		b.kafkaHealthURL = blocksKafkaURL
-		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
-
-		b.kafkaChan = make(chan *kafka.Message, 100)
-
-		if b.blockKafkaAsyncProducer, err = kafka.NewKafkaAsyncProducer(b.logger, blocksKafkaURL, b.kafkaChan); err != nil {
-			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
-		}
-
-		go b.blockKafkaAsyncProducer.Start(ctx)
+	if err := b.startKafka(ctx); err != nil {
+		return err
 	}
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
-				for sub := range b.subscribers {
-					safeClose(sub.done)
-				}
-				return
-			case notification := <-b.notifications:
-				start := gocore.CurrentTime()
+	go b.startSubscriptions(ctx)
 
-				func() {
-					b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
+	if err := b.startHTTP(ctx); err != nil {
+		return err
+	}
 
-					for sub := range b.subscribers {
-						b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
+	// this will block
+	if err := util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
+		blockchain_api.RegisterBlockchainAPIServer(server, b)
+	}); err != nil {
+		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain] can't start GRPC server", err))
+	}
 
-						go func(s subscriber) {
-							b.logger.Debugf("[Blockchain] Sending notification to %s: %s", s.source, notification.Stringify())
+	return nil
+}
 
-							if err := s.subscription.Send(notification); err != nil {
-								b.deadSubscriptions <- s
-							}
-						}(sub)
-					}
-				}()
-				b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
-
-			case s := <-b.newSubscriptions:
-				b.subscribersMu.Lock()
-				b.subscribers[s] = true
-				b.subscribersMu.Unlock()
-			//	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
-
-			case s := <-b.deadSubscriptions:
-				delete(b.subscribers, s)
-				safeClose(s.done)
-				b.logger.Infof("[Blockchain] Subscription removed (Total=%d).", len(b.subscribers))
-			}
-		}
-	}()
-
+func (b *Blockchain) startHTTP(ctx context.Context) error {
 	httpAddress, ok := gocore.Config().Get("blockchain_httpListenAddress")
 	if !ok {
 		return errors.NewConfigurationError("[Miner] No blockchain_httpListenAddress specified")
@@ -250,15 +214,68 @@ func (b *Blockchain) Start(ctx context.Context) error {
 			}
 		}()
 	}
-
-	// this will block
-	if err = util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
-		blockchain_api.RegisterBlockchainAPIServer(server, b)
-	}); err != nil {
-		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain] can't start GRPC server", err))
-	}
-
 	return nil
+}
+
+func (b *Blockchain) startKafka(ctx context.Context) error {
+	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
+	if err == nil && ok {
+		b.kafkaHealthURL = blocksKafkaURL
+		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
+
+		b.kafkaChan = make(chan *kafka.Message, 100)
+
+		if b.blockKafkaAsyncProducer, err = kafka.NewKafkaAsyncProducer(b.logger, blocksKafkaURL, b.kafkaChan); err != nil {
+			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
+		}
+
+		go b.blockKafkaAsyncProducer.Start(ctx)
+	}
+	return nil
+}
+
+/* Must be started as a go routine unless you are in a test */
+func (b *Blockchain) startSubscriptions(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
+			for sub := range b.subscribers {
+				safeClose(sub.done)
+			}
+			return
+		case notification := <-b.notifications:
+			start := gocore.CurrentTime()
+
+			func() {
+				b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
+
+				for sub := range b.subscribers {
+					b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
+
+					go func(s subscriber) {
+						b.logger.Debugf("[Blockchain] Sending notification to %s: %s", s.source, notification.Stringify())
+
+						if err := s.subscription.Send(notification); err != nil {
+							b.deadSubscriptions <- s
+						}
+					}(sub)
+				}
+			}()
+			b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
+
+		case s := <-b.newSubscriptions:
+			b.subscribersMu.Lock()
+			b.subscribers[s] = true
+			b.subscribersMu.Unlock()
+		//	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
+
+		case s := <-b.deadSubscriptions:
+			delete(b.subscribers, s)
+			safeClose(s.done)
+			b.logger.Infof("[Blockchain] Subscription removed (Total=%d).", len(b.subscribers))
+		}
+	}
 }
 
 func (b *Blockchain) Stop(_ context.Context) error {
