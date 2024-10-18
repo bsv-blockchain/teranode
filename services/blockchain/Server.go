@@ -136,13 +136,13 @@ func (b *Blockchain) Init(_ context.Context) error {
 
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
-	if err := b.startKafka(ctx); err != nil {
+	if err := b.startKafka(); err != nil {
 		return errors.WrapGRPC(err)
 	}
 
-	go b.startSubscriptions(ctx)
+	go b.startSubscriptions()
 
-	if err := b.startHTTP(ctx); err != nil {
+	if err := b.startHTTP(); err != nil {
 		return errors.WrapGRPC(err)
 	}
 
@@ -156,7 +156,7 @@ func (b *Blockchain) Start(ctx context.Context) error {
 	return nil
 }
 
-func (b *Blockchain) startHTTP(ctx context.Context) error {
+func (b *Blockchain) startHTTP() error {
 	httpAddress, ok := gocore.Config().Get("blockchain_httpListenAddress")
 	if !ok {
 		return errors.NewConfigurationError("[Miner] No blockchain_httpListenAddress specified")
@@ -172,41 +172,8 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 			AllowMethods: []string{echo.GET},
 		}))
 
-		e.GET("/invalidate/:hash", func(c echo.Context) error {
-			hashStr := c.Param("hash")
-			hash, err := chainhash.NewHashFromStr(hashStr)
-			if err != nil {
-				return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
-			}
-
-			_, err = b.InvalidateBlock(ctx, &blockchain_api.InvalidateBlockRequest{
-				BlockHash: hash.CloneBytes(),
-			})
-
-			if err != nil {
-				return c.String(http.StatusInternalServerError, fmt.Sprintf("error invalidating block: %v", err))
-			}
-
-			return c.String(http.StatusOK, fmt.Sprintf("block invalidated: %s", hashStr))
-		})
-
-		e.GET("/revalidate/:hash", func(c echo.Context) error {
-			hashStr := c.Param("hash")
-			hash, err := chainhash.NewHashFromStr(hashStr)
-			if err != nil {
-				return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
-			}
-
-			_, err = b.RevalidateBlock(ctx, &blockchain_api.RevalidateBlockRequest{
-				BlockHash: hash.CloneBytes(),
-			})
-
-			if err != nil {
-				return c.String(http.StatusInternalServerError, fmt.Sprintf("error revalidating block: %v", err))
-			}
-
-			return c.String(http.StatusOK, fmt.Sprintf("block revalidated: %s", hashStr))
-		})
+		e.GET("/invalidate/:hash", b.invalidateHandler)
+		e.GET("/revalidate/:hash", b.revalidateHandler)
 
 		go func() {
 			if err := e.Start(httpAddress); err != nil {
@@ -218,7 +185,43 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 	return nil
 }
 
-func (b *Blockchain) startKafka(ctx context.Context) error {
+func (b *Blockchain) invalidateHandler(c echo.Context) error {
+	hashStr := c.Param("hash")
+	hash, err := chainhash.NewHashFromStr(hashStr)
+	if err != nil {
+		return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
+	}
+
+	_, err = b.InvalidateBlock(b.AppCtx, &blockchain_api.InvalidateBlockRequest{
+		BlockHash: hash.CloneBytes(),
+	})
+
+	if err != nil {
+		return c.String(http.StatusInternalServerError, fmt.Sprintf("error invalidating block: %v", err))
+	}
+
+	return c.String(http.StatusOK, fmt.Sprintf("block invalidated: %s", hashStr))
+}
+
+func (b *Blockchain) revalidateHandler(c echo.Context) error {
+	hashStr := c.Param("hash")
+	hash, err := chainhash.NewHashFromStr(hashStr)
+	if err != nil {
+		return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
+	}
+
+	_, err = b.RevalidateBlock(b.AppCtx, &blockchain_api.RevalidateBlockRequest{
+		BlockHash: hash.CloneBytes(),
+	})
+
+	if err != nil {
+		return c.String(http.StatusInternalServerError, fmt.Sprintf("error revalidating block: %v", err))
+	}
+
+	return c.String(http.StatusOK, fmt.Sprintf("block revalidated: %s", hashStr))
+}
+
+func (b *Blockchain) startKafka() error {
 	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
 	if err == nil && ok {
 		b.kafkaHealthURL = blocksKafkaURL
@@ -230,17 +233,17 @@ func (b *Blockchain) startKafka(ctx context.Context) error {
 			return errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err)
 		}
 
-		go b.blockKafkaAsyncProducer.Start(ctx)
+		go b.blockKafkaAsyncProducer.Start(b.AppCtx)
 	}
 
 	return nil
 }
 
 /* Must be started as a go routine unless you are in a test */
-func (b *Blockchain) startSubscriptions(ctx context.Context) {
+func (b *Blockchain) startSubscriptions() {
 	for {
 		select {
-		case <-ctx.Done():
+		case <-b.AppCtx.Done():
 			b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
 
 			for sub := range b.subscribers {
