@@ -67,7 +67,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000100010001", chainWork.String())
+		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000002", chainWork.String())
 	})
 
 	t.Run("block 2", func(t *testing.T) {
@@ -80,7 +80,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000200020002", chainWork.String())
+		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000100010003", chainWork.String())
 	})
 
 	t.Run("block 796044", func(t *testing.T) {

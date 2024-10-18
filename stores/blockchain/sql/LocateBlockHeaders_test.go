@@ -1,11 +1,13 @@
 package sql
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/url"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -43,6 +45,13 @@ func TestSQL_LocateBlockHeaders(t *testing.T) {
 		maxHashes uint32
 	}
 
+	var buf bytes.Buffer
+	err = chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
+	require.NoError(t, err)
+	genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+	require.NoError(t, err)
+	require.NotNil(t, genesisBlock)
+
 	tests := []struct {
 		name    string
 		args    args
@@ -75,11 +84,11 @@ func TestSQL_LocateBlockHeaders(t *testing.T) {
 			name: "TestSQL_LocateBlockHashes genesis",
 			args: args{
 				ctx:       context.Background(),
-				locator:   []*chainhash.Hash{model.GenesisBlockHeader.Hash()},
-				hashStop:  model.GenesisBlockHeader.Hash(),
+				locator:   []*chainhash.Hash{genesisBlock.Hash()},
+				hashStop:  genesisBlock.Hash(),
 				maxHashes: 64,
 			},
-			want:    []*model.BlockHeader{model.GenesisBlockHeader},
+			want:    []*model.BlockHeader{genesisBlock.Header},
 			wantErr: assert.NoError,
 		},
 		{
