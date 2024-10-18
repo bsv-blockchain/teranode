@@ -214,6 +214,7 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 			}
 		}()
 	}
+
 	return nil
 }
 
@@ -231,6 +232,7 @@ func (b *Blockchain) startKafka(ctx context.Context) error {
 
 		go b.blockKafkaAsyncProducer.Start(ctx)
 	}
+
 	return nil
 }
 
@@ -240,9 +242,11 @@ func (b *Blockchain) startSubscriptions(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
+
 			for sub := range b.subscribers {
 				safeClose(sub.done)
 			}
+
 			return
 		case notification := <-b.notifications:
 			start := gocore.CurrentTime()
