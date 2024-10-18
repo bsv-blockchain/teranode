@@ -947,7 +947,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 		return errors.NewServiceError("failed to get best block header", err)
 	}
 
-	heightUpdate = int32(bestBlockHeaderMeta.Height)
+	heightUpdate = int32(bestBlockHeaderMeta.Height) // nolint:gosec
 	blkHashUpdate = bestBlockHeader.Hash()
 
 	// Clear the rejected transactions.

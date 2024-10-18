@@ -59,6 +59,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	}
 
 	isCoinbase := tx.IsCoinbase()
+
 	if createOptions.IsCoinbase != nil {
 		isCoinbase = *createOptions.IsCoinbase
 	}
@@ -462,7 +463,7 @@ func (s *Store) getBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs []uint32,
 		aerospike.NewBin("sizeInBytes", aerospike.NewIntegerValue(size)),
 		aerospike.NewBin("extendedSize", aerospike.NewIntegerValue(extendedSize)),
 		aerospike.NewBin("spentUtxos", aerospike.NewIntegerValue(0)),
-		aerospike.NewBin("isCoinbase", tx.IsCoinbase()),
+		aerospike.NewBin("isCoinbase", isCoinbase),
 	}
 
 	if isCoinbase {

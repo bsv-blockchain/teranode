@@ -87,5 +87,5 @@ func NewUTXOHeaderFromReader(reader io.Reader) (*BlockIndex, error) {
 }
 
 func (bi *BlockIndex) String() string {
-	return fmt.Sprintf("Hash: %s, Height: %d, TxCount: %d, ComputedHash: %s", bi.Hash.String(), bi.Height, bi.TxCount, bi.BlockHeader.String())
+	return fmt.Sprintf("Hash: %s, Height: %d, TxCount: %d, PreviousHash: %s, ComputedHash: %s", bi.Hash.String(), bi.Height, bi.TxCount, bi.BlockHeader.HashPrevBlock.String(), bi.BlockHeader.String())
 }
