@@ -691,6 +691,34 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 	}, nil
 }
 
+func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersByHeightRequest) (*blockchain_api.GetBlockHeadersByHeightResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersByHeight",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeadersByHeight),
+	)
+	defer deferFn()
+
+	blockHeaders, metas, err := b.store.GetBlockHeadersFromHeight(ctx, req.StartHeight, req.EndHeight)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	metasBytes := make([][]byte, len(metas))
+	for i, meta := range metas {
+		metasBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersByHeightResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        metasBytes,
+	}, nil
+}
+
 func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockchain_api.BlockchainAPI_SubscribeServer) error {
 	ctx, _, deferFn := tracing.StartTracing(sub.Context(), "Subscribe",
 		tracing.WithParentStat(b.stats),
