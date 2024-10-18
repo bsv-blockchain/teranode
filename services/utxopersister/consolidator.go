@@ -81,6 +81,8 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		previousHash := header.HashPrevBlock
 		height := meta.Height
 
+		c.logger.Infof("Processing header at height %d", height)
+
 		if hash.String() == c.chainParams.GenesisHash.String() {
 			continue
 		}
@@ -113,6 +115,8 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		c.lastBlockHash = hash
 		c.previousBlockHash = previousHash
 	}
+
+	c.logger.Infof("Finished processing headers at height %d", c.lastBlockHeight)
 
 	return nil
 }
