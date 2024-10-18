@@ -183,8 +183,7 @@ func setup(t *testing.T) *testContext {
 		t.Fatalf("Failed to create server: %v", err)
 	}
 
-	server.Init(context.Background())
-	if err != nil {
+	if err := server.Init(context.Background()); err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
 
