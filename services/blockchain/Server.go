@@ -137,13 +137,13 @@ func (b *Blockchain) Init(_ context.Context) error {
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
 	if err := b.startKafka(ctx); err != nil {
-		return err
+		return errors.WrapGRPC(err)
 	}
 
 	go b.startSubscriptions(ctx)
 
 	if err := b.startHTTP(ctx); err != nil {
-		return err
+		return errors.WrapGRPC(err)
 	}
 
 	// this will block
@@ -226,7 +226,7 @@ func (b *Blockchain) startKafka(ctx context.Context) error {
 		b.kafkaChan = make(chan *kafka.Message, 100)
 
 		if b.blockKafkaAsyncProducer, err = kafka.NewKafkaAsyncProducer(b.logger, blocksKafkaURL, b.kafkaChan); err != nil {
-			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
+			return errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err)
 		}
 
 		go b.blockKafkaAsyncProducer.Start(ctx)
