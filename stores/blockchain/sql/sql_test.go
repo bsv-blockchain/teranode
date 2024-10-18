@@ -11,23 +11,23 @@ import (
 
 var (
 	hashPrevBlock, _  = chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-	hashMerkleRoot, _ = chainhash.NewHashFromStr("0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098")
+	hashMerkleRoot, _ = chainhash.NewHashFromStr("6c487efd5e078c65988f78a52f6d9438a7a9eaf1b9446f78e692e81e8d593970")
 	bits, _           = model.NewNBitFromString("207fffff")
-	coinbaseTx, _     = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000")
+	coinbaseTx, _     = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
 	subtree, _        = chainhash.NewHashFromStr("0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098")
 
-	block2PrevBlockHash, _  = chainhash.NewHashFromStr("00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048")
-	block2MerkleRootHash, _ = chainhash.NewHashFromStr("9b0fc92260312ce44e74ef369f5c66bbb85848f2eddd5a7a1cde251e54ccfdd5")
-	coinbaseTx2, _          = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d010bffffffff0100f2052a010000004341047211a824f55b505228e4c3d5194c1fcfaa15a456abdf37f9b9d97a4040afc073dee6c89064984f03385237d92167c13e236446b417ab79a0fcae412ae3316b77ac00000000")
-	block3Hash, _           = chainhash.NewHashFromStr("0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449")
-	block3PrevBlockHash, _  = chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
-	block3MerkleRootHash, _ = chainhash.NewHashFromStr("999e1c837c76a1b7fbb7e57baf87b309960f5ffefbf2a9b95dd890602272f644")
-	coinbaseTx3, _          = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d010effffffff0100f2052a0100000043410494b9d3e76c5b1629ecf97fff95d7a4bbdac87cc26099ada28066c6ff1eb9191223cd897194a08d0c2726c5747f1db49e8cf90e75dc3e3550ae9b30086f3cd5aaac00000000")
-	block1                  = &model.Block{
+	block2PrevBlockHash, _  = chainhash.NewHashFromStr("39e0c1ec707ef27692c46df360109072388cca151b24054d2d70035d1034662a")
+	block2MerkleRootHash, _ = chainhash.NewHashFromStr("b881339d3b500bcaceb5d2f1225f45edd77e846805ddffe27788fc06f218f177")
+	coinbaseTx2, _          = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+	block3Hash, _           = chainhash.NewHashFromStr("3bb0ca67e7675a43534adecf058c38347cd59e2936eb7f6475a7f6354386af58")
+	block3PrevBlockHash, _  = chainhash.NewHashFromStr("484e58c7bf0208d787314710535ef7be8ca31748bc9fef5e1ee2de67ebda757a")
+	block3MerkleRootHash, _ = chainhash.NewHashFromStr("d1de05a65845a49ad63eed887c4cf7cc824e02b5d10de82829f740b748b9737f")
+	coinbaseTx3, _          = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030300002f6d312d65752fb670097da68d1b768d8b21f6ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+		block1                  = &model.Block{
 		Header: &model.BlockHeader{
 			Version:        1,
-			Timestamp:      1231469665,
-			Nonce:          2573394689,
+			Timestamp:      1729259727,
+			Nonce:          0,
 			HashPrevBlock:  hashPrevBlock,
 			HashMerkleRoot: hashMerkleRoot,
 			Bits:           *bits,
@@ -41,8 +41,8 @@ var (
 	block2 = &model.Block{
 		Header: &model.BlockHeader{
 			Version:        1,
-			Timestamp:      1231469744,
-			Nonce:          1639830024,
+			Timestamp:      1729259727,
+			Nonce:          1,
 			HashPrevBlock:  block2PrevBlockHash,
 			HashMerkleRoot: block2MerkleRootHash,
 			Bits:           *bits,
@@ -57,8 +57,8 @@ var (
 	block3 = &model.Block{
 		Header: &model.BlockHeader{
 			Version:        1,
-			Timestamp:      1231470173,
-			Nonce:          1844305925,
+			Timestamp:      1729259727,
+			Nonce:          1,
 			HashPrevBlock:  block3PrevBlockHash,
 			HashMerkleRoot: block3MerkleRootHash,
 			Bits:           *bits,
