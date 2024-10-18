@@ -25,7 +25,7 @@ func TestSqlGetChainTip(t *testing.T) {
 		assert.Equal(t, uint32(0), meta.Height)
 		assert.Equal(t, uint32(1), tip.Version)
 
-		assertGenesis(t, tip)
+		assertRegtestGenesis(t, tip)
 	})
 
 	t.Run("multiple blocks", func(t *testing.T) {

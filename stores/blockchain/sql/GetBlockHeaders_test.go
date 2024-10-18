@@ -71,7 +71,7 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 		assert.Equal(t, 2, len(headers))
 		assert.Equal(t, block1.Header.Hash(), headers[0].Hash())
 		assert.Equal(t, uint32(1), metas[0].Height)
-		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", headers[1].Hash().String())
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", headers[1].Hash().String())
 
 		headers, metas, err = s.GetBlockHeaders(context.Background(), block1.Hash(), 1)
 		require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 		assert.Equal(t, 2, len(headers)) // there are only 2 headers in the chain
 		assert.Equal(t, block1.Header.Hash(), headers[0].Hash())
 		assert.Equal(t, uint32(1), metas[0].Height)
-		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", headers[1].Hash().String())
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", headers[1].Hash().String())
 
 		headers, metas, err = s.GetBlockHeaders(context.Background(), block2Alt.Hash(), 10)
 		require.NoError(t, err)
@@ -93,6 +93,6 @@ func TestSQL_GetBlockHeaders(t *testing.T) {
 		assert.Equal(t, uint32(2), metas[0].Height)
 		assert.Equal(t, block1.Header.Hash(), headers[1].Hash())
 		assert.Equal(t, uint32(1), metas[1].Height)
-		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", headers[2].Hash().String())
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", headers[2].Hash().String())
 	})
 }

@@ -106,7 +106,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 
 		h, _, _ := s.GetBestBlockHeader(context.Background())
 
-		assertGenesis(t, h)
+		assertRegtestGenesis(t, h)
 
 		firstBlock := &model.Block{
 			Header: &model.BlockHeader{
@@ -171,7 +171,7 @@ func Test_getCumulativeChainWork(t *testing.T) {
 
 		h, _, _ := s.GetBestBlockHeader(context.Background())
 
-		assertGenesis(t, h)
+		assertRegtestGenesis(t, h)
 
 		firstBlock := &model.Block{
 			Header: &model.BlockHeader{

@@ -21,7 +21,7 @@ func TestSQL_GetBlockByHeight(t *testing.T) {
 		block, err := s.GetBlockByHeight(context.Background(), 0)
 		require.NoError(t, err)
 
-		assertGenesis(t, block.Header)
+		assertRegtestGenesis(t, block.Header)
 
 		// block
 		assert.Equal(t, uint64(1), block.TransactionCount)

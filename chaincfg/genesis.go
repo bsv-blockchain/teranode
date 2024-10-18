@@ -87,10 +87,6 @@ var genesisBlock = wire.MsgBlock{
 	Transactions: []*wire.MsgTx{&genesisCoinbaseTx},
 }
 
-// regTestGenesisHash is the hash of the first block in the block chain for the
-// regression test network (genesis block).
-var regTestGenesisHash = genesisHash
-
 // regTestGenesisMerkleRoot is the hash of the first transaction in the genesis
 // block for the regression test network.  It is the same as the merkle root for
 // the main network.

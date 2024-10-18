@@ -19,7 +19,7 @@ func TestSQL_GetBlock(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeURL)
 		require.NoError(t, err)
 
-		headerHash, err := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		headerHash, err := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 		require.NoError(t, err)
 
 		block, height, err := s.GetBlock(context.Background(), headerHash)
@@ -27,7 +27,7 @@ func TestSQL_GetBlock(t *testing.T) {
 
 		// header
 		assert.Equal(t, uint32(0), height)
-		assertGenesis(t, block.Header)
+		assertRegtestGenesis(t, block.Header)
 
 		// block
 		assert.Equal(t, uint64(1), block.TransactionCount)

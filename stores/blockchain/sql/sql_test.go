@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	hashPrevBlock, _  = chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	hashPrevBlock, _  = chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 	hashMerkleRoot, _ = chainhash.NewHashFromStr("0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098")
-	bits, _           = model.NewNBitFromString("1d00ffff")
+	bits, _           = model.NewNBitFromString("207fffff")
 	coinbaseTx, _     = bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000")
 	subtree, _        = chainhash.NewHashFromStr("0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098")
 
@@ -86,12 +86,22 @@ var (
 	}
 )
 
-func assertGenesis(t *testing.T, blockHeader *model.BlockHeader) {
-	assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", blockHeader.Hash().String())
+func assertMainnetGenesis(t *testing.T, blockHeader *model.BlockHeader) {
+	assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", blockHeader.Hash().String())
 	assert.Equal(t, uint32(1), blockHeader.Version)
 	assert.Equal(t, &chainhash.Hash{}, blockHeader.HashPrevBlock)
 	assert.Equal(t, "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b", blockHeader.HashMerkleRoot.String())
 	assert.Equal(t, uint32(1231006505), blockHeader.Timestamp)
 	assert.Equal(t, []byte{0xff, 0xff, 0x0, 0x1d}, blockHeader.Bits.CloneBytes())
 	assert.Equal(t, uint32(2083236893), blockHeader.Nonce)
+}
+
+func assertRegtestGenesis(t *testing.T, blockHeader *model.BlockHeader) {
+	assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", blockHeader.Hash().String())
+	assert.Equal(t, uint32(1), blockHeader.Version)
+	assert.Equal(t, &chainhash.Hash{}, blockHeader.HashPrevBlock)
+	assert.Equal(t, "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b", blockHeader.HashMerkleRoot.String())
+	assert.Equal(t, uint32(1296688602), blockHeader.Timestamp)
+	assert.Equal(t, []byte{0xff, 0xff, 0x7f, 0x20}, blockHeader.Bits.CloneBytes())
+	assert.Equal(t, uint32(2), blockHeader.Nonce)
 }

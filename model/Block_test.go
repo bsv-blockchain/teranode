@@ -27,9 +27,9 @@ import (
 
 func TestBlock_Bytes(t *testing.T) {
 
-	hash1, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 	hash2, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
-	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000")
+	coinbaseTx, _ := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 
 	t.Run("test block bytes - min size", func(t *testing.T) {
 		blockHeaderBytes, _ := hex.DecodeString(block1Header)
@@ -75,7 +75,7 @@ func TestBlock_Bytes(t *testing.T) {
 		assert.Equal(t, block.TransactionCount, blockFromBytes.TransactionCount)
 		assert.Equal(t, block.Subtrees, blockFromBytes.Subtrees)
 
-		assert.Equal(t, "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048", block.Hash().String())
+		assert.Equal(t, "4c74e0128fef1a01469380c05b215afaf4cfe51183461f4a7996a84295b6925a", block.Hash().String())
 		assert.Equal(t, block.Hash().String(), blockFromBytes.Hash().String())
 		assert.Equal(t, uint64(1), block.TransactionCount)
 		assert.Equal(t, uint64(123), block.SizeInBytes)
@@ -109,7 +109,7 @@ func TestBlock_Bytes(t *testing.T) {
 		assert.Equal(t, block.Subtrees[0].String(), blockFromBytes.Subtrees[0].String())
 		assert.Equal(t, block.Subtrees[1].String(), blockFromBytes.Subtrees[1].String())
 		assert.Equal(t, uint64(1), block.TransactionCount)
-		assert.Equal(t, uint64(215), block.SizeInBytes)
+		assert.Equal(t, uint64(179), block.SizeInBytes)
 	})
 
 	t.Run("test block reader - subtrees", func(t *testing.T) {
@@ -139,7 +139,7 @@ func TestBlock_Bytes(t *testing.T) {
 		assert.Equal(t, block.Subtrees[0].String(), blockFromBytes.Subtrees[0].String())
 		assert.Equal(t, block.Subtrees[1].String(), blockFromBytes.Subtrees[1].String())
 		assert.Equal(t, uint64(1), block.TransactionCount)
-		assert.Equal(t, uint64(215), block.SizeInBytes)
+		assert.Equal(t, uint64(179), block.SizeInBytes)
 	})
 
 	t.Run("test multiple blocks reader - subtrees", func(t *testing.T) {
@@ -175,7 +175,7 @@ func TestBlock_Bytes(t *testing.T) {
 			assert.Equal(t, block.Subtrees[0].String(), blockFromBytes.Subtrees[0].String())
 			assert.Equal(t, block.Subtrees[1].String(), blockFromBytes.Subtrees[1].String())
 			assert.Equal(t, uint64(1), block.TransactionCount)
-			assert.Equal(t, uint64(215), block.SizeInBytes)
+			assert.Equal(t, uint64(179), block.SizeInBytes)
 		}
 
 		// no more blocks to read
@@ -647,7 +647,7 @@ func TestT(t *testing.T) {
 // tests for msgBlock
 func TestNewBlockFromMsgBlock(t *testing.T) {
 	// Create a mock wire.MsgBlock
-	prevBlockHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	prevBlockHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 	merkleRootHash, _ := chainhash.NewHashFromStr("4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b")
 
 	msgBlock := &wire.MsgBlock{

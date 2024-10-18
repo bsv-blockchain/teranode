@@ -39,7 +39,7 @@ func TestGetLegacyBlockWithBlockStore(t *testing.T) {
 	params := blockInfo{
 		version:           1,
 		bits:              "2000ffff",
-		previousBlockHash: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+		previousBlockHash: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
 		height:            1,
 		nonce:             2083236893,
 		timestamp:         uint32(time.Now().Unix()),
@@ -160,7 +160,7 @@ func TestGetLegacyBlockWithSubtreeStore(t *testing.T) {
 	params := blockInfo{
 		version:           1,
 		bits:              "2000ffff",
-		previousBlockHash: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+		previousBlockHash: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
 		height:            1,
 		nonce:             2083236893,
 		timestamp:         uint32(time.Now().Unix()),
