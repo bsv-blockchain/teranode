@@ -35,5 +35,5 @@ func CheckAll(ctx context.Context, checkLiveness bool, checks []Check) (int, str
 		messages = append(messages, msg)
 	}
 
-	return overallStatus, strings.Join(messages, ",\n "), nil
+	return overallStatus, fmt.Sprintf(`{"status":"%d", "dependencies":[%s]}`, overallStatus, strings.Join(messages, ",\n")), nil
 }

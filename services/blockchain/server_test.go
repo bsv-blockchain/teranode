@@ -2,6 +2,8 @@ package blockchain
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -298,6 +300,53 @@ func setup(t *testing.T) *testContext {
 		logger:        logger,
 		kafkaProducer: kafkaProducer,
 	}
+}
+
+func Test_HealthLiveness(t *testing.T) {
+	ctx := setup(t)
+
+	status, msg, err := ctx.server.Health(context.Background(), true)
+	require.Equal(t, http.StatusOK, status)
+	require.NoError(t, err)
+
+	var jsonMsg map[string]interface{}
+	err = json.Unmarshal([]byte(msg), &jsonMsg)
+	fmt.Println(msg)
+	require.NoError(t, err, "Message should be valid JSON")
+
+	require.Contains(t, jsonMsg, "status", "JSON should contain 'status' field")
+	require.Contains(t, jsonMsg, "dependencies", "JSON should contain 'dependencies' field")
+
+	require.Equal(t, "200", jsonMsg["status"], "Status should be '200'")
+	require.NoError(t, err)
+}
+
+func Test_HealthReadiness(t *testing.T) {
+	ctx := setup(t)
+
+	status, msg, err := ctx.server.Health(context.Background(), false)
+	require.Equal(t, http.StatusOK, status)
+	require.NoError(t, err)
+
+	var jsonMsg map[string]interface{}
+	err = json.Unmarshal([]byte(msg), &jsonMsg)
+	fmt.Println(msg)
+	require.NoError(t, err, "Message should be valid JSON")
+
+	require.Contains(t, jsonMsg, "status", "JSON should contain 'status' field")
+	require.Contains(t, jsonMsg, "dependencies", "JSON should contain 'dependencies' field")
+
+	require.Equal(t, "200", jsonMsg["status"], "Status should be '200'")
+	require.NoError(t, err)
+}
+
+func Test_HealthGRPC(t *testing.T) {
+	ctx := setup(t)
+
+	response, err := ctx.server.HealthGRPC(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.True(t, response.Ok)
 }
 
 func mockBlock(ctx *testContext, t *testing.T) *model.Block {
