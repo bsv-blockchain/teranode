@@ -187,6 +187,7 @@ func (b *Blockchain) startHTTP() error {
 
 func (b *Blockchain) invalidateHandler(c echo.Context) error {
 	hashStr := c.Param("hash")
+
 	hash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
 		return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
@@ -205,6 +206,7 @@ func (b *Blockchain) invalidateHandler(c echo.Context) error {
 
 func (b *Blockchain) revalidateHandler(c echo.Context) error {
 	hashStr := c.Param("hash")
+
 	hash, err := chainhash.NewHashFromStr(hashStr)
 	if err != nil {
 		return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
