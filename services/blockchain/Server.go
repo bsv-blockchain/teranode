@@ -698,7 +698,7 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 	)
 	defer deferFn()
 
-	blockHeaders, metas, err := b.store.GetBlockHeadersFromHeight(ctx, req.StartHeight, req.EndHeight)
+	blockHeaders, metas, err := b.store.GetBlockHeadersByHeight(ctx, req.StartHeight, req.EndHeight)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}

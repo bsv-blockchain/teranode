@@ -8,6 +8,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"golang.org/x/exp/constraints"
 )
 
 func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
@@ -17,8 +18,10 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	blockHeaders := make([]*model.BlockHeader, 0, endHeight-startHeight)
-	blockMetas := make([]*model.BlockHeaderMeta, 0, endHeight-startHeight)
+	capacity := max(1, endHeight-startHeight+1)
+
+	blockHeaders := make([]*model.BlockHeader, 0, capacity)
+	blockMetas := make([]*model.BlockHeaderMeta, 0, capacity)
 
 	q := `
 		SELECT
@@ -99,4 +102,12 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	}
 
 	return blockHeaders, blockMetas, nil
+}
+
+func max[T constraints.Ordered](a, b T) T {
+	if a > b {
+		return a
+	}
+
+	return b
 }
