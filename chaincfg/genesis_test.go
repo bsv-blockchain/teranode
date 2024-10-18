@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/libsv/go-bt"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestGenesisBlock tests the genesis block of the main network for validity by
@@ -317,4 +318,8 @@ var simNetGenesisBlockBytes = []byte{
 	0x5c, 0x38, 0x4d, 0xf7, 0xba, 0x0b, 0x8d, 0x57, /* |\8M....W| */
 	0x8a, 0x4c, 0x70, 0x2b, 0x6b, 0xf1, 0x1d, 0x5f, /* |.Lp+k.._|*/
 	0xac, 0x00, 0x00, 0x00, 0x00, /* |.....|    */
+}
+
+func TestRegtestGenesisBlock(t *testing.T) {
+	assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", regTestGenesisBlock.Header.BlockHash().String())
 }
