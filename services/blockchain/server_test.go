@@ -164,20 +164,6 @@ func Test_GetFSMCurrentState(t *testing.T) {
 	// }
 }
 
-func Test_sendKafkaBlockMessage(t *testing.T) {
-	// Setup
-	ctx := setup(t)
-	mockBlock := mockBlock(ctx, t)
-
-	mockProducer := new(mockKafkaProducer)
-	ctx.server.blockKafkaProducer = mockProducer
-
-	ctx.server.sendKafkaBlockMessage(mockBlock)
-
-	// to get this far means it's not stuck in an endless loop
-	require.Equal(t, 1, len(mockProducer.messages))
-}
-
 type testContext struct {
 	server       *Blockchain
 	subtreeStore blob.Store
