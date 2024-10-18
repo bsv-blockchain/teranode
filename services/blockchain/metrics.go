@@ -24,6 +24,7 @@ var (
 	prometheusBlockchainGetBlockHeader             prometheus.Histogram
 	prometheusBlockchainGetBlockHeaders            prometheus.Histogram
 	prometheusBlockchainGetBlockHeadersFromHeight  prometheus.Histogram
+	prometheusBlockchainGetBlockHeadersByHeight    prometheus.Histogram
 	prometheusBlockchainSubscribe                  prometheus.Histogram
 	prometheusBlockchainGetState                   prometheus.Histogram
 	prometheusBlockchainSetState                   prometheus.Histogram
@@ -178,6 +179,15 @@ func _initPrometheusMetrics() {
 			Namespace: "blockchain",
 			Name:      "get_get_block_headers_from_height",
 			Help:      "Histogram of GetBlockHeadersFromHeight calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainGetBlockHeadersByHeight = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "blockchain",
+			Name:      "get_get_block_headers_by_height",
+			Help:      "Histogram of GetBlockHeadersByHeight calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

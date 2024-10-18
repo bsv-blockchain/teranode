@@ -36,7 +36,6 @@ func (suite *BlockassemblyTestSuite) TestBlockchainSubsriptionWhenUnavilable() {
 		return
 	}
 
-
 	go func() {
 		for {
 			select {
@@ -51,6 +50,12 @@ func (suite *BlockassemblyTestSuite) TestBlockchainSubsriptionWhenUnavilable() {
 
 	suite.SettingsMap["SETTINGS_CONTEXT_1"] = "docker.ubsv1.test.stopBlockchain"
 	_ = testEnv.RestartDockerNodes(suite.SettingsMap)
+
+	fsmState, err := testEnv.Nodes[0].BlockchainClient.GetFSMCurrentState(testEnv.Context)
+	if err != nil {
+		t.Errorf("error getting blockchain service state: %v", err)
+	}
+	assert.Equal(t, "stopped", fsmState, "expected blockchain service to be stopped")
 
 	time.Sleep(120 * time.Second)
 

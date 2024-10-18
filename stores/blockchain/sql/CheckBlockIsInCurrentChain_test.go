@@ -19,8 +19,13 @@ import (
 
 func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	t.Run("empty - no match", func(t *testing.T) {
-		connStr, teardown := setupPostgresContainer(t)
-		defer teardown()
+		connStr, teardown, err := setupPostgresContainer()
+		require.NoError(t, err)
+
+		defer func() {
+			err := teardown()
+			require.NoError(t, err)
+		}()
 
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
@@ -36,8 +41,13 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("single block in chain", func(t *testing.T) {
-		connStr, teardown := setupPostgresContainer(t)
-		defer teardown()
+		connStr, teardown, err := setupPostgresContainer()
+		require.NoError(t, err)
+
+		defer func() {
+			err := teardown()
+			require.NoError(t, err)
+		}()
 
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
@@ -61,8 +71,13 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("multiple blocks in chain", func(t *testing.T) {
-		connStr, teardown := setupPostgresContainer(t)
-		defer teardown()
+		connStr, teardown, err := setupPostgresContainer()
+		require.NoError(t, err)
+
+		defer func() {
+			err := teardown()
+			require.NoError(t, err)
+		}()
 
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
@@ -89,8 +104,13 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("block not in chain", func(t *testing.T) {
-		connStr, teardown := setupPostgresContainer(t)
-		defer teardown()
+		connStr, teardown, err := setupPostgresContainer()
+		require.NoError(t, err)
+
+		defer func() {
+			err := teardown()
+			require.NoError(t, err)
+		}()
 
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
@@ -110,8 +130,13 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("alternative block in branch", func(t *testing.T) {
-		connStr, teardown := setupPostgresContainer(t)
-		defer teardown()
+		connStr, teardown, err := setupPostgresContainer()
+		require.NoError(t, err)
+
+		defer func() {
+			err := teardown()
+			require.NoError(t, err)
+		}()
 
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
@@ -160,8 +185,13 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("alternative block in correct chain", func(t *testing.T) {
-		connStr, teardown := setupPostgresContainer(t)
-		defer teardown()
+		connStr, teardown, err := setupPostgresContainer()
+		require.NoError(t, err)
+
+		defer func() {
+			err := teardown()
+			require.NoError(t, err)
+		}()
 
 		storeURL, err := url.Parse(connStr)
 		require.NoError(t, err)
@@ -210,14 +240,14 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 }
 
-func setupPostgresContainer(t *testing.T) (string, func()) {
+func setupPostgresContainer() (string, func() error, error) {
 	ctx := context.Background()
 
 	dbName := "testdb"
 	dbUser := "postgres"
 	dbPassword := "password"
 
-	postgresC, _ := postgres.Run(ctx,
+	postgresC, err := postgres.Run(ctx,
 		"docker.io/postgres:16-alpine",
 		postgres.WithDatabase(dbName),
 		postgres.WithUsername(dbUser),
@@ -227,19 +257,25 @@ func setupPostgresContainer(t *testing.T) (string, func()) {
 				WithOccurrence(2).
 				WithStartupTimeout(5*time.Second)),
 	)
+	if err != nil {
+		return "", nil, err
+	}
 
 	host, err := postgresC.Host(ctx)
-	require.NoError(t, err)
+	if err != nil {
+		return "", nil, err
+	}
 
 	port, err := postgresC.MappedPort(ctx, "5432")
-	require.NoError(t, err)
+	if err != nil {
+		return "", nil, err
+	}
 
 	connStr := fmt.Sprintf("postgres://postgres:password@%s:%s/testdb?sslmode=disable", host, port.Port())
 
-	teardown := func() {
-		err := postgresC.Terminate(ctx)
-		require.NoError(t, err)
+	teardown := func() error {
+		return postgresC.Terminate(ctx)
 	}
 
-	return connStr, teardown
+	return connStr, teardown, nil
 }

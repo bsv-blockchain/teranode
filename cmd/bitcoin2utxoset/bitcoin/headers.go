@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	BlockHaveData = 8
-	BlockHaveUndo = 16
+	BlockValidTree = 2
+	BlockHaveData  = 8
+	BlockHaveUndo  = 16
 )
 
 func (in *IndexDB) DumpRecords(count int) {
@@ -75,7 +76,9 @@ func (in *IndexDB) WriteHeadersToFile(outputDir string, heightHint int) (*utxope
 
 		blockIndex, err := DeserializeBlockIndex(value)
 		if err != nil {
-			log.Printf("Failed to parse block index: %v", err)
+			if !errors.Is(err, errors.ErrBlockInvalid) {
+				log.Printf("Failed to parse block index: %v", err)
+			}
 			continue
 		}
 
@@ -191,6 +194,10 @@ func DeserializeBlockIndex(data []byte) (*utxopersister.BlockIndex, error) {
 
 	txs, i := DecodeVarIntForIndex(data[pos:])
 	pos += i
+
+	if status&BlockValidTree != 0 {
+		return nil, errors.NewBlockInvalidError(fmt.Sprintf("block %d is not in active chain, skip it", height))
+	}
 
 	if status&(BlockHaveData|BlockHaveUndo) != 0 {
 		val, i = DecodeVarIntForIndex(data[pos:])
