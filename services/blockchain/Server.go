@@ -97,7 +97,7 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 		// Add liveness checks here. Don't include dependency checks.
 		// If the service is stuck return http.StatusServiceUnavailable
 		// to indicate a restart is needed
-		return http.StatusOK, "OK", nil
+		return health.CheckAll(ctx, checkLiveness, nil)
 	}
 
 	// Add readiness checks here. Include dependency checks.
