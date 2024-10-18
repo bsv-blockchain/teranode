@@ -128,9 +128,28 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 	}, errors.WrapGRPC(err)
 }
 
-func (b *Blockchain) Init(_ context.Context) error {
+func (b *Blockchain) Init(ctx context.Context) error {
 
 	b.finiteStateMachine = b.NewFiniteStateMachine()
+
+	// Set the FSM to the latest state
+
+	stateStr, err := b.store.GetFSMState(ctx)
+	if err != nil {
+		b.logger.Errorf("[Blockchain] Error getting FSM state: %v", err)
+	}
+
+	if stateStr == "" { // if no state is stored, set the default state
+		b.logger.Infof("[Blockchain](Init) Blockchain db doesn't have previous FSM state, storing FSM's default state: %v", b.finiteStateMachine.Current())
+		err = b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
+		if err != nil {
+			// TODO: just logging now, consider adding retry
+			b.logger.Errorf("[Blockchain] Error setting FSM state in blockchain store: %v", err)
+		}
+	} else { // if there is a state stored, set the FSM to that state
+		b.logger.Infof("[Blockchain](Init) Blockchain db has previous FSM state: %v, setting FSM's current state to it.", stateStr)
+		b.finiteStateMachine.SetState(stateStr)
+	}
 
 	return nil
 }
@@ -245,15 +264,6 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				b.logger.Errorf("[Blockchain] failed to start http server: %v", err)
 			}
 		}()
-	}
-
-	// Set the FSM to the latest state
-	stateStr, err := b.store.GetFSMState(ctx)
-	if err != nil {
-		b.logger.Errorf("[Blockchain] Error getting FSM state: %v", err)
-	} else {
-		b.logger.Infof("[Blockchain] Last FSM to state: %s", stateStr)
-		b.finiteStateMachine.SetState(stateStr)
 	}
 
 	// this will block
@@ -964,9 +974,14 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 		return nil, errors.WrapGRPC(errors.NewProcessingError("invalid state: %s", state))
 	}
 
-	return &blockchain_api.GetFSMStateResponse{
+	resp := &blockchain_api.GetFSMStateResponse{
 		State: blockchain_api.FSMStateType(enumState),
-	}, nil
+	}
+	//fmt.Println("GetFSMCurrentState State: ", state)
+	//fmt.Println("Enum State: ", enumState)
+	//fmt.Println("blockchain_api.FSMStateType(enumState): ", blockchain_api.FSMStateType(enumState))
+	//fmt.Println("GetFSMCurrentState RESP: ", *resp)
+	return resp, nil
 }
 
 func (b *Blockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, targetState blockchain_api.FSMStateType) error {
