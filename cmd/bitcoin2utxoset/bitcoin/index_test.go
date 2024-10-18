@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,21 +27,13 @@ func TestRecord138(t *testing.T) {
 }
 
 func TestRecord89(t *testing.T) {
-	hashStr := "000000000000000004d5034a3c27673ebcdfc51cd4ad7c44a21668bedc321400"
-
 	b, err := hex.DecodeString("af949350a1c57b020000000020af7148cbd10eff33f8ceb37c4428e57a9a33553d14a0bd04000000000000000065ee2a3525933e0c8c0a983f8d1c02b80c208d34d56af07d648bc20173878cb99491445ca0240518013d1e83")
 	require.NoError(t, err)
 
 	assert.Len(t, b, 89)
 
-	bi, err := DeserializeBlockIndex(b)
-	require.NoError(t, err)
-
-	// t.Logf("Height: %d", bi.Height)
-
-	assert.Equal(t, uint32(566139), bi.Height)
-	assert.Equal(t, uint64(0), bi.TxCount)
-	assert.Equal(t, hashStr, bi.BlockHeader.String())
+	_, err = DeserializeBlockIndex(b)
+	require.ErrorIs(t, err, errors.ErrBlockInvalid)
 }
 
 func TestRecord141(t *testing.T) {

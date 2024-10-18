@@ -165,7 +165,7 @@ func Start() {
 		}
 
 		if int(bestBlock.Height) != height {
-			logger.Warnf("Height mismatch: last height was %d, scanned height was %d", height, bestBlock.Height)
+			logger.Warnf("Height mismatch: height from blocks indexDB was %d, scanned height was %d", height, bestBlock.Height)
 		}
 
 		blockHash = bestBlock.Hash
