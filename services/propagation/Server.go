@@ -184,7 +184,7 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 	if workers > 0 {
 		ps.kafkaHealthURL = validatortxsKafkaURL
 		ps.validatorKafkaProducerClient, err = retry.Retry(ctx, ps.logger, func() (*kafka.KafkaAsyncProducer, error) {
-			return kafka.NewKafkaAsyncProducer(ps.logger, validatortxsKafkaURL, make(chan []byte, 10_000))
+			return kafka.NewKafkaAsyncProducer(ps.logger, validatortxsKafkaURL, make(chan *kafka.Message, 10_000))
 		}, retry.WithMessage("[Propagation Server] error starting kafka producer"))
 		if err != nil {
 			ps.logger.Errorf("[Propagation Server] error starting kafka producer: %v", err)
@@ -472,7 +472,9 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		}
 
 		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
-		ps.validatorKafkaProducerClient.PublishChannel <- validatorData.Bytes()
+		ps.validatorKafkaProducerClient.PublishChannel <- &kafka.Message{
+			Value: validatorData.Bytes(),
+		}
 	} else {
 		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 

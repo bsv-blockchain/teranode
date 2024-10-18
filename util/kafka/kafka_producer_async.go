@@ -22,15 +22,20 @@ type MessageStatus struct {
 	Time    time.Time
 }
 
+type Message struct {
+	Key   []byte
+	Value []byte
+}
+
 type KafkaAsyncProducer struct {
 	Config            KafkaListenerConfig
 	Producer          sarama.AsyncProducer
 	LastMessageStatus MessageStatus
 	mu                sync.Mutex
-	PublishChannel    chan []byte
+	PublishChannel    chan *Message
 }
 
-func NewKafkaAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan []byte) (*KafkaAsyncProducer, error) {
+func NewKafkaAsyncProducer(logger ulogger.Logger, kafkaURL *url.URL, ch chan *Message) (*KafkaAsyncProducer, error) {
 	logger.Debugf("Starting async kafka producer for %v", kafkaURL)
 	topic := kafkaURL.Path[1:]
 	brokersURL := strings.Split(kafkaURL.Host, ",")
@@ -135,9 +140,15 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context) {
 	// Sending a batch of 50 messages asynchronously
 	go func() {
 		for msgBytes := range c.PublishChannel {
+			var key sarama.ByteEncoder
+			if msgBytes.Key != nil {
+				key = sarama.ByteEncoder(msgBytes.Key)
+			}
+
 			message := &sarama.ProducerMessage{
 				Topic: topic,
-				Value: sarama.StringEncoder(msgBytes),
+				Key:   key,
+				Value: sarama.ByteEncoder(msgBytes.Value),
 			}
 			c.Producer.Input() <- message
 		}

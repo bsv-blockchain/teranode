@@ -114,7 +114,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	// err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
 	// require.NoError(t, err)
 
-	producerClient, err := NewKafkaAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
+	producerClient, err := NewKafkaAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan *Message, 10000))
 	require.NoError(t, err)
 
 	go producerClient.Start(ctx)
@@ -189,7 +189,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	producerClient, err := NewKafkaAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
+	producerClient, err := NewKafkaAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan *Message, 10000))
 	require.NoError(t, err)
 
 	go producerClient.Start(ctx)
@@ -310,7 +310,7 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	// err = waitForKafkaReady(ctx, kafkaURL.Host, 30*time.Second)
 	// require.NoError(t, err)
 
-	producerClient, err := NewKafkaAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan []byte, 10000))
+	producerClient, err := NewKafkaAsyncProducer(ulogger.TestLogger{}, kafkaURL, make(chan *Message, 10000))
 	require.NoError(t, err)
 
 	go producerClient.Start(ctx)
@@ -360,12 +360,14 @@ func byteArrayToIntFromString(message []byte) (int, error) {
 	return intValue, nil
 }
 
-func produceMessages(wg *sync.WaitGroup, kafkaChan chan []byte, numberOfMessages int) {
+func produceMessages(wg *sync.WaitGroup, kafkaChan chan *Message, numberOfMessages int) {
 	// #nosec G404: ignoring the warning
 	r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
 	for i := 0; i < numberOfMessages; i++ {
 		msg := []byte(strconv.Itoa(i))
-		kafkaChan <- msg
+		kafkaChan <- &Message{
+			Value: msg,
+		}
 		fmt.Println("pushed message: ", string(msg))
 
 		randomDelay := time.Duration(r.Intn(200)+1) * time.Millisecond
