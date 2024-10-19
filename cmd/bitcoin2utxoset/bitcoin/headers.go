@@ -19,9 +19,15 @@ import (
 )
 
 const (
-	BlockValidTree = 2
-	BlockHaveData  = 8
-	BlockHaveUndo  = 16
+	BlockValidReserved     = 1
+	BlockValidTree         = 2
+	BlockValidTransactions = 3
+	BlockValidChain        = 4
+	BlockValidScripts      = 5
+	BlockValidMask         = BlockValidReserved | BlockValidTree | BlockValidTransactions | BlockValidChain | BlockValidScripts
+
+	BlockHaveData = 8  //!< full block available in blk*.dat
+	BlockHaveUndo = 16 //!< undo data available in rev*.dat
 )
 
 func (in *IndexDB) DumpRecords(count int) {
@@ -195,7 +201,7 @@ func DeserializeBlockIndex(data []byte) (*utxopersister.BlockIndex, error) {
 	txs, i := DecodeVarIntForIndex(data[pos:])
 	pos += i
 
-	if status&BlockValidTree != 0 {
+	if (status & BlockValidMask) <= BlockValidTree {
 		return nil, errors.NewBlockInvalidError(fmt.Sprintf("block %d is not in active chain, skip it", height))
 	}
 
