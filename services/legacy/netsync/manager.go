@@ -1884,7 +1884,7 @@ func (sm *SyncManager) startKafkaListener(ctx context.Context, kafkaURL *url.URL
 		URL:               kafkaURL,
 		GroupID:           groupID,
 		ConsumerCount:     consumerCount,
-		AutoCommitEnabled: false,
+		AutoCommitEnabled: true,
 		ConsumerFn: func(msg kafka.KafkaMessage) error {
 			wireInvMsg, err := sm.newInvFromBytes(msg.Message.Value)
 			if err != nil {
