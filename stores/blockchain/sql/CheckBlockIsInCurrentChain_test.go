@@ -19,7 +19,7 @@ import (
 
 func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	t.Run("empty - no match", func(t *testing.T) {
-		connStr, teardown, err := setupPostgresContainer()
+		connStr, teardown, err := SetupPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -41,7 +41,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("single block in chain", func(t *testing.T) {
-		connStr, teardown, err := setupPostgresContainer()
+		connStr, teardown, err := SetupPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -71,7 +71,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("multiple blocks in chain", func(t *testing.T) {
-		connStr, teardown, err := setupPostgresContainer()
+		connStr, teardown, err := SetupPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -104,7 +104,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("block not in chain", func(t *testing.T) {
-		connStr, teardown, err := setupPostgresContainer()
+		connStr, teardown, err := SetupPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -130,7 +130,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("alternative block in branch", func(t *testing.T) {
-		connStr, teardown, err := setupPostgresContainer()
+		connStr, teardown, err := SetupPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -185,7 +185,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 
 	t.Run("alternative block in correct chain", func(t *testing.T) {
-		connStr, teardown, err := setupPostgresContainer()
+		connStr, teardown, err := SetupPostgresContainer()
 		require.NoError(t, err)
 
 		defer func() {
@@ -240,7 +240,7 @@ func Test_PostgresCheckIfBlockIsInCurrentChain(t *testing.T) {
 	})
 }
 
-func setupPostgresContainer() (string, func() error, error) {
+func SetupPostgresContainer() (string, func() error, error) {
 	ctx := context.Background()
 
 	dbName := "testdb"

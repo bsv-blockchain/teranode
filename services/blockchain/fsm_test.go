@@ -2,6 +2,8 @@ package blockchain
 
 import (
 	"context"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"net/url"
 	"os"
 	"testing"
 
@@ -72,6 +74,20 @@ func Test_NewFiniteStateMachine(t *testing.T) {
 }
 
 func Test_GetSetFSMStateFromStore(t *testing.T) {
+	connStr, teardown, err := SetupPostgresContainer()
+	require.NoError(t, err)
+
+	defer func() {
+		err := teardown()
+		require.NoError(t, err)
+	}()
+
+	storeURL, err := url.Parse(connStr)
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+
 	ctx := context.Background()
 	logger := mock_logger.NewTestLogger()
 

@@ -2,7 +2,6 @@ package sql
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -47,7 +46,6 @@ func New(logger ulogger.Logger, storeURL *url.URL) (*SQL, error) {
 		return nil, errors.NewStorageError("failed to init sql db", err)
 	}
 
-	fmt.Println("Store URL: ", storeURL.Scheme)
 	switch util.SQLEngine(storeURL.Scheme) {
 	case util.Postgres:
 		if err = createPostgresSchema(db); err != nil {
