@@ -3,18 +3,18 @@ package blockchain
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"net/url"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util/test/mock_logger"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -166,7 +166,6 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "RUNNING", state)
 	})
-
 }
 
 func SetupPostgresContainer() (string, func() error, error) {
