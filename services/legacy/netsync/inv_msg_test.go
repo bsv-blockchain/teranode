@@ -5,6 +5,7 @@ import (
 
 	peerpkg "github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,7 @@ func Test_invMsg(t *testing.T) {
 		Hash: chainhash.Hash{0x01, 0x02, 0x03, 0x04},
 	})
 
-	peer, err := peerpkg.NewOutboundPeer(&peerpkg.Config{}, "localhost:8333")
+	peer, err := peerpkg.NewOutboundPeer(ulogger.TestLogger{}, &peerpkg.Config{}, "localhost:8333")
 	require.NoError(t, err)
 
 	sm := &SyncManager{

@@ -234,7 +234,7 @@ type SyncManager struct {
 	subtreeStore      blob.Store
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
-	legacyKafkaInvCh  chan []byte
+	legacyKafkaInvCh  chan *kafka.Message
 
 	// These fields should only be accessed from the blockHandler thread.
 	rejectedTxns    map[chainhash.Hash]struct{}
@@ -1613,7 +1613,9 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 	if sm.legacyKafkaInvCh != nil {
 		// write to Kafka
 		sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.Addr(), len(wireInvMsg.inv.InvList))
-		sm.legacyKafkaInvCh <- wireInvMsg.Bytes()
+		sm.legacyKafkaInvCh <- &kafka.Message{
+			Value: wireInvMsg.Bytes(),
+		}
 	} else {
 		sm.msgChan <- &wireInvMsg
 	}
@@ -1805,7 +1807,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 	// Kafka for INV messages
 	legacyInvConfigURL, err, ok := gocore.Config().GetURL("kafka_legacyInvConfig")
 	if err == nil && ok {
-		sm.legacyKafkaInvCh = make(chan []byte, 10_000)
+		sm.legacyKafkaInvCh = make(chan *kafka.Message, 10_000)
 
 		sm.logger.Infof("[Legacy Manager] starting kafka producer for INV messages at %s", legacyInvConfigURL)
 
