@@ -976,10 +976,7 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 	resp := &blockchain_api.GetFSMStateResponse{
 		State: blockchain_api.FSMStateType(enumState),
 	}
-	//fmt.Println("GetFSMCurrentState State: ", state)
-	//fmt.Println("Enum State: ", enumState)
-	//fmt.Println("blockchain_api.FSMStateType(enumState): ", blockchain_api.FSMStateType(enumState))
-	//fmt.Println("GetFSMCurrentState RESP: ", *resp)
+
 	return resp, nil
 }
 

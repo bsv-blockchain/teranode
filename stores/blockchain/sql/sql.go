@@ -214,6 +214,14 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create block_transactions_map table", err)
 	}
 
+	// Add the 'fsm_state' column if it doesn't exist
+	if _, err := db.Exec(`
+        ALTER TABLE state ADD COLUMN IF NOT EXISTS fsm_state VARCHAR(32) NULL;
+    `); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not alter state table to add fsm_state column", err)
+	}
+
 	return nil
 }
 
@@ -229,17 +237,6 @@ func createSqliteSchema(db *usql.DB) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create blocks table", err)
-	}
-
-	// Check if 'fsm_state' column exists, and add it if it doesn't
-	if _, err := db.Exec(`
-        ALTER TABLE state ADD COLUMN fsm_state VARCHAR(32) NULL;
-    `); err != nil {
-		// Ignore "duplicate column name" error (SQLite code 1)
-		if !strings.Contains(err.Error(), "duplicate column name: fsm_state") {
-			_ = db.Close()
-			return errors.NewStorageError("could not alter state table to add fsm_state column", err)
-		}
 	}
 
 	if _, err := db.Exec(`
@@ -299,6 +296,17 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_set ON blocks (subtrees_set) WHERE subtrees_set = false;`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_subtrees_set index", err)
+	}
+
+	// Check if 'fsm_state' column exists, and add it if it doesn't
+	if _, err := db.Exec(`
+        ALTER TABLE state ADD COLUMN fsm_state VARCHAR(32) NULL;
+    `); err != nil {
+		// Ignore "duplicate column name" error (SQLite code 1)
+		if !strings.Contains(err.Error(), "duplicate column name: fsm_state") {
+			_ = db.Close()
+			return errors.NewStorageError("could not alter state table to add fsm_state column", err)
+		}
 	}
 
 	return nil

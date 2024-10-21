@@ -2,7 +2,7 @@ package sql
 
 import (
 	"context"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 )
 
 func (s *SQL) SetFSMState(ctx context.Context, fsmState string) error {
@@ -14,12 +14,12 @@ func (s *SQL) SetFSMState(ctx context.Context, fsmState string) error {
 
 	result, err := s.db.ExecContext(ctx, query, fsmState, "fsm_state")
 	if err != nil {
-		return fmt.Errorf("failed to set FSM state: %w", err)
+		return errors.NewStorageError("failed to set FSM state: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to get affected rows: %w", err)
+		return errors.NewStorageError("failed to get affected rows: %w", err)
 	}
 
 	// If no rows were updated, insert a new row
@@ -30,7 +30,7 @@ func (s *SQL) SetFSMState(ctx context.Context, fsmState string) error {
         `
 		_, err = s.db.ExecContext(ctx, insertQuery, "fsm_state", []byte{}, fsmState)
 		if err != nil {
-			return fmt.Errorf("failed to insert FSM state: %w", err)
+			return errors.NewStorageError("failed to insert FSM state: %w", err)
 		}
 	}
 

@@ -3,10 +3,11 @@ package sql
 import (
 	"context"
 	"fmt"
-	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/stretchr/testify/require"
 	"net/url"
 	"testing"
+
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_SetGetFSMState(t *testing.T) {

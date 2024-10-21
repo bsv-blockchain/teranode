@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 )
 
@@ -17,6 +18,7 @@ func (s *SQL) GetFSMState(ctx context.Context) (string, error) {
 			// Return "" if db has no rows, meaning no state has been set
 			return "", nil
 		}
+
 		return "", errors.NewStorageError("failed to get FSM state: %v", err)
 	}
 

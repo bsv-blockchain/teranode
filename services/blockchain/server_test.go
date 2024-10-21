@@ -257,6 +257,7 @@ TestAssertions:
 	require.GreaterOrEqual(t, len(stateTransitions), 3, "Expected at least 3 state transitions")
 	assert.Equal(t, blockchain_api.FSMStateType_RUNNING, stateTransitions[0], "Initial state should be RUNNING")
 	assert.Contains(t, stateTransitions, blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE, "State should have transitioned to RESOURCE_UNAVAILABLE")
+
 	finalState, err := ctx.server.GetFSMCurrentState(context.Background(), &emptypb.Empty{})
 	require.NoError(t, err)
 	require.Equal(t, blockchain_api.FSMStateType_RUNNING, finalState.State, "Expected final state to be RUNNING")

@@ -2,16 +2,15 @@ package blockchain
 
 import (
 	"context"
-	"fmt"
-	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	"github.com/ordishs/gocore"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"os"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
+	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util/test/mock_logger"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func Test_NewFiniteStateMachine(t *testing.T) {
@@ -102,17 +101,31 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 
 	})
 
-	t.Run("Alter current state", func(t *testing.T) {
+	t.Run("Alter current state to Running", func(t *testing.T) {
 		_, err = blockchainClient.Run(ctx, &emptypb.Empty{})
 		require.NoError(t, err)
+
 		resp, err := blockchainClient.GetFSMCurrentState(ctx, &emptypb.Empty{})
 		require.NoError(t, err)
-		fmt.Println("Current State: ", resp.State)
+		require.Equal(t, "RUNNING", resp.State.String())
 
 		state, err := blockchainClient.store.GetFSMState(ctx)
 		require.NoError(t, err)
 		require.Equal(t, "RUNNING", state)
 
+	})
+
+	t.Run("Alter current state to Catchup Blocks", func(t *testing.T) {
+		_, err = blockchainClient.CatchUpBlocks(ctx, &emptypb.Empty{})
+		require.NoError(t, err)
+
+		resp, err := blockchainClient.GetFSMCurrentState(ctx, &emptypb.Empty{})
+		require.NoError(t, err)
+		require.Equal(t, "CATCHINGBLOCKS", resp.State.String())
+
+		state, err := blockchainClient.store.GetFSMState(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "CATCHINGBLOCKS", state)
 	})
 
 	_ = os.Remove("data/blockchain.db")
