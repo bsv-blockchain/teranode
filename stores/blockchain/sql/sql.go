@@ -218,7 +218,6 @@ func createPostgresSchema(db *usql.DB) error {
 }
 
 func createSqliteSchema(db *usql.DB) error {
-	fmt.Println("here")
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS state (
 		 key            VARCHAR(32) PRIMARY KEY

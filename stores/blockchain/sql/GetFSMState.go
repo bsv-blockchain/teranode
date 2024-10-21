@@ -3,7 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"github.com/bitcoin-sv/ubsv/errors"
 )
 
 func (s *SQL) GetFSMState(ctx context.Context) (string, error) {
@@ -12,22 +12,17 @@ func (s *SQL) GetFSMState(ctx context.Context) (string, error) {
 	var stateStr sql.NullString
 	err := s.db.QueryRowContext(ctx, query, "fsm_state").Scan(&stateStr)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			// Return default state or handle accordingly
+		//
+		if errors.Is(err, sql.ErrNoRows) {
+			// Return "" if db has no rows, meaning no state has been set
 			return "", nil
 		}
-		return "", fmt.Errorf("failed to get FSM state: %w", err)
+		return "", errors.NewStorageError("failed to get FSM state: %v", err)
 	}
 
 	if !stateStr.Valid {
-		return "", fmt.Errorf("FSM state is NULL")
+		return "", errors.NewStorageError("fsm state is not valid")
 	}
-
-	// Map the string back to FSMStateType
-	//fsmStateValue, ok := blockchain_api.FSMStateType_value[stateStr.String]
-	//if !ok {
-	//	return blockchain.FSMStateType(0), fmt.Errorf("invalid FSM state value: %s", stateStr.String)
-	//}
 
 	return stateStr.String, nil
 }

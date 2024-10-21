@@ -198,7 +198,6 @@ func (b *Blockchain) Start(ctx context.Context) error {
 				b.subscribersMu.Lock()
 				b.subscribers[s] = true
 				b.subscribersMu.Unlock()
-			//	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
 
 			case s := <-b.deadSubscriptions:
 				delete(b.subscribers, s)

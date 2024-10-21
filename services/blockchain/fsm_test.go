@@ -2,8 +2,11 @@ package blockchain
 
 import (
 	"context"
+	"fmt"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/ordishs/gocore"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"os"
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
@@ -73,6 +76,8 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 	ctx := context.Background()
 	logger := mock_logger.NewTestLogger()
 
+	_ = os.Remove("data/blockchain.db")
+
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
 	require.NoError(t, err)
 	require.True(t, found)
@@ -83,24 +88,33 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 	blockchainClient, err := New(ctx, logger, blockchainStore)
 	require.NoError(t, err)
 
-	fsm := blockchainClient.NewFiniteStateMachine()
-	require.NotNil(t, fsm)
-	require.Equal(t, "STOPPED", fsm.Current())
-	require.True(t, fsm.Can(blockchain_api.FSMEventType_RUN.String()))
+	err = blockchainClient.Init(ctx)
+	require.NoError(t, err)
 
-	t.Run("Set and Get FSM State", func(t *testing.T) {
-		err = blockchainClient.store.SetFSMState(ctx, FSMStateCATCHINGBLOCKS.String())
-		require.NoError(t, err)
+	resp, err := blockchainClient.GetFSMCurrentState(ctx, &emptypb.Empty{})
+	require.NoError(t, err)
+	require.Equal(t, "STOPPED", resp.State.String())
+
+	t.Run("Get Initial FSM State", func(t *testing.T) {
 		state, err := blockchainClient.store.GetFSMState(ctx)
 		require.NoError(t, err)
-		require.Equal(t, "CATCHINGBLOCKS", state)
+		require.Equal(t, "STOPPED", state)
+
 	})
 
-	//t.Run("Set and Get FSM State with invalid state", func(t *testing.T) {
-	//	err = blockchainClient.SetFSMState(ctx, "INVALID")
-	//	require.Error(t, err)
-	//	state, err := blockchainClient.GetFSMState(ctx)
-	//	require.NoError(t, err)
-	//	require.Equal(t, "STOPPED", state)
-	//})
+	t.Run("Alter current state", func(t *testing.T) {
+		_, err = blockchainClient.Run(ctx, &emptypb.Empty{})
+		require.NoError(t, err)
+		resp, err := blockchainClient.GetFSMCurrentState(ctx, &emptypb.Empty{})
+		require.NoError(t, err)
+		fmt.Println("Current State: ", resp.State)
+
+		state, err := blockchainClient.store.GetFSMState(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "RUNNING", state)
+
+	})
+
+	_ = os.Remove("data/blockchain.db")
+
 }
