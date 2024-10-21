@@ -899,7 +899,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	)
 	defer deferFn()
 
-	banList, err := p2p.NewBanList(s.logger)
+	banList, _, err := p2p.GetBanList(ctx, s.logger)
 	if err != nil {
 		return nil, err
 	}

@@ -190,6 +190,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 	if found {
 		s.kafkaHealthURL = subtreesKafkaURL
+
 		s.subtreeKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
 			return kafka.NewKafkaAsyncProducer(s.logger, subtreesKafkaURL, make(chan *kafka.Message, 10))
 		}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
@@ -766,7 +767,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 	s.logger.Debugf("GetPeers called")
 
 	if s.P2PNode == nil {
-		return nil, errors.NewError("P2PNode is not initialized")
+		return nil, errors.NewError("P2PNode is not initialised")
 	}
 
 	s.logger.Debugf("Creating reply channel")

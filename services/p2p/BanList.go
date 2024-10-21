@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -15,9 +16,20 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+var (
+	banListInstance *BanList
+	banListOnce     sync.Once
+)
+
 type BanInfo struct {
 	ExpirationTime time.Time
 	Subnet         *net.IPNet
+}
+
+type BanEvent struct {
+	Action string // "add" or "remove"
+	IP     string
+	Subnet *net.IPNet
 }
 
 type BanList struct {
@@ -25,9 +37,44 @@ type BanList struct {
 	engine      util.SQLEngine
 	logger      ulogger.Logger
 	bannedPeers map[string]BanInfo
+	subscribers map[chan BanEvent]struct{}
+
+	mu sync.RWMutex
 }
 
-func NewBanList(logger ulogger.Logger) (*BanList, error) {
+func GetBanList(ctx context.Context, logger ulogger.Logger) (*BanList, chan BanEvent, error) {
+	var eventChan chan BanEvent
+
+	banListOnce.Do(func() {
+		var err error
+
+		banListInstance, err = newBanList(logger)
+		if err != nil {
+			logger.Errorf("Failed to create BanList: %v", err)
+
+			banListInstance = nil
+
+			return
+		}
+
+		err = banListInstance.Init(ctx)
+		if err != nil {
+			logger.Errorf("Failed to initialise BanList: %v", err)
+
+			banListInstance = nil
+		}
+	})
+
+	if banListInstance == nil {
+		return nil, nil, errors.New(errors.ERR_ERROR, "Failed to initialise BanList")
+	}
+
+	eventChan = banListInstance.Subscribe()
+
+	return banListInstance, eventChan, nil
+}
+
+func newBanList(logger ulogger.Logger) (*BanList, error) {
 	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
 	if err != nil {
 		return nil, errors.NewConfigurationError("failed to get blockchain_store setting", err)
@@ -52,15 +99,20 @@ func NewBanList(logger ulogger.Logger) (*BanList, error) {
 		engine:      engine,
 		logger:      logger,
 		bannedPeers: make(map[string]BanInfo),
+		subscribers: make(map[chan BanEvent]struct{}),
 	}, nil
 }
 
 func (b *BanList) Init(ctx context.Context) (err error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+
+	defer cancel()
+
 	if err = b.createTables(ctx); err != nil {
 		return errors.NewProcessingError("failed to create banlist tables", err)
 	}
 
-	if err = b.LoadFromDatabase(ctx); err != nil {
+	if err = b.loadFromDatabase(ctx); err != nil {
 		return errors.NewProcessingError("failed to load banlist from database", err)
 	}
 
@@ -72,6 +124,9 @@ func (b *BanList) Init(ctx context.Context) (err error) {
 // if the ip or subnet is not banned, it will be added to the map
 // ipOrSubnet can be an IP address or a subnet in CIDR notation
 func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime time.Time) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	var subnet *net.IPNet
 
 	var err error
@@ -101,11 +156,12 @@ func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime tim
 			_, subnet, err = net.ParseCIDR(fmt.Sprintf("%s/128", ipOrSubnet))
 		}
 
-		key = ipOrSubnet
-	}
+		if err != nil {
+			b.logger.Errorf("error creating subnet for IP: %v", err)
+			return err
+		}
 
-	if err != nil {
-		return err
+		key = ipOrSubnet
 	}
 
 	banInfo := BanInfo{
@@ -113,16 +169,25 @@ func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime tim
 		Subnet:         subnet,
 	}
 
+	go b.notifySubscribers(BanEvent{Action: "add", IP: key, Subnet: subnet})
+
 	b.bannedPeers[key] = banInfo
 
-	return b.SavePeerToDatabase(ctx, key, banInfo)
+	return b.savePeerToDatabase(ctx, key, banInfo)
 }
 func (b *BanList) Remove(ctx context.Context, ipOrSubnet string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	var key string
+
+	var subnet *net.IPNet
+
+	var err error
 
 	if strings.Contains(ipOrSubnet, "/") {
 		// It's a subnet
-		_, subnet, err := net.ParseCIDR(ipOrSubnet)
+		_, subnet, err = net.ParseCIDR(ipOrSubnet)
 		if err != nil {
 			return errors.New(errors.ERR_INVALID_SUBNET, fmt.Sprintf("can't parse subnet: %s", ipOrSubnet))
 		}
@@ -136,17 +201,28 @@ func (b *BanList) Remove(ctx context.Context, ipOrSubnet string) error {
 			return errors.New(errors.ERR_INVALID_IP, fmt.Sprintf("can't parse IP: %s", ipOrSubnet))
 		}
 
+		if ip.To4() != nil {
+			_, subnet, _ = net.ParseCIDR(fmt.Sprintf("%s/32", ipOrSubnet))
+		} else {
+			_, subnet, _ = net.ParseCIDR(fmt.Sprintf("%s/128", ipOrSubnet))
+		}
+
 		key = ipOrSubnet
 		delete(b.bannedPeers, key)
 	}
 
-	_, err := b.db.ExecContext(ctx, "DELETE FROM bans WHERE key = $1", key)
+	_, err = b.db.ExecContext(ctx, "DELETE FROM bans WHERE key = $1", key)
+
+	go b.notifySubscribers(BanEvent{Action: "remove", IP: key, Subnet: subnet})
 
 	return err
 }
 
 // IsBanned checks if a given IP address is banned
 func (b *BanList) IsBanned(ipStr string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
 		b.logger.Errorf("Invalid IP address: %s", ipStr)
@@ -177,6 +253,8 @@ func (b *BanList) IsBanned(ipStr string) bool {
 }
 
 func (b *BanList) createTables(ctx context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	_, err := b.db.ExecContext(ctx, `
         CREATE TABLE IF NOT EXISTS bans (
             key TEXT PRIMARY KEY,
@@ -188,7 +266,7 @@ func (b *BanList) createTables(ctx context.Context) error {
 	return err
 }
 
-func (b *BanList) SavePeerToDatabase(ctx context.Context, key string, info BanInfo) error {
+func (b *BanList) savePeerToDatabase(ctx context.Context, key string, info BanInfo) error {
 	_, err := b.db.ExecContext(ctx, `
         INSERT INTO bans (key, expiration_time, subnet)
         VALUES ($1, $2, $3)
@@ -203,7 +281,7 @@ func (b *BanList) SavePeerToDatabase(ctx context.Context, key string, info BanIn
 	return nil
 }
 
-func (b *BanList) LoadFromDatabase(ctx context.Context) error {
+func (b *BanList) loadFromDatabase(ctx context.Context) error {
 	rows, err := b.db.QueryContext(ctx, "SELECT key, expiration_time, subnet FROM bans")
 	if err != nil {
 		_ = b.db.Close()
@@ -212,28 +290,93 @@ func (b *BanList) LoadFromDatabase(ctx context.Context) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var key string
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			var key string
 
-		var expirationTime time.Time
+			var expirationTime time.Time
 
-		var subnetStr string
+			var subnetStr string
 
-		err := rows.Scan(&key, &expirationTime, &subnetStr)
-		if err != nil {
-			return err
-		}
+			err := rows.Scan(&key, &expirationTime, &subnetStr)
+			if err != nil {
+				return err
+			}
 
-		_, subnet, err := net.ParseCIDR(subnetStr)
-		if err != nil {
-			b.logger.Errorf("Error parsing subnet %s: %v", subnetStr, err)
-			continue
-		}
+			_, subnet, err := net.ParseCIDR(subnetStr)
+			if err != nil {
+				b.logger.Errorf("Error parsing subnet %s: %v", subnetStr, err)
+				continue
+			}
 
-		b.bannedPeers[key] = BanInfo{
-			ExpirationTime: expirationTime,
-			Subnet:         subnet,
+			b.bannedPeers[key] = BanInfo{
+				ExpirationTime: expirationTime,
+				Subnet:         subnet,
+			}
 		}
 	}
 
 	return rows.Err()
+}
+
+func (b *BanList) Subscribe() chan BanEvent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	ch := make(chan BanEvent, 100) // Buffered channel to prevent blocking
+	b.subscribers[ch] = struct{}{}
+
+	return ch
+}
+
+func (b *BanList) Unsubscribe(ch chan BanEvent) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.subscribers, ch)
+	close(ch)
+}
+
+func (b *BanList) notifySubscribers(event BanEvent) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for ch := range b.subscribers {
+		select {
+		case ch <- event:
+			b.logger.Debugf("Successfully notified subscriber about %s\n", event.IP)
+		default:
+			b.logger.Warnf("Skipped notification for %s due to full channel", event.IP)
+		}
+	}
+
+	b.logger.Debugf("Finished notifying subscribers for %s\n", event.IP)
+}
+
+func (b *BanList) Clear() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// Clear the in-memory map
+	b.bannedPeers = make(map[string]BanInfo)
+	for ch := range b.subscribers {
+		// Drain the channel before closing
+		for len(ch) > 0 {
+			<-ch
+		}
+
+		close(ch)
+	}
+
+	b.subscribers = make(map[chan BanEvent]struct{})
+
+	// Clear the database table
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := b.db.ExecContext(ctx, "DELETE FROM bans")
+	if err != nil {
+		b.logger.Errorf("Failed to clear bans table: %v", err)
+	}
 }

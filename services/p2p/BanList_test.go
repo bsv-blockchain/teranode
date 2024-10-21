@@ -2,6 +2,8 @@ package p2p
 
 import (
 	"context"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,16 +12,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupBanList(t *testing.T) (*BanList, error) {
-	banList, err := NewBanList(ulogger.TestLogger{})
-	require.NoError(t, err)
+func setupBanList(t *testing.T) (*BanList, chan BanEvent, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	err = banList.Init(context.Background())
-	require.NoError(t, err)
+	banListInstance = nil
+	banListOnce = sync.Once{}
 
-	return banList, err
+	return GetBanList(ctx, ulogger.TestLogger{})
 }
 
+func teardown(t *testing.T, banList *BanList) {
+	banList.Clear()
+}
 func TestHandleSetBanAdd(t *testing.T) {
 	banTime := int64(3600)
 	absolute := false
@@ -51,12 +56,15 @@ func TestHandleSetBanAdd(t *testing.T) {
 			isSubnet: true,
 		},
 	}
-	banList, err := setupBanList(t)
+	banList, _, err := setupBanList(t)
 	require.NoError(t, err)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := banList.Add(context.Background(), tt.args.IPOrSubnet, time.Now().Add(time.Duration(*tt.args.BanTime)*time.Second))
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			err := banList.Add(ctx, tt.args.IPOrSubnet, time.Now().Add(time.Duration(*tt.args.BanTime)*time.Second))
 			require.NoError(t, err)
 
 			banInfo, exists := banList.bannedPeers[tt.args.IPOrSubnet]
@@ -75,7 +83,7 @@ func TestHandleSetBanAdd(t *testing.T) {
 }
 
 func TestIsBanned(t *testing.T) {
-	banList, err := setupBanList(t)
+	banList, _, err := setupBanList(t)
 	require.NoError(t, err)
 	// Add a banned IP
 	err = banList.Add(context.Background(), "192.168.1.1", time.Now().Add(3600*time.Second))
@@ -108,7 +116,7 @@ func TestIsBanned(t *testing.T) {
 }
 
 func TestRemoveBan(t *testing.T) {
-	banList, err := setupBanList(t)
+	banList, _, err := setupBanList(t)
 	require.NoError(t, err)
 
 	// Add a banned IP
@@ -138,5 +146,93 @@ func TestRemoveBan(t *testing.T) {
 			_, exists := banList.bannedPeers[tt.ipOrSubnet]
 			require.False(t, exists)
 		})
+	}
+}
+
+func TestBanListChannel(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	banList, eventChan, err := GetBanList(ctx, ulogger.TestLogger{})
+	require.NoError(t, err)
+	require.NotNil(t, banList)
+	require.NotNil(t, eventChan)
+
+	// Ensure we clean up the subscription at the end of the test
+	defer banList.Unsubscribe(eventChan)
+
+	// Create a channel to signal when we're done receiving events
+	done := make(chan bool)
+
+	// Start a goroutine to listen for events
+	go func() {
+		expectedEvents := map[string]BanEvent{
+			"add_ip": {
+				Action: "add",
+				IP:     "192.168.1.1",
+				Subnet: &net.IPNet{IP: net.ParseIP("192.168.1.1").To4(), Mask: net.CIDRMask(32, 32)},
+			},
+			"add_subnet": {
+				Action: "add",
+				IP:     "10.0.0.0/24",
+				Subnet: &net.IPNet{IP: net.ParseIP("10.0.0.0").To4(), Mask: net.CIDRMask(24, 32)},
+			},
+			"remove_ip": {
+				Action: "remove",
+				IP:     "192.168.1.1",
+				Subnet: &net.IPNet{IP: net.ParseIP("192.168.1.1").To4(), Mask: net.CIDRMask(32, 32)},
+			},
+		}
+
+		receivedEvents := 0
+
+		for event := range eventChan {
+			var expectedEvent BanEvent
+
+			var eventKey string
+
+			switch {
+			case event.Action == "add" && event.IP == "192.168.1.1":
+				eventKey = "add_ip"
+			case event.Action == "add" && event.IP == "10.0.0.0/24":
+				eventKey = "add_subnet"
+			case event.Action == "remove" && event.IP == "192.168.1.1":
+				eventKey = "remove_ip"
+			default:
+				t.Errorf("Unexpected event received: %+v", event)
+				continue
+			}
+
+			expectedEvent = expectedEvents[eventKey]
+			require.Equal(t, expectedEvent.Action, event.Action)
+			require.Equal(t, expectedEvent.IP, event.IP)
+			require.Equal(t, expectedEvent.Subnet.String(), event.Subnet.String())
+
+			receivedEvents++
+			if receivedEvents == len(expectedEvents) {
+				close(done)
+				return
+			}
+		}
+	}()
+
+	// Add an IP
+	err = banList.Add(ctx, "192.168.1.1", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	// Add a subnet
+	err = banList.Add(ctx, "10.0.0.0/24", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+
+	// Remove an IP
+	err = banList.Remove(ctx, "192.168.1.1")
+	require.NoError(t, err)
+
+	// Wait for all events to be processed or timeout
+	select {
+	case <-done:
+		// All expected events were received
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timed out waiting for events")
 	}
 }
