@@ -376,11 +376,6 @@ func (u *Server) blockHandler(msg kafka.KafkaMessage) error {
 		errCh:   errCh,
 	}
 	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
-
-	err = <-errCh
-	if err != nil {
-		return errors.NewProcessingError("[BlockFound][%s] failed to process block", hash.String(), err)
-	}
 	// }()
 
 	return nil
