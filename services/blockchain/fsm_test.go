@@ -98,7 +98,6 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 		state, err := blockchainClient.store.GetFSMState(ctx)
 		require.NoError(t, err)
 		require.Equal(t, "STOPPED", state)
-
 	})
 
 	t.Run("Alter current state to Running", func(t *testing.T) {
@@ -112,7 +111,6 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 		state, err := blockchainClient.store.GetFSMState(ctx)
 		require.NoError(t, err)
 		require.Equal(t, "RUNNING", state)
-
 	})
 
 	t.Run("Alter current state to Catchup Blocks", func(t *testing.T) {
@@ -129,5 +127,4 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 	})
 
 	_ = os.Remove("data/blockchain.db")
-
 }

@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+
 	"github.com/bitcoin-sv/ubsv/errors"
 )
 
@@ -28,6 +29,7 @@ func (s *SQL) SetFSMState(ctx context.Context, fsmState string) error {
             INSERT INTO state (key, data, fsm_state, inserted_at)
             VALUES ($1, $2, $3, CURRENT_TIMESTAMP);
         `
+
 		_, err = s.db.ExecContext(ctx, insertQuery, "fsm_state", []byte{}, fsmState)
 		if err != nil {
 			return errors.NewStorageError("failed to insert FSM state: %w", err)

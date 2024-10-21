@@ -140,6 +140,7 @@ func (b *Blockchain) Init(ctx context.Context) error {
 
 	if stateStr == "" { // if no state is stored, set the default state
 		b.logger.Infof("[Blockchain](Init) Blockchain db doesn't have previous FSM state, storing FSM's default state: %v", b.finiteStateMachine.Current())
+
 		err = b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
 		if err != nil {
 			// TODO: just logging now, consider adding retry
@@ -1072,7 +1073,6 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	// check if there was an error setting the state
 	if err != nil {
 		b.logger.Errorf("[Blockchain Server] Error setting the state in blockchain db: %v", err)
-
 	}
 
 	resp := &blockchain_api.GetFSMStateResponse{

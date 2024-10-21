@@ -11,8 +11,13 @@ import (
 )
 
 func Test_SetGetFSMState(t *testing.T) {
-	connStr, teardown := setupPostgresContainer(t)
-	defer teardown()
+	connStr, teardown, err := setupPostgresContainer()
+	require.NoError(t, err)
+
+	defer func() {
+		err := teardown()
+		require.NoError(t, err)
+	}()
 
 	storeURL, err := url.Parse(connStr)
 	require.NoError(t, err)
