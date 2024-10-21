@@ -1,6 +1,7 @@
 package blockassembly
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"net/url"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
 
 	"github.com/bitcoin-sv/ubsv/model"
@@ -75,7 +77,19 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		require.NotNil(t, testItems)
 
 		testItems.blockAssembler.startChannelListeners(ctx)
-		testItems.blockAssembler.bestBlockHeader.Store(model.GenesisBlockHeader)
+
+		var buf bytes.Buffer
+
+		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
+		require.NoError(t, err)
+
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+		require.NoError(t, err)
+		require.NotNil(t, genesisBlock)
+
+		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
+
+		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -90,7 +104,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 			wg.Done()
 		}()
 
-		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
+		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *hash1, Fee: 111})
 
@@ -117,7 +131,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		assert.NotNil(t, subtree)
 		assert.Equal(t, uint64(5000000666), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
-		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Len(t, subtree, 1)
 		assert.Len(t, subtree[0].Nodes, 4)
 
@@ -145,7 +159,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 }
 
 var (
-	hashGenesisBlock, _ = chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	hashGenesisBlock, _ = chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 	bits, _             = model.NewNBitFromString("1d00ffff")
 	blockHeader1        = &model.BlockHeader{
 		Version:        1,
@@ -341,7 +355,17 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCBTx(t *testing.T) {
 		require.NotNil(t, testItems)
 
 		testItems.blockAssembler.startChannelListeners(ctx)
-		testItems.blockAssembler.bestBlockHeader.Store(model.GenesisBlockHeader)
+
+		var buf bytes.Buffer
+
+		err := chaincfg.RegressionNetParams.GenesisBlock.Serialize(&buf)
+		require.NoError(t, err)
+
+		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
+		require.NoError(t, err)
+		require.NotNil(t, genesisBlock)
+
+		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
 
 		var wg sync.WaitGroup
 		wg.Add(1)
@@ -355,7 +379,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCBTx(t *testing.T) {
 			wg.Done()
 		}()
 
-		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
+		_, err = testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTx(util.SubtreeNode{Hash: *util.CoinbasePlaceholderHash, Fee: 5000000000})
 
@@ -383,7 +407,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCBTx(t *testing.T) {
 		// assert.Equal(t, uint64(5000000667), miningCandidate.CoinbaseValue)
 		assert.NotEqual(t, uint64(10000000556), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
-		assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Len(t, subtree, 1)
 		assert.Len(t, subtree[0].Nodes, 4)
 

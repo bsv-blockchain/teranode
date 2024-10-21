@@ -191,7 +191,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	if found {
 		s.kafkaHealthURL = subtreesKafkaURL
 		s.subtreeKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
-			return kafka.NewKafkaAsyncProducer(s.logger, subtreesKafkaURL, make(chan []byte, 10))
+			return kafka.NewKafkaAsyncProducer(s.logger, subtreesKafkaURL, make(chan *kafka.Message, 10))
 		}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
 		if err != nil {
 			s.logger.Fatalf("[P2P] failed to start kafka subtree producer: %v", err)
@@ -209,7 +209,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	if found {
 		s.kafkaHealthURL = blocksKafkaURL
 		s.blocksKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
-			return kafka.NewKafkaAsyncProducer(s.logger, blocksKafkaURL, make(chan []byte, 10))
+			return kafka.NewKafkaAsyncProducer(s.logger, blocksKafkaURL, make(chan *kafka.Message, 10))
 		}, retry.WithMessage("[P2P] error starting kafka block producer"))
 		if err != nil {
 			s.logger.Fatalf("[P2P] failed to start kafka block producer: %v", err)
@@ -670,10 +670,12 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 
 	// send block to kafka, if configured
 	if s.blocksKafkaProducerClient != nil {
-		b := make([]byte, 0, chainhash.HashSize+len(blockMessage.DataHubUrl))
-		b = append(b, hash.CloneBytes()...)
-		b = append(b, []byte(blockMessage.DataHubUrl)...)
-		s.blocksKafkaProducerClient.PublishChannel <- b
+		value := make([]byte, 0, chainhash.HashSize+len(blockMessage.DataHubUrl))
+		value = append(value, hash.CloneBytes()...)
+		value = append(value, []byte(blockMessage.DataHubUrl)...)
+		s.blocksKafkaProducerClient.PublishChannel <- &kafka.Message{
+			Value: value,
+		}
 	}
 }
 
@@ -714,10 +716,12 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 	}
 
 	if s.subtreeKafkaProducerClient != nil {
-		b := make([]byte, 0, chainhash.HashSize+len(subtreeMessage.DataHubUrl))
-		b = append(b, hash.CloneBytes()...)
-		b = append(b, []byte(subtreeMessage.DataHubUrl)...)
-		s.subtreeKafkaProducerClient.PublishChannel <- b
+		value := make([]byte, 0, chainhash.HashSize+len(subtreeMessage.DataHubUrl))
+		value = append(value, hash.CloneBytes()...)
+		value = append(value, []byte(subtreeMessage.DataHubUrl)...)
+		s.subtreeKafkaProducerClient.PublishChannel <- &kafka.Message{
+			Value: value,
+		}
 	} else {
 		if err = s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl); err != nil {
 			s.logger.Errorf("[p2p] error validating subtree from %s: %v", subtreeMessage.DataHubUrl, err)

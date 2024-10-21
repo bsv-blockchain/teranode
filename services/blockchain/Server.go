@@ -41,27 +41,27 @@ type subscriber struct {
 // Blockchain type carries the logger within it
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	addBlockChan       chan *blockchain_api.AddBlockRequest
-	store              blockchain_store.Store
-	logger             ulogger.Logger
-	newSubscriptions   chan subscriber
-	deadSubscriptions  chan subscriber
-	subscribers        map[subscriber]bool
-	subscribersMu      sync.RWMutex
-	notifications      chan *blockchain_api.Notification
-	newBlock           chan struct{}
-	difficulty         *Difficulty
-	chainParams        *chaincfg.Params
-	blockKafkaProducer kafka.KafkaProducerI
-	stats              *gocore.Stat
-	finiteStateMachine *fsm.FSM
-	kafkaHealthURL     *url.URL
-	AppCtx             context.Context
+	addBlockChan            chan *blockchain_api.AddBlockRequest
+	store                   blockchain_store.Store
+	logger                  ulogger.Logger
+	newSubscriptions        chan subscriber
+	deadSubscriptions       chan subscriber
+	subscribers             map[subscriber]bool
+	subscribersMu           sync.RWMutex
+	notifications           chan *blockchain_api.Notification
+	newBlock                chan struct{}
+	difficulty              *Difficulty
+	chainParams             *chaincfg.Params
+	blockKafkaAsyncProducer *kafka.KafkaAsyncProducer
+	kafkaChan               chan *kafka.Message
+	stats                   *gocore.Stat
+	finiteStateMachine      *fsm.FSM
+	kafkaHealthURL          *url.URL
+	AppCtx                  context.Context
 }
 
 // New will return a server instance with the logger stored within it
 func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store) (*Blockchain, error) {
-
 	initPrometheusMetrics()
 
 	network, _ := gocore.Config().Get("network", "mainnet")
@@ -97,7 +97,7 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 		// Add liveness checks here. Don't include dependency checks.
 		// If the service is stuck return http.StatusServiceUnavailable
 		// to indicate a restart is needed
-		return http.StatusOK, "OK", nil
+		return health.CheckAll(ctx, checkLiveness, nil)
 	}
 
 	// Add readiness checks here. Include dependency checks.
@@ -129,7 +129,6 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 }
 
 func (b *Blockchain) Init(ctx context.Context) error {
-
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
 	// Set the FSM to the latest state
@@ -156,57 +155,27 @@ func (b *Blockchain) Init(ctx context.Context) error {
 
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
-
-	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
-	if err == nil && ok {
-		b.kafkaHealthURL = blocksKafkaURL
-		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
-
-		if _, b.blockKafkaProducer, err = kafka.NewKafkaProducer(blocksKafkaURL); err != nil {
-			return errors.WrapGRPC(errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err))
-		}
+	if err := b.startKafka(); err != nil {
+		return errors.WrapGRPC(err)
 	}
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
-				for sub := range b.subscribers {
-					safeClose(sub.done)
-				}
-				return
-			case notification := <-b.notifications:
-				start := gocore.CurrentTime()
+	go b.startSubscriptions()
 
-				func() {
-					b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
+	if err := b.startHTTP(); err != nil {
+		return errors.WrapGRPC(err)
+	}
 
-					for sub := range b.subscribers {
-						b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
-						go func(s subscriber) {
-							b.logger.Debugf("[Blockchain] Sending notification to %s: %s", s.source, notification.Stringify())
-							if err := s.subscription.Send(notification); err != nil {
-								b.deadSubscriptions <- s
-							}
-						}(sub)
-					}
-				}()
-				b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
+	// this will block
+	if err := util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
+		blockchain_api.RegisterBlockchainAPIServer(server, b)
+	}); err != nil {
+		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain] can't start GRPC server", err))
+	}
 
-			case s := <-b.newSubscriptions:
-				b.subscribersMu.Lock()
-				b.subscribers[s] = true
-				b.subscribersMu.Unlock()
+	return nil
+}
 
-			case s := <-b.deadSubscriptions:
-				delete(b.subscribers, s)
-				safeClose(s.done)
-				b.logger.Infof("[Blockchain] Subscription removed (Total=%d).", len(b.subscribers))
-			}
-		}
-	}()
-
+func (b *Blockchain) startHTTP() error {
 	httpAddress, ok := gocore.Config().Get("blockchain_httpListenAddress")
 	if !ok {
 		return errors.NewConfigurationError("[Miner] No blockchain_httpListenAddress specified")
@@ -222,41 +191,8 @@ func (b *Blockchain) Start(ctx context.Context) error {
 			AllowMethods: []string{echo.GET},
 		}))
 
-		e.GET("/invalidate/:hash", func(c echo.Context) error {
-			hashStr := c.Param("hash")
-			hash, err := chainhash.NewHashFromStr(hashStr)
-			if err != nil {
-				return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
-			}
-
-			_, err = b.InvalidateBlock(ctx, &blockchain_api.InvalidateBlockRequest{
-				BlockHash: hash.CloneBytes(),
-			})
-
-			if err != nil {
-				return c.String(http.StatusInternalServerError, fmt.Sprintf("error invalidating block: %v", err))
-			}
-
-			return c.String(http.StatusOK, fmt.Sprintf("block invalidated: %s", hashStr))
-		})
-
-		e.GET("/revalidate/:hash", func(c echo.Context) error {
-			hashStr := c.Param("hash")
-			hash, err := chainhash.NewHashFromStr(hashStr)
-			if err != nil {
-				return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
-			}
-
-			_, err = b.RevalidateBlock(ctx, &blockchain_api.RevalidateBlockRequest{
-				BlockHash: hash.CloneBytes(),
-			})
-
-			if err != nil {
-				return c.String(http.StatusInternalServerError, fmt.Sprintf("error revalidating block: %v", err))
-			}
-
-			return c.String(http.StatusOK, fmt.Sprintf("block revalidated: %s", hashStr))
-		})
+		e.GET("/invalidate/:hash", b.invalidateHandler)
+		e.GET("/revalidate/:hash", b.revalidateHandler)
 
 		go func() {
 			if err := e.Start(httpAddress); err != nil {
@@ -265,14 +201,109 @@ func (b *Blockchain) Start(ctx context.Context) error {
 		}()
 	}
 
-	// this will block
-	if err = util.StartGRPCServer(ctx, b.logger, "blockchain", func(server *grpc.Server) {
-		blockchain_api.RegisterBlockchainAPIServer(server, b)
-	}); err != nil {
-		return errors.WrapGRPC(errors.NewServiceNotStartedError("[Blockchain] can't start GRPC server", err))
+	return nil
+}
+
+func (b *Blockchain) invalidateHandler(c echo.Context) error {
+	hashStr := c.Param("hash")
+
+	hash, err := chainhash.NewHashFromStr(hashStr)
+	if err != nil {
+		return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
+	}
+
+	_, err = b.InvalidateBlock(b.AppCtx, &blockchain_api.InvalidateBlockRequest{
+		BlockHash: hash.CloneBytes(),
+	})
+
+	if err != nil {
+		return c.String(http.StatusInternalServerError, fmt.Sprintf("error invalidating block: %v", err))
+	}
+
+	return c.String(http.StatusOK, fmt.Sprintf("block invalidated: %s", hashStr))
+}
+
+func (b *Blockchain) revalidateHandler(c echo.Context) error {
+	hashStr := c.Param("hash")
+
+	hash, err := chainhash.NewHashFromStr(hashStr)
+	if err != nil {
+		return c.String(http.StatusBadRequest, fmt.Sprintf("invalid hash: %v", err))
+	}
+
+	_, err = b.RevalidateBlock(b.AppCtx, &blockchain_api.RevalidateBlockRequest{
+		BlockHash: hash.CloneBytes(),
+	})
+
+	if err != nil {
+		return c.String(http.StatusInternalServerError, fmt.Sprintf("error revalidating block: %v", err))
+	}
+
+	return c.String(http.StatusOK, fmt.Sprintf("block revalidated: %s", hashStr))
+}
+
+func (b *Blockchain) startKafka() error {
+	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
+	if err == nil && ok {
+		b.kafkaHealthURL = blocksKafkaURL
+		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
+
+		b.kafkaChan = make(chan *kafka.Message, 100)
+
+		if b.blockKafkaAsyncProducer, err = kafka.NewKafkaAsyncProducer(b.logger, blocksKafkaURL, b.kafkaChan); err != nil {
+			return errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err)
+		}
+
+		go b.blockKafkaAsyncProducer.Start(b.AppCtx)
 	}
 
 	return nil
+}
+
+/* Must be started as a go routine unless you are in a test */
+func (b *Blockchain) startSubscriptions() {
+	for {
+		select {
+		case <-b.AppCtx.Done():
+			b.logger.Infof("[Blockchain] Stopping channel listeners go routine")
+
+			for sub := range b.subscribers {
+				safeClose(sub.done)
+			}
+
+			return
+		case notification := <-b.notifications:
+			start := gocore.CurrentTime()
+
+			func() {
+				b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
+
+				for sub := range b.subscribers {
+					b.logger.Debugf("[Blockchain] Sending notification to %s in background: %s", sub.source, notification.Stringify())
+
+					go func(s subscriber) {
+						b.logger.Debugf("[Blockchain] Sending notification to %s: %s", s.source, notification.Stringify())
+
+						if err := s.subscription.Send(notification); err != nil {
+							b.deadSubscriptions <- s
+						}
+					}(sub)
+				}
+			}()
+			b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
+
+		case s := <-b.newSubscriptions:
+			b.subscribersMu.Lock()
+			b.subscribers[s] = true
+			b.subscribersMu.Unlock()
+		//	b.logger.Infof("[Blockchain] New Subscription received from %s (Total=%d).", s.source, len(b.subscribers))
+
+		case s := <-b.deadSubscriptions:
+			delete(b.subscribers, s)
+			safeClose(s.done)
+			b.logger.Infof("[Blockchain] Subscription removed (Total=%d).", len(b.subscribers))
+		}
+	}
 }
 
 func (b *Blockchain) Stop(_ context.Context) error {
@@ -322,10 +353,21 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 	block.Height = height
 
-	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blockKafkaProducer != nil)
+	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blockKafkaAsyncProducer != nil)
 
-	if b.blockKafkaProducer != nil {
-		go b.sendKafkaBlockMessage(block)
+	if b.blockKafkaAsyncProducer != nil {
+		key := block.Header.Hash().CloneBytes()
+
+		value, err := block.Bytes()
+		if err != nil {
+			b.logger.Errorf("[AddBlock] error creating block bytes: %v", err)
+			return nil, errors.WrapGRPC(err)
+		}
+
+		b.kafkaChan <- &kafka.Message{
+			Key:   key,
+			Value: value,
+		}
 	}
 
 	_, _ = b.SendNotification(ctx, &blockchain_api.Notification{
@@ -472,7 +514,6 @@ func (b *Blockchain) GetLastNBlocks(ctx context.Context, request *blockchain_api
 	blockInfo, err := b.store.GetLastNBlocks(ctx, request.NumberOfBlocks, request.IncludeOrphans, request.FromHeight)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
-
 	}
 
 	return &blockchain_api.GetLastNBlocksResponse{
@@ -704,6 +745,34 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 	}
 
 	return &blockchain_api.GetBlockHeadersFromHeightResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        metasBytes,
+	}, nil
+}
+
+func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersByHeightRequest) (*blockchain_api.GetBlockHeadersByHeightResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersByHeight",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeadersByHeight),
+	)
+	defer deferFn()
+
+	blockHeaders, metas, err := b.store.GetBlockHeadersByHeight(ctx, req.StartHeight, req.EndHeight)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	metasBytes := make([][]byte, len(metas))
+	for i, meta := range metas {
+		metasBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersByHeightResponse{
 		BlockHeaders: blockHeaderBytes,
 		Metas:        metasBytes,
 	}, nil
@@ -1215,7 +1284,8 @@ func (b *Blockchain) GetBestHeightAndTime(ctx context.Context, _ *emptypb.Empty)
 
 	return &blockchain_api.GetBestHeightAndTimeResponse{
 		Height: meta.Height,
-		Time:   uint32(medianTimestamp.Unix()),
+		//nolint:gosec // Intentionally ignoring potential overflow for this specific use case
+		Time: uint32(medianTimestamp.Unix()),
 	}, nil
 }
 
@@ -1229,7 +1299,6 @@ func safeClose[T any](ch chan T) {
 
 func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
 	// From https://github.com/bitcoinsv/bsvd/blob/20910511e9006a12e90cddc9f292af8b82950f81/blockchain/chainview.go#L351
-
 	if blockHeaderHash == nil {
 		// return genesis block
 		genesisBlock, err := store.GetBlockByHeight(ctx, 0)
@@ -1246,18 +1315,20 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	// numbers are derived.
 	var maxEntries uint8
 	if blockHeaderHeight <= 12 {
-		maxEntries = uint8(blockHeaderHeight) + 1
+		//nolint:gosec // Intentionally ignoring potential overflow for this specific use case
+		maxEntries = uint8(blockHeaderHeight + 1)
 	} else {
 		// Requested hash itself + previous 10 entries + genesis block.
 		// Then floor(log2(height-10)) entries for the skip portion.
-		adjustedHeight := uint32(blockHeaderHeight) - 10
+		adjustedHeight := blockHeaderHeight - 10
 		maxEntries = 12 + fastLog2Floor(adjustedHeight)
 	}
 	locator := make([]*chainhash.Hash, 0, maxEntries)
 
-	step := int32(1)
+	step := uint32(1)
 	ancestorBlockHeaderHash := blockHeaderHash
-	ancestorBlockHeight := int32(blockHeaderHeight) // this needs to be signed
+	ancestorBlockHeight := blockHeaderHeight // this needs to be signed
+
 	for ancestorBlockHeaderHash != nil {
 		locator = append(locator, ancestorBlockHeaderHash)
 
@@ -1268,12 +1339,12 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 
 		// Calculate height of previous node to include ensuring the
 		// final node is the genesis block.
-		height := int32(ancestorBlockHeight) - step
+		height := ancestorBlockHeight - step
 		if height < 0 {
 			height = 0
 		}
 
-		ancestorBlock, err := store.GetBlockByHeight(ctx, uint32(height))
+		ancestorBlock, err := store.GetBlockByHeight(ctx, height)
 		if err != nil {
 			return nil, err
 		}
@@ -1288,66 +1359,4 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 	}
 
 	return locator, nil
-}
-
-func (b *Blockchain) sendKafkaBlockMessage(block *model.Block) {
-	ctx := b.AppCtx
-	blockBytes, err := block.Bytes()
-	if err != nil {
-		b.logger.Errorf("[AddBlock] Error serializing block: %v", err)
-	} else {
-		b.logger.Debugf("[AddBlock] sending block to kafka: %s", block.String())
-
-		stateStart, err := b.GetFSMCurrentState(ctx, &emptypb.Empty{})
-		if err != nil {
-			b.logger.Errorf("[AddBlock] Error getting FSM current state: %v", err)
-		}
-
-		// Essential we get the message on Kafka topic
-		for { // KAFKA SEND
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				// producer has built-in retry mechanism but it doesn't retry forever
-				if err := b.blockKafkaProducer.Send(block.Header.Hash().CloneBytes(), blockBytes); err != nil {
-					b.logger.Errorf("[AddBlock] Error sending block to kafka: %v", err)
-
-					for { // FSM RESOURCE_UNAVAILABLE
-						select {
-						case <-ctx.Done():
-							return
-						default:
-							b.logger.Infof("[AddBlock] setting FSM to RESOURCE_UNAVAILABLE")
-
-							if _, err := b.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_UNAVAILABLE}); err != nil {
-								b.logger.Errorf("[AddBlock] Error sending FSM event: %v", err)
-								time.Sleep(1 * time.Second)
-								continue // FSM RESOURCE_UNAVAILABLE
-							}
-						}
-						break // FSM RESOURCE_UNAVAILABLE
-					}
-
-					time.Sleep(1 * time.Second)
-					continue // KAFKA SEND
-				}
-			}
-			break // KAFKA SEND
-		}
-
-		stateEnd, err := b.GetFSMCurrentState(ctx, &emptypb.Empty{})
-		if err != nil {
-			b.logger.Errorf("[Blockchain] Error getting FSM current state: %v", err)
-		}
-
-		if stateStart.State != stateEnd.State {
-			b.logger.Infof("[AddBlock] sent block to kafka (after failed attempt(s)): %s", block.String())
-			b.logger.Infof("[AddBlock] reset FSM to %s", stateStart.State)
-
-			if _, err := b.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType(stateStart.State)}); err != nil {
-				b.logger.Errorf("[AddBlock] Error sending FSM event: %v", err)
-			}
-		}
-	}
 }

@@ -8,9 +8,11 @@
 // $ go test -v -run "^TestUtxoTestSuite$/TestDeleteParentTx$" -tags utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestFreezeAndUnfreezeUtxos$" -tags utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowToSpendUtxosAfterReassignment$" -tags utxo
+// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSaveUTXOsIfExtStoreHasTXs$" -tags utxo
 package test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -891,6 +893,65 @@ func (suite *UtxoTestSuite) TestShouldAllowToSpendUtxosAfterReassignment() {
 	}
 
 	assert.Equal(t, true, bl, "Test Tx not found in block")
+}
+
+func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
+	t := suite.T()
+	framework := suite.TeranodeTestEnv
+	logger := framework.Logger
+	ctx := framework.Context
+
+	framework.StopNode("ubsv2")
+
+	txDistributor := &framework.Nodes[0].DistributorClient
+
+	coinbaseClient := framework.Nodes[0].CoinbaseClient
+	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
+	logger.Infof("utxoBalanceBefore: %d", utxoBalanceBefore)
+
+	privateKey0, err := bec.NewPrivateKey(bec.S256())
+	assert.NoError(t, err, "Failed to generate private key")
+
+	address0, err := bscript.NewAddressFromPublicKey(privateKey0.PubKey(), true)
+	assert.NoError(t, err, "Failed to create address")
+
+	faucetTx, err := coinbaseClient.RequestFunds(ctx, address0.AddressString, true)
+	assert.NoError(t, err, "Failed to request funds")
+
+	logger.Infof("Faucet Transaction: %s %s", faucetTx.TxIDChainHash(), faucetTx.TxID())
+
+	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	assert.NoError(t, err, "Failed to send faucet transaction")
+
+	logger.Infof("Faucet Transaction sent: %s with %d outputs", faucetTx.TxIDChainHash(), len(faucetTx.Outputs))
+
+	time.Sleep(10 * time.Second)
+
+	srcFile := fmt.Sprintf("../../data/test/ubsv1/external/%s.tx", faucetTx.TxID())
+
+	destFile := fmt.Sprintf("../../data/test/ubsv2/external/%s.tx", faucetTx.TxID())
+
+	err = helper.CopyFile(srcFile, destFile)
+	if err != nil {
+		t.Errorf("Failed to copy file from %s to %s: %v", srcFile, destFile, err)
+	}
+
+	framework.StartNode("ubsv2")
+	time.Sleep(10 * time.Second)
+
+	err = framework.Nodes[1].BlockchainClient.Run(framework.Context)
+	if err != nil {
+		t.Errorf("Failed to run blockchain client: %v", err)
+	}
+
+	time.Sleep(30 * time.Second)
+
+	md, err := framework.Nodes[1].UtxoStore.Get(ctx, faucetTx.TxIDChainHash())
+	if err != nil {
+		t.Errorf("Failed to get UTXO: %v", err)
+	}
+	assert.NotNil(t, md.Tx.TxID(), "Failed to get UTXO")
+	t.Logf("UTXO: %s %s\n", md.Tx.TxIDChainHash(), md.Tx.TxID())
 }
 
 func TestUtxoTestSuite(t *testing.T) {

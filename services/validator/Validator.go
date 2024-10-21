@@ -78,7 +78,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		if workers > 0 {
 			v.kafkaHealthURL = txmetaKafkaURL
 			v.txMetaKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
-				return kafka.NewKafkaAsyncProducer(v.logger, txmetaKafkaURL, make(chan []byte, 10000))
+				return kafka.NewKafkaAsyncProducer(v.logger, txmetaKafkaURL, make(chan *kafka.Message, 10000))
 			}, retry.WithMessage("[Validator] error starting kafka producer for txMeta"))
 
 			if err != nil {
@@ -100,7 +100,7 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 		if workers > 0 {
 			v.kafkaHealthURL = rejectedTxKafkaURL
 			v.rejectedTxKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
-				return kafka.NewKafkaAsyncProducer(v.logger, rejectedTxKafkaURL, make(chan []byte, 10000))
+				return kafka.NewKafkaAsyncProducer(v.logger, rejectedTxKafkaURL, make(chan *kafka.Message, 10000))
 			}, retry.WithMessage("[Validator] error starting kafka producer for rejected Txs"))
 
 			if err != nil {
@@ -183,7 +183,9 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	if err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
 		if v.rejectedTxKafkaProducerClient != nil {
 			startKafka := time.Now()
-			v.rejectedTxKafkaProducerClient.PublishChannel <- append(tx.TxIDChainHash().CloneBytes(), err.Error()...)
+			v.rejectedTxKafkaProducerClient.PublishChannel <- &kafka.Message{
+				Value: append(tx.TxIDChainHash().CloneBytes(), err.Error()...),
+			}
 
 			prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 		}
@@ -349,7 +351,9 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.H
 
 	if v.txMetaKafkaProducerClient != nil {
 		startKafka := time.Now()
-		v.txMetaKafkaProducerClient.PublishChannel <- append(txHash.CloneBytes(), []byte("delete")...)
+		v.txMetaKafkaProducerClient.PublishChannel <- &kafka.Message{
+			Value: append(txHash.CloneBytes(), []byte("delete")...),
+		}
 
 		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 	}
@@ -370,7 +374,9 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHei
 
 	if v.txMetaKafkaProducerClient != nil {
 		startKafka := time.Now()
-		v.txMetaKafkaProducerClient.PublishChannel <- append(tx.TxIDChainHash().CloneBytes(), data.MetaBytes()...)
+		v.txMetaKafkaProducerClient.PublishChannel <- &kafka.Message{
+			Value: append(tx.TxIDChainHash().CloneBytes(), data.MetaBytes()...),
+		}
 
 		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 	}

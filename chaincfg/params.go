@@ -399,7 +399,7 @@ var RegressionNetParams = Params{
 
 	// Chain parameters
 	GenesisBlock:     &regTestGenesisBlock,
-	GenesisHash:      &regTestGenesisHash,
+	GenesisHash:      newHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"),
 	PowLimit:         regressionPowLimit,
 	PowLimitBits:     0x207fffff,
 	CoinbaseMaturity: 100,

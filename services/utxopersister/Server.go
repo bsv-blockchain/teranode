@@ -287,9 +287,9 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 
 	c := NewConsolidator(s.logger, s.chainParams, s.blockchainStore, s.blockchainClient, s.blockStore, lastWrittenUTXOSetHash)
 
-	s.logger.Infof("Rolling up data from block height %d to %d", s.lastHeight, maxHeight)
+	s.logger.Infof("Rolling up data from block height %d to %d", s.lastHeight+1, maxHeight)
 
-	if err := c.ConsolidateBlockRange(ctx, s.lastHeight, maxHeight); err != nil {
+	if err := c.ConsolidateBlockRange(ctx, s.lastHeight+1, maxHeight); err != nil {
 		return 0, err
 	}
 

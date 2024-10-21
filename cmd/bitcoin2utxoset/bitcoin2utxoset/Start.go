@@ -165,7 +165,7 @@ func Start() {
 		}
 
 		if int(bestBlock.Height) != height {
-			logger.Warnf("Height mismatch: last height was %d, scanned height was %d", height, bestBlock.Height)
+			logger.Warnf("Height mismatch: height from blocks indexDB was %d, scanned height was %d", height, bestBlock.Height)
 		}
 
 		blockHash = bestBlock.Hash
@@ -280,8 +280,27 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			obfuscateKey = value
 			logger.Infof("Obfuscate key: %x (%d bytes)", obfuscateKey, len(obfuscateKey))
 
-		case 66: // 66 = 0x42
-			// Ignore
+		// 66 = 0x42 = B = "chaintip"
+		case 66:
+			obfuscateKeyExtended := getObfuscateKeyExtended(obfuscateKey, value)
+
+			// XOR the value with the obfuscateKey to de-obfuscate it
+			deobfuscatedValue := make([]byte, len(value))
+			for i := range value {
+				deobfuscatedValue[i] = value[i] ^ obfuscateKeyExtended[i]
+			}
+
+			chainstateTip, err := chainhash.NewHash(deobfuscatedValue)
+
+			if err != nil {
+				logger.Errorf("Couldn't create hash from %s: %v", deobfuscatedValue, err)
+			}
+
+			if !blockHash.IsEqual(chainstateTip) {
+				logger.Errorf("Block hash mismatch between last block and chainstate: %s != %s", blockHash, chainstateTip)
+			}
+
+			logger.Infof("Tip in chainstate: %s", chainstateTip)
 
 		// 67 = 0x43 = C = "utxo"
 		case 67:
@@ -296,19 +315,7 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 			// -----
 			// Value
 			// -----
-
-			// Copy the obfuscateKey ready to extend it
-			obfuscateKeyExtended := obfuscateKey[1:] // ignore the first byte, as that just tells you the size of the obfuscateKey
-
-			// Extend the obfuscateKey so it's the same length as the value
-			for i, k := len(obfuscateKeyExtended), 0; len(obfuscateKeyExtended) < len(value); i, k = i+1, k+1 {
-				// append each byte of obfuscateKey to the end until it's the same length as the value
-				obfuscateKeyExtended = append(obfuscateKeyExtended, obfuscateKeyExtended[k])
-				// Example
-				//   [8 175 184 95 99 240 37 253 115 181 161 4 33 81 167 111 145 131 0 233 37 232 118 180 123 120 78]
-				//   [8 177 45 206 253 143 135 37 54]                                                                  <- obfuscate key
-				//   [8 177 45 206 253 143 135 37 54 8 177 45 206 253 143 135 37 54 8 177 45 206 253 143 135 37 54]    <- extended
-			}
+			obfuscateKeyExtended := getObfuscateKeyExtended(obfuscateKey, value)
 
 			// XOR the value with the obfuscateKey (xor each byte) to de-obfuscate the value
 			var xor []byte // create a byte slice to hold the xor results
@@ -588,6 +595,23 @@ func runImport(logger ulogger.Logger, chainstate string, outFile string, blockHa
 	logger.Infof("Processed                                     %16s keys", formatNumber(iterCount))
 
 	return nil
+}
+
+func getObfuscateKeyExtended(obfuscateKey []byte, value []byte) []byte {
+	// Copy the obfuscateKey ready to extend it
+	obfuscateKeyExtended := obfuscateKey[1:] // ignore the first byte, as that just tells you the size of the obfuscateKey
+
+	// Extend the obfuscateKey so it's the same length as the value
+	for i, k := len(obfuscateKeyExtended), 0; len(obfuscateKeyExtended) < len(value); i, k = i+1, k+1 {
+		// append each byte of obfuscateKey to the end until it's the same length as the value
+		// Example
+		//   [8 175 184 95 99 240 37 253 115 181 161 4 33 81 167 111 145 131 0 233 37 232 118 180 123 120 78]
+		//   [8 177 45 206 253 143 135 37 54]                                                                  <- obfuscate key
+		//   [8 177 45 206 253 143 135 37 54 8 177 45 206 253 143 135 37 54 8 177 45 206 253 143 135 37 54]    <- extended
+		obfuscateKeyExtended = append(obfuscateKeyExtended, obfuscateKeyExtended[k])
+	}
+
+	return obfuscateKeyExtended
 }
 
 func formatNumber(n uint64) string {

@@ -119,7 +119,7 @@ func GetUTXOSet(ctx context.Context, logger ulogger.Logger, store blob.Store, bl
 	}, nil
 }
 
-func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, error) {
+func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, store blob.Store, blockHash *chainhash.Hash) (*UTXOSet, bool, error) {
 	us := &UTXOSet{
 		ctx:       ctx,
 		logger:    logger,
@@ -130,14 +130,10 @@ func GetUTXOSetWithExistCheck(ctx context.Context, logger ulogger.Logger, store 
 	// Check to see if the utxo-set already exists
 	exists, err := store.Exists(ctx, blockHash[:], options.WithFileExtension(utxosetExtension))
 	if err != nil {
-		return nil, errors.NewStorageError("error checking if %s.%s exists", blockHash, utxosetExtension, err)
+		return nil, false, errors.NewStorageError("error checking if %s.%s exists", blockHash, utxosetExtension, err)
 	}
 
-	if exists {
-		return nil, nil
-	}
-
-	return us, nil
+	return us, exists, nil
 }
 
 // Build the file header...
@@ -348,7 +344,7 @@ type readCloserWrapper struct {
 
 func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetUTXOAdditionsReader",
-		tracing.WithLogMessage(us.logger, "[GetUTXOAdditionsReader] called"),
+		tracing.WithDebugLogMessage(us.logger, "[GetUTXOAdditionsReader] called"),
 	)
 	defer deferFn()
 
@@ -391,7 +387,7 @@ func (us *UTXOSet) GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, e
 		bufferSize = 4096
 	}
 
-	us.logger.Infof("Using %s buffer for utxo-deletions reader", bufferSize)
+	us.logger.Debugf("Using %s buffer for utxo-deletions reader", bufferSize)
 
 	r = &readCloserWrapper{
 		Reader: bufio.NewReaderSize(r, bufferSize.Int()),
@@ -409,6 +405,8 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 		tracing.WithLogMessage(us.logger, "[CreateUTXOSet] called"),
 	)
 	defer deferFn()
+
+	us.logger.Infof("[CreateUTXOSet] Creating UTXOSet for block %s height %d", c.lastBlockHash, c.lastBlockHeight)
 
 	storer := filestorer.NewFileStorer(ctx, us.logger, us.store, c.lastBlockHash[:], utxosetExtension)
 

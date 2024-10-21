@@ -2,6 +2,8 @@ package blockchain
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -36,10 +38,6 @@ import (
 
 func Test_AddBlock(t *testing.T) {
 	ctx := setup(t)
-
-	if _, err := ctx.server.SendFSMEvent(context.Background(), &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_RUN}); err != nil {
-		t.Fatalf("Failed to set FSM to RUNNING: %v", err)
-	}
 
 	// Create a mock block
 	mockBlk := mockBlock(ctx, t)
@@ -81,16 +79,6 @@ func Test_AddBlock(t *testing.T) {
 	assert.Equal(t, subtreeHashes, addedBlock.SubtreeHashes)
 	assert.Equal(t, mockBlk.TransactionCount, addedBlock.TransactionCount)
 	assert.Equal(t, mockBlk.SizeInBytes, addedBlock.SizeInBytes)
-
-	// Verify that the Kafka message was sent
-	time.Sleep(10 * time.Millisecond) // kafka producer is async, so we need to sleep to ensure the message is sent
-	require.Equal(t, 1, len(ctx.kafkaProducer.messages))
-
-	// Verify that the FSM is in the RUNNING state
-	resp, err := ctx.server.GetFSMCurrentState(c, &emptypb.Empty{})
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, blockchain_api.FSMStateType_RUNNING, resp.State, "Expected FSM state did not match")
 }
 
 func Test_GetBlock(t *testing.T) {
@@ -98,23 +86,13 @@ func Test_GetBlock(t *testing.T) {
 	_, _, err := ctx.server.store.StoreBlock(context.Background(), mockBlock(ctx, t), "")
 	require.NoError(t, err)
 
-	// var wg sync.WaitGroup
-	// wg.Add(1)
-
-	// Start the server
-	// ctx := context.Background()
-	// go func() {
-	// 	//defer wg.Done()
-	// 	if err := server.Start(ctx); err != nil {
-	// 		t.Errorf("Failed to start server: %v", err)
-	// 	}
-	// }()
-
+	context := context.Background()
 	request := &blockchain_api.GetBlockRequest{
 		Hash: []byte{1},
 	}
 
-	block, err := ctx.server.GetBlock(context.Background(), request)
+	block, err := ctx.server.GetBlock(context, request)
+	require.Error(t, err)
 	require.Empty(t, block)
 
 	// TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
@@ -126,24 +104,18 @@ func Test_GetBlock(t *testing.T) {
 		Height: 1,
 	}
 
-	block, err = ctx.server.GetBlockByHeight(context.Background(), requestHeight)
+	block, err = ctx.server.GetBlockByHeight(context, requestHeight)
 	require.Error(t, err, "Expected error")
 	require.Empty(t, block, "Expected block to be empty")
-
 	// unwrap the error
 	// TODO: Put this back in when we fix WrapGRPC/UnwrapGRPC
-	// unwrappedErr = errors.UnwrapGRPC(err)
-	// require.ErrorIs(t, unwrappedErr, errors.ErrBlockNotFound)
-	// var tErr *errors.Error
-	// assert.ErrorAs(t, unwrappedErr, &tErr)
-	// assert.Equal(t, tErr.Code, errors.ERR_BLOCK_NOT_FOUND)
-	// assert.Equal(t, tErr.Message, "block not found")
+	unwrappedErr := errors.UnwrapGRPC(err)
+	require.ErrorIs(t, unwrappedErr, errors.ErrBlockNotFound)
 
-	//wg.Wait()
 	// Stop the server
-	// if err := server.Stop(ctx); err != nil {
-	// 	t.Fatalf("Failed to stop server: %v", err)
-	// }
+	if err := ctx.server.Stop(context); err != nil {
+		t.Fatalf("Failed to stop server: %v", err)
+	}
 }
 
 func Test_GetFSMCurrentState(t *testing.T) {
@@ -151,127 +123,17 @@ func Test_GetFSMCurrentState(t *testing.T) {
 	_, _, err := ctx.server.store.StoreBlock(context.Background(), mockBlock(ctx, t), "")
 	require.NoError(t, err)
 
-	// var wg sync.WaitGroup
-	// wg.Add(1)
-
-	// Assuming that the setup or initialization of the server sets the FSM state
-	// Start the server and the FSM in an initial state you control (not shown here)
-
-	//ctx := context.Background()
-	// go func() {
-	// 	defer wg.Done()
-	// if err := server.Start(ctx); err != nil {
-	// 	t.Errorf("Failed to start server: %v", err)
-	// }
-	//	}()
-
-	// Test the GetFSMCurrentState function
 	response, err := ctx.server.GetFSMCurrentState(context.Background(), &emptypb.Empty{})
 	require.NoError(t, err)
 	require.NotNil(t, response)
 	assert.Equal(t, blockchain_api.FSMStateType_STOPPED, response.State, "Expected FSM state did not match")
-
-	//wg.Wait()
-	// Stop the server
-	// if err := server.Stop(ctx); err != nil {
-	// 	t.Fatalf("Failed to stop server: %v", err)
-	// }
-}
-
-func Test_sendKafkaBlockMessage(t *testing.T) {
-	// Setup
-	ctx := setup(t)
-	mockBlock := mockBlock(ctx, t)
-
-	mockProducer := new(mockKafkaProducer)
-	ctx.server.blockKafkaProducer = mockProducer
-
-	ctx.server.sendKafkaBlockMessage(mockBlock)
-
-	// to get this far means it's not stuck in an endless loop
-	require.Equal(t, 1, len(mockProducer.messages))
-}
-
-func Test_sendKafkaBlockMessage_TemporaryError(t *testing.T) {
-	// Setup
-	ctx := setup(t)
-	mockBlock := mockBlock(ctx, t)
-
-	// Create a mock producer that fails initially and succeeds after 1 second
-	mockProducer := &mockKafkaProducerWithTemporaryError{
-		successAfter: time.Now().Add(1 * time.Second),
-	}
-	ctx.server.blockKafkaProducer = mockProducer
-
-	// Start a goroutine to check FSM state transitions
-	var stateTransitions []blockchain_api.FSMStateType
-	stateChan := make(chan blockchain_api.FSMStateType)
-	done := make(chan bool)
-
-	go func() {
-		for {
-			select {
-			case state := <-stateChan:
-				stateTransitions = append(stateTransitions, state)
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	// Set initial FSM state to RUNNING
-	state, err := ctx.server.SendFSMEvent(context.Background(), &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_RUN})
-	require.NoError(t, err)
-	stateChan <- state.State
-
-	// Start sending Kafka message
-	go func() {
-		ctx.server.sendKafkaBlockMessage(mockBlock)
-		done <- true
-	}()
-
-	// Check FSM state every 100ms
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	timeout := time.After(2 * time.Second)
-
-	for {
-		select {
-		case <-ticker.C:
-			state, err := ctx.server.GetFSMCurrentState(context.Background(), &emptypb.Empty{})
-			require.NoError(t, err)
-			stateChan <- state.State
-		case <-timeout:
-			t.Fatal("Test timed out")
-		case <-done:
-			close(stateChan)
-			close(done)
-			goto TestAssertions
-		}
-	}
-
-TestAssertions:
-
-	// Verify state transitions
-	require.GreaterOrEqual(t, len(stateTransitions), 3, "Expected at least 3 state transitions")
-	assert.Equal(t, blockchain_api.FSMStateType_RUNNING, stateTransitions[0], "Initial state should be RUNNING")
-	assert.Contains(t, stateTransitions, blockchain_api.FSMStateType_RESOURCE_UNAVAILABLE, "State should have transitioned to RESOURCE_UNAVAILABLE")
-
-	finalState, err := ctx.server.GetFSMCurrentState(context.Background(), &emptypb.Empty{})
-	require.NoError(t, err)
-	require.Equal(t, blockchain_api.FSMStateType_RUNNING, finalState.State, "Expected final state to be RUNNING")
-
-	// Verify that the Kafka message was sent
-	assert.Equal(t, int32(1), atomic.LoadInt32(&mockProducer.messagesSent), "Expected 1 Kafka message to be sent")
 }
 
 type testContext struct {
-	server        *Blockchain
-	subtreeStore  blob.Store
-	utxoStore     utxo.Store
-	logger        ulogger.Logger
-	kafkaProducer *mockKafkaProducer
+	server       *Blockchain
+	subtreeStore blob.Store
+	utxoStore    utxo.Store
+	logger       ulogger.Logger
 }
 
 func setup(t *testing.T) *testContext {
@@ -280,25 +142,69 @@ func setup(t *testing.T) *testContext {
 	subtreeStore := blob_memory.New()
 	utxoStore := utxo_memory.New(logger)
 	store := mockStore{}
-	kafkaProducer := &mockKafkaProducer{
-		messages: make([][]byte, 0),
-	}
 
 	server, err := New(context.Background(), logger, &store)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}
 
-	server.blockKafkaProducer = kafkaProducer
-	require.NoError(t, server.Init(context.Background()))
+	if err := server.Init(context.Background()); err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
 
 	return &testContext{
-		server:        server,
-		subtreeStore:  subtreeStore,
-		utxoStore:     utxoStore,
-		logger:        logger,
-		kafkaProducer: kafkaProducer,
+		server:       server,
+		subtreeStore: subtreeStore,
+		utxoStore:    utxoStore,
+		logger:       logger,
 	}
+}
+
+func Test_HealthLiveness(t *testing.T) {
+	ctx := setup(t)
+
+	status, msg, err := ctx.server.Health(context.Background(), true)
+	require.Equal(t, http.StatusOK, status)
+	require.NoError(t, err)
+
+	var jsonMsg map[string]interface{}
+	err = json.Unmarshal([]byte(msg), &jsonMsg)
+	fmt.Println(msg)
+	require.NoError(t, err, "Message should be valid JSON")
+
+	require.Contains(t, jsonMsg, "status", "JSON should contain 'status' field")
+	require.Contains(t, jsonMsg, "dependencies", "JSON should contain 'dependencies' field")
+
+	require.Equal(t, "200", jsonMsg["status"], "Status should be '200'")
+	require.NoError(t, err)
+}
+
+func Test_HealthReadiness(t *testing.T) {
+	ctx := setup(t)
+
+	status, msg, err := ctx.server.Health(context.Background(), false)
+	require.Equal(t, http.StatusOK, status)
+	require.NoError(t, err)
+
+	var jsonMsg map[string]interface{}
+	err = json.Unmarshal([]byte(msg), &jsonMsg)
+	fmt.Println(msg)
+	require.NoError(t, err, "Message should be valid JSON")
+
+	require.Contains(t, jsonMsg, "status", "JSON should contain 'status' field")
+	require.Contains(t, jsonMsg, "dependencies", "JSON should contain 'dependencies' field")
+
+	require.Equal(t, "200", jsonMsg["status"], "Status should be '200'")
+	require.NoError(t, err)
+}
+
+func Test_HealthGRPC(t *testing.T) {
+	ctx := setup(t)
+
+	response, err := ctx.server.HealthGRPC(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.True(t, response.Ok)
 }
 
 func mockBlock(ctx *testContext, t *testing.T) *model.Block {
@@ -311,7 +217,7 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	require.NoError(t, err)
 
 	nBits, _ := model.NewNBitFromString("2000ffff")
-	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	hashPrevBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 	coinbaseHex := "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1703fb03002f6d322d75732f0cb6d7d459fb411ef3ac6d65ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000"
 	coinbase, err := bt.NewTxFromString(coinbaseHex)
@@ -328,8 +234,8 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  hashPrevBlock,
-		HashMerkleRoot: subtree.RootHash(), // doesn't matter, we're only checking the value and not whether it's correct
-		Timestamp:      uint32(time.Now().Unix()),
+		HashMerkleRoot: subtree.RootHash(),        // doesn't matter, we're only checking the value and not whether it's correct
+		Timestamp:      uint32(time.Now().Unix()), // nolint:gosec
 		Bits:           *nBits,
 		Nonce:          0,
 	}
@@ -346,7 +252,6 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 }
 
 var (
-	//tx, _  = hex.DecodeString("0100000001ae73759b118b9c8d54a13ad4ccd5de662bbaa2175ee7f4b413f402affb831ed3000000006b483045022100a6af846212b0c611056a9a30c22f0eed3adc29f8c688e804509b113f322459220220708fb79c66d235d937e8348ac022b3cfa6b64fec8d35a749ea0b2293ad95da014121039f271b930111fd7c818100ee1603d5c5094c68b3d15ad0a58f712e7d766225edffffffff0550c30000000000001976a91448bea2d45f4f6175e47ccb717e4f5d19d8f68f3b88ac204e0000000000001976a91442859b9bada6461d08a0aab8a18105ef30457a8b88ac10270000000000001976a914d0e2122bdeed7b2235f670cdc832f518fb63db9f88ac0c040000000000001976a914d56f84ae869e4a743e929e31218b198f02ce67fe88ac8d0c0100000000001976a91444a8e7fb1a426e4c60597d9d3f534c677d4f858388ac00000000")
 	tx1, _ = bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
 	hash1  = tx1.TxIDChainHash()
 )
@@ -460,7 +365,7 @@ func (s *mockStore) GetBlocksByTime(ctx context.Context, fromTime, toTime time.T
 	panic("not implemented")
 }
 func (s *mockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
-	//TODO implement me
+	// TODO implement me
 	panic("implement me")
 }
 

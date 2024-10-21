@@ -5,6 +5,7 @@ import (
 	"net/http"
 	_ "net/http/pprof" // nolint:gosec
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	utxopersister_service "github.com/bitcoin-sv/ubsv/services/utxopersister"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
@@ -58,26 +59,38 @@ func Start() {
 		return
 	}
 
-	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
-	if err != nil || !found {
-		logger.Errorf("blockchain_store URL not found in config: %v", err)
-		return
-	}
+	var service *utxopersister_service.Server
 
-	logger.Infof("Using blockchainStore at %s", blockchainStoreURL)
+	if gocore.Config().GetBool("direct", true) {
+		blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
+		if err != nil || !found {
+			logger.Errorf("blockchain_store URL not found in config: %v", err)
+			return
+		}
 
-	blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
-	if err != nil {
-		logger.Errorf("Failed to create blockchainStore: %v", err)
-		return
-	}
+		logger.Infof("Using blockchainStore at %s", blockchainStoreURL)
 
-	logger.Infof("Creating utxopersister service")
+		blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
+		if err != nil {
+			logger.Errorf("Failed to create blockchainStore: %v", err)
+			return
+		}
 
-	service, err := utxopersister_service.NewDirect(ctx, logger, blockStore, blockchainStore)
-	if err != nil {
-		logger.Errorf("Failed to create utxopersister service: %v", err)
-		return
+		service, err = utxopersister_service.NewDirect(ctx, logger, blockStore, blockchainStore)
+		if err != nil {
+			logger.Errorf("Failed to create utxopersister service: %v", err)
+			return
+		}
+	} else {
+		blockchainClient, err := blockchain.NewClient(ctx, logger, "test")
+		if err != nil {
+			logger.Errorf("Failed to create blockchainClient: %v", err)
+			return
+		}
+
+		logger.Infof("Creating utxopersister service")
+
+		service = utxopersister_service.New(ctx, logger, blockStore, blockchainClient)
 	}
 
 	logger.Infof("Starting utxopersister service")

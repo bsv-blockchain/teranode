@@ -170,7 +170,7 @@ func GenerateTestBlock(subtreeStore *TestSubtreeStore, config *TestConfig) (*mod
 	_ = coinbase.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000000000+fees)
 
 	nBits, _ := model.NewNBitFromString("2000ffff")
-	hashPrevBlock, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	hashPrevBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 	var subtreeFile *os.File
 	var subtreeFileMerkleHashes *os.File
