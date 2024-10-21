@@ -109,7 +109,8 @@ func (v *scriptVerificatorGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32) (er
 			return errors.NewTxInvalidError("failed to calculate flags from prev locking script, flags : %v, error: %v", flags, errF)
 		}
 
-		if errV := bdkscript.Verify(*in.UnlockingScript, *in.PreviousTxScript, true, uint(flags), tx.Bytes(), i, in.PreviousTxSatoshis); errV != nil {
+		txBinary := tx.Bytes()
+		if errV := bdkscript.Verify(*in.UnlockingScript, *in.PreviousTxScript, true, uint(flags), txBinary, i, in.PreviousTxSatoshis); errV != nil {
 			// Helpful logging to get full information to debug separately in GoBDK
 
 			errLog := bdkDebugVerification{

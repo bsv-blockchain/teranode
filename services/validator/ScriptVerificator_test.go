@@ -20,6 +20,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// To run this test, make sure GoBDK is installed and environment for it is set
+// Then run
+//
+//	go clean -testcache && VERY_LONG_TESTS=1 go test -v -tags "bdk" -run Test_ScriptVerification ./services/validator/...
 var testStoreURL = "https://ubsv-public.s3.eu-west-1.amazonaws.com/testdata"
 
 func Test_ScriptVerification(t *testing.T) {
@@ -29,23 +33,38 @@ func Test_ScriptVerification(t *testing.T) {
 	txs, err := getTxs(testBlockID)
 	require.NoError(t, err)
 
-	t.Run("BDK", func(t *testing.T) {
+	t.Run("BDK Multi Routine", func(t *testing.T) {
 		verifier := newScriptVerificatorGoBDK(ulogger.TestLogger{}, NewPolicySettings(), &chaincfg.MainNetParams)
-		testBlock(t, verifier, txs)
+		testBlockMultiRoutines(t, verifier, txs)
 	})
 
-	t.Run("GoSDK", func(t *testing.T) {
+	t.Run("GoSDK Multi Routine", func(t *testing.T) {
 		verifier := newScriptVerificatorGoSDK(ulogger.TestLogger{}, NewPolicySettings(), &chaincfg.MainNetParams)
-		testBlock(t, verifier, txs)
+		testBlockMultiRoutines(t, verifier, txs)
 	})
 
-	t.Run("GoBt", func(t *testing.T) {
+	t.Run("GoBt Multi Routine", func(t *testing.T) {
 		verifier := newScriptVerificatorGoBt(ulogger.TestLogger{}, NewPolicySettings(), &chaincfg.MainNetParams)
-		testBlock(t, verifier, txs)
+		testBlockMultiRoutines(t, verifier, txs)
+	})
+
+	t.Run("BDK Sequential", func(t *testing.T) {
+		verifier := newScriptVerificatorGoBDK(ulogger.TestLogger{}, NewPolicySettings(), &chaincfg.MainNetParams)
+		testBlockSequential(t, verifier, txs)
+	})
+
+	t.Run("GoSDK Sequential", func(t *testing.T) {
+		verifier := newScriptVerificatorGoSDK(ulogger.TestLogger{}, NewPolicySettings(), &chaincfg.MainNetParams)
+		testBlockSequential(t, verifier, txs)
+	})
+
+	t.Run("GoBt Sequential", func(t *testing.T) {
+		verifier := newScriptVerificatorGoBt(ulogger.TestLogger{}, NewPolicySettings(), &chaincfg.MainNetParams)
+		testBlockSequential(t, verifier, txs)
 	})
 }
 
-func testBlock(t *testing.T, verifier TxValidator, txs []*bt.Tx) {
+func testBlockMultiRoutines(t *testing.T, verifier TxValidator, txs []*bt.Tx) {
 	g := errgroup.Group{}
 
 	// verify the scripts of all the transactions in parallel
@@ -57,6 +76,13 @@ func testBlock(t *testing.T, verifier TxValidator, txs []*bt.Tx) {
 
 	err := g.Wait()
 	require.NoError(t, err)
+}
+
+func testBlockSequential(t *testing.T, verifier TxValidator, txs []*bt.Tx) {
+	for _, tx := range txs {
+		err := verifier.VerifyScript(tx, 725267)
+		require.NoError(t, err)
+	}
 }
 
 func getTxs(testBlockID string) ([]*bt.Tx, error) {
