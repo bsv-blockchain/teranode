@@ -45,6 +45,8 @@ type Store interface {
 	GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error)
 	GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error)
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
+	GetFSMState(ctx context.Context) (string, error)
+	SetFSMState(ctx context.Context, state string) error
 
 	// legacy endpoints
 	LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error)

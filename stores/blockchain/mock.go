@@ -193,3 +193,11 @@ func (m MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []ui
 	// TODO implement me
 	panic("implement me")
 }
+
+func (s MockStore) SetFSMState(ctx context.Context, fsmState string) error {
+	panic("implement me")
+}
+
+func (s MockStore) GetFSMState(ctx context.Context) (string, error) {
+	panic("implement me")
+}
