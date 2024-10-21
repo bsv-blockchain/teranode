@@ -31,7 +31,8 @@ func ValidLockTime(lockTime uint32, blockHeight uint32, blockTime uint32) error 
 		if blockHeight >= lockTime {
 			return nil
 		}
-		return errors.NewLockTimeError("lock time (%d) as block height is greater than block height (%d)", lockTime, blockHeight)
+
+		return errors.NewTxLockTimeError("lock time (%d) as block height is greater than block height (%d)", lockTime, blockHeight)
 	}
 
 	// Note that since the adoption of BIP 113, the time-based nLockTime is compared to the 11-block median time
@@ -41,7 +42,7 @@ func ValidLockTime(lockTime uint32, blockHeight uint32, blockTime uint32) error 
 		return nil
 	}
 
-	return errors.NewLockTimeError("lock time (%d) as timestamp is greater than median block time (%d)", lockTime, blockTime)
+	return errors.NewTxLockTimeError("lock time (%d) as timestamp is greater than median block time (%d)", lockTime, blockTime)
 }
 
 // IsTransactionFinal checks whether a transaction is final

@@ -322,22 +322,24 @@ message SendFSMEventRequest {
 enum FSMEventType {
   STOP = 0;
   RUN = 1;
-  CATCHUPBLOCKS = 2;
-  CATCHUPTXS = 3;
-  RESTORE = 4;
-  LEGACYSYNC = 5;
-  UNAVAILABLE = 6;
+  // MINE = 2;
+  CATCHUPBLOCKS = 3;
+  CATCHUPTXS = 4;
+  RESTORE = 5;
+  LEGACYSYNC = 6;
+  UNAVAILABLE = 7;
 }
 
 // swagger:enum FSMStateType
 enum FSMStateType {
   STOPPED = 0;
   RUNNING = 1;
-  CATCHINGBLOCKS = 2;
-  CATCHINGTXS = 3;
-  RESTORING = 4;
-  LEGACYSYNCING = 5;
-  RESOURCE_UNAVAILABLE = 6;
+  // MINING = 2;
+  CATCHINGBLOCKS = 3;
+  CATCHINGTXS = 4;
+  RESTORING = 5;
+  LEGACYSYNCING =6;
+  RESOURCE_UNAVAILABLE = 7;
 }
 
 message GetBlockLocatorRequest {

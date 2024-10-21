@@ -259,13 +259,11 @@ var (
 func NewMockStore(block *model.Block) blockchain_store.Store {
 	return &mockStore{
 		block: block,
-		state: "STOPPED",
 	}
 }
 
 type mockStore struct {
 	block *model.Block
-	state string
 }
 
 func (s *mockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -377,13 +375,8 @@ func (s *mockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []u
 	panic("not implemented")
 }
 
-func (s *mockStore) SetFSMState(ctx context.Context, fsmState string) error {
-	s.state = fsmState
-	return nil
-}
-
 func (s *mockStore) GetFSMState(ctx context.Context) (string, error) {
-	return s.state, nil
+	panic("not implemented")
 }
 
 type mockKafkaProducer struct {

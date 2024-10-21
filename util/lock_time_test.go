@@ -211,7 +211,7 @@ func Test_IsTransactionFinal_FromRequirements(t *testing.T) {
 
 	// Locktime >= 500M, Time lower			TRUE	FALSE
 	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000004))
-	assert.True(t, errors.Is(IsTransactionFinal(txNonFinal, 123, 500000004), errors.ErrLockTime))
+	assert.True(t, errors.Is(IsTransactionFinal(txNonFinal, 123, 500000004), errors.ErrTxLockTime))
 	// Locktime >= 500M, Time equal			TRUE	TRUE
 	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000005))
 	assert.NoError(t, IsTransactionFinal(txNonFinal, 123, 500000005))
@@ -224,7 +224,7 @@ func Test_IsTransactionFinal_FromRequirements(t *testing.T) {
 
 	// Locktime < 500M, Block Height lower	TRUE	FALSE
 	assert.NoError(t, IsTransactionFinal(txFinal, 122, 500000004))
-	assert.True(t, errors.Is(IsTransactionFinal(txNonFinal, 122, 500000004), errors.ErrLockTime))
+	assert.True(t, errors.Is(IsTransactionFinal(txNonFinal, 122, 500000004), errors.ErrTxLockTime))
 	// Locktime < 500M, Block Height equal	TRUE	TRUE
 	assert.NoError(t, IsTransactionFinal(txFinal, 123, 500000005))
 	assert.NoError(t, IsTransactionFinal(txNonFinal, 123, 500000005))

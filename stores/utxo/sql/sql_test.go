@@ -69,7 +69,7 @@ func TestCreateDuplicate(t *testing.T) {
 
 	_, err = store.Create(ctx, tx, 0)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
+	require.True(t, errors.Is(err, errors.ErrTxExists))
 }
 
 func TestGet(t *testing.T) {

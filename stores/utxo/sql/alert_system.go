@@ -30,11 +30,11 @@ func (s *Store) FreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) erro
 		}
 
 		if spendingTxID != nil {
-			return errors.NewSpentError("transaction %s:%d already spent by %s", spend.SpendingTxID, spend.Vout, spendingTxID)
+			return errors.NewUtxoSpentError("transaction %s:%d already spent by %s", spend.SpendingTxID, spend.Vout, spendingTxID)
 		}
 
 		if frozen {
-			return errors.NewFrozenError("transaction %s:%d already frozen", spend.SpendingTxID, spend.Vout)
+			return errors.NewUtxoFrozenError("transaction %s:%d already frozen", spend.SpendingTxID, spend.Vout)
 		}
 
 		txHashIDMap[spend.TxID.String()] = id
@@ -75,7 +75,7 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend) er
 		}
 
 		if !frozen {
-			return errors.NewFrozenError("transaction %s:%d is not frozen", spend.SpendingTxID, spend.Vout)
+			return errors.NewUtxoFrozenError("transaction %s:%d is not frozen", spend.SpendingTxID, spend.Vout)
 		}
 
 		txHashIDMap[spend.TxID.String()] = id
@@ -112,7 +112,7 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
 	}
 
 	if !frozen {
-		return errors.NewFrozenError("transaction %s:%d is not frozen", utxo.SpendingTxID, utxo.Vout)
+		return errors.NewUtxoFrozenError("transaction %s:%d is not frozen", utxo.SpendingTxID, utxo.Vout)
 	}
 
 	spendableIn := s.GetBlockHeight() + utxostore.ReAssignedUtxoSpendableAfterBlocks

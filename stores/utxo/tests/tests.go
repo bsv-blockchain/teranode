@@ -56,7 +56,7 @@ func Store(t *testing.T, db utxostore.Store) {
 	require.Equal(t, testSpend0.TxID.String(), resp.Tx.TxID())
 
 	_, err = db.Create(context.Background(), tx, 1000)
-	require.Error(t, err, errors.ErrTxAlreadyExists)
+	require.Error(t, err, errors.ErrTxExists)
 
 	err = db.Spend(context.Background(), spends, 1000)
 	require.NoError(t, err)

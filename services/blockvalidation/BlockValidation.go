@@ -133,20 +133,10 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, blockchainCl
 						continue
 					}
 
-					if notification.Type == model.NotificationType_BlockSubtreesSet {
+					if notification.Type == model.NotificationType_Block {
 						cHash := chainhash.Hash(notification.Hash)
 						bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification. STU: %s", cHash.String())
 
-						// if blocks, err := bv.blockchainClient.GetBlocksSubtreesNotSet(ctx); err != nil {
-						// 	bv.logger.Errorf("[BlockValidation:setMined] failed to getBlocksSubtreesNotSet: %s", err)
-						// } else {
-						// 	for _, block := range blocks {
-						// 		if block.Header.Hash().IsEqual(notification.Hash) {
-						// 			bv.logger.Warnf("[BlockValidation:setMined] block's subtrees aren't processed yet STU: %s", notification.Hash.String())
-						// 			break
-						// 		}
-						// 	}
-						// }
 						// convert hash to chainhash
 						hash, err := chainhash.NewHash(notification.Hash)
 						if err != nil {
@@ -572,31 +562,14 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		}
 	}
 
-	if err := u.waitForParentToBeMined(ctx, block); err != nil {
-		// The parent block is not marked as mined, let's re-validate the parent block
-		parentBlock, err := u.blockchainClient.GetBlock(ctx, block.Header.HashPrevBlock)
-		if err != nil {
-			return err
-		}
-
-		u.logger.Warnf("[BlockValidation:ValidateBlock:waitForParentToBeMined][%s] re-validating parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
-
-		if err := u.reValidateBlock(revalidateBlockData{block: parentBlock, baseURL: baseURL}); err != nil {
-			return errors.NewBlockError("[BlockValidation:ValidateBlock:waitForParentToBeMined][%s] failed to revalidate parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
-		}
-
-		// This will call blockchain server to set 'subtrees_mined' true.
-		// This triggers blockchain to publish a notification which block validation uses to mark txs as mined
-		// which is what we are really waiting for
-		if err := u.updateSubtreesTTL(ctx, parentBlock); err != nil {
-			return errors.NewBlockError("[BlockValidation:ValidateBlock:waitForParentToBeMined][%s] failed to update subtree TTLs for parent block %s", block.Hash().String(), block.Header.HashPrevBlock.String())
-		}
+	if err = u.waitForParentToBeMined(ctx, block); err != nil {
+		// re-trigger the setMinedChan for the parent block
+		u.setMinedChan <- block.Header.HashPrevBlock
 
 		// Wait for reValidationBlock to do its thing
-		if err := u.waitForParentToBeMined(ctx, block); err != nil {
+		if err = u.waitForParentToBeMined(ctx, block); err != nil {
 			// Give up, the parent block isn't being fully validated
-			// TODO should we invalidate the parent block in this case?
-			return errors.NewBlockError("[BlockValidation:ValidateBlock:waitForParentToBeMined][%s] given up waiting on parent %s", block.Hash().String(), block.Header.HashPrevBlock.String())
+			return errors.NewBlockError("[ValidateBlock][%s] given up waiting on parent %s", block.Hash().String(), block.Header.HashPrevBlock.String())
 		}
 	}
 
@@ -862,7 +835,7 @@ func (u *BlockValidation) addCoinbaseTransactionInLegacySync(ctx context.Context
 		blockID := ids[0]
 
 		if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height, utxo.WithBlockIDs(blockID)); err != nil {
-			if errors.Is(err, errors.ErrTxAlreadyExists) {
+			if errors.Is(err, errors.ErrTxExists) {
 				u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 			} else {
 				return errors.NewTxError("[ValidateBlock][%s] error storing utxos", block.Header.Hash().String(), err)

@@ -29,14 +29,14 @@ RUN RACE=true TXMETA_SMALL_TAG=true make build -j 32
 RUN RACE=true TXMETA_SMALL_TAG=true make build-tx-blaster -j 32
 
 # RUN_IMG should be overritten by --build-args
-FROM --platform=linux/amd64 ${RUN_IMG} as linux-amd64
+FROM --platform=linux/amd64 ${RUN_IMG} AS linux-amd64
 WORKDIR /app
 COPY --from=0 /app/ubsv.run ./ubsv.run
 COPY --from=0 /app/blaster.run ./blaster.run
 COPY --from=0 /app/wait.sh /app/wait.sh
 
 # Don't do anything different for ARM64 (for now)
-FROM --platform=linux/arm64 ${RUN_IMG} as linux-arm64
+FROM --platform=linux/arm64 ${RUN_IMG} AS linux-arm64
 WORKDIR /app
 COPY --from=0 /app/ubsv.run ./ubsv.run
 COPY --from=0 /app/blaster.run ./blaster.run
@@ -46,9 +46,17 @@ ENV TARGETARCH=${TARGETARCH}
 ENV TARGETOS=${TARGETOS}
 FROM ${TARGETOS}-${TARGETARCH}
 
-RUN apt update && \
-  apt install -y vim htop curl lsof iputils-ping net-tools netcat-openbsd dnsutils postgresql telnet && \
-  rm -rf /var/lib/apt/lists/*
+# Add a build argument to control installation of debugging tools
+ARG INSTALL_DEBUG_TOOLS=true
+
+# Install necessary tools for debugging and troubleshooting if INSTALL_DEBUG_TOOLS is true
+RUN if [ "$INSTALL_DEBUG_TOOLS" = "true" ]; then \
+  apt-get update && \
+  apt-get install -y vim htop curl lsof iputils-ping net-tools netcat-openbsd dnsutils postgresql telnet && \
+  rm -rf /var/lib/apt/lists/*; \
+  else \
+  echo "Skipping installation of debugging tools"; \
+  fi
 
 WORKDIR /app
 

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -2267,7 +2268,13 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 	// overwrite any config options from settings, if applicable
 	setConfigValuesFromSettings(logger, config.GetAll(), cfg)
 
-	cfg.DataDir, _ = config.Get("legacy_workingDir", "./data")
+	workingDir, _ := config.Get("legacy_workingDir", "../../data")
+
+	// get the full path to the data directory
+	cfg.DataDir, err = filepath.Abs(workingDir)
+	if err != nil {
+		return nil, err
+	}
 
 	if config.GetBool("legacy_config_Upnp", false) {
 		cfg.Upnp = true

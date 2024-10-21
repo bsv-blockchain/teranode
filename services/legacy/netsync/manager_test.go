@@ -517,7 +517,7 @@ func buildBlockInv(blocks ...*bsvutil.Block) *wire.MsgInv {
 	msg := wire.NewMsgInv()
 	for _, block := range blocks {
 		invVect := wire.NewInvVect(wire.InvTypeBlock, block.Hash())
-		msg.AddInvVect(invVect)
+		_ = msg.AddInvVect(invVect)
 	}
 	return msg
 }

@@ -146,7 +146,7 @@ func TestAerospike(t *testing.T) {
 
 		_, err = db.Create(context.Background(), tx, 0)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
+		assert.True(t, errors.Is(err, errors.ErrTxExists))
 
 		err = db.SetMined(context.Background(), tx.TxIDChainHash(), blockID)
 		require.NoError(t, err)
@@ -264,14 +264,14 @@ func TestAerospike(t *testing.T) {
 
 		txMeta, err = db.Create(context.Background(), tx, 0)
 		assert.Nil(t, txMeta)
-		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
+		require.True(t, errors.Is(err, errors.ErrTxExists))
 
 		err = db.Spend(context.Background(), spends, 0)
 		require.NoError(t, err)
 
 		txMeta, err = db.Create(context.Background(), tx, 0)
 		assert.Nil(t, txMeta)
-		require.True(t, errors.Is(err, errors.ErrTxAlreadyExists))
+		require.True(t, errors.Is(err, errors.ErrTxExists))
 
 	})
 
