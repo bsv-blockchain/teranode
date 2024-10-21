@@ -428,9 +428,22 @@ func Join(errs ...error) error {
 }
 
 func Is(err, target error) bool {
+	if isGRPCWrappedError(err) {
+		err = UnwrapGRPC(err)
+	}
+
 	return errors.Is(err, target)
 }
 
 func As(err error, target any) bool {
+	if isGRPCWrappedError(err) {
+		err = UnwrapGRPC(err)
+	}
+
 	return errors.As(err, target)
+}
+
+func isGRPCWrappedError(err error) bool {
+	_, ok := status.FromError(err)
+	return ok
 }

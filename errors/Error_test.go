@@ -110,7 +110,7 @@ func Test_ErrorWrapWithAdditionalContext(t *testing.T) {
 	originalErr := New(ERR_TX_INVALID_DOUBLE_SPEND, "original error")
 	wrappedErr := New(ERR_BLOCK_INVALID, "Some more additional context", originalErr)
 
-	if !errors.Is(wrappedErr, originalErr) {
+	if !Is(wrappedErr, originalErr) {
 		t.Errorf("Wrapped error does not match original error")
 	}
 
@@ -193,11 +193,11 @@ func Test_UnwrapChain(t *testing.T) {
 	wrappedOnce := fmt.Errorf("error wrapped once: %w", baseErr)
 	wrappedTwice := fmt.Errorf("error wrapped twice: %w", wrappedOnce)
 
-	if !errors.Is(wrappedTwice, baseErr) {
+	if !Is(wrappedTwice, baseErr) {
 		t.Errorf("Should identify base error anywhere in the unwrap chain")
 	}
 
-	if !errors.Is(wrappedTwice, wrappedOnce) {
+	if !Is(wrappedTwice, wrappedOnce) {
 		t.Errorf("Should identify base error anywhere in the unwrap chain")
 	}
 }
@@ -326,15 +326,15 @@ func Test_VariousChainedErrorsWithWrapUnwrapGRPC(t *testing.T) {
 	require.True(t, unwrapped.Is(level4ContextError))
 
 	// checks with the standard Is function
-	require.True(t, errors.Is(unwrapped, fmtError))
-	require.True(t, errors.Is(unwrapped, txInvalidErr))
-	require.True(t, errors.Is(unwrapped, baseBlockInvalidErr))
-	require.True(t, errors.Is(unwrapped, ErrServiceError))
-	require.True(t, errors.Is(unwrapped, ErrBlockInvalid))
-	require.True(t, errors.Is(unwrapped, ErrTxInvalid))
-	require.True(t, errors.Is(unwrapped, level2ServiceError))
-	require.True(t, errors.Is(unwrapped, level3ProcessingError))
-	require.True(t, errors.Is(unwrapped, level4ContextError))
+	require.True(t, Is(unwrapped, fmtError))
+	require.True(t, Is(unwrapped, txInvalidErr))
+	require.True(t, Is(unwrapped, baseBlockInvalidErr))
+	require.True(t, Is(unwrapped, ErrServiceError))
+	require.True(t, Is(unwrapped, ErrBlockInvalid))
+	require.True(t, Is(unwrapped, ErrTxInvalid))
+	require.True(t, Is(unwrapped, level2ServiceError))
+	require.True(t, Is(unwrapped, level3ProcessingError))
+	require.True(t, Is(unwrapped, level4ContextError))
 }
 
 func ReturnErrorAsStandardErrorWithoutModification(error *Error) error {
@@ -469,15 +469,15 @@ func Test_VariousChainedErrorsConvertedToStandardErrorWithWrapUnwrapGRPC(t *test
 	require.True(t, unwrapped.Is(level4ContextError))
 
 	// checks with the standard Is function
-	require.True(t, errors.Is(unwrapped, fmtError))
-	require.True(t, errors.Is(unwrapped, txInvalidErr))
-	require.True(t, errors.Is(unwrapped, baseBlockInvalidErr))
-	require.True(t, errors.Is(unwrapped, ErrServiceError))
-	require.True(t, errors.Is(unwrapped, ErrBlockInvalid))
-	require.True(t, errors.Is(unwrapped, ErrTxInvalid))
-	require.True(t, errors.Is(unwrapped, level2ServiceError))
-	require.True(t, errors.Is(unwrapped, level3ProcessingError))
-	require.True(t, errors.Is(unwrapped, level4ContextError))
+	require.True(t, Is(unwrapped, fmtError))
+	require.True(t, Is(unwrapped, txInvalidErr))
+	require.True(t, Is(unwrapped, baseBlockInvalidErr))
+	require.True(t, Is(unwrapped, ErrServiceError))
+	require.True(t, Is(unwrapped, ErrBlockInvalid))
+	require.True(t, Is(unwrapped, ErrTxInvalid))
+	require.True(t, Is(unwrapped, level2ServiceError))
+	require.True(t, Is(unwrapped, level3ProcessingError))
+	require.True(t, Is(unwrapped, level4ContextError))
 }
 
 func Test_UnwrapGRPCWithStandardError(t *testing.T) {
@@ -606,7 +606,7 @@ func Test_WrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
 
 	var uErr *Error
 
-	require.True(t, errors.As(unwrappedErr, &uErr))
+	require.True(t, As(unwrappedErr, &uErr))
 	require.True(t, uErr.Is(ErrServiceError))
 	require.True(t, Is(unwrappedErr, ErrServiceError))
 	require.True(t, uErr.Is(ErrTxInvalid))
@@ -615,4 +615,15 @@ func Test_WrapUnwrapGRPCWithMockGRPCServer(t *testing.T) {
 	require.True(t, Is(unwrappedErr, ErrBlockInvalid))
 	require.True(t, uErr.Is(ErrContextCanceled))
 	require.True(t, Is(unwrappedErr, ErrContextCanceled))
+}
+
+func Test_IsErrorWithNestedErrorCodesWithWrapGRPC(t *testing.T) {
+	errRoot := NewServiceError("service error")
+	err := NewProcessingError("processing error", errRoot)
+	grpcErr := WrapGRPC(err)
+
+	require.True(t, errRoot.Is(ErrServiceError))
+	require.True(t, err.Is(ErrProcessing))
+	require.True(t, Is(grpcErr, ErrServiceError))
+	require.True(t, Is(grpcErr, ErrProcessing))
 }
