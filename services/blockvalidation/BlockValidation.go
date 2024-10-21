@@ -862,7 +862,7 @@ func (u *BlockValidation) addCoinbaseTransactionInLegacySync(ctx context.Context
 		blockID := ids[0]
 
 		if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height, utxo.WithBlockIDs(blockID)); err != nil {
-			if errors.Is(err, errors.ErrTxAlreadyExists) {
+			if errors.Is(err, errors.ErrTxExists) {
 				u.logger.Warnf("[ValidateBlock][%s] coinbase tx already exists: %s", block.Header.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 			} else {
 				return errors.NewTxError("[ValidateBlock][%s] error storing utxos", block.Header.Hash().String(), err)

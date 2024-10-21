@@ -19,6 +19,7 @@ var (
 	ErrBlockInvalid               = New(ERR_BLOCK_INVALID, "block invalid")
 	ErrBlockInvalidFormat         = New(ERR_BLOCK_INVALID_FORMAT, "block format is invalid")
 	ErrBlockExists                = New(ERR_BLOCK_EXISTS, "block exists")
+	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrBlockError                 = New(ERR_BLOCK_ERROR, "block error")
 	ErrSubtreeNotFound            = New(ERR_SUBTREE_NOT_FOUND, "subtree not found")
 	ErrSubtreeInvalid             = New(ERR_SUBTREE_INVALID, "subtree invalid")
@@ -28,8 +29,9 @@ var (
 	ErrTxNotFound                 = New(ERR_TX_NOT_FOUND, "tx not found")
 	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")
 	ErrTxInvalidDoubleSpend       = New(ERR_TX_INVALID_DOUBLE_SPEND, "tx invalid double spend")
-	ErrTxAlreadyExists            = New(ERR_TX_ALREADY_EXISTS, "tx already exists")
+	ErrTxExists                   = New(ERR_TX_EXISTS, "tx already exists")
 	ErrTxMissingParent            = New(ERR_TX_MISSING_PARENT, "missing parent tx")
+	ErrTxLockTime                 = New(ERR_TX_LOCK_TIME, "Bad tx lock time")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
@@ -37,15 +39,15 @@ var (
 	ErrStorageUnavailable         = New(ERR_STORAGE_UNAVAILABLE, "storage unavailable")
 	ErrStorageNotStarted          = New(ERR_STORAGE_NOT_STARTED, "storage not started")
 	ErrStorageError               = New(ERR_STORAGE_ERROR, "storage error")
-	ErrCoinbaseMissingBlockHeight = New(ERR_COINBASE_MISSING_BLOCK_HEIGHT, "the coinbase signature script doesn't have the block height")
-	ErrSpent                      = New(ERR_SPENT, "utxo already spent")
-	ErrLockTime                   = New(ERR_LOCKTIME, "Bad lock time")
-	ErrNonFinal                   = New(ERR_NON_FINAL, "tx is non-final")
-	ErrFrozen                     = New(ERR_FROZEN, "tx is frozen")
+	ErrSpent                      = New(ERR_UTXO_SPENT, "utxo already spent")
+	ErrNonFinal                   = New(ERR_UTXO_NON_FINAL, "tx is non-final")
+	ErrFrozen                     = New(ERR_UTXO_FROZEN, "tx is frozen")
 	ErrKafkaDecode                = New(ERR_KAFKA_DECODE_ERROR, "error decoding kafka message")
 	ErrStateInitialization        = New(ERR_STATE_INITIALIZATION, "error initializing state")
 	ErrStateError                 = New(ERR_STATE_ERROR, "error in state")
-	ErrBlobAlreadyExists          = New(ERR_BLOB_ALREADY_EXISTS, "blob already exists")
+	ErrBlobAlreadyExists          = New(ERR_BLOB_EXISTS, "blob already exists")
+	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
+	ErrBlobError                  = New(ERR_BLOB_ERROR, "blob error")
 	ErrBlockParentNotMined        = New(ERR_BLOCK_PARENT_NOT_MINED, "block parent not mined")
 )
 
@@ -79,6 +81,9 @@ func NewError(message string, params ...interface{}) *Error {
 func NewBlockNotFoundError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_NOT_FOUND, message, params...)
 }
+func NewBlockParentNotMinedError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_PARENT_NOT_MINED, message, params...)
+}
 func NewBlockInvalidError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_INVALID, message, params...)
 }
@@ -106,11 +111,14 @@ func NewTxInvalidError(message string, params ...interface{}) *Error {
 func NewTxInvalidDoubleSpendError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_INVALID_DOUBLE_SPEND, message, params...)
 }
-func NewTxAlreadyExistsError(message string, params ...interface{}) *Error {
-	return New(ERR_TX_ALREADY_EXISTS, message, params...)
+func NewTxExistsError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_EXISTS, message, params...)
 }
 func NewTxMissingParentError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_MISSING_PARENT, message, params...)
+}
+func NewTxLockTimeError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_LOCK_TIME, message, params...)
 }
 func NewTxError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_ERROR, message, params...)
@@ -133,20 +141,17 @@ func NewStorageNotStartedError(message string, params ...interface{}) *Error {
 func NewStorageError(message string, params ...interface{}) *Error {
 	return New(ERR_STORAGE_ERROR, message, params...)
 }
-func NewCoinbaseMissingBlockHeightError(message string, params ...interface{}) *Error {
-	return New(ERR_COINBASE_MISSING_BLOCK_HEIGHT, message, params...)
+func NewBlockCoinbaseMissingHeightError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, message, params...)
 }
-func NewSpentError(message string, params ...interface{}) *Error {
-	return New(ERR_SPENT, message, params...)
+func NewUtxoSpentError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_SPENT, message, params...)
 }
-func NewLockTimeError(message string, params ...interface{}) *Error {
-	return New(ERR_LOCKTIME, message, params...)
+func NewUtxoNonFinalError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_NON_FINAL, message, params...)
 }
-func NewNonFinalError(message string, params ...interface{}) *Error {
-	return New(ERR_NON_FINAL, message, params...)
-}
-func NewFrozenError(message string, params ...interface{}) *Error {
-	return New(ERR_FROZEN, message, params...)
+func NewUtxoFrozenError(message string, params ...interface{}) *Error {
+	return New(ERR_UTXO_FROZEN, message, params...)
 }
 func NewStateInitializationError(message string, params ...interface{}) *Error {
 	return New(ERR_STATE_INITIALIZATION, message, params...)
@@ -155,8 +160,11 @@ func NewStateErrorError(message string, params ...interface{}) *Error {
 	return New(ERR_STATE_ERROR, message, params...)
 }
 func NewBlobAlreadyExistsError(message string, params ...interface{}) *Error {
-	return New(ERR_BLOB_ALREADY_EXISTS, message, params...)
+	return New(ERR_BLOB_EXISTS, message, params...)
 }
-func NewBlockParentNotMinedError(message string, params ...interface{}) *Error {
-	return New(ERR_BLOCK_PARENT_NOT_MINED, message, params...)
+func NewBlobNotFoundError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOB_NOT_FOUND, message, params...)
+}
+func NewBlobError(message string, params ...interface{}) *Error {
+	return New(ERR_BLOB_ERROR, message, params...)
 }

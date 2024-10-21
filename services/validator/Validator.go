@@ -222,7 +222,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 		// this function should be moved into go-bt
 		if err = util.IsTransactionFinal(tx, utxoStoreBlockHeight+1, utxoStoreMedianBlockTime); err != nil {
-			return errors.NewNonFinalError("[Validate][%s] transaction is not final", txID, err)
+			return errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
 		}
 	}
 
@@ -271,7 +271,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		//      if the block assembly addition fails, the utxo should not be spendable yet
 		txMetaData, err = v.storeTxInUtxoMap(setSpan, tx, blockHeight)
 		if err != nil {
-			if errors.Is(err, errors.ErrTxAlreadyExists) {
+			if errors.Is(err, errors.ErrTxExists) {
 				// stop all processing, this transaction has already been validated and passed into the block assembly
 				// buf := make([]byte, 1024)
 				// runtime.Stack(buf, false)

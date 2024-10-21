@@ -280,7 +280,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			if aErr.ResultCode == types.KEY_EXISTS_ERROR {
 				// we want to return a tx already exists error on this case
 				// this should only be called with 1 record
-				err = errors.NewTxAlreadyExistsError("[sendStoreBatch-1] %v already exists in store", batch[0].txHash)
+				err = errors.NewTxExistsError("[sendStoreBatch-1] %v already exists in store", batch[0].txHash)
 				for _, bItem := range batch {
 					utils.SafeSend(bItem.done, err)
 				}
@@ -305,7 +305,7 @@ func (s *Store) sendStoreBatch(batch []*batchStoreItem) {
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](batch[idx].done, errors.NewTxAlreadyExistsError("[sendStoreBatch-2] %v already exists in store", batch[idx].txHash))
+					utils.SafeSend[error](batch[idx].done, errors.NewTxExistsError("[sendStoreBatch-2] %v already exists in store", batch[idx].txHash))
 					continue
 				}
 
@@ -550,7 +550,7 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("[storeTransactionExternally] %v already exists in store", bItem.txHash))
+					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[storeTransactionExternally] %v already exists in store", bItem.txHash))
 
 					return
 				}
@@ -641,7 +641,7 @@ func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *ba
 			aErr, ok := err.(*aerospike.AerospikeError)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](bItem.done, errors.NewTxAlreadyExistsError("[storePartialTransactionExternally] %v already exists in store", bItem.txHash))
+					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[storePartialTransactionExternally] %v already exists in store", bItem.txHash))
 
 					return
 				}

@@ -64,7 +64,7 @@ func (m *Memory) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts
 	}
 
 	if _, ok := m.txs[*txHash]; ok {
-		return nil, errors.NewTxAlreadyExistsError("%v already exists", txHash)
+		return nil, errors.NewTxExistsError("%v already exists", txHash)
 	}
 
 	m.txs[*txHash] = &memoryData{
@@ -190,12 +190,12 @@ func (m *Memory) Spend(_ context.Context, spends []*utxo.Spend, blockHeight uint
 
 		// check utxo is frozen
 		if tx.frozenMap[*spend.UTXOHash] {
-			return errors.NewFrozenError("%v is frozen", spend.TxID)
+			return errors.NewUtxoFrozenError("%v is frozen", spend.TxID)
 		}
 
 		// check utxo is spendable
 		if tx.utxoSpendableIn[spend.Vout] != 0 && m.txs[*spend.TxID].utxoSpendableIn[spend.Vout] > m.blockHeight.Load() {
-			return errors.NewLockTimeError("%v is not spendable until %d", spend.TxID, m.txs[*spend.TxID].utxoSpendableIn[spend.Vout])
+			return errors.NewTxLockTimeError("%v is not spendable until %d", spend.TxID, m.txs[*spend.TxID].utxoSpendableIn[spend.Vout])
 		}
 
 		tx.utxoMap[*spend.UTXOHash] = spend.SpendingTxID
@@ -306,11 +306,11 @@ func (m *Memory) FreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 
 		// check that it is not already frozen, or spent
 		if m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] {
-			return errors.NewFrozenError("%v is already frozen", spend.TxID)
+			return errors.NewUtxoFrozenError("%v is already frozen", spend.TxID)
 		}
 
 		if m.txs[*spend.TxID].utxoMap[*spend.UTXOHash] != nil {
-			return errors.NewFrozenError("%v is already spent", spend.TxID)
+			return errors.NewUtxoFrozenError("%v is already spent", spend.TxID)
 		}
 
 		m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] = true
@@ -334,7 +334,7 @@ func (m *Memory) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend) error {
 
 		// check that it is frozen, otherwise return an error
 		if !m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] {
-			return errors.NewFrozenError("%v is not frozen", spend.TxID)
+			return errors.NewUtxoFrozenError("%v is not frozen", spend.TxID)
 		}
 
 		m.txs[*spend.TxID].frozenMap[*spend.UTXOHash] = false
@@ -349,7 +349,7 @@ func (m *Memory) ReAssignUTXO(_ context.Context, oldUtxo *utxo.Spend, newUtxo *u
 
 	// check whether the utxo is frozen
 	if !m.txs[*oldUtxo.TxID].frozenMap[*oldUtxo.UTXOHash] {
-		return errors.NewFrozenError("%v is not frozen", oldUtxo.TxID)
+		return errors.NewUtxoFrozenError("%v is not frozen", oldUtxo.TxID)
 	}
 
 	// set the spendable block height of the re-assigned utxo

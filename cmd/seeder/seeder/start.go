@@ -435,7 +435,7 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 		utxo.WithSetCoinbase(utxoWrapper.Coinbase),
 		utxo.WithBlockIDs(0),
 	); err != nil {
-		if errors.Is(err, errors.ErrTxAlreadyExists) {
+		if errors.Is(err, errors.ErrTxExists) {
 			return nil
 		}
 

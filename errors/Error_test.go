@@ -243,7 +243,7 @@ func Test_UtxoSpentError(t *testing.T) {
 
 	utxoSpentError := NewUtxoSpentErr(chainhash.Hash{}, chainhash.Hash{}, time.Now(), baseErr)
 	require.NotNil(t, utxoSpentError)
-	require.True(t, utxoSpentError.Is(ErrTxAlreadyExists), "expected error to be of type ERR_TX_ALREADY_EXISTS")
+	require.True(t, utxoSpentError.Is(ErrTxExists), "expected error to be of type ERR_TX_EXISTS")
 	require.True(t, utxoSpentError.Is(baseErr), "expected error to be of type baseErr")
 	require.False(t, utxoSpentError.Is(ErrBlockInvalid), "expected error to be of type baseErr")
 

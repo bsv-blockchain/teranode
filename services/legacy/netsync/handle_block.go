@@ -334,7 +334,7 @@ func (sm *SyncManager) createUtxos(ctx context.Context, txMap map[chainhash.Hash
 
 		g.Go(func() error {
 			if _, err := sm.utxoStore.Create(gCtx, txMap[txHash].tx, uint32(block.Height())); err != nil {
-				if errors.Is(err, errors.ErrTxAlreadyExists) {
+				if errors.Is(err, errors.ErrTxExists) {
 					sm.logger.Debugf("failed to create utxo for tx %s: %s", txHash.String(), err)
 				} else {
 					return err
