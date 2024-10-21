@@ -2,15 +2,18 @@ package blockchain
 
 import (
 	"context"
+	"fmt"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"net/url"
-	"os"
 	"testing"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
 	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/util/test/mock_logger"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -85,20 +88,11 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 	storeURL, err := url.Parse(connStr)
 	require.NoError(t, err)
 
-	s, err := New(ulogger.TestLogger{}, storeURL)
+	blockchainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, storeURL)
 	require.NoError(t, err)
 
 	ctx := context.Background()
 	logger := mock_logger.NewTestLogger()
-
-	_ = os.Remove("data/blockchain.db")
-
-	blockchainStoreURL, err, found := gocore.Config().GetURL("blockchain_store")
-	require.NoError(t, err)
-	require.True(t, found)
-
-	blockchainStore, err := blockchain_store.NewStore(logger, blockchainStoreURL)
-	require.NoError(t, err)
 
 	blockchainClient, err := New(ctx, logger, blockchainStore)
 	require.NoError(t, err)
@@ -142,5 +136,75 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 		require.Equal(t, "CATCHINGBLOCKS", state)
 	})
 
-	_ = os.Remove("data/blockchain.db")
+	t.Run("Simulate re-initializing blockchain service", func(t *testing.T) {
+		// Step 1 Simulate restarting the blockchain service
+		blockchainClient.finiteStateMachine = nil
+
+		// Step 2 Re-initialize the blockchain service
+		// This should restore the state to the last known state from DB
+		err = blockchainClient.Init(ctx)
+		require.NoError(t, err)
+
+		resp, err = blockchainClient.GetFSMCurrentState(ctx, &emptypb.Empty{})
+		require.NoError(t, err)
+		require.Equal(t, "CATCHINGBLOCKS", resp.State.String())
+
+		state, err := blockchainClient.store.GetFSMState(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "CATCHINGBLOCKS", state)
+	})
+
+	t.Run("Alter current state to Running again", func(t *testing.T) {
+		_, err = blockchainClient.Run(ctx, &emptypb.Empty{})
+		require.NoError(t, err)
+
+		resp, err := blockchainClient.GetFSMCurrentState(ctx, &emptypb.Empty{})
+		require.NoError(t, err)
+		require.Equal(t, "RUNNING", resp.State.String())
+
+		state, err := blockchainClient.store.GetFSMState(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "RUNNING", state)
+	})
+
+}
+
+func SetupPostgresContainer() (string, func() error, error) {
+	ctx := context.Background()
+
+	dbName := "testdb"
+	dbUser := "postgres"
+	dbPassword := "password"
+
+	postgresC, err := postgres.Run(ctx,
+		"docker.io/postgres:16-alpine",
+		postgres.WithDatabase(dbName),
+		postgres.WithUsername(dbUser),
+		postgres.WithPassword(dbPassword),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(5*time.Second)),
+	)
+	if err != nil {
+		return "", nil, err
+	}
+
+	host, err := postgresC.Host(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+
+	port, err := postgresC.MappedPort(ctx, "5432")
+	if err != nil {
+		return "", nil, err
+	}
+
+	connStr := fmt.Sprintf("postgres://postgres:password@%s:%s/testdb?sslmode=disable", host, port.Port())
+
+	teardown := func() error {
+		return postgresC.Terminate(ctx)
+	}
+
+	return connStr, teardown, nil
 }
