@@ -1,3 +1,5 @@
+bitbucket.org/simon_ordish/cryptolib v1.0.48 h1:bz3DsRCQK1tPQ59d1KwqDCkS0wW2PU6VoLlgTK/jKZM=
+bitbucket.org/simon_ordish/cryptolib v1.0.48/go.mod h1:Zt5cEbIFQyX6LxtDy7rZ5Bo2irVWJPZ1gQXWCsc66ZE=
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 cloud.google.com/go v0.31.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 cloud.google.com/go v0.34.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
@@ -352,6 +354,10 @@ github.com/go-task/slim-sprig/v3 v3.0.0/go.mod h1:W848ghGpv3Qj3dhTPRyJypKRiqCdHZ
 github.com/go-viper/mapstructure/v2 v2.2.1 h1:ZAaOCxANMuZx5RCeg0mBdEZk7DZasvvZIxtHqx8aGss=
 github.com/go-viper/mapstructure/v2 v2.2.1/go.mod h1:oJDH3BJKyqBA2TXFhDsKDGDTlndYOZ6rGS0BRZIxGhM=
 github.com/go-yaml/yaml v2.1.0+incompatible/go.mod h1:w2MrLa16VYP0jy6N7M5kHaCkaLENm+P+Tv+MfurjSw0=
+github.com/go-zeromq/goczmq/v4 v4.2.2 h1:HAJN+i+3NW55ijMJJhk7oWxHKXgAuSBkoFfvr8bYj4U=
+github.com/go-zeromq/goczmq/v4 v4.2.2/go.mod h1:Sm/lxrfxP/Oxqs0tnHD6WAhwkWrx+S+1MRrKzcxoaYE=
+github.com/go-zeromq/zmq4 v0.15.0 h1:SLqukpmLTx0JsLaOaCCjwy5eBdfJ+ouJX/677HoFbJM=
+github.com/go-zeromq/zmq4 v0.15.0/go.mod h1:sD47DcXifeUFsVTB2ps8ijqTpEuTAlYgfuLoiWEXdCE=
 github.com/gobwas/httphead v0.1.0/go.mod h1:O/RXo79gxV8G+RqlR/otEwx4Q36zl9rqC5u12GKvMCM=
 github.com/gobwas/pool v0.2.1/go.mod h1:q8bcK0KcYlCgd9e7WYLm9LpyS+YeLd8JVDW6WezmKEw=
 github.com/gobwas/ws v1.2.1/go.mod h1:hRKAFb8wOxFROYNsT1bqfWnhX+b5MFeJM9r2ZSwg/KY=
@@ -832,6 +838,8 @@ github.com/opentracing/opentracing-go v1.1.0/go.mod h1:UkNAQd3GIcIGf0SeVgPpRdFSt
 github.com/opentracing/opentracing-go v1.2.0 h1:uEJPy/1a5RIPAJ0Ov+OIO8OxWu77jEv+1B0VhjKrZUs=
 github.com/opentracing/opentracing-go v1.2.0/go.mod h1:GxEUsuufX4nBwe+T+Wl9TAgYrxe9dPLANfrWvHYVTgc=
 github.com/openzipkin/zipkin-go v0.1.1/go.mod h1:NtoC/o8u3JlF1lSlyPNswIbeQH9bJTmOf0Erfk+hxe8=
+github.com/ordishs/go-bitcoin v1.0.86 h1:OuLnaOfzCe/dHFlCredPFSJKQLOQIuUuuJj/faPtJnE=
+github.com/ordishs/go-bitcoin v1.0.86/go.mod h1:O3lqD8unDlwLXTmQTT4F5x/Gl3xgP4IgMQDFxTmi9V4=
 github.com/ordishs/go-bt/v2 v2.2.12 h1:gdvc/HLbvnGSYACoDGAyDWGsGTowrndDeFAtE7SEcIU=
 github.com/ordishs/go-bt/v2 v2.2.12/go.mod h1:GzP/0J7RbEgMZ20pt6zuBgZuuaZwUKBl5wKJmPRst/I=
 github.com/ordishs/go-utils v1.0.51 h1:XgBphXkjoUxRdahzyNRpQ5NnB96ygkggIqqzX6ruaFo=
@@ -841,6 +849,8 @@ github.com/ordishs/gocore v1.0.68/go.mod h1:k6BD/+c2Onli/SWyNYwBFqBXhEd8Bw2mSqYT
 github.com/orisano/pixelmatch v0.0.0-20220722002657-fb0b55479cde/go.mod h1:nZgzbfBr3hhjoZnS66nKrHmduYNpc34ny7RK4z5/HM0=
 github.com/outcaste-io/ristretto v0.2.3 h1:AK4zt/fJ76kjlYObOeNwh4T3asEuaCmp26pOvUOL9w0=
 github.com/outcaste-io/ristretto v0.2.3/go.mod h1:W8HywhmtlopSB1jeMg3JtdIhf+DYkLAr0VN/s4+MHac=
+github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
+github.com/patrickmn/go-cache v2.1.0+incompatible/go.mod h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 h1:onHthvaw9LFnH4t2DcNVpwGmV9E1BkGknEliJkfwQj0=
 github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58/go.mod h1:DXv8WO4yhMYhSNPKjeNKa5WY9YCIEBRbNzFFPJbWO6Y=
 github.com/pelletier/go-toml v1.9.5 h1:4yBQzkHv+7BHq2PQUZF3Mx0IYxG7LsP222s7Agd3ve8=

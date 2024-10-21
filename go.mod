@@ -90,6 +90,7 @@ require (
 )
 
 require (
+	bitbucket.org/simon_ordish/cryptolib v1.0.48 // indirect
 	github.com/OneOfOne/xxhash v1.2.8 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/containerd/containerd/api v1.7.19 // indirect
@@ -100,10 +101,13 @@ require (
 	github.com/eiannone/keyboard v0.0.0-20220611211555-0d226195f203 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
+	github.com/go-zeromq/goczmq/v4 v4.2.2 // indirect
+	github.com/go-zeromq/zmq4 v0.15.0 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
+	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pion/datachannel v1.5.8 // indirect
 	github.com/pion/dtls/v2 v2.2.12 // indirect
 	github.com/pion/ice/v2 v2.3.34 // indirect
@@ -130,6 +134,7 @@ require (
 
 require (
 	github.com/felixge/fgprof v0.9.5
+	github.com/ordishs/go-bitcoin v1.0.86
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.33.0
 )
 
