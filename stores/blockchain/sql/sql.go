@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"strings"
 	"sync"
 	"time"
 
@@ -106,7 +105,6 @@ func createPostgresSchema(db *usql.DB) error {
       CREATE TABLE IF NOT EXISTS state (
 	    key            VARCHAR(32) PRIMARY KEY
 	    ,data          BYTEA NOT NULL
-        ,fsm_state	 VARCHAR(32) NULL
         ,inserted_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         ,updated_at    TIMESTAMPTZ NULL
 	  );
@@ -212,13 +210,15 @@ func createPostgresSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create block_transactions_map table", err)
 	}
 
-	// Add the 'fsm_state' column if it doesn't exist
-	if _, err := db.Exec(`
-        ALTER TABLE state ADD COLUMN IF NOT EXISTS fsm_state VARCHAR(32) NULL;
-    `); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not alter state table to add fsm_state column", err)
-	}
+	/*
+			// Add the 'fsm_state' column if it doesn't exist
+			if _, err := db.Exec(`
+		        ALTER TABLE state ADD COLUMN IF NOT EXISTS fsm_state VARCHAR(32) NULL;
+		    `); err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not alter state table to add fsm_state column", err)
+			}
+	*/
 
 	return nil
 }
@@ -228,7 +228,6 @@ func createSqliteSchema(db *usql.DB) error {
 		CREATE TABLE IF NOT EXISTS state (
 		 key            VARCHAR(32) PRIMARY KEY
 	    ,data           BLOB NOT NULL
-	    ,fsm_state      VARCHAR(32) NULL
         ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         ,updated_at     TEXT NULL
 	  );
@@ -295,18 +294,18 @@ func createSqliteSchema(db *usql.DB) error {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_subtrees_set index", err)
 	}
-
-	// Check if 'fsm_state' column exists, and add it if it doesn't
-	if _, err := db.Exec(`
-        ALTER TABLE state ADD COLUMN fsm_state VARCHAR(32) NULL;
-    `); err != nil {
-		// Ignore "duplicate column name" error (SQLite code 1)
-		if !strings.Contains(err.Error(), "duplicate column name: fsm_state") {
-			_ = db.Close()
-			return errors.NewStorageError("could not alter state table to add fsm_state column", err)
-		}
-	}
-
+	/*
+	   	// Check if 'fsm_state' column exists, and add it if it doesn't
+	   	if _, err := db.Exec(`
+	           ALTER TABLE state ADD COLUMN fsm_state VARCHAR(32) NULL;
+	       `); err != nil {
+	   		// Ignore "duplicate column name" error (SQLite code 1)
+	   		if !strings.Contains(err.Error(), "duplicate column name: fsm_state") {
+	   			_ = db.Close()
+	   			return errors.NewStorageError("could not alter state table to add fsm_state column", err)
+	   		}
+	   	}
+	*/
 	return nil
 }
 

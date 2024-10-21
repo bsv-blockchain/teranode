@@ -2,7 +2,6 @@ package sql
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"testing"
 
@@ -11,7 +10,7 @@ import (
 )
 
 func Test_SetGetFSMState(t *testing.T) {
-	connStr, teardown, err := setupPostgresContainer()
+	connStr, teardown, err := SetupPostgresContainer()
 	require.NoError(t, err)
 
 	defer func() {
@@ -29,7 +28,13 @@ func Test_SetGetFSMState(t *testing.T) {
 	require.NoError(t, err)
 
 	state, err := s.GetFSMState(context.Background())
-	fmt.Println("State: ", state)
 	require.NoError(t, err)
 	require.Equal(t, "CATCHING_BLOCKS", state)
+
+	err = s.SetFSMState(context.Background(), "RUNNING")
+	require.NoError(t, err)
+
+	state, err = s.GetFSMState(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "RUNNING", state)
 }
