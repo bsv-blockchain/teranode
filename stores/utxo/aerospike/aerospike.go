@@ -85,17 +85,22 @@ func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*St
 		log.Fatal("Failed to init placeholder key")
 	}
 
-	expiration := uint32(0)
-
 	expirationValue := aerospikeURL.Query().Get("expiration")
-	if expirationValue != "" {
-		expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
-		if err != nil {
-			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
-		}
-		// nolint: gosec
-		expiration = uint32(expiration64)
+	if expirationValue == "" {
+		return nil, errors.NewInvalidArgumentError("expiration query parameter missing")
 	}
+
+	expiration64, err := strconv.ParseUint(expirationValue, 10, 64)
+	if err != nil {
+		return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
+	}
+
+	if expiration64 == 0 {
+		return nil, errors.NewInvalidArgumentError("expiration cannot be 0 (in Aerospike this means immediate expiration)")
+	}
+
+	// nolint: gosec
+	expiration := uint32(expiration64)
 
 	setName := aerospikeURL.Query().Get("set")
 	if setName == "" {
