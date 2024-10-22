@@ -93,6 +93,11 @@ func New(ctx context.Context, logger ulogger.Logger, aerospikeURL *url.URL) (*St
 		if err != nil {
 			return nil, errors.NewInvalidArgumentError("could not parse expiration %s", expirationValue, err)
 		}
+
+		if expiration == 0 {
+			logger.Infof("expiration is set to 0 meaning the default aerospike namespace TTL setting will be used")
+		}
+
 		// nolint: gosec
 		expiration = uint32(expiration64)
 	}
