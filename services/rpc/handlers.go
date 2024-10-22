@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -904,11 +903,9 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, err
 	}
 
-	var subnet *net.IPNet
-
 	c := cmd.(*bsvjson.SetBanCmd)
 
-	s.logger.Debugf("in handleSetBan: c: %+v", c)
+	s.logger.Debugf("in handleSetBan: c: %+v", *c)
 
 	if c.IPOrSubnet == "" {
 		return nil, &bsvjson.RPCError{
@@ -940,7 +937,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			}
 		}
 
-		s.logger.Debugf("Added ban for %s until %v", subnet.String(), expirationTime)
+		s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 	case "remove":
 		err = banList.Remove(ctx, c.IPOrSubnet)
 		if err != nil {
