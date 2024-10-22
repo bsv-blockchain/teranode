@@ -364,7 +364,7 @@ func readBlockFromReader(block *Block, buf io.Reader) (*Block, error) {
 	for i := uint64(0); i < block.subtreeLength; i++ {
 		_, err = io.ReadFull(buf, hashBytes[:])
 		if err != nil {
-			return nil, errors.NewBlockInvalidError("error reading subtree hash", err)
+			return nil, errors.NewBlockInvalidError("error reading subtree hash %d/%d", i, block.subtreeLength, err)
 		}
 
 		subtreeHash, err = chainhash.NewHash(hashBytes[:])
