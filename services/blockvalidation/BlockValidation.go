@@ -774,7 +774,7 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 		u.logger.Errorf("[ValidateBlock][%s] failed to store coinbase transaction [%s]", block.Hash().String(), err)
 	}
 
-	u.logger.Infof("[ValidateBlock][%s] storing coinbase tx: %s DONE", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
+	u.logger.Infof("[ValidateBlock][%s] storing coinbase in tx store: %s DONE", block.Hash().String(), block.CoinbaseTx.TxIDChainHash().String())
 
 	// decouple the tracing context to not cancel the context when finalize the block processing in the background
 	callerSpan := tracing.DecoupleTracingSpan(ctx, "decoupleValidateBlock")
@@ -824,7 +824,6 @@ func (u *BlockValidation) addCoinbaseTransactionInLegacySync(ctx context.Context
 
 	if currentState.Is(blockchain.FSMStateLEGACYSYNCING) {
 		// Add the coinbase transaction to the metaTxStore, but only in LEGACY SYNCING mode
-		u.logger.Debugf("[ValidateBlock][%s] height %d storeCoinbaseTx %s", block.Header.Hash().String(), block.Height, block.CoinbaseTx.TxIDChainHash().String())
 
 		// get block ID from DB
 		ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.Hash(), 1)
@@ -833,6 +832,8 @@ func (u *BlockValidation) addCoinbaseTransactionInLegacySync(ctx context.Context
 		}
 
 		blockID := ids[0]
+
+		u.logger.Debugf("[ValidateBlock][%s] height %d storeCoinbaseTx %s blockID %d", block.Header.Hash().String(), block.Height, block.CoinbaseTx.TxIDChainHash().String(), blockID)
 
 		if _, err = u.utxoStore.Create(ctx, block.CoinbaseTx, block.Height, utxo.WithBlockIDs(blockID)); err != nil {
 			if errors.Is(err, errors.ErrTxExists) {
