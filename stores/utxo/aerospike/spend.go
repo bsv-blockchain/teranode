@@ -313,6 +313,7 @@ func (s *Store) incrementNrRecords(txid *chainhash.Hash, increment int) (interfa
 		luaPackage,
 		"incrementNrRecords",
 		aerospike.NewIntegerValue(increment),
+		aerospike.NewValue(s.expiration), // ttl
 	)
 	if err != nil {
 		return nil, errors.NewProcessingError("[incrementNrRecords][%s] failed to increment nrRecords", key, err)
