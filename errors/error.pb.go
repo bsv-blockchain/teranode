@@ -82,6 +82,11 @@ const (
 	// State errors 90-99
 	ERR_STATE_INITIALIZATION ERR = 90
 	ERR_STATE_ERROR          ERR = 99
+
+	// network errors 100-109
+	ERR_NETWORK_ERROR      ERR = 100
+	ERR_INVALID_SUBNET     ERR = 101
+	ERR_INVALID_IP         ERR = 102
 )
 
 // Enum value maps for ERR.
