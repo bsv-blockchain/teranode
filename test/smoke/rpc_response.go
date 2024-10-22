@@ -42,8 +42,8 @@ type P2PNode struct {
 
 type P2PRPCResponse struct {
 	Result []P2PNode   `json:"result"`
-	Error  interface{} `json:"error"` // `error` potrebbe essere null o contenere informazioni, quindi usa `interface{}`
-	ID     interface{} `json:"id"`    // `id` potrebbe essere null o un numero, quindi `interface{}`
+	Error  interface{} `json:"error"`
+	ID     interface{} `json:"id"`
 }
 
 type GetInfo struct {
@@ -61,4 +61,10 @@ type GetInfo struct {
 	} `json:"result"`
 	Error interface{} `json:"error"`
 	ID    int         `json:"id"`
+}
+
+type GetDifficultyResponse struct {
+	Result float64     `json:"result"`
+	Error  interface{} `json:"error"`
+	ID     int         `json:"id"`
 }
