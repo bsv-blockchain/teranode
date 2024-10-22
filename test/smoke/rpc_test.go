@@ -1,6 +1,6 @@
 //go:build rpc
 
-// go test -v -run "^TestRPCTestSuite$/TestRPCGetBlockchainInfo$" -tags rpc
+// go test -v -run "^TestRPCTestSuite$/TestRPCGetDifficulty$" -tags rpc
 
 package test
 
@@ -100,6 +100,36 @@ func (suite *RPCTestSuite) TestRPCGetInfo() {
 		}
 	} else {
 		t.Logf("Test succeeded, retrieved information from getinfo RPC call")
+	}
+}
+
+func (suite *RPCTestSuite) TestRPCGetDifficulty() {
+	t := suite.T()
+
+	var getDifficulty GetDifficultyResponse
+
+	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getdifficulty", []interface{}{})
+
+	if err != nil {
+		t.Errorf("Error CallRPC: %v", err)
+	}
+
+	errJSON := json.Unmarshal([]byte(resp), &getDifficulty)
+	if err != nil {
+		t.Errorf("JSON decoding error: %v", errJSON)
+		return
+	}
+
+	t.Logf("%s", resp)
+
+	if getDifficulty.Error != nil {
+		if strErr, ok := getDifficulty.Error.(string); ok && strErr == "null" {
+			t.Errorf("Test failed: getdifficulty RPC call returned error: %v", strErr)
+		} else {
+			t.Errorf("Test failed: getdifficulty RPC call returned an unexpected error type: %v", getDifficulty.Error)
+		}
+	} else {
+		t.Logf("Test succeeded, retrieved information from getdifficulty RPC call")
 	}
 }
 
