@@ -103,6 +103,7 @@ message GetBlockResponse {
   uint64 transaction_count = 4;
   repeated bytes subtree_hashes = 5;
   uint64 size_in_bytes = 6;
+  uint32 id = 7;
 }
 
 message GetFullBlockResponse {

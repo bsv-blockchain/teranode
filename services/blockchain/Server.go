@@ -414,6 +414,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 		SubtreeHashes:    subtreeHashes,
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
+		Id:               block.ID,
 	}, nil
 }
 
@@ -479,6 +480,7 @@ func (b *Blockchain) GetBlockByHeight(ctx context.Context, request *blockchain_a
 		SubtreeHashes:    subtreeHashes,
 		TransactionCount: block.TransactionCount,
 		SizeInBytes:      block.SizeInBytes,
+		Id:               block.ID,
 	}, nil
 }
 

@@ -245,7 +245,7 @@ func createBlocks() error {
 		return errors.NewProcessingError("header1 does not have met target difficulty")
 	}
 
-	block1, err = model.NewBlock(header1, coinbase1, nil, 1, 0, 1)
+	block1, err = model.NewBlock(header1, coinbase1, nil, 1, 0, 1, 1)
 	if err != nil {
 		return err
 	}
@@ -292,7 +292,7 @@ func createBlocks() error {
 		return errors.NewProcessingError("header2 does not have met target difficulty")
 	}
 
-	block2, err = model.NewBlock(header2, coinbase2, []*chainhash.Hash{subtree2.RootHash()}, 3, 0, 2)
+	block2, err = model.NewBlock(header2, coinbase2, []*chainhash.Hash{subtree2.RootHash()}, 3, 0, 2, 2)
 	if err != nil {
 		return err
 	}
@@ -339,7 +339,7 @@ func createBlocks() error {
 		return errors.NewProcessingError("header3 does not have met target difficulty")
 	}
 
-	block3, err = model.NewBlock(header3, coinbase3, []*chainhash.Hash{subtree3.RootHash()}, 3, 0, 3)
+	block3, err = model.NewBlock(header3, coinbase3, []*chainhash.Hash{subtree3.RootHash()}, 3, 0, 3, 3)
 	if err != nil {
 		return err
 	}
