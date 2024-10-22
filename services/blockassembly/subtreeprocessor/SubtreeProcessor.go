@@ -288,7 +288,7 @@ func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveDownBlock
 }
 
 func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block, responseCh chan ResetResponse) {
-	stp.logger.Warnf("[SubtreeProcessor][Reset] Resetting subtree processor")
+	stp.logger.Warnf("[SubtreeProcessor][Reset] Resetting subtree processor with %d moveDownBlocks and %d moveUpBlocks", len(moveDownBlocks), len(moveUpBlocks))
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
 
