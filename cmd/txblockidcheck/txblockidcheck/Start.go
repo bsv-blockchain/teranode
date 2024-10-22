@@ -13,6 +13,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -76,7 +77,12 @@ func Start() {
 		usage("transaction hash required")
 	}
 
-	utxoStore, err := utxofactory.NewStore(ctx, logger, parseURL(utxoStoreString), "main", false)
+	var (
+		err       error
+		utxoStore utxo.Store
+	)
+
+	utxoStore, err = utxofactory.NewStore(ctx, logger, parseURL(utxoStoreString), "main", false)
 	if err != nil {
 		usage(err.Error())
 	}
@@ -108,17 +114,19 @@ func Start() {
 	if txMeta != nil {
 		fmt.Printf("Tx %s (coinbase=%v) (blockID=%v)\n", txHash, txMeta.IsCoinbase, txMeta.BlockIDs)
 
-		for _, hash := range txMeta.ParentTxHashes {
-			txMeta, err := utxoStore.Get(ctx, &hash)
+		if !txMeta.IsCoinbase {
+			for _, hash := range txMeta.ParentTxHashes {
+				txMeta, err := utxoStore.Get(ctx, &hash)
 
-			switch {
-			case errors.Is(err, errors.ErrTxNotFound):
-				fmt.Printf("Parent tx %s not found in utxoStore\n", txHash)
-			case err != nil:
-				fmt.Printf("Parent tx %s get error\n", hash)
-			default:
-				parentTxs = append(parentTxs, txMeta)
-				fmt.Printf("Parent tx %s (coinbase=%v) (blockID=%v)\n", hash, txMeta.IsCoinbase, txMeta.BlockIDs)
+				switch {
+				case errors.Is(err, errors.ErrTxNotFound):
+					fmt.Printf("Parent tx %s not found in utxoStore\n", txHash)
+				case err != nil:
+					fmt.Printf("Parent tx %s get error\n", hash)
+				default:
+					parentTxs = append(parentTxs, txMeta)
+					fmt.Printf("Parent tx %s (coinbase=%v) (blockID=%v)\n", hash, txMeta.IsCoinbase, txMeta.BlockIDs)
+				}
 			}
 		}
 	}
@@ -194,6 +202,17 @@ func checkBlocks(ctx context.Context, blockHeaders []*model.BlockHeader, blockMe
 		if err := block.GetAndValidateSubtrees(ctx, ulogger.TestLogger{}, subtreeStore, nil); err != nil {
 			fmt.Println(err.Error())
 			continue
+		}
+
+		if block.CoinbaseTx.TxIDChainHash().IsEqual(txHash) {
+			foundCount++
+
+			fmt.Print("===============\n")
+			fmt.Printf("Coinbase tx found: %s\n", txHash)
+			fmt.Printf("Block Height: %d\n", blockMeta.Height)
+			fmt.Printf("Block ID: %d\n", blockMeta.ID)
+			fmt.Printf("Block Hash: %s\n", blockHeader.Hash())
+			fmt.Print("===============\n")
 		}
 
 		if parentTxs != nil && parentTxs[0].IsCoinbase {
