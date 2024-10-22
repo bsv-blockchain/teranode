@@ -224,6 +224,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					}
 
 					u.logger.Infof("[BlockValidation Init] processing catchup on channel [%s]", c.block.Hash().String())
+
 					if err := u.catchup(ctx1, c.block, c.baseURL); err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to catchup from [%s] [%v]", c.block.Hash().String(), err)
 					}
@@ -254,6 +255,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		// subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
 		// g.SetLimit(subtreeConcurrency)
 		var partitions int
+
 		if partitions, err = strconv.Atoi(blocksKafkaURL.Query().Get("partitions")); err != nil {
 			return errors.NewConfigurationError("unable to parse Kafka partitions from %s", blocksKafkaURL.String(), err)
 		}
@@ -322,6 +324,7 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.Kafk
 			// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
 			// kafka message should be committed, so return nil to mark message.
 			u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling block, marking Kafka message as completed.\n", msg, err)
+
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -360,15 +363,14 @@ func (u *Server) blockHandler(msg kafka.KafkaMessage) error {
 	if err != nil {
 		return errors.NewServiceError("[BlockFound][%s] failed to check if block exists", hash.String(), err)
 	}
+
 	if exists {
 		u.logger.Infof("[BlockFound][%s] already validated, skipping", hash.String())
 		return nil
 	}
 
-	var errCh chan error
+	errCh := make(chan error, 1)
 
-	// process the block in the background, in the order we receive them, but without blocking the grpc call
-	// go func() {
 	u.logger.Infof("[BlockFound][%s] add on channel", hash.String())
 	u.blockFoundCh <- processBlockFound{
 		hash:    hash,
@@ -376,7 +378,11 @@ func (u *Server) blockHandler(msg kafka.KafkaMessage) error {
 		errCh:   errCh,
 	}
 	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
-	// }()
+
+	err = <-errCh
+	if err != nil {
+		return errors.NewProcessingError("[BlockFound][%s] failed to process block", hash.String(), err)
+	}
 
 	return nil
 }
@@ -408,6 +414,11 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 				baseURL: pb.baseURL,
 			}
 		}
+
+		if blockFound.errCh != nil {
+			blockFound.errCh <- nil
+		}
+
 		return nil
 	}
 
@@ -420,6 +431,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		if blockFound.errCh != nil {
 			blockFound.errCh <- err
 		}
+
 		return errors.NewProcessingError("[Init] failed to process block [%s]", blockFound.hash.String(), err)
 	}
 
@@ -637,7 +649,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 	err = u.processBlockFound(ctx, block.Header.Hash(), "legacy", block)
 	if err != nil {
 		// error from processBlockFound is already wrapped
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	return &blockvalidation_api.EmptyMessage{}, nil
@@ -654,7 +666,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	// first check if the block exists, it might have already been processed
 	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
-		return errors.WrapGRPC(errors.NewServiceError("[processBlockFound][%s] failed to check if block exists", hash.String(), err))
+		return errors.NewServiceError("[processBlockFound][%s] failed to check if block exists", hash.String(), err)
 	}
 	if exists {
 		u.logger.Warnf("[processBlockFound][%s] not processing block that already was found", hash.String())
@@ -667,7 +679,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	} else {
 		block, err = u.getBlock(ctx, hash, baseUrl)
 		if err != nil {
-			return errors.WrapGRPC(err)
+			return err
 		}
 	}
 
@@ -676,8 +688,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	// catchup if we are missing the parent block.
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
-		return errors.WrapGRPC(
-			errors.NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", hash.String(), block.Header.HashPrevBlock.String(), err))
+		return errors.NewServiceError("[processBlockFound][%s] failed to check if parent block %s exists", hash.String(), block.Header.HashPrevBlock.String(), err)
 	}
 
 	if !parentExists {
@@ -704,7 +715,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 		err = u.blockValidation.ValidateBlock(ctx, block, baseUrl, u.blockValidation.bloomFilterStats)
 	}
 	if err != nil {
-		return errors.WrapGRPC(errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err))
+		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
 	}
 
 	return nil
