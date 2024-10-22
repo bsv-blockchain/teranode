@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -2276,6 +2277,11 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		return nil, err
 	}
 
+	// make sure the data directory exists
+	if err = os.MkdirAll(cfg.DataDir, 0755); err != nil {
+		return nil, err
+	}
+
 	if config.GetBool("legacy_config_Upnp", false) {
 		cfg.Upnp = true
 	}
@@ -2359,7 +2365,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 	// Add the peers that are defined in teranode settings...
 	// also retrieved in services/legacy/Server.go:118
 	addresses, found := gocore.Config().GetMulti("legacy_connect_peers", "|")
-	if found {
+	if found && len(addresses) > 0 {
 		c.ConnectPeers = append(c.ConnectPeers, addresses...)
 		// set max peers to the number of connect peers
 		// this forces the server to only connect to the peers defined in the settings
