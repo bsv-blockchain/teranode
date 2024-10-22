@@ -43,6 +43,7 @@ type ClientI interface {
 
 	// FSM related endpoints
 	GetFSMCurrentState(ctx context.Context) (*FSMStateType, error)
+	IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error)
 	WaitForFSMtoTransitionToGivenState(context.Context, FSMStateType) error
 	GetFSMCurrentStateForE2ETestMode() FSMStateType
 	// SendFSMEvent(ctx context.Context, state blockchain_api.FSMEventType) error
@@ -185,6 +186,9 @@ func (s *MockBlockchain) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.
 	panic("not implemented")
 }
 func (s *MockBlockchain) GetFSMCurrentState(_ context.Context) (*blockchain_api.FSMStateType, error) {
+	panic("not implemented")
+}
+func (s *MockBlockchain) IsFSMCurrentState(_ context.Context, _ FSMStateType) (bool, error) {
 	panic("not implemented")
 }
 func (s *MockBlockchain) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain_api.FSMStateType) error {

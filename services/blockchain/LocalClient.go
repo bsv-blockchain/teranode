@@ -191,6 +191,10 @@ func (c LocalClient) GetFSMCurrentState(_ context.Context) (*FSMStateType, error
 	return &state, nil
 }
 
+func (c LocalClient) IsFSMCurrentState(_ context.Context, state FSMStateType) (bool, error) {
+	return state == FSMStateRUNNING, nil
+}
+
 func (c LocalClient) WaitForFSMtoTransitionToGivenState(_ context.Context, _ FSMStateType) error {
 	return nil
 }

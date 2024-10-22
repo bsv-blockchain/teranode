@@ -760,6 +760,15 @@ func (c *Client) GetFSMCurrentState(ctx context.Context) (*FSMStateType, error) 
 	return &state.State, nil
 }
 
+func (c *Client) IsFSMCurrentState(ctx context.Context, state FSMStateType) (bool, error) {
+	currentState, err := c.GetFSMCurrentState(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	return *currentState == state, nil
+}
+
 func (c *Client) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState FSMStateType) error {
 	if _, err := c.client.WaitFSMToTransitionToGivenState(ctx, &blockchain_api.WaitFSMToTransitionRequest{
 		State: targetState,

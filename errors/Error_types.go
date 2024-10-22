@@ -156,7 +156,7 @@ func NewUtxoFrozenError(message string, params ...interface{}) *Error {
 func NewStateInitializationError(message string, params ...interface{}) *Error {
 	return New(ERR_STATE_INITIALIZATION, message, params...)
 }
-func NewStateErrorError(message string, params ...interface{}) *Error {
+func NewStateError(message string, params ...interface{}) *Error {
 	return New(ERR_STATE_ERROR, message, params...)
 }
 func NewBlobAlreadyExistsError(message string, params ...interface{}) *Error {

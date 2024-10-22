@@ -176,6 +176,11 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					continue
 				}
 
+				if len(moveDownBlocks) == 0 && len(moveUpBlocks) == 0 {
+					b.logger.Errorf("[BlockAssembler][Reset] no reorg blocks found, invalid reset")
+					continue
+				}
+
 				currentHeight := meta.Height
 				if response := b.subtreeProcessor.Reset(b.bestBlockHeader.Load(), moveDownBlocks, moveUpBlocks); response.Err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", err)
@@ -390,15 +395,20 @@ func (b *BlockAssembler) GetState(ctx context.Context) (*model.BlockHeader, uint
 }
 
 func (b *BlockAssembler) SetState(ctx context.Context) error {
-	if b.bestBlockHeader.Load() == nil {
+	blockHeader := b.bestBlockHeader.Load()
+	if blockHeader == nil {
 		return errors.NewError("bestBlockHeader is nil")
 	}
 
-	state := make([]byte, 4+len(b.bestBlockHeader.Load().Bytes()))
-	binary.LittleEndian.PutUint32(state[:4], b.bestBlockHeight.Load())
-	state = append(state[:4], b.bestBlockHeader.Load().Bytes()...)
+	blockHeaderBytes := blockHeader.Bytes()
 
-	b.logger.Debugf("[BlockAssembler] setting state: %d: %s", b.bestBlockHeight.Load(), b.bestBlockHeader.Load().Hash())
+	blockHeight := b.bestBlockHeight.Load()
+
+	state := make([]byte, 4+len(blockHeaderBytes))
+	binary.LittleEndian.PutUint32(state[:4], blockHeight)
+	state = append(state[:4], blockHeaderBytes...)
+
+	b.logger.Debugf("[BlockAssembler] setting state: %d: %s", blockHeight, blockHeader.Hash())
 	return b.blockchainClient.SetState(ctx, "BlockAssembler", state)
 }
 
@@ -637,16 +647,21 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		return nil, nil, errors.NewError("header is nil")
 	}
 
-	newChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), uint64(b.maxBlockReorgCatchup))
+	// allow this to get up to 100,000 hashes
+	// this is needed for large resets of the block assembly
+	// the maxBlockReorgCatchup is used to limit the number of blocks we can catch up to in the subtree processor
+	maxGetHashes := uint64(100_000)
+
+	newChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), maxGetHashes)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error getting new chain", err)
 	}
 
 	// moveUpBlockHeaders will contain all block headers we need to move up to get to the new tip from the common ancestor
-	moveUpBlockHeaders := make([]*model.BlockHeader, 0, b.maxBlockReorgCatchup)
+	moveUpBlockHeaders := make([]*model.BlockHeader, 0, len(newChain))
 
 	// moveDownBlocks will contain all blocks we need to move down to get to the common ancestor
-	moveDownBlockHeaders := make([]*model.BlockHeader, 0, b.maxBlockReorgRollback)
+	moveDownBlockHeaders := make([]*model.BlockHeader, 0, len(newChain))
 
 	// find the first blockHeader that is the same in both chains
 	var commonAncestor *model.BlockHeader
@@ -680,7 +695,7 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		moveDownBlockHeaders = append(moveDownBlockHeaders, blockHeader)
 	}
 
-	if len(moveDownBlockHeaders) > b.maxBlockReorgRollback {
+	if len(moveDownBlockHeaders) > int(maxGetHashes) {
 		return nil, nil, errors.NewProcessingError("reorg is too big, max block reorg: %d", b.maxBlockReorgRollback)
 	}
 

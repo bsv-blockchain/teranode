@@ -487,6 +487,15 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembl
 	)
 	defer deferFn()
 
+	isRunning, err := ba.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	if !isRunning {
+		return nil, errors.WrapGRPC(errors.NewStateError("cannot get mining candidate when FSM is not in RUNNING state"))
+	}
+
 	miningCandidate, subtrees, err := ba.blockAssembler.GetMiningCandidate(ctx)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)

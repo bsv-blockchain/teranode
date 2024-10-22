@@ -410,6 +410,9 @@ func (s *mockStore) Unavailable(ctx context.Context) error {
 func (s *mockStore) GetFSMCurrentState(_ context.Context) (*blockchain.FSMStateType, error) {
 	panic("not implemented")
 }
+func (s *mockStore) IsFSMCurrentState(ctx context.Context, state blockchain.FSMStateType) (bool, error) {
+	panic("implement me")
+}
 func (s *mockStore) WaitForFSMtoTransitionToGivenState(_ context.Context, _ blockchain.FSMStateType) error {
 	panic("not implemented")
 }
