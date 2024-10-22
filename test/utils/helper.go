@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bitcoin-sv/go-sdk/script"
 	"github.com/bitcoin-sv/ubsv/errors"
 	block_model "github.com/bitcoin-sv/ubsv/model"
 	ba "github.com/bitcoin-sv/ubsv/services/blockassembly"
@@ -24,6 +25,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	tf "github.com/bitcoin-sv/ubsv/test/test_framework"
 	tenv "github.com/bitcoin-sv/ubsv/test/testenv"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -1169,4 +1171,159 @@ func CopyFile(src, dst string) error {
 	}
 
 	return nil
+}
+
+func GetUtxoBalance(ctx context.Context, node tenv.TeranodeTestClient) uint64 {
+	utxoBalance, _, _ := node.CoinbaseClient.GetBalance(ctx)
+	return utxoBalance
+}
+
+func GeneratePrivateKeyAndAddress() (*bec.PrivateKey, *bscript.Address, error) {
+	privateKey, err := bec.NewPrivateKey(bec.S256())
+	if err != nil {
+		return nil, nil, err
+	}
+
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return privateKey, address, nil
+}
+
+func RequestFunds(ctx context.Context, node tenv.TeranodeTestClient, address string) (*bt.Tx, error) {
+	faucetTx, err := node.CoinbaseClient.RequestFunds(ctx, address, true)
+	if err != nil {
+		return nil, err
+	}
+
+	return faucetTx, nil
+}
+
+func SendTransaction(ctx context.Context, node tenv.TeranodeTestClient, tx *bt.Tx) (bool, error) {
+	_, err := node.DistributorClient.SendTransaction(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func CreateUtxoFromTransaction(tx *bt.Tx, vout uint32) *bt.UTXO {
+	output := tx.Outputs[vout]
+
+	return &bt.UTXO{
+		TxIDHash:      tx.TxIDChainHash(),
+		Vout:          vout,
+		LockingScript: output.LockingScript,
+		Satoshis:      output.Satoshis,
+	}
+}
+
+func CreateTransaction(utxo *bt.UTXO, address string, satoshis uint64, privateKey *bec.PrivateKey) (*bt.Tx, error) {
+	tx := bt.NewTx()
+
+	err := tx.FromUTXOs(utxo)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.AddP2PKHOutputFromAddress(address, satoshis)
+	if err != nil {
+		return nil, err
+	}
+
+	err = tx.FillAllInputs(context.Background(), &unlocker.Getter{PrivateKey: privateKey})
+	if err != nil {
+		return nil, err
+	}
+
+	return tx, nil
+}
+
+func FreezeUtxos(ctx context.Context, testenv tenv.TeranodeTestEnv, tx *bt.Tx, logger ulogger.Logger) error {
+	utxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	spend := &utxo.Spend{
+		TxID:     tx.TxIDChainHash(),
+		Vout:     0,
+		UTXOHash: utxoHash,
+	}
+
+	for _, node := range testenv.Nodes {
+		err := node.UtxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend})
+		if err != nil {
+			logger.Errorf("Error freezing UTXOs on node %v: %v", err, node.Name)
+		}
+	}
+
+	return nil
+}
+
+func ReassignUtxo(ctx context.Context, testenv tenv.TeranodeTestEnv, firstTx, reassignTx *bt.Tx, logger ulogger.Logger) error {
+	publicKey, err := extractPublicKey(reassignTx.Inputs[0].UnlockingScript.Bytes())
+	if err != nil {
+		return err
+	}
+
+	newLockingScript, err := bscript.NewP2PKHFromPubKeyBytes(publicKey)
+	if err != nil {
+		return err
+	}
+
+	amendedOutputScript := &bt.Output{
+		Satoshis:      firstTx.Outputs[0].Satoshis,
+		LockingScript: newLockingScript,
+	}
+
+	oldUtxoHash, err := util.UTXOHashFromOutput(firstTx.TxIDChainHash(), firstTx.Outputs[0], 0)
+	if err != nil {
+		return err
+	}
+
+	newUtxoHash, err := util.UTXOHashFromOutput(firstTx.TxIDChainHash(), amendedOutputScript, 0)
+	if err != nil {
+		return err
+	}
+
+	newSpend := &utxo.Spend{
+		TxID:     firstTx.TxIDChainHash(),
+		Vout:     0,
+		UTXOHash: newUtxoHash,
+	}
+
+	for _, node := range testenv.Nodes {
+		err = node.UtxoStore.ReAssignUTXO(ctx, &utxo.Spend{
+			TxID:     firstTx.TxIDChainHash(),
+			Vout:     0,
+			UTXOHash: oldUtxoHash,
+		}, newSpend)
+
+		if err != nil {
+			return err
+		}
+
+		logger.Infof("UTXO reassigned on node %v", node.Name)
+	}
+
+	return nil
+}
+
+func extractPublicKey(scriptSig []byte) ([]byte, error) {
+	// Parse the scriptSig into an array of elements (OpCodes or Data pushes)
+	parsedScript := script.NewFromBytes(scriptSig)
+
+	elements, err := parsedScript.ParseOps()
+	if err != nil {
+		return nil, err
+	}
+
+	// For P2PKH, the last element is the public key (the second item in scriptSig)
+	if len(elements) < 2 {
+		return nil, errors.NewProcessingError("invalid P2PKH scriptSig")
+	}
+
+	publicKey := elements[len(elements)-1].Data // Last element is the public key
+
+	return publicKey, nil
 }
