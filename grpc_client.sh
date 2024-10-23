@@ -11,9 +11,9 @@ wait_for_service() {
 }
 
 # Wait for ubsv services to be ready
-wait_for_service ubsv-1 8087
-wait_for_service ubsv-2 8087
-wait_for_service ubsv-3 8087
+wait_for_service ubsv1 8087
+wait_for_service ubsv2 8087
+wait_for_service ubsv3 8087
 
 # Additional wait time of 20 seconds
 echo "All ubsv services are up. Waiting for 20 seconds..."
