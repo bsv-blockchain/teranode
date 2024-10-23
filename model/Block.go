@@ -183,6 +183,7 @@ type Block struct {
 	Subtrees         []*chainhash.Hash `json:"subtrees"`
 	SubtreeSlices    []*util.Subtree   `json:"-"`
 	Height           uint32            `json:"height"` // SAO - This can be left empty (i.e 0) as it is only used in legacy before the height was encoded in the coinbase tx (BIP-34)
+	ID               uint32            `json:"id"`
 
 	// local
 	hash            *chainhash.Hash
@@ -190,7 +191,6 @@ type Block struct {
 	subtreeSlicesMu sync.RWMutex
 	txMap           util.TxMap
 	medianTimestamp uint32
-	ID              uint32
 }
 
 type BlockBloomFilter struct {
@@ -199,7 +199,7 @@ type BlockBloomFilter struct {
 	CreationTime time.Time
 }
 
-func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64, blockHeight uint32) (*Block, error) {
+func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, transactionCount uint64, sizeInBytes uint64, blockHeight uint32, id uint32) (*Block, error) {
 	return &Block{
 		Header:           header,
 		CoinbaseTx:       coinbase,
@@ -208,6 +208,7 @@ func NewBlock(header *BlockHeader, coinbase *bt.Tx, subtrees []*chainhash.Hash, 
 		SizeInBytes:      sizeInBytes,
 		subtreeLength:    uint64(len(subtrees)),
 		Height:           blockHeight,
+		ID:               id,
 	}, nil
 }
 
@@ -269,7 +270,7 @@ func NewBlockFromMsgBlock(msgBlock *wire.MsgBlock) (*Block, error) {
 	// }
 
 	// Create and return the new Block
-	return NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0)
+	return NewBlock(header, coinbaseTx, subtrees, txCount, sizeInBytes, 0, 0)
 }
 
 func NewBlockFromBytes(blockBytes []byte) (block *Block, err error) {

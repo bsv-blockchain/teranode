@@ -158,6 +158,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 			select {
 			case getSubtreesChan := <-stp.getSubtreesChan:
 				stp.currentRunningState.Store("getSubtrees")
+
 				logger.Infof("[SubtreeProcessor] get current subtrees")
 
 				chainedCount := stp.chainedSubtreeCount.Load()
@@ -212,6 +213,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 
 			case moveUpReq := <-stp.moveUpBlockChan:
 				stp.currentRunningState.Store("moveUpBlock")
+
 				logger.Infof("[SubtreeProcessor][%s] moveUpBlock subtree processor", moveUpReq.block.String())
 
 				err = stp.moveUpBlock(ctx, moveUpReq.block, false)
@@ -670,6 +672,7 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 	startTime := time.Now()
 
 	prometheusSubtreeProcessorMoveDownBlock.Inc()
+
 	stp.logger.Infof("[moveDownBlocks] with %d blocks", len(blocks))
 
 	lastIncompleteSubtree := stp.currentSubtree
@@ -768,6 +771,7 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 	}
 
 	stp.logger.Warnf("[moveDownBlocks] add previous nodes to subtrees")
+
 	// add all the transactions from the previous state
 	for _, subtree := range chainedSubtrees {
 		for _, node := range subtree.Nodes {

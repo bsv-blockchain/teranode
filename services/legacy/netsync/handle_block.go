@@ -117,7 +117,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	// create valid teranode block, with the subtree hash
 	blockSize := block.MsgBlock().SerializeSize()
 
-	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), uint64(blockSize), blockHeight)
+	teranodeBlock, err := model.NewBlock(header, coinbaseTx, subtrees, uint64(len(block.Transactions())), uint64(blockSize), blockHeight, 0) //nolint:gosec
 	if err != nil {
 		return errors.NewProcessingError("failed to create model.NewBlock", err)
 	}
