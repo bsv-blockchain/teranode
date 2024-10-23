@@ -1379,7 +1379,10 @@ func getBlockLocator(ctx context.Context, store blockchain_store.Store, blockHea
 		// Calculate height of previous node to include ensuring the
 		// final node is the genesis block.
 		height := ancestorBlockHeight - step
-		if height < 0 {
+
+		// check whether step > ancestorBlockHeight, which would give a negative value for height, but
+		// since height is an uint32, it will wrap around to the maximum value and overflow
+		if step > ancestorBlockHeight {
 			height = 0
 		}
 

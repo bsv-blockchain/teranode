@@ -8,32 +8,26 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
-	"github.com/libsv/go-bt/v2"
-	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/stretchr/testify/assert"
-	"google.golang.org/protobuf/types/known/emptypb"
-
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain/blockchain_api"
-
-	"sync"
-
-	"sync/atomic"
-
 	"github.com/bitcoin-sv/ubsv/stores/blob"
-	"github.com/bitcoin-sv/ubsv/stores/blob/file"
 	blob_memory "github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
-	blockchain_store "github.com/bitcoin-sv/ubsv/stores/blockchain"
-	blockchain_options "github.com/bitcoin-sv/ubsv/stores/blockchain/options"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxo_memory "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/usql"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/emptypb"
+)
+
+var (
+	tx1, _ = bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
+	hash1  = tx1.TxIDChainHash()
 )
 
 func Test_AddBlock(t *testing.T) {
@@ -251,182 +245,78 @@ func mockBlock(ctx *testContext, t *testing.T) *model.Block {
 	return block
 }
 
-var (
-	tx1, _ = bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
-	hash1  = tx1.TxIDChainHash()
-)
+func Test_getBlockLocator(t *testing.T) {
+	ctx := context.Background()
 
-func NewMockStore(block *model.Block) blockchain_store.Store {
-	return &mockStore{
-		block: block,
-		state: "STOPPED",
-	}
-}
+	t.Run("block 0", func(t *testing.T) {
+		store := newMockStore(nil)
+		block := &model.Block{
+			Height: 0,
+			Header: &model.BlockHeader{
+				Version:        0,
+				HashPrevBlock:  &chainhash.Hash{},
+				HashMerkleRoot: &chainhash.Hash{},
+				Timestamp:      0,
+				Bits:           model.NBit{},
+				Nonce:          0,
+			},
+		}
+		store.getBlockByHeight[0] = block
 
-type mockStore struct {
-	block *model.Block
-	state string
-}
+		locator, err := getBlockLocator(ctx, store, nil, 0)
+		require.NoError(t, err)
 
-func (s *mockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	return http.StatusOK, "OK", nil
-}
+		assert.Len(t, locator, 1)
+		assert.Equal(t, block.Hash().String(), locator[0].String())
+	})
 
-func (s *mockStore) GetDB() *usql.DB {
-	panic("not implemented")
-}
+	t.Run("blocks", func(t *testing.T) {
+		store := newMockStore(nil)
+		for i := uint32(0); i <= 1024; i++ {
+			store.getBlockByHeight[i] = &model.Block{
+				Height: i,
+				Header: &model.BlockHeader{
+					Version:        i,
+					HashPrevBlock:  &chainhash.Hash{},
+					HashMerkleRoot: &chainhash.Hash{},
+					Timestamp:      i,
+					Bits:           model.NBit{},
+					Nonce:          i,
+				},
+			}
+		}
 
-func (s *mockStore) GetDBEngine() util.SQLEngine {
-	panic("not implemented")
-}
-func (s *mockStore) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, uint32, error) {
-	return s.block, 0, nil
-}
-func (s *mockStore) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlockss uint32) ([]*model.Block, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
-	return nil, errors.ErrBlockNotFound
-}
-func (s *mockStore) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (uint32, error) {
-	panic("not implemented")
-}
-func (s *mockStore) StoreBlock(ctx context.Context, block *model.Block, peerID string, opts ...blockchain_options.StoreBlockOption) (uint64, uint32, error) {
-	s.block = block
-	return 0, 0, nil
-}
-func (s *mockStore) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetForkedBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	panic("not implemented")
-}
-func (s *mockStore) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
-	panic("not implemented")
-}
-func (s *mockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetState(ctx context.Context, key string) ([]byte, error) {
-	panic("not implemented")
-}
-func (s *mockStore) SetState(ctx context.Context, key string, data []byte) error {
-	panic("not implemented")
-}
-func (s *mockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
-	panic("not implemented")
-}
-func (s *mockStore) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
-	panic("not implemented")
-}
-func (s *mockStore) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error) {
-	panic("not implemented")
-}
-func (s *mockStore) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
-	// TODO implement me
-	panic("implement me")
-}
+		locator, err := getBlockLocator(ctx, store, store.getBlockByHeight[1024].Hash(), 1024)
+		require.NoError(t, err)
 
-func (s *mockStore) ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*file.File, error) {
-	panic("not implemented")
-}
+		assert.Len(t, locator, 21)
 
-func (s *mockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
-	panic("not implemented")
-}
+		expectedHeights := []uint32{
+			1024,
+			1023,
+			1022,
+			1021,
+			1020,
+			1019,
+			1018,
+			1017,
+			1016,
+			1015,
+			1014,
+			1013,
+			1011,
+			1007,
+			999,
+			983,
+			951,
+			887,
+			759,
+			503,
+			0,
+		}
 
-func (s *mockStore) SetFSMState(ctx context.Context, fsmState string) error {
-	s.state = fsmState
-	return nil
-}
-
-func (s *mockStore) GetFSMState(ctx context.Context) (string, error) {
-	return s.state, nil
-}
-
-type mockKafkaProducer struct {
-	messages [][]byte
-	mu       sync.Mutex
-}
-
-func (m *mockKafkaProducer) Send(key []byte, data []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.messages = append(m.messages, data)
-	return nil
-}
-
-func (m *mockKafkaProducer) Close() error {
-	return nil
-}
-
-func (m *mockKafkaProducer) GetClient() sarama.ConsumerGroup {
-	return nil
-}
-
-type mockKafkaProducerWithTemporaryError struct {
-	successAfter time.Time
-	messagesSent int32
-}
-
-func (m *mockKafkaProducerWithTemporaryError) Send(key []byte, data []byte) error {
-	if time.Now().Before(m.successAfter) {
-		return errors.New(errors.ERR_UNKNOWN, "temporary Kafka error")
-	}
-
-	atomic.AddInt32(&m.messagesSent, 1)
-	return nil
-}
-
-func (m *mockKafkaProducerWithTemporaryError) Close() error {
-	return nil
-}
-
-func (m *mockKafkaProducerWithTemporaryError) GetClient() sarama.ConsumerGroup {
-	return nil
+		for locatorIdx, locatorHash := range locator {
+			assert.Equal(t, store.getBlockByHeight[expectedHeights[locatorIdx]].Hash().String(), locatorHash.String())
+		}
+	})
 }
