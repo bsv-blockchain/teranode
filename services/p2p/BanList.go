@@ -223,9 +223,16 @@ func (b *BanList) IsBanned(ipStr string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	ip := net.ParseIP(ipStr)
+	// ipStr may contain a port, so we need to split it
+	host, _, err := net.SplitHostPort(ipStr)
+	if err != nil {
+		// if SplitHostPort fails, it means there's no port, so use the original string
+		host = ipStr
+	}
+
+	ip := net.ParseIP(host)
 	if ip == nil {
-		b.logger.Errorf("Invalid IP address: %s", ipStr)
+		b.logger.Errorf("Invalid IP address: %s", host)
 		return false
 	}
 
@@ -239,7 +246,7 @@ func (b *BanList) IsBanned(ipStr string) bool {
 		}
 
 		// Check if it's a direct IP match
-		if key == ipStr {
+		if key == host {
 			return true
 		}
 

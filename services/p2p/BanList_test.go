@@ -128,6 +128,9 @@ func TestIsBanned(t *testing.T) {
 		{"IP not in banned subnet", "10.0.1.1", false},
 		{"invalid IP", "invalid", false},
 		{"invalid subnet", "10.0.0.0/33", false},
+		{"unbanned IP with port", "192.168.1.2:8333", false},
+		{"banned IP with port", "192.168.1.1:8333", true},
+
 		{"empty string", "", false},
 	}
 
