@@ -3,12 +3,15 @@ package p2p
 import (
 	"context"
 	"net"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/rpc/bsvjson"
+	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,7 +22,28 @@ func setupBanList(t *testing.T) (*BanList, chan BanEvent, error) {
 	banListInstance = nil
 	banListOnce = sync.Once{}
 
-	return GetBanList(ctx, ulogger.TestLogger{})
+	// Create a new in-memory SQLite database for testing
+	storeURL, err := url.Parse("sqlitememory://")
+	require.NoError(t, err)
+
+	store, err := blockchain.NewStore(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+
+	banList := &BanList{
+		db:          store.GetDB(),
+		engine:      util.SqliteMemory,
+		logger:      ulogger.TestLogger{},
+		bannedPeers: make(map[string]BanInfo),
+		subscribers: make(map[chan BanEvent]struct{}),
+	}
+
+	err = banList.Init(ctx)
+	require.NoError(t, err)
+
+	banListInstance = banList
+	eventChan := banList.Subscribe()
+
+	return banList, eventChan, nil
 }
 
 func teardown(t *testing.T, banList *BanList) {
