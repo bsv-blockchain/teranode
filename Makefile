@@ -4,6 +4,7 @@ DEBUG_FLAGS=
 RACE_FLAGS=
 TXMETA_TAG=
 SETTINGS_CONTEXT_DEFAULT := docker.ci
+LOCAL_TEST_START_FROM_STATE ?=
 
 .PHONY: set_debug_flags
 set_debug_flags:
@@ -52,11 +53,37 @@ dev-dashboard:
 
 .PHONY: build
 # build-blockchainstatus build-tx-blaster build-propagation-blaster build-aerospiketest build-blockassembly-blaster build-utxostore-blaster build-s3-blaster build-chainintegrity
-build: build-ubsv-with-dashboard
+build: update_config build-ubsv-with-dashboard clean_backup
+
+.PHONY: update_config
+update_config:
+ifeq ($(LOCAL_TEST_START_FROM_STATE),)
+	@echo "No LOCAL_TEST_START_FROM_STATE provided; using existing settings_local.conf"
+else
+	@echo "Updating settings_local.conf with local_test_start_from_state=$(LOCAL_TEST_START_FROM_STATE)"
+
+	# Remove existing local_test_start_from_state line if it exists
+	# For macOS (BSD sed):
+	@sed -i '' '/^[[:space:]]*local_test_start_from_state[[:space:]]*=.*$$/d' settings_local.conf
+
+	# For Linux (GNU sed), comment out the above line and uncomment the following line:
+	# @sed -i '/^[[:space:]]*local_test_start_from_state[[:space:]]*=.*$$/d' settings_local.conf
+
+	# Append an empty line
+	@echo "" >> settings_local.conf
+	# Append the new local_test_start_from_state value
+	@echo "local_test_start_from_state = $(LOCAL_TEST_START_FROM_STATE)" >> settings_local.conf
+endif
+
+
+.PHONY: clean_backup
+clean_backup:
+	@rm -f settings_local.conf.bak
+
 
 .PHONY: build-ubsv-with-dashboard
 build-ubsv-with-dashboard: set_debug_flags set_race_flag set_txmetacache_flag build-dashboard
-	go build $(RACE_FLAG) -tags aerospike,bdk,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL" -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
+	go build $(RACE_FLAG) -tags aerospike,bdk,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GITHUB_SHA} -X main.version=MANUAL -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o ubsv.run .
 
 .PHONY: build-ubsv
 build-ubsv: set_debug_flags set_race_flag set_txmetacache_flag

@@ -58,6 +58,7 @@ type Blockchain struct {
 	finiteStateMachine      *fsm.FSM
 	kafkaHealthURL          *url.URL
 	AppCtx                  context.Context
+	localTestStartState     FSMStateType
 }
 
 // New will return a server instance with the logger stored within it
@@ -131,8 +132,9 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 func (b *Blockchain) Init(ctx context.Context) error {
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
-	// Set the FSM to the latest state
+	// check if we are in local testing mode with a defined target state for the FSM
 
+	// Set the FSM to the latest state
 	stateStr, err := b.store.GetFSMState(ctx)
 	if err != nil {
 		b.logger.Errorf("[Blockchain] Error getting FSM state: %v", err)
