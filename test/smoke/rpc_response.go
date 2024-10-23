@@ -68,3 +68,9 @@ type GetDifficultyResponse struct {
 	Error  interface{} `json:"error"`
 	ID     int         `json:"id"`
 }
+
+type GetBlockHashResponse struct {
+	Result string      `json:"result"`
+	Error  interface{} `json:"error"`
+	ID     int         `json:"id"`
+}
