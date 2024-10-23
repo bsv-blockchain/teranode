@@ -133,6 +133,41 @@ func (suite *RPCTestSuite) TestRPCGetDifficulty() {
 	}
 }
 
+func (suite *RPCTestSuite) TestRPCGetBlockHash() {
+	t := suite.T()
+
+	var getBlockHash GetBlockHashResponse
+	block := 2
+
+	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockhash", []interface{}{block})
+
+	if err != nil {
+		t.Errorf("Error CallRPC: %v", err)
+	}
+
+	errJSON := json.Unmarshal([]byte(resp), &getBlockHash)
+	if err != nil {
+		t.Errorf("JSON decoding error: %v", errJSON)
+		return
+	}
+
+	t.Logf("%s", resp)
+
+	if getBlockHash.Error != nil {
+		if strErr, ok := getBlockHash.Error.(string); ok && strErr == "null" {
+			t.Errorf("Test failed: getBlockHash RPC call returned error: %v", strErr)
+		} else {
+			t.Errorf("Test failed: getBlockHash RPC call returned an unexpected error type: %v", getBlockHash.Error)
+		}
+	} else {
+		if getBlockHash.Result != "" {
+			t.Logf("Test succeeded, retrieved information from getblockhash RPC call")
+		} else {
+			t.Errorf("Test failed: getBlockHash RPC call returned an empty block hash: %v", getBlockHash.Result)
+		}
+	}
+}
+
 func TestRPCTestSuite(t *testing.T) {
 	suite.Run(t, new(RPCTestSuite))
 }
