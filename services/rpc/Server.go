@@ -146,6 +146,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"reconsiderblock":       handleReconsiderBlock,
 	"searchrawtransactions": handleUnimplemented,
 	"sendrawtransaction":    handleSendRawTransaction,
+	"setban":                handleSetBan,
 	"setgenerate":           handleUnimplemented,
 	"stop":                  handleStop,
 	"submitblock":           handleUnimplemented,
@@ -870,8 +871,6 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 			Message: "Failed to parse request: " + err.Error(),
 		}
 	}
-
-	s.logger.Debugf("request: %v", request)
 
 	if jsonErr == nil {
 		// The JSON-RPC 1.0 spec defines that notifications must have their "id"

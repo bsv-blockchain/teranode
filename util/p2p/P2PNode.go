@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	dUtil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 	"github.com/multiformats/go-multiaddr"
 	ma "github.com/multiformats/go-multiaddr"
+	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/ordishs/gocore"
 )
 
@@ -59,29 +61,33 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) (*P2PNode, error) {
 	logger.Infof("[P2PNode] Creating node")
 
 	var (
-		pk  *crypto.PrivKey
+		pk  *crypto.PrivKey // Private key for the node
 		err error
 	)
 
+	// If no private key is provided in the configuration, attempt to read or generate one
 	if config.PrivateKey == "" {
 		privateKeyFilename := fmt.Sprintf("%s.%s.p2p.private_key", config.ProcessName, gocore.Config().GetContext())
 
 		pk, err = readPrivateKey(privateKeyFilename)
 		if err != nil {
+			// If reading fails, attempt to generate a new private key
 			pk, err = generatePrivateKey(privateKeyFilename)
 			if err != nil {
 				return nil, errors.NewConfigurationError("[P2PNode] error generating private key", err)
 			}
 		}
 	} else {
+		// If a private key is provided, decode it
 		pk, err = decodeHexEd25519PrivateKey(config.PrivateKey)
 		if err != nil {
 			return nil, errors.NewInvalidArgumentError("[P2PNode] error decoding private key", err)
 		}
 	}
 
-	var h host.Host
+	var h host.Host // The libp2p host for the node
 
+	// If a private DHT is configured, set up the private network
 	if config.UsePrivateDHT {
 		s := ""
 		s += fmt.Sprintln("/key/swarm/psk/1.0.0/")
@@ -102,7 +108,7 @@ func NewP2PNode(logger ulogger.Logger, config P2PConfig) (*P2PNode, error) {
 			return nil, errors.NewServiceError("[P2PNode] error creating private network", err)
 		}
 	} else {
-		// p2p service did this
+		// If no private DHT is configured, create a standard libp2p host
 		h, err = libp2p.New(
 			libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/%s/tcp/%d", config.IP, config.Port)),
 			libp2p.Identity(*pk),
@@ -354,7 +360,7 @@ func (s *P2PNode) connectToStaticPeers(ctx context.Context, staticPeers []string
 	i := len(staticPeers)
 
 	for _, peerAddr := range staticPeers {
-		peerInfo, err := peer.AddrInfoFromP2pAddr(multiaddr.StringCast(peerAddr))
+		peerInfo, err := peer.AddrInfoFromP2pAddr(ma.StringCast(peerAddr))
 		if err != nil {
 			s.logger.Errorf("[P2PNode] failed to get peerInfo from  %s: %v", peerAddr, err)
 			continue
@@ -549,7 +555,7 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 	}
 
 	for _, ba := range bootstrapAddresses {
-		bootstrapAddr, err := multiaddr.NewMultiaddr(ba)
+		bootstrapAddr, err := ma.NewMultiaddr(ba)
 		if err != nil {
 			return nil, errors.NewServiceError("[P2PNode] failed to create bootstrap multiaddress %s", ba, err)
 		}
@@ -558,6 +564,14 @@ func (s *P2PNode) initPrivateDHT(ctx context.Context, host host.Host) (*dht.Ipfs
 		if err != nil {
 			return nil, errors.NewServiceError("[P2PNode] failed to get peerInfo from  %s", ba, err)
 		}
+		// get the IP from the multiaddress
+		ip, err := getIPFromMultiaddr(ctx, peerInfo.Addrs[0])
+		if err != nil {
+			s.logger.Warnf("[P2PNode] failed to get IP from multiaddress %s", ba, err)
+			s.logger.Warnf("peerInfo: %+v\n", peerInfo)
+		}
+
+		s.logger.Infof("[P2PNode] bootstrap address %s has IP %s", ba, ip)
 
 		err = host.Connect(ctx, *peerInfo)
 		if err != nil {
@@ -624,4 +638,54 @@ func (s *P2PNode) ConnectedPeers() []PeerInfo {
 	}
 
 	return peers
+}
+
+func (s *P2PNode) DisconnectPeer(ctx context.Context, peerID peer.ID) error {
+	return s.host.Network().ClosePeer(peerID)
+}
+
+// TODO: remove
+
+func getIPFromMultiaddr(ctx context.Context, maddr multiaddr.Multiaddr) (net.IP, error) {
+	// Try to get the IP address component
+	if ip, err := maddr.ValueForProtocol(multiaddr.P_IP4); err == nil {
+		return net.ParseIP(ip), nil
+	}
+
+	if ip, err := maddr.ValueForProtocol(multiaddr.P_IP6); err == nil {
+		return net.ParseIP(ip), nil
+	}
+
+	// If it's a DNS multiaddr, resolve it
+	if _, err := maddr.ValueForProtocol(multiaddr.P_DNS4); err == nil {
+		return resolveDNS(ctx, maddr)
+	}
+
+	if _, err := maddr.ValueForProtocol(multiaddr.P_DNS6); err == nil {
+		return resolveDNS(ctx, maddr)
+	}
+
+	return nil, nil // Not an IP or resolvable DNS address
+}
+
+func resolveDNS(ctx context.Context, dnsAddr multiaddr.Multiaddr) (net.IP, error) {
+
+	resolver := madns.DefaultResolver
+
+	addrs, err := resolver.Resolve(ctx, dnsAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(addrs) == 0 {
+		return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("no addresses found for %s", dnsAddr))
+	}
+	// Get the IP from the first resolved address
+	for _, proto := range []int{multiaddr.P_IP4, multiaddr.P_IP6} {
+		if ipStr, err := addrs[0].ValueForProtocol(proto); err == nil {
+			return net.ParseIP(ipStr), nil
+		}
+	}
+
+	return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("no IP address found in resolved multiaddr %s", dnsAddr))
 }

@@ -120,6 +120,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseUrl s
 				} else {
 					s.logger.Errorf("Failed to Send notification WS message: %v", err)
 				}
+
 				break
 			}
 		}

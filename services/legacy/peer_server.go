@@ -37,6 +37,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/version"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
+	"github.com/bitcoin-sv/ubsv/services/p2p"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/validator"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
@@ -257,6 +258,8 @@ type server struct {
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
 	assetHTTPAddress  string
+	banList           *p2p.BanList
+	banChan           chan p2p.BanEvent
 }
 
 // serverPeer extends the peer to maintain state shared by the server and
@@ -1076,7 +1079,7 @@ func randomUint16Number(max uint16) uint16 {
 	for {
 		binary.Read(rand.Reader, binary.LittleEndian, &randomNumber)
 		if randomNumber < limitRange {
-			return (randomNumber % max)
+			return randomNumber % max
 		}
 	}
 }
@@ -1323,6 +1326,13 @@ func (s *server) handleUpdatePeerHeights(state *peerState, umsg updatePeerHeight
 // peerHandler goroutine.
 func (s *server) handleAddPeerMsg(state *peerState, sp *serverPeer) bool {
 	if sp == nil {
+		return false
+	}
+
+	// ignore new peers if in banlist
+	if s.banList.IsBanned(sp.Addr()) {
+		s.logger.Infof("Rejecting banned peer %s", sp.Addr())
+		sp.Disconnect()
 		return false
 	}
 
@@ -1631,6 +1641,7 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 			msg.reply <- errors.New("max peers reached")
 			return
 		}
+
 		for _, peer := range state.persistentPeers {
 			if peer.Addr() == msg.addr {
 				if msg.permanent {
@@ -1788,6 +1799,13 @@ func (s *server) inboundPeerConnected(conn net.Conn) {
 	var err error
 	sp := newServerPeer(s, false)
 
+	addr := conn.RemoteAddr().String()
+	if s.banList.IsBanned(addr) {
+		s.logger.Infof("Rejecting banned inbound peer %s", addr)
+		conn.Close()
+		return
+	}
+
 	sp.isWhitelisted, err = isWhitelisted(conn.RemoteAddr())
 	if err != nil {
 		s.logger.Warnf("Cannot whitelist peer %v: %v", conn.RemoteAddr(), err)
@@ -1805,6 +1823,14 @@ func (s *server) inboundPeerConnected(conn net.Conn) {
 // manager of the attempt.
 func (s *server) outboundPeerConnected(c *connmgr.ConnReq, conn net.Conn) {
 	sp := newServerPeer(s, c.Permanent)
+
+	addr := conn.RemoteAddr().String()
+	if s.banList.IsBanned(addr) {
+		s.logger.Infof("Rejecting banned outbound peer %s", addr)
+		conn.Close()
+		return
+	}
+
 	p, err := peer.NewOutboundPeer(s.logger, newPeerConfig(sp), c.Addr.String())
 	if err != nil {
 		sp.server.logger.Debugf("Cannot create outbound peer %s: %v", c.Addr, err)
@@ -2088,6 +2114,9 @@ func (s *server) Start() {
 		go s.upnpUpdateThread()
 	}
 
+	// Start listening for ban events
+	go s.listenForBanEvents(s.ctx)
+
 	s.WaitForShutdown()
 }
 
@@ -2339,6 +2368,10 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 			return nil, errors.New("no valid listen address")
 		}
 	}
+	banList, banChan, err := p2p.GetBanList(ctx, logger)
+	if err != nil {
+		return nil, errors.New("can't get banList")
+	}
 
 	s := server{
 		ctx:                  ctx,
@@ -2367,6 +2400,8 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		subtreeValidation:    subtreeValidation,
 		blockValidation:      blockValidation,
 		assetHTTPAddress:     assetHttpAddress,
+		banList:              banList,
+		banChan:              banChan,
 	}
 
 	s.syncManager, err = netsync.New(
@@ -2793,4 +2828,41 @@ func pickNoun(n uint64, singular, plural string) string {
 		return singular
 	}
 	return plural
+}
+
+func (s *server) listenForBanEvents(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-s.banChan:
+			s.handleBanEvent(ctx, event)
+		}
+	}
+}
+
+func (s *server) handleBanEvent(ctx context.Context, event p2p.BanEvent) {
+	if event.Action != "add" {
+		return // We only care about new bans
+	}
+
+	s.logger.Infof("Received ban event for %s", event.IP)
+
+	// Create a message to send to the peer handler
+	disconnectMsg := disconnectNodeMsg{
+		cmp: func(sp *serverPeer) bool {
+			peerIP := net.ParseIP(sp.Addr())
+			return sp.Addr() == event.IP || (event.Subnet != nil && event.Subnet.Contains(peerIP))
+		},
+		reply: make(chan error),
+	}
+
+	// Send the message to the peer handler
+	s.query <- disconnectMsg
+
+	// Wait for the reply
+	err := <-disconnectMsg.reply
+	if err != nil {
+		s.logger.Errorf("Error disconnecting banned peers: %v", err)
+	}
 }

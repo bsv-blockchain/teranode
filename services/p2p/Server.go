@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -26,6 +27,8 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/multiformats/go-multiaddr"
+	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -37,6 +40,10 @@ var (
 	subtreeTopicName    string
 	miningOnTopicName   string
 	rejectedTxTopicName string
+)
+
+const (
+	banActionAdd = "add"
 )
 
 type Server struct {
@@ -53,6 +60,8 @@ type Server struct {
 	subtreeKafkaProducerClient    *kafka.KafkaAsyncProducer
 	blocksKafkaProducerClient     *kafka.KafkaAsyncProducer
 	kafkaHealthURL                *url.URL
+	banList                       *BanList
+	banChan                       chan BanEvent
 }
 
 func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Server, error) {
@@ -103,6 +112,11 @@ func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient bloc
 		return nil, errors.NewConfigurationError("error getting p2p_shared_key")
 	}
 
+	banlist, banChan, err := GetBanList(ctx, logger)
+	if err != nil {
+		return nil, errors.NewServiceError("error getting banlist", err)
+	}
+
 	usePrivateDht := gocore.Config().GetBool("p2p_dht_use_private", false)
 	optimiseRetries := gocore.Config().GetBool("p2p_optimise_retries", false)
 
@@ -138,6 +152,8 @@ func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient bloc
 		bitcoinProtocolID: "ubsv/bitcoin/1.0.0",
 		notificationCh:    make(chan *notificationMsg),
 		blockchainClient:  blockchainClient,
+		banList:           banlist,
+		banChan:           banChan,
 	}
 
 	return p2pServer, nil
@@ -190,6 +206,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 	if found {
 		s.kafkaHealthURL = subtreesKafkaURL
+
 		s.subtreeKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
 			return kafka.NewKafkaAsyncProducer(s.logger, subtreesKafkaURL, make(chan *kafka.Message, 10))
 		}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
@@ -208,6 +225,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 	if found {
 		s.kafkaHealthURL = blocksKafkaURL
+
 		s.blocksKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
 			return kafka.NewKafkaAsyncProducer(s.logger, blocksKafkaURL, make(chan *kafka.Message, 10))
 		}, retry.WithMessage("[P2P] error starting kafka block producer"))
@@ -222,6 +240,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	rejectedTxKafkaURL, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
 	if err == nil && ok {
 		s.kafkaHealthURL = rejectedTxKafkaURL
+
 		var partitions int
 
 		if partitions, err = strconv.Atoi(rejectedTxKafkaURL.Query().Get("partitions")); err != nil {
@@ -373,6 +392,8 @@ func (s *Server) Start(ctx context.Context) error {
 	_ = s.P2PNode.SetTopicHandler(ctx, miningOnTopicName, s.handleMiningOnTopic)
 
 	go s.blockchainSubscriptionListener(ctx)
+
+	go s.listenForBanEvents(ctx)
 
 	s.sendBestBlockMessage(ctx)
 
@@ -764,7 +785,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 	s.logger.Debugf("GetPeers called")
 
 	if s.P2PNode == nil {
-		return nil, errors.NewError("P2PNode is not initialized")
+		return nil, errors.NewError("P2PNode is not initialised")
 	}
 
 	s.logger.Debugf("Creating reply channel")
@@ -773,8 +794,6 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 	resp := &p2p_api.GetPeersResponse{}
 
 	for _, sp := range serverPeers {
-		// s.logger.Debugf("peer: %v", sp.ID)
-		// s.logger.Debugf("peer: %v", sp.Addrs)
 		if sp.ID == s.P2PNode.HostID() {
 			continue
 		}
@@ -789,4 +808,110 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 	}
 
 	return resp, nil
+}
+
+func (s *Server) listenForBanEvents(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-s.banChan:
+			s.handleBanEvent(ctx, event)
+		}
+	}
+}
+
+func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
+	if event.Action != banActionAdd {
+		return // we only care about new bans
+	}
+
+	s.logger.Infof("Received ban event for %s", event.IP)
+
+	// parse the banned IP or subnet
+	var bannedIP net.IP
+
+	var bannedSubnet *net.IPNet
+	if event.Subnet != nil {
+		bannedSubnet = event.Subnet
+	} else {
+		bannedIP = net.ParseIP(event.IP)
+		if bannedIP == nil {
+			s.logger.Errorf("Invalid IP address in ban event: %s", event.IP)
+			return
+		}
+	}
+
+	// check if we're connected to the banned IP
+	peers := s.P2PNode.ConnectedPeers()
+	for _, peer := range peers {
+		for _, addr := range peer.Addrs {
+			peerIP, err := s.getIPFromMultiaddr(ctx, addr)
+			if err != nil {
+				s.logger.Errorf("Error getting IP from multiaddr %s: %v", addr, err)
+				continue
+			}
+
+			if peerIP == nil {
+				continue
+			}
+
+			s.logger.Debugf("bannedSubnet: %v, bannedIP: %v, peerIP: %s", bannedSubnet, bannedIP, peerIP)
+
+			if (bannedSubnet != nil && bannedSubnet.Contains(peerIP)) ||
+				(bannedIP != nil && peerIP.Equal(bannedIP)) {
+				s.logger.Infof("Disconnecting from banned peer: %s (%s)", peer.ID, peerIP)
+
+				err := s.P2PNode.DisconnectPeer(ctx, peer.ID)
+				if err != nil {
+					s.logger.Errorf("Error disconnecting from peer %s: %v", peer.ID, err)
+				}
+
+				break // no need to check other addresses for this peer
+			}
+		}
+	}
+}
+
+func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr multiaddr.Multiaddr) (net.IP, error) {
+	// try to get the IP address component
+	if ip, err := maddr.ValueForProtocol(multiaddr.P_IP4); err == nil {
+		return net.ParseIP(ip), nil
+	}
+
+	if ip, err := maddr.ValueForProtocol(multiaddr.P_IP6); err == nil {
+		return net.ParseIP(ip), nil
+	}
+
+	// if it's a DNS multiaddr, resolve it
+	if _, err := maddr.ValueForProtocol(multiaddr.P_DNS4); err == nil {
+		return s.resolveDNS(ctx, maddr)
+	}
+
+	if _, err := maddr.ValueForProtocol(multiaddr.P_DNS6); err == nil {
+		return s.resolveDNS(ctx, maddr)
+	}
+
+	return nil, nil // not an IP or resolvable DNS address
+}
+
+func (s *Server) resolveDNS(ctx context.Context, dnsAddr multiaddr.Multiaddr) (net.IP, error) {
+	resolver := madns.DefaultResolver
+
+	addrs, err := resolver.Resolve(ctx, dnsAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(addrs) == 0 {
+		return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("no addresses found for %s", dnsAddr))
+	}
+	// get the IP from the first resolved address
+	for _, proto := range []int{multiaddr.P_IP4, multiaddr.P_IP6} {
+		if ipStr, err := addrs[0].ValueForProtocol(proto); err == nil {
+			return net.ParseIP(ipStr), nil
+		}
+	}
+
+	return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("no IP address found in resolved multiaddr %s", dnsAddr))
 }
