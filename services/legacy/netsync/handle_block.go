@@ -16,6 +16,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -63,6 +64,26 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 
 		deferFn(err)
 	}()
+
+	// check that block assembly is not more than 100 (chainParams.CoinbaseMaturity) blocks behind
+	// this is to make sure all the coinbases have been processed in the block assembly
+	_, err = retry.Retry(ctx, sm.logger, func() (uint32, error) {
+		blockAssemblyStatus, err := sm.blockAssembly.GetBlockAssemblyState(ctx)
+		if err != nil {
+			return 0, errors.NewProcessingError("failed to get block assembly state", err)
+		}
+
+		if blockAssemblyStatus.CurrentHeight+uint32(sm.chainParams.CoinbaseMaturity) < blockHeight {
+			return 0, errors.NewProcessingError("block assembly is behind, block height %d, block assembly height %d", blockHeight, blockAssemblyStatus.CurrentHeight)
+		}
+
+		return blockAssemblyStatus.CurrentHeight, nil
+	},
+		retry.WithRetryCount(5),
+		retry.WithBackoffDurationType(5*time.Second),
+		retry.WithBackoffMultiplier(2),
+		retry.WithMessage(fmt.Sprintf("[HandleBlockDirect][%s %d] block assembly is behind, retrying", block.Hash().String(), blockHeight)),
+	)
 
 	// 3. Create a block message with (block hash, coinbase tx and slice if 1 subtree)
 	var headerBytes bytes.Buffer
@@ -388,7 +409,13 @@ func (sm *SyncManager) preValidateTransactions(ctx context.Context, txMap map[ch
 			}()
 
 			// call the validator to validate the transaction, but skip the utxo creation
-			return sm.validationClient.Validate(gCtx, txMap[txHash].tx, uint32(block.Height()), validator.WithSkipUtxoCreation(true))
+			return sm.validationClient.Validate(gCtx,
+				txMap[txHash].tx,
+				// nolint:gosec
+				uint32(block.Height()),
+				validator.WithSkipUtxoCreation(true),
+				validator.WithAddTXToBlockAssembly(false),
+			)
 		})
 	}
 

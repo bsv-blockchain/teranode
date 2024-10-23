@@ -726,6 +726,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
+		blockassemblyClient, err := blockassembly.NewClient(ctx, logger)
+		if err != nil {
+			return err
+		}
+
 		if err = sm.AddService("Legacy", legacy.New(
 			logger.New("legacy"),
 			blockchainClient,
@@ -734,6 +739,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			utxoStore,
 			subtreeValidationClient,
 			blockValidationClient,
+			blockassemblyClient,
 		)); err != nil {
 			return err
 		}

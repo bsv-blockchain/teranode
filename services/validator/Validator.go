@@ -297,7 +297,10 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	if !v.blockAssemblyDisabled {
+	// the option blockAssemblyDisabled is false by default
+	blockAssemblyEnabled := !v.blockAssemblyDisabled
+
+	if blockAssemblyEnabled && validationOptions.addTXToBlockAssembly {
 		parentTxHashes := make([]chainhash.Hash, len(tx.Inputs))
 		for i, input := range tx.Inputs {
 			parentTxHashes[i] = *input.PreviousTxIDChainHash()

@@ -516,12 +516,12 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveDownBlocks []*
 		stp.newSubtreeChan <- NewSubtreeRequest{Subtree: subtree}
 	}
 
-	stp.setTxCount()
+	stp.setTxCountFromSubtrees()
 
 	return nil
 }
 
-func (stp *SubtreeProcessor) setTxCount() {
+func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 	stp.txCount.Store(0)
 
 	for _, subtree := range stp.chainedSubtrees {
@@ -830,6 +830,17 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 		return errors.NewProcessingError("[moveUpBlock][%s] error processing coinbase utxos", block.String(), err)
 	}
 
+	// if there are no transactions in the subtree processor, we do not have to do anything
+	// we will always have at least 1 single coinbase placeholder transaction
+	if stp.txCount.Load() == 1 && stp.SubtreeCount() == 1 && stp.currentSubtree.Nodes[0].Hash.Equal(*util.CoinbasePlaceholderHash) {
+		stp.logger.Infof("[moveUpBlock][%s] no transactions in subtree processor, skipping cleanup", block.String())
+
+		// set the current block header
+		stp.currentBlockHeader = block.Header
+
+		return nil
+	}
+
 	// create a reverse lookup map of all the subtrees in the block
 	blockSubtreesMap := make(map[chainhash.Hash]int, len(block.Subtrees))
 	for idx, subtree := range block.Subtrees {
@@ -954,7 +965,7 @@ func (stp *SubtreeProcessor) moveUpBlock(ctx context.Context, block *model.Block
 
 	stp.logger.Infof("[moveUpBlock][%s] processing remainder tx hashes into subtrees DONE in %s", block.String(), time.Since(remainderStartTime).String())
 
-	stp.setTxCount()
+	stp.setTxCountFromSubtrees()
 
 	// set the current block header
 	stp.currentBlockHeader = block.Header
@@ -1086,7 +1097,7 @@ func (stp *SubtreeProcessor) processCoinbaseUtxos(ctx context.Context, block *mo
 			// These transactions were created twice:
 			//   e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb468
 			//   d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599
-			stp.logger.Infof("[SubtreeProcessor] coinbase utxos already exist (assume BlockValidation created them). Skipping")
+			stp.logger.Warnf("[SubtreeProcessor] coinbase utxos for %s already exist. Skipping", block.CoinbaseTx.TxIDChainHash())
 		} else {
 			stp.logger.Errorf("[SubtreeProcessor] error storing utxos: %v", err)
 			return err

@@ -443,6 +443,22 @@ func (c *Client) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash,
 		return nil, nil, errors.UnwrapGRPC(err)
 	}
 
+	return c.returnBlockHeaders(resp)
+}
+
+func (c *Client) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	resp, err := c.client.GetBlockHeadersFromTill(ctx, &blockchain_api.GetBlockHeadersFromTillRequest{
+		StartHash: blockHashFrom.CloneBytes(),
+		EndHash:   blockHashTill.CloneBytes(),
+	})
+	if err != nil {
+		return nil, nil, errors.UnwrapGRPC(err)
+	}
+
+	return c.returnBlockHeaders(resp)
+}
+
+func (c *Client) returnBlockHeaders(resp *blockchain_api.GetBlockHeadersResponse) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
 	for _, headerBytes := range resp.BlockHeaders {
 		header, err := model.NewBlockHeaderFromBytes(headerBytes)

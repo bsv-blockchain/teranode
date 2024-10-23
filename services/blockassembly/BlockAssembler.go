@@ -12,13 +12,11 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
-
-	"github.com/bitcoin-sv/ubsv/stores/utxo"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
+	"github.com/bitcoin-sv/ubsv/stores/utxo"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -168,7 +166,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				}
 
 				// reset the block assembly
-				b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler to new best block header: %d: %s", meta.Height, bestBlockchainBlockHeader.String())
+				b.logger.Warnf("[BlockAssembler][Reset] resetting: %d: %s -> %d: %s", b.bestBlockHeight.Load(), b.bestBlockHeader.Load().Hash(), meta.Height, bestBlockchainBlockHeader.String())
 
 				moveDownBlocks, moveUpBlocks, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader)
 				if err != nil {
@@ -276,7 +274,6 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), b.bestBlockHeader.Load().Hash())
 		b.currentRunningState.Store("reorging")
 		err = b.handleReorg(ctx, bestBlockchainBlockHeader)
-
 		if err != nil {
 			b.logger.Errorf("[BlockAssembler][%s] error handling reorg: %v", bestBlockchainBlockHeader.Hash(), err)
 			return
@@ -595,7 +592,8 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		// large reorg, log it and Reset the block assembler
 		b.logger.Warnf("large reorg, moveDownBlocks: %d, moveUpBlocks: %d, resetting block assembly", len(moveDownBlocks), len(moveUpBlocks))
 		b.Reset()
-		return nil
+
+		return errors.NewProcessingError("large reorg, resetting block assembly")
 	}
 
 	// now do the reorg in the subtree processor
@@ -642,15 +640,33 @@ func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.Block
 	return moveDownBlocks, moveUpBlocks, nil
 }
 
+// getReorgBlockHeaders returns the block headers that need to be moved down and up to get to the new tip
+// it is based on a common ancestor between the current chain and the new chain
+// TODO optimize this function
 func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model.BlockHeader) ([]*model.BlockHeader, []*model.BlockHeader, error) {
 	if header == nil {
 		return nil, nil, errors.NewError("header is nil")
 	}
 
-	// allow this to get up to 100,000 hashes
+	// allow this to get up to 10,000 hashes
 	// this is needed for large resets of the block assembly
 	// the maxBlockReorgCatchup is used to limit the number of blocks we can catch up to in the subtree processor
-	maxGetHashes := uint64(100_000)
+	maxGetReorgHashes, _ := gocore.Config().GetInt("blockassembly_maxGetReorgHashes", 10_000)
+
+	// nolint:gosec
+	maxGetHashes := uint64(maxGetReorgHashes)
+
+	// get a much larger chain map from the current chain to determine the common ancestor
+	currentChainMap := make(map[chainhash.Hash]uint32, maxGetHashes)
+
+	currentChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Load().Hash(), maxGetHashes)
+	if err != nil {
+		return nil, nil, errors.NewServiceError("error getting current chain", err)
+	}
+
+	for _, blockHeader := range currentChain {
+		currentChainMap[*blockHeader.Hash()] = blockHeader.Timestamp
+	}
 
 	newChain, _, err := b.blockchainClient.GetBlockHeaders(ctx, header.Hash(), maxGetHashes)
 	if err != nil {
@@ -667,7 +683,7 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 	var commonAncestor *model.BlockHeader
 	for _, blockHeader := range newChain {
 		// check whether the blockHeader is in the current chain
-		if _, ok := b.currentChainMap[*blockHeader.Hash()]; ok {
+		if _, ok := currentChainMap[*blockHeader.Hash()]; ok {
 			commonAncestor = blockHeader
 			break
 		}

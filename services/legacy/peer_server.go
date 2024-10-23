@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/addrmgr"
@@ -257,6 +258,7 @@ type server struct {
 	subtreeStore      blob.Store
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
+	blockAssembly     *blockassembly.Client
 	assetHTTPAddress  string
 	banList           *p2p.BanList
 	banChan           chan p2p.BanEvent
@@ -2303,6 +2305,7 @@ out:
 func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockchainClient blockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
+	blockAssembly *blockassembly.Client,
 	listenAddrs []string, chainParams *chaincfg.Params, assetHttpAddress string) (*server, error) {
 
 	// init config
@@ -2399,6 +2402,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		subtreeStore:         subtreeStore,
 		subtreeValidation:    subtreeValidation,
 		blockValidation:      blockValidation,
+		blockAssembly:        blockAssembly,
 		assetHTTPAddress:     assetHttpAddress,
 		banList:              banList,
 		banChan:              banChan,
@@ -2413,6 +2417,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, config Config, blockc
 		subtreeStore,
 		subtreeValidation,
 		blockValidation,
+		blockAssembly,
 		&netsync.Config{
 			PeerNotifier:            &s,
 			ChainParams:             s.chainParams,

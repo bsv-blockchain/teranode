@@ -34,6 +34,7 @@ const (
 	BlockchainAPI_GetNextWorkRequired_FullMethodName             = "/blockchain_api.BlockchainAPI/GetNextWorkRequired"
 	BlockchainAPI_GetBlockExists_FullMethodName                  = "/blockchain_api.BlockchainAPI/GetBlockExists"
 	BlockchainAPI_GetBlockHeaders_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBlockHeaders"
+	BlockchainAPI_GetBlockHeadersFromTill_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromTill"
 	BlockchainAPI_GetBlockHeadersFromHeight_FullMethodName       = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromHeight"
 	BlockchainAPI_GetBlockHeadersByHeight_FullMethodName         = "/blockchain_api.BlockchainAPI/GetBlockHeadersByHeight"
 	BlockchainAPI_GetBlockHeaderIDs_FullMethodName               = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
@@ -83,6 +84,7 @@ type BlockchainAPIClient interface {
 	GetNextWorkRequired(ctx context.Context, in *GetNextWorkRequiredRequest, opts ...grpc.CallOption) (*GetNextWorkRequiredResponse, error)
 	GetBlockExists(ctx context.Context, in *GetBlockRequest, opts ...grpc.CallOption) (*GetBlockExistsResponse, error)
 	GetBlockHeaders(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
+	GetBlockHeadersFromTill(ctx context.Context, in *GetBlockHeadersFromTillRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error)
 	GetBlockHeadersFromHeight(ctx context.Context, in *GetBlockHeadersFromHeightRequest, opts ...grpc.CallOption) (*GetBlockHeadersFromHeightResponse, error)
 	GetBlockHeadersByHeight(ctx context.Context, in *GetBlockHeadersByHeightRequest, opts ...grpc.CallOption) (*GetBlockHeadersByHeightResponse, error)
 	GetBlockHeaderIDs(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeaderIDsResponse, error)
@@ -245,6 +247,16 @@ func (c *blockchainAPIClient) GetBlockHeaders(ctx context.Context, in *GetBlockH
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockHeadersResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeaders_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetBlockHeadersFromTill(ctx context.Context, in *GetBlockHeadersFromTillRequest, opts ...grpc.CallOption) (*GetBlockHeadersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlockHeadersResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeadersFromTill_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -559,6 +571,7 @@ type BlockchainAPIServer interface {
 	GetNextWorkRequired(context.Context, *GetNextWorkRequiredRequest) (*GetNextWorkRequiredResponse, error)
 	GetBlockExists(context.Context, *GetBlockRequest) (*GetBlockExistsResponse, error)
 	GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error)
+	GetBlockHeadersFromTill(context.Context, *GetBlockHeadersFromTillRequest) (*GetBlockHeadersResponse, error)
 	GetBlockHeadersFromHeight(context.Context, *GetBlockHeadersFromHeightRequest) (*GetBlockHeadersFromHeightResponse, error)
 	GetBlockHeadersByHeight(context.Context, *GetBlockHeadersByHeightRequest) (*GetBlockHeadersByHeightResponse, error)
 	GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error)
@@ -635,6 +648,9 @@ func (UnimplementedBlockchainAPIServer) GetBlockExists(context.Context, *GetBloc
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeaders not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetBlockHeadersFromTill(context.Context, *GetBlockHeadersFromTillRequest) (*GetBlockHeadersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersFromTill not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeadersFromHeight(context.Context, *GetBlockHeadersFromHeightRequest) (*GetBlockHeadersFromHeightResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersFromHeight not implemented")
@@ -971,6 +987,24 @@ func _BlockchainAPI_GetBlockHeaders_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetBlockHeaders(ctx, req.(*GetBlockHeadersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetBlockHeadersFromTill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlockHeadersFromTillRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetBlockHeadersFromTill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetBlockHeadersFromTill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetBlockHeadersFromTill(ctx, req.(*GetBlockHeadersFromTillRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1530,6 +1564,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockHeaders",
 			Handler:    _BlockchainAPI_GetBlockHeaders_Handler,
+		},
+		{
+			MethodName: "GetBlockHeadersFromTill",
+			Handler:    _BlockchainAPI_GetBlockHeadersFromTill_Handler,
 		},
 		{
 			MethodName: "GetBlockHeadersFromHeight",

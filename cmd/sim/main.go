@@ -143,6 +143,7 @@ func main() {
 		nil, // subtreeValidation subtreevalidation.Interface,
 		nil, // blockValidation blockvalidation.Interface,
 		nil, // config *netsync.Config
+		nil,
 	)
 	if err != nil {
 		panic(err)

@@ -83,6 +83,7 @@ func (ctx *testContext) Setup(config *testConfig) error {
 		subtreeStore,
 		subtreeValidation,
 		blockvalidationClient,
+		nil,
 		&netsync.Config{
 			PeerNotifier: peerNotifier,
 			ChainParams:  ctx.cfg.chainParams,

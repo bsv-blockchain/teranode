@@ -1,7 +1,8 @@
 package validator
 
 type Options struct {
-	skipUtxoCreation bool
+	skipUtxoCreation     bool
+	addTXToBlockAssembly bool
 }
 
 // Option is a function that sets some option on the Options struct
@@ -9,7 +10,8 @@ type Option func(*Options)
 
 func NewDefaultOptions() *Options {
 	return &Options{
-		skipUtxoCreation: false,
+		skipUtxoCreation:     false,
+		addTXToBlockAssembly: true,
 	}
 }
 
@@ -26,5 +28,12 @@ func ProcessOptions(opts ...Option) *Options {
 func WithSkipUtxoCreation(skip bool) Option {
 	return func(o *Options) {
 		o.skipUtxoCreation = skip
+	}
+}
+
+// WithAddTXToBlockAssembly is an option that allows the transaction to be added to the block assembly or not
+func WithAddTXToBlockAssembly(add bool) Option {
+	return func(o *Options) {
+		o.addTXToBlockAssembly = add
 	}
 }

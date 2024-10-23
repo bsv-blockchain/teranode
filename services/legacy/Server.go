@@ -6,6 +6,7 @@ import (
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer_api"
@@ -39,6 +40,7 @@ type Server struct {
 	utxoStore         utxo.Store
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
+	blockAssembly     *blockassembly.Client
 }
 
 // New will return a server instance with the logger stored within it
@@ -49,6 +51,7 @@ func New(logger ulogger.Logger,
 	utxoStore utxo.Store,
 	subtreeValidation subtreevalidation.Interface,
 	blockValidation blockvalidation.Interface,
+	blockAssembly *blockassembly.Client,
 ) *Server {
 
 	initPrometheusMetrics()
@@ -62,6 +65,7 @@ func New(logger ulogger.Logger,
 		utxoStore:         utxoStore,
 		subtreeValidation: subtreeValidation,
 		blockValidation:   blockValidation,
+		blockAssembly:     blockAssembly,
 	}
 }
 
@@ -126,6 +130,7 @@ func (s *Server) Init(ctx context.Context) error {
 		s.subtreeStore,
 		s.subtreeValidation,
 		s.blockValidation,
+		s.blockAssembly,
 		listenAddresses,
 		chainParams,
 		assetHttpAddress,

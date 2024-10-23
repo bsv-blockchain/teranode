@@ -118,6 +118,10 @@ func (m MockStore) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Has
 	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
 }
 
+func (m MockStore) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+}
+
 func (m MockStore) GetForkedBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	//TODO implement me
 	panic("implement me")

@@ -723,6 +723,44 @@ func (b *Blockchain) GetBlockHeaders(ctx context.Context, req *blockchain_api.Ge
 	}, nil
 }
 
+func (b *Blockchain) GetBlockHeadersFromTill(ctx context.Context, req *blockchain_api.GetBlockHeadersFromTillRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersFromTill",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
+	)
+	defer deferFn()
+
+	startHash, err := chainhash.NewHash(req.StartHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's start hash is not valid", err))
+	}
+
+	endHash, err := chainhash.NewHash(req.EndHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain] request's end hash is not valid", err))
+	}
+
+	blockHeaders, blockHeaderMetas, err := b.store.GetBlockHeadersFromTill(ctx, startHash, endHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	blockHeaderMetaBytes := make([][]byte, len(blockHeaders))
+	for i, meta := range blockHeaderMetas {
+		blockHeaderMetaBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.GetBlockHeadersResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        blockHeaderMetaBytes,
+	}, nil
+}
+
 func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersFromHeightRequest) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
 	ctx, _, deferFn := tracing.StartTracing(ctx, "GetBlockHeadersFromHeight",
 		tracing.WithParentStat(b.stats),

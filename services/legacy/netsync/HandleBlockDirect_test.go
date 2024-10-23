@@ -58,6 +58,7 @@ func TestHandleBlockDirect(t *testing.T) {
 		subtreeStore,
 		subtreeValidation,
 		blockValidation,
+		nil,
 		config,
 	)
 	require.NoError(t, err)

@@ -18,6 +18,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
+	"github.com/bitcoin-sv/ubsv/services/blockassembly"
 	ubsvblockchain "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/blockchain"
@@ -234,6 +235,7 @@ type SyncManager struct {
 	subtreeStore      blob.Store
 	subtreeValidation subtreevalidation.Interface
 	blockValidation   blockvalidation.Interface
+	blockAssembly     *blockassembly.Client
 	legacyKafkaInvCh  chan *kafka.Message
 
 	// These fields should only be accessed from the blockHandler thread.
@@ -1706,8 +1708,7 @@ func (sm *SyncManager) Pause() chan<- struct{} {
 func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockchain.ClientI,
 	validationClient validator.Interface, utxoStore utxostore.Store, subtreeStore blob.Store,
 	subtreeValidation subtreevalidation.Interface, blockValidation blockvalidation.Interface,
-	config *Config) (*SyncManager, error) {
-
+	blockAssembly *blockassembly.Client, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
 
 	sm := SyncManager{
@@ -1736,6 +1737,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 		subtreeStore:      subtreeStore,
 		subtreeValidation: subtreeValidation,
 		blockValidation:   blockValidation,
+		blockAssembly:     blockAssembly,
 	}
 
 	// set an eviction function for orphan transactions
