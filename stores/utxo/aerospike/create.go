@@ -524,16 +524,14 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 	// Get a new write policy which will allow CREATE or UPDATE
 	wPolicy := util.GetAerospikeWritePolicy(0, aerospike.TTLDontExpire)
 
-	for i := len(binsToStore) - 1; i >= 0; i-- {
-		bins := binsToStore[i]
+	// For all records, set the write policy to CREATE_ONLY
+	wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
-		if i == 0 {
-			// For the "master" record, set the write policy to CREATE_ONLY
-			wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
-		}
+	for binIdx := len(binsToStore) - 1; binIdx >= 0; binIdx-- {
+		bins := binsToStore[binIdx]
 
 		// nolint: gosec
-		keySource := uaerospike.CalculateKeySource(bItem.txHash, uint32(i))
+		keySource := uaerospike.CalculateKeySource(bItem.txHash, uint32(binIdx))
 
 		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
 		if err != nil {
@@ -547,16 +545,16 @@ func (s *Store) storeTransactionExternally(ctx context.Context, bItem *batchStor
 		}
 
 		if err = s.client.PutBins(wPolicy, key, bins...); err != nil {
-			aErr, ok := err.(*aerospike.AerospikeError)
+			var aErr *aerospike.AerospikeError
+			ok := errors.As(err, &aErr)
 			if ok {
 				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[storeTransactionExternally] %v already exists in store", bItem.txHash))
-
-					return
+					s.logger.Warnf("[storeTransactionExternally][%s] bin %d already exists in store", bItem.txHash, binIdx)
+					continue
 				}
 			}
 
-			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not put bins (extended mode) to store", err))
+			utils.SafeSend[error](bItem.done, errors.NewProcessingError("[storeTransactionExternally][%s] could not put bins (extended mode) to store", bItem.txHash, err))
 
 			return
 		}
@@ -647,7 +645,7 @@ func (s *Store) storePartialTransactionExternally(ctx context.Context, bItem *ba
 				}
 			}
 
-			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not put bins (extended mode) to store", err))
+			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not put partial bins (extended mode) to store", err))
 
 			return
 		}
