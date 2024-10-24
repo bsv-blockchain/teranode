@@ -362,7 +362,7 @@ func (us *UTXOSet) GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, e
 		bufferSize = 4096
 	}
 
-	us.logger.Infof("Using %s buffer for utxo-additions reader", bufferSize)
+	us.logger.Debugf("Using %s buffer for utxo-additions reader", bufferSize)
 
 	r = &readCloserWrapper{
 		Reader: bufio.NewReaderSize(r, bufferSize.Int()),
