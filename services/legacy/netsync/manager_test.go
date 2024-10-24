@@ -2,12 +2,13 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-package netsync_test
+package netsync
 
 import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,7 +16,6 @@ import (
 	blockchain2 "github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/blockvalidation"
 	"github.com/bitcoin-sv/ubsv/services/legacy/bsvutil"
-	"github.com/bitcoin-sv/ubsv/services/legacy/netsync"
 	"github.com/bitcoin-sv/ubsv/services/legacy/peer"
 	"github.com/bitcoin-sv/ubsv/services/legacy/txscript"
 	"github.com/bitcoin-sv/ubsv/services/legacy/wire"
@@ -25,11 +25,11 @@ import (
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
-
-// zeroHash is the zero value hash (all zeros).
-var zeroHash chainhash.Hash
 
 // nullTime is an empty time defined for convenience
 var nullTime time.Time
@@ -42,7 +42,7 @@ type testConfig struct {
 type testContext struct {
 	cfg          testConfig
 	peerNotifier *MockPeerNotifier
-	syncManager  *netsync.SyncManager
+	syncManager  *SyncManager
 }
 
 func (ctx *testContext) Setup(config *testConfig) error {
@@ -75,7 +75,7 @@ func (ctx *testContext) Setup(config *testConfig) error {
 		return fmt.Errorf("failed to create block validation client: %v", err)
 	}
 
-	syncMgr, err := netsync.New(context.Background(),
+	syncMgr, err := New(context.Background(),
 		ulogger.TestLogger{},
 		blockchainClient,
 		validatorClient,
@@ -84,7 +84,7 @@ func (ctx *testContext) Setup(config *testConfig) error {
 		subtreeValidation,
 		blockvalidationClient,
 		nil,
-		&netsync.Config{
+		&Config{
 			PeerNotifier: peerNotifier,
 			ChainParams:  ctx.cfg.chainParams,
 			MaxPeers:     8,
@@ -215,6 +215,142 @@ func TestPeerConnections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to stop SyncManager: %v", err)
 	}
+}
+
+func TestSyncManager_QueueInv(t *testing.T) {
+	t.Run("empty message - no kafka", func(t *testing.T) {
+		msgChan := make(chan interface{})
+		sm := SyncManager{
+			msgChan: msgChan,
+		}
+
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+
+		go func() {
+			msg := <-msgChan
+			invMsg, ok := msg.(*invMsg)
+			require.True(t, ok)
+			assert.Len(t, invMsg.inv.InvList, 0)
+			wg.Done()
+		}()
+
+		sm.QueueInv(&wire.MsgInv{}, nil)
+
+		wg.Wait()
+	})
+
+	t.Run("tx message", func(t *testing.T) {
+		msgChan, legacyKafkaInvCh, sm, smPeer := setupQueueInvTests()
+
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+
+		go func() {
+			// no message should be sent here
+			msg := <-msgChan
+			require.Nil(t, msg)
+		}()
+
+		go func() {
+			msg := <-legacyKafkaInvCh
+			wireInvMsg, err := sm.newInvFromBytes(msg.Value)
+			require.NoError(t, err)
+			assert.Len(t, wireInvMsg.inv.InvList, 2)
+			wg.Done()
+		}()
+
+		inv := &wire.MsgInv{}
+		err := inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{}})
+		require.NoError(t, err)
+		err = inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{}})
+		require.NoError(t, err)
+
+		sm.QueueInv(inv, smPeer)
+
+		wg.Wait()
+	})
+
+	t.Run("block message", func(t *testing.T) {
+		msgChan, legacyKafkaInvCh, sm, smPeer := setupQueueInvTests()
+
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+
+		go func() {
+			msg := <-msgChan
+			wireInvMsg, ok := msg.(*wire.MsgInv)
+			require.True(t, ok)
+			assert.Len(t, wireInvMsg.InvList, 2)
+			wg.Done()
+		}()
+
+		go func() {
+			msg := <-legacyKafkaInvCh
+			require.Nil(t, msg)
+		}()
+
+		inv := &wire.MsgInv{}
+		err := inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeBlock, Hash: chainhash.Hash{}})
+		require.NoError(t, err)
+		err = inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeBlock, Hash: chainhash.Hash{}})
+		require.NoError(t, err)
+
+		sm.QueueInv(inv, smPeer)
+
+		wg.Wait()
+	})
+
+	t.Run("mixed message", func(t *testing.T) {
+		msgChan, legacyKafkaInvCh, sm, smPeer := setupQueueInvTests()
+
+		wg := sync.WaitGroup{}
+		wg.Add(2)
+
+		go func() {
+			// no message should be sent here
+			msg := <-msgChan
+			wireInvMsg, ok := msg.(*wire.MsgInv)
+			require.True(t, ok)
+			assert.Len(t, wireInvMsg.InvList, 1)
+			wg.Done()
+		}()
+
+		go func() {
+			msg := <-legacyKafkaInvCh
+			wireInvMsg, err := sm.newInvFromBytes(msg.Value)
+			require.NoError(t, err)
+			assert.Len(t, wireInvMsg.inv.InvList, 1)
+			wg.Done()
+		}()
+
+		inv := &wire.MsgInv{}
+		err := inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeBlock, Hash: chainhash.Hash{}})
+		require.NoError(t, err)
+		err = inv.AddInvVect(&wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{}})
+		require.NoError(t, err)
+
+		sm.QueueInv(inv, smPeer)
+
+		wg.Wait()
+	})
+}
+
+func setupQueueInvTests() (chan interface{}, chan *kafka.Message, *SyncManager, *peer.Peer) {
+	msgChan := make(chan interface{})
+	legacyKafkaInvCh := make(chan *kafka.Message)
+
+	sm := SyncManager{
+		msgChan:          msgChan,
+		legacyKafkaInvCh: legacyKafkaInvCh,
+		logger:           ulogger.TestLogger{},
+		peerStates:       make(map[*peer.Peer]*peerSyncState),
+	}
+
+	smPeer := &peer.Peer{}
+	sm.peerStates[smPeer] = &peerSyncState{}
+
+	return msgChan, legacyKafkaInvCh, &sm, smPeer
 }
 
 // Test blockchain syncing protocol. SyncManager should request, processes, and

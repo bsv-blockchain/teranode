@@ -2,7 +2,7 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-package netsync_test
+package netsync
 
 import (
 	"errors"
@@ -28,7 +28,7 @@ func init() {
 }
 
 /* This file contains mock structs and helper functions that are shared by tests
- * in the netsync_test package.
+ * in the netsync package.
  */
 
 // SimpleAddr implements the net.Addr using struct fields

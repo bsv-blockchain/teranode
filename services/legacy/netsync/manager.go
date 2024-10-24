@@ -1608,17 +1608,42 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 		return
 	}
 
-	wireInvMsg := invMsg{inv: inv, peer: peer}
-
 	// write all tx inv messages to Kafka and read from there
 	// this allows us to stop reading in certain cases, but still have the inv messages to catch up on
 	if sm.legacyKafkaInvCh != nil {
-		// write to Kafka
-		sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.Addr(), len(wireInvMsg.inv.InvList))
-		sm.legacyKafkaInvCh <- &kafka.Message{
-			Value: wireInvMsg.Bytes(),
+		// split inv message to transactions and blocks
+		invBlockMsg := wire.NewMsgInv()
+		invTxMsg := wire.NewMsgInv()
+
+		for _, invVect := range inv.InvList {
+			if invVect.Type == wire.InvTypeBlock {
+				if err := invBlockMsg.AddInvVect(invVect); err != nil {
+					sm.logger.Errorf("failed to add inv vector to inv block message: %v", err)
+					continue
+				}
+			} else {
+				if err := invTxMsg.AddInvVect(invVect); err != nil {
+					sm.logger.Errorf("failed to add inv vector to inv tx message: %v", err)
+					continue
+				}
+			}
+		}
+
+		if len(invBlockMsg.InvList) > 0 {
+			sm.msgChan <- invBlockMsg
+		}
+
+		if len(invTxMsg.InvList) > 0 {
+			wireInvMsg := invMsg{inv: invTxMsg, peer: peer}
+
+			// write to Kafka
+			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.Addr(), len(wireInvMsg.inv.InvList))
+			sm.legacyKafkaInvCh <- &kafka.Message{
+				Value: wireInvMsg.Bytes(),
+			}
 		}
 	} else {
+		wireInvMsg := invMsg{inv: inv, peer: peer}
 		sm.msgChan <- &wireInvMsg
 	}
 }
