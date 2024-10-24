@@ -148,9 +148,16 @@ func (b *Blockchain) Init(ctx context.Context) error {
 	// check if we are in local testing mode with a defined target state for the FSM
 	if b.localTestStartState != "" {
 		b.finiteStateMachine.SetState(b.localTestStartState)
+
+		err := b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
+		if err != nil {
+			b.logger.Errorf("[Blockchain] Error setting FSM state in blockchain store: %v", err)
+		}
+
+		return nil
 	}
 
-	// Set the FSM to the latest state
+	// Set the FSM to the latest persisted state
 	stateStr, err := b.store.GetFSMState(ctx)
 	if err != nil {
 		b.logger.Errorf("[Blockchain] Error getting FSM state: %v", err)
