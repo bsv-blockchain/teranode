@@ -40,14 +40,15 @@
 
 
 ## Key Topics
+
 1. Introduction to Teranode
     - [What is Teranode?](docs/topics/teranodeIntro.md)
 
 2. Teranode Architecture
 
-    - [Overall System Design](docs/architecture/teranode-architecture.md)
+    - [Overall System Design](docs/architecture/teranode-overall-system-design.md)
 
-    - Microservices Overview
+    - [Microservices Overview](docs/architecture/teranode-microservices-overview.md)
 
     - Core Services:
       - [Asset Server](docs/services/assetServer.md)
@@ -65,6 +66,7 @@
       - [P2P Service](docs/services/p2p.md)
       - [P2P Bootstrap Service](docs/services/p2pBootstrap.md)
       - [P2P Legacy Service](docs/services/p2pLegacy.md)
+      - [RPC Server](docs/services/rpc.md)
 
     - Stores:
       - [Blob Server](docs/stores/blob.md)
