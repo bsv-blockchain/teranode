@@ -55,7 +55,7 @@ require (
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/ordishs/go-utils v1.0.51
-	github.com/ordishs/gocore v1.0.68
+	github.com/ordishs/gocore v1.0.70
 	github.com/prometheus/client_golang v1.20.2
 	github.com/quic-go/quic-go v0.45.2
 	github.com/rs/zerolog v1.32.0
@@ -331,7 +331,7 @@ require (
 	github.com/mrz1836/go-parameters v0.4.1 // indirect
 	github.com/multiformats/go-base32 v0.1.0 // indirect
 	github.com/multiformats/go-base36 v0.2.0 // indirect
-	github.com/multiformats/go-multiaddr-dns v0.3.1 // indirect
+	github.com/multiformats/go-multiaddr-dns v0.3.1
 	github.com/multiformats/go-multiaddr-fmt v0.1.0 // indirect
 	github.com/multiformats/go-multibase v0.2.0 // indirect
 	github.com/multiformats/go-multicodec v0.9.0 // indirect
