@@ -62,7 +62,7 @@ type Blockchain struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, local_test_start_from_state ...string) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, localTestStartFromState ...string) (*Blockchain, error) {
 	initPrometheusMetrics()
 
 	network, _ := gocore.Config().Get("network", "mainnet")
@@ -92,16 +92,15 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 		AppCtx:            ctx,
 	}
 
-	if len(local_test_start_from_state) >= 1 && local_test_start_from_state[0] != "" {
+	if len(localTestStartFromState) >= 1 && localTestStartFromState[0] != "" {
 		// Convert the string state to FSMStateType using the map
-		_, ok := blockchain_api.FSMStateType_value[local_test_start_from_state[0]]
+		_, ok := blockchain_api.FSMStateType_value[localTestStartFromState[0]]
 		if !ok {
 			// Handle the case where the state is not found in the map
-			logger.Errorf("Invalid inital state: %s", local_test_start_from_state[0])
+			logger.Errorf("Invalid initial state: %s", localTestStartFromState[0])
 		} else {
-			b.localTestStartState = local_test_start_from_state[0]
+			b.localTestStartState = localTestStartFromState[0]
 		}
-
 	}
 
 	return b, nil
