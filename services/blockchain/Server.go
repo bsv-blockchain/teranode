@@ -58,10 +58,11 @@ type Blockchain struct {
 	finiteStateMachine      *fsm.FSM
 	kafkaHealthURL          *url.URL
 	AppCtx                  context.Context
+	localTestStartState     string
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, localTestStartFromState ...string) (*Blockchain, error) {
 	initPrometheusMetrics()
 
 	network, _ := gocore.Config().Get("network", "mainnet")
@@ -76,7 +77,7 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}
 
-	return &Blockchain{
+	b := &Blockchain{
 		store:             store,
 		logger:            logger,
 		addBlockChan:      make(chan *blockchain_api.AddBlockRequest, 10),
@@ -89,7 +90,20 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 		chainParams:       params,
 		stats:             gocore.NewStat("blockchain"),
 		AppCtx:            ctx,
-	}, nil
+	}
+
+	if len(localTestStartFromState) >= 1 && localTestStartFromState[0] != "" {
+		// Convert the string state to FSMStateType using the map
+		_, ok := blockchain_api.FSMStateType_value[localTestStartFromState[0]]
+		if !ok {
+			// Handle the case where the state is not found in the map
+			logger.Errorf("Invalid initial state: %s", localTestStartFromState[0])
+		} else {
+			b.localTestStartState = localTestStartFromState[0]
+		}
+	}
+
+	return b, nil
 }
 
 func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -131,8 +145,19 @@ func (b *Blockchain) HealthGRPC(ctx context.Context, _ *emptypb.Empty) (*blockch
 func (b *Blockchain) Init(ctx context.Context) error {
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
-	// Set the FSM to the latest state
+	// check if we are in local testing mode with a defined target state for the FSM
+	if b.localTestStartState != "" {
+		b.finiteStateMachine.SetState(b.localTestStartState)
 
+		err := b.store.SetFSMState(ctx, b.finiteStateMachine.Current())
+		if err != nil {
+			b.logger.Errorf("[Blockchain] Error setting FSM state in blockchain store: %v", err)
+		}
+
+		return nil
+	}
+
+	// Set the FSM to the latest persisted state
 	stateStr, err := b.store.GetFSMState(ctx)
 	if err != nil {
 		b.logger.Errorf("[Blockchain] Error getting FSM state: %v", err)
