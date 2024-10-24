@@ -1,6 +1,6 @@
 # 🗂️️ State Management in Teranode
 
-Last Modified: 12-September-2024
+Last Modified: 24-Octubre-2024
 
 ## Table of Contents
 1. [Description](#1-description)
@@ -26,7 +26,6 @@ The FSM has the following **states**:
 
 * **Stopped**
 * **Running**
-* **Mining** (defined but not used in the current implementation)
 * **CatchingBlocks**
 * **CatchingTxs**
 * **Restoring**
@@ -36,7 +35,6 @@ The FSM has the following **states**:
 The FSM responds to the following **events**:
 
 * **Run**
-* **Mine** (defined but not used in the current implementation)
 * **CatchupBlocks**
 * **CatchupTxs**
 * **Restore**
