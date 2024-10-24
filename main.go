@@ -316,7 +316,23 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore)
+		var localTestStartFromState string
+
+		// Check if the command line has the -localTestStartFromState flag, if so use that value as initial FSM state
+		for _, cmd := range os.Args[1:] {
+			if strings.HasPrefix(cmd, "-localTestStartFromState=") {
+				localTestStartFromState = strings.SplitN(cmd, "=", 2)[1]
+				break
+			}
+		}
+
+		// if flag is not found, check the config if the flag is set
+		if localTestStartFromState == "" {
+			// read the config param
+			localTestStartFromState, _ = gocore.Config().Get("local_test_start_from_state")
+		}
+
+		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, localTestStartFromState)
 		if err != nil {
 			return err
 		}

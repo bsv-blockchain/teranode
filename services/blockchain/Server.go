@@ -58,11 +58,11 @@ type Blockchain struct {
 	finiteStateMachine      *fsm.FSM
 	kafkaHealthURL          *url.URL
 	AppCtx                  context.Context
-	localTestStartState     FSMStateType
+	localTestStartState     string
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, local_test_start_from_state ...string) (*Blockchain, error) {
 	initPrometheusMetrics()
 
 	network, _ := gocore.Config().Get("network", "mainnet")
@@ -77,7 +77,7 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 		logger.Errorf("[BlockAssembler] Couldn't create difficulty: %v", err)
 	}
 
-	return &Blockchain{
+	b := &Blockchain{
 		store:             store,
 		logger:            logger,
 		addBlockChan:      make(chan *blockchain_api.AddBlockRequest, 10),
@@ -90,7 +90,21 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 		chainParams:       params,
 		stats:             gocore.NewStat("blockchain"),
 		AppCtx:            ctx,
-	}, nil
+	}
+
+	if len(local_test_start_from_state) >= 1 && local_test_start_from_state[0] != "" {
+		// Convert the string state to FSMStateType using the map
+		_, ok := blockchain_api.FSMStateType_value[local_test_start_from_state[0]]
+		if !ok {
+			// Handle the case where the state is not found in the map
+			logger.Errorf("Invalid inital state: %s", local_test_start_from_state[0])
+		} else {
+			b.localTestStartState = local_test_start_from_state[0]
+		}
+
+	}
+
+	return b, nil
 }
 
 func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -133,6 +147,9 @@ func (b *Blockchain) Init(ctx context.Context) error {
 	b.finiteStateMachine = b.NewFiniteStateMachine()
 
 	// check if we are in local testing mode with a defined target state for the FSM
+	if b.localTestStartState != "" {
+		b.finiteStateMachine.SetState(b.localTestStartState)
+	}
 
 	// Set the FSM to the latest state
 	stateStr, err := b.store.GetFSMState(ctx)
