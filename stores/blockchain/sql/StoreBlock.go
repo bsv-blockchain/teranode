@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
@@ -46,8 +47,9 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		SizeInBytes: block.SizeInBytes,
 		Miner:       miner,
 		ChainWork:   chainWork,
-		// BlockTime   uint32 `json:"block_time"`    // Time of the block.
-		// Timestamp   uint32 `json:"timestamp"`     // Timestamp of the block.
+		BlockTime:   block.Header.Timestamp,
+		// nolint:gosec
+		Timestamp: uint32(time.Now().Unix()),
 	}
 
 	ok := s.blocksCache.AddBlockHeader(block.Header, meta)
