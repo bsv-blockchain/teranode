@@ -1,4 +1,4 @@
-//go:build rpc
+////go:build rpc
 
 // go test -v -run "^TestRPCTestSuite$/TestRPCGetDifficulty$" -tags rpc
 
@@ -19,6 +19,7 @@ type RPCTestSuite struct {
 
 const (
 	ubsv1RPCEndpoint string = "http://localhost:11292"
+	nullStr          string = "null"
 )
 
 func (suite *RPCTestSuite) TestRPCGetBlockchainInfo() {
@@ -93,7 +94,7 @@ func (suite *RPCTestSuite) TestRPCGetInfo() {
 	t.Logf("%s", resp)
 
 	if getInfo.Error != nil {
-		if strErr, ok := getInfo.Error.(string); ok && strErr == "null" {
+		if strErr, ok := getInfo.Error.(string); ok && strErr == nullStr {
 			t.Errorf("Test failed: getinfo RPC call returned error: %v", strErr)
 		} else {
 			t.Errorf("Test failed: getinfo RPC call returned an unexpected error type: %v", getInfo.Error)
@@ -135,9 +136,9 @@ func (suite *RPCTestSuite) TestRPCGetDifficulty() {
 
 func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 	t := suite.T()
+	block := 2
 
 	var getBlockHash GetBlockHashResponse
-	block := 2
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockhash", []interface{}{block})
 
@@ -165,6 +166,31 @@ func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 		} else {
 			t.Errorf("Test failed: getBlockHash RPC call returned an empty block hash: %v", getBlockHash.Result)
 		}
+	}
+}
+
+func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
+	t := suite.T()
+	height := 2
+
+	var getBlockByHeightResp GetBlockByHeightResponse
+
+	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockbyheight", []interface{}{height})
+
+	if err != nil {
+		t.Errorf("Error CallRPC: %v", err)
+	}
+
+	errJSON := json.Unmarshal([]byte(resp), &getBlockByHeightResp)
+	if err != nil {
+		t.Errorf("JSON decoding error: %v", errJSON)
+		return
+	}
+
+	t.Logf("%s", resp)
+
+	if getBlockByHeightResp.Result.Height != 1 {
+		t.Errorf("Expected height %d, got %d", height, getBlockByHeightResp.Result.Height)
 	}
 }
 
