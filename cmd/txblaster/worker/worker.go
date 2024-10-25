@@ -57,50 +57,38 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusWorkers = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "tx_blaster",
-			Name:      "workers",
-			Help:      "Number of workers running",
+			Name: "tx_blaster_workers",
+			Help: "Number of workers running",
 		},
 	)
 	prometheusProcessedTransactions = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "tx_blaster",
-			Name:      "processed_transactions",
-			Help:      "Number of transactions processed by the tx blaster",
+			Name: "tx_blaster_processed_transactions",
+			Help: "Number of transactions processed by the tx blaster",
 		},
 	)
 	prometheusInvalidTransactions = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "tx_blaster",
-			Name:      "invalid_transactions",
-			Help:      "Number of transactions found invalid by the tx blaster",
+			Name: "tx_blaster_invalid_transactions",
+			Help: "Number of transactions found invalid by the tx blaster",
 		},
 	)
 	prometheusInternalErrors = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "tx_blaster",
-			Name:      "internal_server_errors",
-			Help:      "Number of transactions found failing at server end",
+			Name: "tx_blaster_internal_server_errors",
+			Help: "Number of transactions found failing at server end",
 		},
 	)
 	prometheusTransactionDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "tx_blaster",
-			Name:      "transactions_duration",
-			Help:      "Duration of transaction processing by the tx blaster",
+			Name: "tx_blaster_transactions_duration",
+			Help: "Duration of transaction processing by the tx blaster",
 		},
 	)
 	prometheusTransactionSize = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "tx_blaster",
-			Name:      "transactions_size",
-			Help:      "Size of transactions processed by the tx blaster",
+			Name: "tx_blaster_transactions_size",
+			Help: "Size of transactions processed by the tx blaster",
 		},
 	)
 }

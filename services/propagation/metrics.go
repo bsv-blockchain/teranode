@@ -1,11 +1,10 @@
 package propagation
 
 import (
-	"sync"
-
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -27,8 +26,7 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusHealth = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "propagation",
+			Namespace: "propagation",
 			Name:      "health",
 			Help:      "Histogram of calls to the health endpoint of the propagation service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -36,8 +34,7 @@ func _initPrometheusMetrics() {
 	)
 	prometheusProcessedTransactions = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "propagation",
+			Namespace: "propagation",
 			Name:      "transactions",
 			Help:      "Histogram of transaction processing by the propagation service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -45,8 +42,7 @@ func _initPrometheusMetrics() {
 	)
 	prometheusProcessedTransactionBatch = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "propagation",
+			Namespace: "propagation",
 			Name:      "transactions_batch",
 			Help:      "Histogram of transaction processing by the propagation service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -54,8 +50,7 @@ func _initPrometheusMetrics() {
 	)
 	prometheusTransactionSize = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "propagation",
+			Namespace: "propagation",
 			Name:      "transactions_size",
 			Help:      "Size of transactions processed by the propagation service",
 			Buckets:   util.MetricsBucketsSize,
@@ -63,8 +58,7 @@ func _initPrometheusMetrics() {
 	)
 	prometheusInvalidTransactions = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "propagation",
+			Namespace: "propagation",
 			Name:      "invalid_transactions",
 			Help:      "Number of transactions found invalid by the propagation service",
 		},

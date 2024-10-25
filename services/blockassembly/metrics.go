@@ -43,8 +43,7 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusBlockAssemblyHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "health",
 			Help:      "Number of calls to the health endpoint of the blockassembly service",
 		},
@@ -52,8 +51,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblyAddTx = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "add_tx",
 			Help:      "Histogram of AddTx in the blockassembly service",
 			Buckets:   util.MetricsBucketsMicroSeconds,
@@ -62,8 +60,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblyRemoveTx = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "remove_tx",
 			Help:      "Histogram of RemoveTx in the blockassembly service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -72,9 +69,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblyGetMiningCandidateDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
-			Name:      "get_mining_candidate_duration",
+			Namespace: "blockassembly",
+			Name:      "get_mining_candidate_duration_millis",
 			Help:      "Histogram of GetMiningCandidate in the blockassembly service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
@@ -82,8 +78,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblySubmitMiningSolutionCh = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "submit_mining_solution_ch",
 			Help:      "Number of items in the SubmitMiningSolution channel in the blockassembly service",
 		},
@@ -91,8 +86,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblySubmitMiningSolution = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "submit_mining_solution",
 			Help:      "Histogram of SubmitMiningSolution in the blockassembly service",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -101,8 +95,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblyUpdateSubtreesTTL = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "update_subtrees_ttl",
 			Help:      "Histogram of updating subtrees TTL in the blockassembly service",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -111,8 +104,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblerGetMiningCandidate = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "block_assembler_get_mining_candidate",
 			Help:      "Number of calls to GetMiningCandidate in the block assembler",
 		},
@@ -120,8 +112,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblerSubtreeCreated = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "subtree_created",
 			Help:      "Number of subtrees created in the block assembler",
 		},
@@ -129,8 +120,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblerTransactions = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "transactions",
 			Help:      "Number of transactions currently in the block assembler subtree processor",
 		},
@@ -138,8 +128,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblerQueuedTransactions = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "queued_transactions",
 			Help:      "Number of transactions currently queued in the block assembler subtree processor",
 		},
@@ -147,8 +136,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblerSubtrees = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "subtrees",
 			Help:      "Number of subtrees currently in the block assembler subtree processor",
 		},
@@ -156,8 +144,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblerTxMetaGetDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "tx_meta_get",
 			Help:      "Histogram of reading tx meta data from txmeta store in block assembler",
 			Buckets:   util.MetricsBucketsMicroSeconds,
@@ -166,8 +153,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblerReorg = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "reorg",
 			Help:      "Number of reorgs in block assembler",
 		},
@@ -175,8 +161,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblerReorgDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "reorg_duration",
 			Help:      "Histogram of reorg in block assembler",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -185,8 +170,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblyBestBlockHeight = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "best_block_height",
 			Help:      "Best block height in block assembly",
 		},
@@ -194,8 +178,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockAssemblyCurrentBlockHeight = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "current_block_height",
 			Help:      "Current block height in block assembly",
 		},

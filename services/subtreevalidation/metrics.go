@@ -1,11 +1,10 @@
 package subtreevalidation
 
 import (
-	"sync"
-
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -32,8 +31,7 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusHealth = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
+			Namespace: "subtreevalidation",
 			Name:      "health",
 			Help:      "Histogram of calls to health endpoint",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
@@ -42,8 +40,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeValidationCheckSubtree = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
+			Namespace: "subtreevalidation",
 			Name:      "check_subtree",
 			Help:      "Duration of calls to checkSubtree endpoint",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
@@ -52,8 +49,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeValidationValidateSubtree = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
+			Namespace: "subtreevalidation",
 			Name:      "validate_subtree",
 			Help:      "Histogram of subtrees validated",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
@@ -62,8 +58,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeValidationValidateSubtreeRetry = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
+			Namespace: "subtreevalidation",
 			Name:      "validate_subtree_retry",
 			Help:      "Number of retries when subtrees validated",
 		},
@@ -71,8 +66,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeValidationValidateSubtreeHandler = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
+			Namespace: "subtreevalidation",
 			Name:      "validate_subtree_handler",
 			Help:      "Duration of subtree handler",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
@@ -81,8 +75,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeValidationValidateSubtreeDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
+			Namespace: "subtreevalidation",
 			Name:      "validate_subtree_duration",
 			Help:      "Duration of validate subtree",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
@@ -91,8 +84,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeValidationBlessMissingTransaction = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
+			Namespace: "subtreevalidation",
 			Name:      "bless_missing_transaction",
 			Help:      "Duration of bless missing transaction",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -101,8 +93,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeValidationSetTXMetaCacheKafka = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
+			Namespace: "subtreevalidation",
 			Name:      "set_tx_meta_cache_kafka",
 			Help:      "Duration of setting tx meta cache from kafka",
 			Buckets:   util.MetricsBucketsMicroSeconds,
@@ -111,8 +102,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeValidationDelTXMetaCacheKafka = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
+			Namespace: "subtreevalidation",
 			Name:      "del_tx_meta_cache_kafka",
 			Help:      "Duration of deleting tx meta cache from kafka",
 			Buckets:   util.MetricsBucketsMicroSeconds,
@@ -121,8 +111,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeValidationSetTXMetaCacheKafkaErrors = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
+			Namespace: "subtreevalidation",
 			Name:      "set_tx_meta_cache_kafka_errors",
 			Help:      "Number of errors setting tx meta cache from kafka",
 		},

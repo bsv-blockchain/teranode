@@ -1,11 +1,10 @@
 package coinbase
 
 import (
-	"sync"
-
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"sync"
 )
 
 var (
@@ -26,8 +25,7 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "coinbase",
+			Namespace: "coinbase",
 			Name:      "health",
 			Help:      "Number of calls to the Health endpoint",
 		},
@@ -35,8 +33,7 @@ func _initPrometheusMetrics() {
 
 	prometheusRequestFunds = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "coinbase",
+			Namespace: "coinbase",
 			Name:      "request_funds",
 			Help:      "Histogram of calls to the RequestFunds endpoint",
 			Buckets:   util.MetricsBucketsMilliSeconds,

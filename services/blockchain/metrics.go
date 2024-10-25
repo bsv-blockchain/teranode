@@ -53,8 +53,7 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusBlockchainHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockchain",
+			Namespace: "blockchain",
 			Name:      "health",
 			Help:      "Histogram of calls to the health endpoint of the blockchain service",
 		},
@@ -62,8 +61,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainAddBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockchain",
+			Namespace: "blockchain",
 			Name:      "add_block",
 			Help:      "Histogram of block added to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -72,8 +70,7 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "blockchain",
+			Namespace: "blockchain",
 			Name:      "get_block",
 			Help:      "Histogram of Get block calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,

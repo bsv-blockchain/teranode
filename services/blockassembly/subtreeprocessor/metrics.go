@@ -33,8 +33,7 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusSubtreeProcessorAddTx = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreeprocessor",
+			Namespace: "subtreeprocessor",
 			Name:      "add_tx",
 			Help:      "Number of times a tx is added in subtree processor",
 		},
@@ -42,8 +41,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeProcessorMoveUpBlock = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreeprocessor",
+			Namespace: "subtreeprocessor",
 			Name:      "move_up",
 			Help:      "Number of times a block is moved up in subtree processor",
 		},
@@ -51,8 +49,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeProcessorMoveUpBlockDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreeprocessor",
+			Namespace: "subtreeprocessor",
 			Name:      "move_up_duration",
 			Help:      "Histogram of moving up block in subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -61,8 +58,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeProcessorMoveDownBlock = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreeprocessor",
+			Namespace: "subtreeprocessor",
 			Name:      "move_down",
 			Help:      "Number of times a block is moved down in subtree processor",
 		},
@@ -70,8 +66,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeProcessorMoveDownBlockDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreeprocessor",
+			Namespace: "subtreeprocessor",
 			Name:      "move_down_duration",
 			Help:      "Histogram of moving down block in subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -97,8 +92,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeProcessorProcessCoinbaseTx = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreeprocessor",
+			Namespace: "subtreeprocessor",
 			Name:      "process_coinbase_tx",
 			Help:      "Number of times a coinbase tx is processed in subtree processor",
 		},
@@ -106,9 +100,8 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeProcessorProcessCoinbaseTxDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreeprocessor",
-			Name:      "process_coinbase_tx_duration",
+			Namespace: "subtreeprocessor",
+			Name:      "process_coinbase_tx_duration_millis",
 			Help:      "Duration of processing coinbase tx in subtree processor",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
@@ -116,8 +109,7 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeProcessorCreateTransactionMap = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreeprocessor",
+			Namespace: "subtreeprocessor",
 			Name:      "transaction_map",
 			Help:      "Number of times a transaction map is created in subtree processor",
 		},
@@ -125,9 +117,8 @@ func _initPrometheusMetrics() {
 
 	prometheusSubtreeProcessorCreateTransactionMapDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreeprocessor",
-			Name:      "transaction_map_duration",
+			Namespace: "subtreeprocessor",
+			Name:      "transaction_map_duration_seconds",
 			Help:      "Duration of creating transaction map in subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
 		},

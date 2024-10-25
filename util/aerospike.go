@@ -347,8 +347,8 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 						if _, ok := aerospikePrometheusMetrics[prometheusKey]; !ok {
 							aerospikePrometheusMetrics[prometheusKey] = promauto.NewCounter(
 								prometheus.CounterOpts{
-									Namespace: "teranode",
-									Subsystem: "aerospike_client_" + key,
+									Namespace: "aerospike_client",
+									Subsystem: key,
 									Name:      subKey,
 									Help:      fmt.Sprintf("Aerospike stat %s:%s", key, subKey),
 								},

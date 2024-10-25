@@ -37,8 +37,7 @@ var (
 func Init() {
 	prometheusBlockAssemblerAddTx = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockassembly",
+			Namespace: "blockassembly",
 			Name:      "block_assembler_add_tx",
 			Help:      "Number of txs added to the block assembler",
 		},
