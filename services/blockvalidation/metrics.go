@@ -44,7 +44,8 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusBlockValidationHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "health",
 			Help:      "Number of health checks",
 		},
@@ -52,7 +53,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationBlockFoundCh = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "block_found_ch",
 			Help:      "Number of blocks found buffered in the block found channel",
 		},
@@ -60,7 +62,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationBlockFound = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "block_found",
 			Help:      "Histogram of calls to BlockFound method",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -69,7 +72,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationCatchupCh = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "catchup_ch",
 			Help:      "Number of catchups buffered in the catchup channel",
 		},
@@ -77,7 +81,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationCatchup = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "catchup",
 			Help:      "Histogram of catchup events",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -86,7 +91,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationProcessBlockFound = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "process_block_found",
 			Help:      "Histogram of process block found",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -95,7 +101,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationSetTxMetaQueueCh = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "set_tx_meta_queue_ch",
 			Help:      "Number of tx meta queue buffered in the set tx meta queue channel",
 		},
@@ -121,7 +128,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationValidateBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "validate_block",
 			Help:      "Histogram of calls to ValidateBlock method",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -130,7 +138,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationReValidateBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "revalidate_block",
 			Help:      "Histogram of re-validate block",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -139,7 +148,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationReValidateBlockErr = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "revalidate_block_err",
 			Help:      "Number of blocks revalidated with error",
 			Buckets:   util.MetricsBucketsSeconds,
@@ -148,7 +158,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationSetTXMetaCache = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "set_tx_meta_cache",
 			Help:      "Number of tx meta cache sets",
 		},
@@ -156,7 +167,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationSetTXMetaCacheDel = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "del_tx_meta_cache",
 			Help:      "Number of tx meta cache deletes",
 		},
@@ -172,7 +184,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationSetMinedMulti = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "set_tx_mined_multi",
 			Help:      "Number of tx mined multi sets",
 		},
@@ -180,7 +193,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationLastValidatedBlocksCache = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "last_validated_blocks_cache",
 			Help:      "Number of blocks in the last validated blocks cache",
 		},
@@ -188,7 +202,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationBlockExistsCache = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "block_exists_cache",
 			Help:      "Number of blocks in the block exists cache",
 		},
@@ -196,7 +211,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockValidationSubtreeExistsCache = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
 			Name:      "subtree_exists_cache",
 			Help:      "Number of subtrees in the subtree exists cache",
 		},
