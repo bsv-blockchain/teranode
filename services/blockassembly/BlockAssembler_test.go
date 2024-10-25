@@ -10,14 +10,13 @@ import (
 	"testing"
 
 	"github.com/bitcoin-sv/ubsv/chaincfg"
-	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
-
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockassembly/subtreeprocessor"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/services/miner/cpuminer"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
 	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -228,18 +227,6 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 
 		// set the cached BlockAssembler items to the correct values
 		items.blockAssembler.bestBlockHeader.Store(blockHeader4)
-		items.blockAssembler.currentChain = []*model.BlockHeader{
-			blockHeader4,
-			blockHeader3,
-			blockHeader2,
-			blockHeader1,
-		}
-		items.blockAssembler.currentChainMap = map[chainhash.Hash]uint32{
-			*blockHeader4.Hash(): 4,
-			*blockHeader3.Hash(): 3,
-			*blockHeader2.Hash(): 2,
-			*blockHeader1.Hash(): 1,
-		}
 
 		err := items.addBlock(blockHeader1)
 		require.NoError(t, err)
@@ -276,11 +263,6 @@ func TestBlockAssembler_getReorgBlockHeaders(t *testing.T) {
 
 		// set the cached BlockAssembler items to the correct values
 		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
-		items.blockAssembler.currentChain = []*model.BlockHeader{blockHeader2, blockHeader1}
-		items.blockAssembler.currentChainMap = map[chainhash.Hash]uint32{
-			*blockHeader1.Hash(): 1,
-			*blockHeader2.Hash(): 2,
-		}
 
 		err := items.addBlock(blockHeader1)
 		require.NoError(t, err)

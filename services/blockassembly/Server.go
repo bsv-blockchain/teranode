@@ -13,7 +13,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/blob/options"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
-	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
@@ -424,7 +423,6 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 	}
 
 	// this is never used, so we can remove it
-	var batchError error = nil
 	for _, req := range requests {
 		startTxTime := time.Now()
 		// create the subtree node
@@ -443,40 +441,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 		Ok: true,
 	}
 
-	if batchError == nil {
-		return resp, nil
-	}
-
-	return resp, errors.WrapGRPC(batchError)
-}
-
-func (ba *BlockAssembly) GetTxMeta(ctx context.Context, txHash *chainhash.Hash) (*meta.Data, error) {
-	ctx, _, deferFn := tracing.StartTracing(ctx, "GetTxMeta",
-		tracing.WithParentStat(ba.stats),
-		tracing.WithHistogram(prometheusBlockAssemblerTxMetaGetDuration),
-		tracing.WithLogMessage(ba.logger, "[GetTxMeta][%s] called", txHash.String()),
-	)
-	defer deferFn()
-
-	txMetadata, err := ba.utxoStore.Get(ctx, txHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	currentChainMapIDs := ba.blockAssembler.GetCurrentChainMapIDs()
-
-	// looking this up here and adding to the subtree processor, might create a situation where a transaction
-	// that was in a block from a competing miner, is added to the subtree processor when it shouldn't
-	if len(txMetadata.BlockIDs) > 0 {
-		for _, id := range txMetadata.BlockIDs {
-			if _, ok := currentChainMapIDs[id]; ok {
-				// the tx is already in a block on our chain, nothing to do
-				return nil, errors.WrapGRPC(errors.NewProcessingError("tx already in a block on the active chain: %d", id))
-			}
-		}
-	}
-
-	return txMetadata, nil
+	return resp, nil
 }
 
 func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*model.MiningCandidate, error) {

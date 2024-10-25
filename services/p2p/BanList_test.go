@@ -12,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/blockchain"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -179,6 +180,9 @@ func TestRemoveBan(t *testing.T) {
 func TestBanListChannel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// TODO this needs to be different, we shouldn't be having to set globals to run tests
+	gocore.Config().Set("blockchain_store", "sqlitememory://")
 
 	banList, eventChan, err := GetBanList(ctx, ulogger.TestLogger{})
 	require.NoError(t, err)

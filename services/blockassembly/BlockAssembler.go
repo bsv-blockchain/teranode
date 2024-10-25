@@ -200,10 +200,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 
 				prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
 
-				if err = b.setCurrentChain(ctx); err != nil {
-					b.logger.Errorf("[BlockAssembler][Reset][%s] error setting current chain: %v", bestBlockchainBlockHeader.Hash(), err)
-				}
-
 				b.logger.Warnf("[BlockAssembler][Reset] setting wait count to 2 for getMiningCandidate")
 				b.resetWaitCount.Store(2) // wait 2 blocks before starting to mine again
 				// nolint:gosec
@@ -314,11 +310,6 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 	if err != nil {
 		b.logger.Errorf("[BlockAssembler][%s] error getting next work required: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
-
-	err = b.setCurrentChain(ctx)
-	if err != nil {
-		b.logger.Errorf("[BlockAssembler][%s] error setting current chain: %v", bestBlockchainBlockHeader.Hash(), err)
-	}
 }
 
 func (b *BlockAssembler) GetCurrentRunningState() string {
@@ -364,11 +355,6 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 		b.logger.Errorf("[BlockAssembler] error setting state: %v", err)
 	}
 
-	err = b.setCurrentChain(ctx)
-	if err != nil {
-		b.logger.Errorf("[BlockAssembler] error setting current chain: %v", err)
-	}
-
 	b.startChannelListeners(ctx)
 
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(b.bestBlockHeight.Load()))
@@ -407,48 +393,6 @@ func (b *BlockAssembler) SetState(ctx context.Context) error {
 
 	b.logger.Debugf("[BlockAssembler] setting state: %d: %s", blockHeight, blockHeader.Hash())
 	return b.blockchainClient.SetState(ctx, "BlockAssembler", state)
-}
-
-func (b *BlockAssembler) setCurrentChain(ctx context.Context) (err error) {
-	b.currentChain, _, err = b.blockchainClient.GetBlockHeaders(ctx, b.bestBlockHeader.Load().Hash(), uint64(b.maxBlockReorgCatchup))
-	if err != nil {
-		return errors.NewServiceError("error getting block headers from blockchain", err)
-	}
-
-	ids, err := b.blockchainClient.GetBlockHeaderIDs(ctx, b.bestBlockHeader.Load().Hash(), uint64(b.maxBlockReorgCatchup))
-	if err != nil {
-		return errors.NewServiceError("error getting block headers from blockchain", err)
-	}
-
-	b.currentChainMapMu.Lock()
-
-	b.currentChainMap = make(map[chainhash.Hash]uint32, len(b.currentChain))
-	for _, blockHeader := range b.currentChain {
-		b.currentChainMap[*blockHeader.Hash()] = blockHeader.Timestamp
-	}
-
-	b.currentChainMapIDs = make(map[uint32]struct{}, len(ids))
-	for _, id := range ids {
-		b.currentChainMapIDs[id] = struct{}{}
-	}
-
-	b.currentChainMapMu.Unlock()
-
-	return nil
-}
-
-func (b *BlockAssembler) GetCurrentChainMap() map[chainhash.Hash]uint32 {
-	b.currentChainMapMu.RLock()
-	defer b.currentChainMapMu.RUnlock()
-
-	return b.currentChainMap
-}
-
-func (b *BlockAssembler) GetCurrentChainMapIDs() map[uint32]struct{} {
-	b.currentChainMapMu.RLock()
-	defer b.currentChainMapMu.RUnlock()
-
-	return b.currentChainMapIDs
 }
 
 func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
@@ -701,9 +645,9 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		moveUpBlockHeaders[i], moveUpBlockHeaders[opp] = moveUpBlockHeaders[opp], moveUpBlockHeaders[i]
 	}
 
-	// traverse b.currentChain in reverse order until we find the common ancestor
+	// traverse currentChain in reverse order until we find the common ancestor
 	// skipping the current block, start at the previous block (len-2)
-	for _, blockHeader := range b.currentChain {
+	for _, blockHeader := range currentChain {
 		if blockHeader.Hash().IsEqual(commonAncestor.Hash()) {
 			break
 		}
