@@ -93,12 +93,17 @@ func getTxs(testBlockID string) ([]*bt.Tx, error) {
 
 	reader := bytes.NewReader(blockBytes)
 
+	maxNbTx := 44_407 // nb tx at block 000000000000000000a69d478ffc96546356028d192b62534ec22663ac2457e9
 	txs := make([]*bt.Tx, 0)
 	for {
 		tx := &bt.Tx{}
 		_, err = tx.ReadFrom(reader)
 		if err != nil {
-			break
+			if len(txs) == maxNbTx {
+				break
+			} else {
+				return nil, fmt.Errorf("error reading data, read %v txs, error : %v", len(txs), err)
+			}
 		}
 
 		txs = append(txs, tx)
