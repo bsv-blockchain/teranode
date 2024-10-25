@@ -116,6 +116,12 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			return nil, nil, errors.NewProcessingError("failed to convert hashMerkleRoot", err)
 		}
 
+		// nolint:gosec
+		blockHeaderMeta.Timestamp = uint32(insertedAt.Unix())
+
+		// Set the block time to the timestamp in the meta
+		blockHeaderMeta.BlockTime = blockHeader.Timestamp
+
 		blockHeaders = append(blockHeaders, blockHeader)
 		blockHeaderMetas = append(blockHeaderMetas, blockHeaderMeta)
 	}
