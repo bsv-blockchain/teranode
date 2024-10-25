@@ -99,6 +99,8 @@ services:
         condition: service_started
       kafka-shared:
         condition: service_started
+      aerospike-1:
+        condition: service_started
     entrypoint: [ "/app/wait.sh", "localhost", "3100", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run", "-miner=1", "-coinbase=1", "-blockpersister=1", "-rpc=1" ]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv1"
@@ -122,6 +124,8 @@ services:
         condition: service_started
       kafka-shared:
         condition: service_started
+      aerospike-2:
+        condition: service_started
     entrypoint: [ "/app/wait.sh", "localhost", "3200", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run" ]
     environment:
       SETTINGS_CONTEXT: "docker.host.ubsv2"
@@ -143,6 +147,8 @@ services:
       postgres:
         condition: service_started
       kafka-shared:
+        condition: service_started
+      aerospike-3:
         condition: service_started
     entrypoint: [ "/app/wait.sh", "localhost", "3300", "2", "--", "/app/wait.sh", "localhost", "15432", "0", "--", "/app/wait.sh", "localhost", "19092", "0", "--", "/app/ubsv.run" ]
     environment:
