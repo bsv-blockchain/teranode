@@ -25,6 +25,7 @@ import (
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 )
 
 const (
@@ -1046,12 +1047,15 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 		return fmt.Sprintf("Received %v%s from %s",
 			msg.Command(), summary, p)
 	}))
-	p.logger.Debugf("%v", newLogClosure(func() string {
-		return spew.Sdump(msg)
-	}))
-	p.logger.Debugf("%v", newLogClosure(func() string {
-		return spew.Sdump(buf)
-	}))
+
+	if gocore.Config().GetBool("legacy_printInvMessages", false) {
+		p.logger.Debugf("%v", newLogClosure(func() string {
+			return spew.Sdump(msg)
+		}))
+		p.logger.Debugf("%v", newLogClosure(func() string {
+			return spew.Sdump(buf)
+		}))
+	}
 
 	return msg, buf, nil
 }
@@ -1074,18 +1078,23 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 		return fmt.Sprintf("Sending %v%s to %s", msg.Command(),
 			summary, p)
 	}))
-	p.logger.Debugf("%v", newLogClosure(func() string {
-		return spew.Sdump(msg)
-	}))
-	p.logger.Debugf("%v", newLogClosure(func() string {
-		var buf bytes.Buffer
-		_, err := wire.WriteMessageWithEncodingN(&buf, msg, p.ProtocolVersion(),
-			p.cfg.ChainParams.Net, enc)
-		if err != nil {
-			return err.Error()
-		}
-		return spew.Sdump(buf.Bytes())
-	}))
+
+	if gocore.Config().GetBool("legacy_printInvMessages", false) {
+		p.logger.Debugf("%v", newLogClosure(func() string {
+			return spew.Sdump(msg)
+		}))
+
+		p.logger.Debugf("%v", newLogClosure(func() string {
+			var buf bytes.Buffer
+
+			_, err := wire.WriteMessageWithEncodingN(&buf, msg, p.ProtocolVersion(), p.cfg.ChainParams.Net, enc)
+			if err != nil {
+				return err.Error()
+			}
+
+			return spew.Sdump(buf.Bytes())
+		}))
+	}
 
 	// Write the message to the peer.
 	n, err := wire.WriteMessageWithEncodingN(p.conn, msg,
