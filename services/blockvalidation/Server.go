@@ -233,7 +233,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 					prometheusBlockValidationCatchupCh.Set(float64(len(u.catchupCh)))
 
 					// catched up, ready to mine, send RUN event
-					err = u.blockchainClient.Run(ctx1)
+					err = u.blockchainClient.Run(ctx1, "blockvalidation/Server")
 					if err != nil {
 						u.logger.Errorf("[BlockValidation Init] failed to send RUN event [%v]", err)
 					}

@@ -372,7 +372,7 @@ func (sm *SyncManager) startSync() {
 		if bestPeer.LastBlock() == int32(bestBlockHeaderMeta.Height) {
 			sm.logger.Infof("peer %v is at the same height %d as us, sending RUNNING", bestPeer.Addr(), bestPeer.LastBlock())
 
-			if err = sm.blockchainClient.Run(sm.ctx); err != nil {
+			if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/startSync"); err != nil {
 				sm.logger.Errorf("failed to set blockchain state to running: %v", err)
 			}
 		}
@@ -976,7 +976,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 
 			// Since we are current, we can tell FSM to transition to RUN
 			// Blockchain client will check if miner is registered, if so it will send Mine event, and FSM will transition to Mine
-			if err = sm.blockchainClient.Run(sm.ctx); err != nil {
+			if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/handleBlockMsg"); err != nil {
 				sm.logger.Errorf("[Sync Manager] failed to send FSM RUN event %v", err)
 			}
 		}
@@ -1469,7 +1469,7 @@ out:
 				// we reached current in legacy, and current FSM state is not Running, send RUN event
 				if currentState != nil && *currentState != ubsvblockchain.FSMStateRUNNING {
 					sm.logger.Infof("[SyncManager] Legacy reached current, sending RUN event to FSM")
-					if err = sm.blockchainClient.Run(sm.ctx); err != nil {
+					if err = sm.blockchainClient.Run(sm.ctx, "legacy/netsync/manager/blockHandler"); err != nil {
 						sm.logger.Infof("[Sync Manager] failed to send FSM RUN event %v", err)
 					}
 				}

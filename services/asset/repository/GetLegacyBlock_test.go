@@ -389,7 +389,7 @@ func (s *mockStore) IntervalBlockHashes(endHash *chainhash.Hash, interval int) (
 func (s *mockStore) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
 	panic("implement me")
 }
-func (s *mockStore) Run(ctx context.Context) error {
+func (s *mockStore) Run(ctx context.Context, source string) error {
 	panic("not implemented")
 }
 func (s *mockStore) Mine(ctx context.Context) error {

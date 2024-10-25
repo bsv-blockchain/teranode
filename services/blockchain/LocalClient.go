@@ -213,7 +213,7 @@ func (c LocalClient) SendFSMEvent(_ context.Context, _ blockchain_api.FSMEventTy
 	return nil
 }
 
-func (c LocalClient) Run(ctx context.Context) error {
+func (c LocalClient) Run(ctx context.Context, source string) error {
 	return nil
 }
 

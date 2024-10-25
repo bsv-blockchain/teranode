@@ -73,21 +73,21 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 
 	suite.T().Logf("Sending initial RUN event to Node1")
 
-	err = suite.Framework.Nodes[0].BlockchainClient.Run(suite.Framework.Context)
+	err = suite.Framework.Nodes[0].BlockchainClient.Run(suite.Framework.Context, "test")
 	if err != nil {
 		suite.T().Fatal(err)
 	}
 
 	suite.T().Logf("Sending initial RUN event to Node2")
 
-	err = suite.Framework.Nodes[1].BlockchainClient.Run(suite.Framework.Context)
+	err = suite.Framework.Nodes[1].BlockchainClient.Run(suite.Framework.Context, "test")
 	if err != nil {
 		suite.T().Fatal(err)
 	}
 
 	suite.T().Logf("Sending initial RUN event to Node3")
 
-	err = suite.Framework.Nodes[2].BlockchainClient.Run(suite.Framework.Context)
+	err = suite.Framework.Nodes[2].BlockchainClient.Run(suite.Framework.Context, "test")
 	if err != nil {
 		suite.T().Fatal(err)
 	}

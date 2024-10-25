@@ -104,21 +104,21 @@ func (suite *TeranodeTestSuite) SetupTestEnv(settingsMap map[string]string, comp
 
 		suite.T().Logf("Sending initial RUN event to Node1")
 
-		err = suite.TeranodeTestEnv.Nodes[0].BlockchainClient.Run(suite.TeranodeTestEnv.Context)
+		err = suite.TeranodeTestEnv.Nodes[0].BlockchainClient.Run(suite.TeranodeTestEnv.Context, "test")
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
 		suite.T().Logf("Sending initial RUN event to Node2")
 
-		err = suite.TeranodeTestEnv.Nodes[1].BlockchainClient.Run(suite.TeranodeTestEnv.Context)
+		err = suite.TeranodeTestEnv.Nodes[1].BlockchainClient.Run(suite.TeranodeTestEnv.Context, "test")
 		if err != nil {
 			suite.T().Fatal(err)
 		}
 
 		suite.T().Logf("Sending initial RUN event to Node3")
 
-		err = suite.TeranodeTestEnv.Nodes[2].BlockchainClient.Run(suite.TeranodeTestEnv.Context)
+		err = suite.TeranodeTestEnv.Nodes[2].BlockchainClient.Run(suite.TeranodeTestEnv.Context, "test")
 		if err != nil {
 			suite.T().Fatal(err)
 		}

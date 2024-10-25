@@ -820,16 +820,20 @@ func (c *Client) SendFSMEvent(ctx context.Context, event blockchain_api.FSMEvent
 }
 
 // Run sends a run FSM event to the blockchain service.
-func (c *Client) Run(ctx context.Context) error {
-	currentState := c.fmsState.Load()
-	if currentState != nil {
+func (c *Client) Run(ctx context.Context, source string) error {
+	currentState := ""
+
+	state := c.fmsState.Load()
+	if state != nil {
 		// check whether the current state is the same as the target state
-		if *currentState == FSMStateRUNNING {
+		if *state == FSMStateRUNNING {
 			return nil
 		}
+
+		currentState = state.String()
 	}
 
-	c.logger.Infof("[Blockchain Client] Sending Run event")
+	c.logger.Infof("[Blockchain Client] Sending Run event %s (%s => Run)", source, currentState)
 
 	_, err := c.client.Run(ctx, &emptypb.Empty{})
 	if err != nil {
