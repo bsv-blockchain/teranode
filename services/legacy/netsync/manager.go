@@ -1272,13 +1272,6 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		}
 	}
 
-	// If we are current, send a RUN event to the FSM
-	if sm.current() {
-		if err := sm.blockchainClient.Run(sm.ctx); err != nil {
-			sm.logger.Errorf("[Sync Manager] failed to send FSM RUN event %v", err)
-		}
-	}
-
 	// If this inv contains a block announcement, and this isn't coming from
 	// our current sync peer or we're current, then update the last
 	// announced block for this peer. We'll use this information later to
