@@ -510,25 +510,27 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 
 	// If we don't have a sync peer, then there is nothing to do.
 	if sm.syncPeer == nil {
-		// GOKHAN: here check if it is nil, we can end the process of
-		// interval?
 		return
 	}
 
 	// Update network stats at the end of this tick.
 	defer sm.syncPeerState.updateNetwork(sm.syncPeer)
 
+	validNetworkSpeed := sm.syncPeerState.validNetworkSpeed(sm.minSyncPeerNetworkSpeed)
+	lastBlockSince := time.Since(sm.syncPeerState.lastBlockTime)
+
 	// Check network speed of the sync peer and its last block time. If we're currently
 	// flushing the cache skip this round.
-	if (sm.syncPeerState.validNetworkSpeed(sm.minSyncPeerNetworkSpeed) < maxNetworkViolations) &&
-		(time.Since(sm.syncPeerState.lastBlockTime) <= maxLastBlockTime) {
+	if (validNetworkSpeed < maxNetworkViolations) && (lastBlockSince <= maxLastBlockTime) {
 		return
 	}
+
+	sm.logger.Debugf("sync peer %s is slow, network speed: %v, last block time: %v", sm.syncPeer.Addr(), validNetworkSpeed, lastBlockSince)
 
 	// Don't update sync peers if you have all the available blocks.
 	_, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
-		sm.logger.Errorf("Failed to get best block header: %v", err)
+		sm.logger.Errorf("failed to get best block header: %v", err)
 		return
 	}
 
@@ -540,10 +542,14 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
+	sm.logger.Debugf("sync peer %s is not at the same height (%d) as us (%d), updating sync peer", sm.syncPeer.Addr(), sm.topBlock(), bestBlockHeaderMeta.Height)
+
 	state, exists := sm.peerStates[sm.syncPeer]
 	if !exists {
 		return
 	}
+
+	sm.logger.Debugf("removing sync peer %s", sm.syncPeer.Addr())
 
 	sm.clearRequestedState(state)
 	sm.updateSyncPeer(state)
