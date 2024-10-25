@@ -74,3 +74,40 @@ type GetBlockHashResponse struct {
 	Error  interface{} `json:"error"`
 	ID     int         `json:"id"`
 }
+
+type GetBlockByHeightStatus struct {
+	Validity            string `json:"validity"`
+	Data                bool   `json:"data"`
+	Undo                bool   `json:"undo"`
+	Failed              bool   `json:"failed"`
+	ParentFailed        bool   `json:"parent failed"`
+	DiskMeta            bool   `json:"disk meta"`
+	SoftReject          bool   `json:"soft reject"`
+	DoubleSpend         bool   `json:"double spend"`
+	SoftConsensusFrozen bool   `json:"soft consensus frozen"`
+}
+
+type GetBlockByHeightResponse struct {
+	Result struct {
+		Tx                []string               `json:"tx"`
+		Hash              string                 `json:"hash"`
+		Confirmations     int                    `json:"confirmations"`
+		Size              int                    `json:"size"`
+		Height            int                    `json:"height"`
+		Version           int                    `json:"version"`
+		VersionHex        string                 `json:"versionHex"`
+		Merkleroot        string                 `json:"merkleroot"`
+		NumTx             int                    `json:"num_tx"`
+		Time              int64                  `json:"time"`
+		Mediantime        int64                  `json:"mediantime"`
+		Nonce             int                    `json:"nonce"`
+		Bits              string                 `json:"bits"`
+		Difficulty        float64                `json:"difficulty"`
+		Chainwork         string                 `json:"chainwork"`
+		Previousblockhash string                 `json:"previousblockhash"`
+		Nextblockhash     string                 `json:"nextblockhash"`
+		Status            GetBlockByHeightStatus `json:"status"`
+	}
+	Error interface{} `json:"error"`
+	ID    int         `json:"id"`
+}
