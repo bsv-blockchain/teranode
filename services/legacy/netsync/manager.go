@@ -636,7 +636,7 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	ctx, _, _ := tracing.StartTracing(sm.ctx, "handleTxMsg",
 		tracing.WithHistogram(prometheusLegacyNetsyncHandleTxMsg),
-		tracing.WithDebugLogMessage(sm.logger, "handling transaction message for %s", tmsg.tx.Hash()),
+		tracing.WithDebugLogMessage(sm.logger, "handling transaction message for %s from %s", tmsg.tx.Hash(), tmsg.peer),
 	)
 
 	peer := tmsg.peer
@@ -694,7 +694,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 			// this is an orphan transaction, we will accept it when the parent comes in
 			// first check if the transaction already exists in the orphan pool, otherwise add it
 			if _, orphanTxExists := sm.orphanTxs.Get(*txHash); !orphanTxExists {
-				sm.logger.Debugf("Orphan transaction %v from %s", txHash, peer)
+				sm.logger.Debugf("orphan transaction %v added from %s", txHash, peer)
 
 				// create a map of the parents of the transaction for faster lookups
 				txParents := make(map[chainhash.Hash]struct{})
@@ -796,18 +796,20 @@ func (sm *SyncManager) isCurrent(bestBlockHeaderMeta *model.BlockHeaderMeta) boo
 	// latest known good checkpoint (when checkpoints are enabled).
 	checkpoint := &sm.chainParams.Checkpoints[len(sm.chainParams.Checkpoints)-1]
 	if checkpoint != nil && int32(bestBlockHeaderMeta.Height) < checkpoint.Height {
+		sm.logger.Debugf("[isCurrent] chain is below the latest checkpoint: %v < %v", bestBlockHeaderMeta.Height, checkpoint.Height)
 		return false
 	}
 
-	// Not current if the latest best block has a timestamp before 24 hours
-	// ago.
+	// Not current if the latest best block has a timestamp before 24 hours ago.
 	//
-	// The chain appears to be current if none of the checks reported
-	// otherwise.
+	// The chain appears to be current if none of the checks reported otherwise.
 	// minus24Hours := b.timeSource.AdjustedTime().Add(-24 * time.Hour).Unix()
 	minus24Hours := time.Now().Add(-24 * time.Hour).Unix()
 
-	return int64(bestBlockHeaderMeta.BlockTime) >= minus24Hours
+	current := int64(bestBlockHeaderMeta.BlockTime) >= minus24Hours
+	sm.logger.Debugf("[isCurrent] chain is current based on time: %v (%d >= %d)", current, bestBlockHeaderMeta.BlockTime, minus24Hours)
+
+	return current
 }
 
 // current returns true if we believe we are synced with our peers, false if we
@@ -820,7 +822,7 @@ func (sm *SyncManager) current() bool {
 	}
 
 	if !sm.isCurrent(bestBlockHeaderMeta) {
-		sm.logger.Debugf("[current] Chain is not current: %v", bestBlockHeaderMeta.Height)
+		sm.logger.Debugf("[current] chain is not current: %v", bestBlockHeaderMeta.Height)
 		return false
 	}
 
@@ -832,11 +834,11 @@ func (sm *SyncManager) current() bool {
 
 	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
 	if int32(bestBlockHeaderMeta.Height) < sm.syncPeer.LastBlock() {
-		sm.logger.Debugf("[current] Chain is not current, lower than sync peer block height: %v < %v", bestBlockHeaderMeta.Height, sm.syncPeer.LastBlock())
+		sm.logger.Debugf("[current] chain is not current, lower than sync peer (%s) block height: %v < %v", bestBlockHeaderMeta.Height, sm.syncPeer, sm.syncPeer.LastBlock())
 		return false
 	}
 
-	sm.logger.Debugf("[current] Chain is current: %v", bestBlockHeaderMeta.Height)
+	sm.logger.Debugf("[current] chain is current at %v, sync peer: %s (last block %d)", bestBlockHeaderMeta.Height, sm.syncPeer, sm.syncPeer.LastBlock())
 	return true
 }
 
@@ -1742,12 +1744,17 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 	blockAssembly *blockassembly.Client, config *Config) (*SyncManager, error) {
 	initPrometheusMetrics()
 
+	orphanEvictionDuration, err, _ := gocore.Config().GetDuration("legacy_orphanEvictionDuration", 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+
 	sm := SyncManager{
 		ctx:          ctx,
 		peerNotifier: config.PeerNotifier,
 		chain:        config.Chain,
 		//txMemPool:     config.TxMemPool,
-		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](10 * time.Minute),
+		orphanTxs:       expiringmap.New[chainhash.Hash, *orphanTxAndParents](orphanEvictionDuration),
 		chainParams:     config.ChainParams,
 		rejectedTxns:    make(map[chainhash.Hash]struct{}),
 		requestedTxns:   make(map[chainhash.Hash]struct{}),
@@ -1774,12 +1781,12 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 	// set an eviction function for orphan transactions
 	// this will be called when an orphan transaction is evicted from the map
 	sm.orphanTxs.WithEvictionFunction(func(txHash chainhash.Hash, orphanTx *orphanTxAndParents) bool {
-		sm.logger.Infof("evicting orphan transaction %v", txHash)
-
 		// try to process one last time
 		// nolint:gosec
-		if err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, uint32(sm.topBlock())); err != nil {
-			sm.logger.Errorf("failed to validate orphan transaction when evicting %v: %v", txHash, err)
+		if err = sm.validationClient.Validate(sm.ctx, orphanTx.tx, uint32(sm.topBlock())); err != nil {
+			sm.logger.Debugf("failed to validate orphan transaction when evicting %v: %v", txHash, err)
+		} else {
+			sm.logger.Debugf("evicted orphan transaction %v", txHash)
 		}
 
 		return true
