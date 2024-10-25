@@ -189,7 +189,7 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 
 	t.Logf("%s", resp)
 
-	if getBlockByHeightResp.Result.Height != 1 {
+	if getBlockByHeightResp.Result.Height != height {
 		t.Errorf("Expected height %d, got %d", height, getBlockByHeightResp.Result.Height)
 	}
 }
