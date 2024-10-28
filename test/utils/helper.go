@@ -1327,3 +1327,27 @@ func extractPublicKey(scriptSig []byte) ([]byte, error) {
 
 	return publicKey, nil
 }
+
+func RemoveDataDirectory(dir string, useSudo bool) error {
+	var cmd *exec.Cmd
+
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return nil
+	}
+
+	if !useSudo {
+		cmd = exec.Command("rm", "-rf", dir)
+	} else {
+		cmd = exec.Command("sudo", "rm", "-rf", dir)
+	}
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	err := cmd.Run()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

@@ -5,6 +5,7 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -12,8 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -50,6 +54,7 @@ func (suite *RPCTestSuite) TearDownTest() {
 const (
 	ubsv1RPCEndpoint string = "http://localhost:9292"
 	nullStr          string = "null"
+	stringTrue              = "true"
 )
 
 func (suite *RPCTestSuite) TestRPCGetBlockchainInfo() {
@@ -168,7 +173,22 @@ func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 	t := suite.T()
 	block := 2
 
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
 	var getBlockHash GetBlockHashResponse
+
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+	time.Sleep(1 * time.Second)
+
+	// Generate blocks
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[5]"})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(5 * time.Second)
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockhash", []interface{}{block})
 
@@ -202,8 +222,23 @@ func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 	t := suite.T()
 	height := 2
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+
+	defer cancel()
 
 	var getBlockByHeightResp GetBlockByHeightResponse
+
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+	time.Sleep(1 * time.Second)
+
+	// Generate blocks
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(5 * time.Second)
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockbyheight", []interface{}{height})
 
@@ -217,7 +252,7 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 		return
 	}
 
-	t.Logf("%s", resp)
+	t.Logf("Resp: %s", resp)
 
 	if getBlockByHeightResp.Result.Height != height {
 		t.Errorf("Expected height %d, got %d", height, getBlockByHeightResp.Result.Height)
@@ -231,19 +266,23 @@ func TestRPCTestSuite(t *testing.T) {
 func startKafka(logFile string) error {
 	kafkaCmd = exec.Command("../../deploy/dev/kafka.sh")
 	kafkaLog, err := os.Create(logFile)
+
 	if err != nil {
 		return err
 	}
+
 	defer kafkaLog.Close()
 
 	kafkaCmd.Stdout = kafkaLog
 	kafkaCmd.Stderr = kafkaLog
+
 	return kafkaCmd.Start()
 }
 
 func startApp(logFile string) error {
 	appCmd := exec.Command("go", "run", "../../.")
-	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test.ba")
+
+	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test")
 
 	appLog, err := os.Create(logFile)
 	if err != nil {
@@ -278,6 +317,8 @@ func stopKafka() {
 }
 
 func stopUbsv() {
+	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
+
 	log.Println("Stopping UBSV...")
 	cmd := exec.Command("pkill", "-f", "ubsv")
 	if err := cmd.Run(); err != nil {
@@ -285,4 +326,6 @@ func stopUbsv() {
 	} else {
 		log.Println("UBSV stopped successfully")
 	}
+
+	_ = helper.RemoveDataDirectory("./data", isGitHubActions)
 }
