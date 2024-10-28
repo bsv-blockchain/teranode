@@ -1,10 +1,11 @@
-//go:build rpc
+////go:build rpc
 
 // go test -v -run "^TestRPCTestSuite$/TestRPCGetDifficulty$" -tags rpc
 
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -12,8 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -202,8 +206,16 @@ func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 	t := suite.T()
 	height := 2
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+
+	defer cancel()
 
 	var getBlockByHeightResp GetBlockByHeightResponse
+
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockbyheight", []interface{}{height})
 
@@ -217,7 +229,7 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 		return
 	}
 
-	t.Logf("%s", resp)
+	t.Logf("Resp: %s", resp)
 
 	if getBlockByHeightResp.Result.Height != height {
 		t.Errorf("Expected height %d, got %d", height, getBlockByHeightResp.Result.Height)
@@ -231,13 +243,16 @@ func TestRPCTestSuite(t *testing.T) {
 func startKafka(logFile string) error {
 	kafkaCmd = exec.Command("../../deploy/dev/kafka.sh")
 	kafkaLog, err := os.Create(logFile)
+
 	if err != nil {
 		return err
 	}
+
 	defer kafkaLog.Close()
 
 	kafkaCmd.Stdout = kafkaLog
 	kafkaCmd.Stderr = kafkaLog
+
 	return kafkaCmd.Start()
 }
 
