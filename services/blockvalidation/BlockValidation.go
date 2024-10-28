@@ -406,6 +406,12 @@ func (u *BlockValidation) GetSubtreeExists(ctx context.Context, hash *chainhash.
 }
 
 func (u *BlockValidation) setTxMined(ctx context.Context, blockHash *chainhash.Hash) (err error) {
+	ctx, _, deferFn := tracing.StartTracing(ctx, "setTxMined",
+		tracing.WithParentStat(u.stats),
+		tracing.WithLogMessage(u.logger, "[setTxMined][%s] setting tx mined", blockHash.String()),
+	)
+	defer deferFn()
+
 	var (
 		block *model.Block
 		ids   []uint32
