@@ -54,6 +54,7 @@ func (suite *RPCTestSuite) TearDownTest() {
 const (
 	ubsv1RPCEndpoint string = "http://localhost:9292"
 	nullStr          string = "null"
+	stringTrue              = "true"
 )
 
 func (suite *RPCTestSuite) TestRPCGetBlockchainInfo() {
@@ -172,7 +173,22 @@ func (suite *RPCTestSuite) TestRPCGetBlockHash() {
 	t := suite.T()
 	block := 2
 
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
 	var getBlockHash GetBlockHashResponse
+
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+	time.Sleep(1 * time.Second)
+
+	// Generate blocks
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[5]"})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(5 * time.Second)
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockhash", []interface{}{block})
 
@@ -214,8 +230,15 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 
 	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
 	require.NoError(t, err)
+
 	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
+	time.Sleep(1 * time.Second)
+
+	// Generate blocks
+	_, err = helper.CallRPC(ubsv1RPCEndpoint, "generate", []interface{}{"[101]"})
+	require.NoError(t, err, "Failed to generate blocks")
+	time.Sleep(5 * time.Second)
 
 	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getblockbyheight", []interface{}{height})
 
@@ -258,7 +281,8 @@ func startKafka(logFile string) error {
 
 func startApp(logFile string) error {
 	appCmd := exec.Command("go", "run", "../../.")
-	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test.ba")
+
+	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test")
 
 	appLog, err := os.Create(logFile)
 	if err != nil {
@@ -293,6 +317,8 @@ func stopKafka() {
 }
 
 func stopUbsv() {
+	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
+
 	log.Println("Stopping UBSV...")
 	cmd := exec.Command("pkill", "-f", "ubsv")
 	if err := cmd.Run(); err != nil {
@@ -300,4 +326,6 @@ func stopUbsv() {
 	} else {
 		log.Println("UBSV stopped successfully")
 	}
+
+	_ = helper.RemoveDataDirectory("./data", isGitHubActions)
 }

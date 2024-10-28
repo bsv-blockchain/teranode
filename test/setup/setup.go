@@ -46,7 +46,7 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettings(settingsMap
 
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
 
-	err = removeDataDirectory("../../data/test", isGitHubActions)
+	err = helper.RemoveDataDirectory("../../data/test", isGitHubActions)
 	if err != nil {
 		suite.T().Fatal(err)
 	}
@@ -118,7 +118,7 @@ func (suite *BitcoinTestSuite) SetupTestWithCustomComposeAndSettingsSkipChecks(s
 	suite.SettingsMap = settingsMap
 
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
-	err = removeDataDirectory("../../data/test", isGitHubActions)
+	err = helper.RemoveDataDirectory("../../data/test", isGitHubActions)
 
 	if err != nil {
 		suite.T().Fatal(err)
@@ -155,7 +155,7 @@ func (suite *BitcoinTestSuite) TearDownTest() {
 	}
 
 	isGitHubActions := os.Getenv("GITHUB_ACTIONS") == stringTrue
-	err := removeDataDirectory("../../data", isGitHubActions)
+	err := helper.RemoveDataDirectory("../../data", isGitHubActions)
 
 	if err != nil {
 		suite.T().Fatal(err)
@@ -166,30 +166,6 @@ func (suite *BitcoinTestSuite) TearDownTest() {
 
 func TestBitcoinTestSuite(t *testing.T) {
 	suite.Run(t, new(BitcoinTestSuite))
-}
-
-func removeDataDirectory(dir string, useSudo bool) error {
-	var cmd *exec.Cmd
-
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return nil
-	}
-
-	if !useSudo {
-		cmd = exec.Command("rm", "-rf", dir)
-	} else {
-		cmd = exec.Command("sudo", "rm", "-rf", dir)
-	}
-
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	err := cmd.Run()
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func cleanUpE2EContainers(isGitHubActions bool) (err error) {
