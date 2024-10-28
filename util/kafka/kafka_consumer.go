@@ -14,17 +14,22 @@ import (
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/retry"
+	"github.com/ordishs/gocore"
 
 	"github.com/IBM/sarama"
 )
 
+type KafkaConsumerGroupI interface {
+	Start(ctx context.Context, consumerFn func(message KafkaMessage) error)
+	URL() *url.URL
+}
+
 type KafkaListenerConfig struct {
 	Logger            ulogger.Logger
 	URL               *url.URL
-	GroupID           string
+	ConsumerGroupID   string
 	ConsumerCount     int
 	AutoCommitEnabled bool
-	ConsumerFn        func(message KafkaMessage) error
 }
 
 type KafkaConsumerGroup struct {
@@ -32,6 +37,53 @@ type KafkaConsumerGroup struct {
 	ConsumerGroup     sarama.ConsumerGroup
 	LastMessageStatus MessageStatus
 	mu                sync.Mutex
+}
+
+func NewKafkaConsumerGroupFromSettings(ctx context.Context, logger ulogger.Logger, topic string, consumerGroupID string, autoCommit bool) (*KafkaConsumerGroup, error) {
+	url, err, ok := gocore.Config().GetURL("kafka_" + topic + "Config")
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to get Kafka URL for %s: %v", topic, err)
+	}
+
+	if !ok || url == nil {
+		return nil, errors.NewConfigurationError("missing Kafka URL for %s", topic)
+	}
+
+	partitions := util.GetQueryParamInt(url, "partitions", 1)
+	consumerRatio := util.GetQueryParamInt(url, "consumer_ratio", 1)
+
+	if consumerRatio < 1 {
+		logger.Warnf("consumer_ratio is less than 1, setting it to 1")
+
+		consumerRatio = 1
+	}
+
+	consumerCount := partitions / consumerRatio
+	if consumerCount < 0 {
+		logger.Warnf("consumer count is less than 0, setting it to 1")
+
+		consumerCount = 1
+	}
+
+	// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
+	// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
+	// groupID := topic + "-" + uuid.New().String()
+
+	logger.Infof("Starting %d Kafka consumers for %s messages", consumerCount, topic)
+
+	client, err := NewKafkaConsumeGroup(ctx, KafkaListenerConfig{
+		Logger:            logger,
+		URL:               url,
+		ConsumerGroupID:   consumerGroupID,
+		ConsumerCount:     consumerCount,
+		AutoCommitEnabled: autoCommit,
+	})
+
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", url.String(), err)
+	}
+
+	return client, nil
 }
 
 // txMetaCache : autocommit should be enabled - true, we CAN miss.
@@ -50,15 +102,11 @@ func NewKafkaConsumeGroup(ctx context.Context, cfg KafkaListenerConfig) (*KafkaC
 		return nil, errors.NewConfigurationError("consumer count must be greater than 0", nil)
 	}
 
-	if cfg.ConsumerFn == nil {
-		return nil, errors.NewConfigurationError("consumer function is not set", nil)
-	}
-
 	if cfg.Logger == nil {
 		return nil, errors.NewConfigurationError("logger is not set", nil)
 	}
 
-	if cfg.GroupID == "" {
+	if cfg.ConsumerGroupID == "" {
 		return nil, errors.NewConfigurationError("group ID is not set", nil)
 	}
 
@@ -87,7 +135,7 @@ func NewKafkaConsumeGroup(ctx context.Context, cfg KafkaListenerConfig) (*KafkaC
 		_ = clusterAdmin.Close()
 	}(clusterAdmin)
 
-	consumerGroup, err := sarama.NewConsumerGroup(brokersURL, cfg.GroupID, config)
+	consumerGroup, err := sarama.NewConsumerGroup(brokersURL, cfg.ConsumerGroupID, config)
 	if err != nil {
 		return nil, errors.NewServiceError("error creating consumer group client", err)
 	}
@@ -105,7 +153,7 @@ func NewKafkaConsumeGroup(ctx context.Context, cfg KafkaListenerConfig) (*KafkaC
 	return client, nil
 }
 
-func (k *KafkaConsumerGroup) Start(ctx context.Context) {
+func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message KafkaMessage) error) {
 	if k == nil {
 		return
 	}
@@ -135,7 +183,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context) {
 		}
 		k.mu.Unlock()
 
-		return k.Config.ConsumerFn(message)
+		return consumerFn(message)
 	}
 
 	topics := []string{k.Config.URL.Path[1:]}
@@ -143,7 +191,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context) {
 	for i := 0; i < k.Config.ConsumerCount; i++ {
 		go func(consumerIndex int) {
 			// defer consumer.Close() // Ensure cleanup, if necessary
-			k.Config.Logger.Infof("[kafka] Starting consumer [%d] for group %s on topic %s \n", consumerIndex, k.Config.GroupID, topics[0])
+			k.Config.Logger.Infof("[kafka] Starting consumer [%d] for group %s on topic %s \n", consumerIndex, k.Config.ConsumerGroupID, topics[0])
 
 			for {
 				select {
@@ -153,7 +201,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context) {
 				default:
 					if err := k.ConsumerGroup.Consume(ctx, topics, NewKafkaConsumer(k.Config.AutoCommitEnabled, consumerFunc)); err != nil {
 						if errors.Is(err, context.Canceled) {
-							k.Config.Logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, k.Config.GroupID)
+							k.Config.Logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, k.Config.ConsumerGroupID)
 						} else {
 							// Consider delay before retry or exit based on error type
 							k.Config.Logger.Errorf("Error from consumer [%d]: %v", consumerIndex, err)
@@ -174,15 +222,19 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context) {
 
 	select {
 	case <-signals:
-		k.Config.Logger.Infof("[kafka] Received signal, shutting down consumers for group %s", k.Config.GroupID)
+		k.Config.Logger.Infof("[kafka] Received signal, shutting down consumers for group %s", k.Config.ConsumerGroupID)
 		cancel() // Ensure the context is canceled
 	case <-ctx.Done():
-		k.Config.Logger.Infof("[kafka] Context done, shutting down consumer for %s", k.Config.GroupID)
+		k.Config.Logger.Infof("[kafka] Context done, shutting down consumer for %s", k.Config.ConsumerGroupID)
 	}
 
 	if err := k.ConsumerGroup.Close(); err != nil {
-		k.Config.Logger.Errorf("[Kafka] %s: error closing client: %v", k.Config.GroupID, err)
+		k.Config.Logger.Errorf("[Kafka] %s: error closing client: %v", k.Config.ConsumerGroupID, err)
 	}
+}
+
+func (k *KafkaConsumerGroup) URL() *url.URL {
+	return k.Config.URL
 }
 
 // KafkaConsumer represents a Sarama consumer group consumer
@@ -276,17 +328,14 @@ func (kc *KafkaConsumer) handleMessageWithManualCommit(ctx context.Context, sess
 	// kc.logger.Infof("Processing message with offset: %v", message.Offset)
 
 	// execute consumer closure
-	if err := kc.consumerClosure(msg); err != nil {
-		// if the error is not nil, start retry logic
-		_, err = retry.Retry(ctx, kc.logger, func() (any, error) {
-			return struct{}{}, kc.consumerClosure(msg)
-		}, retry.WithRetryCount(3), retry.WithBackoffMultiplier(2),
-			retry.WithBackoffDurationType(time.Second), retry.WithMessage("[kafka_consumer] retrying to process message..."))
+	_, err := retry.Retry(ctx, kc.logger, func() (any, error) {
+		return struct{}{}, kc.consumerClosure(msg)
+	}, retry.WithRetryCount(3), retry.WithBackoffMultiplier(2),
+		retry.WithBackoffDurationType(time.Second), retry.WithMessage("[kafka_consumer] retrying to process message..."))
 
-		// if we still can't process the message, log the error and skip to the next message
-		if err != nil {
-			kc.logger.Errorf("[kafka_consumer] error processing kafka message, skipping: %v", message)
-		}
+	// if we can't process the message, log the error and skip to the next message
+	if err != nil {
+		kc.logger.Errorf("[kafka_consumer] error processing kafka message, skipping: %v", message)
 	}
 
 	// kc.logger.Infof("Committing offset: %v", message.Offset)

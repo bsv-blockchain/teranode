@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
@@ -22,7 +20,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/p2p"
 	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -56,15 +53,14 @@ type Server struct {
 	AssetHTTPAddressURL           string
 	e                             *echo.Echo
 	notificationCh                chan *notificationMsg
-	rejectedTxKafkaConsumerClient *kafka.KafkaConsumerGroup
+	rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI
 	subtreeKafkaProducerClient    *kafka.KafkaAsyncProducer
 	blocksKafkaProducerClient     *kafka.KafkaAsyncProducer
-	kafkaHealthURL                *url.URL
 	banList                       *BanList
 	banChan                       chan BanEvent
 }
 
-func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI) (*Server, error) {
+func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient blockchain.ClientI, rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI) (*Server, error) {
 	logger.Debugf("Creating P2P service")
 
 	p2pIP, ok := gocore.Config().Get("p2p_ip")
@@ -147,13 +143,14 @@ func NewServer(ctx context.Context, logger ulogger.Logger, blockchainClient bloc
 	}
 
 	p2pServer := &Server{
-		P2PNode:           p2pNode,
-		logger:            logger,
-		bitcoinProtocolID: "ubsv/bitcoin/1.0.0",
-		notificationCh:    make(chan *notificationMsg),
-		blockchainClient:  blockchainClient,
-		banList:           banlist,
-		banChan:           banChan,
+		P2PNode:                       p2pNode,
+		logger:                        logger,
+		bitcoinProtocolID:             "ubsv/bitcoin/1.0.0",
+		notificationCh:                make(chan *notificationMsg),
+		blockchainClient:              blockchainClient,
+		banList:                       banlist,
+		banChan:                       banChan,
+		rejectedTxKafkaConsumerClient: rejectedTxKafkaConsumerClient,
 	}
 
 	return p2pServer, nil
@@ -175,7 +172,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
 		{Name: "BlockValidationClient", Check: s.blockValidationClient.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, s.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, s.rejectedTxKafkaConsumerClient.URL())},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -199,118 +196,43 @@ func (s *Server) Init(ctx context.Context) (err error) {
 
 	s.AssetHTTPAddressURL = AssetHTTPAddressURL.String()
 
-	subtreesKafkaURL, err, found := gocore.Config().GetURL("kafka_subtreesConfig")
+	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
 	if err != nil {
 		return errors.NewConfigurationError("[P2P] error getting kafka url", err)
 	}
 
-	if found {
-		s.kafkaHealthURL = subtreesKafkaURL
-
-		s.subtreeKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
-			return kafka.NewKafkaAsyncProducer(s.logger, subtreesKafkaURL, make(chan *kafka.Message, 10))
-		}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
-		if err != nil {
-			s.logger.Fatalf("[P2P] failed to start kafka subtree producer: %v", err)
-			return
-		}
-
-		s.logger.Infof("[P2P] connected to kafka at %s", subtreesKafkaURL.Host)
+	if !ok || subtreesKafkaURL == nil {
+		return errors.NewConfigurationError("missing Kafka URL for subtrees")
 	}
 
-	blocksKafkaURL, err, found := gocore.Config().GetURL("kafka_blocksConfig")
+	s.subtreeKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
+		return kafka.NewKafkaAsyncProducer(s.logger, subtreesKafkaURL, make(chan *kafka.Message, 10))
+	}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
+	if err != nil {
+		s.logger.Fatalf("[P2P] failed to start kafka subtree producer: %v", err)
+		return
+	}
+
+	s.logger.Infof("[P2P] connected to kafka at %s", subtreesKafkaURL.Host)
+
+	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksConfig")
 	if err != nil {
 		return errors.NewConfigurationError("[P2P] error getting kafka url", err)
 	}
 
-	if found {
-		s.kafkaHealthURL = blocksKafkaURL
-
-		s.blocksKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
-			return kafka.NewKafkaAsyncProducer(s.logger, blocksKafkaURL, make(chan *kafka.Message, 10))
-		}, retry.WithMessage("[P2P] error starting kafka block producer"))
-		if err != nil {
-			s.logger.Fatalf("[P2P] failed to start kafka block producer: %v", err)
-			return
-		}
-
-		s.logger.Infof("[P2P] connected to kafka at %s", blocksKafkaURL.Host)
+	if !ok || blocksKafkaURL == nil {
+		return errors.NewConfigurationError("missing Kafka URL for blocks")
 	}
 
-	rejectedTxKafkaURL, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
-	if err == nil && ok {
-		s.kafkaHealthURL = rejectedTxKafkaURL
-
-		var partitions int
-
-		if partitions, err = strconv.Atoi(rejectedTxKafkaURL.Query().Get("partitions")); err != nil {
-			return errors.NewInvalidArgumentError("[Subtreevalidation] unable to parse Kafka partitions from %s", rejectedTxKafkaURL, err)
-		}
-
-		consumerRatio := util.GetQueryParamInt(rejectedTxKafkaURL, "consumer_ratio", 8)
-		if consumerRatio < 1 {
-			consumerRatio = 1
-		}
-
-		consumerCount := partitions / consumerRatio
-		if consumerCount < 0 {
-			consumerCount = 1
-		}
-
-		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
-		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
-		groupID := "subtreevalidation-" + uuid.New().String()
-
-		s.logger.Infof("Starting %d Kafka consumers for rejected tx messages", consumerCount)
-
-		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
-		// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
-		// Therefore, autocommit is set to true.
-		rejectedTxHandler := func(msg kafka.KafkaMessage) error {
-			hash, err := chainhash.NewHash(msg.Message.Value[:chainhash.HashSize])
-			if err != nil {
-				s.logger.Errorf("error getting chainhash from string %s: %v", msg.Message.Value[:chainhash.HashSize], err)
-				return err
-			}
-
-			reason := string(msg.Message.Value[chainhash.HashSize:])
-
-			s.logger.Debugf("P2P Received %s rejected tx notification: %s", hash.String(), reason)
-
-			rejectedTxMessage := p2p.RejectedTxMessage{
-				TxId:   hash.String(),
-				Reason: reason,
-				PeerId: s.P2PNode.HostID().String(),
-			}
-
-			msgBytes, err := json.Marshal(rejectedTxMessage)
-			if err != nil {
-				s.logger.Errorf("json marshal error: %v", err)
-
-				return err
-			}
-
-			s.logger.Debugf("P2P publishing rejectedTxMessage")
-
-			if err := s.P2PNode.Publish(ctx, rejectedTxTopicName, msgBytes); err != nil {
-				s.logger.Errorf("publish error: %v", err)
-			}
-
-			return nil
-		}
-		s.rejectedTxKafkaConsumerClient, err = kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
-			Logger:            s.logger,
-			URL:               rejectedTxKafkaURL,
-			GroupID:           groupID,
-			ConsumerCount:     consumerCount,
-			AutoCommitEnabled: true,
-			ConsumerFn:        rejectedTxHandler,
-		})
-
-		if err != nil {
-			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", rejectedTxKafkaURL.String(), err)
-		}
+	s.blocksKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
+		return kafka.NewKafkaAsyncProducer(s.logger, blocksKafkaURL, make(chan *kafka.Message, 10))
+	}, retry.WithMessage("[P2P] error starting kafka block producer"))
+	if err != nil {
+		s.logger.Fatalf("[P2P] failed to start kafka block producer: %v", err)
+		return
 	}
+
+	s.logger.Infof("[P2P] connected to kafka at %s", blocksKafkaURL.Host)
 
 	return nil
 }
@@ -318,7 +240,43 @@ func (s *Server) Init(ctx context.Context) (err error) {
 func (s *Server) Start(ctx context.Context) error {
 	s.logger.Infof("P2P service starting")
 
-	go s.rejectedTxKafkaConsumerClient.Start(ctx)
+	// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
+	// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
+	// Therefore, autocommit is set to true.
+	rejectedTxHandler := func(msg kafka.KafkaMessage) error {
+		hash, err := chainhash.NewHash(msg.Message.Value[:chainhash.HashSize])
+		if err != nil {
+			s.logger.Errorf("error getting chainhash from string %s: %v", msg.Message.Value[:chainhash.HashSize], err)
+			return err
+		}
+
+		reason := string(msg.Message.Value[chainhash.HashSize:])
+
+		s.logger.Debugf("P2P Received %s rejected tx notification: %s", hash.String(), reason)
+
+		rejectedTxMessage := p2p.RejectedTxMessage{
+			TxId:   hash.String(),
+			Reason: reason,
+			PeerId: s.P2PNode.HostID().String(),
+		}
+
+		msgBytes, err := json.Marshal(rejectedTxMessage)
+		if err != nil {
+			s.logger.Errorf("json marshal error: %v", err)
+
+			return err
+		}
+
+		s.logger.Debugf("P2P publishing rejectedTxMessage")
+
+		if err := s.P2PNode.Publish(ctx, rejectedTxTopicName, msgBytes); err != nil {
+			s.logger.Errorf("publish error: %v", err)
+		}
+
+		return nil
+	}
+
+	go s.rejectedTxKafkaConsumerClient.Start(ctx, rejectedTxHandler)
 	go s.subtreeKafkaProducerClient.Start(ctx)
 	go s.blocksKafkaProducerClient.Start(ctx)
 

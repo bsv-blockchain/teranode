@@ -70,48 +70,59 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 
 	v.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
 
-	txmetaKafkaURL, _, found := gocore.Config().GetURL("kafka_txmetaConfig")
-	if found {
-		workers, _ := gocore.Config().GetInt("blockvalidation_kafkaWorkers", 100)
-		// only start the kafka producer if there are workers listening
-		// this can be used to disable the kafka producer, by just setting workers to 0
-		if workers > 0 {
-			v.kafkaHealthURL = txmetaKafkaURL
-			v.txMetaKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
-				return kafka.NewKafkaAsyncProducer(v.logger, txmetaKafkaURL, make(chan *kafka.Message, 10000))
-			}, retry.WithMessage("[Validator] error starting kafka producer for txMeta"))
-
-			if err != nil {
-				v.logger.Fatalf("[Validator] failed to start kafka producer for txMeta: %v", err)
-				return nil, err
-			}
-
-			go v.txMetaKafkaProducerClient.Start(ctx)
-
-			logger.Infof("[Validator] connected to kafka at %s", txmetaKafkaURL.Host)
-		}
+	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to get Kafka URL for txmeta: %v", err)
 	}
 
-	rejectedTxKafkaURL, _, found := gocore.Config().GetURL("kafka_rejectedTxConfig")
-	if found {
-		workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
-		// only start the kafka producer if there are workers listening
-		// this can be used to disable the kafka producer, by just setting workers to 0
-		if workers > 0 {
-			v.kafkaHealthURL = rejectedTxKafkaURL
-			v.rejectedTxKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
-				return kafka.NewKafkaAsyncProducer(v.logger, rejectedTxKafkaURL, make(chan *kafka.Message, 10000))
-			}, retry.WithMessage("[Validator] error starting kafka producer for rejected Txs"))
+	if !ok || txmetaKafkaURL == nil {
+		return nil, errors.NewConfigurationError("missing Kafka URL for txmeta")
+	}
 
-			if err != nil {
-				v.logger.Fatalf("[Validator] failed to start kafka producer for rejected Txs: %v", err)
-				return nil, err
-			}
+	workers, _ := gocore.Config().GetInt("blockvalidation_kafkaWorkers", 100)
+	// only start the kafka producer if there are workers listening
+	// this can be used to disable the kafka producer, by just setting workers to 0
+	if workers > 0 {
+		v.kafkaHealthURL = txmetaKafkaURL
+		v.txMetaKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
+			return kafka.NewKafkaAsyncProducer(v.logger, txmetaKafkaURL, make(chan *kafka.Message, 10000))
+		}, retry.WithMessage("[Validator] error starting kafka producer for txMeta"))
 
-			go v.rejectedTxKafkaProducerClient.Start(ctx)
-
-			logger.Infof("[Validator] connected to kafka at %s", rejectedTxKafkaURL.Host)
+		if err != nil {
+			v.logger.Fatalf("[Validator] failed to start kafka producer for txMeta: %v", err)
+			return nil, err
 		}
+
+		go v.txMetaKafkaProducerClient.Start(ctx)
+
+		logger.Infof("[Validator] connected to kafka at %s", txmetaKafkaURL.Host)
+	}
+
+	rejectedTxKafkaURL, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to get Kafka URL for rejectedTx: %v", err)
+	}
+
+	if !ok || rejectedTxKafkaURL == nil {
+		return nil, errors.NewConfigurationError("missing Kafka URL for rejectedTx")
+	}
+
+	// only start the kafka producer if there are workers listening
+	// this can be used to disable the kafka producer, by just setting workers to 0
+	if workers > 0 {
+		v.kafkaHealthURL = rejectedTxKafkaURL
+		v.rejectedTxKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
+			return kafka.NewKafkaAsyncProducer(v.logger, rejectedTxKafkaURL, make(chan *kafka.Message, 10000))
+		}, retry.WithMessage("[Validator] error starting kafka producer for rejected Txs"))
+
+		if err != nil {
+			v.logger.Fatalf("[Validator] failed to start kafka producer for rejected Txs: %v", err)
+			return nil, err
+		}
+
+		go v.rejectedTxKafkaProducerClient.Start(ctx)
+
+		logger.Infof("[Validator] connected to kafka at %s", rejectedTxKafkaURL.Host)
 	}
 
 	return v, nil

@@ -1912,27 +1912,29 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 }
 
 func (sm *SyncManager) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int) {
-	if _, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
+	client, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
 		Logger:            sm.logger,
 		URL:               kafkaURL,
-		GroupID:           groupID,
+		ConsumerGroupID:   groupID,
 		ConsumerCount:     consumerCount,
 		AutoCommitEnabled: true,
-		ConsumerFn: func(msg kafka.KafkaMessage) error {
-			wireInvMsg, err := sm.newInvFromBytes(msg.Message.Value)
-			if err != nil {
-				sm.logger.Errorf("failed to create INV message from Kafka message: %v", err)
-				return nil // ignore any errors, the message might be old and/or the peer is already disconnected
-			}
-
-			sm.logger.Debugf("Received INV message from Kafka: %v", wireInvMsg)
-
-			// Queue the INV message on the internal message channel
-			sm.msgChan <- wireInvMsg
-
-			return nil
-		},
-	}); err != nil {
+	})
+	if err != nil {
 		sm.logger.Errorf("failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
 	}
+
+	client.Start(ctx, func(msg kafka.KafkaMessage) error {
+		wireInvMsg, err := sm.newInvFromBytes(msg.Message.Value)
+		if err != nil {
+			sm.logger.Errorf("failed to create INV message from Kafka message: %v", err)
+			return nil // ignore any errors, the message might be old and/or the peer is already disconnected
+		}
+
+		sm.logger.Debugf("Received INV message from Kafka: %v", wireInvMsg)
+
+		// Queue the INV message on the internal message channel
+		sm.msgChan <- wireInvMsg
+
+		return nil
+	})
 }

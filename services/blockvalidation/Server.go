@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"runtime"
 	"slices"
 	"strconv"
@@ -62,8 +61,7 @@ type Server struct {
 	catchupCh           chan processBlockCatchup
 	blockValidation     *BlockValidation
 	SetTxMetaQ          *util.LockFreeQ[[][]byte]
-	kafkaConsumerClient *kafka.KafkaConsumerGroup
-	kafkaHealthURL      *url.URL
+	kafkaConsumerClient kafka.KafkaConsumerGroupI
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
 	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
@@ -73,7 +71,7 @@ type Server struct {
 
 // New will return a server instance with the logger stored within it
 func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
-	utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI) *Server {
+	utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, kafkaConsumerClient kafka.KafkaConsumerGroupI) *Server {
 
 	initPrometheusMetrics()
 
@@ -98,6 +96,7 @@ func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
 		stats:                gocore.NewStat("blockvalidation"),
+		kafkaConsumerClient:  kafkaConsumerClient,
 	}
 
 	return bVal
@@ -121,7 +120,7 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "TxStore", Check: u.txStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, u.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, u.kafkaConsumerClient.URL())},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -248,53 +247,6 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}()
 
-	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksConfig")
-	if err == nil && ok {
-		u.kafkaHealthURL = blocksKafkaURL
-		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.
-		// subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
-		// g.SetLimit(subtreeConcurrency)
-		var partitions int
-
-		if partitions, err = strconv.Atoi(blocksKafkaURL.Query().Get("partitions")); err != nil {
-			return errors.NewConfigurationError("unable to parse Kafka partitions from %s", blocksKafkaURL.String(), err)
-		}
-
-		consumerRatio := util.GetQueryParamInt(blocksKafkaURL, "consumer_ratio", 4)
-		if consumerRatio < 1 {
-			consumerRatio = 1
-		}
-
-		quotient := partitions / consumerRatio
-		remainder := partitions % consumerRatio
-
-		consumerCount := quotient
-		if remainder > 0 {
-			consumerCount++
-		}
-		// set the concurrency limit by default to leave 16 cpus for doing tx meta processing
-		blockConcurrency, _ := gocore.Config().GetInt("blockvalidation_kafkaBlockConcurrency", util.Max(4, runtime.NumCPU()-16))
-		g := errgroup.Group{}
-		g.SetLimit(blockConcurrency)
-
-		// By using the fixed "blockvalidation" group ID, we ensure that only one instance of this service will process the block messages.
-		u.logger.Infof("Starting %d Kafka consumers for block messages", consumerCount)
-
-		client, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
-			Logger:            u.logger,
-			URL:               blocksKafkaURL,
-			GroupID:           "blockvalidation",
-			ConsumerCount:     consumerCount,
-			AutoCommitEnabled: false,
-			ConsumerFn:        u.consumerMessageHandler(ctx),
-		})
-		if err != nil {
-			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", blocksKafkaURL.String(), err)
-		}
-
-		u.kafkaConsumerClient = client
-	}
-
 	return nil
 }
 
@@ -306,7 +258,6 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.Kafk
 		}()
 
 		select {
-		// error handling
 		case err := <-errCh:
 			// if err is nil, it means function is successfully executed, return nil.
 			if err == nil {
@@ -449,7 +400,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 func (u *Server) Start(ctx context.Context) error {
 
 	// start blocks kafka consumer
-	go u.kafkaConsumerClient.Start(ctx)
+	go u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx))
 
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent

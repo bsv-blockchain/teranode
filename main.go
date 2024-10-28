@@ -48,6 +48,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/felixge/fgprof"
 	"github.com/ordishs/gocore"
@@ -349,9 +350,15 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
+		rejectedTxKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "rejectedTx", "p2p", true)
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for rejectedTx: %v", err)
+		}
+
 		p2pService, err := p2p.NewServer(ctx,
 			logger.New("P2P"),
 			blockchainClient,
+			rejectedTxKafkaConsumerClient,
 		)
 		if err != nil {
 			return err
@@ -468,12 +475,19 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
+		// kafka_blocksFinalConfig
+		blocksFinalKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "blocksFinal", "blockpersister", false)
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for blocksFinal: %v", err)
+		}
+
 		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
 			logger.New("bp"),
 			blockStore,
 			subtreeStore,
 			utxoStore,
 			blockchainClient,
+			blocksFinalKafkaConsumerClient,
 		)); err != nil {
 			return err
 
@@ -563,6 +577,18 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
+		// kafka_subtreesConfig
+		subtreeConsumerClient, err := kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "subtrees", "subtreevalidation", false)
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for subtrees: %v", err)
+		}
+
+		// kafka_txmetaConfig
+		txmetaConsumerClient, err := kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "txmeta", "subtreevalidation", true)
+		if err != nil {
+			return errors.NewConfigurationError("failed to create new Kafka listener for txmeta: %v", err)
+		}
+
 		subtreeValidationService, err := subtreevalidation.New(ctx,
 			logger.New("stval"),
 			subtreeStore,
@@ -570,6 +596,8 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			utxoStore,
 			validatorClient,
 			blockchainClient,
+			subtreeConsumerClient,
+			txmetaConsumerClient,
 		)
 		if err != nil {
 			return err
@@ -608,6 +636,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				return err
 			}
 
+			// kafka_blocksConfig
+			kafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "blocks", "blockvalidation", false)
+			if err != nil {
+				return errors.NewConfigurationError("failed to get Kafka URL for blocks: %v", err)
+			}
+
 			if err = sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
 				subtreeStore,
@@ -615,6 +649,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				utxoStore,
 				validatorClient,
 				blockchainClient,
+				kafkaConsumerClient,
 			)); err != nil {
 				return err
 			}
@@ -634,10 +669,22 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				return err
 			}
 
+			var consumerClient kafka.KafkaConsumerGroupI
+			kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
+			if err == nil && ok {
+				// kafka_validatortxsConfig
+				consumerClient, err = kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "validatortxs", "validator", true)
+
+				if err != nil {
+					return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", kafkaURL.String(), err)
+				}
+			}
+
 			if err = sm.AddService("Validator", validator.NewServer(
 				logger.New("validator"),
 				utxoStore,
 				blockchainClient,
+				consumerClient,
 			)); err != nil {
 				return err
 			}

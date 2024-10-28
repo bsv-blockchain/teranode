@@ -64,7 +64,6 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 
 		logger.Infof("Hashes: %v", hashes)
 
-
 		baClient := framework.Nodes[0].BlockassemblyClient
 
 		_, err = helper.MineBlock(ctx, baClient, logger)
@@ -152,17 +151,17 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithP2PSwitch() {
 		t.Errorf("Failed to restart nodes: %v", err)
 	}
 
-	err := framework.Nodes[0].BlockchainClient.Run(ctx)
+	err := framework.Nodes[0].BlockchainClient.Run(ctx, "test/fsm/state_test.go")
 	if err != nil {
 		suite.T().Fatal(err)
 	}
 
-	err = framework.Nodes[1].BlockchainClient.Run(ctx)
+	err = framework.Nodes[1].BlockchainClient.Run(ctx, "test/fsm/state_test.go")
 	if err != nil {
 		suite.T().Fatal(err)
 	}
 
-	err = framework.Nodes[2].BlockchainClient.Run(ctx)
+	err = framework.Nodes[2].BlockchainClient.Run(ctx, "test/fsm/state_test.go")
 	if err != nil {
 		suite.T().Fatal(err)
 	}
@@ -292,7 +291,6 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	txCountAfter := state.GetTxCount()
 	logger.Infof("Tx count after: %v", txCountAfter)
 
-
 	assert.LessOrEqual(t, txCountAfter, uint64(10), "Tx count mismatch")
 
 	// metricsAfter, err := helper.QueryPrometheusMetric("http://localhost:16090", "validator_processed_transactions")
@@ -324,7 +322,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	bestBlock, _, _ = blockchainNode0.GetBestBlockHeader(framework.Context)
 
 	// Set Running State
-	err = blockchainNode0.Run(framework.Context)
+	err = blockchainNode0.Run(framework.Context, "test/fsm/state_test.go")
 	if err != nil {
 		t.Errorf("Failed to set state: %v", err)
 	}

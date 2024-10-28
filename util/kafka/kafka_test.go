@@ -128,24 +128,25 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	listenerClient, err := NewKafkaConsumeGroup(ctx, KafkaListenerConfig{
 		Logger:            ulogger.TestLogger{},
 		URL:               kafkaURL,
-		GroupID:           "kafka_test",
+		ConsumerGroupID:   "kafka_test",
 		ConsumerCount:     1,
 		AutoCommitEnabled: true,
-		ConsumerFn: func(message KafkaMessage) error {
-			msgInt, err := byteArrayToIntFromString(message.Message.Value)
-			require.NoError(t, err)
-
-			if message.Message.Offset != int64(msgInt) {
-				return err
-			}
-
-			// fmt.Println("received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
-			wg.Done()
-			return nil
-		},
 	})
 	require.NoError(t, err)
-	go listenerClient.Start(ctx)
+
+	consumerFn := func(message KafkaMessage) error {
+		msgInt, err := byteArrayToIntFromString(message.Message.Value)
+		require.NoError(t, err)
+
+		if message.Message.Offset != int64(msgInt) {
+			return err
+		}
+
+		// fmt.Println("received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
+		wg.Done()
+		return nil
+	}
+	go listenerClient.Start(ctx, consumerFn)
 	wg.Wait()
 }
 
@@ -252,14 +253,13 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 			client, err := NewKafkaConsumeGroup(ctx, KafkaListenerConfig{
 				Logger:            ulogger.NewZeroLogger("test"),
 				URL:               kafkaURL,
-				GroupID:           "kafka_test",
+				ConsumerGroupID:   "kafka_test",
 				ConsumerCount:     1,
 				AutoCommitEnabled: false,
-				ConsumerFn:        tCase.consumerClosure,
 			})
 			require.NoError(t, err)
 
-			go client.Start(ctx)
+			go client.Start(ctx, tCase.consumerClosure)
 
 			wg.Wait()
 
@@ -331,14 +331,13 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	client, err := NewKafkaConsumeGroup(context.Background(), KafkaListenerConfig{
 		Logger:            ulogger.TestLogger{},
 		URL:               kafkaURL,
-		GroupID:           "kafka_test",
+		ConsumerGroupID:   "kafka_test",
 		ConsumerCount:     1,
 		AutoCommitEnabled: false,
-		ConsumerFn:        errClosure,
 	})
 	require.NoError(t, err)
 
-	go client.Start(context.Background())
+	go client.Start(context.Background(), errClosure)
 
 	count := 0
 	for count < numberOfMessages*4 { // each message is processed 4 times before offset commit

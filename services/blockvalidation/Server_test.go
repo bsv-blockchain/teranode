@@ -14,6 +14,7 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/libsv/go-bt/v2"
@@ -299,7 +300,8 @@ func TestServer_processBlockFound(t *testing.T) {
 
 	blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, blockchainStore, nil, utxoStore)
 
-	s := New(ulogger.TestLogger{}, nil, txStore, utxoStore, nil, blockchainClient)
+	kafkaConsumerClient := &kafka.KafkaConsumerGroup{}
+	s := New(ulogger.TestLogger{}, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient)
 	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, blockchainClient, nil, txStore, utxoStore, nil, nil, time.Duration(2)*time.Second)
 
 	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", block)
