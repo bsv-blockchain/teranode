@@ -6,19 +6,49 @@ package test
 
 import (
 	"encoding/json"
+	"log"
+	"os"
+	"os/exec"
 	"testing"
+	"time"
 
 	arrange "github.com/bitcoin-sv/ubsv/test/fixtures"
 	helper "github.com/bitcoin-sv/ubsv/test/utils"
 	"github.com/stretchr/testify/suite"
 )
 
+var kafkaCmd *exec.Cmd
+var appCmd *exec.Cmd
+var appPID int
+
 type RPCTestSuite struct {
 	arrange.TeranodeTestSuite
 }
 
+func (suite *RPCTestSuite) SetupTest() {
+	if err := startKafka("kafka.log"); err != nil {
+		log.Fatalf("Failed to start Kafka: %v", err)
+	}
+
+	// Ensure Kafka has time to initialize
+	time.Sleep(5 * time.Second)
+
+	// Start the app
+	if err := startApp("app.log"); err != nil {
+		log.Fatalf("Failed to start app: %v", err)
+	}
+
+	// Ensure the app has time to initialize
+	time.Sleep(5 * time.Second)
+}
+
+func (suite *RPCTestSuite) TearDownTest() {
+	stopKafka()
+	stopUbsv()
+}
+
 const (
-	ubsv1RPCEndpoint string = "http://localhost:11292"
+	ubsv1RPCEndpoint string = "http://localhost:9292"
 	nullStr          string = "null"
 )
 
@@ -196,4 +226,63 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 
 func TestRPCTestSuite(t *testing.T) {
 	suite.Run(t, new(RPCTestSuite))
+}
+
+func startKafka(logFile string) error {
+	kafkaCmd = exec.Command("../../deploy/dev/kafka.sh")
+	kafkaLog, err := os.Create(logFile)
+	if err != nil {
+		return err
+	}
+	defer kafkaLog.Close()
+
+	kafkaCmd.Stdout = kafkaLog
+	kafkaCmd.Stderr = kafkaLog
+	return kafkaCmd.Start()
+}
+
+func startApp(logFile string) error {
+	appCmd := exec.Command("go", "run", "../../.")
+	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test.ba")
+
+	appLog, err := os.Create(logFile)
+	if err != nil {
+		return err
+	}
+	defer appLog.Close()
+
+	appCmd.Stdout = appLog
+	appCmd.Stderr = appLog
+
+	log.Println("Starting app in the background...")
+	if err := appCmd.Start(); err != nil {
+		return err
+	}
+
+	appPID = appCmd.Process.Pid
+
+	// Wait for the app to be ready (consider implementing a health check here)
+	time.Sleep(30 * time.Second) // Adjust this as needed for your app's startup time
+
+	return nil
+}
+
+func stopKafka() {
+	log.Println("Stopping Kafka...")
+	cmd := exec.Command("docker", "stop", "kafka-server")
+	if err := cmd.Run(); err != nil {
+		log.Printf("Failed to stop Kafka: %v\n", err)
+	} else {
+		log.Println("Kafka stopped successfully")
+	}
+}
+
+func stopUbsv() {
+	log.Println("Stopping UBSV...")
+	cmd := exec.Command("pkill", "-f", "ubsv")
+	if err := cmd.Run(); err != nil {
+		log.Printf("Failed to stop UBSV: %v\n", err)
+	} else {
+		log.Println("UBSV stopped successfully")
+	}
 }

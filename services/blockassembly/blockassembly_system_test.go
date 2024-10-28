@@ -126,7 +126,7 @@ func TestHealth(t *testing.T) {
 	err = ba.Init(ctx)
 	require.NoError(t, err)
 
-	err = blockchainClient.Run(ctx)
+	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
 
 	status, message, err := ba.Health(ctx, true)
@@ -150,17 +150,17 @@ func TestCoinbaseSubsidyHeight(t *testing.T) {
 	err = ba.Init(ctx)
 	require.NoError(t, err)
 
-	err = blockchainClient.Run(ctx)
+	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
+
+	// Get the block height
+	err = ba.blockAssembler.blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Failed to start block assembler")
+	time.Sleep(5 * time.Second)
 
 	// Generate blocks
 	_, err = CallRPC("http://localhost:9292", "generate", []interface{}{"[200]"})
 	require.NoError(t, err, "Failed to generate blocks")
-	time.Sleep(5 * time.Second)
-
-	// Get the block height
-	err = ba.blockAssembler.blockchainClient.Run(ctx)
-	require.NoError(t, err, "Failed to start block assembler")
 	time.Sleep(5 * time.Second)
 
 	h, m, _ := ba.blockchainClient.GetBestBlockHeader(ctx)
@@ -193,7 +193,7 @@ func TestDifficultyAdjustment(t *testing.T) {
 	err = ba.Init(ctx)
 	require.NoError(t, err)
 
-	err = blockchainClient.Run(ctx)
+	err = blockchainClient.Run(ctx, "test")
 	require.NoError(t, err, "Blockchain client failed to start")
 
 	ba.blockAssembler.chainParams.NoDifficultyAdjustment = false
