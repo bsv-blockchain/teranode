@@ -26,6 +26,7 @@
 2. [Running Services Locally](docs/howto/locallyRunningServices.md)
 3. [Using the Makefile](docs/howto/makefile.md)
 4. [Running Tests](docs/howto/runningTests.md)
+5. [Setting Up Automated Test Environment](docs/howto/automatedTestingHowTo.md)
 5. [Generating Protobuf Files](docs/howto/generatingProtobuf.md)
 6. [Adding new Protobuf Services](docs/howto/addingNewProtobufServices.md)
 7. [Configuring gRPC Logging](docs/howto/configuringGrpcLogging.md)
@@ -83,6 +84,8 @@
       - [Chain Integrity](docs/commands/chainIntegrity.md)
 
 3. [Technology Stack](docs/topics/technologyStack.md)
+4. [Testing Framework](docs/topics/understandingTheTestingFramework.md)
+
 
 ## Reference
 
@@ -120,12 +123,13 @@
 5. [Naming Conventions](docs/references/namingConventions.md)
 6. [Error Handling Guidelines](docs/references/errorHandling.md)
 7. [Configuration Settings](docs/references/settings.md)
+8. [Testing Framework Technical Reference](docs/references/testingTechnicalReference.md)
 8. [Network Consensus Rules](docs/references/networkConsensusRules.md)
 
 ## Additional Resources
 1. [Glossary](docs/references/glossary.md)
 2. Contributing to Teranode
-5. License Information
+3. License Information
 
 ---
 
