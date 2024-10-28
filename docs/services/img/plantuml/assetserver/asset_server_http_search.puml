@@ -1,0 +1,80 @@
+
+@startuml
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/http_impl/Search.go)" as HTTPServer
+participant "Repository" as Repo
+participant "BlockchainClient" as BC
+participant "UtxoStore" as UTXO
+participant "SubtreeStore" as Subtree
+
+Client -> HTTPServer : GET /search?q=<query>
+activate HTTPServer
+HTTPServer -> HTTPServer : Validate query
+alt query is 64 characters long (hash)
+    HTTPServer -> Repo : GetBlockHeader(ctx, hash)
+    activate Repo
+    Repo -> BC : GetBlockHeader(ctx, hash)
+    BC --> Repo : BlockHeader or error
+    Repo --> HTTPServer : BlockHeader or error
+    deactivate Repo
+    alt BlockHeader found
+        HTTPServer --> Client : JSON Response (type: "block")
+    else BlockHeader not found
+        HTTPServer -> Repo : GetTransactionMeta(ctx, hash)
+        activate Repo
+        Repo -> UTXO : Get(ctx, hash)
+        UTXO --> Repo : TransactionMeta or error
+        Repo --> HTTPServer : TransactionMeta or error
+        deactivate Repo
+        alt TransactionMeta found
+            HTTPServer --> Client : JSON Response (type: "tx")
+        else TransactionMeta not found
+            HTTPServer -> Repo : GetSubtreeBytes(ctx, hash)
+            activate Repo
+            Repo -> Subtree : Get(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
+            Subtree --> Repo : SubtreeBytes or error
+            Repo --> HTTPServer : SubtreeBytes or error
+            deactivate Repo
+            alt SubtreeBytes found
+                HTTPServer --> Client : JSON Response (type: "subtree")
+            else SubtreeBytes not found
+                HTTPServer -> Repo : GetUtxo(ctx, &utxo.Spend{UTXOHash: hash})
+                activate Repo
+                Repo -> UTXO : GetSpend(ctx, spend)
+                UTXO --> Repo : UTXO or error
+                Repo --> HTTPServer : UTXO or error
+                deactivate Repo
+                alt UTXO found
+                    HTTPServer --> Client : JSON Response (type: "utxo")
+                else UTXO not found
+                    HTTPServer --> Client : 404 Not Found
+                end
+            end
+        end
+    end
+else query is a number (potential block height)
+    HTTPServer -> Repo : GetBestBlockHeader(ctx)
+    activate Repo
+    Repo -> BC : GetBestBlockHeader(ctx)
+    BC --> Repo : BestBlockHeader or error
+    Repo --> HTTPServer : BestBlockHeader or error
+    deactivate Repo
+    alt query is valid block height
+        HTTPServer -> Repo : GetBlockByHeight(ctx, height)
+        activate Repo
+        Repo -> BC : GetBlockByHeight(ctx, height)
+        BC --> Repo : Block or error
+        Repo --> HTTPServer : Block or error
+        deactivate Repo
+        HTTPServer --> Client : JSON Response (type: "block")
+    else invalid block height
+        HTTPServer --> Client : 400 Bad Request
+    end
+else invalid query
+    HTTPServer --> Client : 400 Bad Request
+end
+deactivate HTTPServer
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

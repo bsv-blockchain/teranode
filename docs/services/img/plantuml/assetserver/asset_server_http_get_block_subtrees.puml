@@ -1,0 +1,29 @@
+@startuml
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
+participant "Repository" as Repo
+participant "BlockchainClient" as BC
+participant "SubtreeStore" as SS
+
+Client -> HTTPServer : GET /block/:hash/subtrees/json
+activate HTTPServer
+HTTPServer -> Repo : GetBlockSubtrees(ctx, hash)
+activate Repo
+Repo -> BC : GetBlock(ctx, hash)
+activate BC
+BC --> Repo : model.Block
+deactivate BC
+loop For each transaction in block
+    Repo -> SS : GetSubtreeHead(ctx, txHash)
+    activate SS
+    SS --> Repo : util.Subtree, numNodes
+    deactivate SS
+end
+Repo --> HTTPServer : []SubtreeInfo
+deactivate Repo
+HTTPServer --> Client : JSON Response (Subtrees data)
+deactivate HTTPServer
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

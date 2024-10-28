@@ -1,0 +1,22 @@
+@startuml
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/http_impl/http.go)" as HTTPServer
+participant "Repository" as Repo
+participant "BlockchainClient" as BC
+
+Client -> HTTPServer : GET /block/:hash/forks
+activate HTTPServer
+HTTPServer -> Repo : GetBlockForks(ctx, hash)
+activate Repo
+Repo -> BC : GetBlockForks(ctx, hash)
+activate BC
+BC --> Repo : []model.BlockForkInfo
+deactivate BC
+Repo --> HTTPServer : []model.BlockForkInfo
+deactivate Repo
+HTTPServer --> Client : JSON Response (Block Forks data)
+deactivate HTTPServer
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
