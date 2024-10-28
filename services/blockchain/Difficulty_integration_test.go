@@ -1,0 +1,177 @@
+package blockchain
+
+import (
+	"context"
+	"net/url"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/bitcoin-sv/ubsv/chaincfg"
+	"github.com/bitcoin-sv/ubsv/model"
+	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain"
+	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestDifficultyAdjustment_should_not_change_difficulty_if_blocks_are_mined_in_time(t *testing.T) {
+	os.Setenv("blockchain_store_cache_enabled", "false")
+
+	ctx := context.Background()
+	storeURL, err := url.Parse("sqlitememory://")
+	require.NoError(t, err)
+
+	gcoinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+
+	currentTime := time.Now().Unix()
+
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+
+	params := &chaincfg.MainNetParams
+
+	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, params)
+	t.Logf("difficulty: %v", d.nBits.String())
+	require.NoError(t, err)
+
+	hashGenesisBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+
+	//nolint: gosec
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  hashGenesisBlock,
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          1,
+		Bits:           *d.nBits,
+		Timestamp:      uint32(currentTime),
+	}
+
+	block := &model.Block{
+		Header:           header,
+		CoinbaseTx:       gcoinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	_, _, err = blockchainStore.StoreBlock(ctx, block, "")
+	require.NoError(t, err)
+	// Simulate mining 144 blocks
+	prevBlockHash := header.Hash()
+
+	for i := 0; i < 150; i++ {
+		coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+		currentTime += int64(params.TargetTimePerBlock.Seconds())
+		// t.Logf("current time: %v", currentTime)
+
+		//nolint: gosec
+		header := &model.BlockHeader{
+			Version:        1,
+			Timestamp:      uint32(currentTime),
+			Bits:           *d.nBits,
+			Nonce:          1,
+			HashPrevBlock:  prevBlockHash,
+			HashMerkleRoot: &chainhash.Hash{},
+		}
+		block := &model.Block{
+			Header:           header,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{},
+		}
+		_, _, err := blockchainStore.StoreBlock(ctx, block, "")
+		require.NoError(t, err)
+
+		prevBlockHash = header.Hash()
+	}
+
+	// Calculate next difficulty
+	bestHeader, meta, err := blockchainStore.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	newBits, err := d.CalcNextWorkRequired(ctx, bestHeader, meta.Height)
+	require.NoError(t, err)
+	t.Logf("newBits: %v", newBits.String())
+
+	// Assert that difficulty has changed
+	assert.Equal(t, d.nBits, newBits)
+}
+
+// nolint: gosec
+func TestDifficultyAdjustment_should_change_difficulty_if_blocks_are_mined_faster_than_expected(t *testing.T) {
+	os.Setenv("blockchain_store_cache_enabled", "false")
+
+	ctx := context.Background()
+
+	storeURL, err := url.Parse("sqlitememory://")
+	require.NoError(t, err)
+
+	gcoinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f29c267ffea1adb87f33b398fffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+
+	currentTime := time.Now().Unix()
+
+	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL)
+	require.NoError(t, err)
+
+	params := &chaincfg.MainNetParams
+
+	d, err := NewDifficulty(blockchainStore, ulogger.TestLogger{}, params)
+	t.Logf("difficulty: %v", d.nBits.String())
+	require.NoError(t, err)
+
+	hashGenesisBlock, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+	header := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  hashGenesisBlock,
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          1,
+		Bits:           *d.nBits,
+		Timestamp:      uint32(currentTime),
+	}
+	block := &model.Block{
+		Header:           header,
+		CoinbaseTx:       gcoinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	_, _, err = blockchainStore.StoreBlock(ctx, block, "")
+	require.NoError(t, err)
+	// Simulate mining 144 blocks
+	prevBlockHash := header.Hash()
+
+	for i := 0; i < 150; i++ {
+		coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+		currentTime += int64(params.TargetTimePerBlock.Seconds() / 10)
+		// t.Logf("current time: %v", currentTime)
+		header := &model.BlockHeader{
+			Version:        1,
+			Timestamp:      uint32(currentTime),
+			Bits:           *d.nBits,
+			Nonce:          1,
+			HashPrevBlock:  prevBlockHash,
+			HashMerkleRoot: &chainhash.Hash{},
+		}
+
+		block := &model.Block{
+			Header:           header,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{},
+		}
+
+		_, _, err := blockchainStore.StoreBlock(ctx, block, "")
+		require.NoError(t, err)
+
+		prevBlockHash = header.Hash()
+	}
+
+	// Calculate next difficulty
+	bestHeader, meta, err := blockchainStore.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	newBits, err := d.CalcNextWorkRequired(ctx, bestHeader, meta.Height)
+	require.NoError(t, err)
+	t.Logf("newBits: %v", newBits.String())
+
+	// Assert that difficulty has changed
+	assert.NotEqual(t, d.nBits, newBits)
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -36,7 +37,7 @@ func (m *Memory) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	m.Counters["health"]++
 	m.countersMu.Unlock()
 
-	return 0, "Memory Store", nil
+	return http.StatusOK, "Memory Store", nil
 }
 
 func (m *Memory) Close(_ context.Context) error {
