@@ -153,7 +153,7 @@ func (v *Server) Start(ctx context.Context) error {
 			return err
 		}
 
-		if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil {
+		if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil { //nolint:gosec
 			prometheusInvalidTransactions.Inc()
 			v.logger.Errorf("[Validator] Invalid tx: %s", err)
 

@@ -144,6 +144,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 
 		// fmt.Println("received message: ", string(message.Message.Value), ", Offset: ", message.Message.Offset)
 		wg.Done()
+
 		return nil
 	}
 	go listenerClient.Start(ctx, consumerFn)

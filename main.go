@@ -670,6 +670,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			}
 
 			var consumerClient kafka.KafkaConsumerGroupI
+
 			kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
 			if err == nil && ok {
 				// kafka_validatortxsConfig

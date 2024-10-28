@@ -70,9 +70,15 @@ type Server struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
-	utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, kafkaConsumerClient kafka.KafkaConsumerGroupI) *Server {
-
+func New(
+	logger ulogger.Logger,
+	subtreeStore blob.Store,
+	txStore blob.Store,
+	utxoStore utxo.Store,
+	validatorClient validator.Interface,
+	blockchainClient blockchain.ClientI,
+	kafkaConsumerClient kafka.KafkaConsumerGroupI,
+) *Server {
 	initPrometheusMetrics()
 
 	// TEMP limit to 1, to prevent multiple subtrees processing at the same time

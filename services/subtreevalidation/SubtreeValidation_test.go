@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
-	"github.com/bitcoin-sv/ubsv/util/kafka"
+	"github.com/bitcoin-sv/ubsv/util/kafka" //nolint:gci
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
 	"github.com/bitcoin-sv/ubsv/services/validator"
