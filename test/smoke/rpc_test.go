@@ -1,4 +1,4 @@
-//go:build rpc
+////go:build rpc
 
 // go test -v -run "^TestRPCTestSuite$/TestRPCGetDifficulty$" -tags rpc
 
@@ -256,6 +256,32 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 
 	if getBlockByHeightResp.Result.Height != height {
 		t.Errorf("Expected height %d, got %d", height, getBlockByHeightResp.Result.Height)
+	}
+}
+
+func (suite *RPCTestSuite) TestRPCGetMiningInfo() {
+	var miningInfoResp GetMiningInfoResponse
+
+	t := suite.T()
+	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getmininginfo", []interface{}{})
+
+	if err != nil {
+		t.Errorf("Error CallRPC: %v", err)
+	}
+
+	errJSON := json.Unmarshal([]byte(resp), &miningInfoResp)
+
+	if errJSON != nil {
+		t.Errorf("JSON decoding error: %v", errJSON)
+		return
+	}
+
+	t.Logf("%s", resp)
+
+	if miningInfoResp.Result.NetworkHashPs == 0 {
+		t.Errorf("Test failed: getmininginfo not working")
+	} else {
+		t.Logf("getmininginfo test succeeded")
 	}
 }
 

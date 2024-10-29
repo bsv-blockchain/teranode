@@ -111,3 +111,17 @@ type GetBlockByHeightResponse struct {
 	Error interface{} `json:"error"`
 	ID    int         `json:"id"`
 }
+
+type GetMiningInfoResponse struct {
+	Result struct {
+		Blocks           int     `json:"blocks"`
+		CurrentBlockSize int     `json:"currentblocksize"`
+		CurrentBlockTx   int     `json:"currentblocktx"`
+		Difficulty       float64 `json:"difficulty"`
+		Errors           string  `json:"errors"`
+		NetworkHashPs    float64 `json:"networkhashps"`
+		Chain            string  `json:"chain"`
+	}
+	Error interface{} `json:"error"`
+	ID    int         `json:"id"`
+}
