@@ -1684,6 +1684,9 @@ func (sm *SyncManager) Start() {
 	sm.wg.Add(1)
 
 	go sm.blockHandler()
+
+	// kick off the initial sync
+	go sm.startSync()
 }
 
 // Stop gracefully shuts down the sync manager by stopping all asynchronous
