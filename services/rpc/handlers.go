@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"time"
@@ -958,6 +959,43 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 	return nil, nil
 }
 
+func handleGetMiningInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "handleGetMiningInfo",
+		tracing.WithParentStat(RPCStat),
+		tracing.WithHistogram(prometheusHandleGetMiningInfo),
+		tracing.WithLogMessage(s.logger, "[handleGetMiningInfo] called"),
+	)
+	defer deferFn()
+
+	bestBlockHeader, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// {
+	//   "blocks": 868496,
+	//   "currentblocksize": 0,
+	//   "currentblocktx": 0,
+	//   "difficulty": 97415240192.16336,
+	//   "errors": "",
+	//   "networkhashps": 7.08831367103262e+17,
+	//   "pooledtx": 935,
+	//   "chain": "main"
+	// }
+
+	difficulty, _ := bestBlockHeader.Bits.CalculateDifficulty().Float64()
+
+	return &bsvjson.GetMiningInfoResult{
+		Blocks:           int64(bestBlockMeta.Height),                                               // The current block
+		CurrentBlockSize: bestBlockMeta.SizeInBytes,                                                 // The last block size
+		CurrentBlockTx:   bestBlockMeta.TxCount,                                                     // The last block transaction
+		Difficulty:       difficulty,                                                                // The current difficulty
+		Errors:           "",                                                                        // Current errors
+		NetworkHashPS:    calculateHashRate(difficulty, s.chainParams.TargetTimePerBlock.Seconds()), // The network hashes per second
+		// PooledTx:      0,                           // The size of the mempool - we don't have a mempool
+		Chain: s.chainParams.Name, // current network name as defined in BIP70 (main, test, regtest)
+	}, nil
+}
+
 // messageToHex serializes a message to the wire protocol encoding using the
 // latest protocol version and returns a hex-encoded string of the result.
 func messageToHex(msg wire.Message) (string, error) {
@@ -968,4 +1006,8 @@ func messageToHex(msg wire.Message) (string, error) {
 	}
 
 	return hex.EncodeToString(buf.Bytes()), nil
+}
+
+func calculateHashRate(difficulty float64, blockTime float64) float64 {
+	return (difficulty * math.Pow(2, 32)) / blockTime
 }

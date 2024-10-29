@@ -131,7 +131,7 @@ var rpcHandlersBeforeInit = map[string]commandHandler{
 	"getheaders":            handleUnimplemented,
 	"getinfo":               handleGetInfo,
 	"getmempoolinfo":        handleUnimplemented,
-	"getmininginfo":         handleUnimplemented,
+	"getmininginfo":         handleGetMiningInfo,
 	"getnettotals":          handleUnimplemented,
 	"getnetworkhashps":      handleUnimplemented,
 	"getpeerinfo":           handleGetpeerinfo,

@@ -29,6 +29,7 @@ var (
 	prometheusHandleReconsiderBlock      prometheus.Histogram
 	prometheusHandleHelp                 prometheus.Histogram
 	prometheusHandleSetBan               prometheus.Histogram
+	prometheusHandleGetMiningInfo        prometheus.Histogram
 )
 
 var (
@@ -216,6 +217,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "rpc",
 			Name:      "set_ban",
 			Help:      "Histogram of calls to handleSetBan in the rpc service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+	prometheusHandleGetMiningInfo = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "rpc",
+			Name:      "get_mining_info",
+			Help:      "Histogram of calls to handleGetMiningInfo in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
