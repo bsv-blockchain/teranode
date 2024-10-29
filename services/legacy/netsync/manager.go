@@ -914,8 +914,9 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
 	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block); err != nil {
 		if legacySyncMode && errors.Is(err, errors.ErrBlockNotFound) {
-			// previous block not found?
-			return err
+			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
+			sm.logger.Errorf("Failed to process block %v: %v", blockHash, err)
+			return nil
 		}
 
 		serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
@@ -923,6 +924,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
 		}
 
+		// TODO TEMPORARY: we should not panic here, but return the error
 		panic(err)
 		// return err
 	}
@@ -1027,9 +1029,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	sm.logger.Infof("Reached the final checkpoint -- switching to normal mode")
 
 	locator := blockchain.BlockLocator([]*chainhash.Hash{blockHash})
-	err = peer.PushGetBlocksMsg(locator, &zeroHash)
-
-	if err != nil {
+	if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
 		return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.Addr(), err)
 	}
 
