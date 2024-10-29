@@ -1846,7 +1846,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 
 		// start a go routine to start the kafka producer
 		go func() {
-			if _, err = kafka.NewKafkaAsyncProducer(sm.logger, legacyInvConfigURL, sm.legacyKafkaInvCh); err != nil {
+			if _, err = kafka.NewKafkaAsyncProducerFromURL(sm.logger, legacyInvConfigURL, sm.legacyKafkaInvCh); err != nil {
 				sm.logger.Errorf("[Legacy Manager] error starting kafka producer: %v", err)
 				return
 			}
@@ -1912,7 +1912,7 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 }
 
 func (sm *SyncManager) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int) {
-	client, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
+	client, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaConsumerConfig{
 		Logger:            sm.logger,
 		URL:               kafkaURL,
 		ConsumerGroupID:   groupID,

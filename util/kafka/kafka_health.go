@@ -3,8 +3,6 @@ package kafka
 import (
 	"context"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -14,7 +12,7 @@ import (
 HealthChecker is a function that checks the health of a Kafka cluster.
 It returns a function that can be used to check the health of a Kafka cluster.
 */
-func HealthChecker(_ context.Context, kafkaURL *url.URL) func(ctx context.Context, checkLiveness bool) (int, string, error) {
+func HealthChecker(_ context.Context, brokersURL []string) func(ctx context.Context, checkLiveness bool) (int, string, error) {
 	/*
 		There isn't a built-in way to check the health of a Kafka cluster.
 		So, we need to connect to the cluster and check if we can connect to it.
@@ -27,11 +25,9 @@ func HealthChecker(_ context.Context, kafkaURL *url.URL) func(ctx context.Contex
 		Not perfect but it's something.
 	*/
 	return func(ctx context.Context, checkLiveness bool) (int, string, error) {
-		if kafkaURL == nil {
+		if brokersURL == nil {
 			return http.StatusOK, "Kafka is not configured - skipping health check", nil
 		}
-
-		brokersURL := strings.Split(kafkaURL.Host, ",")
 
 		config := sarama.NewConfig()
 		config.Version = sarama.V2_1_0_0

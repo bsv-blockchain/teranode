@@ -172,7 +172,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "BlockchainClient", Check: s.blockchainClient.Health},
 		{Name: "BlockValidationClient", Check: s.blockValidationClient.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, s.rejectedTxKafkaConsumerClient.URL())},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, s.rejectedTxKafkaConsumerClient.BrokersURL())},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -206,7 +206,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 
 	s.subtreeKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
-		return kafka.NewKafkaAsyncProducer(s.logger, subtreesKafkaURL, make(chan *kafka.Message, 10))
+		return kafka.NewKafkaAsyncProducerFromURL(s.logger, subtreesKafkaURL, make(chan *kafka.Message, 10))
 	}, retry.WithMessage("[P2P] error starting kafka subtree producer"))
 	if err != nil {
 		s.logger.Fatalf("[P2P] failed to start kafka subtree producer: %v", err)
@@ -225,7 +225,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 
 	s.blocksKafkaProducerClient, err = retry.Retry(ctx, s.logger, func() (*kafka.KafkaAsyncProducer, error) {
-		return kafka.NewKafkaAsyncProducer(s.logger, blocksKafkaURL, make(chan *kafka.Message, 10))
+		return kafka.NewKafkaAsyncProducerFromURL(s.logger, blocksKafkaURL, make(chan *kafka.Message, 10))
 	}, retry.WithMessage("[P2P] error starting kafka block producer"))
 	if err != nil {
 		s.logger.Fatalf("[P2P] failed to start kafka block producer: %v", err)

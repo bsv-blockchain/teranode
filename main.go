@@ -350,7 +350,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		rejectedTxKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "rejectedTx", "p2p", true)
+		url, err, _ := gocore.Config().GetURL("kafka_rejectedTxConfig")
+		if err != nil {
+			return errors.NewConfigurationError("failed to get Kafka URL for rejectedTx consumer - kafka_rejectedTxConfig", err)
+		}
+
+		rejectedTxKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(ctx, logger, url, "p2p", true)
 		if err != nil {
 			return errors.NewConfigurationError("failed to create new Kafka listener for rejectedTx: %v", err)
 		}
@@ -475,8 +480,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		// kafka_blocksFinalConfig
-		blocksFinalKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "blocksFinal", "blockpersister", false)
+		url, err, _ := gocore.Config().GetURL("kafka_blocksFinalConfig")
+		if err != nil {
+			return errors.NewConfigurationError("failed to get Kafka URL for blocksFinal consumer - kafka_blocksFinalConfig", err)
+		}
+
+		blocksFinalKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(ctx, logger, url, "blockpersister", false)
 		if err != nil {
 			return errors.NewConfigurationError("failed to create new Kafka listener for blocksFinal: %v", err)
 		}
@@ -577,14 +586,22 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		// kafka_subtreesConfig
-		subtreeConsumerClient, err := kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "subtrees", "subtreevalidation", false)
+		url, err, _ := gocore.Config().GetURL("kafka_subtreesConfig")
+		if err != nil {
+			return errors.NewConfigurationError("failed to get Kafka URL for subtrees consumer - kafka_subtreesConfig", err)
+		}
+
+		subtreeConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(ctx, logger, url, "subtreevalidation", false)
 		if err != nil {
 			return errors.NewConfigurationError("failed to create new Kafka listener for subtrees: %v", err)
 		}
 
-		// kafka_txmetaConfig
-		txmetaConsumerClient, err := kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "txmeta", "subtreevalidation", true)
+		url, err, _ = gocore.Config().GetURL("kafka_txmetaConfig")
+		if err != nil {
+			return errors.NewConfigurationError("failed to get Kafka URL for txmeta consumer - kafka_txmetaConfig", err)
+		}
+
+		txmetaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(ctx, logger, url, "subtreevalidation", true)
 		if err != nil {
 			return errors.NewConfigurationError("failed to create new Kafka listener for txmeta: %v", err)
 		}
@@ -636,8 +653,12 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				return err
 			}
 
-			// kafka_blocksConfig
-			kafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "blocks", "blockvalidation", false)
+			url, err, _ := gocore.Config().GetURL("kafka_blocksConfig")
+			if err != nil {
+				return errors.NewConfigurationError("failed to get Kafka URL for blocks consumer - kafka_blocksConfig", err)
+			}
+
+			kafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(ctx, logger, url, "blockvalidation", false)
 			if err != nil {
 				return errors.NewConfigurationError("failed to get Kafka URL for blocks: %v", err)
 			}
@@ -673,8 +694,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 
 			kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
 			if err == nil && ok {
-				// kafka_validatortxsConfig
-				consumerClient, err = kafka.NewKafkaConsumerGroupFromSettings(ctx, logger, "validatortxs", "validator", true)
+				consumerClient, err = kafka.NewKafkaConsumerGroupFromURL(ctx, logger, kafkaURL, "validator", true)
 
 				if err != nil {
 					return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", kafkaURL.String(), err)

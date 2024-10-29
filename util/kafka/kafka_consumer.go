@@ -10,43 +10,41 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/retry"
-	"github.com/ordishs/gocore"
-
-	"github.com/IBM/sarama"
 )
 
 type KafkaConsumerGroupI interface {
 	Start(ctx context.Context, consumerFn func(message KafkaMessage) error)
-	URL() *url.URL
+	BrokersURL() []string
 }
 
-type KafkaListenerConfig struct {
+type KafkaConsumerConfig struct {
 	Logger            ulogger.Logger
 	URL               *url.URL
+	BrokersURL        []string
+	Topic             string
+	Partitions        int
+	ConsumerRatio     int
 	ConsumerGroupID   string
 	ConsumerCount     int
 	AutoCommitEnabled bool
+	Replay            bool
 }
 
 type KafkaConsumerGroup struct {
-	Config            KafkaListenerConfig
+	Config            KafkaConsumerConfig
 	ConsumerGroup     sarama.ConsumerGroup
 	LastMessageStatus MessageStatus
 	mu                sync.Mutex
 }
 
-func NewKafkaConsumerGroupFromSettings(ctx context.Context, logger ulogger.Logger, topic string, consumerGroupID string, autoCommit bool) (*KafkaConsumerGroup, error) {
-	url, err, ok := gocore.Config().GetURL("kafka_" + topic + "Config")
-	if err != nil {
-		return nil, errors.NewConfigurationError("failed to get Kafka URL for %s: %v", topic, err)
-	}
-
-	if !ok || url == nil {
-		return nil, errors.NewConfigurationError("missing Kafka URL for %s", topic)
+func NewKafkaConsumerGroupFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL, consumerGroupID string, autoCommit bool) (*KafkaConsumerGroup, error) {
+	if url == nil {
+		return nil, errors.NewConfigurationError("missing kafka url")
 	}
 
 	partitions := util.GetQueryParamInt(url, "partitions", 1)
@@ -69,31 +67,31 @@ func NewKafkaConsumerGroupFromSettings(ctx context.Context, logger ulogger.Logge
 	// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
 	// groupID := topic + "-" + uuid.New().String()
 
-	logger.Infof("Starting %d Kafka consumers for %s messages", consumerCount, topic)
+	// AutoCommitEnabled:
+	// txMetaCache : true, we CAN miss.
+	// rejected txs : true, we CAN miss.
+	// subtree validation : false.
+	// block persister : false.
+	// block validation: false.
 
-	client, err := NewKafkaConsumeGroup(ctx, KafkaListenerConfig{
+	consumerConfig := KafkaConsumerConfig{
 		Logger:            logger,
 		URL:               url,
+		BrokersURL:        strings.Split(url.Host, ","),
+		Topic:             url.Path[1:],
+		Partitions:        partitions,
+		ConsumerRatio:     consumerRatio,
 		ConsumerGroupID:   consumerGroupID,
 		ConsumerCount:     consumerCount,
 		AutoCommitEnabled: autoCommit,
-	})
-
-	if err != nil {
-		return nil, errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", url.String(), err)
+		Replay:            util.GetQueryParamInt(url, "replay", 0) == 1,
 	}
 
-	return client, nil
+	return NewKafkaConsumeGroup(ctx, consumerConfig)
 }
 
-// txMetaCache : autocommit should be enabled - true, we CAN miss.
-// subtree validation : autocommit should be disabled - false.
-// block persister : autocommit should be disabled - false.
-// block assembly: no kafka setup
-
-// StartKafkaGroupListener Autocommit is enabled/disabled according to the parameter fed in the function.
-// We DO NOT read autocommit parameter from the URL.
-func NewKafkaConsumeGroup(ctx context.Context, cfg KafkaListenerConfig) (*KafkaConsumerGroup, error) {
+// We DO NOT read autocommit parameter from the URL because the handler func has specific error handling logic.
+func NewKafkaConsumeGroup(ctx context.Context, cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error) {
 	if cfg.URL == nil {
 		return nil, errors.NewConfigurationError("kafka URL is not set", nil)
 	}
@@ -110,6 +108,8 @@ func NewKafkaConsumeGroup(ctx context.Context, cfg KafkaListenerConfig) (*KafkaC
 		return nil, errors.NewConfigurationError("group ID is not set", nil)
 	}
 
+	cfg.Logger.Infof("Starting %d Kafka consumers for %s messages", cfg.ConsumerCount, cfg.Topic)
+
 	config := sarama.NewConfig()
 	config.Consumer.Return.Errors = true
 
@@ -120,14 +120,11 @@ func NewKafkaConsumeGroup(ctx context.Context, cfg KafkaListenerConfig) (*KafkaC
 		config.Consumer.Offsets.AutoCommit.Enable = false
 	}
 
-	replay := util.GetQueryParamInt(cfg.URL, "replay", 0)
-	if replay == 1 {
+	if cfg.Replay {
 		config.Consumer.Offsets.Initial = sarama.OffsetOldest
 	}
 
-	brokersURL := strings.Split(cfg.URL.Host, ",")
-
-	clusterAdmin, err := sarama.NewClusterAdmin(brokersURL, config)
+	clusterAdmin, err := sarama.NewClusterAdmin(cfg.BrokersURL, config)
 	if err != nil {
 		return nil, errors.NewConfigurationError("error while creating cluster admin", err)
 	}
@@ -135,9 +132,9 @@ func NewKafkaConsumeGroup(ctx context.Context, cfg KafkaListenerConfig) (*KafkaC
 		_ = clusterAdmin.Close()
 	}(clusterAdmin)
 
-	consumerGroup, err := sarama.NewConsumerGroup(brokersURL, cfg.ConsumerGroupID, config)
+	consumerGroup, err := sarama.NewConsumerGroup(cfg.BrokersURL, cfg.ConsumerGroupID, config)
 	if err != nil {
-		return nil, errors.NewServiceError("error creating consumer group client", err)
+		return nil, errors.NewServiceError("failed to create Kafka consumer group for %s: %v", cfg.Topic, err)
 	}
 
 	client := &KafkaConsumerGroup{
@@ -186,7 +183,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 		return consumerFn(message)
 	}
 
-	topics := []string{k.Config.URL.Path[1:]}
+	topics := []string{k.Config.Topic}
 
 	for i := 0; i < k.Config.ConsumerCount; i++ {
 		go func(consumerIndex int) {
@@ -233,8 +230,8 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 	}
 }
 
-func (k *KafkaConsumerGroup) URL() *url.URL {
-	return k.Config.URL
+func (k *KafkaConsumerGroup) BrokersURL() []string {
+	return k.Config.BrokersURL
 }
 
 // KafkaConsumer represents a Sarama consumer group consumer

@@ -147,7 +147,7 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, u.txmetaConsumerClient.URL())},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, u.txmetaConsumerClient.BrokersURL())},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)

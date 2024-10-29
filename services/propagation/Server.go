@@ -15,7 +15,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -56,8 +55,7 @@ type PropagationServer struct {
 	txStore                      blob.Store
 	validator                    validator.Interface
 	blockchainClient             blockchain.ClientI
-	validatorKafkaProducerClient *kafka.KafkaAsyncProducer
-	kafkaHealthURL               *url.URL
+	validatorKafkaProducerClient kafka.KafkaAsyncProducerI
 }
 
 // New will return a server instance with the logger stored within it
@@ -90,7 +88,7 @@ func (ps *PropagationServer) Health(ctx context.Context, checkLiveness bool) (in
 		{Name: "ValidatorClient", Check: ps.validator.Health},
 		{Name: "TxStore", Check: ps.txStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(ps.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, ps.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, ps.validatorKafkaProducerClient.BrokersURL())},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -182,9 +180,8 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 
 	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
 	if workers > 0 {
-		ps.kafkaHealthURL = validatortxsKafkaURL
 		ps.validatorKafkaProducerClient, err = retry.Retry(ctx, ps.logger, func() (*kafka.KafkaAsyncProducer, error) {
-			return kafka.NewKafkaAsyncProducer(ps.logger, validatortxsKafkaURL, make(chan *kafka.Message, 10_000))
+			return kafka.NewKafkaAsyncProducerFromURL(ps.logger, validatortxsKafkaURL, make(chan *kafka.Message, 10_000))
 		}, retry.WithMessage("[Propagation Server] error starting kafka producer"))
 		if err != nil {
 			ps.logger.Errorf("[Propagation Server] error starting kafka producer: %v", err)
@@ -472,9 +469,9 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		}
 
 		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
-		ps.validatorKafkaProducerClient.PublishChannel <- &kafka.Message{
+		ps.validatorKafkaProducerClient.Publish(&kafka.Message{
 			Value: validatorData.Bytes(),
-		}
+		})
 	} else {
 		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 

@@ -52,7 +52,7 @@ type Blockchain struct {
 	newBlock                chan struct{}
 	difficulty              *Difficulty
 	chainParams             *chaincfg.Params
-	blockKafkaAsyncProducer *kafka.KafkaAsyncProducer
+	blockKafkaAsyncProducer kafka.KafkaAsyncProducerI
 	kafkaChan               chan *kafka.Message
 	stats                   *gocore.Stat
 	finiteStateMachine      *fsm.FSM
@@ -120,7 +120,7 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "BlockchainStore", Check: b.store.Health},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, b.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, b.blockKafkaAsyncProducer.BrokersURL())},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -276,7 +276,7 @@ func (b *Blockchain) startKafka() error {
 
 		b.kafkaChan = make(chan *kafka.Message, 100)
 
-		if b.blockKafkaAsyncProducer, err = kafka.NewKafkaAsyncProducer(b.logger, blocksKafkaURL, b.kafkaChan); err != nil {
+		if b.blockKafkaAsyncProducer, err = kafka.NewKafkaAsyncProducerFromURL(b.logger, blocksKafkaURL, b.kafkaChan); err != nil {
 			return errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err)
 		}
 

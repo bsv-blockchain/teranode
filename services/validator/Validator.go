@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -42,7 +41,6 @@ type Validator struct {
 	stats                         *gocore.Stat
 	txMetaKafkaProducerClient     *kafka.KafkaAsyncProducer
 	rejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
-	kafkaHealthURL                *url.URL
 }
 
 func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interface, error) {
@@ -83,9 +81,8 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 	// only start the kafka producer if there are workers listening
 	// this can be used to disable the kafka producer, by just setting workers to 0
 	if workers > 0 {
-		v.kafkaHealthURL = txmetaKafkaURL
 		v.txMetaKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
-			return kafka.NewKafkaAsyncProducer(v.logger, txmetaKafkaURL, make(chan *kafka.Message, 10000))
+			return kafka.NewKafkaAsyncProducerFromURL(v.logger, txmetaKafkaURL, make(chan *kafka.Message, 10000))
 		}, retry.WithMessage("[Validator] error starting kafka producer for txMeta"))
 
 		if err != nil {
@@ -110,9 +107,8 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 	// only start the kafka producer if there are workers listening
 	// this can be used to disable the kafka producer, by just setting workers to 0
 	if workers > 0 {
-		v.kafkaHealthURL = rejectedTxKafkaURL
 		v.rejectedTxKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
-			return kafka.NewKafkaAsyncProducer(v.logger, rejectedTxKafkaURL, make(chan *kafka.Message, 10000))
+			return kafka.NewKafkaAsyncProducerFromURL(v.logger, rejectedTxKafkaURL, make(chan *kafka.Message, 10000))
 		}, retry.WithMessage("[Validator] error starting kafka producer for rejected Txs"))
 
 		if err != nil {
@@ -172,7 +168,7 @@ func (v *Validator) Health(ctx context.Context, checkLiveness bool) (int, string
 	checks := []health.Check{
 		{Name: "BlockHeight", Check: checkBlockHeight},
 		{Name: "UTXOStore", Check: v.utxoStore.Health},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, v.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, v.rejectedTxKafkaProducerClient.BrokersURL())},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
