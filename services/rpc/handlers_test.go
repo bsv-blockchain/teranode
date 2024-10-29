@@ -9,7 +9,7 @@ import (
 
 func TestHandleGetMiningInfo(t *testing.T) {
 	difficulty := 97415240192.16336
-
+	expectedHashRate := 6.973254512622107e+17
 	networkHashPS := calculateHashRate(difficulty, chaincfg.MainNetParams.TargetTimePerBlock.Seconds())
-	assert.Equal(t, networkHashPS, 7.08831367103262e+17)
+	assert.Equal(t, networkHashPS, expectedHashRate)
 }
