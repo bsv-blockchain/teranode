@@ -74,6 +74,7 @@ func NewKafkaConsumeGroup(ctx context.Context, cfg KafkaListenerConfig) (*KafkaC
 
 	replay := util.GetQueryParamInt(cfg.URL, "replay", 0)
 	if replay == 1 {
+		// defaults to OffsetNewest
 		config.Consumer.Offsets.Initial = sarama.OffsetOldest
 	}
 

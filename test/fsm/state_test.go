@@ -64,7 +64,6 @@ func (suite *FsmTestSuite) TestNodeCatchUpState_WithStartAndStopNodes() {
 
 		logger.Infof("Hashes: %v", hashes)
 
-
 		baClient := framework.Nodes[0].BlockassemblyClient
 
 		_, err = helper.MineBlock(ctx, baClient, logger)
@@ -264,7 +263,8 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	time.Sleep(5 * time.Second)
 
 	fsmState, _ := blockchainNode0.GetFSMCurrentState(framework.Context)
-	assert.Equal(t, fsmState, blockchain_api.FSMStateType(4), "FSM state is not equal to 4")
+
+	assert.Equal(t, "CATCHINGTXS", fsmState, "FSM state is not equal to 4")
 
 	state, err := blockAssemblyNode0.GetBlockAssemblyState(framework.Context)
 	if err != nil {
@@ -291,7 +291,6 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 
 	txCountAfter := state.GetTxCount()
 	logger.Infof("Tx count after: %v", txCountAfter)
-
 
 	assert.LessOrEqual(t, txCountAfter, uint64(10), "Tx count mismatch")
 
