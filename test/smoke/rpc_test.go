@@ -259,6 +259,32 @@ func (suite *RPCTestSuite) TestRPCGetBlockByHeight() {
 	}
 }
 
+func (suite *RPCTestSuite) TestRPCGetMiningInfo() {
+	var miningInfoResp GetMiningInfoResponse
+
+	t := suite.T()
+	resp, err := helper.CallRPC(ubsv1RPCEndpoint, "getmininginfo", []interface{}{})
+
+	if err != nil {
+		t.Errorf("Error CallRPC: %v", err)
+	}
+
+	errJSON := json.Unmarshal([]byte(resp), &miningInfoResp)
+
+	if errJSON != nil {
+		t.Errorf("JSON decoding error: %v", errJSON)
+		return
+	}
+
+	t.Logf("%s", resp)
+
+	if miningInfoResp.Result.NetworkHashPs == 0 {
+		t.Errorf("Test failed: getmininginfo not working")
+	} else {
+		t.Logf("getmininginfo test succeeded")
+	}
+}
+
 func TestRPCTestSuite(t *testing.T) {
 	suite.Run(t, new(RPCTestSuite))
 }
