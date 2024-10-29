@@ -1631,21 +1631,22 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 		}
 
 		if len(invBlockMsg.InvList) > 0 {
-			sm.msgChan <- invBlockMsg
+			netsyncInvMsg := invMsg{inv: invBlockMsg, peer: peer}
+			sm.msgChan <- &netsyncInvMsg
 		}
 
 		if len(invTxMsg.InvList) > 0 {
-			wireInvMsg := invMsg{inv: invTxMsg, peer: peer}
+			netsyncInvMsg := invMsg{inv: invTxMsg, peer: peer}
 
 			// write to Kafka
-			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.Addr(), len(wireInvMsg.inv.InvList))
+			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.Addr(), len(netsyncInvMsg.inv.InvList))
 			sm.legacyKafkaInvCh <- &kafka.Message{
-				Value: wireInvMsg.Bytes(),
+				Value: netsyncInvMsg.Bytes(),
 			}
 		}
 	} else {
-		wireInvMsg := invMsg{inv: inv, peer: peer}
-		sm.msgChan <- &wireInvMsg
+		netsyncInvMsg := invMsg{inv: inv, peer: peer}
+		sm.msgChan <- &netsyncInvMsg
 	}
 }
 
