@@ -36,6 +36,7 @@ var (
 	prometheusBlockchainGetBlocksMinedNotSet       prometheus.Histogram
 	prometheusBlockchainSetBlockSubtreesSet        prometheus.Histogram
 	prometheusBlockchainGetBlocksSubtreesNotSet    prometheus.Histogram
+	prometheusBlockchainFSMCurrentState            prometheus.Gauge
 	prometheusBlockchainGetFSMCurrentState         prometheus.Histogram
 	prometheusBlockchainGetBlockLocator            prometheus.Histogram
 	prometheusBlockchainLocateBlockHeaders         prometheus.Histogram
@@ -315,6 +316,15 @@ func _initPrometheusMetrics() {
 			Name:      "get_blocks_subtrees_not_set",
 			Help:      "Histogram of GetBlocksSubtreesNotSet calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainFSMCurrentState = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "fsm_current_state",
+			Help:      "Current state of the blockchain FSM",
 		},
 	)
 
