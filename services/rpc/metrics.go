@@ -49,7 +49,8 @@ func _initPrometheusMetrics() {
 	//)
 	prometheusHandleGetBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_block",
 			Help:      "Histogram of calls to handleGetBlock in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -57,7 +58,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleGetBlockByHeight = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_block_by_height",
 			Help:      "Histogram of calls to handleGetBlockByHeight in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -65,7 +67,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleGetBlockHash = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_block_hash",
 			Help:      "Histogram of calls to handleGetBlockHash in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -73,7 +76,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleGetBlockHeader = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_block_header",
 			Help:      "Histogram of calls to handleGetBlockHeader in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -81,7 +85,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleGetBestBlockHash = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_best_block_hash",
 			Help:      "Histogram of calls to handleGetBestBlockHash in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -89,7 +94,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleGetRawTransaction = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_raw_transaction",
 			Help:      "Histogram of calls to handleGetRawTransaction in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -97,7 +103,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleCreateRawTransaction = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "create_raw_transaction",
 			Help:      "Histogram of calls to handleCreateRawTransaction in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -105,7 +112,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleSendRawTransaction = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "send_raw_transaction",
 			Help:      "Histogram of calls to handleSendRawTransaction in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -113,7 +121,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleGenerate = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "generate",
 			Help:      "Histogram of calls to handleGenerate in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -121,7 +130,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleGetMiningCandidate = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_mining_candidate",
 			Help:      "Histogram of calls to handleGetMiningCandidate in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -129,7 +139,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleSubmitMiningSolution = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "submit_mining_solution",
 			Help:      "Histogram of calls to handleSubmitMiningSolution in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -137,7 +148,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleGetpeerinfo = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_peer_info",
 			Help:      "Histogram of calls to handleGetpeerinfo in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -145,7 +157,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleGetblockchaininfo = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_blockchain_info",
 			Help:      "Histogram of calls to handleGetblockchaininfo in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -153,7 +166,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleGetinfo = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_info",
 			Help:      "Histogram of calls to handleGetinfo in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -162,7 +176,8 @@ func _initPrometheusMetrics() {
 
 	prometheusHandleGetDifficulty = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "get_difficulty",
 			Help:      "Histogram of calls to handleGetDifficulty in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -170,7 +185,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleInvalidateBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "invalidate_block",
 			Help:      "Histogram of calls to handleInvalidateBlock in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -178,7 +194,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleReconsiderBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "reconsider_block",
 			Help:      "Histogram of calls to handleReconsiderBlock in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -186,7 +203,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleHelp = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "help",
 			Help:      "Histogram of calls to handleHelp in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -194,7 +212,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusHandleSetBan = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "rpc",
+			Namespace: "teranode",
+			Subsystem: "rpc",
 			Name:      "set_ban",
 			Help:      "Histogram of calls to handleSetBan in the rpc service",
 			Buckets:   util.MetricsBucketsMilliSeconds,

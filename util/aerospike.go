@@ -347,8 +347,8 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 						if _, ok := aerospikePrometheusMetrics[prometheusKey]; !ok {
 							aerospikePrometheusMetrics[prometheusKey] = promauto.NewCounter(
 								prometheus.CounterOpts{
-									Namespace: "aerospike_client",
-									Subsystem: key,
+									Namespace: "teranode",
+									Subsystem: "aerospike_client_" + key,
 									Name:      subKey,
 									Help:      fmt.Sprintf("Aerospike stat %s:%s", key, subKey),
 								},
@@ -378,7 +378,8 @@ func initStats(logger ulogger.Logger, client *uaerospike.Client) {
 					if _, ok := aerospikePrometheusMetrics[key]; !ok {
 						aerospikePrometheusMetrics[key] = promauto.NewCounter(
 							prometheus.CounterOpts{
-								Namespace: "aerospike_client",
+								Namespace: "teranode",
+								Subsystem: "aerospike_client",
 								Name:      key,
 								Help:      fmt.Sprintf("Aerospike stat %s", key),
 							},

@@ -47,26 +47,34 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusTxMetaAerospikeMapGet = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_txmeta_get",
-			Help: "Number of txmeta get calls done to aerospike",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "txmeta_get",
+			Help:      "Number of txmeta get calls done to aerospike",
 		},
 	)
 	prometheusUtxostoreCreate = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_utxo_store",
-			Help: "Number of Create calls done to aerospike",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_store",
+			Help:      "Number of Create calls done to aerospike",
 		},
 	)
 	prometheusTxMetaAerospikeMapSetMined = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_txmeta_set_mined",
-			Help: "Number of txmeta set_mined calls done to aerospike",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "txmeta_set_mined",
+			Help:      "Number of txmeta set_mined calls done to aerospike",
 		},
 	)
 	prometheusTxMetaAerospikeMapErrors = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_txmeta_errors",
-			Help: "Number of txmeta map errors",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "txmeta_errors",
+			Help:      "Number of txmeta map errors",
 		},
 		[]string{
 			"function", // function raising the error
@@ -75,40 +83,52 @@ func _initPrometheusMetrics() {
 	)
 	prometheusTxMetaAerospikeMapGetMulti = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_txmeta_get_multi",
-			Help: "Number of txmeta get_multi calls done to aerospike map",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "txmeta_get_multi",
+			Help:      "Number of txmeta get_multi calls done to aerospike map",
 		},
 	)
 	prometheusTxMetaAerospikeMapGetMultiN = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_txmeta_get_multi_n",
-			Help: "Number of txmeta get_multi txs done to aerospike map",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "txmeta_get_multi_n",
+			Help:      "Number of txmeta get_multi txs done to aerospike map",
 		},
 	)
 
 	prometheusTxMetaAerospikeMapSetMinedBatch = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_txmeta_set_mined_batch",
-			Help: "Number of txmeta set_mined_batch calls done to aerospike map",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "txmeta_set_mined_batch",
+			Help:      "Number of txmeta set_mined_batch calls done to aerospike map",
 		},
 	)
 	prometheusTxMetaAerospikeMapSetMinedBatchN = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_txmeta_set_mined_batch_n",
-			Help: "Number of txmeta set_mined_batch txs done to aerospike map",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "txmeta_set_mined_batch_n",
+			Help:      "Number of txmeta set_mined_batch txs done to aerospike map",
 		},
 	)
 	prometheusTxMetaAerospikeMapSetMinedBatchErrN = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_txmeta_set_mined_batch_err_n",
-			Help: "Number of txmeta set_mined_batch txs errors to aerospike map",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "txmeta_set_mined_batch_err_n",
+			Help:      "Number of txmeta set_mined_batch txs errors to aerospike map",
 		},
 	)
 
 	prometheusUtxoMapGet = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_utxo_get",
-			Help: "Number of utxo get calls done to aerospike",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_get",
+			Help:      "Number of utxo get calls done to aerospike",
 		},
 	)
 	// prometheusUtxoMapStore = promauto.NewCounter(
@@ -131,27 +151,35 @@ func _initPrometheusMetrics() {
 	// )
 	prometheusUtxoMapSpend = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_utxo_spend",
-			Help: "Number of utxo spend calls done to aerospike",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend",
+			Help:      "Number of utxo spend calls done to aerospike",
 		},
 	)
 
 	prometheusUtxoMapReset = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_utxo_reset",
-			Help: "Number of utxo reset calls done to aerospike",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_reset",
+			Help:      "Number of utxo reset calls done to aerospike",
 		},
 	)
 	prometheusUtxoMapDelete = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_utxo_delete",
-			Help: "Number of utxo delete calls done to aerospike",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_delete",
+			Help:      "Number of utxo delete calls done to aerospike",
 		},
 	)
 	prometheusUtxoMapErrors = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "aerospike_map_utxo_errors",
-			Help: "Number of utxo errors",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_errors",
+			Help:      "Number of utxo errors",
 		},
 		[]string{
 			"function", // function raising the error
@@ -161,39 +189,48 @@ func _initPrometheusMetrics() {
 
 	prometheusUtxoCreateBatch = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name:    "aerospike_utxo_create_batch",
-			Help:    "Duration of utxo create batch",
-			Buckets: util.MetricsBucketsMilliSeconds,
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_create_batch",
+			Help:      "Duration of utxo create batch",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
 	prometheusUtxoCreateBatchSize = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name:    "aerospike_utxo_create_batch_size",
-			Help:    "Size of utxo create batch",
-			Buckets: util.MetricsBucketsSizeSmall,
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_create_batch_size",
+			Help:      "Size of utxo create batch",
+			Buckets:   util.MetricsBucketsSizeSmall,
 		},
 	)
 
 	prometheusUtxoSpendBatch = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name:    "aerospike_utxo_spend_batch",
-			Help:    "Duration of utxo spend batch",
-			Buckets: util.MetricsBucketsMilliSeconds,
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend_batch",
+			Help:      "Duration of utxo spend batch",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
 	prometheusUtxoSpendBatchSize = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name:    "aerospike_utxo_spend_batch_size",
-			Help:    "Size of utxo spend batch",
-			Buckets: util.MetricsBucketsSizeSmall,
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend_batch_size",
+			Help:      "Size of utxo spend batch",
+			Buckets:   util.MetricsBucketsSizeSmall,
 		},
 	)
 
 	prometheusTxMetaAerospikeMapGetExternal = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "aerospike",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
 			Name:      "get_external",
 			Help:      "Duration of getting an external transaction from the blob store",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -202,7 +239,8 @@ func _initPrometheusMetrics() {
 
 	prometheusTxMetaAerospikeMapSetExternal = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "aerospike",
+			Namespace: "teranode",
+			Subsystem: "aerospike",
 			Name:      "set_external",
 			Help:      "Duration of setting an external transaction to the blob store",
 			Buckets:   util.MetricsBucketsMilliSeconds,

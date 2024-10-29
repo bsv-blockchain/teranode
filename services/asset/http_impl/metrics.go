@@ -1,9 +1,10 @@
 package http_impl
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"sync"
 )
 
 var (
@@ -29,7 +30,8 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusAssetHttpGetTransaction = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "Asset",
+			Namespace: "teranode",
+			Subsystem: "asset",
 			Name:      "http_get_transaction",
 			Help:      "Number of Get transactions ops",
 		},
@@ -41,7 +43,8 @@ func _initPrometheusMetrics() {
 
 	prometheusAssetHttpGetTransactions = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "Asset",
+			Namespace: "teranode",
+			Subsystem: "asset",
 			Name:      "http_get_transactions",
 			Help:      "Number of Get transactions ops",
 		},
@@ -53,7 +56,8 @@ func _initPrometheusMetrics() {
 
 	prometheusAssetHttpGetSubtree = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "Asset",
+			Namespace: "teranode",
+			Subsystem: "asset",
 			Name:      "http_get_subtree",
 			Help:      "Number of Get subtree ops",
 		},
@@ -65,7 +69,8 @@ func _initPrometheusMetrics() {
 
 	prometheusAssetHttpGetBlockHeader = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "Asset",
+			Namespace: "teranode",
+			Subsystem: "asset",
 			Name:      "http_get_block_header",
 			Help:      "Number of Get block header ops",
 		},
@@ -77,7 +82,8 @@ func _initPrometheusMetrics() {
 
 	prometheusAssetHttpGetLastNBlocks = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "Asset",
+			Namespace: "teranode",
+			Subsystem: "asset",
 			Name:      "http_get_last_n_blocks",
 			Help:      "Number of Get last N blocks ops",
 		},
@@ -89,7 +95,8 @@ func _initPrometheusMetrics() {
 
 	prometheusAssetHttpGetBestBlockHeader = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "Asset",
+			Namespace: "teranode",
+			Subsystem: "asset",
 			Name:      "http_get_best_block_header",
 			Help:      "Number of Get best block header ops",
 		},
@@ -101,7 +108,8 @@ func _initPrometheusMetrics() {
 
 	prometheusAssetHttpGetBlock = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "Asset",
+			Namespace: "teranode",
+			Subsystem: "asset",
 			Name:      "http_get_block",
 			Help:      "Number of Get block ops",
 		},
@@ -113,7 +121,8 @@ func _initPrometheusMetrics() {
 
 	prometheusAssetHttpGetBlockLegacy = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "Asset",
+			Namespace: "teranode",
+			Subsystem: "asset",
 			Name:      "http_get_block_legacy",
 			Help:      "Number of Get legacy block ops",
 		},
@@ -125,7 +134,8 @@ func _initPrometheusMetrics() {
 
 	prometheusAssetHttpGetUTXO = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Namespace: "Asset",
+			Namespace: "teranode",
+			Subsystem: "asset",
 			Name:      "http_get_utxo",
 			Help:      "Number of Get UTXO ops",
 		},
