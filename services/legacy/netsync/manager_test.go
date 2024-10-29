@@ -279,9 +279,9 @@ func TestSyncManager_QueueInv(t *testing.T) {
 
 		go func() {
 			msg := <-msgChan
-			wireInvMsg, ok := msg.(*wire.MsgInv)
+			wireInvMsg, ok := msg.(*invMsg)
 			require.True(t, ok)
-			assert.Len(t, wireInvMsg.InvList, 2)
+			assert.Len(t, wireInvMsg.inv.InvList, 2)
 			wg.Done()
 		}()
 
@@ -310,9 +310,9 @@ func TestSyncManager_QueueInv(t *testing.T) {
 		go func() {
 			// no message should be sent here
 			msg := <-msgChan
-			wireInvMsg, ok := msg.(*wire.MsgInv)
+			wireInvMsg, ok := msg.(*invMsg)
 			require.True(t, ok)
-			assert.Len(t, wireInvMsg.InvList, 1)
+			assert.Len(t, wireInvMsg.inv.InvList, 1)
 			wg.Done()
 		}()
 
