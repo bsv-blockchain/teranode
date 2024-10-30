@@ -137,7 +137,7 @@ func setup(t *testing.T) *testContext {
 	utxoStore := utxo_memory.New(logger)
 	store := mockStore{}
 
-	server, err := New(context.Background(), logger, &store)
+	server, err := New(context.Background(), logger, &store, nil)
 	if err != nil {
 		t.Fatalf("Failed to create server: %v", err)
 	}

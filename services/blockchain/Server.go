@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
-	"net/url"
 	"sync"
 	"time"
 
@@ -56,13 +55,12 @@ type Blockchain struct {
 	kafkaChan               chan *kafka.Message
 	stats                   *gocore.Stat
 	finiteStateMachine      *fsm.FSM
-	kafkaHealthURL          *url.URL
 	AppCtx                  context.Context
 	localTestStartState     string
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, localTestStartFromState ...string) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, blockKafkaAsyncProducer kafka.KafkaAsyncProducerI, localTestStartFromState ...string) (*Blockchain, error) {
 	initPrometheusMetrics()
 
 	network, _ := gocore.Config().Get("network", "mainnet")
@@ -78,18 +76,19 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 	}
 
 	b := &Blockchain{
-		store:             store,
-		logger:            logger,
-		addBlockChan:      make(chan *blockchain_api.AddBlockRequest, 10),
-		newSubscriptions:  make(chan subscriber, 10),
-		deadSubscriptions: make(chan subscriber, 10),
-		subscribers:       make(map[subscriber]bool),
-		notifications:     make(chan *blockchain_api.Notification, 100),
-		newBlock:          make(chan struct{}, 10),
-		difficulty:        d,
-		chainParams:       params,
-		stats:             gocore.NewStat("blockchain"),
-		AppCtx:            ctx,
+		store:                   store,
+		logger:                  logger,
+		addBlockChan:            make(chan *blockchain_api.AddBlockRequest, 10),
+		newSubscriptions:        make(chan subscriber, 10),
+		deadSubscriptions:       make(chan subscriber, 10),
+		subscribers:             make(map[subscriber]bool),
+		notifications:           make(chan *blockchain_api.Notification, 100),
+		newBlock:                make(chan struct{}, 10),
+		difficulty:              d,
+		chainParams:             params,
+		stats:                   gocore.NewStat("blockchain"),
+		AppCtx:                  ctx,
+		blockKafkaAsyncProducer: blockKafkaAsyncProducer,
 	}
 
 	if len(localTestStartFromState) >= 1 && localTestStartFromState[0] != "" {
@@ -114,13 +113,18 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 		return health.CheckAll(ctx, checkLiveness, nil)
 	}
 
+	var brokersURL []string
+	if b.blockKafkaAsyncProducer != nil { // tests may not set this
+		brokersURL = b.blockKafkaAsyncProducer.BrokersURL()
+	}
+
 	// Add readiness checks here. Include dependency checks.
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
 	// A failed dependency check does not imply the service needs restarting
 	checks := []health.Check{
 		{Name: "BlockchainStore", Check: b.store.Health},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, b.blockKafkaAsyncProducer.BrokersURL())},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -181,9 +185,7 @@ func (b *Blockchain) Init(ctx context.Context) error {
 
 // Start function
 func (b *Blockchain) Start(ctx context.Context) error {
-	if err := b.startKafka(); err != nil {
-		return errors.WrapGRPC(err)
-	}
+	b.startKafka()
 
 	go b.startSubscriptions()
 
@@ -268,22 +270,11 @@ func (b *Blockchain) revalidateHandler(c echo.Context) error {
 	return c.String(http.StatusOK, fmt.Sprintf("block revalidated: %s", hashStr))
 }
 
-func (b *Blockchain) startKafka() error {
-	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
-	if err == nil && ok {
-		b.kafkaHealthURL = blocksKafkaURL
-		b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
+func (b *Blockchain) startKafka() {
+	b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
+	b.kafkaChan = make(chan *kafka.Message, 100)
 
-		b.kafkaChan = make(chan *kafka.Message, 100)
-
-		if b.blockKafkaAsyncProducer, err = kafka.NewKafkaAsyncProducerFromURL(b.logger, blocksKafkaURL, b.kafkaChan); err != nil {
-			return errors.NewServiceUnavailableError("[Blockchain] error connecting to kafka", err)
-		}
-
-		go b.blockKafkaAsyncProducer.Start(b.AppCtx)
-	}
-
-	return nil
+	b.blockKafkaAsyncProducer.Start(b.AppCtx, b.kafkaChan)
 }
 
 /* Must be started as a go routine unless you are in a test */

@@ -61,7 +61,7 @@ func (ctx *testContext) Setup(config *testConfig) error {
 	}
 
 	utxoStore := utxostore.New(ulogger.TestLogger{})
-	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, utxoStore)
+	validatorClient, err := validator.New(context.Background(), ulogger.TestLogger{}, utxoStore, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create validator client: %v", err)
 	}

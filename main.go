@@ -317,6 +317,16 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
+		blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
+		if err != nil || !ok {
+			return err
+		}
+
+		blockKafkaAsyncProducer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, blocksKafkaURL)
+		if err != nil {
+			return err
+		}
+
 		var localTestStartFromState string
 
 		// Check if the command line has the -localTestStartFromState flag, if so use that value as initial FSM state
@@ -333,7 +343,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			localTestStartFromState, _ = gocore.Config().Get("local_test_start_from_state")
 		}
 
-		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, localTestStartFromState)
+		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, blockKafkaAsyncProducer, localTestStartFromState)
 		if err != nil {
 			return err
 		}
@@ -350,20 +360,54 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		url, err, _ := gocore.Config().GetURL("kafka_rejectedTxConfig")
+		url, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
 		if err != nil {
 			return errors.NewConfigurationError("failed to get Kafka URL for rejectedTx consumer - kafka_rejectedTxConfig", err)
 		}
 
-		rejectedTxKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(ctx, logger, url, "p2p", true)
+		if !ok || url == nil {
+			return errors.NewConfigurationError("missing Kafka URL for rejectedTx consumer")
+		}
+
+		rejectedTxKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "p2p", true)
 		if err != nil {
 			return errors.NewConfigurationError("failed to create new Kafka listener for rejectedTx: %v", err)
+		}
+
+		subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
+		if err != nil {
+			return errors.NewConfigurationError("failed to get Kafka URL for subtrees async producer", err)
+		}
+
+		if !ok || subtreesKafkaURL == nil {
+			return errors.NewConfigurationError("missing Kafka URL for subtrees")
+		}
+
+		subtreeKafkaProducerClient, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, subtreesKafkaURL)
+		if err != nil {
+			return err
+		}
+
+		blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksConfig")
+		if err != nil {
+			return errors.NewConfigurationError("failed to get Kafka URL for blocks async producer", err)
+		}
+
+		if !ok || blocksKafkaURL == nil {
+			return errors.NewConfigurationError("missing Kafka URL for blocks")
+		}
+
+		blocksKafkaProducerClient, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, blocksKafkaURL)
+		if err != nil {
+			return err
 		}
 
 		p2pService, err := p2p.NewServer(ctx,
 			logger.New("P2P"),
 			blockchainClient,
 			rejectedTxKafkaConsumerClient,
+			subtreeKafkaProducerClient,
+			blocksKafkaProducerClient,
 		)
 		if err != nil {
 			return err
@@ -485,7 +529,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return errors.NewConfigurationError("failed to get Kafka URL for blocksFinal consumer - kafka_blocksFinalConfig", err)
 		}
 
-		blocksFinalKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(ctx, logger, url, "blockpersister", false)
+		blocksFinalKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "blockpersister", false)
 		if err != nil {
 			return errors.NewConfigurationError("failed to create new Kafka listener for blocksFinal: %v", err)
 		}
@@ -591,7 +635,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return errors.NewConfigurationError("failed to get Kafka URL for subtrees consumer - kafka_subtreesConfig", err)
 		}
 
-		subtreeConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(ctx, logger, url, "subtreevalidation", false)
+		subtreeConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "subtreevalidation", false)
 		if err != nil {
 			return errors.NewConfigurationError("failed to create new Kafka listener for subtrees: %v", err)
 		}
@@ -601,7 +645,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return errors.NewConfigurationError("failed to get Kafka URL for txmeta consumer - kafka_txmetaConfig", err)
 		}
 
-		txmetaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(ctx, logger, url, "subtreevalidation", true)
+		txmetaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "subtreevalidation", true)
 		if err != nil {
 			return errors.NewConfigurationError("failed to create new Kafka listener for txmeta: %v", err)
 		}
@@ -658,7 +702,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				return errors.NewConfigurationError("failed to get Kafka URL for blocks consumer - kafka_blocksConfig", err)
 			}
 
-			kafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(ctx, logger, url, "blockvalidation", false)
+			kafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "blockvalidation", false)
 			if err != nil {
 				return errors.NewConfigurationError("failed to get Kafka URL for blocks: %v", err)
 			}
@@ -694,11 +738,39 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 
 			kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
 			if err == nil && ok {
-				consumerClient, err = kafka.NewKafkaConsumerGroupFromURL(ctx, logger, kafkaURL, "validator", true)
+				consumerClient, err = kafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, "validator", true)
 
 				if err != nil {
 					return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", kafkaURL.String(), err)
 				}
+			}
+
+			txMetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
+			if err != nil {
+				return errors.NewConfigurationError("failed to get Kafka URL for txmeta consumer - kafka_txmetaConfig", err)
+			}
+
+			if !ok || txMetaKafkaURL == nil {
+				return errors.NewConfigurationError("missing Kafka URL for txmeta")
+			}
+
+			txMetaKafkaProducerClient, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, txMetaKafkaURL)
+			if err != nil {
+				return errors.NewServiceError("could not create txmeta kafka producer for local validator", err)
+			}
+
+			rejectedTxKafkaURL, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
+			if err != nil {
+				return errors.NewConfigurationError("failed to get Kafka URL for rejectedTx consumer - kafka_rejectedTxConfig", err)
+			}
+
+			if !ok || rejectedTxKafkaURL == nil {
+				return errors.NewConfigurationError("missing Kafka URL for rejectedTx")
+			}
+
+			rejectedTxKafkaProducerClient, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, rejectedTxKafkaURL)
+			if err != nil {
+				return errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
 			}
 
 			if err = sm.AddService("Validator", validator.NewServer(
@@ -706,6 +778,8 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				utxoStore,
 				blockchainClient,
 				consumerClient,
+				txMetaKafkaProducerClient,
+				rejectedTxKafkaProducerClient,
 			)); err != nil {
 				return err
 			}
@@ -767,11 +841,26 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 					return err
 				}
 
+				validatortxsKafkaURL, err, found := gocore.Config().GetURL("kafka_validatortxsConfig")
+				if err != nil {
+					return err
+				}
+
+				var validatorKafkaProducerClient kafka.KafkaAsyncProducerI
+
+				if found && validatortxsKafkaURL != nil {
+					validatorKafkaProducerClient, err = kafka.NewKafkaAsyncProducerFromURL(ctx, logger, validatortxsKafkaURL)
+					if err != nil {
+						return err
+					}
+				}
+
 				if err = sm.AddService("PropagationServer", propagation.New(
 					logger.New("prop"),
 					txStore,
 					validatorClient,
 					blockchainClient,
+					validatorKafkaProducerClient,
 				)); err != nil {
 					return err
 				}

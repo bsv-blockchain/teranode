@@ -79,6 +79,11 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusOK, "OK", nil
 	}
 
+	var brokersURL []string
+	if u.blocksFinalKafkaConsumerClient != nil { // tests may not set this
+		brokersURL = u.blocksFinalKafkaConsumerClient.BrokersURL()
+	}
+
 	// Add readiness checks here. Include dependency checks.
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
@@ -89,7 +94,7 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, u.blocksFinalKafkaConsumerClient.BrokersURL())},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -144,7 +149,7 @@ func (u *Server) Start(ctx context.Context) error {
 		u.logger.Infof("[Block Persister] Node finished restoring and has transitioned to Running state, continuing to start Block Persister service")
 	}
 
-	go u.blocksFinalKafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx))
+	u.blocksFinalKafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx))
 
 	// http.HandleFunc("GET /block/", func(w http.ResponseWriter, req *http.Request) {
 	// 	hashStr := req.PathValue("hash")

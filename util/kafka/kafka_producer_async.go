@@ -2,6 +2,7 @@ package kafka
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"os"
 	"os/signal"
@@ -14,12 +15,13 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/retry"
 )
 
 type KafkaAsyncProducerI interface {
-	Start(ctx context.Context)
+	Start(ctx context.Context, ch chan *Message)
 	BrokersURL() []string
-	Publish(msg *Message)
+	Publish(msg *Message) error
 }
 
 type KafkaProducerConfig struct {
@@ -48,39 +50,51 @@ type Message struct {
 }
 
 type KafkaAsyncProducer struct {
-	Config            KafkaProducerConfig
-	Producer          sarama.AsyncProducer
-	LastMessageStatus MessageStatus
-	mu                sync.Mutex
-	PublishChannel    chan *Message
+	Config         KafkaProducerConfig
+	Producer       sarama.AsyncProducer
+	publishChannel chan *Message
 }
 
-func NewKafkaAsyncProducerFromURL(logger ulogger.Logger, kafkaURL *url.URL, ch chan *Message) (*KafkaAsyncProducer, error) {
-	producerConfig := KafkaProducerConfig{
-		Logger:                logger,
-		URL:                   kafkaURL,
-		BrokersURL:            strings.Split(kafkaURL.Host, ","),
-		Topic:                 kafkaURL.Path[1:],
-		Partitions:            int32(util.GetQueryParamInt(kafkaURL, "partitions", 1)),     //nolint:gosec
-		ReplicationFactor:     int16(util.GetQueryParamInt(kafkaURL, "replication", 1)),    //nolint:gosec
-		RetentionPeriodMillis: util.GetQueryParam(kafkaURL, "retention", "600000"),         // 10 minutes
-		SegmentBytes:          util.GetQueryParam(kafkaURL, "segment_bytes", "1073741824"), // 1GB default
-		FlushBytes:            util.GetQueryParamInt(kafkaURL, "flush_bytes", 1024*1024),
-		FlushMessages:         util.GetQueryParamInt(kafkaURL, "flush_messages", 50_000),
-		FlushFrequency:        util.GetQueryParamDuration(kafkaURL, "flush_frequency", 10*time.Second),
+func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL) (*KafkaAsyncProducer, error) {
+	path := url.Path
+	if strings.HasPrefix(path, "/") {
+		path = path[1:]
 	}
 
-	return NewKafkaAsyncProducer(logger, producerConfig, ch)
+	producerConfig := KafkaProducerConfig{
+		Logger:                logger,
+		URL:                   url,
+		BrokersURL:            strings.Split(url.Host, ","),
+		Topic:                 path,
+		Partitions:            int32(util.GetQueryParamInt(url, "partitions", 1)),     //nolint:gosec
+		ReplicationFactor:     int16(util.GetQueryParamInt(url, "replication", 1)),    //nolint:gosec
+		RetentionPeriodMillis: util.GetQueryParam(url, "retention", "600000"),         // 10 minutes
+		SegmentBytes:          util.GetQueryParam(url, "segment_bytes", "1073741824"), // 1GB default
+		FlushBytes:            util.GetQueryParamInt(url, "flush_bytes", 1024*1024),
+		FlushMessages:         util.GetQueryParamInt(url, "flush_messages", 50_000),
+		FlushFrequency:        util.GetQueryParamDuration(url, "flush_frequency", 10*time.Second),
+	}
+
+	producer, err := retry.Retry(ctx, logger, func() (*KafkaAsyncProducer, error) {
+		return NewKafkaAsyncProducer(logger, producerConfig)
+	}, retry.WithMessage(fmt.Sprintf("[P2P] error starting kafka async producer for topic %s", producerConfig.Topic)))
+	if err != nil {
+		logger.Fatalf("[P2P] failed to start kafka async producer for topic %s: %v", producerConfig.Topic, err)
+		return nil, err
+	}
+
+	return producer, nil
 }
 
-func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig, ch chan *Message) (*KafkaAsyncProducer, error) {
+func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
 	logger.Debugf("Starting async kafka producer for %v", cfg.URL)
 
 	config := sarama.NewConfig()
-	config.Producer.Return.Successes = true
 	config.Producer.Flush.Bytes = cfg.FlushBytes
 	config.Producer.Flush.Messages = cfg.FlushMessages
 	config.Producer.Flush.Frequency = cfg.FlushFrequency
+
+	cfg.Logger.Infof("Starting Kafka async producer for %s topic", cfg.Topic)
 
 	// try turning off acks
 	// config.Producer.RequiredAcks = sarama.NoResponse // Equivalent to 'acks=0'
@@ -94,19 +108,8 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig, ch ch
 		_ = clusterAdmin.Close()
 	}(clusterAdmin)
 
-	if err := clusterAdmin.CreateTopic(cfg.Topic, &sarama.TopicDetail{
-		NumPartitions:     cfg.Partitions,
-		ReplicationFactor: cfg.ReplicationFactor,
-		ConfigEntries: map[string]*string{
-			"retention.ms":        &cfg.RetentionPeriodMillis,
-			"delete.retention.ms": &cfg.RetentionPeriodMillis,
-			"segment.ms":          &cfg.RetentionPeriodMillis,
-			"segment.bytes":       &cfg.SegmentBytes,
-		},
-	}, false); err != nil {
-		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
-			return nil, errors.NewProcessingError("unable to create topic", err)
-		}
+	if err := createTopic(clusterAdmin, cfg); err != nil {
+		return nil, err
 	}
 
 	producer, err := sarama.NewAsyncProducer(cfg.BrokersURL, config)
@@ -117,93 +120,115 @@ func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig, ch ch
 	client := &KafkaAsyncProducer{
 		Producer: producer,
 		Config:   cfg,
-		LastMessageStatus: MessageStatus{
-			Success: true,
-			Time:    time.Now(),
-			Error:   nil,
-		},
-		PublishChannel: ch,
 	}
 
 	return client, nil
 }
 
-func (c *KafkaAsyncProducer) Start(ctx context.Context) {
+func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	if c == nil {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	wg := sync.WaitGroup{}
+	wg.Add(1)
 
-	topic := c.Config.URL.Path[1:]
-
-	// Start a goroutine to handle successful message deliveries
 	go func() {
-		for range c.Producer.Successes() {
-			c.mu.Lock()
-			c.LastMessageStatus = MessageStatus{
-				Success: true,
-				Error:   nil,
-				Time:    time.Now(),
+		context, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		c.publishChannel = ch
+
+		go func() {
+			for s := range c.Producer.Successes() {
+				c.Config.Logger.Infof("Successfully sent message offset: %d", s.Offset)
 			}
-			c.mu.Unlock()
+		}()
+
+		go func() {
+			for err := range c.Producer.Errors() {
+				c.Config.Logger.Errorf("Failed to deliver message: %v", err)
+			}
+		}()
+
+		go func() {
+			wg.Done()
+
+			for msgBytes := range c.publishChannel {
+				var key sarama.ByteEncoder
+				if msgBytes.Key != nil {
+					key = sarama.ByteEncoder(msgBytes.Key)
+				}
+
+				message := &sarama.ProducerMessage{
+					Topic: c.Config.Topic,
+					Key:   key,
+					Value: sarama.ByteEncoder(msgBytes.Value),
+				}
+
+				c.Producer.Input() <- message
+			}
+		}()
+
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+		go func() {
+			<-signals
+			cancel()
+		}()
+
+		select {
+		case <-signals:
+			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %v ...", c.Config.URL)
+			cancel() // Ensure the context is canceled
+		case <-context.Done():
+			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
 		}
+
+		c.Producer.AsyncClose()
 	}()
 
-	// Start a goroutine to handle errors
-	go func() {
-		for err := range c.Producer.Errors() {
-			c.Config.Logger.Errorf("Failed to deliver message: %v", err)
-			c.mu.Lock()
-			c.LastMessageStatus = MessageStatus{
-				Success: false,
-				Error:   err,
-				Time:    time.Now(),
-			}
-			c.mu.Unlock()
-		}
-	}()
-	// Sending a batch of 50 messages asynchronously
-	go func() {
-		for msgBytes := range c.PublishChannel {
-			var key sarama.ByteEncoder
-			if msgBytes.Key != nil {
-				key = sarama.ByteEncoder(msgBytes.Key)
-			}
-
-			message := &sarama.ProducerMessage{
-				Topic: topic,
-				Key:   key,
-				Value: sarama.ByteEncoder(msgBytes.Value),
-			}
-			c.Producer.Input() <- message
-		}
-	}()
-
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-signals
-		cancel()
-	}()
-
-	select {
-	case <-signals:
-		c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %v ...", c.Config.URL)
-		cancel() // Ensure the context is canceled
-	case <-ctx.Done():
-		c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
-	}
-
-	c.Producer.AsyncClose()
+	wg.Wait() // don't continue until we know we are ready to accept messages on the PublishChannel
 }
 
 func (c *KafkaAsyncProducer) BrokersURL() []string {
+	if c == nil {
+		return nil
+	}
+
 	return c.Config.BrokersURL
 }
 
-func (c *KafkaAsyncProducer) Publish(msg *Message) {
-	c.PublishChannel <- msg
+func (c *KafkaAsyncProducer) Publish(msg *Message) error {
+	if c.publishChannel == nil {
+		return errors.NewServiceNotStartedError("CAnnot publish message as Kafka producer service not started yet")
+	}
+
+	c.publishChannel <- msg
+
+	return nil
+}
+
+func createTopic(admin sarama.ClusterAdmin, cfg KafkaProducerConfig) error {
+	err := admin.CreateTopic(cfg.Topic, &sarama.TopicDetail{
+		NumPartitions:     cfg.Partitions,
+		ReplicationFactor: cfg.ReplicationFactor,
+		ConfigEntries: map[string]*string{
+			"retention.ms":        &cfg.RetentionPeriodMillis,
+			"delete.retention.ms": &cfg.RetentionPeriodMillis,
+			"segment.ms":          &cfg.RetentionPeriodMillis,
+			"segment.bytes":       &cfg.SegmentBytes,
+		},
+	}, false)
+
+	if err != nil {
+		if errors.Is(err, sarama.ErrTopicAlreadyExists) {
+			return nil
+		}
+
+		return errors.NewProcessingError("unable to create topic", err)
+	}
+
+	return nil
 }

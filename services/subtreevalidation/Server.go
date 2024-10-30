@@ -138,6 +138,11 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusOK, "OK", nil
 	}
 
+	var brokersURL []string
+	if u.txmetaConsumerClient != nil { // tests may not set this
+		brokersURL = u.txmetaConsumerClient.BrokersURL()
+	}
+
 	// Add readiness checks here. Include dependency checks.
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
@@ -147,7 +152,7 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, u.txmetaConsumerClient.BrokersURL())},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -179,8 +184,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 // Start function
 func (u *Server) Start(ctx context.Context) error {
 	// start kafka consumers
-	go u.subtreeConsumerClient.Start(ctx, u.consumerMessageHandler(ctx))
-	go u.txmetaConsumerClient.Start(ctx, u.txmetaHandler)
+	u.subtreeConsumerClient.Start(ctx, u.consumerMessageHandler(ctx))
+	u.txmetaConsumerClient.Start(ctx, u.txmetaHandler)
 
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent

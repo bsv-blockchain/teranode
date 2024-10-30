@@ -30,26 +30,30 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
-	validator        Interface
-	logger           ulogger.Logger
-	utxoStore        utxo.Store
-	kafkaSignal      chan os.Signal
-	stats            *gocore.Stat
-	ctx              context.Context
-	blockchainClient blockchain.ClientI
-	consumerClient   kafka.KafkaConsumerGroupI
+	validator                     Interface
+	logger                        ulogger.Logger
+	utxoStore                     utxo.Store
+	kafkaSignal                   chan os.Signal
+	stats                         *gocore.Stat
+	ctx                           context.Context
+	blockchainClient              blockchain.ClientI
+	consumerClient                kafka.KafkaConsumerGroupI
+	txMetaKafkaProducerClient     kafka.KafkaAsyncProducerI
+	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blockchain.ClientI, consumerClient kafka.KafkaConsumerGroupI) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blockchain.ClientI, consumerClient kafka.KafkaConsumerGroupI, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
-		logger:           logger,
-		utxoStore:        utxoStore,
-		stats:            gocore.NewStat("validator"),
-		blockchainClient: blockchainClient,
-		consumerClient:   consumerClient,
+		logger:                        logger,
+		utxoStore:                     utxoStore,
+		stats:                         gocore.NewStat("validator"),
+		blockchainClient:              blockchainClient,
+		consumerClient:                consumerClient,
+		txMetaKafkaProducerClient:     txMetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 }
 
@@ -61,6 +65,11 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusOK, "OK", nil
 	}
 
+	var brokersURL []string
+	if v.consumerClient != nil { // tests may not set this
+		brokersURL = v.consumerClient.BrokersURL()
+	}
+
 	// Add readiness checks here. Include dependency checks.
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
@@ -70,7 +79,7 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "UTXOStore", Check: v.utxoStore.Health},
 		{Name: "Validator", Check: v.validator.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(v.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, v.consumerClient.BrokersURL())},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -95,7 +104,7 @@ func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) 
 func (v *Server) Init(ctx context.Context) (err error) {
 	v.ctx = ctx
 
-	v.validator, err = New(ctx, v.logger, v.utxoStore)
+	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient)
 	if err != nil {
 		return errors.NewServiceError("could not create validator", err)
 	}
@@ -163,7 +172,7 @@ func (v *Server) Start(ctx context.Context) error {
 		return nil
 	}
 
-	go v.consumerClient.Start(ctx, kafkaMessageHandler)
+	v.consumerClient.Start(ctx, kafkaMessageHandler)
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {

@@ -19,7 +19,7 @@ func TestValidatorErrors(t *testing.T) {
 	tracing.SetGlobalMockTracer()
 	tx := bt.NewTx()
 
-	v, err := validator.New(context.Background(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}))
+	v, err := validator.New(context.Background(), ulogger.TestLogger{}, memory.New(ulogger.TestLogger{}), nil, nil)
 	require.NoError(t, err)
 	err = v.Validate(context.Background(), tx, util.GenesisActivationHeight)
 	require.Error(t, err)

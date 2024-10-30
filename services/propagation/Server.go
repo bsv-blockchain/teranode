@@ -30,7 +30,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/bitcoin-sv/ubsv/util/kafka"
-	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -59,15 +58,16 @@ type PropagationServer struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI) *PropagationServer {
+func New(logger ulogger.Logger, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI) *PropagationServer {
 	initPrometheusMetrics()
 
 	return &PropagationServer{
-		logger:           logger,
-		stats:            gocore.NewStat("propagation"),
-		txStore:          txStore,
-		validator:        validatorClient,
-		blockchainClient: blockchainClient,
+		logger:                       logger,
+		stats:                        gocore.NewStat("propagation"),
+		txStore:                      txStore,
+		validator:                    validatorClient,
+		blockchainClient:             blockchainClient,
+		validatorKafkaProducerClient: validatorKafkaProducerClient,
 	}
 }
 
@@ -79,6 +79,11 @@ func (ps *PropagationServer) Health(ctx context.Context, checkLiveness bool) (in
 		return http.StatusOK, "OK", nil
 	}
 
+	var brokersURL []string
+	if ps.validatorKafkaProducerClient != nil { // tests may not set this
+		brokersURL = ps.validatorKafkaProducerClient.BrokersURL()
+	}
+
 	// Add readiness checks here. Include dependency checks.
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
@@ -88,7 +93,7 @@ func (ps *PropagationServer) Health(ctx context.Context, checkLiveness bool) (in
 		{Name: "ValidatorClient", Check: ps.validator.Health},
 		{Name: "TxStore", Check: ps.txStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(ps.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, ps.validatorKafkaProducerClient.BrokersURL())},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -170,27 +175,8 @@ func (ps *PropagationServer) Start(ctx context.Context) (err error) {
 		}()
 	}
 
-	//  kafka channel setup
-	validatortxsKafkaURL, _, found := gocore.Config().GetURL("kafka_validatortxsConfig")
-	if !found {
-		return errors.New(errors.ERR_CONFIGURATION, "kafka_validatortxs Config not found, validator channel configuration is required")
-	}
-
-	ps.logger.Infof("[Propagation Server] connecting to kafka for sending txs at %s", validatortxsKafkaURL)
-
-	workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
-	if workers > 0 {
-		ps.validatorKafkaProducerClient, err = retry.Retry(ctx, ps.logger, func() (*kafka.KafkaAsyncProducer, error) {
-			return kafka.NewKafkaAsyncProducerFromURL(ps.logger, validatortxsKafkaURL, make(chan *kafka.Message, 10_000))
-		}, retry.WithMessage("[Propagation Server] error starting kafka producer"))
-		if err != nil {
-			ps.logger.Errorf("[Propagation Server] error starting kafka producer: %v", err)
-			return
-		}
-
-		go ps.validatorKafkaProducerClient.Start(ctx)
-
-		ps.logger.Infof("[Propagation Server] connected to kafka for sending transactions to validator at %s", validatortxsKafkaURL)
+	if ps.validatorKafkaProducerClient != nil {
+		ps.validatorKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
 	}
 
 	// this will block
