@@ -2,8 +2,10 @@
 
 participant "UDP6 Client" as Client
 participant "UDP6 Listener" as UDPListener
-
 participant "PropagationServer" as PropagationServer
+participant "TxStore" as TxStore
+participant "Kafka Producer" as KafkaProducer
+participant "Validator" as Validator
 
 loop for each ipv6Address in ipv6Addresses
     PropagationServer -> UDPListener: Setup UDP Multicast Listener (ipv6Address)
@@ -17,21 +19,22 @@ loop Listening for UDP Packets
     activate UDPListener
     UDPListener -> PropagationServer: Invoke ProcessTransaction
 
-    alt if transaction is valid
-        PropagationServer -> TxStore: storeTransaction(ctx, tx)
-        activate TxStore
-        TxStore --> PropagationServer: Storage confirmation
-        deactivate TxStore
-        PropagationServer --> PropagationServer: Send success response
-    else if transaction is invalid
-        PropagationServer --> PropagationServer: Send error response
+    PropagationServer -> TxStore: storeTransaction(ctx, tx)
+    activate TxStore
+    TxStore --> PropagationServer: Storage confirmation
+    deactivate TxStore
+
+    alt if Kafka Producer is configured
+        PropagationServer -> KafkaProducer: Send transaction
+        activate KafkaProducer
+        KafkaProducer --> PropagationServer: Confirmation
+        deactivate KafkaProducer
+    else if direct validation
+        PropagationServer -> Validator: Validate(ctx, tx)
+        activate Validator
+        Validator --> PropagationServer: Validation response
+        deactivate Validator
     end
-
-
-    PropagationServer -> Validator: Validate(ctx, tx)
-    activate Validator
-    Validator --> PropagationServer: Validation response
-    deactivate Validator
 
     deactivate UDPListener
 end

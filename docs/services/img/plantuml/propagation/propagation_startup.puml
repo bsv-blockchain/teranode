@@ -3,12 +3,22 @@
 participant "Propagation Server" as Server
 participant "Configuration System" as Config
 participant "UDP6 Listeners" as UDP6
-participant "HTTP Server" as HTTP
-participant "fRPC Server" as fRPC
 participant "QUIC Server" as QUIC
 participant "gRPC Server" as gRPC
+participant "Kafka Producer" as Kafka
+participant "BlockchainClient" as BC
 
 activate Server
+
+Server -> Config: Get fsm_state_restore
+Config --> Server: fsmStateRestore
+
+alt if fsmStateRestore is true
+    Server -> BC: Restore()
+    BC --> Server: Restored
+    Server -> BC: WaitForFSMtoTransitionToGivenState(RUNNING)
+    BC --> Server: FSM in RUNNING state
+end
 
 Server -> Config: Get ipv6_addresses
 Config --> Server: ipv6Addresses
@@ -17,26 +27,19 @@ activate UDP6
 UDP6 --> Server: Listeners started/failed
 deactivate UDP6
 
-Server -> Config: Get propagation_httpAddress
-Config --> Server: httpAddress
-Server -> HTTP: StartHTTPServer(ctx, serverURL)
-activate HTTP
-HTTP --> Server: HTTP Server started/failed
-deactivate HTTP
-
-Server -> Config: Get propagation_frpcListenAddress
-Config --> Server: frpcAddress
-Server -> fRPC: frpcServer(ctx, frpcAddress)
-activate fRPC
-fRPC --> Server: fRPC Server started/failed
-deactivate fRPC
-
 Server -> Config: Get propagation_quicListenAddress
 Config --> Server: quicAddress
 Server -> QUIC: quicServer(ctx, quicAddress)
 activate QUIC
 QUIC --> Server: QUIC Server started/failed
 deactivate QUIC
+
+Server -> Config: Get kafka_validatortxsConfig
+Config --> Server: kafkaConfig
+Server -> Kafka: Setup Kafka Producer
+activate Kafka
+Kafka --> Server: Kafka Producer ready
+deactivate Kafka
 
 Server -> gRPC: StartGRPCServer(ctx, "propagation")
 activate gRPC

@@ -4,6 +4,7 @@ participant "gRPC Client" as Client
 participant "gRPC Server" as Server
 participant "PropagationServer" as PropagationServer
 participant "Tx Store" as TxStore
+participant "Kafka Producer" as KafkaProducer
 participant "Validator" as Validator
 
 Client -> Server: Send gRPC request (ProcessTransaction)
@@ -12,23 +13,24 @@ activate Server
 Server -> PropagationServer: Invoke ProcessTransaction
 activate PropagationServer
 
+PropagationServer -> TxStore: storeTransaction(ctx, tx)
+activate TxStore
+TxStore --> PropagationServer: Storage confirmation
+deactivate TxStore
 
-alt if transaction is valid
-    PropagationServer -> TxStore: storeTransaction(ctx, tx)
-    activate TxStore
-    TxStore --> PropagationServer: Storage confirmation
-    deactivate TxStore
-    PropagationServer --> Server: Send success response
-else if transaction is invalid
-    PropagationServer --> Server: Send error response
+alt if Kafka Producer is configured
+    PropagationServer -> KafkaProducer: Send transaction
+    activate KafkaProducer
+    KafkaProducer --> PropagationServer: Confirmation
+    deactivate KafkaProducer
+else if direct validation
+    PropagationServer -> Validator: Validate(ctx, tx)
+    activate Validator
+    Validator --> PropagationServer: Validation response
+    deactivate Validator
 end
 
-
-PropagationServer -> Validator: Validate(ctx, tx)
-activate Validator
-Validator --> PropagationServer: Validation response
-deactivate Validator
-
+PropagationServer --> Server: Send response
 deactivate PropagationServer
 Server -> Client: Return response
 deactivate Server

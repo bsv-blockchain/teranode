@@ -2,34 +2,47 @@
 
 participant "HTTP Client" as Client
 participant "HTTP Server" as HTTP
-participant "Propagation Server" as Server
+participant "PropagationServer" as Server
 participant "Tx Store" as TxStore
+participant "Kafka Producer" as KafkaProducer
 participant "Validator" as ValidationService
 
 activate Server
 
-
-Server -> HTTP: StartHTTPServer(ctx, serverURL)
+Server -> HTTP: Setup HTTP handlers
 activate HTTP
-HTTP --> Server: HTTP Server started
-deactivate Server
 
 loop HTTP Request Handling
-    Client -> HTTP: Send request (/tx)
+    Client -> HTTP: POST /tx
     activate Client
-    HTTP -> Server: ProcessTransaction(ctx, Request)
+    HTTP -> Server: handleStream(w, r)
     activate Server
-    Server -> TxStore: storeTransaction(ctx, tx)
-    activate TxStore
-    TxStore --> Server: txId
-    deactivate TxStore
-    Server -> ValidationService: Validate(ctx, tx)
-    activate ValidationService
-    ValidationService --> Server: ValidationResult
-    deactivate ValidationService
-    Server --> HTTP: Transaction processed
+
+    loop for each transaction in stream
+        Server -> Server: Read transaction data
+        Server -> Server: ProcessTransaction(ctx, tx)
+
+        Server -> TxStore: storeTransaction(ctx, tx)
+        activate TxStore
+        TxStore --> Server: Storage confirmation
+        deactivate TxStore
+
+        alt if Kafka Producer is configured
+            Server -> KafkaProducer: Send transaction
+            activate KafkaProducer
+            KafkaProducer --> Server: Confirmation
+            deactivate KafkaProducer
+        else if direct validation
+            Server -> ValidationService: Validate(ctx, tx)
+            activate ValidationService
+            ValidationService --> Server: ValidationResult
+            deactivate ValidationService
+        end
+    end
+
+    Server --> HTTP: Transactions processed
     deactivate Server
-    HTTP -> Client: Response
+    HTTP -> Client: Response (implicit, as it's a stream)
     deactivate Client
 end
 
