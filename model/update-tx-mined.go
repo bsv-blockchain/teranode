@@ -41,17 +41,20 @@ var (
 
 func initWorker() {
 	prometheusUpdateTxMinedCh = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: "model",
+		Namespace: "teranode",
+		Subsystem: "model",
 		Name:      "update_tx_mined_ch",
 		Help:      "Number of tx mined messages sent to the worker",
 	})
 	prometheusUpdateTxMinedQueue = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: "model",
+		Namespace: "teranode",
+		Subsystem: "model",
 		Name:      "update_tx_mined_queue",
 		Help:      "Number of tx mined messages in the queue",
 	})
 	prometheusUpdateTxMinedDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "model",
+		Namespace: "teranode",
+		Subsystem: "model",
 		Name:      "update_tx_mined_duration",
 		Help:      "Duration of updating tx mined status",
 		Buckets:   util.MetricsBucketsSeconds,

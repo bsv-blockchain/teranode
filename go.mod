@@ -136,6 +136,7 @@ require (
 	github.com/felixge/fgprof v0.9.5
 	github.com/ordishs/go-bitcoin v1.0.86
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.33.0
+	gotest.tools v2.2.0+incompatible
 )
 
 require (

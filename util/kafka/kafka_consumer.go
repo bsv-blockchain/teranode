@@ -132,6 +132,7 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 	}
 
 	if cfg.Replay {
+		// defaults to OffsetNewest
 		config.Consumer.Offsets.Initial = sarama.OffsetOldest
 	}
 

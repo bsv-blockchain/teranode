@@ -11,6 +11,11 @@ import (
 
 func Test_SetGetFSMState(t *testing.T) {
 	connStr, teardown, err := SetupPostgresContainer()
+
+	if err != nil {
+		t.Logf("Error setting up postgres container: %v", err)
+	}
+
 	require.NoError(t, err)
 
 	defer func() {

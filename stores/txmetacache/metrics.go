@@ -31,72 +31,81 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "tx_meta_cache_size",
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "size",
 			Help:      "Number of items in the tx meta cache",
 		},
 	)
 
 	prometheusBlockValidationTxMetaCacheInsertions = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "tx_meta_cache_insertions",
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "insertions",
 			Help:      "Number of insertions into the tx meta cache",
 		},
 	)
 
 	prometheusBlockValidationTxMetaCacheHits = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "tx_meta_cache_hits",
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "hits",
 			Help:      "Number of hits in the tx meta cache",
 		},
 	)
 
 	prometheusBlockValidationTxMetaCacheMisses = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "tx_meta_cache_misses",
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "misses",
 			Help:      "Number of misses in the tx meta cache",
 		},
 	)
 
 	prometheusBlockValidationTxMetaCacheGetOrigin = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "tx_meta_cache_get_origin",
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "get_origin",
 			Help:      "Number of get origins in the tx meta cache",
 		},
 	)
 
 	prometheusBlockValidationTxMetaCacheEvictions = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "tx_meta_cache_evictions",
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "evictions",
 			Help:      "Number of evictions in the tx meta cache",
 		},
 	)
 
 	prometheusBlockValidationTxMetaCacheTrims = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "tx_meta_cache_trims",
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "trims",
 			Help:      "Number of trim operations in the tx meta cache",
 		},
 	)
 
 	prometheusBlockValidationTxMetaCacheMapSize = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "tx_meta_cache_cache_map_size",
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "map_size",
 			Help:      "Number of total elements in the improved cache's bucket maps",
 		},
 	)
 
 	prometheusBlockValidationTxMetaCacheTotalElementsAdded = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Namespace: "blockvalidation",
-			Name:      "tx_meta_cache_cache_total_elements_added",
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "total_elements_added",
 			Help:      "Number of total number of elements added to the txmetacache",
 		},
 	)

@@ -180,6 +180,8 @@ func (b *Blockchain) Init(ctx context.Context) error {
 		b.finiteStateMachine.SetState(stateStr)
 	}
 
+	prometheusBlockchainFSMCurrentState.Set(float64(blockchain_api.FSMStateType_value[b.finiteStateMachine.Current()]))
+
 	return nil
 }
 

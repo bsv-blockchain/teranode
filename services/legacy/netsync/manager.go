@@ -914,8 +914,9 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// without calling HandleBlockDirect. Such that it doesn't interfere with the operation of block validation.
 	if err = sm.HandleBlockDirect(sm.ctx, bmsg.peer, bmsg.block); err != nil {
 		if legacySyncMode && errors.Is(err, errors.ErrBlockNotFound) {
-			// previous block not found?
-			return err
+			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
+			sm.logger.Errorf("Failed to process block %v: %v", blockHash, err)
+			return nil
 		}
 
 		serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
@@ -923,6 +924,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
 		}
 
+		// TODO TEMPORARY: we should not panic here, but return the error
 		panic(err)
 		// return err
 	}
@@ -965,11 +967,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// chain is "current". This avoids sending a spammy amount of messages
 	// if we're syncing the chain from scratch.
 	if blkHashUpdate != nil && heightUpdate != 0 {
-		// only update the height, if the peer is not the current syncPeer
-		if peer != sm.syncPeer {
-			peer.UpdateLastBlockHeight(heightUpdate)
-			sm.logger.Infof("peer %s reports new height %d, current %v", peer.Addr(), heightUpdate, sm.current())
-		}
+		peer.UpdateLastBlockHeight(heightUpdate)
+		sm.logger.Infof("peer %s reports new height %d, current %v", peer.Addr(), heightUpdate, sm.current())
 
 		if sm.current() { // used to check for isOrphan || sm.current()
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
@@ -1030,9 +1029,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	sm.logger.Infof("Reached the final checkpoint -- switching to normal mode")
 
 	locator := blockchain.BlockLocator([]*chainhash.Hash{blockHash})
-	err = peer.PushGetBlocksMsg(locator, &zeroHash)
-
-	if err != nil {
+	if err = peer.PushGetBlocksMsg(locator, &zeroHash); err != nil {
 		return errors.NewServiceError("Failed to send getblocks message to peer %s", peer.Addr(), err)
 	}
 
@@ -1631,21 +1628,22 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 		}
 
 		if len(invBlockMsg.InvList) > 0 {
-			sm.msgChan <- invBlockMsg
+			netsyncInvMsg := invMsg{inv: invBlockMsg, peer: peer}
+			sm.msgChan <- &netsyncInvMsg
 		}
 
 		if len(invTxMsg.InvList) > 0 {
-			wireInvMsg := invMsg{inv: invTxMsg, peer: peer}
+			netsyncInvMsg := invMsg{inv: invTxMsg, peer: peer}
 
 			// write to Kafka
-			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.Addr(), len(wireInvMsg.inv.InvList))
+			sm.logger.Debugf("writing INV message to Kafka from peer %s, length: %d", peer.Addr(), len(netsyncInvMsg.inv.InvList))
 			sm.legacyKafkaInvCh <- &kafka.Message{
-				Value: wireInvMsg.Bytes(),
+				Value: netsyncInvMsg.Bytes(),
 			}
 		}
 	} else {
-		wireInvMsg := invMsg{inv: inv, peer: peer}
-		sm.msgChan <- &wireInvMsg
+		netsyncInvMsg := invMsg{inv: inv, peer: peer}
+		sm.msgChan <- &netsyncInvMsg
 	}
 }
 
@@ -1683,6 +1681,9 @@ func (sm *SyncManager) Start() {
 	sm.wg.Add(1)
 
 	go sm.blockHandler()
+
+	// kick off the initial sync
+	go sm.startSync()
 }
 
 // Stop gracefully shuts down the sync manager by stopping all asynchronous

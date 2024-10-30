@@ -39,7 +39,8 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	for _, metric := range peerServerMetricHandlers {
 		peerServerMetrics[metric] = prometheus.NewHistogram(prometheus.HistogramOpts{
-			Namespace: "legacy_peer_server",
+			Namespace: "teranode",
+			Subsystem: "legacy_peer_server",
 			Name:      metric,
 			Help:      "The time taken to handle " + metric,
 			Buckets:   util.MetricsBucketsMilliSeconds,

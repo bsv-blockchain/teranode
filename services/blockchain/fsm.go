@@ -31,22 +31,23 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	// Define callbacks
 	callbacks := fsm.Callbacks{
 		"enter_state": func(_ context.Context, e *fsm.Event) {
-			metadata := make(map[string]string)
-			metadata["event"] = e.Event
-			metadata["destination"] = e.Dst
+			metadata := map[string]string{
+				"event":       e.Event,
+				"destination": e.Dst,
+			}
 
-			_, err := b.SendNotification(context.Background(), &blockchain_api.Notification{
+			if _, err := b.SendNotification(context.Background(), &blockchain_api.Notification{
 				Type:     model.NotificationType_FSMState,
 				Hash:     (&chainhash.Hash{})[:], // not relevant for FSMEvent notifications
 				Base_URL: "",                     // not relevant for FSMEvent notifications
 				Metadata: &blockchain_api.NotificationMetadata{
 					Metadata: metadata,
 				},
-			})
-
-			if err != nil {
+			}); err != nil {
 				b.logger.Errorf("[Blockchain][FiniteStateMachine] error sending notification: %s", err)
 			}
+
+			prometheusBlockchainFSMCurrentState.Set(float64(blockchain_api.FSMStateType_value[e.Dst]))
 		},
 	}
 

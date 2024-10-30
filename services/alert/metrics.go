@@ -22,7 +22,8 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "alert",
+			Namespace: "teranode",
+			Subsystem: "alert",
 			Name:      "health",
 			Help:      "Number of calls to the Health endpoint",
 		},

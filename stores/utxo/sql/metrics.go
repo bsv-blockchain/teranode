@@ -25,32 +25,42 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusUtxoGet = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "sql_utxo_get",
-			Help: "Number of utxo get calls done to sql",
+			Namespace: "teranode",
+			Subsystem: "sql",
+			Name:      "utxo_get",
+			Help:      "Number of utxo get calls done to sql",
 		},
 	)
 	prometheusUtxoSpend = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "sql_utxo_spend",
-			Help: "Number of utxo spend calls done to sql",
+			Namespace: "teranode",
+			Subsystem: "sql",
+			Name:      "utxo_spend",
+			Help:      "Number of utxo spend calls done to sql",
 		},
 	)
 	prometheusUtxoReset = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "sql_utxo_reset",
-			Help: "Number of utxo reset calls done to sql",
+			Namespace: "teranode",
+			Subsystem: "sql",
+			Name:      "utxo_reset",
+			Help:      "Number of utxo reset calls done to sql",
 		},
 	)
 	prometheusUtxoDelete = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "sql_utxo_delete",
-			Help: "Number of utxo delete calls done to sql",
+			Namespace: "teranode",
+			Subsystem: "sql",
+			Name:      "utxo_delete",
+			Help:      "Number of utxo delete calls done to sql",
 		},
 	)
 	prometheusUtxoErrors = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "sql_utxo_errors",
-			Help: "Number of utxo errors",
+			Namespace: "teranode",
+			Subsystem: "sql",
+			Name:      "utxo_errors",
+			Help:      "Number of utxo errors",
 		},
 		[]string{
 			"function", // function raising the error

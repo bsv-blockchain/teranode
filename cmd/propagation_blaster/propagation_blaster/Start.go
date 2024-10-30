@@ -49,15 +49,19 @@ var (
 func Init() {
 	prometheusWorkers = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Name: "tx_blaster_workers",
-			Help: "Number of workers running",
+			Namespace: "teranode",
+			Subsystem: "tx_blaster",
+			Name:      "workers",
+			Help:      "Number of workers running",
 		},
 	)
 
 	prometheusProcessedTransactions = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "tx_blaster_processed_transactions",
-			Help: "Number of transactions processed by the tx blaster",
+			Namespace: "teranode",
+			Subsystem: "tx_blaster",
+			Name:      "processed_transactions",
+			Help:      "Number of transactions processed by the tx blaster",
 		},
 	)
 

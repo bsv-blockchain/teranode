@@ -434,12 +434,8 @@ type GetMiningInfoResult struct {
 	CurrentBlockTx   uint64  `json:"currentblocktx"`
 	Difficulty       float64 `json:"difficulty"`
 	Errors           string  `json:"errors"`
-	Generate         bool    `json:"generate"`
-	GenProcLimit     int32   `json:"genproclimit"`
-	HashesPerSec     int64   `json:"hashespersec"`
 	NetworkHashPS    float64 `json:"networkhashps"`
-	PooledTx         uint64  `json:"pooledtx"`
-	TestNet          bool    `json:"testnet"`
+	Chain            string  `json:"chain"`
 }
 
 // GetWorkResult models the data from the getwork command.

@@ -36,6 +36,7 @@ var (
 	prometheusBlockchainGetBlocksMinedNotSet       prometheus.Histogram
 	prometheusBlockchainSetBlockSubtreesSet        prometheus.Histogram
 	prometheusBlockchainGetBlocksSubtreesNotSet    prometheus.Histogram
+	prometheusBlockchainFSMCurrentState            prometheus.Gauge
 	prometheusBlockchainGetFSMCurrentState         prometheus.Histogram
 	prometheusBlockchainGetBlockLocator            prometheus.Histogram
 	prometheusBlockchainLocateBlockHeaders         prometheus.Histogram
@@ -53,7 +54,8 @@ func initPrometheusMetrics() {
 func _initPrometheusMetrics() {
 	prometheusBlockchainHealth = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "health",
 			Help:      "Histogram of calls to the health endpoint of the blockchain service",
 		},
@@ -61,7 +63,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainAddBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "add_block",
 			Help:      "Histogram of block added to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -70,7 +73,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_block",
 			Help:      "Histogram of Get block calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -79,7 +83,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlockStats = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_block_stats",
 			Help:      "Histogram of Get block stats calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -88,7 +93,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlockGraphData = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_block_graph_data",
 			Help:      "Histogram of Get block graph data calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -97,7 +103,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetLastNBlocks = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_last_n_block",
 			Help:      "Histogram of GetLastNBlocks calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -106,7 +113,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetSuitableBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_suitable_block",
 			Help:      "Histogram of GetSuitableBlock calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -114,7 +122,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusBlockchainGetHashOfAncestorBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_hash_of_ancestor_block",
 			Help:      "Histogram of GetHashOfAncestorBlock calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -122,7 +131,8 @@ func _initPrometheusMetrics() {
 	)
 	prometheusBlockchainGetNextWorkRequired = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_next_work_required",
 			Help:      "Histogram of GetNextWorkRequired calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -131,7 +141,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlockExists = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_block_exists",
 			Help:      "Histogram of GetBlockExists calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -140,7 +151,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBestBlockHeader = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_get_best_block_header",
 			Help:      "Histogram of GetBestBlockHeader calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -149,7 +161,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainCheckBlockIsInCurrentChain = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "check_block_is_in_current_chain",
 			Help:      "Histogram of CheckBlockIsInCurrentChain calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -158,7 +171,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlockHeader = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_get_block_header",
 			Help:      "Histogram of GetBlockHeader calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -167,7 +181,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlockHeaders = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_get_block_headers",
 			Help:      "Histogram of GetBlockHeaders calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -176,7 +191,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlockHeadersFromHeight = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_get_block_headers_from_height",
 			Help:      "Histogram of GetBlockHeadersFromHeight calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -185,7 +201,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlockHeadersByHeight = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_get_block_headers_by_height",
 			Help:      "Histogram of GetBlockHeadersByHeight calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -194,7 +211,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainSubscribe = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "subscribe",
 			Help:      "Histogram of Subscribe calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -203,7 +221,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetState = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_state",
 			Help:      "Histogram of GetState calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -212,7 +231,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainSetState = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "set_state",
 			Help:      "Histogram of SetState calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -221,7 +241,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlockHeaderIDs = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_block_header_ids",
 			Help:      "Histogram of GetBlockHeaderIDs calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -230,7 +251,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainInvalidateBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "invalidate_block",
 			Help:      "Histogram of InvalidateBlock calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -239,7 +261,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainRevalidateBlock = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "revalidate_block",
 			Help:      "Histogram of RevalidateBlock calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -248,7 +271,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainSendNotification = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "send_notification",
 			Help:      "Histogram of SendNotification calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -257,7 +281,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainSetBlockMinedSet = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "set_block_mined_set",
 			Help:      "Histogram of SetBlockMinedSet calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -266,7 +291,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlocksMinedNotSet = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_blocks_mined_not_set",
 			Help:      "Histogram of GetBlocksMinedNotSet calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -275,7 +301,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainSetBlockSubtreesSet = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "set_block_subtrees_set",
 			Help:      "Histogram of SetBlockSubtreesSet calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -284,16 +311,27 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlocksSubtreesNotSet = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_blocks_subtrees_not_set",
 			Help:      "Histogram of GetBlocksSubtreesNotSet calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
+	prometheusBlockchainFSMCurrentState = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "fsm_current_state",
+			Help:      "Current state of the blockchain FSM",
+		},
+	)
+
 	prometheusBlockchainGetFSMCurrentState = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_fsm_current_state",
 			Help:      "Histogram of GetFSMCurrentState calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -302,7 +340,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainGetBlockLocator = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "get_block_locator",
 			Help:      "Histogram of GetBlockLocator calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
@@ -311,7 +350,8 @@ func _initPrometheusMetrics() {
 
 	prometheusBlockchainLocateBlockHeaders = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Namespace: "blockchain",
+			Namespace: "teranode",
+			Subsystem: "blockchain",
 			Name:      "locate_block_headers",
 			Help:      "Histogram of LocateBlockHeaders calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
