@@ -3,7 +3,6 @@ package kafka
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"net/url"
 	"strconv"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/docker/go-connections/nat"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -355,7 +355,7 @@ func byteArrayToIntFromString(message []byte) (int, error) {
 
 func produceMessages(logger ulogger.Logger, wg *sync.WaitGroup, client KafkaAsyncProducerI, numberOfMessages int) {
 	// #nosec G404: ignoring the warning
-	r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
+	// r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
 
 	for i := 0; i < numberOfMessages; i++ {
 		msg := []byte(strconv.Itoa(i))
@@ -365,10 +365,109 @@ func produceMessages(logger ulogger.Logger, wg *sync.WaitGroup, client KafkaAsyn
 		logger.Infof("pushed message: %v", string(msg))
 
 		if wg == nil {
-			randomDelay := time.Duration(r.Intn(200)+1) * time.Millisecond
-			time.Sleep(randomDelay)
+			// randomDelay := time.Duration(r.Intn(200)+1) * time.Millisecond
+			// time.Sleep(randomDelay)
 		} else {
 			wg.Done()
 		}
 	}
+}
+
+/*
+This test is to ensure that when a consumer is restarted, it will resume from the last committed offset
+and not reprocess the same messages again.
+*/
+func TestKafkaConsumerOffsetContinuation(t *testing.T) {
+	t.Parallel()
+
+	logger := ulogger.NewZeroLogger("test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	testContainer := &TestContainerWrapper{}
+
+	err := testContainer.RunContainer(1)
+	require.NoError(t, err)
+
+	defer func() {
+		cleanupErr := testContainer.CleanUp()
+		if cleanupErr != nil {
+			t.Errorf("failed to clean up container: %v", cleanupErr)
+		}
+	}()
+
+	topic := fmt.Sprintf("test-topic-%s", uuid.New().String())
+	groupID := fmt.Sprintf("test-group-%s", uuid.New().String())
+
+	kafkaURL := &url.URL{
+		Scheme:   "kafka",
+		Host:     testContainer.GetBrokerAddresses()[0],
+		Path:     topic,
+		RawQuery: "partitions=1&replicationFactor=1&flush_frequency=1ms&replay=1",
+	}
+
+	producer, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	require.NoError(t, err)
+
+	producer.Start(ctx, make(chan *Message, 100))
+	defer producer.Producer.Close()
+
+	t.Log("Publishing first batch of test messages...")
+
+	messages := []string{"msg1", "msg2"}
+	for _, msg := range messages {
+		producer.Publish(&Message{
+			Value: []byte(msg),
+		})
+	}
+
+	var receivedMessages []string
+
+	consume := func() {
+		consumer, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, groupID, false) // autoCommit = false
+		require.NoError(t, err)
+		defer consumer.ConsumerGroup.Close()
+
+		consumer.Start(ctx, func(msg KafkaMessage) error {
+			receivedMessages = append(receivedMessages, string(msg.Message.Value))
+			return nil
+		})
+
+		deadline := time.After(5 * time.Second)
+
+		// wait for 2 messages to be received
+		for {
+			select {
+			case <-deadline:
+				break
+			default:
+				time.Sleep(1 * time.Millisecond)
+
+				if len(receivedMessages) >= 2 {
+					return
+				}
+			}
+		}
+	}
+
+	consume()
+
+	t.Logf("First batch complete. Received messages: %v", receivedMessages)
+	require.Equal(t, []string{"msg1", "msg2"}, receivedMessages)
+
+	t.Log("Publishing second batch of test messages...")
+
+	messages = []string{"msg3", "msg4"}
+	for _, msg := range messages {
+		producer.Publish(&Message{
+			Value: []byte(msg),
+		})
+	}
+
+	receivedMessages = nil
+
+	consume()
+
+	require.Equal(t, []string{"msg3", "msg4"}, receivedMessages)
 }
