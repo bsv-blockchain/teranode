@@ -254,26 +254,6 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 
 	ctx := context.Background()
 
-	if !kc.cfg.AutoCommitEnabled {
-		kc.cfg.Logger.Infof("Configuring auto-session-offset-commit for session %s", session.MemberID())
-
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-
-		// Start commit goroutine
-		go func() {
-			for {
-				select {
-				case <-ticker.C:
-					// kc.cfg.Logger.Infof("Committing offsets for session %s", session.MemberID())
-					session.Commit()
-				case <-session.Context().Done():
-					return
-				}
-			}
-		}()
-	}
-
 	for {
 		select {
 		case <-session.Context().Done():
@@ -312,6 +292,19 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 					processed++
 				default:
 					// No more messages immediately available
+					if !kc.cfg.AutoCommitEnabled {
+						// kc.cfg.Logger.Infof("Committing offsets for session %s", session.MemberID())
+						// kafka commit concept is confusing as it does two things:
+						// - auto commit enabled will 1) update the offset to the latest message received and 2) commit this to the server
+						// - auto commit disabled means we do both things ourselves - 1) mark the offset and 2) commit this to the server
+						// When it's disabled, we mark the offset manually inside handleMessageWithManualCommit() and
+						// we push this to the server (commit) here
+						// NOTE: session.Commit() is a blocking call so we don't do it on every message processed, only when the batch is complete
+						// In theory this means if the process is terminated before the commit, we could find that when we start up again,
+						// we're given the last batch of messages all over again.
+						session.Commit()
+					}
+
 					break
 				}
 			}
