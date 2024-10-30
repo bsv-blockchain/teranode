@@ -183,7 +183,10 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 						return
 					default:
 						if err := k.ConsumerGroup.Consume(ctx, topics, NewKafkaConsumer(k.Config, consumerFn)); err != nil {
-							if errors.Is(err, context.Canceled) {
+							if errors.Is(err, sarama.ErrClosedConsumerGroup) { // nolint:gocritic
+								k.Config.Logger.Infof("[kafka] Consumer [%d] for group %s closed", consumerIndex, k.Config.ConsumerGroupID)
+								return
+							} else if errors.Is(err, context.Canceled) {
 								k.Config.Logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, k.Config.ConsumerGroupID)
 							} else {
 								// Consider delay before retry or exit based on error type
@@ -244,7 +247,11 @@ func (kc *KafkaConsumer) Setup(sarama.ConsumerGroupSession) error {
 }
 
 // Cleanup is run at the end of a session, once all ConsumeClaim goroutines have exited
-func (kc *KafkaConsumer) Cleanup(sarama.ConsumerGroupSession) error {
+func (kc *KafkaConsumer) Cleanup(session sarama.ConsumerGroupSession) error {
+	if !kc.cfg.AutoCommitEnabled {
+		session.Commit()
+	}
+
 	return nil
 }
 
@@ -260,6 +267,7 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 			// Should return when `session.Context()` is done.
 			// If not, will raise `ErrRebalanceInProgress` or `read tcp <ip>:<port>: i/o timeout` when kafka rebalance. see:
 			// https://github.com/Shopify/sarama/issues/1192
+			// return session.Context().Err()
 			return session.Context().Err()
 
 		case message := <-claim.Messages():
@@ -278,6 +286,11 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 			processed := 1
 			for processed < batchSize {
 				select {
+				case <-session.Context().Done():
+					// Should return when `session.Context()` is done.
+					// If not, will raise `ErrRebalanceInProgress` or `read tcp <ip>:<port>: i/o timeout` when kafka rebalance. see:
+					// https://github.com/Shopify/sarama/issues/1192
+					return session.Context().Err()
 				case message := <-claim.Messages():
 					if message == nil {
 						break
