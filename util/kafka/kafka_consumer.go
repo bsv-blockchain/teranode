@@ -39,10 +39,8 @@ type KafkaConsumerConfig struct {
 }
 
 type KafkaConsumerGroup struct {
-	Config            KafkaConsumerConfig
-	ConsumerGroup     sarama.ConsumerGroup
-	LastMessageStatus MessageStatus
-	mu                sync.Mutex
+	Config        KafkaConsumerConfig
+	ConsumerGroup sarama.ConsumerGroup
 }
 
 func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerGroupID string, autoCommit bool) (*KafkaConsumerGroup, error) {
@@ -147,11 +145,6 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 	client := &KafkaConsumerGroup{
 		Config:        cfg,
 		ConsumerGroup: consumerGroup,
-		LastMessageStatus: MessageStatus{
-			Success: true,
-			Time:    time.Now(),
-			Error:   nil,
-		},
 	}
 
 	return client, nil
@@ -172,27 +165,8 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 		go func() {
 			for err := range k.ConsumerGroup.Errors() {
 				k.Config.Logger.Errorf("Kafka consumer error: %v", err)
-				k.mu.Lock()
-				k.LastMessageStatus = MessageStatus{
-					Success: false,
-					Error:   err,
-					Time:    time.Now(),
-				}
-				k.mu.Unlock()
 			}
 		}()
-
-		consumerFunc := func(message KafkaMessage) error {
-			k.mu.Lock()
-			k.LastMessageStatus = MessageStatus{
-				Success: true,
-				Error:   nil,
-				Time:    time.Now(),
-			}
-			k.mu.Unlock()
-
-			return consumerFn(message)
-		}
 
 		topics := []string{k.Config.Topic}
 
@@ -208,7 +182,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 						// Context cancelled, exit goroutine
 						return
 					default:
-						if err := k.ConsumerGroup.Consume(ctx, topics, NewKafkaConsumer(k.Config, consumerFunc)); err != nil {
+						if err := k.ConsumerGroup.Consume(ctx, topics, NewKafkaConsumer(k.Config, consumerFn)); err != nil {
 							if errors.Is(err, context.Canceled) {
 								k.Config.Logger.Infof("[kafka] Consumer [%d] for group %s cancelled", consumerIndex, k.Config.ConsumerGroupID)
 							} else {
@@ -276,10 +250,8 @@ func (kc *KafkaConsumer) Cleanup(sarama.ConsumerGroupSession) error {
 
 // ConsumeClaim must start a consumer loop of ConsumerGroupClaim's Messages().
 func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	// NOTE:
-	// Do not move the code below to a goroutine.
-	// The `ConsumeClaim` itself is called within a goroutine, see:
-	// https://github.com/Shopify/sarama/blob/main/consumer_group.go#L27-L29
+	const batchSize = 1000
+
 	ctx := context.Background()
 
 	if !kc.cfg.AutoCommitEnabled {
@@ -304,50 +276,45 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 
 	for {
 		select {
+		case <-session.Context().Done():
+			// Should return when `session.Context()` is done.
+			// If not, will raise `ErrRebalanceInProgress` or `read tcp <ip>:<port>: i/o timeout` when kafka rebalance. see:
+			// https://github.com/Shopify/sarama/issues/1192
+			return session.Context().Err()
+
 		case message := <-claim.Messages():
 			if message == nil {
-				// Received a nil message, skip
 				continue
 			}
-			// Handle the first message
-			// fmt.Printf("Handling first message: topic = %s, partition = %d, offset = %d, key = %s, value = %s\n", message.Topic, message.Partition, message.Offset, string(message.Key), string(message.Value))
+
+			// Process first message
 			if kc.cfg.AutoCommitEnabled {
-				_ = kc.handleMessagesWithAutoCommit(session, message)
+				kc.handleMessagesWithAutoCommit(session, message) //nolint:errcheck
 			} else {
-				_ = kc.handleMessageWithManualCommit(ctx, session, message)
+				kc.handleMessageWithManualCommit(ctx, session, message) //nolint:errcheck
 			}
 
-			messageCount := 1 // Start with 1 message already received.
-			// Handle further messages up to a maximum of 1000.
-		InnerLoop:
-			for messageCount < 1000 {
+			// Process any additional messages available (up to batchSize-1)
+			processed := 1
+			for processed < batchSize {
 				select {
 				case message := <-claim.Messages():
 					if message == nil {
-						// Received a nil message, skip
-						// TODO: Should we break here? Maybe get rid of break here.
-						// Context: If we don't break, in the tests we keep getting nil messages.
-						break InnerLoop
+						break
 					}
 
 					if kc.cfg.AutoCommitEnabled {
-						// No need to check the error here as we are auto committing
-						_ = kc.handleMessagesWithAutoCommit(session, message)
+						kc.handleMessagesWithAutoCommit(session, message) //nolint:errcheck
 					} else {
-						_ = kc.handleMessageWithManualCommit(ctx, session, message)
+						kc.handleMessageWithManualCommit(ctx, session, message) //nolint:errcheck
 					}
-					messageCount++
+
+					processed++
 				default:
-					// No more messages, break the inner loop.
-					break InnerLoop
+					// No more messages immediately available
+					break
 				}
 			}
-
-		// Should return when `session.Context()` is done.
-		// If not, will raise `ErrRebalanceInProgress` or `read tcp <ip>:<port>: i/o timeout` when kafka rebalance. see:
-		// https://github.com/Shopify/sarama/issues/1192
-		case <-session.Context().Done():
-			return session.Context().Err()
 		}
 	}
 }
