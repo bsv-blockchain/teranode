@@ -9,16 +9,23 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
 
+	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
+	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
+	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/libsv/go-bt/v2"
+	"github.com/libsv/go-bt/v2/chainhash"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -241,6 +248,113 @@ func TestDifficultyAdjustment(t *testing.T) {
 	// Assert that the block generation rate is within an acceptable range
 	// Expecting roughly 2 blocks per minute (30 seconds per block)
 	assert.InDelta(t, 1.0, blocksPerMinute, 1.0, "Block generation rate should be roughly 2 blocks per minute")
+}
+
+func TestShouldFollowLongerChain(t *testing.T) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	memStore := memory.New()
+	blobStore := memory.New()
+	utxoStore := utxostore.New(ulogger.TestLogger{})
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+	blockchainStoreUrlstr, ok := gocore.Config().Get("blockchain_store")
+	require.True(t, ok)
+	blockchainStoreUrl, err := url.Parse(blockchainStoreUrlstr)
+	blockchainStore, err := blockchainstore.New(ulogger.TestLogger{}, blockchainStoreUrl)
+	paramsA := &chaincfg.MainNetParams
+
+
+	dA, err := blockchain.NewDifficulty(blockchainStore, ulogger.TestLogger{}, paramsA)
+	t.Logf("difficulty: %v", )
+	require.NoError(t, err)
+
+	paramsB = &chaincfg.RegressionNetParams
+
+	dB, err := blockchain.NewDifficulty(blockchainStore, ulogger.TestLogger{}, paramsB)
+	t.Logf("difficulty: %v", *dB.nBits)
+	require.NoError(t, err)
+
+	ba := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	require.NotNil(t, ba)
+
+	err = ba.Init(ctx)
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+
+	// Generate initial 101 blocks
+	_, err = CallRPC("http://localhost:9292", "generate", []interface{}{"[101]"})
+	require.NoError(t, err, "Failed to generate initial blocks")
+	time.Sleep(5 * time.Second)
+
+	// Get initial block height and hash
+	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err, "Failed to get initial block header")
+	initialHeight := initialMetadata.Height
+	t.Logf("Initial block height: %d", initialHeight)
+
+	// Create chain A (higher difficulty)
+	chainABits, _ := model.NewNBitFromString("1d00ffff")
+	chainAHeader1 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          1,
+		Bits:           *chainABits,
+		Timestamp:      uint32(time.Now().Unix()),
+	}
+
+	// Create chain B (lower difficulty)
+	chainBBits, _ := model.NewNBitFromString("1d00ffaa") // Lower difficulty
+	chainBHeader1 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          2,
+		Bits:           *chainBBits,
+		Timestamp:      uint32(time.Now().Unix()),
+	}
+
+	// Store blocks from both chains
+	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+
+	// Store Chain A block
+	blockA := &model.Block{
+		Header:           chainAHeader1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockA, "")
+	require.NoError(t, err, "Failed to add Chain A block")
+
+	// Store Chain B block
+	blockB := &model.Block{
+		Header:           chainBHeader1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockB, "")
+	require.NoError(t, err, "Failed to add Chain B block")
+
+	// Create new block assembler to check which chain it follows
+	newBA := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	require.NotNil(t, newBA)
+
+	err = newBA.Init(ctx)
+	require.NoError(t, err)
+
+	// Get the best block header from the new block assembler
+	bestHeader, _, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, bestHeader)
+
+	// Assert that it followed chain A (higher difficulty)
+	assert.Equal(t, chainAHeader1.Hash(), bestHeader.Hash(), "Block assembler should follow the chain with higher difficulty")
 }
 
 func CallRPC(url string, method string, params []interface{}) (string, error) {

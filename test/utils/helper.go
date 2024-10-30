@@ -387,6 +387,7 @@ func CreateAndSendRawTx(ctx context.Context, node tf.BitcoinNode) (chainhash.Has
 }
 
 func CreateAndSendTx(ctx context.Context, node tenv.TeranodeTestClient) (chainhash.Hash, error) {
+	logger := ulogger.New("e2eTestRun", ulogger.WithLevel("INFO"))
 
 	nilHash := chainhash.Hash{}
 	privateKey, _ := bec.NewPrivateKey(bec.S256())
@@ -434,6 +435,8 @@ func CreateAndSendTx(ctx context.Context, node tenv.TeranodeTestClient) (chainha
 	if err != nil {
 		return nilHash, errors.NewProcessingError("Failed to send new transaction: %w", err)
 	}
+
+	logger.Infof("Transaction sent: %s", newTx.TxID())
 
 	return *newTx.TxIDChainHash(), nil
 }
