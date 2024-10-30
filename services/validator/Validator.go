@@ -160,6 +160,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	if err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
 		if v.rejectedTxKafkaProducerClient != nil {
 			startKafka := time.Now()
+
 			v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
 				Value: append(tx.TxIDChainHash().CloneBytes(), err.Error()...),
 			})
@@ -331,6 +332,7 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.H
 
 	if v.txmetaKafkaProducerClient != nil {
 		startKafka := time.Now()
+
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
 			Value: append(txHash.CloneBytes(), []byte("delete")...),
 		})
@@ -354,6 +356,7 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHei
 
 	if v.txmetaKafkaProducerClient != nil {
 		startKafka := time.Now()
+
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
 			Value: append(tx.TxIDChainHash().CloneBytes(), data.MetaBytes()...),
 		})
@@ -425,7 +428,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 	return spends, nil
 }
 
-func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error {
+func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error { //nolint:gosec
 	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "sendToBlockAssembler",
 		tracing.WithHistogram(prometheusValidatorSendToBlockAssembly),
 	)

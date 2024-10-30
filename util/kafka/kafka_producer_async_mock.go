@@ -27,8 +27,6 @@ func (c *KafkaAsyncProducerMock) PublishChannel() chan *Message {
 	return c.publishChannel
 }
 
-func (c *KafkaAsyncProducerMock) Publish(msg *Message) error {
+func (c *KafkaAsyncProducerMock) Publish(msg *Message) {
 	c.publishChannel <- msg
-
-	return nil
 }

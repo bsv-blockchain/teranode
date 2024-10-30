@@ -77,16 +77,11 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 	// block persister : false.
 	// block validation: false.
 
-	path := url.Path
-	if strings.HasPrefix(path, "/") {
-		path = path[1:]
-	}
-
 	consumerConfig := KafkaConsumerConfig{
 		Logger:                            logger,
 		URL:                               url,
 		BrokersURL:                        strings.Split(url.Host, ","),
-		Topic:                             path,
+		Topic:                             strings.TrimPrefix(url.Path, "/"),
 		Partitions:                        partitions,
 		ConsumerRatio:                     consumerRatio,
 		ConsumerGroupID:                   consumerGroupID,

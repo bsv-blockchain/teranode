@@ -21,7 +21,7 @@ import (
 type KafkaAsyncProducerI interface {
 	Start(ctx context.Context, ch chan *Message)
 	BrokersURL() []string
-	Publish(msg *Message) error
+	Publish(msg *Message)
 }
 
 type KafkaProducerConfig struct {
@@ -56,16 +56,11 @@ type KafkaAsyncProducer struct {
 }
 
 func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL) (*KafkaAsyncProducer, error) {
-	path := url.Path
-	if strings.HasPrefix(path, "/") {
-		path = path[1:]
-	}
-
 	producerConfig := KafkaProducerConfig{
 		Logger:                logger,
 		URL:                   url,
 		BrokersURL:            strings.Split(url.Host, ","),
-		Topic:                 path,
+		Topic:                 strings.TrimPrefix(url.Path, "/"),
 		Partitions:            int32(util.GetQueryParamInt(url, "partitions", 1)),     //nolint:gosec
 		ReplicationFactor:     int16(util.GetQueryParamInt(url, "replication", 1)),    //nolint:gosec
 		RetentionPeriodMillis: util.GetQueryParam(url, "retention", "600000"),         // 10 minutes
@@ -200,14 +195,8 @@ func (c *KafkaAsyncProducer) BrokersURL() []string {
 	return c.Config.BrokersURL
 }
 
-func (c *KafkaAsyncProducer) Publish(msg *Message) error {
-	if c.publishChannel == nil {
-		return errors.NewServiceNotStartedError("CAnnot publish message as Kafka producer service not started yet")
-	}
-
+func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	c.publishChannel <- msg
-
-	return nil
 }
 
 func createTopic(admin sarama.ClusterAdmin, cfg KafkaProducerConfig) error {
