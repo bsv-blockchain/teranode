@@ -17,6 +17,7 @@ func NewKafkaAsyncProducerMock() *KafkaAsyncProducerMock {
 }
 
 func (c *KafkaAsyncProducerMock) Start(ctx context.Context, ch chan *Message) {
+	// mock implementation
 }
 
 func (c *KafkaAsyncProducerMock) BrokersURL() []string {
