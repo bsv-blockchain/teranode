@@ -354,9 +354,6 @@ func byteArrayToIntFromString(message []byte) (int, error) {
 }
 
 func produceMessages(logger ulogger.Logger, wg *sync.WaitGroup, client KafkaAsyncProducerI, numberOfMessages int) {
-	// #nosec G404: ignoring the warning
-	// r := rand.New(rand.NewSource(time.Now().UnixNano())) // Create a new Rand instance
-
 	for i := 0; i < numberOfMessages; i++ {
 		msg := []byte(strconv.Itoa(i))
 		client.Publish(&Message{
@@ -364,10 +361,7 @@ func produceMessages(logger ulogger.Logger, wg *sync.WaitGroup, client KafkaAsyn
 		})
 		logger.Infof("pushed message: %v", string(msg))
 
-		if wg == nil {
-			// randomDelay := time.Duration(r.Intn(200)+1) * time.Millisecond
-			// time.Sleep(randomDelay)
-		} else {
+		if wg != nil {
 			wg.Done()
 		}
 	}
