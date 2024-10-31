@@ -13,6 +13,8 @@
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
 8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+9. [Other Resources](#9-other-resources)
+
 
 ## 1. Description
 
@@ -27,13 +29,11 @@ At a glance, the Propagation service:
 ![Propagation_Service_Container_Diagram.png](img/Propagation_Service_Container_Diagram.png)
 
 
-The service implements multiple experimental alternative communication methods (e.g. fRPC, QUIC) for transaction propagation, as well as UDP listeners over IPv6. At the time of writing, the gRPC protocol is the primary communication method.
+The service implements multiple experimental alternative communication methods (e.g. QUIC) for transaction propagation, as well as UDP listeners over IPv6. At the time of writing, the gRPC protocol is the primary communication method.
 
-- `StartUDP6Listeners`, `quicServer`, `frpcServer`, `StartHTTPServer`: These functions are designed to start various network listeners for different protocols like UDP, QUIC, DRPC, fRPC, and HTTP. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports.
+- `StartUDP6Listeners`, `quicServer`, `StartHTTPServer`: These functions are designed to start various network listeners for different protocols like UDP, QUIC, and HTTP. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports.
 
 A node can start multiple parallel instances of the Propagation service. This translates into multiple pods within a Kubernetes cluster. Each instance will have its own gRPC server, and will be able to receive and propagate transactions independently. GRPC load balancing allows to distribute the load across the multiple instances.
-
-The Notice how fRPC does not allow for load balancing.
 
 ![Propagation_Service_Component_Diagram.png](img/Propagation_Service_Component_Diagram.png)
 
@@ -77,21 +77,7 @@ The Propagation Service uses gRPC for communication between nodes. The protobuf 
 
 The Propagation Service deals with the extended transaction format, as seen below:
 
-| Field           | Description                                                                                            | Size                                              |
-|-----------------|--------------------------------------------------------------------------------------------------------|---------------------------------------------------|
-| Version no      | currently 2                                                                                            | 4 bytes                                           |
-| **EF marker**   | **marker for extended format**                                                                         | **0000000000EF**                                  |
-| In-counter      | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
-| list of inputs  | **Extended Format** transaction Input Structure                                                        | <in-counter> qty with variable length per input   |
-| Out-counter     | positive integer VI = [[VarInt]]                                                                       | 1 - 9 bytes                                       |
-| list of outputs | Transaction Output Structure                                                                           | <out-counter> qty with variable length per output |
-| nLocktime       | if non-zero and sequence numbers are < 0xFFFFFFFF: block height or timestamp when transaction is final | 4 bytes                                           |
-
-Teranode must be able to receive transactions in Extended Format (EF) from a transaction broadcasting service or other Teranode.
-
-It must be noted that Teranode will not do any re-formatting from other transaction formats into EF. I.e. Teranode is only expected to receive transactions in EF.
-
-More information on the extended tx structure and purpose can be found in the [Architecture Documentation](docs/architecture/architecture.md).
+- [Extended Transaction Data Model](../topics/datamodel/transaction_data_model.md): Include additional metadata to facilitate processing.
 
 ## 5. Technology
 
@@ -104,12 +90,11 @@ Main technologies involved:
   - The service is designed for a P2P network environment, where nodes (computers) in the network communicate directly with each other without central coordination.
   - `libsv/go-p2p/wire` is used for P2P transaction propagation in the Teranode BSV network.
 
-3. **Networking Protocols (UDP, HTTP, QUIC, fRPC)**:
+3. **Networking Protocols (UDP, HTTP, QUIC)**:
   - The service uses various networking protocols for communication:
     - **UDP (User Datagram Protocol)**: A lightweight, connectionless protocol used for low-latency and loss-tolerating connections.
     - **HTTP (Hypertext Transfer Protocol)**.
     - **QUIC (Quick UDP Internet Connections)**: A transport layer network protocol designed by Google to improve the performance of connection-oriented web applications.
-    - **fRPC**: fRPC-go is a lightweight, fast, and secure RPC framework implemented for Go.
 
 4. **Cryptography**:
   - The use of `crypto` packages for RSA key generation and TLS (Transport Layer Security) configuration for secure communication.
@@ -125,17 +110,14 @@ Main technologies involved:
 │
 ├── Client.go                    - Contains the client-side logic for interacting with the propagation service.
 ├── Server.go                    - Contains the main server-side implementation for the propagation service.
+├── Server_test.go               - Unit tests for the Server.go functionality.
 ├── StreamingClient.go           - Implementation of a client capable of handling streaming data, for real-time data processing or communication.
-├── StreamingClient_test.go      - Unit tests for the `StreamingClient.go` functionality.
-├── frpc.go                      - Related to the fRPC framework implementation for the propagation service.
+├── StreamingClient_test.go      - Unit tests for the StreamingClient.go functionality.
 ├── metrics.go                   - Metrics collection and monitoring of the propagation service.
 └── propagation_api              - Directory containing various files related to the API definition and implementation of the propagation service.
-    ├── propagation_api.frpc.go         - Specific implementation file for the fRPC framework for the propagation API.
     ├── propagation_api.pb.go           - Auto-generated file from protobuf definitions, containing Go bindings for the API.
     ├── propagation_api.proto           - Protocol Buffers definition file for the propagation API.
-    ├── propagation_api_drpc.pb.go      - DRPC (Distributed RPC) specific implementation file for the propagation API.
     └── propagation_api_grpc.pb.go      - gRPC (Google's RPC framework) specific implementation file for the propagation API.
-
 ```
 
 ## 7. How to run
@@ -153,11 +135,20 @@ Please refer to the [Locally Running Services Documentation](../locallyRunningSe
 
 The Propagation service uses the following configuration options:
 
-- **`utxostore_grpcAddress`**: gRPC address for the UTXO store is set.
-- **`ipv6_addresses`**: Specifies the IPv6 addresses to bind UDP6 listeners for transaction propagation.
-- **`ipv6_interface`**: Configures the network interface (e.g., "en0") to use for IPv6 multicast listeners, with a default fallback if not specified.
-- **`propagation_quicListenAddress`**: Defines the address and port for the QUIC server used for experimental high-throughput transaction propagation.
+- **`propagation_sendBatchSize`**: Defines the batch size for sending transactions (default: 100).
+- **`propagation_sendBatchTimeout`**: Sets the timeout for sending batches of transactions, likely in seconds (default: 5).
 - **`grpc_resolver`**: Determines the gRPC resolver to use for client connections, supporting Kubernetes ("k8s" or "kubernetes") and potentially other resolvers.
 - **`propagation_grpcAddresses`**: Lists the gRPC server addresses for the propagation service, used by the client to connect and process transactions.
-- **`useLocalValidator`**: A boolean flag to use a local validator service for health checks and possibly other validation purposes.
-- **`grpc_resolver`** alternatives (`"k8s"`, `"kubernetes"`): Specifies the resolver scheme for Kubernetes service discovery, affecting how the propagation client resolves service addresses within a Kubernetes environment.
+- **`propagation_httpListenAddress`**: Specifies the HTTP listen address for the propagation service.
+- **`fsm_state_restore`**: A boolean flag to determine if the Finite State Machine (FSM) should be restored to a previous state (default: false).
+- **`ipv6_addresses`**: Specifies the IPv6 addresses to bind UDP6 listeners for transaction propagation.
+- **`propagation_quicListenAddress`**: Defines the address and port for the QUIC server used for experimental high-throughput transaction propagation.
+- **`kafka_validatortxsConfig`**: URL configuration for Kafka, used for validator transactions.
+- **`validator_kafkaWorkers`**: Number of Kafka workers for the validator service (default: 100).
+- **`propagation_grpcMaxConnectionAge`**: Maximum age of gRPC connections before they are closed and reopened (default: 90 seconds).
+- **`ipv6_interface`**: Configures the network interface (e.g., "en0") to use for IPv6 multicast listeners, with a default fallback if not specified.
+
+
+## 9. Other Resources
+
+[Propagation Service Reference](../references/services/propagation_reference.md)
