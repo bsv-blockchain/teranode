@@ -133,7 +133,7 @@ func (v *Server) Start(ctx context.Context) error {
 		v.logger.Infof("[Validator] Node finished restoring and has transitioned to Running state, continuing to start Transaction Validator service")
 	}
 
-	kafkaMessageHandler := func(msg kafka.KafkaMessage) error {
+	kafkaMessageHandler := func(msg *kafka.KafkaMessage) error {
 		currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
 		if err != nil {
 			v.logger.Errorf("[Validator] Failed to get current state: %s", err)
@@ -146,7 +146,7 @@ func (v *Server) Start(ctx context.Context) error {
 			time.Sleep(1 * time.Second) // Wait and check again in 1 second
 		}
 
-		data, err := NewTxValidationDataFromBytes(msg.Message.Value)
+		data, err := NewTxValidationDataFromBytes(msg.Value)
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
 			v.logger.Errorf("[Validator] Failed to decode kafka message: %s", err)

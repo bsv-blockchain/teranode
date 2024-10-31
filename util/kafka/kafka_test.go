@@ -116,6 +116,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	}
 
 	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	// defer producerClient.Producer.AsyncClose()
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 100))
@@ -130,21 +131,34 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	listenerClient, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_consumer", true)
 	require.NoError(t, err)
 
-	consumerFn := func(message KafkaMessage) error {
-		msgInt, err := byteArrayToIntFromString(message.Message.Value)
+	consumerFn := func(message *KafkaMessage) error {
+		msgInt, err := byteArrayToIntFromString(message.Value)
 		require.NoError(t, err)
 
-		if message.Message.Offset != int64(msgInt) {
+		if message.Offset != int64(msgInt) {
 			return err
 		}
 
-		logger.Infof("received message: %s, Offset: %d ", string(message.Message.Value), message.Message.Offset)
+		logger.Infof("received message: %s, Offset: %d ", string(message.Value), message.Offset)
 		wg.Done()
 
 		return nil
 	}
 	listenerClient.Start(ctx, consumerFn)
-	wg.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Wait group completed successfully
+	case <-time.After(5 * time.Second):
+		t.Log("!!!!!! test failed - timeout waiting for messages !!!!!!")
+		t.FailNow()
+	}
 }
 
 func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
@@ -191,6 +205,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	var wg sync.WaitGroup
 
 	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	// defer producerClient.Producer.AsyncClose()
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 10000))
@@ -201,13 +216,13 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	testCases := []struct {
 		name            string
 		groupID         string
-		consumerClosure func(KafkaMessage) error
+		consumerClosure func(*KafkaMessage) error
 	}{
 		{
 			name:    "Process messages with all success",
 			groupID: "test-group-1",
-			consumerClosure: func(message KafkaMessage) error {
-				logger.Infof("Consumer closure#1 received message: %s, Offset: %d", string(message.Message.Value), message.Message.Offset)
+			consumerClosure: func(message *KafkaMessage) error {
+				logger.Infof("Consumer closure#1 received message: %s, Offset: %d", string(message.Value), message.Offset)
 				wg.Done()
 				return nil
 			},
@@ -215,8 +230,8 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 		{
 			name:    "Process messages with 2nd time success closure",
 			groupID: "test-group-2",
-			consumerClosure: func(message KafkaMessage) error {
-				logger.Infof("Consumer closure#2 received message: %s, Offset: %d", string(message.Message.Value), message.Message.Offset)
+			consumerClosure: func(message *KafkaMessage) error {
+				logger.Infof("Consumer closure#2 received message: %s, Offset: %d", string(message.Value), message.Offset)
 				counter++
 				if counter%2 == 0 {
 					wg.Done()
@@ -228,8 +243,8 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 		{
 			name:    "Process messages with 3rd time success closure",
 			groupID: "test-group-3",
-			consumerClosure: func(message KafkaMessage) error {
-				logger.Infof("Consumer closure#3 received message: %s, Offset: %d", string(message.Message.Value), message.Message.Offset)
+			consumerClosure: func(message *KafkaMessage) error {
+				logger.Infof("Consumer closure#3 received message: %s, Offset: %d", string(message.Value), message.Offset)
 				counter++
 				if counter%3 == 0 {
 					wg.Done()
@@ -255,7 +270,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 			client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, tCase.groupID, false)
 			require.NoError(t, err)
 
-			client.Start(ctx, tCase.consumerClosure)
+			client.Start(ctx, tCase.consumerClosure, WithRetryAndMoveOn(3, 1, time.Millisecond))
 		})
 		wg.Wait()
 
@@ -307,21 +322,18 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	logger.Infof("Kafka URL: %v", kafkaURL)
 
 	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	// defer producerClient.Producer.AsyncClose()
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 10000))
 
 	numberOfMessages := 2
-	wg := sync.WaitGroup{}
-	wg.Add(numberOfMessages)
-
-	go produceMessages(logger, &wg, producerClient, numberOfMessages)
-	wg.Wait()
+	go produceMessages(logger, nil, producerClient, numberOfMessages)
 
 	c := make(chan []byte)
-	errClosure := func(message KafkaMessage) error {
-		logger.Infof("Consumer closure received message: %s, Offset: %d, Partition: %d", string(message.Message.Value), message.Message.Offset, message.Message.Partition)
-		c <- message.Message.Value
+	errClosure := func(message *KafkaMessage) error {
+		logger.Infof("Consumer closure received message: %s, Offset: %d, Partition: %d", string(message.Value), message.Offset, message.Partition)
+		c <- message.Value
 
 		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
 	}
@@ -345,6 +357,9 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 			messagesReceived = append(messagesReceived, msg)
 		}
 	}
+
+	client.ConsumerGroup.Close()
+
 	// In total we should have 4 messages (1 + 3 retries) for each of the 2 original messages
 	require.Equal(t, numberOfMessages*4, len(messagesReceived))
 
@@ -427,10 +442,10 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	}
 
 	producer, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	// defer producer.Producer.AsyncClose()
 	require.NoError(t, err)
 
 	producer.Start(ctx, make(chan *Message, 100))
-	defer producer.Producer.Close()
 
 	t.Log("Publishing first batch of test messages...")
 
@@ -448,8 +463,8 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 		require.NoError(t, err)
 		defer consumer.ConsumerGroup.Close()
 
-		consumer.Start(ctx, func(msg KafkaMessage) error {
-			receivedMessages = append(receivedMessages, string(msg.Message.Value))
+		consumer.Start(ctx, func(msg *KafkaMessage) error {
+			receivedMessages = append(receivedMessages, string(msg.Value))
 			return nil
 		})
 

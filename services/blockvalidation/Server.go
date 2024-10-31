@@ -261,8 +261,8 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.KafkaMessage) error {
-	return func(msg kafka.KafkaMessage) error {
+func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
+	return func(msg *kafka.KafkaMessage) error {
 		errCh := make(chan error, 1)
 		go func() {
 			errCh <- u.blockHandler(msg)
@@ -294,20 +294,20 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.Kafk
 	}
 }
 
-func (u *Server) blockHandler(msg kafka.KafkaMessage) error {
-	if msg.Message == nil {
+func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
+	if msg == nil {
 		return nil
 	}
 
-	hash, err := chainhash.NewHash(msg.Message.Value[:32])
+	hash, err := chainhash.NewHash(msg.Value[:32])
 	if err != nil {
 		u.logger.Errorf("Failed to parse block hash from message: %v", err)
 		return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
 	}
 
 	var baseUrl string
-	if len(msg.Message.Value) > 32 {
-		baseUrl = string(msg.Message.Value[32:])
+	if len(msg.Value) > 32 {
+		baseUrl = string(msg.Value[32:])
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

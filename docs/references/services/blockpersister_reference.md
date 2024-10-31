@@ -67,7 +67,7 @@ Stops the Block Persister Service.
 #### blocksFinalHandler
 
 ```go
-func (u *Server) blocksFinalHandler(msg kafka.KafkaMessage) error
+func (u *Server) blocksFinalHandler(msg *kafka.KafkaMessage) error
 ```
 
 Handles incoming Kafka messages for finalized blocks.

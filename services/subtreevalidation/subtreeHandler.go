@@ -11,8 +11,8 @@ import (
 	"github.com/libsv/go-bt/v2/chainhash"
 )
 
-func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.KafkaMessage) error {
-	return func(msg kafka.KafkaMessage) error {
+func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
+	return func(msg *kafka.KafkaMessage) error {
 		errCh := make(chan error, 1)
 		go func() {
 			errCh <- u.subtreesHandler(msg)
@@ -56,8 +56,8 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.Kafk
 	}
 }
 
-func (u *Server) subtreesHandler(msg kafka.KafkaMessage) error {
-	if msg.Message != nil {
+func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
+	if msg != nil {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -66,20 +66,20 @@ func (u *Server) subtreesHandler(msg kafka.KafkaMessage) error {
 			prometheusSubtreeValidationValidateSubtreeHandler.Observe(float64(time.Since(startTime).Microseconds()) / 1_000_000)
 		}()
 
-		if len(msg.Message.Value) < 32 {
-			u.logger.Errorf("Received subtree message of %d bytes", len(msg.Message.Value))
-			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Message.Value))
+		if len(msg.Value) < 32 {
+			u.logger.Errorf("Received subtree message of %d bytes", len(msg.Value))
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Value))
 		}
 
-		hash, err := chainhash.NewHash(msg.Message.Value[:32])
+		hash, err := chainhash.NewHash(msg.Value[:32])
 		if err != nil {
 			u.logger.Errorf("Failed to parse subtree hash from message: %v", err)
 			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse subtree hash from message", err)
 		}
 
 		var baseUrl string
-		if len(msg.Message.Value) > 32 {
-			baseUrl = string(msg.Message.Value[32:])
+		if len(msg.Value) > 32 {
+			baseUrl = string(msg.Value[32:])
 		}
 
 		u.logger.Infof("Received subtree message for %s from %s", hash.String(), baseUrl)

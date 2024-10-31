@@ -1927,8 +1927,8 @@ func (sm *SyncManager) startKafkaListener(ctx context.Context, kafkaURL *url.URL
 		sm.logger.Errorf("failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
 	}
 
-	client.Start(ctx, func(msg kafka.KafkaMessage) error {
-		wireInvMsg, err := sm.newInvFromBytes(msg.Message.Value)
+	client.Start(ctx, func(msg *kafka.KafkaMessage) error {
+		wireInvMsg, err := sm.newInvFromBytes(msg.Value)
 		if err != nil {
 			sm.logger.Errorf("failed to create INV message from Kafka message: %v", err)
 			return nil // ignore any errors, the message might be old and/or the peer is already disconnected

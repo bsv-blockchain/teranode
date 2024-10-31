@@ -218,14 +218,14 @@ func (s *Server) Start(ctx context.Context) error {
 	// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
 	// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
 	// Therefore, autocommit is set to true.
-	rejectedTxHandler := func(msg kafka.KafkaMessage) error {
-		hash, err := chainhash.NewHash(msg.Message.Value[:chainhash.HashSize])
+	rejectedTxHandler := func(msg *kafka.KafkaMessage) error {
+		hash, err := chainhash.NewHash(msg.Value[:chainhash.HashSize])
 		if err != nil {
-			s.logger.Errorf("error getting chainhash from string %s: %v", msg.Message.Value[:chainhash.HashSize], err)
+			s.logger.Errorf("error getting chainhash from string %s: %v", msg.Value[:chainhash.HashSize], err)
 			return err
 		}
 
-		reason := string(msg.Message.Value[chainhash.HashSize:])
+		reason := string(msg.Value[chainhash.HashSize:])
 
 		s.logger.Debugf("P2P Received %s rejected tx notification: %s", hash.String(), reason)
 

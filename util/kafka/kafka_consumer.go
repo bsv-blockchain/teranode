@@ -17,8 +17,12 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/retry"
 )
 
+type KafkaMessage struct {
+	sarama.ConsumerMessage
+}
+
 type KafkaConsumerGroupI interface {
-	Start(ctx context.Context, consumerFn func(message KafkaMessage) error, opts ...ConsumerOption)
+	Start(ctx context.Context, consumerFn func(message *KafkaMessage) error, opts ...ConsumerOption)
 	BrokersURL() []string
 }
 
@@ -165,7 +169,7 @@ func WithRetryAndMoveOn(maxRetries, backoffMultiplier int, backoffDurationType t
 	}
 }
 
-func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message KafkaMessage) error, opts ...ConsumerOption) {
+func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message *KafkaMessage) error, opts ...ConsumerOption) {
 	if k == nil {
 		return
 	}
@@ -182,7 +186,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 
 	if options.withRetryAnMoveOn {
 		originalFn := consumerFn
-		consumerFn = func(msg KafkaMessage) error {
+		consumerFn = func(msg *KafkaMessage) error {
 			_, err := retry.Retry(ctx, k.Config.Logger, func() (any, error) { //nolint:errcheck
 				return struct{}{}, originalFn(msg)
 			},
@@ -273,11 +277,11 @@ func (k *KafkaConsumerGroup) BrokersURL() []string {
 
 // KafkaConsumer represents a Sarama consumer group consumer
 type KafkaConsumer struct {
-	consumerClosure func(KafkaMessage) error
+	consumerClosure func(*KafkaMessage) error
 	cfg             KafkaConsumerConfig
 }
 
-func NewKafkaConsumer(cfg KafkaConsumerConfig, consumerClosureOrNil func(message KafkaMessage) error) *KafkaConsumer {
+func NewKafkaConsumer(cfg KafkaConsumerConfig, consumerClosureOrNil func(message *KafkaMessage) error) *KafkaConsumer {
 	consumer := &KafkaConsumer{
 		consumerClosure: consumerClosureOrNil,
 		cfg:             cfg,
@@ -304,8 +308,6 @@ func (kc *KafkaConsumer) Cleanup(session sarama.ConsumerGroupSession) error {
 func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	const batchSize = 1000
 
-	ctx := context.Background()
-
 	for {
 		select {
 		case <-session.Context().Done():
@@ -323,9 +325,9 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 			var err error
 			// Process first message
 			if kc.cfg.AutoCommitEnabled {
-				err = kc.handleMessagesWithAutoCommit(session, message)
+				err = kc.handleMessagesWithAutoCommit(message)
 			} else {
-				err = kc.handleMessageWithManualCommit(ctx, session, message)
+				err = kc.handleMessageWithManualCommit(session, message)
 			}
 
 			if err != nil {
@@ -349,9 +351,9 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 					}
 
 					if kc.cfg.AutoCommitEnabled {
-						err = kc.handleMessagesWithAutoCommit(session, message)
+						err = kc.handleMessagesWithAutoCommit(message)
 					} else {
-						err = kc.handleMessageWithManualCommit(ctx, session, message)
+						err = kc.handleMessageWithManualCommit(session, message)
 					}
 
 					if err != nil {
@@ -384,11 +386,11 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 }
 
 // handleMessageWithManualCommit processes the message and commits the offset only if the processing of the message is successful
-func (kc *KafkaConsumer) handleMessageWithManualCommit(ctx context.Context, session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage) error {
-	msg := KafkaMessage{Message: message, Session: session}
+func (kc *KafkaConsumer) handleMessageWithManualCommit(session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage) error {
+	msg := KafkaMessage{*message}
 	// kc.cfg.Logger.Infof("Processing message with offset: %v", message.Offset)
 
-	if err := kc.consumerClosure(msg); err != nil {
+	if err := kc.consumerClosure(&msg); err != nil {
 		return err
 	}
 
@@ -402,8 +404,6 @@ func (kc *KafkaConsumer) handleMessageWithManualCommit(ctx context.Context, sess
 	return nil
 }
 
-func (kc *KafkaConsumer) handleMessagesWithAutoCommit(session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage) error {
-	msg := KafkaMessage{Message: message, Session: session}
-
-	return kc.consumerClosure(msg)
+func (kc *KafkaConsumer) handleMessagesWithAutoCommit(message *sarama.ConsumerMessage) error {
+	return kc.consumerClosure(&KafkaMessage{*message})
 }

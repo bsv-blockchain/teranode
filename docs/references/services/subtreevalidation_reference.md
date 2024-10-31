@@ -166,7 +166,7 @@ Checks if a priority subtree check is active for the given subtree hash.
 ### subtreeHandler
 
 ```go
-func (u *Server) subtreeHandler(msg kafka.KafkaMessage) error
+func (u *Server) subtreeHandler(msg *kafka.KafkaMessage) error
 ```
 
 Handles incoming subtree messages from Kafka.
@@ -174,7 +174,7 @@ Handles incoming subtree messages from Kafka.
 ### txmetaHandler
 
 ```go
-func (u *Server) txmetaHandler(msg kafka.KafkaMessage) error
+func (u *Server) txmetaHandler(msg *kafka.KafkaMessage) error
 ```
 
 Handles incoming transaction metadata messages from Kafka.

@@ -23,8 +23,8 @@ var (
 	q    *quorum.Quorum
 )
 
-func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.KafkaMessage) error {
-	return func(msg kafka.KafkaMessage) error {
+func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
+	return func(msg *kafka.KafkaMessage) error {
 		// this does manual commit so we need to implement error handling and differentiate between errors
 		errCh := make(chan error, 1)
 		go func() {
@@ -67,7 +67,7 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.Kafk
 	}
 }
 
-func (u *Server) blocksFinalHandler(msg kafka.KafkaMessage) error {
+func (u *Server) blocksFinalHandler(msg *kafka.KafkaMessage) error {
 	var err error
 
 	once.Do(func() {
@@ -98,21 +98,21 @@ func (u *Server) blocksFinalHandler(msg kafka.KafkaMessage) error {
 		return err
 	}
 
-	if msg.Message != nil {
+	if msg != nil {
 		ctx, _, deferFn := tracing.StartTracing(u.ctx, "blocksFinalHandler",
 			tracing.WithHistogram(prometheusBlockPersisterValidateSubtreeHandler),
-			tracing.WithLogMessage(u.logger, "[blocksFinalHandler] called for block %s", utils.ReverseAndHexEncodeSlice(msg.Message.Key)),
+			tracing.WithLogMessage(u.logger, "[blocksFinalHandler] called for block %s", utils.ReverseAndHexEncodeSlice(msg.Key)),
 		)
 		defer deferFn()
 
-		if len(msg.Message.Key) != 32 {
-			u.logger.Errorf("Received blocksFinal message key %d bytes", len(msg.Message.Value))
-			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Message.Value))
+		if len(msg.Key) != 32 {
+			u.logger.Errorf("Received blocksFinal message key %d bytes", len(msg.Value))
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Value))
 		}
 
 		var hash *chainhash.Hash
 
-		hash, err = chainhash.NewHash(msg.Message.Key)
+		hash, err = chainhash.NewHash(msg.Key)
 		if err != nil {
 			u.logger.Errorf("Failed to parse block hash from message: %v", err)
 			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
@@ -145,7 +145,7 @@ func (u *Server) blocksFinalHandler(msg kafka.KafkaMessage) error {
 			return errors.NewBlockExistsError("Block %s already being persisted", hash.String())
 		}
 
-		if err = u.persistBlock(ctx, hash, msg.Message.Value); err != nil {
+		if err = u.persistBlock(ctx, hash, msg.Value); err != nil {
 			if errors.Is(err, errors.ErrNotFound) {
 				u.logger.Warnf("PreviousBlock %s not found, so UTXOSet not processed", hash.String())
 
