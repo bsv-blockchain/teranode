@@ -916,17 +916,16 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 		if legacySyncMode && errors.Is(err, errors.ErrBlockNotFound) {
 			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
 			sm.logger.Errorf("Failed to process block %v: %v", blockHash, err)
-			return nil
-		}
+		} else {
+			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
+			if !legacySyncMode && !serviceError {
+				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
+			}
 
-		serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
-		if !legacySyncMode && !serviceError {
-			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
+			// TODO TEMPORARY: we should not panic here, but return the error
+			panic(err)
+			// return err
 		}
-
-		// TODO TEMPORARY: we should not panic here, but return the error
-		panic(err)
-		// return err
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
