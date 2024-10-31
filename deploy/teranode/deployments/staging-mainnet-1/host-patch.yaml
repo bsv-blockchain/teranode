@@ -1,0 +1,49 @@
+apiVersion: teranode.bsvblockchain.org/v1alpha1
+kind: Cluster
+metadata:
+  name: teranode
+spec:
+  asset:
+    spec:
+      grpcIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+      httpIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+      httpsIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+  blockAssembly:
+    spec:
+      grpcIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+      httpIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+      httpsIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+  blockValidator:
+    spec:
+      grpcIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+      httpIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+      httpsIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+  blockchain:
+    spec:
+      grpcIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+      httpIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+      httpsIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+  peer:
+    spec:
+      grpcIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+      wsIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+      wssIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev
+  propagation:
+    spec:
+      grpcIngress:
+        host: eu-central-1-teranode-staging-mainnet-1.ubsv.dev

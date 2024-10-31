@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: staging-mainnet-1
+
+configMapGenerator:
+  - literals:
+      - SETTINGS_CONTEXT=operator.mainnet.euw1-1
+      - asset_centrifuge_disable=true
+      - blockassembly_disabled=true
+    name: shared-config
+    behavior: merge
+
+namePrefix: mainnet-1-
+
+patches:
+  - path: node-selector-patch.yaml
+    target:
+      kind: Cluster
+  - path: host-patch.yaml
+    target:
+      kind: Cluster
+  - path: resources-patch.yaml
+    target:
+      kind: Cluster
+  - path: enabled-services-patch.yaml
+    target:
+      kind: Cluster
+  - target:
+      kind: Cluster
+    patch: |
+      - op: replace
+        path: /spec/image
+        value: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.5.455
+
+resources:
+  - ../../base
