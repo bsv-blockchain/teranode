@@ -10,6 +10,7 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -257,6 +258,9 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
 	blockAssemblyNode0 := framework.Nodes[0].BlockassemblyClient
 
+	// blockchainNode1 := framework.Nodes[1].BlockchainClient
+	blockAssemblyNode1 := framework.Nodes[1].BlockassemblyClient
+
 	// Set CatchUpTransactions State
 	err := blockchainNode0.CatchUpTransactions(framework.Context)
 	if err != nil {
@@ -270,13 +274,21 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	t.Logf("Expected FSM state name after sending CatchupTx: %v", blockchain_api.FSMStateType_name[4])
 	assert.Equal(t, "CATCHINGTXS", fsmState.String(), "FSM state is not equal to 4")
 
-	state, err := blockAssemblyNode0.GetBlockAssemblyState(framework.Context)
+	state0, err := blockAssemblyNode0.GetBlockAssemblyState(framework.Context)
 	if err != nil {
 		t.Errorf("Failed to get block assembly state: %v", err)
 	}
 
-	txCountBefore := state.GetTxCount()
-	logger.Infof("Tx count before: %v", txCountBefore)
+	state1, err := blockAssemblyNode1.GetBlockAssemblyState(framework.Context)
+	if err != nil {
+		t.Errorf("Failed to get block assembly state: %v", err)
+	}
+
+	txCountBefore0 := state0.GetTxCount()
+	logger.Infof("Node 0 Tx count before: %v", txCountBefore0)
+
+	txCountBefore1 := state1.GetTxCount()
+	logger.Infof("Node 1 Tx count before: %v", txCountBefore1)
 
 	// metricsBefore, err := helper.QueryPrometheusMetric("http://localhost:16090", "validator_processed_transactions")
 	// if err != nil {
@@ -288,15 +300,27 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 		t.Errorf("Failed to create and send raw txs: %v", err)
 	}
 
-	state, err = blockAssemblyNode0.GetBlockAssemblyState(framework.Context)
-	if err != nil {
-		t.Errorf("Failed to get block assembly state: %v", err)
+	for i := 0; i < 20; i++ {
+		logger.Infof("Hashes: %v", hashesNode0[i])
 	}
 
-	txCountAfter := state.GetTxCount()
-	logger.Infof("Tx count after: %v", txCountAfter)
+	state0, err = blockAssemblyNode0.GetBlockAssemblyState(framework.Context)
+	if err != nil {
+		t.Errorf("Failed to get block assembly state for Node 0: %v", err)
+	}
 
-	assert.LessOrEqual(t, txCountAfter, uint64(10), "Tx count mismatch")
+	state1, err = blockAssemblyNode1.GetBlockAssemblyState(framework.Context)
+	if err != nil {
+		t.Errorf("Failed to get block assembly state for Node 1: %v", err)
+	}
+
+	txCountAfter0 := state0.GetTxCount()
+	logger.Infof("Node 0 Tx count after sending transactions: %v", txCountAfter0)
+
+	txCountAfter1 := state1.GetTxCount()
+	logger.Infof("Node 1 Tx count after sending transactions: %v", txCountAfter1)
+
+	assert.LessOrEqual(t, txCountAfter0, uint64(10), "Tx count mismatch")
 
 	// metricsAfter, err := helper.QueryPrometheusMetric("http://localhost:16090", "validator_processed_transactions")
 	// if err != nil {
@@ -315,6 +339,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 		t.Errorf("error getting block reader: %v", err)
 	}
 
+	fmt.Println("Initial block read")
 	if err == nil {
 		if bl, err := helper.ReadFile(framework.Context, "block", framework.Logger, r, hashesNode0[5], framework.Nodes[0].BlockstoreURL); err != nil {
 			t.Errorf("error reading block: %v", err)
