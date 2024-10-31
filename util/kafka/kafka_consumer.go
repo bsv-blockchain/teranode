@@ -18,24 +18,21 @@ import (
 )
 
 type KafkaConsumerGroupI interface {
-	Start(ctx context.Context, consumerFn func(message KafkaMessage) error)
+	Start(ctx context.Context, consumerFn func(message KafkaMessage) error, opts ...ConsumerOption)
 	BrokersURL() []string
 }
 
 type KafkaConsumerConfig struct {
-	Logger                            ulogger.Logger
-	URL                               *url.URL
-	BrokersURL                        []string
-	Topic                             string
-	Partitions                        int
-	ConsumerRatio                     int
-	ConsumerGroupID                   string
-	ConsumerCount                     int
-	AutoCommitEnabled                 bool
-	Replay                            bool
-	MessageErrorMaxRetries            int
-	MessageErrorBackoffMultiplier     int
-	MessageErrorBackoffMultiplierType time.Duration
+	Logger            ulogger.Logger
+	URL               *url.URL
+	BrokersURL        []string
+	Topic             string
+	Partitions        int
+	ConsumerRatio     int
+	ConsumerGroupID   string
+	ConsumerCount     int
+	AutoCommitEnabled bool
+	Replay            bool
 }
 
 type KafkaConsumerGroup struct {
@@ -76,19 +73,16 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 	// block validation: false.
 
 	consumerConfig := KafkaConsumerConfig{
-		Logger:                            logger,
-		URL:                               url,
-		BrokersURL:                        strings.Split(url.Host, ","),
-		Topic:                             strings.TrimPrefix(url.Path, "/"),
-		Partitions:                        partitions,
-		ConsumerRatio:                     consumerRatio,
-		ConsumerGroupID:                   consumerGroupID,
-		ConsumerCount:                     consumerCount,
-		AutoCommitEnabled:                 autoCommit,
-		Replay:                            util.GetQueryParamInt(url, "replay", 0) == 1,
-		MessageErrorMaxRetries:            util.GetQueryParamInt(url, "message_error_max_retries", 3),
-		MessageErrorBackoffMultiplier:     util.GetQueryParamInt(url, "message_error_backoff_multiplier", 2),
-		MessageErrorBackoffMultiplierType: util.GetQueryParamDuration(url, "message_error_backoff_multiplier_type", 1*time.Second),
+		Logger:            logger,
+		URL:               url,
+		BrokersURL:        strings.Split(url.Host, ","),
+		Topic:             strings.TrimPrefix(url.Path, "/"),
+		Partitions:        partitions,
+		ConsumerRatio:     consumerRatio,
+		ConsumerGroupID:   consumerGroupID,
+		ConsumerCount:     consumerCount,
+		AutoCommitEnabled: autoCommit,
+		Replay:            util.GetQueryParamInt(url, "replay", 0) == 1,
 	}
 
 	return NewKafkaConsumerGroup(consumerConfig)
@@ -150,9 +144,60 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 	return client, nil
 }
 
-func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message KafkaMessage) error) {
+// ConsumerOption represents an option for configuring the consumer behavior
+type ConsumerOption func(*consumerOptions)
+
+type consumerOptions struct {
+	withRetryAnMoveOn   bool
+	maxRetries          int
+	backoffMultiplier   int
+	backoffDurationType time.Duration
+}
+
+// WithRetryAndMoveOn configures retry behavior for the consumer function
+// After max retries, the error is logged and the message is skipped
+func WithRetryAndMoveOn(maxRetries, backoffMultiplier int, backoffDurationType time.Duration) ConsumerOption {
+	return func(o *consumerOptions) {
+		o.withRetryAnMoveOn = true
+		o.maxRetries = maxRetries
+		o.backoffMultiplier = backoffMultiplier
+		o.backoffDurationType = backoffDurationType
+	}
+}
+
+func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message KafkaMessage) error, opts ...ConsumerOption) {
 	if k == nil {
 		return
+	}
+
+	options := &consumerOptions{
+		withRetryAnMoveOn:   false,
+		maxRetries:          3,
+		backoffMultiplier:   2,
+		backoffDurationType: time.Second,
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	if options.withRetryAnMoveOn {
+		originalFn := consumerFn
+		consumerFn = func(msg KafkaMessage) error {
+			_, err := retry.Retry(ctx, k.Config.Logger, func() (any, error) { //nolint:errcheck
+				return struct{}{}, originalFn(msg)
+			},
+				retry.WithRetryCount(options.maxRetries),
+				retry.WithBackoffMultiplier(options.backoffMultiplier),
+				retry.WithBackoffDurationType(options.backoffDurationType),
+				retry.WithMessage("[kafka_consumer] retrying processing kafka message..."))
+
+			// if we can't process the message, log the error and skip to the next message
+			if err != nil {
+				k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message, skipping: %v", msg)
+			}
+
+			return nil // give up and move on
+		}
 	}
 
 	wg := sync.WaitGroup{}
@@ -275,11 +320,18 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 				continue
 			}
 
+			var err error
 			// Process first message
 			if kc.cfg.AutoCommitEnabled {
-				kc.handleMessagesWithAutoCommit(session, message) //nolint:errcheck
+				err = kc.handleMessagesWithAutoCommit(session, message)
 			} else {
-				kc.handleMessageWithManualCommit(ctx, session, message) //nolint:errcheck
+				err = kc.handleMessageWithManualCommit(ctx, session, message)
+			}
+
+			if err != nil {
+				kc.cfg.Logger.Errorf("[kafka_consumer] consumer will close - failed to process message (topic: %s, partition: %d, offset: %d): %v",
+					message.Topic, message.Partition, message.Offset, err)
+				return err
 			}
 
 			// Process any additional messages available (up to batchSize-1)
@@ -297,9 +349,15 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 					}
 
 					if kc.cfg.AutoCommitEnabled {
-						kc.handleMessagesWithAutoCommit(session, message) //nolint:errcheck
+						err = kc.handleMessagesWithAutoCommit(session, message)
 					} else {
-						kc.handleMessageWithManualCommit(ctx, session, message) //nolint:errcheck
+						err = kc.handleMessageWithManualCommit(ctx, session, message)
+					}
+
+					if err != nil {
+						kc.cfg.Logger.Errorf("[kafka_consumer] consumer will close - failed to process message (topic: %s, partition: %d, offset: %d): %v",
+							message.Topic, message.Partition, message.Offset, err)
+						return err
 					}
 
 					processed++
@@ -328,21 +386,17 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 // handleMessageWithManualCommit processes the message and commits the offset only if the processing of the message is successful
 func (kc *KafkaConsumer) handleMessageWithManualCommit(ctx context.Context, session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage) error {
 	msg := KafkaMessage{Message: message, Session: session}
-	kc.cfg.Logger.Infof("Processing message with offset: %v", message.Offset)
+	// kc.cfg.Logger.Infof("Processing message with offset: %v", message.Offset)
 
-	// execute consumer closure
-	_, err := retry.Retry(ctx, kc.cfg.Logger, func() (any, error) {
-		return struct{}{}, kc.consumerClosure(msg)
-	}, retry.WithRetryCount(kc.cfg.MessageErrorMaxRetries), retry.WithBackoffMultiplier(kc.cfg.MessageErrorBackoffMultiplier),
-		retry.WithBackoffDurationType(kc.cfg.MessageErrorBackoffMultiplierType), retry.WithMessage("[kafka_consumer] retrying to process message..."))
-
-	// if we can't process the message, log the error and skip to the next message
-	if err != nil {
-		kc.cfg.Logger.Errorf("[kafka_consumer] error processing kafka message, skipping: %v", message)
+	if err := kc.consumerClosure(msg); err != nil {
+		return err
 	}
 
 	// kc.logger.Infof("Committing offset: %v", message.Offset)
-	// Commit the message offset, processing is successful
+
+	// Update the message offset, processing is successful
+	// This doesn't commit the offset to the server, it just marks it as processed in memory on the client
+	// The commit is done elsewhere
 	session.MarkMessage(message, "")
 
 	return nil
@@ -351,9 +405,5 @@ func (kc *KafkaConsumer) handleMessageWithManualCommit(ctx context.Context, sess
 func (kc *KafkaConsumer) handleMessagesWithAutoCommit(session sarama.ConsumerGroupSession, message *sarama.ConsumerMessage) error {
 	msg := KafkaMessage{Message: message, Session: session}
 
-	// we don't check the error here as we are auto committing
-	_ = kc.consumerClosure(msg)
-
-	// Auto-commit is implied, so we don't need to explicitly mark the message here
-	return nil
+	return kc.consumerClosure(msg)
 }

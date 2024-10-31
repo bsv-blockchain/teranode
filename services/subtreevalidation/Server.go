@@ -184,7 +184,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 // Start function
 func (u *Server) Start(ctx context.Context) error {
 	// start kafka consumers
-	u.subtreeConsumerClient.Start(ctx, u.consumerMessageHandler(ctx))
+	u.subtreeConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(3, 2, time.Second))
 	u.txmetaConsumerClient.Start(ctx, u.txmetaHandler)
 
 	// Check if we need to Restore. If so, move FSM to the Restore state

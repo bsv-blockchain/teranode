@@ -183,7 +183,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 		Scheme:   "kafka",
 		Host:     testContainer.GetBrokerAddresses()[0],
 		Path:     kafkaTopic,
-		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=6000000&flush_frequency=1s&replay=1&message_error_backoff_multiplier_type=1ms", kafkaPartitions, kafkaReplicationFactor),
+		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=6000000&flush_frequency=1s&replay=1", kafkaPartitions, kafkaReplicationFactor),
 	}
 
 	logger.Infof("Kafka URL: %v", kafkaURL)
@@ -300,7 +300,7 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 		Scheme: "kafka",
 		Host:   testContainer.GetBrokerAddresses()[0],
 		Path:   kafkaTopic,
-		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=600000&flush_bytes=1024&flush_messages=10000&flush_frequency=1s&replay=1&message_error_backoff_multiplier_type=1ms",
+		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=600000&flush_frequency=1s&replay=1",
 			kafkaPartitions, kafkaReplicationFactor),
 	}
 
@@ -318,10 +318,10 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	go produceMessages(logger, &wg, producerClient, numberOfMessages)
 	wg.Wait()
 
-	c := make(chan struct{})
+	c := make(chan []byte)
 	errClosure := func(message KafkaMessage) error {
 		logger.Infof("Consumer closure received message: %s, Offset: %d, Partition: %d", string(message.Message.Value), message.Message.Offset, message.Message.Partition)
-		c <- struct{}{}
+		c <- message.Message.Value
 
 		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
 	}
@@ -329,16 +329,41 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test", false)
 	require.NoError(t, err)
 
-	client.Start(ctx, errClosure)
+	// WithRetryAndMoveOn(3, 1, time.Millisecond) is the key here - we're testing that the consumer will retry 3 times before moving on
+	client.Start(ctx, errClosure, WithRetryAndMoveOn(3, 1, time.Millisecond))
 
-	count := 0
-	for count < numberOfMessages*4 { // each message is processed 4 times before offset commit
+	messagesReceived := [][]byte{}
+	timeout := time.After(10 * time.Second)
+
+	// wait for 4 attempts on each of the 2 original messages
+	// or 10 seconds, whichever comes first
+	for i := 0; i < numberOfMessages*4; i++ { // each message is processed 4 times before offset commit
 		select {
-		case <-time.After(30 * time.Second):
-			t.Fatal("Timed out waiting")
-		case <-c:
-			count++
+		case <-timeout:
+			i = numberOfMessages * 4
+		case msg := <-c:
+			messagesReceived = append(messagesReceived, msg)
 		}
+	}
+	// In total we should have 4 messages (1 + 3 retries) for each of the 2 original messages
+	require.Equal(t, numberOfMessages*4, len(messagesReceived))
+
+	// Check that first 4 messages are the same first message
+	firstValue := 0
+
+	for i := 0; i < 4; i++ {
+		value, err := byteArrayToIntFromString(messagesReceived[i])
+		require.NoError(t, err)
+		require.Equal(t, firstValue, value)
+	}
+
+	// Check next 4 messages are the same second message
+	secondValue := 1
+
+	for i := 4; i < 8; i++ {
+		value, err := byteArrayToIntFromString(messagesReceived[i])
+		require.NoError(t, err)
+		require.Equal(t, secondValue, value)
 	}
 }
 
