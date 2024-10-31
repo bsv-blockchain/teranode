@@ -160,6 +160,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.logger.Infof("Stopping blockassembler as ctx is done")
 				close(b.miningCandidateCh)
 				close(b.blockchainSubscriptionCh)
+
 				return
 
 			case <-b.resetCh:
@@ -213,6 +214,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.logger.Warnf("[BlockAssembler][Reset] resetting to new best block header: %d", meta.Height)
 				b.bestBlockHeader.Store(bestBlockchainBlockHeader)
 				b.bestBlockHeight.Store(currentHeight)
+
 				if err = b.SetState(ctx); err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error setting state: %v", err)
 				}
@@ -261,8 +263,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			case notification := <-b.blockchainSubscriptionCh:
 				b.currentRunningState.Store("blockchainSubscription")
 
-				switch notification.Type {
-				case model.NotificationType_Block:
+				if notification.Type == model.NotificationType_Block {
 					b.UpdateBestBlock(ctx)
 				}
 			} // select
@@ -277,6 +278,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		return
 	}
 	b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
+
 	defer b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), meta.Height)
 
 	prometheusBlockAssemblyBestBlockHeight.Set(float64(meta.Height))
@@ -304,6 +306,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		}
 
 		b.currentRunningState.Store("movingUp")
+
 		if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
 			b.logger.Errorf("[BlockAssembler][%s] error moveUpBlock in subtree processor: %v", bestBlockchainBlockHeader.Hash(), err)
 			return
@@ -339,6 +342,7 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 	bestBlockHeader, bestBlockHeight, err := b.GetState(ctx)
 	b.bestBlockHeight.Store(bestBlockHeight)
 	b.bestBlockHeader.Store(bestBlockHeader)
+
 	if err != nil {
 		// TODO what is the best way to handle errors wrapped in grpc rpc errors?
 		if strings.Contains(err.Error(), sql.ErrNoRows.Error()) {
@@ -411,6 +415,7 @@ func (b *BlockAssembler) SetState(ctx context.Context) error {
 	state = append(state[:4], blockHeaderBytes...)
 
 	b.logger.Debugf("[BlockAssembler] setting state: %d: %s", blockHeight, blockHeader.Hash())
+
 	return b.blockchainClient.SetState(ctx, "BlockAssembler", state)
 }
 
@@ -472,6 +477,8 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// Get the hash of the last subtree in the list...
 	// We do this by using the same subtree processor logic to get the top tree hash.
 	id := &chainhash.Hash{}
+	var txCount uint32
+	var sizeWithoutCoinbase uint32
 
 	if len(subtrees) > 0 {
 		topTree, err := util.NewIncompleteTreeByLeafCount(len(subtrees))
@@ -480,6 +487,10 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		}
 		for _, subtree := range subtrees {
 			_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
+			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
+			txCount += uint32(len(subtree.Nodes))
+			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
+			sizeWithoutCoinbase += uint32(subtree.SizeInBytes)
 		}
 		id = topTree.RootHash()
 	}
@@ -507,6 +518,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	}
 
 	var coinbaseMerkleProofBytes [][]byte
+
 	if len(subtrees) > 0 {
 		coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtrees)
 		if err != nil {
@@ -527,14 +539,16 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	previousHash := b.bestBlockHeader.Load().Hash().CloneBytes()
 	miningCandidate := &model.MiningCandidate{
 		// create a job ID from the top tree hash and the previous block hash, to prevent empty block job id collisions
-		Id:            chainhash.HashB(append(append(id[:], previousHash...), timeBytes...)),
-		PreviousHash:  previousHash,
-		CoinbaseValue: coinbaseValue,
-		Version:       1,
-		NBits:         nBits.CloneBytes(),
-		Height:        b.bestBlockHeight.Load() + 1,
-		Time:          timeNow,
-		MerkleProof:   coinbaseMerkleProofBytes,
+		Id:                  chainhash.HashB(append(append(id[:], previousHash...), timeBytes...)),
+		PreviousHash:        previousHash,
+		CoinbaseValue:       coinbaseValue,
+		Version:             1,
+		NBits:               nBits.CloneBytes(),
+		Height:              b.bestBlockHeight.Load() + 1,
+		Time:                timeNow,
+		MerkleProof:         coinbaseMerkleProofBytes,
+		NumTxs:              txCount,
+		SizeWithoutCoinbase: sizeWithoutCoinbase,
 		// nolint:gosec
 		SubtreeCount: uint32(len(subtrees)),
 	}
@@ -696,6 +710,7 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 		if err != nil {
 			return nil, errors.NewProcessingError("error getting next work required", err)
 		}
+
 		return nbit, nil
 	}
 

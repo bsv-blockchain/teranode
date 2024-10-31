@@ -49,6 +49,8 @@ var (
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlobError                  = New(ERR_BLOB_ERROR, "blob error")
 	ErrBlockParentNotMined        = New(ERR_BLOCK_PARENT_NOT_MINED, "block parent not mined")
+	ErrInvalidSubnet              = New(ERR_INVALID_SUBNET, "invalid subnet")
+	ErrInvalidIP                  = New(ERR_INVALID_IP, "invalid ip")
 )
 
 func NewUnknownError(message string, params ...interface{}) *Error {

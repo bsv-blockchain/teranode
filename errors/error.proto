@@ -70,4 +70,8 @@ enum ERR {
   // State errors 90-99
   STATE_INITIALIZATION=90;
   STATE_ERROR=99;
+  // Network errors 100-109
+  NETWORK_ERROR=100;
+  INVALID_SUBNET=101;
+  INVALID_IP=102;
 }
