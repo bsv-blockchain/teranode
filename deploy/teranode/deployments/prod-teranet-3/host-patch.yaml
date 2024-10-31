@@ -11,30 +11,6 @@ spec:
         host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
       httpsIngress:
         host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
-  blockAssembly:
-    spec:
-      grpcIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
-      httpIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
-      httpsIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
-  blockValidator:
-    spec:
-      grpcIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
-      httpIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
-      httpsIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
-  blockchain:
-    spec:
-      grpcIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
-      httpIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
-      httpsIngress:
-        host: eu-central-1-teranode-prod-teranet-3.ubsv.dev
   peer:
     spec:
       grpcIngress:
