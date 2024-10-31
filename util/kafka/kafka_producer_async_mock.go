@@ -20,6 +20,10 @@ func (c *KafkaAsyncProducerMock) Start(ctx context.Context, ch chan *Message) {
 	// mock implementation
 }
 
+func (c *KafkaAsyncProducerMock) Stop() error {
+	return nil
+}
+
 func (c *KafkaAsyncProducerMock) BrokersURL() []string {
 	return nil
 }

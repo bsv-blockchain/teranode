@@ -119,7 +119,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 100))
-	defer producerClient.Close()
+	defer producerClient.Stop()
 
 	numberOfMessages := 100
 	go produceMessages(logger, producerClient, numberOfMessages)
@@ -208,7 +208,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 10000))
-	defer producerClient.Close()
+	defer producerClient.Stop()
 
 	counter := 0
 
@@ -336,7 +336,7 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 10000))
-	defer producerClient.Close()
+	defer producerClient.Stop()
 
 	numberOfMessages := 2
 	go produceMessages(logger, producerClient, numberOfMessages)
@@ -452,7 +452,7 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	require.NoError(t, err)
 
 	producer.Start(ctx, make(chan *Message, 100))
-	defer producer.Close()
+	defer producer.Stop()
 
 	t.Log("Publishing first batch of test messages...")
 

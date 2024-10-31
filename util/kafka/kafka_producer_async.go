@@ -21,7 +21,7 @@ import (
 
 type KafkaAsyncProducerI interface {
 	Start(ctx context.Context, ch chan *Message)
-	Close() error
+	Stop() error
 	BrokersURL() []string
 	Publish(msg *Message)
 }
@@ -184,13 +184,13 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
 		}
 
-		c.Close()
+		c.Stop()
 	}()
 
 	wg.Wait() // don't continue until we know we know the go func has started and is ready to accept messages on the PublishChannel
 }
 
-func (c *KafkaAsyncProducer) Close() error {
+func (c *KafkaAsyncProducer) Stop() error {
 	if c == nil {
 		return nil
 	}
