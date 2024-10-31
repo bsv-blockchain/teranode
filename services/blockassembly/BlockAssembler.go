@@ -17,11 +17,16 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+)
+
+var (
+	stats = gocore.NewStat("blockassembler")
 )
 
 type miningCandidateResponse struct {
@@ -179,16 +184,30 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					continue
 				}
 
+				isLegacySync, err := b.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateLEGACYSYNCING)
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler][Reset] error getting FSM state: %v", err)
+
+					// if we can't get the FSM state, we assume we are not in legacy sync, which is the default, but less optimized
+					isLegacySync = false
+				}
+
 				currentHeight := meta.Height
-				if response := b.subtreeProcessor.Reset(b.bestBlockHeader.Load(), moveDownBlocks, moveUpBlocks); response.Err != nil {
+
+				if response := b.subtreeProcessor.Reset(b.bestBlockHeader.Load(), moveDownBlocks, moveUpBlocks, isLegacySync); response.Err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", err)
 					// something went wrong, we need to set the best block header in the block assembly to be the
 					// same as the subtree processor's best block header
 					bestBlockchainBlockHeader = b.subtreeProcessor.GetCurrentBlockHeader()
 
-					// set the new height based on the response counts
-					// nolint:gosec
-					currentHeight = uint32(int(meta.Height) - len(response.MovedDownBlocks) + len(response.MovedUpBlocks))
+					_, bestBlockchainBlockHeaderMeta, err := b.blockchainClient.GetBlockHeader(ctx, bestBlockchainBlockHeader.Hash())
+					if err != nil {
+						b.logger.Errorf("[BlockAssembler][Reset] error getting best block header meta: %v", err)
+						continue
+					}
+
+					// set the new height based on the best block header from the subtree processor
+					currentHeight = bestBlockchainBlockHeaderMeta.Height
 				}
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting to new best block header: %d", meta.Height)
@@ -551,6 +570,13 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 }
 
 func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.BlockHeader) ([]*model.Block, []*model.Block, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "getReorgBlocks",
+		tracing.WithParentStat(stats),
+		tracing.WithHistogram(prometheusBlockAssemblerGetReorgBlocksDuration),
+		tracing.WithLogMessage(b.logger, "[getReorgBlocks] called"),
+	)
+	defer deferFn()
+
 	moveDownBlockHeaders, moveUpBlockHeaders, err := b.getReorgBlockHeaders(ctx, header)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error getting reorg block headers", err)

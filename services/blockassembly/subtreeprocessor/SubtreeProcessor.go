@@ -51,12 +51,11 @@ type resetBlocks struct {
 	moveDownBlocks []*model.Block
 	moveUpBlocks   []*model.Block
 	responseCh     chan ResetResponse
+	isLegacySync   bool
 }
 
 type ResetResponse struct {
-	MovedDownBlocks []*model.Block
-	MovedUpBlocks   []*model.Block
-	Err             error
+	Err error
 }
 
 type SubtreeProcessor struct {
@@ -229,9 +228,14 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, subtreeStor
 				stp.deDuplicateTransactions()
 				stp.currentRunningState.Store("running")
 
-			case resetBlocks := <-stp.resetCh:
+			case resetBlocksMsg := <-stp.resetCh:
 				stp.currentRunningState.Store("resetBlocks")
-				stp.reset(resetBlocks.blockHeader, resetBlocks.moveDownBlocks, resetBlocks.moveUpBlocks, resetBlocks.responseCh)
+				err = stp.reset(resetBlocksMsg.blockHeader, resetBlocksMsg.moveDownBlocks, resetBlocksMsg.moveUpBlocks, resetBlocksMsg.isLegacySync)
+
+				if resetBlocksMsg.responseCh != nil {
+					resetBlocksMsg.responseCh <- ResetResponse{Err: err}
+				}
+
 				stp.currentRunningState.Store("running")
 
 			default:
@@ -292,19 +296,20 @@ func (stp *SubtreeProcessor) GetCurrentRunningState() string {
 // Reset resets the subtree processor, removing all subtrees and transactions
 // this will be called from the block assembler in a channel select, making sure no other operations are happening
 // the queue will still be ingesting transactions
-func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block) ResetResponse {
+func (stp *SubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block, isLegacySync bool) ResetResponse {
 	responseCh := make(chan ResetResponse)
 	stp.resetCh <- &resetBlocks{
 		blockHeader:    blockHeader,
 		moveDownBlocks: moveDownBlocks,
 		moveUpBlocks:   moveUpBlocks,
 		responseCh:     responseCh,
+		isLegacySync:   isLegacySync,
 	}
 
 	return <-responseCh
 }
 
-func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block, responseCh chan ResetResponse) {
+func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlocks []*model.Block, moveUpBlocks []*model.Block, isLegacySync bool) error {
 	stp.logger.Warnf("[SubtreeProcessor][Reset] Resetting subtree processor with %d moveDownBlocks and %d moveUpBlocks", len(moveDownBlocks), len(moveUpBlocks))
 	stp.chainedSubtrees = make([]*util.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
@@ -325,53 +330,65 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveDownBlock
 		}
 	}
 
-	movedDownBlocks := make([]*model.Block, 0, len(moveDownBlocks))
-	movedUpBlocks := make([]*model.Block, 0, len(moveUpBlocks))
-
 	for _, block := range moveDownBlocks {
 		if err := stp.utxoStore.Delete(context.Background(), block.CoinbaseTx.TxIDChainHash()); err != nil {
 			// no need to error out if the key doesn't exist anyway
 			if !errors.Is(err, errors.ErrTxNotFound) {
-				responseCh <- ResetResponse{
-					MovedDownBlocks: movedDownBlocks,
-					MovedUpBlocks:   movedUpBlocks,
-					Err:             errors.NewProcessingError("[SubtreeProcessor][Reset] error deleting utxos for tx %s", block.CoinbaseTx.String(), err),
+				return errors.NewProcessingError("[SubtreeProcessor][Reset] error deleting utxos for tx %s", block.CoinbaseTx.String(), err)
+			}
+		}
+
+		stp.currentBlockHeader = block.Header
+	}
+
+	// optimized version for legacy sync
+	if isLegacySync {
+		coinbaseTxsAdded := sync.Map{}
+
+		g, gCtx := errgroup.WithContext(context.Background())
+
+		for _, block := range moveUpBlocks {
+			g.Go(func() error {
+				if err := stp.processCoinbaseUtxos(gCtx, block); err != nil {
+					return err
 				}
 
-				return
-			}
+				coinbaseTxsAdded.Store(block.Hash().String(), block)
+
+				return nil
+			})
 		}
 
-		stp.currentBlockHeader = block.Header
-		movedDownBlocks = append(movedDownBlocks, block)
-	}
+		if err := g.Wait(); err != nil {
+			coinbaseTxsAdded.Range(func(key, value interface{}) bool {
+				// remove all the coinbase transactions we added
+				block := value.(*model.Block)
+				if delErr := stp.utxoStore.Delete(context.Background(), block.CoinbaseTx.TxIDChainHash()); err != nil {
+					stp.logger.Errorf("[SubtreeProcessor][Reset] error deleting utxos for coinbase tx %s: %v", block.CoinbaseTx.String(), delErr)
+				}
 
-	for _, block := range moveUpBlocks {
-		if err := stp.processCoinbaseUtxos(context.Background(), block); err != nil {
-			responseCh <- ResetResponse{
-				MovedDownBlocks: movedDownBlocks,
-				MovedUpBlocks:   movedUpBlocks,
-				Err:             errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err),
-			}
+				return true
+			})
 
-			return
+			return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
 		}
 
-		stp.currentBlockHeader = block.Header
-		movedUpBlocks = append(movedUpBlocks, block)
-	}
+		stp.currentBlockHeader = blockHeader
+	} else {
+		for _, block := range moveUpBlocks {
+			if err := stp.processCoinbaseUtxos(context.Background(), block); err != nil {
+				return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
+			}
 
-	stp.currentBlockHeader = blockHeader
+			stp.currentBlockHeader = block.Header
+		}
+	}
 
 	// we do not clear the removeMap, this will always be valid
 	// stp.removeMap = util.NewSwissMap(0)
 	stp.logger.Warnf("[SubtreeProcessor][Reset] Resetting subtree processor DONE")
 
-	responseCh <- ResetResponse{
-		MovedDownBlocks: movedDownBlocks,
-		MovedUpBlocks:   movedUpBlocks,
-		Err:             nil,
-	}
+	return nil
 }
 
 func (stp *SubtreeProcessor) SetCurrentBlockHeader(blockHeader *model.BlockHeader) {
@@ -741,7 +758,7 @@ func (stp *SubtreeProcessor) moveDownBlocks(ctx context.Context, blocks []*model
 			})
 		}
 
-		if err := g.Wait(); err != nil {
+		if err = g.Wait(); err != nil {
 			return errors.NewProcessingError("[moveDownBlocks][%s], block %d (block hash: %v), error getting subtrees", block.String(), i, block.Hash(), err)
 		}
 
