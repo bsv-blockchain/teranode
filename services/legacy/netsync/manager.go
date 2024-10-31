@@ -341,10 +341,9 @@ func (sm *SyncManager) startSync() {
 			continue
 		}
 
-		// Remove sync candidate peers that are no longer candidates due
+		// Skip sync candidate peers that are no longer candidates due
 		// to passing their latest known block.
 		if peer.LastBlock() < int32(bestBlockHeaderMeta.Height) {
-			state.syncCandidate = false
 			continue
 		}
 
@@ -967,7 +966,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// if we're syncing the chain from scratch.
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
-		sm.logger.Infof("peer %s reports new height %d, current %v", peer.Addr(), heightUpdate, sm.current())
+		sm.logger.Debugf("peer %s reports new best height %d, current %v", peer.Addr(), peer.LastBlock(), sm.current())
 
 		if sm.current() { // used to check for isOrphan || sm.current()
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)
