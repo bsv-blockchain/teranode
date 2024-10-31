@@ -119,7 +119,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 100))
-	defer producerClient.Stop()
+	defer producerClient.Stop() //nolint:errcheck
 
 	numberOfMessages := 100
 	go produceMessages(logger, producerClient, numberOfMessages)
@@ -208,7 +208,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 10000))
-	defer producerClient.Stop()
+	defer producerClient.Stop() //nolint:errcheck
 
 	counter := 0
 
@@ -336,14 +336,14 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 10000))
-	defer producerClient.Stop()
+	defer producerClient.Stop() //nolint:errcheck
 
 	numberOfMessages := 2
 	go produceMessages(logger, producerClient, numberOfMessages)
 
 	c := make(chan []byte)
 	errClosure := func(message *KafkaMessage) error {
-		logger.Infof("Consumer closure received message: %s, Offset: %d, Partition: %d", string(message.Value), message.Offset, message.Partition)
+		logger.Infof("Consumer closure received message:	 %s, Offset: %d, Partition: %d", string(message.Value), message.Offset, message.Partition)
 		c <- message.Value
 
 		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
@@ -452,7 +452,7 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	require.NoError(t, err)
 
 	producer.Start(ctx, make(chan *Message, 100))
-	defer producer.Stop()
+	defer producer.Stop() //nolint:errcheck
 
 	t.Log("Publishing first batch of test messages...")
 
