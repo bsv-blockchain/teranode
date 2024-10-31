@@ -122,7 +122,7 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	defer producerClient.Close()
 
 	numberOfMessages := 100
-	go produceMessages(logger, nil, producerClient, numberOfMessages)
+	go produceMessages(logger, producerClient, numberOfMessages)
 
 	var wg sync.WaitGroup
 
@@ -255,11 +255,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 		},
 	}
 
-	wgP := sync.WaitGroup{}
-	wgP.Add(10)
-	// Send 10 messages
-	go produceMessages(logger, &wgP, producerClient, 10)
-	wgP.Wait()
+	go produceMessages(logger, producerClient, 10)
 
 	// Run test cases
 	for _, tCase := range testCases {
@@ -272,7 +268,22 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 
 			client.Start(ctx, tCase.consumerClosure, WithRetryAndMoveOn(3, 1, time.Millisecond))
 		})
-		wg.Wait()
+
+		// Create a channel to signal when the wait group is done
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		// Wait for either completion or timeout
+		select {
+		case <-done:
+			// Wait group completed successfully
+		case <-time.After(5 * time.Second):
+			t.Error("timeout waiting for messages")
+			t.FailNow()
+		}
 
 		// Stop the listener
 		cancel()
@@ -328,7 +339,7 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	defer producerClient.Close()
 
 	numberOfMessages := 2
-	go produceMessages(logger, nil, producerClient, numberOfMessages)
+	go produceMessages(logger, producerClient, numberOfMessages)
 
 	c := make(chan []byte)
 	errClosure := func(message *KafkaMessage) error {
@@ -393,17 +404,13 @@ func byteArrayToIntFromString(message []byte) (int, error) {
 	return intValue, nil
 }
 
-func produceMessages(logger ulogger.Logger, wg *sync.WaitGroup, client KafkaAsyncProducerI, numberOfMessages int) {
+func produceMessages(logger ulogger.Logger, client KafkaAsyncProducerI, numberOfMessages int) {
 	for i := 0; i < numberOfMessages; i++ {
 		msg := []byte(strconv.Itoa(i))
 		client.Publish(&Message{
 			Value: msg,
 		})
 		logger.Infof("pushed message: %v", string(msg))
-
-		if wg != nil {
-			wg.Done()
-		}
 	}
 }
 
