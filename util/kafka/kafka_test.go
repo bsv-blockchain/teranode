@@ -116,10 +116,10 @@ func Test_KafkaAsyncProducerConsumerAutoCommit_using_tc(t *testing.T) {
 	}
 
 	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
-	// defer producerClient.Producer.AsyncClose()
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 100))
+	defer producerClient.Close()
 
 	numberOfMessages := 100
 	go produceMessages(logger, nil, producerClient, numberOfMessages)
@@ -205,10 +205,10 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	var wg sync.WaitGroup
 
 	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
-	// defer producerClient.Producer.AsyncClose()
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 10000))
+	defer producerClient.Close()
 
 	counter := 0
 
@@ -322,10 +322,10 @@ func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) 
 	logger.Infof("Kafka URL: %v", kafkaURL)
 
 	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
-	// defer producerClient.Producer.AsyncClose()
 	require.NoError(t, err)
 
 	producerClient.Start(ctx, make(chan *Message, 10000))
+	defer producerClient.Close()
 
 	numberOfMessages := 2
 	go produceMessages(logger, nil, producerClient, numberOfMessages)
@@ -442,10 +442,10 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	}
 
 	producer, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
-	// defer producer.Producer.AsyncClose()
 	require.NoError(t, err)
 
 	producer.Start(ctx, make(chan *Message, 100))
+	defer producer.Close()
 
 	t.Log("Publishing first batch of test messages...")
 

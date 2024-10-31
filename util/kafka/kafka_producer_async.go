@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 
 type KafkaAsyncProducerI interface {
 	Start(ctx context.Context, ch chan *Message)
+	Close() error
 	BrokersURL() []string
 	Publish(msg *Message)
 }
@@ -53,6 +55,7 @@ type KafkaAsyncProducer struct {
 	Config         KafkaProducerConfig
 	Producer       sarama.AsyncProducer
 	publishChannel chan *Message
+	closed         atomic.Bool
 }
 
 func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, url *url.URL) (*KafkaAsyncProducer, error) {
@@ -181,10 +184,29 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
 		}
 
-		c.Producer.AsyncClose()
+		c.Close()
 	}()
 
 	wg.Wait() // don't continue until we know we know the go func has started and is ready to accept messages on the PublishChannel
+}
+
+func (c *KafkaAsyncProducer) Close() error {
+	if c == nil {
+		return nil
+	}
+
+	if c.closed.Load() {
+		return nil
+	}
+
+	c.closed.Store(true)
+
+	if err := c.Producer.Close(); err != nil {
+		c.closed.Store(false)
+		return err
+	}
+
+	return nil
 }
 
 func (c *KafkaAsyncProducer) BrokersURL() []string {
