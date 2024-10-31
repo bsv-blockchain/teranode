@@ -26,7 +26,7 @@ func CheckAll(ctx context.Context, checkLiveness bool, checks []Check) (int, str
 
 		var msg string
 
-		if message[0] == '{' && message[len(message)-1] == '}' {
+		if len(message) > 0 && message[0] == '{' && message[len(message)-1] == '}' {
 			msg = fmt.Sprintf(`{"resource": "%s", "status": "%d", "error": "%v", "dependencies": [%s]}`, check.Name, status, err, message)
 		} else {
 			msg = fmt.Sprintf(`{"resource": "%s", "status": "%d", "error": "%v", "message": "%s"}`, check.Name, status, err, message)
