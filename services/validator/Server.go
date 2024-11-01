@@ -172,7 +172,9 @@ func (v *Server) Start(ctx context.Context) error {
 		return nil
 	}
 
-	v.consumerClient.Start(ctx, kafkaMessageHandler)
+	if v.consumerClient != nil {
+		v.consumerClient.Start(ctx, kafkaMessageHandler)
+	}
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/url"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/ulogger"
@@ -11,13 +12,9 @@ import (
 
 // Producer functions
 func getKafkaAsyncProducer(ctx context.Context, logger ulogger.Logger, setting string) (*kafka.KafkaAsyncProducer, error) {
-	url, err, ok := gocore.Config().GetURL(setting)
+	url, err, _ := gocore.Config().GetURL(setting)
 	if err != nil {
 		return nil, errors.NewConfigurationError("failed to get Kafka URL for "+setting, err)
-	}
-
-	if !ok || url == nil {
-		return nil, errors.NewConfigurationError("missing Kafka URL for " + setting)
 	}
 
 	producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, url)
@@ -48,18 +45,20 @@ func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger) (*k
 }
 
 func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger) (kafka.KafkaAsyncProducerI, error) {
-	url, err, found := gocore.Config().GetURL("kafka_validatortxsConfig")
+
+	value, found := gocore.Config().Get("kafka_validatortxsConfig")
+	if !found || value == "" {
+		return nil, nil
+	}
+
+	url, err := url.ParseRequestURI(value)
 	if err != nil {
 		return nil, errors.NewConfigurationError("failed to get Kafka URL for validatortxs producer - kafka_validatortxsConfig", err)
 	}
 
-	var producer kafka.KafkaAsyncProducerI
-
-	if found && url != nil {
-		producer, err = kafka.NewKafkaAsyncProducerFromURL(ctx, logger, url)
-		if err != nil {
-			return nil, errors.NewServiceError("could not create validatortxs kafka producer for local validator", err)
-		}
+	producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, url)
+	if err != nil {
+		return nil, errors.NewServiceError("could not create validatortxs kafka producer for local validator", err)
 	}
 
 	return producer, nil
@@ -97,19 +96,21 @@ func getKafkaSubtreesConsumerGroup(logger ulogger.Logger, consumerGroupID string
 }
 
 func getKafkaTxConsumerGroup(logger ulogger.Logger, consumerGroupID string) (kafka.KafkaConsumerGroupI, error) {
-	var consumer kafka.KafkaConsumerGroupI
 
-	url, err, found := gocore.Config().GetURL("kafka_validatortxsConfig")
+	value, found := gocore.Config().Get("kafka_validatortxsConfig")
+	if !found || value == "" {
+		return nil, nil
+	}
+
+	url, err := url.ParseRequestURI(value)
 	if err != nil {
 		return nil, errors.NewConfigurationError("failed to get Kafka URL for validatortxs consumer - kafka_validatortxsConfig", err)
 	}
 
-	if found && url != nil {
-		consumer, err = kafka.NewKafkaConsumerGroupFromURL(logger, url, consumerGroupID, true)
+	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, consumerGroupID, true)
 
-		if err != nil {
-			return nil, errors.NewConfigurationError("failed to create new Kafka listener for kafka_validatortxsConfig", err)
-		}
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to create new Kafka listener for kafka_validatortxsConfig", err)
 	}
 
 	return consumer, nil
