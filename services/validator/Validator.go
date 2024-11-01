@@ -158,7 +158,7 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	validationOptions := ProcessOptions(opts...)
 
 	if err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
-		if v.rejectedTxKafkaProducerClient != nil {
+		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 			startKafka := time.Now()
 
 			v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
@@ -330,7 +330,7 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.H
 		}
 	}
 
-	if v.txmetaKafkaProducerClient != nil {
+	if v.txmetaKafkaProducerClient != nil { // tests may not set this
 		startKafka := time.Now()
 
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
@@ -354,7 +354,7 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHei
 		return nil, err
 	}
 
-	if v.txmetaKafkaProducerClient != nil {
+	if v.txmetaKafkaProducerClient != nil { // tests may not set this
 		startKafka := time.Now()
 
 		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
