@@ -13,7 +13,6 @@ import (
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo"
 	utxofactory "github.com/bitcoin-sv/ubsv/stores/utxo/_factory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
-	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/ordishs/gocore"
 )
 
@@ -90,30 +89,12 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger) (validator.I
 			return nil, errors.NewServiceError("could not create local validator client", err)
 		}
 
-		txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
-		if err != nil {
-			return nil, err
-		}
-
-		if !ok || txmetaKafkaURL == nil {
-			return nil, errors.NewConfigurationError("missing Kafka URL for txmeta")
-		}
-
-		txMetaKafkaProducerClient, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, txmetaKafkaURL)
+		txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, logger)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create txmeta kafka producer for local validator", err)
 		}
 
-		rejectedTxKafkaURL, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
-		if err != nil {
-			return nil, err
-		}
-
-		if !ok || rejectedTxKafkaURL == nil {
-			return nil, errors.NewConfigurationError("missing Kafka URL for rejectedTx")
-		}
-
-		rejectedTxKafkaProducerClient, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, rejectedTxKafkaURL)
+		rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, logger)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
 		}
