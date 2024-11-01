@@ -410,7 +410,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 				msgBytes, err = json.Marshal(blockMessage)
 				if err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] json marshal error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] blockMessage - json marshal error: %v", err)
 					continue
 				}
 
@@ -437,7 +437,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 				msgBytes, err = json.Marshal(miningOnMessage)
 				if err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] json marshal error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] miningOnMessage - json marshal error: %v", err)
 					continue
 				}
 
@@ -456,7 +456,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 				msgBytes, err = json.Marshal(subtreeMessage)
 				if err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] json marshal error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] subtreeMessage - json marshal error: %v", err)
 
 					continue
 				}
