@@ -415,7 +415,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				}
 
 				if err := s.P2PNode.Publish(ctx, blockTopicName, msgBytes); err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] publish error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] blockMessage - publish error: %v", err)
 				}
 			case model.NotificationType_MiningOn:
 				header, meta, err = s.blockchainClient.GetBestBlockHeader(ctx)
@@ -444,7 +444,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				s.logger.Debugf("P2P publishing miningOnMessage")
 
 				if err := s.P2PNode.Publish(ctx, miningOnTopicName, msgBytes); err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] publish error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] miningOnMessage - publish error: %v", err)
 				}
 			case model.NotificationType_Subtree:
 				// if it's a subtree notification send it on the subtree channel.
@@ -462,7 +462,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				}
 
 				if err := s.P2PNode.Publish(ctx, subtreeTopicName, msgBytes); err != nil {
-					s.logger.Errorf("[blockchainSubscriptionListener] publish error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] subtreeMessage - publish error: %v", err)
 				}
 			}
 		}
