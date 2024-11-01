@@ -61,6 +61,7 @@ func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger) (kafka.
 			return nil, errors.NewServiceError("could not create validatortxs kafka producer for local validator", err)
 		}
 	}
+
 	return producer, nil
 }
 
