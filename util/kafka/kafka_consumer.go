@@ -152,20 +152,37 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 type ConsumerOption func(*consumerOptions)
 
 type consumerOptions struct {
-	withRetryAnMoveOn   bool
+	withRetryAndMoveOn  bool
+	withRetryAndStop    bool
 	maxRetries          int
 	backoffMultiplier   int
 	backoffDurationType time.Duration
+	stopFn              func()
 }
 
-// WithRetryAndMoveOn configures retry behavior for the consumer function
+// WithRetryAndMoveOn configures error behaviour for the consumer function
 // After max retries, the error is logged and the message is skipped
 func WithRetryAndMoveOn(maxRetries, backoffMultiplier int, backoffDurationType time.Duration) ConsumerOption {
 	return func(o *consumerOptions) {
-		o.withRetryAnMoveOn = true
+		o.withRetryAndMoveOn = true
+		o.withRetryAndStop = false // can't have both options set
 		o.maxRetries = maxRetries
 		o.backoffMultiplier = backoffMultiplier
 		o.backoffDurationType = backoffDurationType
+	}
+}
+
+// WithRetryAndMoveOn configures error behaviour for the consumer function
+// After max retries, the error is logged and message consumption stops
+// Use this when you cannot proceed with the next message in the queue
+func WithRetryAndStop(maxRetries, backoffMultiplier int, backoffDurationType time.Duration, stopFn func()) ConsumerOption {
+	return func(o *consumerOptions) {
+		o.withRetryAndMoveOn = false // can't have both options set
+		o.withRetryAndStop = true
+		o.maxRetries = maxRetries
+		o.backoffMultiplier = backoffMultiplier
+		o.backoffDurationType = backoffDurationType
+		o.stopFn = stopFn
 	}
 }
 
@@ -175,7 +192,8 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 	}
 
 	options := &consumerOptions{
-		withRetryAnMoveOn:   false,
+		withRetryAndMoveOn:  false,
+		withRetryAndStop:    false,
 		maxRetries:          3,
 		backoffMultiplier:   2,
 		backoffDurationType: time.Second,
@@ -184,10 +202,10 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 		opt(options)
 	}
 
-	if options.withRetryAnMoveOn {
+	if options.withRetryAndMoveOn {
 		originalFn := consumerFn
 		consumerFn = func(msg *KafkaMessage) error {
-			_, err := retry.Retry(ctx, k.Config.Logger, func() (any, error) { //nolint:errcheck
+			_, err := retry.Retry(ctx, k.Config.Logger, func() (any, error) { // nolint:errcheck
 				return struct{}{}, originalFn(msg)
 			},
 				retry.WithRetryCount(options.maxRetries),
@@ -201,6 +219,32 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			}
 
 			return nil // give up and move on
+		}
+	}
+
+	if options.withRetryAndStop {
+		originalFn := consumerFn
+		consumerFn = func(msg *KafkaMessage) error {
+			_, err := retry.Retry(ctx, k.Config.Logger, func() (any, error) { // nolint:errcheck
+				return struct{}{}, originalFn(msg)
+			},
+				retry.WithRetryCount(options.maxRetries),
+				retry.WithBackoffMultiplier(options.backoffMultiplier),
+				retry.WithBackoffDurationType(options.backoffDurationType),
+				retry.WithMessage("[kafka_consumer] retrying processing kafka message..."))
+
+			// if we can't process the message, log the error and stop consuming any more messages
+			if err != nil {
+				if options.stopFn != nil {
+					k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message, stopping: %v", msg)
+					options.stopFn()
+				} else {
+					k.ConsumerGroup.Close() // nolint:errcheck
+					panic("error processing kafka message, with no stop function provided")
+				}
+			}
+
+			return nil
 		}
 	}
 

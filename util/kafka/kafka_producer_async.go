@@ -64,8 +64,8 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 		URL:                   url,
 		BrokersURL:            strings.Split(url.Host, ","),
 		Topic:                 strings.TrimPrefix(url.Path, "/"),
-		Partitions:            int32(util.GetQueryParamInt(url, "partitions", 1)),     //nolint:gosec
-		ReplicationFactor:     int16(util.GetQueryParamInt(url, "replication", 1)),    //nolint:gosec
+		Partitions:            int32(util.GetQueryParamInt(url, "partitions", 1)),     // nolint:gosec
+		ReplicationFactor:     int16(util.GetQueryParamInt(url, "replication", 1)),    // nolint:gosec
 		RetentionPeriodMillis: util.GetQueryParam(url, "retention", "600000"),         // 10 minutes
 		SegmentBytes:          util.GetQueryParam(url, "segment_bytes", "1073741824"), // 1GB default
 		FlushBytes:            util.GetQueryParamInt(url, "flush_bytes", 1024*1024),
@@ -184,7 +184,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
 		}
 
-		c.Stop() //nolint:errcheck
+		c.Stop() // nolint:errcheck
 	}()
 
 	wg.Wait() // don't continue until we know we know the go func has started and is ready to accept messages on the PublishChannel
