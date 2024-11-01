@@ -51,6 +51,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/felixge/fgprof"
+	"github.com/google/uuid"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
@@ -645,7 +646,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return errors.NewConfigurationError("failed to get Kafka URL for txmeta consumer - kafka_txmetaConfig", err)
 		}
 
-		txmetaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "subtreevalidation", true)
+		txmetaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "subtreevalidation-"+uuid.New().String(), true)
 		if err != nil {
 			return errors.NewConfigurationError("failed to create new Kafka listener for txmeta: %v", err)
 		}
