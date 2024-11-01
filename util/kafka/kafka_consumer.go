@@ -86,7 +86,7 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 		ConsumerGroupID:   consumerGroupID,
 		ConsumerCount:     consumerCount,
 		AutoCommitEnabled: autoCommit,
-		Replay:            util.GetQueryParamInt(url, "replay", 0) == 1,
+		Replay:            util.GetQueryParamInt(url, "replay", 1) == 1, // default is start from beginning
 	}
 
 	return NewKafkaConsumerGroup(consumerConfig)
