@@ -355,81 +355,77 @@ func (kc *KafkaConsumer) Cleanup(session sarama.ConsumerGroupSession) error {
 
 // ConsumeClaim must start a consumer loop of ConsumerGroupClaim's Messages().
 func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
-	const batchSize = 1000
+	const (
+		batchSize      = 1000
+		commitInterval = time.Minute
+	)
+
+	messageProcessedSinceLastCommit := false
+	commitTicker := time.NewTicker(commitInterval)
+	defer commitTicker.Stop()
+
+	// Create a buffered channel for messages to reduce context switching
+	messages := make(chan *sarama.ConsumerMessage, batchSize)
+
+	// Start a separate goroutine to receive messages
+	go func() {
+		for message := range claim.Messages() {
+			select {
+			case messages <- message:
+			case <-session.Context().Done():
+				return
+			}
+		}
+	}()
 
 	for {
 		select {
 		case <-session.Context().Done():
-			// Should return when `session.Context()` is done.
-			// If not, will raise `ErrRebalanceInProgress` or `read tcp <ip>:<port>: i/o timeout` when kafka rebalance. see:
-			// https://github.com/Shopify/sarama/issues/1192
-			// return session.Context().Err()
 			return session.Context().Err()
 
-		case message := <-claim.Messages():
+		case <-commitTicker.C:
+			if !kc.cfg.AutoCommitEnabled && messageProcessedSinceLastCommit {
+				session.Commit()
+
+				messageProcessedSinceLastCommit = false
+			}
+
+		case message := <-messages:
 			if message == nil {
 				continue
 			}
 
-			var err error
-			// Process first message
-			if kc.cfg.AutoCommitEnabled {
-				err = kc.handleMessagesWithAutoCommit(message)
-			} else {
-				err = kc.handleMessageWithManualCommit(session, message)
-			}
+			// Process batch of messages
+			processed := 0
+			for ; processed < batchSize; processed++ {
+				var err error
+				if kc.cfg.AutoCommitEnabled {
+					err = kc.handleMessagesWithAutoCommit(message)
+				} else {
+					err = kc.handleMessageWithManualCommit(session, message)
+					if err == nil {
+						messageProcessedSinceLastCommit = true
+					}
+				}
 
-			if err != nil {
-				kc.cfg.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
-					message.Topic, message.Partition, message.Offset, err)
-				return err
-			}
+				if err != nil {
+					kc.cfg.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
+						message.Topic, message.Partition, message.Offset, err)
+					return err
+				}
 
-			// Process any additional messages available (up to batchSize-1)
-			processed := 1
-			for processed < batchSize {
+				// Try to get next message without blocking
 				select {
-				case <-session.Context().Done():
-					// Should return when `session.Context()` is done.
-					// If not, will raise `ErrRebalanceInProgress` or `read tcp <ip>:<port>: i/o timeout` when kafka rebalance. see:
-					// https://github.com/Shopify/sarama/issues/1192
-					return session.Context().Err()
-				case message := <-claim.Messages():
+				case message = <-messages:
 					if message == nil {
 						break
 					}
-
-					if kc.cfg.AutoCommitEnabled {
-						err = kc.handleMessagesWithAutoCommit(message)
-					} else {
-						err = kc.handleMessageWithManualCommit(session, message)
-					}
-
-					if err != nil {
-						kc.cfg.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
-							message.Topic, message.Partition, message.Offset, err)
-						return err
-					}
-
-					processed++
 				default:
 					// No more messages immediately available
-					if !kc.cfg.AutoCommitEnabled {
-						// kc.cfg.Logger.Infof("Committing offsets for session %s", session.MemberID())
-						// kafka commit concept is confusing as it does two things:
-						// - auto commit enabled will 1) update the offset to the latest message received and 2) commit this to the server
-						// - auto commit disabled means we do both things ourselves - 1) mark the offset and 2) commit this to the server
-						// When it's disabled, we mark the offset manually inside handleMessageWithManualCommit() and
-						// we push this to the server (commit) here
-						// NOTE: session.Commit() is a blocking call so we don't do it on every message processed, only when the batch is complete
-						// In theory this means if the process is terminated before the commit, we could find that when we start up again,
-						// we're given the last batch of messages all over again.
-						session.Commit()
-					}
-
-					break
+					goto BatchComplete
 				}
 			}
+		BatchComplete:
 		}
 	}
 }
