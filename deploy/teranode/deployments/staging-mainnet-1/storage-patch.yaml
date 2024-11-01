@@ -1,0 +1,41 @@
+apiVersion: teranode.bsvblockchain.org/v1alpha1
+kind: Cluster
+metadata:
+  name: teranode
+spec:
+  asset:
+    spec:
+      storageClass: gp2
+  blockAssembly:
+    spec:
+      storageClass: gp2
+  blockPersister:
+    spec:
+      storageClass: gp2
+  blockValidator:
+    spec:
+      storageClass: gp2
+  blockchain:
+    spec:
+      storageClass: gp2
+  coinbase:
+    spec:
+      storageClass: gp2
+  legacy:
+    spec:
+      storageClass: gp2
+  miner:
+    spec:
+      storageClass: gp2
+  peer:
+    spec:
+      storageClass: gp2
+  propagation:
+    spec:
+      storageClass: gp2
+  subtreeValidator:
+    spec:
+      storageClass: gp2
+  utxoPersister:
+    spec:
+      storageClass: gp2
