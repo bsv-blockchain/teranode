@@ -669,17 +669,13 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 		return
 	}
 
-	if s.subtreeKafkaProducerClient != nil {
+	if s.subtreeKafkaProducerClient != nil { // tests may not set this
 		value := make([]byte, 0, chainhash.HashSize+len(subtreeMessage.DataHubUrl))
 		value = append(value, hash.CloneBytes()...)
 		value = append(value, []byte(subtreeMessage.DataHubUrl)...)
 		s.subtreeKafkaProducerClient.Publish(&kafka.Message{
 			Value: value,
 		})
-	} else {
-		if err = s.blockValidationClient.SubtreeFound(ctx, hash, subtreeMessage.DataHubUrl); err != nil {
-			s.logger.Errorf("[p2p] error validating subtree from %s: %v", subtreeMessage.DataHubUrl, err)
-		}
 	}
 }
 
