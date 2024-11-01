@@ -239,7 +239,10 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 					k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message, stopping: %v", msg)
 					options.stopFn()
 				} else {
-					k.ConsumerGroup.Close() // nolint:errcheck
+					c := k.ConsumerGroup
+					k.ConsumerGroup = nil
+
+					c.Close() // nolint:errcheck
 					panic("error processing kafka message, with no stop function provided")
 				}
 			}
@@ -307,8 +310,10 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			k.Config.Logger.Infof("[kafka] Context done, shutting down consumer for %s", k.Config.ConsumerGroupID)
 		}
 
-		if err := k.ConsumerGroup.Close(); err != nil {
-			k.Config.Logger.Errorf("[Kafka] %s: error closing client: %v", k.Config.ConsumerGroupID, err)
+		if k.ConsumerGroup != nil {
+			if err := k.ConsumerGroup.Close(); err != nil {
+				k.Config.Logger.Errorf("[Kafka] %s: error closing client: %v", k.Config.ConsumerGroupID, err)
+			}
 		}
 	}()
 

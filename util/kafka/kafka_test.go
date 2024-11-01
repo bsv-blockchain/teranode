@@ -290,7 +290,7 @@ func Test_KafkaAsyncProducerWithManualCommitParams_using_tc(t *testing.T) {
 	}
 }
 
-func Test_KafkaAsyncProducerWithManualCommitErrorClosure_using_tc(t *testing.T) {
+func Test_KafkaAsyncProducerWithManualCommitWithRetryAndMoveOnOption_using_tc(t *testing.T) {
 	t.Parallel()
 
 	// logger := ulogger.NewZeroLogger("test")
@@ -511,4 +511,111 @@ func TestKafkaConsumerOffsetContinuation(t *testing.T) {
 	consume()
 
 	require.Equal(t, []string{"msg3", "msg4"}, receivedMessages)
+}
+
+func Test_KafkaAsyncProducerWithManualCommitWithRetryAndStopOption_using_tc(t *testing.T) {
+	t.Parallel()
+
+	logger := ulogger.TestLogger{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	testContainer := &TestContainerWrapper{}
+	err := testContainer.RunContainer(5) // Using port offset 5 to avoid conflicts
+	require.NoError(t, err)
+
+	defer func() {
+		cleanupErr := testContainer.CleanUp()
+		if cleanupErr != nil {
+			t.Errorf("failed to clean up container: %v", cleanupErr)
+		}
+	}()
+
+	const (
+		kafkaPartitions        = 1
+		kafkaReplicationFactor = 1
+		kafkaTopic             = "unittest"
+	)
+
+	kafkaURL := &url.URL{
+		Scheme: "kafka",
+		Host:   testContainer.GetBrokerAddresses()[0],
+		Path:   kafkaTopic,
+		RawQuery: fmt.Sprintf("partitions=%d&replication=%d&retention=600000&flush_frequency=1s&replay=1",
+			kafkaPartitions, kafkaReplicationFactor),
+	}
+
+	logger.Infof("Kafka URL: %v", kafkaURL)
+
+	producerClient, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL)
+	require.NoError(t, err)
+
+	producerClient.Start(ctx, make(chan *Message, 10000))
+	defer producerClient.Stop() // nolint:errcheck
+
+	numberOfMessages := 2
+	go produceMessages(logger, producerClient, numberOfMessages)
+
+	messagesChan := make(chan []byte)
+	processingDone := make(chan struct{})
+
+	errClosure := func(message *KafkaMessage) error {
+		logger.Infof("Consumer closure received message: %s, Offset: %d, Partition: %d",
+			string(message.Value), message.Offset, message.Partition)
+
+		select {
+		case messagesChan <- message.Value:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+
+		return errors.New(errors.ERR_BLOCK_ERROR, "block error")
+	}
+
+	client, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_stop", false)
+	require.NoError(t, err)
+
+	stopped := false
+	// it should not bother doing a retry and just call the supplied stop func
+	client.Start(ctx, errClosure, WithRetryAndStop(0, 1, time.Millisecond, func() {
+		c := client.ConsumerGroup
+		client.ConsumerGroup = nil
+		stopped = true
+
+		c.Close()
+	}))
+
+	messagesReceived := [][]byte{}
+
+	go func() {
+		defer close(processingDone)
+
+		timeout := time.After(5 * time.Second)
+
+		// consume messages until timeout
+		for {
+			select {
+			case <-timeout:
+				return
+			case msg := <-messagesChan:
+				messagesReceived = append(messagesReceived, msg)
+			}
+		}
+	}()
+
+	<-processingDone
+
+	// Verify first message was attempted
+	require.Greater(t, len(messagesReceived), 0)
+	value, err := byteArrayToIntFromString(messagesReceived[0])
+	require.NoError(t, err)
+	require.Equal(t, 0, value)
+
+	// Verify second message was not attempted at all
+	require.Equal(t, 1, len(messagesReceived))
+
+	// Verify stop func was called
+	require.True(t, stopped)
+	require.Nil(t, client.ConsumerGroup)
 }
