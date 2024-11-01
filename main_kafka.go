@@ -45,7 +45,6 @@ func getKafkaTxmetaAsyncProducer(ctx context.Context, logger ulogger.Logger) (*k
 }
 
 func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger) (kafka.KafkaAsyncProducerI, error) {
-
 	value, found := gocore.Config().Get("kafka_validatortxsConfig")
 	if !found || value == "" {
 		return nil, nil
@@ -96,7 +95,6 @@ func getKafkaSubtreesConsumerGroup(logger ulogger.Logger, consumerGroupID string
 }
 
 func getKafkaTxConsumerGroup(logger ulogger.Logger, consumerGroupID string) (kafka.KafkaConsumerGroupI, error) {
-
 	value, found := gocore.Config().Get("kafka_validatortxsConfig")
 	if !found || value == "" {
 		return nil, nil

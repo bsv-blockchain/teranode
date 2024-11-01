@@ -444,7 +444,7 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 				}
 			}
 		BatchComplete:
-		} // noling:wsl
+		} // nolint:wsl
 	}
 }
 
