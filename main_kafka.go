@@ -92,7 +92,7 @@ func getKafkaRejectedTxConsumerGroup(logger ulogger.Logger, consumerGroupID stri
 }
 
 func getKafkaSubtreesConsumerGroup(logger ulogger.Logger, consumerGroupID string) (*kafka.KafkaConsumerGroup, error) {
-	return getKafkaConsumerGroup(logger, "kafka_subtreesConfig", consumerGroupID, false)
+	return getKafkaConsumerGroup(logger, "kafka_subtreesConfig", consumerGroupID, true)
 }
 
 func getKafkaTxConsumerGroup(logger ulogger.Logger, consumerGroupID string) (kafka.KafkaConsumerGroupI, error) {
