@@ -656,6 +656,23 @@ func CreateAndSendTxs(ctx context.Context, node tenv.TeranodeTestClient, count i
 	return txHashes, nil
 }
 
+func CreateAndSendTxsToASliceOfNodes(ctx context.Context, nodes []tenv.TeranodeTestClient, count int) ([]chainhash.Hash, error) {
+	var txHashes []chainhash.Hash
+
+	for i := 0; i < count; i++ {
+		tx, err := CreateAndSendTxToSliceOfNodes(ctx, nodes)
+		if err != nil {
+			return nil, errors.NewProcessingError("error creating raw transaction : %w", err)
+		}
+
+		txHashes = append(txHashes, tx)
+
+		time.Sleep(1 * time.Second) // Wait 10 seconds between transactions
+	}
+
+	return txHashes, nil
+}
+
 func CreateAndSendRawTxsConcurrently(ctx context.Context, node tf.BitcoinNode, count int) ([]chainhash.Hash, error) {
 	var wg sync.WaitGroup
 
