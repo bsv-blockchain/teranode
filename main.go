@@ -48,7 +48,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
-	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/felixge/fgprof"
 	"github.com/google/uuid"
@@ -318,12 +317,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksFinalConfig")
-		if err != nil || !ok {
-			return err
-		}
-
-		blockKafkaAsyncProducer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, blocksKafkaURL)
+		blockKafkaAsyncProducer, err := getKafkaBlocksAsyncProducer(ctx, logger)
 		if err != nil {
 			return err
 		}
@@ -361,44 +355,17 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		url, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
-		if err != nil {
-			return errors.NewConfigurationError("failed to get Kafka URL for rejectedTx consumer - kafka_rejectedTxConfig", err)
-		}
-
-		if !ok || url == nil {
-			return errors.NewConfigurationError("missing Kafka URL for rejectedTx consumer")
-		}
-
-		rejectedTxKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "p2p", true)
-		if err != nil {
-			return errors.NewConfigurationError("failed to create new Kafka listener for rejectedTx: %v", err)
-		}
-
-		subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
-		if err != nil {
-			return errors.NewConfigurationError("failed to get Kafka URL for subtrees async producer", err)
-		}
-
-		if !ok || subtreesKafkaURL == nil {
-			return errors.NewConfigurationError("missing Kafka URL for subtrees")
-		}
-
-		subtreeKafkaProducerClient, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, subtreesKafkaURL)
+		rejectedTxKafkaConsumerClient, err := getKafkaRejectedTxConsumerGroup(logger, "p2p")
 		if err != nil {
 			return err
 		}
 
-		blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksConfig")
+		subtreeKafkaProducerClient, err := getKafkaSubtreesAsyncProducer(ctx, logger)
 		if err != nil {
-			return errors.NewConfigurationError("failed to get Kafka URL for blocks async producer", err)
+			return err
 		}
 
-		if !ok || blocksKafkaURL == nil {
-			return errors.NewConfigurationError("missing Kafka URL for blocks")
-		}
-
-		blocksKafkaProducerClient, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, blocksKafkaURL)
+		blocksKafkaProducerClient, err := getKafkaBlocksAsyncProducer(ctx, logger)
 		if err != nil {
 			return err
 		}
@@ -525,14 +492,9 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		url, err, _ := gocore.Config().GetURL("kafka_blocksFinalConfig")
+		blocksFinalKafkaConsumerClient, err := getKafkaBlocksFinalConsumerGroup(logger, "blockpersister")
 		if err != nil {
-			return errors.NewConfigurationError("failed to get Kafka URL for blocksFinal consumer - kafka_blocksFinalConfig", err)
-		}
-
-		blocksFinalKafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "blockpersister", false)
-		if err != nil {
-			return errors.NewConfigurationError("failed to create new Kafka listener for blocksFinal: %v", err)
+			return err
 		}
 
 		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
@@ -631,24 +593,14 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		url, err, _ := gocore.Config().GetURL("kafka_subtreesConfig")
+		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(logger, "subtreevalidation-"+uuid.New().String())
 		if err != nil {
-			return errors.NewConfigurationError("failed to get Kafka URL for subtrees consumer - kafka_subtreesConfig", err)
+			return err
 		}
 
-		subtreeConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "subtreevalidation", false)
+		txmetaConsumerClient, err := getKafkaTxmetaConsumerGroup(logger, "subtreevalidation")
 		if err != nil {
-			return errors.NewConfigurationError("failed to create new Kafka listener for subtrees: %v", err)
-		}
-
-		url, err, _ = gocore.Config().GetURL("kafka_txmetaConfig")
-		if err != nil {
-			return errors.NewConfigurationError("failed to get Kafka URL for txmeta consumer - kafka_txmetaConfig", err)
-		}
-
-		txmetaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "subtreevalidation-"+uuid.New().String(), true)
-		if err != nil {
-			return errors.NewConfigurationError("failed to create new Kafka listener for txmeta: %v", err)
+			return err
 		}
 
 		subtreeValidationService, err := subtreevalidation.New(ctx,
@@ -698,14 +650,9 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				return err
 			}
 
-			url, err, _ := gocore.Config().GetURL("kafka_blocksConfig")
+			kafkaConsumerClient, err := getKafkaBlocksConsumerGroup(logger, "blockvalidation")
 			if err != nil {
-				return errors.NewConfigurationError("failed to get Kafka URL for blocks consumer - kafka_blocksConfig", err)
-			}
-
-			kafkaConsumerClient, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, "blockvalidation", false)
-			if err != nil {
-				return errors.NewConfigurationError("failed to get Kafka URL for blocks: %v", err)
+				return err
 			}
 
 			if err = sm.AddService("Block Validation", blockvalidation.New(
@@ -735,43 +682,19 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				return err
 			}
 
-			var consumerClient kafka.KafkaConsumerGroupI
-
-			kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
-			if err == nil && ok {
-				consumerClient, err = kafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, "validator", true)
-
-				if err != nil {
-					return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", kafkaURL.String(), err)
-				}
-			}
-
-			txMetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
+			consumerClient, err := getKafkaTxConsumerGroup(logger, "validator")
 			if err != nil {
-				return errors.NewConfigurationError("failed to get Kafka URL for txmeta consumer - kafka_txmetaConfig", err)
+				return err
 			}
 
-			if !ok || txMetaKafkaURL == nil {
-				return errors.NewConfigurationError("missing Kafka URL for txmeta")
-			}
-
-			txMetaKafkaProducerClient, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, txMetaKafkaURL)
+			txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, logger)
 			if err != nil {
-				return errors.NewServiceError("could not create txmeta kafka producer for local validator", err)
+				return err
 			}
 
-			rejectedTxKafkaURL, err, ok := gocore.Config().GetURL("kafka_rejectedTxConfig")
+			rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, logger)
 			if err != nil {
-				return errors.NewConfigurationError("failed to get Kafka URL for rejectedTx consumer - kafka_rejectedTxConfig", err)
-			}
-
-			if !ok || rejectedTxKafkaURL == nil {
-				return errors.NewConfigurationError("missing Kafka URL for rejectedTx")
-			}
-
-			rejectedTxKafkaProducerClient, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, rejectedTxKafkaURL)
-			if err != nil {
-				return errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
+				return err
 			}
 
 			if err = sm.AddService("Validator", validator.NewServer(
@@ -842,18 +765,9 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 					return err
 				}
 
-				validatortxsKafkaURL, err, found := gocore.Config().GetURL("kafka_validatortxsConfig")
+				validatorKafkaProducerClient, err := getKafkaTxAsyncProducer(ctx, logger)
 				if err != nil {
 					return err
-				}
-
-				var validatorKafkaProducerClient kafka.KafkaAsyncProducerI
-
-				if found && validatortxsKafkaURL != nil {
-					validatorKafkaProducerClient, err = kafka.NewKafkaAsyncProducerFromURL(ctx, logger, validatortxsKafkaURL)
-					if err != nil {
-						return err
-					}
 				}
 
 				if err = sm.AddService("PropagationServer", propagation.New(
