@@ -380,7 +380,7 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 			}
 
 			if err != nil {
-				kc.cfg.Logger.Errorf("[kafka_consumer] consumer will close - failed to process message (topic: %s, partition: %d, offset: %d): %v",
+				kc.cfg.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
 					message.Topic, message.Partition, message.Offset, err)
 				return err
 			}
@@ -406,7 +406,7 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 					}
 
 					if err != nil {
-						kc.cfg.Logger.Errorf("[kafka_consumer] consumer will close - failed to process message (topic: %s, partition: %d, offset: %d): %v",
+						kc.cfg.Logger.Errorf("[kafka_consumer] failed to process message (topic: %s, partition: %d, offset: %d): %v",
 							message.Topic, message.Partition, message.Offset, err)
 						return err
 					}
