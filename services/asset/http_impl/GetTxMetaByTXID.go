@@ -1,3 +1,4 @@
+// Package http_impl provides HTTP handlers for blockchain data retrieval and analysis.
 package http_impl
 
 import (
@@ -22,6 +23,82 @@ type aerospikeRecord struct {
 	Expiration uint32                 `json:"expiration"`
 }
 
+// GetTxMetaByTXID creates an HTTP handler for retrieving transaction metadata directly
+// from the Aerospike store. Supports multiple response formats.
+//
+// Parameters:
+//   - mode: ReadMode specifying the response format (JSON, BINARY_STREAM, or HEX)
+//
+// Returns:
+//   - func(c echo.Context) error: Echo handler function
+//
+// URL Parameters:
+//   - hash: Transaction hash (hex string)
+//
+// Configuration Required:
+//   - utxostore: URL configuration for Aerospike connection
+//   - Default set name: "txmeta" if not specified in URL query
+//
+// HTTP Response Formats:
+//
+//  1. JSON (mode = JSON):
+//     Status: 200 OK
+//     Content-Type: application/json
+//     Body: Aerospike record with metadata:
+//     {
+//     "key": "<string>",                // Aerospike key string
+//     "digest": "<string>",             // Key digest (hex)
+//     "namespace": "<string>",          // Aerospike namespace
+//     "set": "<string>",                // Set name
+//     "node": "<string>",               // Aerospike node name
+//     "bins": {                         // Record data
+//     "tx": "<hex string>",           // Transaction data
+//     "parentTxHashes": "<hex string>",
+//     // ... other bins
+//     },
+//     "generation": <uint32>,           // Record generation
+//     "expiration": <uint32>            // Record expiration
+//     }
+//
+//  2. HEX (mode = HEX):
+//     Status: 200 OK
+//     Content-Type: text/plain
+//     Body: Hexadecimal string of the Aerospike record string representation
+//
+//  3. Binary (mode = BINARY_STREAM):
+//     Status: 200 OK
+//     Content-Type: application/octet-stream
+//     Body: Raw bytes of the Aerospike record string representation
+//
+// Error Responses:
+//   - 500 Internal Server Error:
+//   - Missing or invalid utxostore configuration
+//   - Aerospike connection errors
+//   - Invalid transaction hash
+//   - Record retrieval errors
+//   - JSON marshalling errors
+//   - Invalid read mode
+//
+// Monitoring:
+//   - Execution time recorded in "GetUTXOsByTXID_http" statistic
+//   - Prometheus metric "asset_http_get_utxo" tracks successful responses
+//   - Debug logging of request handling
+//
+// Example Usage:
+//
+//	# Get metadata in JSON format
+//	GET /tx/meta/<txid>
+//
+//	# Get metadata in hex format
+//	GET /tx/meta/<txid>/hex
+//
+//	# Get metadata in binary format
+//	GET /tx/meta/<txid>/raw
+//
+// Notes:
+//   - Requires Aerospike database connection
+//   - Binary data in JSON response is hex-encoded
+//   - Direct access to underlying storage system
 func (h *HTTP) GetTxMetaByTXID(mode ReadMode) func(c echo.Context) error {
 
 	return func(c echo.Context) error {

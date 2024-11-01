@@ -1,3 +1,5 @@
+// Package centrifuge_impl provides WebSocket handling capabilities for the Centrifuge server,
+// enabling real-time bidirectional communication between clients and the server.
 package centrifuge_impl
 
 import (
@@ -75,7 +77,14 @@ type WebsocketHandler struct {
 
 var writeBufferPool = &sync.Pool{}
 
-// NewWebsocketHandler creates new WebsocketHandler.
+// NewWebsocketHandler creates a new WebSocket handler with the specified configuration.
+//
+// Parameters:
+//   - node: Centrifuge node instance
+//   - config: WebSocket configuration options
+//
+// Returns:
+//   - http.Handler: Configured WebSocket handler
 func NewWebsocketHandler(n *centrifuge.Node, c WebsocketConfig) *WebsocketHandler {
 	upgrade := &websocket.Upgrader{
 		ReadBufferSize:    c.ReadBufferSize,
@@ -98,6 +107,8 @@ func NewWebsocketHandler(n *centrifuge.Node, c WebsocketConfig) *WebsocketHandle
 	}
 }
 
+// ConnectRequest represents the initial connection request from a client.
+// It contains authentication and subscription information.
 type ConnectRequest struct {
 	Token   string                       `json:"token,omitempty"`
 	Data    json.RawMessage              `json:"data,omitempty"`
@@ -106,12 +117,19 @@ type ConnectRequest struct {
 	Version string                       `json:"version,omitempty"`
 }
 
+// SubscribeRequest represents a subscription request to a specific channel.
 type SubscribeRequest struct {
 	Recover bool   `json:"recover,omitempty"`
 	Epoch   string `json:"epoch,omitempty"`
 	Offset  uint64 `json:"offset,omitempty"`
 }
 
+// ServeHTTP implements the http.Handler interface for WebSocket connections.
+// It handles the WebSocket upgrade process and manages the connection lifecycle.
+//
+// Parameters:
+//   - rw: HTTP response writer
+//   - r: HTTP request
 func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	compression := s.config.Compression
 	compressionLevel := s.config.CompressionLevel
@@ -240,8 +258,8 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// websocketTransport is a wrapper struct over websocket connection to fit session
-// interface so client will accept it.
+// websocketTransport implements the transport layer for WebSocket connections.
+// It handles the low-level WebSocket communication details.
 type websocketTransport struct {
 	mu        sync.RWMutex
 	writeMu   sync.Mutex // sync general write with unidirectional ping write.
@@ -298,7 +316,7 @@ func (t *websocketTransport) addPing() {
 	t.mu.Unlock()
 }
 
-// Name returns name of transport.
+// Name returns the transport name ("websocket").
 func (t *websocketTransport) Name() string {
 	return "websocket"
 }
@@ -336,6 +354,13 @@ func (t *websocketTransport) PingPongConfig() centrifuge.PingPongConfig {
 	}
 }
 
+// writeData writes data to the WebSocket connection with proper message type and compression.
+//
+// Parameters:
+//   - data: Data to write
+//
+// Returns:
+//   - error: Any error encountered during writing
 func (t *websocketTransport) writeData(data []byte) error {
 	if t.opts.compressionMinSize > 0 {
 		t.conn.EnableWriteCompression(len(data) > t.opts.compressionMinSize)
@@ -362,10 +387,24 @@ func (t *websocketTransport) writeData(data []byte) error {
 	return nil
 }
 
+// Write sends a single message through the WebSocket connection.
+//
+// Parameters:
+//   - message: Data to send
+//
+// Returns:
+//   - error: Any error encountered during writing
 func (t *websocketTransport) Write(message []byte) error {
 	return t.WriteMany(message)
 }
 
+// WriteMany sends multiple messages through the WebSocket connection.
+//
+// Parameters:
+//   - messages: Multiple messages to send
+//
+// Returns:
+//   - error: Any error encountered during writing
 func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 	select {
 	case <-t.closeCh:
@@ -383,7 +422,13 @@ func (t *websocketTransport) WriteMany(messages ...[]byte) error {
 
 const closeFrameWait = 5 * time.Second
 
-// Close closes transport.
+// Close gracefully closes the WebSocket transport.
+//
+// Parameters:
+//   - disconnect: Reason for disconnection
+//
+// Returns:
+//   - error: Any error encountered during closure
 func (t *websocketTransport) Close(_ centrifuge.Disconnect) error {
 	t.mu.Lock()
 	if t.closed {
@@ -399,6 +444,10 @@ func (t *websocketTransport) Close(_ centrifuge.Disconnect) error {
 	return t.conn.Close()
 }
 
+// sameHostOriginCheck creates a function to verify the origin of WebSocket connections.
+//
+// Returns:
+//   - func(r *http.Request) bool: Origin checking function
 func sameHostOriginCheck() func(r *http.Request) bool {
 	return func(r *http.Request) bool {
 		err := checkSameHost(r)
@@ -406,6 +455,13 @@ func sameHostOriginCheck() func(r *http.Request) bool {
 	}
 }
 
+// checkSameHost verifies that the WebSocket connection originates from the same host.
+//
+// Parameters:
+//   - r: HTTP request to check
+//
+// Returns:
+//   - error: Error if origin check fails
 func checkSameHost(r *http.Request) error {
 	return nil
 

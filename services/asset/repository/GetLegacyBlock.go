@@ -1,3 +1,6 @@
+// Package repository provides access to blockchain data storage and retrieval operations.
+// It implements the necessary interfaces to interact with various data stores and
+// blockchain clients.
 package repository
 
 import (
@@ -20,6 +23,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// GetLegacyBlockReader provides a reader interface for retrieving block data in legacy format.
+// It streams block data including header, transactions, and subtrees.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the block to retrieve
+//
+// Returns:
+//   - *io.PipeReader: Reader for streaming block data
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash) (*io.PipeReader, error) {
 	block, err := repo.GetBlockByHash(ctx, hash)
 	if err != nil {
@@ -79,6 +92,14 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 	return r, nil
 }
 
+// writeLegacyBlockHeader writes a block header in legacy format to the provided writer.
+//
+// Parameters:
+//   - block: Block containing the header to write
+//   - w: Writer to write the header to
+//
+// Returns:
+//   - error: Any error encountered during writing
 func (repo *Repository) writeLegacyBlockHeader(block *model.Block, w io.Writer) error {
 	// write bitcoin block magic number
 	if _, err := w.Write([]byte{0xf9, 0xbe, 0xb4, 0xd9}); err != nil {
@@ -106,6 +127,16 @@ func (repo *Repository) writeLegacyBlockHeader(block *model.Block, w io.Writer) 
 	return nil
 }
 
+// writeTransactionsViaBlockStore writes transactions from the block store to the provided writer.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - block: Block containing the transactions
+//   - subtreeHash: Hash of the subtree containing transaction information
+//   - w: Writer to write the transactions to
+//
+// Returns:
+//   - error: Any error encountered during writing
 func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, _ *model.Block, subtreeHash *chainhash.Hash, w *io.PipeWriter) error {
 	if subtreeReader, err := repo.GetSubtreeDataReader(ctx, subtreeHash); err != nil {
 		return err
@@ -123,6 +154,17 @@ func (repo *Repository) writeTransactionsViaBlockStore(ctx context.Context, _ *m
 	return nil
 }
 
+// writeTransactionsViaSubtreeStore writes transactions from the subtree store to the provided writer.
+// This is used as a fallback when transactions are not available in the block store.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - block: Block containing the transactions
+//   - subtreeHash: Hash of the subtree containing transaction information
+//   - w: Writer to write the transactions to
+//
+// Returns:
+//   - error: Any error encountered during writing
 func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, w *io.PipeWriter) error {
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, subtreeHash.CloneBytes(), options.WithFileExtension("subtree"))
 	if err != nil {
@@ -185,6 +227,17 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, bl
 	return nil
 }
 
+// getTxs retrieves transaction metadata for a batch of transactions.
+// It supports concurrent retrieval of transaction data and handles missing transactions.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - txHashes: Array of transaction hashes to retrieve
+//   - txMetaSlice: Slice to store retrieved transaction metadata
+//
+// Returns:
+//   - int: Number of missing transactions
+//   - error: Any error encountered during retrieval
 func (repo *Repository) getTxs(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, errors.NewProcessingError("[processTxMetaUsingStore] txHashes and txMetaSlice must be the same length")

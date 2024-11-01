@@ -1,3 +1,4 @@
+// Package http_impl provides HTTP handlers for blockchain data retrieval and analysis.
 package http_impl
 
 import (
@@ -14,6 +15,66 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// GetTransactions creates an HTTP handler for retrieving multiple transactions in a single request.
+// It accepts a stream of transaction hashes and returns concatenated transaction data.
+//
+// HTTP Method:
+//   - POST
+//
+// Request:
+//
+//	Content-Type: application/octet-stream
+//	Body: Concatenated 32-byte transaction hashes
+//	Note: Each hash must be exactly 32 bytes
+//
+// Returns:
+//   - func(c echo.Context) error: Echo handler function
+//
+// HTTP Response:
+//
+//	Status: 200 OK
+//	Content-Type: application/octet-stream
+//	Body: Concatenated transaction data for all found transactions
+//
+// Error Responses:
+//
+//   - 404 Not Found:
+//
+//   - One or more transactions not found
+//     Example: {"message": "not found"}
+//
+//   - 500 Internal Server Error:
+//
+//   - Error reading request body
+//
+//   - Invalid hash format
+//
+//   - Repository errors
+//
+// Performance:
+//   - Concurrent transaction retrieval (up to 1024 goroutines)
+//   - Initial response buffer capacity: 32MB
+//   - Thread-safe response construction
+//
+// Monitoring:
+//   - Execution time recorded in "GetTransactions_http" statistic
+//   - Prometheus metric "asset_http_get_transactions" tracks number of transactions
+//   - Debug logging includes:
+//   - Number of transactions processed
+//   - Total response size
+//   - Processing duration
+//
+// Example Usage:
+//
+//	# Request multiple transactions
+//	POST /transactions
+//	Body: <32-byte-hash1><32-byte-hash2>...
+//
+// Notes:
+//   - Each transaction hash in the request must be exactly 32 bytes
+//   - Response contains only found transactions
+//   - Transactions are retrieved concurrently for better performance
+//   - Response order may not match request order due to concurrent processing
 func (h *HTTP) GetTransactions() func(c echo.Context) error {
 	return func(c echo.Context) error {
 		nrTxAdded := 0

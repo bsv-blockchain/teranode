@@ -1,3 +1,4 @@
+// Package http_impl provides HTTP handlers for blockchain data retrieval.
 package http_impl
 
 import (
@@ -14,11 +15,91 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+// BlockExtended represents a block with additional information about the next block
+// in the blockchain. It embeds the base Block model and adds the next block hash.
 type BlockExtended struct {
-	*model.Block
-	NextBlock *chainhash.Hash `json:"nextblock"`
+	*model.Block                 // Embedded Block model containing basic block data
+	NextBlock    *chainhash.Hash `json:"nextblock"` // Hash of the next block in the chain, if available
 }
 
+// GetBlockByHeight creates an HTTP handler for retrieving blocks by their height in the blockchain.
+// The functionality mirrors GetBlockByHash but uses block height for lookup instead of hash.
+//
+// Parameters:
+//   - mode: ReadMode specifying the response format (JSON, BINARY_STREAM, or HEX)
+//
+// Returns:
+//   - func(c echo.Context) error: Echo handler function
+//
+// URL Parameters:
+//   - height: Block height (uint64)
+//
+// HTTP Response Formats:
+//
+//  1. JSON (mode = JSON):
+//     Status: 200 OK
+//     Content-Type: application/json
+//     Body: BlockExtended object:
+//     {
+//     "header": {
+//     // BlockHeader fields
+//     "version": <uint32>,
+//     "hash_prev_block": "<string>",
+//     "hash_merkle_root": "<string>",
+//     "timestamp": <uint32>,
+//     "bits": "<string>",
+//     "nonce": <uint32>
+//     },
+//     "coinbase_tx": <transaction>,
+//     "transaction_count": <uint64>,
+//     "size_in_bytes": <uint64>,
+//     "subtrees": ["<hash>", ...],
+//     "height": <uint32>,
+//     "id": <uint32>,
+//     "nextblock": "<hash or null>"
+//     }
+//
+//  2. Binary (mode = BINARY_STREAM):
+//     Status: 200 OK
+//     Content-Type: application/octet-stream
+//     Body: Serialized block in the following format:
+//     - Block header (80 bytes)
+//     - Transaction count (varint)
+//     - Size in bytes (varint)
+//     - Subtree list
+//     - Coinbase transaction
+//     - Height (varint)
+//
+//  3. Hex (mode = HEX):
+//     Status: 200 OK
+//     Content-Type: text/plain
+//     Body: Hex-encoded version of the binary format
+//
+// Error Responses:
+//   - 400 Bad Request:
+//   - Invalid height parameter (non-integer)
+//   - Block serialization error
+//   - 404 Not Found: No block exists at specified height
+//   - 500 Internal Server Error: Repository errors or invalid read mode
+//
+// Security:
+//   - Response includes a cryptographic signature in the header if private key is configured
+//
+// Monitoring:
+//   - Execution time recorded in "GetBlock_http" statistic
+//   - Prometheus metric "asset_http_get_block" tracks successful responses
+//   - Detailed logging of request handling and completion time
+//
+// Example Usage:
+//
+//	// Get block in JSON format
+//	GET /block/height/0
+//
+//	// Get block in raw binary format
+//	GET /block/height/0/raw
+//
+//	// Get block in hex format
+//	GET /block/height/0/hex
 func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		start := gocore.CurrentTime()
@@ -79,6 +160,81 @@ func (h *HTTP) GetBlockByHeight(mode ReadMode) func(c echo.Context) error {
 	}
 }
 
+// GetBlockByHash creates an HTTP handler for retrieving blocks by their hash.
+// It supports multiple response formats and includes response signing capabilities.
+//
+// Parameters:
+//   - mode: ReadMode specifying the response format (JSON, BINARY_STREAM, or HEX)
+//
+// Returns:
+//   - func(c echo.Context) error: Echo handler function
+//
+// URL Parameters:
+//   - hash: Block hash (hex string)
+//
+// HTTP Response Formats:
+//
+//  1. JSON (mode = JSON):
+//     Status: 200 OK
+//     Content-Type: application/json
+//     Body: BlockExtended object:
+//     {
+//     "header": {
+//     // BlockHeader fields
+//     "version": <uint32>,
+//     "hash_prev_block": "<string>",
+//     "hash_merkle_root": "<string>",
+//     "timestamp": <uint32>,
+//     "bits": "<string>",
+//     "nonce": <uint32>
+//     },
+//     "coinbase_tx": <transaction>,
+//     "transaction_count": <uint64>,
+//     "size_in_bytes": <uint64>,
+//     "subtrees": ["<hash>", ...],
+//     "height": <uint32>,
+//     "id": <uint32>,
+//     "nextblock": "<hash or null>"
+//     }
+//
+//  2. Binary (mode = BINARY_STREAM):
+//     Status: 200 OK
+//     Content-Type: application/octet-stream
+//     Body: Serialized block in the following format:
+//     - Block header (80 bytes)
+//     - Transaction count (varint)
+//     - Size in bytes (varint)
+//     - Subtree list
+//     - Coinbase transaction
+//     - Height (varint)
+//
+//  3. Hex (mode = HEX):
+//     Status: 200 OK
+//     Content-Type: text/plain
+//     Body: Hex-encoded version of the binary format
+//
+// Error Responses:
+//   - 400 Bad Request: Invalid hash format or block serialization error
+//   - 404 Not Found: Block not found with specified hash
+//   - 500 Internal Server Error: Repository errors or invalid read mode
+//
+// Security:
+//   - Response includes a cryptographic signature in the header if private key is configured
+//
+// Monitoring:
+//   - Prometheus metric "asset_http_get_block" tracks successful responses
+//   - Debug logging of request handling
+//
+// Example Usage:
+//
+//	// Get block in JSON format
+//	GET /block/hash/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
+//
+//	// Get block in raw binary format
+//	GET /block/hash/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/raw
+//
+//	// Get block in hex format
+//	GET /block/hash/000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f/hex
 func (h *HTTP) GetBlockByHash(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		h.logger.Debugf("[Asset_http] GetBlockByHash in %s for %s: %s", mode, c.Request().RemoteAddr, c.Param("hash"))

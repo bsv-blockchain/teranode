@@ -1,3 +1,4 @@
+// Package http_impl provides HTTP handlers for blockchain data retrieval and analysis.
 package http_impl
 
 import (
@@ -28,6 +29,75 @@ func calculateSpeed(duration time.Duration, sizeInKB float64) float64 {
 	return speed
 }
 
+// GetSubtree creates an HTTP handler for retrieving subtree data in multiple formats.
+// Includes performance monitoring and response signing.
+//
+// Parameters:
+//   - mode: ReadMode specifying the response format (JSON, BINARY_STREAM, or HEX)
+//
+// Returns:
+//   - func(c echo.Context) error: Echo handler function
+//
+// URL Parameters:
+//   - hash: Subtree hash (hex string)
+//
+// HTTP Response Formats:
+//
+//  1. JSON (mode = JSON):
+//     Status: 200 OK
+//     Content-Type: application/json
+//     Body:
+//     {
+//     "height": <int>,
+//     "fees": <uint64>,
+//     "size_in_bytes": <uint64>,
+//     "fee_hash": "<string>",
+//     "nodes": [
+//     // Array of subtree nodes
+//     ],
+//     "conflicting_nodes": [
+//     // Array of conflicting node hashes
+//     ]
+//     }
+//
+//  2. Binary (mode = BINARY_STREAM):
+//     Status: 200 OK
+//     Content-Type: application/octet-stream
+//     Body: Raw subtree node data (32 bytes per node)
+//
+//  3. Hex (mode = HEX):
+//     Status: 200 OK
+//     Content-Type: text/plain
+//     Body: Hexadecimal encoding of node data
+//
+// Error Responses:
+//
+//   - 404 Not Found:
+//
+//   - Subtree not found
+//     Example: {"message": "not found"}
+//
+//   - 500 Internal Server Error:
+//
+//   - Invalid subtree hash format
+//
+//   - Subtree deserialization errors
+//
+//   - Invalid read mode
+//
+// Monitoring:
+//   - Execution time recorded in "GetSubtree_http" statistic
+//   - Prometheus metric "asset_http_get_subtree" tracks responses
+//   - Performance logging including transfer speed (KB/sec)
+//   - Response size logging in KB
+//
+// Security:
+//   - Response includes cryptographic signature if private key is configured
+//
+// Notes:
+//   - JSON mode requires full subtree deserialization
+//   - Binary/Hex modes use more efficient streaming approach
+//   - Includes performance metrics in logs
 func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		var b []byte
@@ -183,6 +253,31 @@ func readFull(reader io.Reader, buf []byte) (int, error) {
 	return bytesRead, nil
 }
 
+// GetSubtreeAsReader creates an HTTP handler for streaming subtree node data
+// efficiently using a custom reader implementation. This endpoint provides better
+// memory efficiency for large subtrees.
+//
+// URL Parameters:
+//   - hash: Subtree hash (hex string)
+//
+// HTTP Response:
+//
+//	Status: 200 OK
+//	Content-Type: application/octet-stream
+//	Body: Streamed subtree node data:
+//	  - Skips root hash (32 bytes)
+//	  - Skips fees (8 bytes)
+//	  - Skips size (8 bytes)
+//	  - Reads number of leaves (8 bytes)
+//	  - Streams node hashes (32 bytes each)
+//
+// Performance:
+//   - Uses 4MB buffer for reading
+//   - Skips non-essential data during streaming
+//   - Efficient memory usage for large subtrees
+//   - Performance metrics logged on completion
+//
+// Error handling and monitoring are identical to GetSubtree endpoint
 func (h *HTTP) GetSubtreeAsReader(c echo.Context) error {
 	start := gocore.CurrentTime()
 	stat := AssetStat.NewStat("GetSubtreeAsReader_http")
