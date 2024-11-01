@@ -361,8 +361,31 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 	)
 
 	messageProcessedSinceLastCommit := false
-	commitTicker := time.NewTicker(commitInterval)
-	defer commitTicker.Stop()
+
+	var mu sync.Mutex // Add mutex to protect messageProcessedSinceLastCommit
+
+	// Start a separate goroutine for commit ticker
+	if !kc.cfg.AutoCommitEnabled {
+		go func() {
+			commitTicker := time.NewTicker(commitInterval)
+			defer commitTicker.Stop()
+
+			for {
+				select {
+				case <-session.Context().Done():
+					return
+				case <-commitTicker.C:
+					mu.Lock()
+					if messageProcessedSinceLastCommit {
+						session.Commit()
+
+						messageProcessedSinceLastCommit = false
+					}
+					mu.Unlock()
+				}
+			}
+		}()
+	}
 
 	// Create a buffered channel for messages to reduce context switching
 	messages := make(chan *sarama.ConsumerMessage, batchSize)
@@ -383,13 +406,6 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 		case <-session.Context().Done():
 			return session.Context().Err()
 
-		case <-commitTicker.C:
-			if !kc.cfg.AutoCommitEnabled && messageProcessedSinceLastCommit {
-				session.Commit()
-
-				messageProcessedSinceLastCommit = false
-			}
-
 		case message := <-messages:
 			if message == nil {
 				continue
@@ -404,7 +420,9 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 				} else {
 					err = kc.handleMessageWithManualCommit(session, message)
 					if err == nil {
+						mu.Lock()
 						messageProcessedSinceLastCommit = true
+						mu.Unlock()
 					}
 				}
 
@@ -426,7 +444,7 @@ func (kc *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim
 				}
 			}
 		BatchComplete:
-		}
+		} // noling:wsl
 	}
 }
 
