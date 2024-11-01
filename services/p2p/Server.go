@@ -192,7 +192,7 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 }
 
 func (s *Server) Init(ctx context.Context) (err error) {
-	s.logger.Infof("P2P service initialising")
+	s.logger.Infof("[Init] P2P service initialising")
 
 	AssetHTTPAddressURL, _, _ := gocore.Config().GetURL("asset_httpAddress")
 	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
@@ -200,11 +200,11 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	if AssetHTTPAddressURL.Scheme == "http" && securityLevel == 1 {
 		AssetHTTPAddressURL.Scheme = "https"
 
-		s.logger.Warnf("asset_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
+		s.logger.Warnf("[Init] asset_httpAddress is HTTP but securityLevel is 1, changing to HTTPS")
 	} else if AssetHTTPAddressURL.Scheme == "https" && securityLevel == 0 {
 		AssetHTTPAddressURL.Scheme = "http"
 
-		s.logger.Warnf("asset_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
+		s.logger.Warnf("[Init] asset_httpAddress is HTTPS but securityLevel is 0, changing to HTTP")
 	}
 
 	s.AssetHTTPAddressURL = AssetHTTPAddressURL.String()
@@ -213,7 +213,7 @@ func (s *Server) Init(ctx context.Context) (err error) {
 }
 
 func (s *Server) Start(ctx context.Context) error {
-	s.logger.Infof("P2P service starting")
+	s.logger.Infof("[Start] P2P service starting")
 
 	// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
 	// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
@@ -221,13 +221,13 @@ func (s *Server) Start(ctx context.Context) error {
 	rejectedTxHandler := func(msg *kafka.KafkaMessage) error {
 		hash, err := chainhash.NewHash(msg.Value[:chainhash.HashSize])
 		if err != nil {
-			s.logger.Errorf("error getting chainhash from string %s: %v", msg.Value[:chainhash.HashSize], err)
+			s.logger.Errorf("[Start] error getting chainhash from string %s: %v", msg.Value[:chainhash.HashSize], err)
 			return err
 		}
 
 		reason := string(msg.Value[chainhash.HashSize:])
 
-		s.logger.Debugf("P2P Received %s rejected tx notification: %s", hash.String(), reason)
+		s.logger.Debugf("[Start] Received %s rejected tx notification: %s", hash.String(), reason)
 
 		rejectedTxMessage := p2p.RejectedTxMessage{
 			TxId:   hash.String(),
@@ -237,15 +237,15 @@ func (s *Server) Start(ctx context.Context) error {
 
 		msgBytes, err := json.Marshal(rejectedTxMessage)
 		if err != nil {
-			s.logger.Errorf("json marshal error: %v", err)
+			s.logger.Errorf("[Start] json marshal error: %v", err)
 
 			return err
 		}
 
-		s.logger.Debugf("P2P publishing rejectedTxMessage")
+		s.logger.Debugf("[Start] publishing rejectedTxMessage")
 
 		if err := s.P2PNode.Publish(ctx, rejectedTxTopicName, msgBytes); err != nil {
-			s.logger.Errorf("publish error: %v", err)
+			s.logger.Errorf("[Start] publish error: %v", err)
 		}
 
 		return nil
@@ -264,15 +264,15 @@ func (s *Server) Start(ctx context.Context) error {
 	if fsmStateRestore {
 		// Send Restore event to FSM
 		if err = s.blockchainClient.Restore(ctx); err != nil {
-			s.logger.Errorf("[p2p] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
+			s.logger.Errorf("[Start] failed to send Restore event [%v], this should not happen, FSM will continue without Restoring", err)
 		}
 
 		// Wait for node to finish Restoring.
 		// this means FSM got a RUN event and transitioned to RUN state
 		// this will block
-		s.logger.Infof("[p2p] Node is restoring, waiting for FSM to transition to Running state")
+		s.logger.Infof("[Start] Node is restoring, waiting for FSM to transition to Running state")
 		_ = s.blockchainClient.WaitForFSMtoTransitionToGivenState(ctx, blockchain.FSMStateRUNNING)
-		s.logger.Infof("[p2p] Node finished restoring and has transitioned to Running state, continuing to start p2p service")
+		s.logger.Infof("[Start] Node finished restoring and has transitioned to Running state, continuing to start p2p service")
 	}
 
 	s.blockValidationClient, err = blockvalidation.NewClient(ctx, s.logger, "p2p")
@@ -302,7 +302,7 @@ func (s *Server) Start(ctx context.Context) error {
 	go func() {
 		err := s.StartHTTP(ctx)
 		if err != nil {
-			s.logger.Errorf("error starting http server: %s", err)
+			s.logger.Errorf("[Start] error starting http server: %s", err)
 			return
 		}
 	}()
@@ -345,11 +345,11 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) sendBestBlockMessage(ctx context.Context) {
 	msgBytes, err := json.Marshal(p2p.BestBlockMessage{PeerId: s.P2PNode.HostID().String()})
 	if err != nil {
-		s.logger.Errorf("json marshal error: %v", err)
+		s.logger.Errorf("[sendBestBlockMessage] json marshal error: %v", err)
 	}
 
 	if err := s.P2PNode.Publish(ctx, bestBlockTopicName, msgBytes); err != nil {
-		s.logger.Errorf("publish error: %v", err)
+		s.logger.Errorf("[sendBestBlockMessage] publish error: %v", err)
 	}
 }
 
@@ -357,7 +357,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 	// Subscribe to the blockchain service
 	blockchainSubscription, err := s.blockchainClient.Subscribe(ctx, "p2pServer")
 	if err != nil {
-		s.logger.Errorf("error subscribing to blockchain service: %v", err)
+		s.logger.Errorf("[blockchainSubscriptionListener] error subscribing to blockchain service: %v", err)
 		return
 	}
 
@@ -375,7 +375,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Infof("P2P service shutting down")
+			s.logger.Infof("[blockchainSubscriptionListener] P2P service shutting down")
 			return
 		case notification = <-blockchainSubscription:
 			if notification == nil {
@@ -387,7 +387,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 			hash, err := chainhash.NewHash(notification.Hash)
 			if err != nil {
-				s.logger.Errorf("error getting chainhash from notification hash %s: %v", notification.Hash, err)
+				s.logger.Errorf("[blockchainSubscriptionListener] error getting chainhash from notification hash %s: %v", notification.Hash, err)
 				continue
 			}
 
@@ -397,7 +397,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 				// // _, meta, err := s.blockchainClient.GetBestBlockHeader(ctx)
 				// // // block, err := s.blockchainClient.GetBlock(ctx, notification.Hash)
 				if err != nil {
-					s.logger.Errorf("error getting block header and meta for BlockMessage: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] error getting block header and meta for BlockMessage: %v", err)
 					continue
 				}
 
@@ -410,17 +410,17 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 				msgBytes, err = json.Marshal(blockMessage)
 				if err != nil {
-					s.logger.Errorf("json mmarshal error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] json marshal error: %v", err)
 					continue
 				}
 
 				if err := s.P2PNode.Publish(ctx, blockTopicName, msgBytes); err != nil {
-					s.logger.Errorf("publish error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] publish error: %v", err)
 				}
 			case model.NotificationType_MiningOn:
 				header, meta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 				if err != nil {
-					s.logger.Errorf("error getting block header for MiningOnMessage: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] error getting block header for MiningOnMessage: %v", err)
 					continue
 				}
 
@@ -437,14 +437,14 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 				msgBytes, err = json.Marshal(miningOnMessage)
 				if err != nil {
-					s.logger.Errorf("json marshal error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] json marshal error: %v", err)
 					continue
 				}
 
 				s.logger.Debugf("P2P publishing miningOnMessage")
 
 				if err := s.P2PNode.Publish(ctx, miningOnTopicName, msgBytes); err != nil {
-					s.logger.Errorf("publish error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] publish error: %v", err)
 				}
 			case model.NotificationType_Subtree:
 				// if it's a subtree notification send it on the subtree channel.
@@ -456,13 +456,13 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 				msgBytes, err = json.Marshal(subtreeMessage)
 				if err != nil {
-					s.logger.Errorf("json marshal error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] json marshal error: %v", err)
 
 					continue
 				}
 
 				if err := s.P2PNode.Publish(ctx, subtreeTopicName, msgBytes); err != nil {
-					s.logger.Errorf("publish error: %v", err)
+					s.logger.Errorf("[blockchainSubscriptionListener] publish error: %v", err)
 				}
 			}
 		}
@@ -473,14 +473,14 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 	addr, _ := gocore.Config().Get("p2p_httpListenAddress")
 	securityLevel, _ := gocore.Config().GetInt("securityLevelHTTP", 0)
 
-	s.logger.Infof("p2p service listening on %s", addr)
+	s.logger.Infof("[StartHTTP] p2p service listening on %s", addr)
 
 	go func() {
 		<-ctx.Done()
-		s.logger.Infof("[p2p] service shutting down")
+		s.logger.Infof("[StartHTTP] p2p service shutting down")
 
 		if err := s.e.Shutdown(ctx); err != nil {
-			s.logger.Errorf("[p2p] service shutdown error: %v", err)
+			s.logger.Errorf("[StartHTTP] p2p service shutdown error: %v", err)
 		}
 	}()
 
@@ -492,7 +492,7 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 	var err error
 
 	if securityLevel == 0 {
-		servicemanager.AddListenerInfo(fmt.Sprintf("p2p HTTP listening on %s", addr))
+		servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTP listening on %s", addr))
 		err = s.e.Start(addr)
 	} else {
 		certFile, found := gocore.Config().Get("server_certFile")
@@ -505,7 +505,7 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 			return errors.NewConfigurationError("server_keyFile is required for HTTPS")
 		}
 
-		servicemanager.AddListenerInfo(fmt.Sprintf("p2p HTTPS listening on %s", addr))
+		servicemanager.AddListenerInfo(fmt.Sprintf("[StartHTTP] p2p HTTPS listening on %s", addr))
 		err = s.e.StartTLS(addr, certFile, keyFile)
 	}
 
@@ -517,7 +517,7 @@ func (s *Server) StartHTTP(ctx context.Context) error {
 }
 
 func (s *Server) Stop(ctx context.Context) error {
-	s.logger.Infof("Stopping P2P service")
+	s.logger.Infof("[Stop] Stopping P2P service")
 	return s.e.Shutdown(ctx)
 }
 
@@ -540,13 +540,13 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 
 	err := json.Unmarshal(m, &bestBlockMessage)
 	if err != nil {
-		s.logger.Errorf("json unmarshal error: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic] json unmarshal error: %v", err)
 		return
 	}
 
 	pid, err = peer.Decode(bestBlockMessage.PeerId)
 	if err != nil {
-		s.logger.Errorf("error decoding peerId: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic] error decoding peerId: %v", err)
 		return
 	}
 
@@ -555,12 +555,12 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 	// get best block from blockchain service
 	bh, bhMeta, err = s.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		s.logger.Errorf("error getting best block header: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic] error getting best block header: %v", err)
 		return
 	}
 
 	if bh == nil {
-		s.logger.Errorf("error getting best block header: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic] error getting best block header: %v", err)
 		return
 	}
 
@@ -572,19 +572,19 @@ func (s *Server) handleBestBlockTopic(ctx context.Context, m []byte, from string
 
 	msgBytes, err = json.Marshal(blockMessage)
 	if err != nil {
-		s.logger.Errorf("json marshal error: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic] json marshal error: %v", err)
 		return
 	}
 
 	// send best block to the requester
 	err = s.P2PNode.SendToPeer(ctx, pid, msgBytes)
 	if err != nil {
-		s.logger.Errorf("error sending peer message: %v", err)
+		s.logger.Errorf("[handleBestBlockTopic] error sending peer message: %v", err)
 	}
 }
 
 func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
-	s.logger.Debugf("handleBlockTopic")
+	s.logger.Debugf("[handleBlockTopic] got p2p block notification")
 
 	var (
 		blockMessage p2p.BlockMessage
@@ -597,11 +597,11 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 
 	err = json.Unmarshal(m, &blockMessage)
 	if err != nil {
-		s.logger.Errorf("json unmarshal error: %v", err)
+		s.logger.Errorf("[handleBlockTopic] json unmarshal error: %v", err)
 		return
 	}
 
-	s.logger.Debugf("got p2p block notification for %s from %s", blockMessage.Hash, blockMessage.PeerId)
+	s.logger.Debugf("[handleBlockTopic] got p2p block notification for %s from %s", blockMessage.Hash, blockMessage.PeerId)
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp: time.Now().UTC().Format(isoFormat),
@@ -618,7 +618,7 @@ func (s *Server) handleBlockTopic(ctx context.Context, m []byte, from string) {
 
 	hash, err = chainhash.NewHashFromStr(blockMessage.Hash)
 	if err != nil {
-		s.logger.Errorf("error getting chainhash from string %s: %v", blockMessage.Hash, err)
+		s.logger.Errorf("[handleBlockTopic] error getting chainhash from string %s: %v", blockMessage.Hash, err)
 		return
 	}
 
@@ -645,11 +645,11 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 
 	err = json.Unmarshal(m, &subtreeMessage)
 	if err != nil {
-		s.logger.Errorf("json unmarshal error: %v", err)
+		s.logger.Errorf("[handleSubtreeTopic] json unmarshal error: %v", err)
 		return
 	}
 
-	s.logger.Debugf("got p2p subtree notification for %s from %s", subtreeMessage.Hash, subtreeMessage.PeerId)
+	s.logger.Debugf("[handleSubtreeTopic] got p2p subtree notification for %s from %s", subtreeMessage.Hash, subtreeMessage.PeerId)
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp: time.Now().UTC().Format(isoFormat),
@@ -665,7 +665,7 @@ func (s *Server) handleSubtreeTopic(ctx context.Context, m []byte, from string) 
 
 	hash, err = chainhash.NewHashFromStr(subtreeMessage.Hash)
 	if err != nil {
-		s.logger.Errorf("error getting chainhash from string %s: %v", subtreeMessage.Hash, err)
+		s.logger.Errorf("[handleSubtreeTopic] error getting chainhash from string %s: %v", subtreeMessage.Hash, err)
 		return
 	}
 
@@ -690,11 +690,11 @@ func (s *Server) handleMiningOnTopic(ctx context.Context, m []byte, from string)
 
 	err = json.Unmarshal(m, &miningOnMessage)
 	if err != nil {
-		s.logger.Errorf("json unmarshal error: %v", err)
+		s.logger.Errorf("[handleMiningOnTopic] json unmarshal error: %v", err)
 		return
 	}
 
-	s.logger.Debugf("got p2p mining on notification for %s from %s", miningOnMessage.Hash, miningOnMessage.PeerId)
+	s.logger.Debugf("[handleMiningOnTopic] got p2p mining on notification for %s from %s", miningOnMessage.Hash, miningOnMessage.PeerId)
 
 	s.notificationCh <- &notificationMsg{
 		Timestamp:    time.Now().UTC().Format(isoFormat),
@@ -714,7 +714,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 	s.logger.Debugf("GetPeers called")
 
 	if s.P2PNode == nil {
-		return nil, errors.NewError("P2PNode is not initialised")
+		return nil, errors.NewError("[GetPeers] P2PNode is not initialised")
 	}
 
 	s.logger.Debugf("Creating reply channel")
@@ -755,7 +755,7 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 		return // we only care about new bans
 	}
 
-	s.logger.Infof("Received ban event for %s", event.IP)
+	s.logger.Infof("[handleBanEvent] Received ban event for %s", event.IP)
 
 	// parse the banned IP or subnet
 	var bannedIP net.IP
@@ -766,7 +766,7 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 	} else {
 		bannedIP = net.ParseIP(event.IP)
 		if bannedIP == nil {
-			s.logger.Errorf("Invalid IP address in ban event: %s", event.IP)
+			s.logger.Errorf("[handleBanEvent] Invalid IP address in ban event: %s", event.IP)
 			return
 		}
 	}
@@ -777,7 +777,7 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 		for _, addr := range peer.Addrs {
 			peerIP, err := s.getIPFromMultiaddr(ctx, addr)
 			if err != nil {
-				s.logger.Errorf("Error getting IP from multiaddr %s: %v", addr, err)
+				s.logger.Errorf("[handleBanEvent] Error getting IP from multiaddr %s: %v", addr, err)
 				continue
 			}
 
@@ -785,15 +785,15 @@ func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
 				continue
 			}
 
-			s.logger.Debugf("bannedSubnet: %v, bannedIP: %v, peerIP: %s", bannedSubnet, bannedIP, peerIP)
+			s.logger.Debugf("[handleBanEvent] bannedSubnet: %v, bannedIP: %v, peerIP: %s", bannedSubnet, bannedIP, peerIP)
 
 			if (bannedSubnet != nil && bannedSubnet.Contains(peerIP)) ||
 				(bannedIP != nil && peerIP.Equal(bannedIP)) {
-				s.logger.Infof("Disconnecting from banned peer: %s (%s)", peer.ID, peerIP)
+				s.logger.Infof("[handleBanEvent] Disconnecting from banned peer: %s (%s)", peer.ID, peerIP)
 
 				err := s.P2PNode.DisconnectPeer(ctx, peer.ID)
 				if err != nil {
-					s.logger.Errorf("Error disconnecting from peer %s: %v", peer.ID, err)
+					s.logger.Errorf("[handleBanEvent] Error disconnecting from peer %s: %v", peer.ID, err)
 				}
 
 				break // no need to check other addresses for this peer
@@ -833,7 +833,7 @@ func (s *Server) resolveDNS(ctx context.Context, dnsAddr multiaddr.Multiaddr) (n
 	}
 
 	if len(addrs) == 0 {
-		return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("no addresses found for %s", dnsAddr))
+		return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("[resolveDNS] no addresses found for %s", dnsAddr))
 	}
 	// get the IP from the first resolved address
 	for _, proto := range []int{multiaddr.P_IP4, multiaddr.P_IP6} {
@@ -842,5 +842,5 @@ func (s *Server) resolveDNS(ctx context.Context, dnsAddr multiaddr.Multiaddr) (n
 		}
 	}
 
-	return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("no IP address found in resolved multiaddr %s", dnsAddr))
+	return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("[resolveDNS] no IP address found in resolved multiaddr %s", dnsAddr))
 }
