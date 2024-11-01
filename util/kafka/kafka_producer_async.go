@@ -184,7 +184,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
 		}
 
-		c.Stop()
+		c.Stop() //nolint:errcheck
 	}()
 
 	wg.Wait() // don't continue until we know we know the go func has started and is ready to accept messages on the PublishChannel
