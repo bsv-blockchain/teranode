@@ -40,27 +40,27 @@ type subscriber struct {
 // Blockchain type carries the logger within it
 type Blockchain struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	addBlockChan            chan *blockchain_api.AddBlockRequest
-	store                   blockchain_store.Store
-	logger                  ulogger.Logger
-	newSubscriptions        chan subscriber
-	deadSubscriptions       chan subscriber
-	subscribers             map[subscriber]bool
-	subscribersMu           sync.RWMutex
-	notifications           chan *blockchain_api.Notification
-	newBlock                chan struct{}
-	difficulty              *Difficulty
-	chainParams             *chaincfg.Params
-	blockKafkaAsyncProducer kafka.KafkaAsyncProducerI
-	kafkaChan               chan *kafka.Message
-	stats                   *gocore.Stat
-	finiteStateMachine      *fsm.FSM
-	AppCtx                  context.Context
-	localTestStartState     string
+	addBlockChan                  chan *blockchain_api.AddBlockRequest
+	store                         blockchain_store.Store
+	logger                        ulogger.Logger
+	newSubscriptions              chan subscriber
+	deadSubscriptions             chan subscriber
+	subscribers                   map[subscriber]bool
+	subscribersMu                 sync.RWMutex
+	notifications                 chan *blockchain_api.Notification
+	newBlock                      chan struct{}
+	difficulty                    *Difficulty
+	chainParams                   *chaincfg.Params
+	blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI
+	kafkaChan                     chan *kafka.Message
+	stats                         *gocore.Stat
+	finiteStateMachine            *fsm.FSM
+	AppCtx                        context.Context
+	localTestStartState           string
 }
 
 // New will return a server instance with the logger stored within it
-func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, blockKafkaAsyncProducer kafka.KafkaAsyncProducerI, localTestStartFromState ...string) (*Blockchain, error) {
+func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Store, blocksFinalKafkaAsyncProducer kafka.KafkaAsyncProducerI, localTestStartFromState ...string) (*Blockchain, error) {
 	initPrometheusMetrics()
 
 	network, _ := gocore.Config().Get("network", "mainnet")
@@ -76,19 +76,19 @@ func New(ctx context.Context, logger ulogger.Logger, store blockchain_store.Stor
 	}
 
 	b := &Blockchain{
-		store:                   store,
-		logger:                  logger,
-		addBlockChan:            make(chan *blockchain_api.AddBlockRequest, 10),
-		newSubscriptions:        make(chan subscriber, 10),
-		deadSubscriptions:       make(chan subscriber, 10),
-		subscribers:             make(map[subscriber]bool),
-		notifications:           make(chan *blockchain_api.Notification, 100),
-		newBlock:                make(chan struct{}, 10),
-		difficulty:              d,
-		chainParams:             params,
-		stats:                   gocore.NewStat("blockchain"),
-		AppCtx:                  ctx,
-		blockKafkaAsyncProducer: blockKafkaAsyncProducer,
+		store:                         store,
+		logger:                        logger,
+		addBlockChan:                  make(chan *blockchain_api.AddBlockRequest, 10),
+		newSubscriptions:              make(chan subscriber, 10),
+		deadSubscriptions:             make(chan subscriber, 10),
+		subscribers:                   make(map[subscriber]bool),
+		notifications:                 make(chan *blockchain_api.Notification, 100),
+		newBlock:                      make(chan struct{}, 10),
+		difficulty:                    d,
+		chainParams:                   params,
+		stats:                         gocore.NewStat("blockchain"),
+		AppCtx:                        ctx,
+		blocksFinalKafkaAsyncProducer: blocksFinalKafkaAsyncProducer,
 	}
 
 	if len(localTestStartFromState) >= 1 && localTestStartFromState[0] != "" {
@@ -114,8 +114,8 @@ func (b *Blockchain) Health(ctx context.Context, checkLiveness bool) (int, strin
 	}
 
 	var brokersURL []string
-	if b.blockKafkaAsyncProducer != nil { // tests may not set this
-		brokersURL = b.blockKafkaAsyncProducer.BrokersURL()
+	if b.blocksFinalKafkaAsyncProducer != nil { // tests may not set this
+		brokersURL = b.blocksFinalKafkaAsyncProducer.BrokersURL()
 	}
 
 	// Add readiness checks here. Include dependency checks.
@@ -276,7 +276,7 @@ func (b *Blockchain) startKafka() {
 	b.logger.Infof("[Blockchain] Starting Kafka producer for blocks")
 	b.kafkaChan = make(chan *kafka.Message, 100)
 
-	b.blockKafkaAsyncProducer.Start(b.AppCtx, b.kafkaChan)
+	b.blocksFinalKafkaAsyncProducer.Start(b.AppCtx, b.kafkaChan)
 }
 
 /* Must be started as a go routine unless you are in a test */
@@ -372,9 +372,9 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 	block.Height = height
 
-	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blockKafkaAsyncProducer != nil)
+	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blocksFinalKafkaAsyncProducer != nil)
 
-	if b.blockKafkaAsyncProducer != nil {
+	if b.blocksFinalKafkaAsyncProducer != nil {
 		key := block.Header.Hash().CloneBytes()
 
 		value, err := block.Bytes()

@@ -30,6 +30,10 @@ func getKafkaBlocksAsyncProducer(ctx context.Context, logger ulogger.Logger) (*k
 	return getKafkaAsyncProducer(ctx, logger, "kafka_blocksConfig")
 }
 
+func getKafkaBlocksFinalAsyncProducer(ctx context.Context, logger ulogger.Logger) (*kafka.KafkaAsyncProducer, error) {
+	return getKafkaAsyncProducer(ctx, logger, "kafka_blocksFinalConfig")
+}
+
 func getKafkaRejectedTxAsyncProducer(ctx context.Context, logger ulogger.Logger) (*kafka.KafkaAsyncProducer, error) {
 	return getKafkaAsyncProducer(ctx, logger, "kafka_rejectedTxConfig")
 }

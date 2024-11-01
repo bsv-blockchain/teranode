@@ -317,7 +317,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
-		blockKafkaAsyncProducer, err := getKafkaBlocksAsyncProducer(ctx, logger)
+		blocksFinalKafkaAsyncProducer, err := getKafkaBlocksFinalAsyncProducer(ctx, logger)
 		if err != nil {
 			return err
 		}
@@ -338,7 +338,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			localTestStartFromState, _ = gocore.Config().Get("local_test_start_from_state")
 		}
 
-		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, blockKafkaAsyncProducer, localTestStartFromState)
+		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, blocksFinalKafkaAsyncProducer, localTestStartFromState)
 		if err != nil {
 			return err
 		}
