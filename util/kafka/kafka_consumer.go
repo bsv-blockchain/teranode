@@ -59,7 +59,7 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 	}
 
 	consumerCount := partitions / consumerRatio
-	if consumerCount < 0 {
+	if consumerCount < 1 {
 		logger.Warnf("consumer count is less than 0, setting it to 1")
 
 		consumerCount = 1
