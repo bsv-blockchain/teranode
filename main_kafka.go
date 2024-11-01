@@ -24,6 +24,7 @@ func getKafkaAsyncProducer(ctx context.Context, logger ulogger.Logger, setting s
 	if err != nil {
 		return nil, err
 	}
+
 	return producer, nil
 }
 func getKafkaBlocksAsyncProducer(ctx context.Context, logger ulogger.Logger) (*kafka.KafkaAsyncProducer, error) {
@@ -74,6 +75,7 @@ func getKafkaConsumerGroup(logger ulogger.Logger, setting string, consumerGroupI
 	if err != nil {
 		return nil, errors.NewConfigurationError("missing Kafka URL for "+setting, err)
 	}
+
 	return consumer, nil
 }
 
@@ -108,6 +110,7 @@ func getKafkaTxConsumerGroup(logger ulogger.Logger, consumerGroupID string) (kaf
 			return nil, errors.NewConfigurationError("failed to create new Kafka listener for kafka_validatortxsConfig", err)
 		}
 	}
+
 	return consumer, nil
 }
 
