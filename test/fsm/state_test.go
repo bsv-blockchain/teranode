@@ -257,23 +257,24 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	url := "http://localhost:10090"
 	logger := framework.Logger
 	blockchainNode0 := framework.Nodes[0].BlockchainClient
+	blockchainNode1 := framework.Nodes[1].BlockchainClient
 	blockAssemblyNode0 := framework.Nodes[0].BlockassemblyClient
 
 	// blockchainNode1 := framework.Nodes[1].BlockchainClient
 	blockAssemblyNode1 := framework.Nodes[1].BlockassemblyClient
 
 	// Set CatchUpTransactions State
-	// err := blockchainNode0.CatchUpTransactions(framework.Context)
-	// if err != nil {
-	// 	t.Errorf("Failed to set state: %v", err)
-	// }
+	err := blockchainNode0.CatchUpTransactions(framework.Context)
+	if err != nil {
+		t.Errorf("Failed to set state: %v", err)
+	}
 
-	// time.Sleep(10 * time.Second)
+	time.Sleep(10 * time.Second)
 
-	// fsmState, _ := blockchainNode0.GetFSMCurrentState(framework.Context)
-	// t.Logf("FSM state after sending CatchupTx: %v", fsmState)
-	// t.Logf("Expected FSM state name after sending CatchupTx: %v", blockchain_api.FSMStateType_name[4])
-	// assert.Equal(t, "CATCHINGTXS", fsmState.String(), "FSM state is not equal to 4")
+	fsmState, _ := blockchainNode0.GetFSMCurrentState(framework.Context)
+	t.Logf("FSM state after sending CatchupTx: %v", fsmState)
+	t.Logf("Expected FSM state name after sending CatchupTx: %v", blockchain_api.FSMStateType_name[4])
+	assert.Equal(t, "CATCHINGTXS", fsmState.String(), "FSM state is not equal to 4")
 
 	state0, err := blockAssemblyNode0.GetBlockAssemblyState(framework.Context)
 	if err != nil {
@@ -299,11 +300,11 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	// nodes := framework.Nodes
 
 	// hashesNode0, err := helper.CreateAndSendTxsToASliceOfNodes(framework.Context, nodes, 20)
-	hashesNode0, err := helper.CreateAndSendTxs(framework.Context, framework.Nodes[0], 20)
-	// hashesNode0, err := helper.CreateAndSendTxsToASliceOfNodes(framework.Context, framework.Nodes, 20)
-	// if err != nil {
-	// 	t.Errorf("Failed to create and send raw txs: %v", err)
-	// }
+	// hashesNode0, err := helper.CreateAndSendTxs(framework.Context, framework.Nodes[0], 20)
+	hashesNode0, err := helper.CreateAndSendTxsToASliceOfNodes(framework.Context, framework.Nodes, 20)
+	if err != nil {
+		t.Errorf("Failed to create and send raw txs: %v", err)
+	}
 
 	for i := 0; i < 20; i++ {
 		logger.Infof("Hashes: %v", hashesNode0[i])
@@ -326,7 +327,7 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 	logger.Infof("Node 1 Tx count after sending transactions: %v", txCountAfter1)
 
 	assert.LessOrEqual(t, txCountAfter0, uint64(10), "Tx count mismatch")
-	// assert.LessOrEqual(t, txCountAfter, uint64(10), "Tx count mismatch")
+	assert.LessOrEqual(t, txCountAfter1, uint64(10), "Tx count mismatch")
 
 	// metricsAfter, err := helper.QueryPrometheusMetric("http://localhost:16090", "validator_processed_transactions")
 	// if err != nil {
@@ -357,27 +358,33 @@ func (suite *FsmTestSuite) TestTXCatchUpState_SendTXsToNode0() {
 			t.Errorf("error reading block: %v", err)
 		} else {
 			logger.Infof("Block at height (%d): was tested for the test Tx\n", *bestBlock.Hash())
-			assert.Equal(t, true, bl, "Test Tx found in block, was not expecting to see it in the block while in catch-up state")
+			assert.Equal(t, false, bl, "Test Tx found in block, was not expecting to see it in the block while in catch-up state")
 		}
 	}
 
-	return
-	bestBlock, _, _ = blockchainNode0.GetBestBlockHeader(framework.Context)
+	// return
+	_, meta, _ := blockchainNode0.GetBestBlockHeader(framework.Context)
+	t.Logf("Best block height of node0: %v", meta.Height)
+
+	_, meta, _ = blockchainNode1.GetBestBlockHeader(framework.Context)
+	t.Logf("Best block height of node1: %v", meta.Height)
 
 	// Set Running State
-	// err = blockchainNode0.Run(framework.Context, "ubsv1")
-	// if err != nil {
-	// 	t.Errorf("Failed to set state: %v", err)
-	// }
+	err = blockchainNode0.Run(framework.Context, "ubsv1")
+	if err != nil {
+		t.Errorf("Failed to set state: %v", err)
+	}
 
-	// time.Sleep(10 * time.Second)
+	time.Sleep(10 * time.Second)
 
-	// fsmState, _ = blockchainNode0.GetFSMCurrentState(framework.Context)
-	// t.Logf("FSM state after sending run: %v", fsmState)
-	// assert.Equal(t, "RUNNING", fsmState.String(), "FSM state is not equal to 1")
+	fsmState, _ = blockchainNode0.GetFSMCurrentState(framework.Context)
+	t.Logf("FSM state after sending run: %v", fsmState)
+	assert.Equal(t, "RUNNING", fsmState.String(), "FSM state is not equal to 1")
 
 	height, _ := helper.GetBlockHeight(url)
 	t.Logf("Block height before mining: %d\n", height)
+
+	// Check newer blocks that arrived and check if the test tx is included in the block
 
 	_, err = helper.MineBlock(framework.Context, baClient, logger)
 
