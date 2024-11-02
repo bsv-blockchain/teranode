@@ -1,3 +1,6 @@
+// Package http_impl provides the HTTP server implementation for the Bitcoin SV blockchain service.
+// It implements a comprehensive REST API for accessing blockchain data with support for multiple
+// response formats.
 package http_impl
 
 import (
@@ -21,6 +24,8 @@ import (
 
 var AssetStat = gocore.NewStat("Asset")
 
+// HTTP represents the main HTTP server structure for the blockchain service.
+// It handles routing, middleware, and request processing for all blockchain data endpoints.
 type HTTP struct {
 	logger     ulogger.Logger
 	repository *repository.Repository
@@ -29,6 +34,66 @@ type HTTP struct {
 	privKey    crypto.PrivKey
 }
 
+// New creates and configures a new HTTP server instance with all routes and middleware.
+//
+// Parameters:
+//   - logger: Logger instance for server operations
+//   - repo: Repository instance for blockchain data access
+//
+// Returns:
+//   - *HTTP: Configured HTTP server instance
+//   - error: Any error encountered during setup
+//
+// API Endpoints:
+//
+//	Health and Status:
+//	- GET /alive: Service liveness check
+//	- GET /health: Service health check with dependency status
+//
+//	Transaction Related:
+//	- GET /api/v1/tx/{hash}: Get transaction (binary/hex/json)
+//	- POST /api/v1/txs: Batch transaction retrieval
+//	- GET /api/v1/txmeta/{hash}/json: Get transaction metadata
+//	- GET /api/v1/txmeta_raw/{hash}: Get raw transaction metadata
+//
+//	Block Related:
+//	- GET /api/v1/block/{hash}: Get block by hash
+//	- GET /api/v1/blocks: Get paginated block list
+//	- GET /api/v1/block/{hash}/forks: Get block fork information
+//	- GET /api/v1/bestblockheader: Get latest block header
+//	- GET /api/v1/blockstats: Get blockchain statistics
+//	- GET /api/v1/blockgraphdata/{period}: Get time-series block data
+//
+//	UTXO Related:
+//	- GET /api/v1/utxo/{hash}: Get UTXO information
+//	- GET /api/v1/utxos/{hash}/json: Get UTXOs by transaction
+//	- GET /api/v1/balance: Get UTXO set balance
+//
+//	Search and Discovery:
+//	- GET /api/v1/search: Search for blockchain entities
+//
+//	Legacy Compatibility:
+//	- GET /rest/block/{hash}.bin: Get block in legacy format
+//	- GET /api/v1/block_legacy/{hash}: Get block in legacy format
+//
+// Configuration:
+//   - ECHO_DEBUG: Enable debug logging
+//   - http_sign_response: Enable response signing
+//   - p2p_private_key: Private key for response signing
+//   - securityLevelHTTP: 0 for HTTP, non-zero for HTTPS
+//   - server_certFile: TLS certificate file (HTTPS only)
+//   - server_keyFile: TLS key file (HTTPS only)
+//
+// Security Features:
+//   - Optional HTTPS support
+//   - Response signing capability
+//   - CORS configuration
+//   - Gzip compression
+//
+// Monitoring:
+//   - Custom request logging in debug mode
+//   - Prometheus metrics
+//   - Statistical tracking with reset capability
 func New(logger ulogger.Logger, repo *repository.Repository) (*HTTP, error) {
 	initPrometheusMetrics()
 
