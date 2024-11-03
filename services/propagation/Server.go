@@ -471,7 +471,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 			Height: util.GenesisActivationHeight,
 		}
 
-		ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
+		// ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
 		ps.validatorKafkaProducerClient.PublishChannel <- &kafka.Message{
 			Value: validatorData.Bytes(),
 		}
