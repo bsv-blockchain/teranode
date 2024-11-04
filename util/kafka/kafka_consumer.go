@@ -172,7 +172,7 @@ func WithRetryAndMoveOn(maxRetries, backoffMultiplier int, backoffDurationType t
 	}
 }
 
-// WithRetryAndMoveOn configures error behaviour for the consumer function
+// WithRetryAndStop configures error behaviour for the consumer function
 // After max retries, the error is logged and message consumption stops
 // Use this when you cannot proceed with the next message in the queue
 func WithRetryAndStop(maxRetries, backoffMultiplier int, backoffDurationType time.Duration, stopFn func()) ConsumerOption {
