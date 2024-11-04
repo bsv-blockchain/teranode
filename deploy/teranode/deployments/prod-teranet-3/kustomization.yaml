@@ -4,7 +4,7 @@ namespace: prod-teranet-3
 
 configMapGenerator:
   - literals:
-      - SETTINGS_CONTEXT=operator.testing.t1
+      - SETTINGS_CONTEXT=operator.testing.prod-teranet-3
       - asset_centrifuge_disable=true
       - blockassembly_disabled=true
     name: shared-config

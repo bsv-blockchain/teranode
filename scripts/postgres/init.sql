@@ -168,33 +168,33 @@ DATABASE coinbase6
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE t1 LOGIN
-  PASSWORD 't1'
+CREATE ROLE "prod-teranet-1" LOGIN
+  PASSWORD 'prod-teranet-1'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant t1 to postgres;
+grant "prod-teranet-1" to postgres;
 CREATE
-DATABASE t1
-  WITH OWNER = t1
+DATABASE "prod-teranet-1"
+  WITH OWNER = "prod-teranet-1"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE t2 LOGIN
-  PASSWORD 't2'
+CREATE ROLE "prod-teranet-2" LOGIN
+  PASSWORD 'prod-teranet-2'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant t2 to postgres;
+grant "prod-teranet-2" to postgres;
 CREATE
-DATABASE t2
-  WITH OWNER = t2
+DATABASE "prod-teranet-2"
+  WITH OWNER = "prod-teranet-2"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
-CREATE ROLE t3 LOGIN
-  PASSWORD 't3'
+CREATE ROLE "prod-teranet-3" LOGIN
+  PASSWORD 'prod-teranet-3'
   NOSUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
-grant t3 to postgres;
+grant "prod-teranet-3" to postgres;
 CREATE
-DATABASE t3
-  WITH OWNER = t3
+DATABASE "prod-teranet-3"
+  WITH OWNER = "prod-teranet-3"
   ENCODING = 'UTF8'
   CONNECTION LIMIT = -1;
 
