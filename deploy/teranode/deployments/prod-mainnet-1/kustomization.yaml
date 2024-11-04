@@ -31,6 +31,12 @@ patches:
       - op: replace
         path: /spec/image
         value: 434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.5.455
+  - target:
+      kind: Cluster
+    patch: |-
+      - op: replace
+        path: /spec/configMapName
+        value: mainnet-1-shared-config
 
 resources:
   - ../../base

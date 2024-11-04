@@ -25,6 +25,12 @@ patches:
   - path: enabled-services-patch.yaml
     target:
       kind: Cluster
+  - target:
+      kind: Cluster
+    patch: |-
+      - op: replace
+        path: /spec/configMapName
+        value: teranet-1-shared-config
 
 
 resources:

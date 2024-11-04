@@ -34,5 +34,12 @@ patches:
   - target:
       kind: Cluster
     path: storage-patch.yaml
+  - target:
+      kind: Cluster
+    patch: |-
+      - op: replace
+        path: /spec/configMapName
+        value: mainnet-1-shared-config
+
 resources:
   - ../../base
