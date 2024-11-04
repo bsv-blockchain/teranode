@@ -96,10 +96,6 @@ func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation
 		panic(err)
 	}
 
-	// if err := subtreeValidationServer.Init(context.Background()); err != nil {
-	// 	panic(err)
-	// }
-
 	subtreeValidationClient := &MockSubtreeValidationClient{
 		server: subtreeValidationServer,
 	}
