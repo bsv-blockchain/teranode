@@ -251,7 +251,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return nil
 	}
 
-	s.rejectedTxKafkaConsumerClient.Start(ctx, rejectedTxHandler)
+	s.rejectedTxKafkaConsumerClient.Start(ctx, rejectedTxHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
 	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
 	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
 

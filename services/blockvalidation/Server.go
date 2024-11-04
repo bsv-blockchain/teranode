@@ -411,7 +411,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 func (u *Server) Start(ctx context.Context) error {
 
 	// start blocks kafka consumer
-	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx))
+	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
 
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent

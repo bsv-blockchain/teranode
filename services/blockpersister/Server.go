@@ -3,6 +3,7 @@ package blockpersister
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
@@ -149,7 +150,7 @@ func (u *Server) Start(ctx context.Context) error {
 		u.logger.Infof("[Block Persister] Node finished restoring and has transitioned to Running state, continuing to start Block Persister service")
 	}
 
-	u.blocksFinalKafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx))
+	u.blocksFinalKafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndStop(0, 1, time.Second, nil))
 
 	// http.HandleFunc("GET /block/", func(w http.ResponseWriter, req *http.Request) {
 	// 	hashStr := req.PathValue("hash")

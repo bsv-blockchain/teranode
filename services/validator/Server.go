@@ -173,7 +173,7 @@ func (v *Server) Start(ctx context.Context) error {
 	}
 
 	if v.consumerClient != nil {
-		v.consumerClient.Start(ctx, kafkaMessageHandler)
+		v.consumerClient.Start(ctx, kafkaMessageHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
 	}
 
 	// this will block
