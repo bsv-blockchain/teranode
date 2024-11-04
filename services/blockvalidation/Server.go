@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"runtime"
 	"slices"
 	"strconv"
@@ -62,8 +61,7 @@ type Server struct {
 	catchupCh           chan processBlockCatchup
 	blockValidation     *BlockValidation
 	SetTxMetaQ          *util.LockFreeQ[[][]byte]
-	kafkaConsumerClient *kafka.KafkaConsumerGroup
-	kafkaHealthURL      *url.URL
+	kafkaConsumerClient kafka.KafkaConsumerGroupI
 	// cache to prevent processing the same block / subtree multiple times
 	// we are getting all message many times from the different miners and this prevents going to the stores multiple times
 	processSubtreeNotify *ttlcache.Cache[chainhash.Hash, bool]
@@ -72,9 +70,15 @@ type Server struct {
 }
 
 // New will return a server instance with the logger stored within it
-func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
-	utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI) *Server {
-
+func New(
+	logger ulogger.Logger,
+	subtreeStore blob.Store,
+	txStore blob.Store,
+	utxoStore utxo.Store,
+	validatorClient validator.Interface,
+	blockchainClient blockchain.ClientI,
+	kafkaConsumerClient kafka.KafkaConsumerGroupI,
+) *Server {
 	initPrometheusMetrics()
 
 	// TEMP limit to 1, to prevent multiple subtrees processing at the same time
@@ -98,6 +102,7 @@ func New(logger ulogger.Logger, subtreeStore blob.Store, txStore blob.Store,
 		processSubtreeNotify: ttlcache.New[chainhash.Hash, bool](),
 		SetTxMetaQ:           util.NewLockFreeQ[[][]byte](),
 		stats:                gocore.NewStat("blockvalidation"),
+		kafkaConsumerClient:  kafkaConsumerClient,
 	}
 
 	return bVal
@@ -111,6 +116,11 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusOK, "OK", nil
 	}
 
+	var brokersURL []string
+	if u.kafkaConsumerClient != nil { // tests may not set this
+		brokersURL = u.kafkaConsumerClient.BrokersURL()
+	}
+
 	// Add readiness checks here. Include dependency checks.
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
@@ -121,7 +131,7 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "TxStore", Check: u.txStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, u.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -248,65 +258,17 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		}
 	}()
 
-	blocksKafkaURL, err, ok := gocore.Config().GetURL("kafka_blocksConfig")
-	if err == nil && ok {
-		u.kafkaHealthURL = blocksKafkaURL
-		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.
-		// subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
-		// g.SetLimit(subtreeConcurrency)
-		var partitions int
-
-		if partitions, err = strconv.Atoi(blocksKafkaURL.Query().Get("partitions")); err != nil {
-			return errors.NewConfigurationError("unable to parse Kafka partitions from %s", blocksKafkaURL.String(), err)
-		}
-
-		consumerRatio := util.GetQueryParamInt(blocksKafkaURL, "consumer_ratio", 4)
-		if consumerRatio < 1 {
-			consumerRatio = 1
-		}
-
-		quotient := partitions / consumerRatio
-		remainder := partitions % consumerRatio
-
-		consumerCount := quotient
-		if remainder > 0 {
-			consumerCount++
-		}
-		// set the concurrency limit by default to leave 16 cpus for doing tx meta processing
-		blockConcurrency, _ := gocore.Config().GetInt("blockvalidation_kafkaBlockConcurrency", util.Max(4, runtime.NumCPU()-16))
-		g := errgroup.Group{}
-		g.SetLimit(blockConcurrency)
-
-		// By using the fixed "blockvalidation" group ID, we ensure that only one instance of this service will process the block messages.
-		u.logger.Infof("Starting %d Kafka consumers for block messages", consumerCount)
-
-		client, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
-			Logger:            u.logger,
-			URL:               blocksKafkaURL,
-			GroupID:           "blockvalidation",
-			ConsumerCount:     consumerCount,
-			AutoCommitEnabled: false,
-			ConsumerFn:        u.consumerMessageHandler(ctx),
-		})
-		if err != nil {
-			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", blocksKafkaURL.String(), err)
-		}
-
-		u.kafkaConsumerClient = client
-	}
-
 	return nil
 }
 
-func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.KafkaMessage) error {
-	return func(msg kafka.KafkaMessage) error {
+func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
+	return func(msg *kafka.KafkaMessage) error {
 		errCh := make(chan error, 1)
 		go func() {
 			errCh <- u.blockHandler(msg)
 		}()
 
 		select {
-		// error handling
 		case err := <-errCh:
 			// if err is nil, it means function is successfully executed, return nil.
 			if err == nil {
@@ -332,20 +294,20 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg kafka.Kafk
 	}
 }
 
-func (u *Server) blockHandler(msg kafka.KafkaMessage) error {
-	if msg.Message == nil {
+func (u *Server) blockHandler(msg *kafka.KafkaMessage) error {
+	if msg == nil {
 		return nil
 	}
 
-	hash, err := chainhash.NewHash(msg.Message.Value[:32])
+	hash, err := chainhash.NewHash(msg.Value[:32])
 	if err != nil {
 		u.logger.Errorf("Failed to parse block hash from message: %v", err)
 		return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
 	}
 
 	var baseUrl string
-	if len(msg.Message.Value) > 32 {
-		baseUrl = string(msg.Message.Value[32:])
+	if len(msg.Value) > 32 {
+		baseUrl = string(msg.Value[32:])
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -449,7 +411,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 func (u *Server) Start(ctx context.Context) error {
 
 	// start blocks kafka consumer
-	go u.kafkaConsumerClient.Start(ctx)
+	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(0, 1, time.Second))
 
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent
@@ -477,20 +439,6 @@ func (u *Server) Start(ctx context.Context) error {
 			u.logger.Errorf("[BlockValidation] failed to start http server: %v", err)
 		}
 	}
-
-	//kafkaBlocksValidateConfigURL, err, ok := gocore.Config().GetURL("kafka_blocksValidateConfig")
-	//if err == nil && ok {
-	//	u.logger.Infof("[BlockValidation] starting block validation Kafka client on address: %s, with %d workers", kafkaBlocksValidateConfigURL.String(), 1)
-	//
-	//	util.StartKafkaListener(ctx, u.logger, kafkaBlocksValidateConfigURL, 1, "BlockValidation", "blockvalidation", func(_ context.Context, blockHashBytes []byte, _ []byte) error {
-	//		blockHash, err := chainhash.NewHash(blockHashBytes)
-	//		if err != nil {
-	//			u.logger.Errorf("[BlockValidation] failed to parse block hash from kafka: %v", err)
-	//			return nil
-	//		}
-	//		return u.blockValidation.validateBlock(ctx, blockHash)
-	//	})
-	//}
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, u.logger, "blockvalidation", func(server *grpc.Server) {

@@ -23,7 +23,51 @@ var (
 	q    *quorum.Quorum
 )
 
-func (u *Server) blocksFinalHandler(msg kafka.KafkaMessage) error {
+func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.KafkaMessage) error {
+	return func(msg *kafka.KafkaMessage) error {
+		// this does manual commit so we need to implement error handling and differentiate between errors
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- u.blocksFinalHandler(msg)
+		}()
+
+		select {
+		case err := <-errCh:
+			// if err is nil, it means function is successfully executed, return nil.
+			if err == nil {
+				return nil
+			}
+
+			if errors.Is(err, errors.ErrBlockExists) {
+				// if block exists, it is not an error, so return nil to mark message as committed.
+				return nil
+			}
+
+			// currently, the following cases are considered recoverable:
+			// ERR_STORAGE_ERROR, ERR_SERVICE_ERROR
+			// all other cases, including but not limited to, are considered as unrecoverable:
+			// ERR_PROCESSING, ERR_BLOCK_EXISTS, ERR_INVALID_ARGUMENT
+
+			// If error is not nil, check if the error is a recoverable error.
+			// If it is a recoverable error, then return the error, so that it kafka message is not marked as committed.
+			// So the message will be consumed again.
+			if errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrServiceError) {
+				u.logger.Errorf("blocksFinalHandler failed: %v", err)
+				return err
+			}
+
+			// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
+			// kafka message should be committed, so return nil to mark message.
+			u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for block persister block handler, marking Kafka message as completed.\n", msg, err)
+
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (u *Server) blocksFinalHandler(msg *kafka.KafkaMessage) error {
 	var err error
 
 	once.Do(func() {
@@ -54,21 +98,21 @@ func (u *Server) blocksFinalHandler(msg kafka.KafkaMessage) error {
 		return err
 	}
 
-	if msg.Message != nil {
+	if msg != nil {
 		ctx, _, deferFn := tracing.StartTracing(u.ctx, "blocksFinalHandler",
 			tracing.WithHistogram(prometheusBlockPersisterValidateSubtreeHandler),
-			tracing.WithLogMessage(u.logger, "[blocksFinalHandler] called for block %s", utils.ReverseAndHexEncodeSlice(msg.Message.Key)),
+			tracing.WithLogMessage(u.logger, "[blocksFinalHandler] called for block %s", utils.ReverseAndHexEncodeSlice(msg.Key)),
 		)
 		defer deferFn()
 
-		if len(msg.Message.Key) != 32 {
-			u.logger.Errorf("Received blocksFinal message key %d bytes", len(msg.Message.Value))
-			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Message.Value))
+		if len(msg.Key) != 32 {
+			u.logger.Errorf("Received blocksFinal message key %d bytes", len(msg.Value))
+			return errors.New(errors.ERR_INVALID_ARGUMENT, "Received subtree message of %d bytes", len(msg.Value))
 		}
 
 		var hash *chainhash.Hash
 
-		hash, err = chainhash.NewHash(msg.Message.Key)
+		hash, err = chainhash.NewHash(msg.Key)
 		if err != nil {
 			u.logger.Errorf("Failed to parse block hash from message: %v", err)
 			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse block hash from message", err)
@@ -101,7 +145,7 @@ func (u *Server) blocksFinalHandler(msg kafka.KafkaMessage) error {
 			return errors.NewBlockExistsError("Block %s already being persisted", hash.String())
 		}
 
-		if err = u.persistBlock(ctx, hash, msg.Message.Value); err != nil {
+		if err = u.persistBlock(ctx, hash, msg.Value); err != nil {
 			if errors.Is(err, errors.ErrNotFound) {
 				u.logger.Warnf("PreviousBlock %s not found, so UTXOSet not processed", hash.String())
 

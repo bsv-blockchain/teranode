@@ -15,6 +15,19 @@ func GetQueryParam(u *url.URL, key string, defValue string) string {
 	return s
 }
 
+func GetQueryParamBool(u *url.URL, key string, defValue bool) bool {
+	s := u.Query().Get(key)
+	if s == "" {
+		return defValue
+	}
+
+	if s == "true" {
+		return true
+	}
+
+	return false
+}
+
 func GetQueryParamInt(u *url.URL, key string, defValue int) int {
 	s := GetQueryParam(u, key, "")
 	if s == "" {

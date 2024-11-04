@@ -3,9 +3,6 @@ package subtreevalidation
 import (
 	"context"
 	"net/http"
-	"net/url"
-	"runtime"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,11 +21,9 @@ import (
 	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/quorum"
-	"github.com/google/uuid"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -48,9 +43,8 @@ type Server struct {
 	prioritySubtreeCheckActiveMap     map[string]bool
 	prioritySubtreeCheckActiveMapLock sync.Mutex
 	blockchainClient                  blockchain.ClientI
-	subtreeConsumerClient             *kafka.KafkaConsumerGroup
-	txmetaConsumerClient              *kafka.KafkaConsumerGroup
-	kafkaHealthURL                    *url.URL
+	subtreeConsumerClient             kafka.KafkaConsumerGroupI
+	txmetaConsumerClient              kafka.KafkaConsumerGroupI
 }
 
 var (
@@ -66,6 +60,8 @@ func New(
 	utxoStore utxo.Store,
 	validatorClient validator.Interface,
 	blockchainClient blockchain.ClientI,
+	subtreeConsumerClient kafka.KafkaConsumerGroupI,
+	txmetaConsumerClient kafka.KafkaConsumerGroupI,
 ) (*Server, error) {
 	maxMerkleItemsPerSubtree, _ := gocore.Config().GetInt("initial_merkle_items_per_subtree", 1024)
 	subtreeTTLMinutes, _ := gocore.Config().GetInt("subtreevalidation_subtreeTTL", 120)
@@ -84,6 +80,8 @@ func New(
 		prioritySubtreeCheckActiveMap:     map[string]bool{},
 		prioritySubtreeCheckActiveMapLock: sync.Mutex{},
 		blockchainClient:                  blockchainClient,
+		subtreeConsumerClient:             subtreeConsumerClient,
+		txmetaConsumerClient:              txmetaConsumerClient,
 	}
 
 	var err error
@@ -140,6 +138,11 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusOK, "OK", nil
 	}
 
+	var brokersURL []string
+	if u.txmetaConsumerClient != nil { // tests may not set this
+		brokersURL = u.txmetaConsumerClient.BrokersURL()
+	}
+
 	// Add readiness checks here. Include dependency checks.
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
@@ -149,7 +152,7 @@ func (u *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "SubtreeStore", Check: u.subtreeStore.Health},
 		{Name: "UTXOStore", Check: u.utxoStore.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(u.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, u.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -175,147 +178,14 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *subtreevalidation_api.EmptyM
 func (u *Server) Init(ctx context.Context) (err error) {
 	initPrometheusMetrics()
 
-	subtreesKafkaURL, err, ok := gocore.Config().GetURL("kafka_subtreesConfig")
-	if err == nil && ok {
-		u.kafkaHealthURL = subtreesKafkaURL
-		// Start a number of Kafka consumers equal to the number of CPU cores, minus 16 to leave processing for the tx meta cache.
-		// subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
-		// g.SetLimit(subtreeConcurrency)
-		var partitions int
-
-		if partitions, err = strconv.Atoi(subtreesKafkaURL.Query().Get("partitions")); err != nil {
-			return errors.NewInvalidArgumentError("[Subtreevalidation] unable to parse Kafka partitions from %s", subtreesKafkaURL, err)
-		}
-
-		consumerRatio := util.GetQueryParamInt(subtreesKafkaURL, "consumer_ratio", 4)
-		if consumerRatio < 1 {
-			consumerRatio = 1
-		}
-
-		consumerCount := partitions / consumerRatio
-
-		if consumerCount < 0 {
-			consumerCount = 1
-		}
-
-		// set the concurrency limit by default to leave 16 cpus for doing tx meta processing
-		subtreeConcurrency, _ := gocore.Config().GetInt("subtreevalidation_kafkaSubtreeConcurrency", util.Max(4, runtime.NumCPU()-16))
-		g := errgroup.Group{}
-		g.SetLimit(subtreeConcurrency)
-
-		// By using the fixed "subtreevalidation" group ID, we ensure that only one instance of this service will process the subtree messages.
-		u.logger.Infof("Starting %d Kafka consumers for subtree messages", consumerCount)
-
-		// Autocommit is disabled for subtree messages, so that we can commit the message only after the subtree has been processed.
-		subtreeHandler := func(msg kafka.KafkaMessage) error {
-			errCh := make(chan error, 1)
-			go func() {
-				errCh <- u.subtreeHandler(msg)
-			}()
-
-			select {
-			// error handling
-			case err := <-errCh:
-				// if err is nil, it means function is successfully executed, return nil.
-				if err == nil {
-					return nil
-				}
-
-				if errors.Is(err, errors.ErrSubtreeExists) {
-					// if the error is subtree exists, then return nil, so that the kafka message is marked as committed.
-					// So the message will not be consumed again.
-					u.logger.Infof("Subtree already exists, marking Kafka message as completed.\n")
-					return nil
-				}
-
-				// currently, the following cases are considered recoverable:
-				// ERR_SERVICE_ERROR, ERR_STORAGE_ERROR, ERR_CONTEXT_ERROR, ERR_THRESHOLD_EXCEEDED, ERR_EXTERNAL_ERROR
-				// all other cases, including but not limited to, are considered as unrecoverable:
-				// ERR_PROCESSING, ERR_SUBTREE_INVALID, ERR_SUBTREE_INVALID_FORMAT, ERR_INVALID_ARGUMENT, ERR_SUBTREE_EXISTS, ERR_TX_INVALID
-
-				// if error is not nil, check if the error is a recoverable error.
-				// If the error is a recoverable error, then return the error, so that it kafka message is not marked as committed.
-				// So the message will be consumed again.
-				if errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError) || errors.Is(err, errors.ErrThresholdExceeded) || errors.Is(err, errors.ErrContextCanceled) || errors.Is(err, errors.ErrExternal) {
-					u.logger.Errorf("Recoverable error (%v) processing kafka message %v for handling subtree, returning error, thus not marking Kafka message as complete.\n", msg, err)
-					return err
-				}
-
-				// error is not nil and not recoverable, so it is unrecoverable error, and it should not be tried again
-				// kafka message should be committed, so return nil to mark message.
-				u.logger.Errorf("Unrecoverable error (%v) processing kafka message %v for handling subtree, marking Kafka message as completed.\n", msg, err)
-
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		client, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
-			Logger:            u.logger,
-			URL:               subtreesKafkaURL,
-			GroupID:           "subtreevalidation",
-			ConsumerCount:     consumerCount,
-			AutoCommitEnabled: false,
-			ConsumerFn:        subtreeHandler,
-		})
-
-		if err != nil {
-			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", subtreesKafkaURL.String(), err)
-		}
-
-		u.subtreeConsumerClient = client
-	}
-
-	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
-	if err == nil && ok {
-		u.kafkaHealthURL = txmetaKafkaURL
-		var partitions int
-
-		if partitions, err = strconv.Atoi(txmetaKafkaURL.Query().Get("partitions")); err != nil {
-			return errors.NewInvalidArgumentError("[Subtreevalidation] unable to parse Kafka partitions from %s", txmetaKafkaURL, err)
-		}
-
-		consumerRatio := util.GetQueryParamInt(txmetaKafkaURL, "consumer_ratio", 8)
-		if consumerRatio < 1 {
-			consumerRatio = 1
-		}
-
-		consumerCount := partitions / consumerRatio
-		if consumerCount < 0 {
-			consumerCount = 1
-		}
-
-		// Generate a unique group ID for the txmeta Kafka listener, to ensure that each instance of this service will process all txmeta messages.
-		// This is necessary because the txmeta messages are used to populate the txmeta cache, which is shared across all instances of this service.
-		groupID := "subtreevalidation-" + uuid.New().String()
-
-		u.logger.Infof("Starting %d Kafka consumers for tx meta messages", consumerCount)
-
-		// For TxMeta, we are using autocommit, as we want to consume every message as fast as possible, and it is okay if some of the messages are not properly processed.
-		// We don't need manual kafka commit and error handling here, as it is not necessary to retry the message, we have the message in stores.
-		// Therefore, autocommit is set to true.
-		u.txmetaConsumerClient, err = kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
-			Logger:            u.logger,
-			URL:               txmetaKafkaURL,
-			GroupID:           groupID,
-			ConsumerCount:     consumerCount,
-			AutoCommitEnabled: true,
-			ConsumerFn:        u.txmetaHandler,
-		})
-
-		if err != nil {
-			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", subtreesKafkaURL.String(), err)
-		}
-	}
-
 	return nil
 }
 
 // Start function
 func (u *Server) Start(ctx context.Context) error {
 	// start kafka consumers
-	go u.subtreeConsumerClient.Start(ctx)
-	go u.txmetaConsumerClient.Start(ctx)
+	u.subtreeConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithRetryAndMoveOn(3, 2, time.Second))
+	u.txmetaConsumerClient.Start(ctx, u.txmetaHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
 
 	// Check if we need to Restore. If so, move FSM to the Restore state
 	// Restore will block and wait for RUN event to be manually sent

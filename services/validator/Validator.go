@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/health"
 	"github.com/bitcoin-sv/ubsv/util/kafka"
-	"github.com/bitcoin-sv/ubsv/util/retry"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/bscript"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -40,12 +38,11 @@ type Validator struct {
 	saveInParallel                bool
 	blockAssemblyDisabled         bool
 	stats                         *gocore.Stat
-	txMetaKafkaProducerClient     *kafka.KafkaAsyncProducer
-	rejectedTxKafkaProducerClient *kafka.KafkaAsyncProducer
-	kafkaHealthURL                *url.URL
+	txmetaKafkaProducerClient     kafka.KafkaAsyncProducerI
+	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 }
 
-func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interface, error) {
+func New(ctx context.Context, logger ulogger.Logger, store utxo.Store, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) (Interface, error) {
 	initPrometheusMetrics()
 
 	ba, err := blockassembly.NewClient(ctx, logger)
@@ -60,58 +57,33 @@ func New(ctx context.Context, logger ulogger.Logger, store utxo.Store) (Interfac
 	}
 
 	v := &Validator{
-		logger:         logger,
-		txValidator:    NewTxValidator(scriptValidator, logger, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
-		utxoStore:      store,
-		blockAssembler: ba,
-		saveInParallel: true,
-		stats:          gocore.NewStat("validator"),
+		logger:                        logger,
+		txValidator:                   NewTxValidator(scriptValidator, logger, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		utxoStore:                     store,
+		blockAssembler:                ba,
+		saveInParallel:                true,
+		stats:                         gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:     txMetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
 	v.blockAssemblyDisabled = gocore.Config().GetBool("blockassembly_disabled", false)
 
-	txmetaKafkaURL, _, found := gocore.Config().GetURL("kafka_txmetaConfig")
-	if found {
-		workers, _ := gocore.Config().GetInt("blockvalidation_kafkaWorkers", 100)
-		// only start the kafka producer if there are workers listening
-		// this can be used to disable the kafka producer, by just setting workers to 0
-		if workers > 0 {
-			v.kafkaHealthURL = txmetaKafkaURL
-			v.txMetaKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
-				return kafka.NewKafkaAsyncProducer(v.logger, txmetaKafkaURL, make(chan *kafka.Message, 10000))
-			}, retry.WithMessage("[Validator] error starting kafka producer for txMeta"))
-
-			if err != nil {
-				v.logger.Fatalf("[Validator] failed to start kafka producer for txMeta: %v", err)
-				return nil, err
-			}
-
-			go v.txMetaKafkaProducerClient.Start(ctx)
-
-			logger.Infof("[Validator] connected to kafka at %s", txmetaKafkaURL.Host)
-		}
+	txmetaKafkaURL, err, ok := gocore.Config().GetURL("kafka_txmetaConfig")
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to get Kafka URL for txmeta: %v", err)
 	}
 
-	rejectedTxKafkaURL, _, found := gocore.Config().GetURL("kafka_rejectedTxConfig")
-	if found {
-		workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
-		// only start the kafka producer if there are workers listening
-		// this can be used to disable the kafka producer, by just setting workers to 0
-		if workers > 0 {
-			v.kafkaHealthURL = rejectedTxKafkaURL
-			v.rejectedTxKafkaProducerClient, err = retry.Retry(ctx, logger, func() (*kafka.KafkaAsyncProducer, error) {
-				return kafka.NewKafkaAsyncProducer(v.logger, rejectedTxKafkaURL, make(chan *kafka.Message, 10000))
-			}, retry.WithMessage("[Validator] error starting kafka producer for rejected Txs"))
+	if !ok || txmetaKafkaURL == nil {
+		return nil, errors.NewConfigurationError("missing Kafka URL for txmeta")
+	}
 
-			if err != nil {
-				v.logger.Fatalf("[Validator] failed to start kafka producer for rejected Txs: %v", err)
-				return nil, err
-			}
+	if v.txmetaKafkaProducerClient != nil { // tests may not set this
+		v.txmetaKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
+	}
 
-			go v.rejectedTxKafkaProducerClient.Start(ctx)
-
-			logger.Infof("[Validator] connected to kafka at %s", rejectedTxKafkaURL.Host)
-		}
+	if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
+		v.rejectedTxKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
 	}
 
 	return v, nil
@@ -158,10 +130,15 @@ func (v *Validator) Health(ctx context.Context, checkLiveness bool) (int, string
 		return http.StatusOK, sb.String(), nil
 	}
 
+	var brokersURL []string
+	if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
+		brokersURL = v.rejectedTxKafkaProducerClient.BrokersURL()
+	}
+
 	checks := []health.Check{
 		{Name: "BlockHeight", Check: checkBlockHeight},
 		{Name: "UTXOStore", Check: v.utxoStore.Health},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, v.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -181,11 +158,12 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 	validationOptions := ProcessOptions(opts...)
 
 	if err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
-		if v.rejectedTxKafkaProducerClient != nil {
+		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 			startKafka := time.Now()
-			v.rejectedTxKafkaProducerClient.PublishChannel <- &kafka.Message{
+
+			v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
 				Value: append(tx.TxIDChainHash().CloneBytes(), err.Error()...),
-			}
+			})
 
 			prometheusValidatorSendToP2PKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 		}
@@ -352,11 +330,12 @@ func (v *Validator) reverseTxMetaStore(setSpan tracing.Span, txHash *chainhash.H
 		}
 	}
 
-	if v.txMetaKafkaProducerClient != nil {
+	if v.txmetaKafkaProducerClient != nil { // tests may not set this
 		startKafka := time.Now()
-		v.txMetaKafkaProducerClient.PublishChannel <- &kafka.Message{
+
+		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
 			Value: append(txHash.CloneBytes(), []byte("delete")...),
-		}
+		})
 
 		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 	}
@@ -375,11 +354,12 @@ func (v *Validator) storeTxInUtxoMap(traceSpan tracing.Span, tx *bt.Tx, blockHei
 		return nil, err
 	}
 
-	if v.txMetaKafkaProducerClient != nil {
+	if v.txmetaKafkaProducerClient != nil { // tests may not set this
 		startKafka := time.Now()
-		v.txMetaKafkaProducerClient.PublishChannel <- &kafka.Message{
+
+		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
 			Value: append(tx.TxIDChainHash().CloneBytes(), data.MetaBytes()...),
-		}
+		})
 
 		prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 	}
@@ -448,7 +428,7 @@ func (v *Validator) spendUtxos(traceSpan tracing.Span, tx *bt.Tx, blockHeight ui
 	return spends, nil
 }
 
-func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error {
+func (v *Validator) sendToBlockAssembler(traceSpan tracing.Span, bData *blockassembly.Data, reservedUtxos []*utxo.Spend) error { //nolint:gosec
 	ctx, _, deferFn := tracing.StartTracing(traceSpan.Ctx, "sendToBlockAssembler",
 		tracing.WithHistogram(prometheusValidatorSendToBlockAssembly),
 	)

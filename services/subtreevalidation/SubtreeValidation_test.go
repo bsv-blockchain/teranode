@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
+	"github.com/bitcoin-sv/ubsv/util/kafka" //nolint:gci
 
 	"github.com/bitcoin-sv/ubsv/services/legacy/testdata"
 	"github.com/bitcoin-sv/ubsv/services/validator"
@@ -85,7 +86,9 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 			httpmock.NewBytesResponder(200, nodeBytes),
 		)
 
-		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
+		nilConsumer := &kafka.KafkaConsumerGroup{}
+
+		subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 		require.NoError(t, err)
 
 		v := ValidateSubtree{
@@ -151,7 +154,9 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	txMetaStore, validatorClient, txStore, subtreeStore, blockchainClient, deferFunc := setup()
 	defer deferFunc()
 
-	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
+	nilConsumer := &kafka.KafkaConsumerGroup{}
+
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 	require.NoError(t, err)
 
 	subtreeValidation.utxoStore, _ = txmetacache.NewTxMetaCache(context.Background(), ulogger.TestLogger{}, txMetaStore, 2048)
@@ -226,7 +231,9 @@ func TestBlockValidationValidateSubtreeInternalWithMissingTx(t *testing.T) {
 		httpmock.NewBytesResponder(200, nodeBytes),
 	)
 
-	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient)
+	nilConsumer := &kafka.KafkaConsumerGroup{}
+
+	subtreeValidation, err := New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
 	require.NoError(t, err)
 
 	// Create a mock context

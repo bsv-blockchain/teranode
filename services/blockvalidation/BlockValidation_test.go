@@ -8,6 +8,7 @@ import (
 	"time"
 
 	utxoStore "github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation"
 	"github.com/bitcoin-sv/ubsv/services/subtreevalidation/subtreevalidation_api"
@@ -88,12 +89,10 @@ func setup() (utxoStore.Store, *validator.MockValidatorClient, subtreevalidation
 
 	blockchainClient := &blockchain.LocalClient{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient)
-	if err != nil {
-		panic(err)
-	}
+	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	if err := subtreeValidationServer.Init(context.Background()); err != nil {
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, subtreeStore, txStore, txMetaStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
+	if err != nil {
 		panic(err)
 	}
 

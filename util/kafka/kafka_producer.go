@@ -18,11 +18,6 @@ kafka-topics.sh --describe --bootstrap-server localhost:9092
 kafka-console-consumer.sh --topic blocks --bootstrap-server localhost:9092 --from-beginning
 */
 
-type KafkaMessage struct {
-	Message *sarama.ConsumerMessage
-	Session sarama.ConsumerGroupSession
-}
-
 type KafkaProducerI interface {
 	GetClient() sarama.ConsumerGroup
 	Send(key []byte, data []byte) error

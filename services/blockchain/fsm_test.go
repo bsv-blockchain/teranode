@@ -21,7 +21,7 @@ import (
 func Test_NewFiniteStateMachine(t *testing.T) {
 	ctx := context.Background()
 	logger := mock_logger.NewTestLogger()
-	blockchainClient, err := New(ctx, logger, nil)
+	blockchainClient, err := New(ctx, logger, nil, nil)
 	require.NoError(t, err)
 
 	fsm := blockchainClient.NewFiniteStateMachine()
@@ -94,7 +94,7 @@ func Test_GetSetFSMStateFromStore(t *testing.T) {
 	ctx := context.Background()
 	logger := mock_logger.NewTestLogger()
 
-	blockchainClient, err := New(ctx, logger, blockchainStore)
+	blockchainClient, err := New(ctx, logger, blockchainStore, nil)
 	require.NoError(t, err)
 
 	err = blockchainClient.Init(ctx)

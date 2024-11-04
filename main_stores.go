@@ -89,9 +89,21 @@ func getValidatorClient(ctx context.Context, logger ulogger.Logger) (validator.I
 			return nil, errors.NewServiceError("could not create local validator client", err)
 		}
 
+		txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, logger)
+		if err != nil {
+			return nil, errors.NewServiceError("could not create txmeta kafka producer for local validator", err)
+		}
+
+		rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, logger)
+		if err != nil {
+			return nil, errors.NewServiceError("could not create rejectedTx kafka producer for local validator", err)
+		}
+
 		mainValidatorClient, err = validator.New(ctx,
 			logger,
 			utxoStore,
+			txMetaKafkaProducerClient,
+			rejectedTxKafkaProducerClient,
 		)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create local validator", err)

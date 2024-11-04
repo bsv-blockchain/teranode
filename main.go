@@ -50,6 +50,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/bitcoin-sv/ubsv/util/servicemanager"
 	"github.com/felixge/fgprof"
+	"github.com/google/uuid"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
@@ -316,6 +317,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
+		blocksFinalKafkaAsyncProducer, err := getKafkaBlocksFinalAsyncProducer(ctx, logger)
+		if err != nil {
+			return err
+		}
+
 		var localTestStartFromState string
 
 		// Check if the command line has the -localTestStartFromState flag, if so use that value as initial FSM state
@@ -332,7 +338,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			localTestStartFromState, _ = gocore.Config().Get("local_test_start_from_state")
 		}
 
-		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, localTestStartFromState)
+		blockchainService, err = blockchain.New(ctx, logger.New("bchn"), blockchainStore, blocksFinalKafkaAsyncProducer, localTestStartFromState)
 		if err != nil {
 			return err
 		}
@@ -349,9 +355,27 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
+		rejectedTxKafkaConsumerClient, err := getKafkaRejectedTxConsumerGroup(logger, "p2p")
+		if err != nil {
+			return err
+		}
+
+		subtreeKafkaProducerClient, err := getKafkaSubtreesAsyncProducer(ctx, logger)
+		if err != nil {
+			return err
+		}
+
+		blocksKafkaProducerClient, err := getKafkaBlocksAsyncProducer(ctx, logger)
+		if err != nil {
+			return err
+		}
+
 		p2pService, err := p2p.NewServer(ctx,
 			logger.New("P2P"),
 			blockchainClient,
+			rejectedTxKafkaConsumerClient,
+			subtreeKafkaProducerClient,
+			blocksKafkaProducerClient,
 		)
 		if err != nil {
 			return err
@@ -468,12 +492,18 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
+		blocksFinalKafkaConsumerClient, err := getKafkaBlocksFinalConsumerGroup(logger, "blockpersister")
+		if err != nil {
+			return err
+		}
+
 		if err = sm.AddService("BlockPersister", blockpersister.New(ctx,
 			logger.New("bp"),
 			blockStore,
 			subtreeStore,
 			utxoStore,
 			blockchainClient,
+			blocksFinalKafkaConsumerClient,
 		)); err != nil {
 			return err
 
@@ -563,6 +593,16 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			return err
 		}
 
+		subtreeConsumerClient, err := getKafkaSubtreesConsumerGroup(logger, "subtreevalidation-"+uuid.New().String())
+		if err != nil {
+			return err
+		}
+
+		txmetaConsumerClient, err := getKafkaTxmetaConsumerGroup(logger, "subtreevalidation")
+		if err != nil {
+			return err
+		}
+
 		subtreeValidationService, err := subtreevalidation.New(ctx,
 			logger.New("stval"),
 			subtreeStore,
@@ -570,6 +610,8 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 			utxoStore,
 			validatorClient,
 			blockchainClient,
+			subtreeConsumerClient,
+			txmetaConsumerClient,
 		)
 		if err != nil {
 			return err
@@ -608,6 +650,11 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				return err
 			}
 
+			kafkaConsumerClient, err := getKafkaBlocksConsumerGroup(logger, "blockvalidation")
+			if err != nil {
+				return err
+			}
+
 			if err = sm.AddService("Block Validation", blockvalidation.New(
 				logger.New("bval"),
 				subtreeStore,
@@ -615,6 +662,7 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				utxoStore,
 				validatorClient,
 				blockchainClient,
+				kafkaConsumerClient,
 			)); err != nil {
 				return err
 			}
@@ -634,10 +682,28 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 				return err
 			}
 
+			consumerClient, err := getKafkaTxConsumerGroup(logger, "validator")
+			if err != nil {
+				return err
+			}
+
+			txMetaKafkaProducerClient, err := getKafkaTxmetaAsyncProducer(ctx, logger)
+			if err != nil {
+				return err
+			}
+
+			rejectedTxKafkaProducerClient, err := getKafkaRejectedTxAsyncProducer(ctx, logger)
+			if err != nil {
+				return err
+			}
+
 			if err = sm.AddService("Validator", validator.NewServer(
 				logger.New("validator"),
 				utxoStore,
 				blockchainClient,
+				consumerClient,
+				txMetaKafkaProducerClient,
+				rejectedTxKafkaProducerClient,
 			)); err != nil {
 				return err
 			}
@@ -699,11 +765,17 @@ func startServices(ctx context.Context, logger ulogger.Logger, serviceName strin
 					return err
 				}
 
+				validatorKafkaProducerClient, err := getKafkaTxAsyncProducer(ctx, logger)
+				if err != nil {
+					return err
+				}
+
 				if err = sm.AddService("PropagationServer", propagation.New(
 					logger.New("prop"),
 					txStore,
 					validatorClient,
 					blockchainClient,
+					validatorKafkaProducerClient,
 				)); err != nil {
 					return err
 				}

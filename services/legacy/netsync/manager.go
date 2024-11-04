@@ -1845,10 +1845,13 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 
 		// start a go routine to start the kafka producer
 		go func() {
-			if _, err = kafka.NewKafkaAsyncProducer(sm.logger, legacyInvConfigURL, sm.legacyKafkaInvCh); err != nil {
+			producer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, sm.logger, legacyInvConfigURL)
+			if err != nil {
 				sm.logger.Errorf("[Legacy Manager] error starting kafka producer: %v", err)
 				return
 			}
+
+			producer.Start(sm.ctx, sm.legacyKafkaInvCh)
 		}()
 
 		kafkaControlChan := make(chan bool) // true = start, false = stop
@@ -1911,27 +1914,29 @@ func New(ctx context.Context, logger ulogger.Logger, blockchainClient ubsvblockc
 }
 
 func (sm *SyncManager) startKafkaListener(ctx context.Context, kafkaURL *url.URL, groupID string, consumerCount int) {
-	if _, err := kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
+	client, err := kafka.NewKafkaConsumerGroup(kafka.KafkaConsumerConfig{
 		Logger:            sm.logger,
 		URL:               kafkaURL,
-		GroupID:           groupID,
+		ConsumerGroupID:   groupID,
 		ConsumerCount:     consumerCount,
 		AutoCommitEnabled: true,
-		ConsumerFn: func(msg kafka.KafkaMessage) error {
-			wireInvMsg, err := sm.newInvFromBytes(msg.Message.Value)
-			if err != nil {
-				sm.logger.Errorf("failed to create INV message from Kafka message: %v", err)
-				return nil // ignore any errors, the message might be old and/or the peer is already disconnected
-			}
-
-			sm.logger.Debugf("Received INV message from Kafka: %v", wireInvMsg)
-
-			// Queue the INV message on the internal message channel
-			sm.msgChan <- wireInvMsg
-
-			return nil
-		},
-	}); err != nil {
+	})
+	if err != nil {
 		sm.logger.Errorf("failed to start Kafka listener for %s: %v", kafkaURL.String(), err)
 	}
+
+	client.Start(ctx, func(msg *kafka.KafkaMessage) error {
+		wireInvMsg, err := sm.newInvFromBytes(msg.Value)
+		if err != nil {
+			sm.logger.Errorf("failed to create INV message from Kafka message: %v", err)
+			return nil // ignore any errors, the message might be old and/or the peer is already disconnected
+		}
+
+		sm.logger.Debugf("Received INV message from Kafka: %v", wireInvMsg)
+
+		// Queue the INV message on the internal message channel
+		sm.msgChan <- wireInvMsg
+
+		return nil
+	})
 }

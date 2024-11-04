@@ -17,6 +17,7 @@ import (
 	"github.com/bitcoin-sv/ubsv/stores/utxo/meta"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
+	"github.com/bitcoin-sv/ubsv/util/kafka"
 	"github.com/bitcoin-sv/ubsv/util/quorum"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
@@ -211,7 +212,8 @@ func TestBlock(t *testing.T) {
 
 	blockchainClient := &blockchain.LocalClient{}
 
-	persister := New(context.Background(), ulogger.TestLogger{}, blockStore, subtreeStore, mockStore, blockchainClient)
+	blocksFinalKafkaConsumerClient := &kafka.KafkaConsumerGroup{}
+	persister := New(context.Background(), ulogger.TestLogger{}, blockStore, subtreeStore, mockStore, blockchainClient, blocksFinalKafkaConsumerClient)
 
 	var block model.Block
 

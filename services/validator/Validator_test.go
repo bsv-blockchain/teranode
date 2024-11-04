@@ -28,7 +28,7 @@ func BenchmarkValidator(b *testing.B) {
 		panic(err)
 	}
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, utxoMemorystore.New(ulogger.TestLogger{}))
+	v, err := New(context.Background(), ulogger.TestLogger{}, utxoMemorystore.New(ulogger.TestLogger{}), nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -56,7 +56,7 @@ func TestValidate_CoinbaseTransaction(t *testing.T) {
 	// delete spends set to false
 	utxoStore := utxoMemorystore.New(ulogger.TestLogger{})
 
-	v, err := New(context.Background(), ulogger.TestLogger{}, utxoStore)
+	v, err := New(context.Background(), ulogger.TestLogger{}, utxoStore, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -90,26 +90,24 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 		scriptValidator = VerificatorGoBT
 	}
 
+	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
+	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	v := &Validator{
-		logger:         ulogger.TestLogger{},
-		txValidator:    NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
-		utxoStore:      utxoStore,
-		blockAssembler: BlockAssemblyStore{},
-		saveInParallel: true,
-		stats:          gocore.NewStat("validator"),
-		txMetaKafkaProducerClient: &kafka.KafkaAsyncProducer{
-			PublishChannel: make(chan *kafka.Message, 1),
-		},
-		rejectedTxKafkaProducerClient: &kafka.KafkaAsyncProducer{
-			PublishChannel: make(chan *kafka.Message, 1),
-		},
+		logger:                        ulogger.TestLogger{},
+		txValidator:                   NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		utxoStore:                     utxoStore,
+		blockAssembler:                BlockAssemblyStore{},
+		saveInParallel:                true,
+		stats:                         gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:     txmetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, len(v.txMetaKafkaProducerClient.PublishChannel), "txMetaKafkaChan should have 1 message")
-	require.Equal(t, 0, len(v.rejectedTxKafkaProducerClient.PublishChannel), "rejectedTxKafkaChan should be empty")
+	require.Equal(t, 1, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should have 1 message")
+	require.Equal(t, 0, len(rejectedTxKafkaProducerClient.PublishChannel()), "rejectedTxKafkaChan should be empty")
 }
 
 func TestValidate_RejectedTransactionChannel(t *testing.T) {
@@ -129,26 +127,25 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 		scriptValidator = VerificatorGoBT
 	}
 
+	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
+	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
+
 	v := &Validator{
-		logger:         ulogger.TestLogger{},
-		txValidator:    NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
-		utxoStore:      utxoStore,
-		blockAssembler: nil,
-		saveInParallel: true,
-		stats:          gocore.NewStat("validator"),
-		txMetaKafkaProducerClient: &kafka.KafkaAsyncProducer{
-			PublishChannel: make(chan *kafka.Message, 1),
-		},
-		rejectedTxKafkaProducerClient: &kafka.KafkaAsyncProducer{
-			PublishChannel: make(chan *kafka.Message, 1),
-		},
+		logger:                        ulogger.TestLogger{},
+		txValidator:                   NewTxValidator(scriptValidator, ulogger.TestLogger{}, NewPolicySettings(), chaincfg.GetChainParamsFromConfig()),
+		utxoStore:                     utxoStore,
+		blockAssembler:                nil,
+		saveInParallel:                true,
+		stats:                         gocore.NewStat("validator"),
+		txmetaKafkaProducerClient:     txmetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 
 	err = v.Validate(context.Background(), tx, 0)
 	require.Error(t, err)
 
-	require.Equal(t, 0, len(v.txMetaKafkaProducerClient.PublishChannel), "txMetaKafkaChan should be empty")
-	require.Equal(t, 1, len(v.rejectedTxKafkaProducerClient.PublishChannel), "rejectedTxKafkaChan should have 1 message")
+	require.Equal(t, 0, len(txmetaKafkaProducerClient.PublishChannel()), "txMetaKafkaChan should be empty")
+	require.Equal(t, 1, len(rejectedTxKafkaProducerClient.PublishChannel()), "rejectedTxKafkaChan should have 1 message")
 }
 
 func TestValidate_InValidDoubleSpendTx(t *testing.T) {

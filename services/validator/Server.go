@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"syscall"
 	"time"
@@ -31,26 +30,30 @@ import (
 // Server type carries the logger within it
 type Server struct {
 	validator_api.UnsafeValidatorAPIServer
-	validator        Interface
-	logger           ulogger.Logger
-	utxoStore        utxo.Store
-	kafkaSignal      chan os.Signal
-	stats            *gocore.Stat
-	ctx              context.Context
-	blockchainClient blockchain.ClientI
-	consumerClient   *kafka.KafkaConsumerGroup
-	kafkaHealthURL   *url.URL
+	validator                     Interface
+	logger                        ulogger.Logger
+	utxoStore                     utxo.Store
+	kafkaSignal                   chan os.Signal
+	stats                         *gocore.Stat
+	ctx                           context.Context
+	blockchainClient              blockchain.ClientI
+	consumerClient                kafka.KafkaConsumerGroupI
+	txMetaKafkaProducerClient     kafka.KafkaAsyncProducerI
+	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 }
 
 // NewServer will return a server instance with the logger stored within it
-func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blockchain.ClientI) *Server {
+func NewServer(logger ulogger.Logger, utxoStore utxo.Store, blockchainClient blockchain.ClientI, consumerClient kafka.KafkaConsumerGroupI, txMetaKafkaProducerClient kafka.KafkaAsyncProducerI, rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{
-		logger:           logger,
-		utxoStore:        utxoStore,
-		stats:            gocore.NewStat("validator"),
-		blockchainClient: blockchainClient,
+		logger:                        logger,
+		utxoStore:                     utxoStore,
+		stats:                         gocore.NewStat("validator"),
+		blockchainClient:              blockchainClient,
+		consumerClient:                consumerClient,
+		txMetaKafkaProducerClient:     txMetaKafkaProducerClient,
+		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
 	}
 }
 
@@ -62,6 +65,11 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		return http.StatusOK, "OK", nil
 	}
 
+	var brokersURL []string
+	if v.consumerClient != nil { // tests may not set this
+		brokersURL = v.consumerClient.BrokersURL()
+	}
+
 	// Add readiness checks here. Include dependency checks.
 	// If any dependency is not ready, return http.StatusServiceUnavailable
 	// If all dependencies are ready, return http.StatusOK
@@ -71,7 +79,7 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		{Name: "UTXOStore", Check: v.utxoStore.Health},
 		{Name: "Validator", Check: v.validator.Health},
 		{Name: "FSM", Check: blockchain.CheckFSM(v.blockchainClient)},
-		{Name: "Kafka", Check: kafka.HealthChecker(ctx, v.kafkaHealthURL)},
+		{Name: "Kafka", Check: kafka.HealthChecker(ctx, brokersURL)},
 	}
 
 	return health.CheckAll(ctx, checkLiveness, checks)
@@ -96,88 +104,9 @@ func (v *Server) HealthGRPC(ctx context.Context, _ *validator_api.EmptyMessage) 
 func (v *Server) Init(ctx context.Context) (err error) {
 	v.ctx = ctx
 
-	v.validator, err = New(ctx, v.logger, v.utxoStore)
+	v.validator, err = New(ctx, v.logger, v.utxoStore, v.txMetaKafkaProducerClient, v.rejectedTxKafkaProducerClient)
 	if err != nil {
 		return errors.NewServiceError("could not create validator", err)
-	}
-
-	kafkaURL, err, ok := gocore.Config().GetURL("kafka_validatortxsConfig")
-	if err == nil && ok {
-		v.kafkaHealthURL = kafkaURL
-		v.logger.Debugf("[Validator] Kafka listener starting in URL: %s", kafkaURL.String())
-
-		workers, _ := gocore.Config().GetInt("validator_kafkaWorkers", 100)
-		if workers < 1 {
-			// no workers, nothing to do
-			return nil
-		}
-
-		v.logger.Infof("[Validator Server] starting Kafka listener")
-
-		consumerRatio := util.GetQueryParamInt(kafkaURL, "consumer_ratio", 8)
-		if consumerRatio < 1 {
-			consumerRatio = 1
-		}
-
-		partitions := util.GetQueryParamInt(kafkaURL, "partitions", 1)
-
-		consumerCount := partitions / consumerRatio
-		if consumerCount < 0 {
-			consumerCount = 1
-		}
-
-		v.logger.Infof("[Validator] starting Kafka on address: %s, with %d consumers and %d workers\n", kafkaURL.String(), consumerCount, workers)
-
-		kafkaMessageHandler := func(msg kafka.KafkaMessage) error {
-			currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
-			if err != nil {
-				v.logger.Errorf("[Validator] Failed to get current state: %s", err)
-
-				return err
-			}
-
-			for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
-				v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
-				time.Sleep(1 * time.Second) // Wait and check again in 1 second
-			}
-
-			data, err := NewTxValidationDataFromBytes(msg.Message.Value)
-			if err != nil {
-				prometheusInvalidTransactions.Inc()
-				v.logger.Errorf("[Validator] Failed to decode kafka message: %s", err)
-
-				return err
-			}
-
-			tx, err := bt.NewTxFromBytes(data.Tx)
-			if err != nil {
-				prometheusInvalidTransactions.Inc()
-				v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
-
-				return err
-			}
-
-			if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil {
-				prometheusInvalidTransactions.Inc()
-				v.logger.Errorf("[Validator] Invalid tx: %s", err)
-
-				return err
-			}
-
-			return nil
-		}
-		v.consumerClient, err = kafka.NewKafkaConsumeGroup(ctx, kafka.KafkaListenerConfig{
-			Logger:            v.logger,
-			URL:               kafkaURL,
-			GroupID:           "blockassembly",
-			ConsumerCount:     consumerCount,
-			AutoCommitEnabled: true,
-			ConsumerFn:        kafkaMessageHandler,
-		})
-
-		if err != nil {
-			return errors.NewConfigurationError("failed to create new Kafka listener for %s: %v", kafkaURL.String(), err)
-		}
 	}
 
 	return nil
@@ -204,7 +133,48 @@ func (v *Server) Start(ctx context.Context) error {
 		v.logger.Infof("[Validator] Node finished restoring and has transitioned to Running state, continuing to start Transaction Validator service")
 	}
 
-	go v.consumerClient.Start(ctx)
+	kafkaMessageHandler := func(msg *kafka.KafkaMessage) error {
+		currentState, err := v.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			v.logger.Errorf("[Validator] Failed to get current state: %s", err)
+
+			return err
+		}
+
+		for currentState != nil && *currentState == blockchain.FSMStateCATCHINGTXS {
+			v.logger.Debugf("[Validator] Waiting for FSM to finish catching txs")
+			time.Sleep(1 * time.Second) // Wait and check again in 1 second
+		}
+
+		data, err := NewTxValidationDataFromBytes(msg.Value)
+		if err != nil {
+			prometheusInvalidTransactions.Inc()
+			v.logger.Errorf("[Validator] Failed to decode kafka message: %s", err)
+
+			return err
+		}
+
+		tx, err := bt.NewTxFromBytes(data.Tx)
+		if err != nil {
+			prometheusInvalidTransactions.Inc()
+			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
+
+			return err
+		}
+
+		if err = v.validator.Validate(ctx, tx, uint32(data.Height)); err != nil { //nolint:gosec
+			prometheusInvalidTransactions.Inc()
+			v.logger.Errorf("[Validator] Invalid tx: %s", err)
+
+			return err
+		}
+
+		return nil
+	}
+
+	if v.consumerClient != nil {
+		v.consumerClient.Start(ctx, kafkaMessageHandler, kafka.WithRetryAndMoveOn(0, 1, time.Second))
+	}
 
 	// this will block
 	if err := util.StartGRPCServer(ctx, v.logger, "validator", func(server *grpc.Server) {
