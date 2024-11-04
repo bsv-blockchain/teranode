@@ -1,3 +1,4 @@
+// Package http_impl provides HTTP handlers for blockchain data retrieval and analysis.
 package http_impl
 
 import (
@@ -11,6 +12,72 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+// GetUTXO creates an HTTP handler for retrieving unspent transaction output (UTXO) information.
+// Supports multiple response formats.
+//
+// Parameters:
+//   - mode: ReadMode specifying the response format (JSON, BINARY_STREAM, or HEX)
+//
+// Returns:
+//   - func(c echo.Context) error: Echo handler function
+//
+// URL Parameters:
+//   - hash: UTXO hash (hex string)
+//
+// HTTP Response Formats:
+//
+//  1. JSON (mode = JSON):
+//     Status: 200 OK
+//     Content-Type: application/json
+//     Body:
+//     {
+//     "status": <int>,                    // Status code
+//     "spendingTxId": "<string>",         // Hash of spending transaction (if spent)
+//     "lockTime": <uint32>                // Optional lock time
+//     }
+//
+//  2. Binary (mode = BINARY_STREAM):
+//     Status: 200 OK
+//     Content-Type: application/octet-stream
+//     Body: Raw bytes of spending transaction ID
+//
+//  3. Hex (mode = HEX):
+//     Status: 200 OK
+//     Content-Type: text/plain
+//     Body: Hex string of spending transaction ID
+//
+// Error Responses:
+//
+//   - 404 Not Found:
+//
+//   - UTXO not found
+//
+//   - UTXO status is NOT_FOUND
+//     Example: {"message": "UTXO not found"}
+//
+//   - 500 Internal Server Error:
+//
+//   - Invalid UTXO hash format
+//
+//   - Repository errors
+//
+//   - Invalid read mode
+//
+// Monitoring:
+//   - Execution time recorded in "GetUTXO_http" statistic
+//   - Prometheus metric "asset_http_get_utxo" tracks successful responses
+//   - Debug logging of request handling
+//
+// Example Usage:
+//
+//	# Get UTXO info in JSON format
+//	GET /utxo/<hash>
+//
+//	# Get spending transaction ID in binary format
+//	GET /utxo/<hash>/raw
+//
+//	# Get spending transaction ID in hex format
+//	GET /utxo/<hash>/hex
 func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 
 	return func(c echo.Context) error {

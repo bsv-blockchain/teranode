@@ -1,0 +1,25 @@
+apiVersion: teranode.bsvblockchain.org/v1alpha1
+kind: Cluster
+metadata:
+  name: teranode
+spec:
+  asset:
+    spec:
+      grpcIngress:
+        host: eu-west-1-teranode-prod-mainnet-2.ubsv.dev
+      httpIngress:
+        host: eu-west-1-teranode-prod-mainnet-2.ubsv.dev
+      httpsIngress:
+        host: eu-west-1-teranode-prod-mainnet-2.ubsv.dev
+  peer:
+    spec:
+      grpcIngress:
+        host: eu-west-1-teranode-prod-mainnet-2.ubsv.dev
+      wsIngress:
+        host: eu-west-1-teranode-prod-mainnet-2.ubsv.dev
+      wssIngress:
+        host: eu-west-1-teranode-prod-mainnet-2.ubsv.dev
+  propagation:
+    spec:
+      grpcIngress:
+        host: eu-west-1-teranode-prod-mainnet-2.ubsv.dev

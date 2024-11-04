@@ -1,0 +1,33 @@
+apiVersion: teranode.bsvblockchain.org/v1alpha1
+kind: Cluster
+metadata:
+  name: teranode
+spec:
+  asset:
+    enabled: true
+  blockAssembly:
+    enabled: true
+  blockPersister:
+    enabled: true
+  blockValidator:
+    enabled: true
+  blockchain:
+    enabled: true
+  bootstrap:
+    enabled: false
+  coinbase:
+    enabled: true
+  legacy:
+    enabled: false
+  miner:
+    enabled: true
+  peer:
+    enabled: true
+  propagation:
+    enabled: true
+  subtreeValidator:
+    enabled: true
+  utxoPersister:
+    enabled: false
+  validator:
+    enabled: true

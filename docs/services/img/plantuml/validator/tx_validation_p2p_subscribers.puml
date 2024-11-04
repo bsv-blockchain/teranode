@@ -1,23 +1,39 @@
 @startuml
-participant "P2P Service \n(Server.go)" as P2P
-control "validatorSubscriptionListener" as Listener
-entity "Validator Client \n(Client.go)" as ValidatorClient
+participant "gRPC Client" as Client
 entity "Validator Server \n(Server.go)" as ValidatorServer
+entity "Validator \n(Validator.go)" as Validator
+queue "Rejected Tx Kafka Producer" as RejectedKafka
+database "UTXO Store" as UTXOStore
+participant "Block Assembly" as BlockAssembly
 
-=== Establish gRPC Stream Subscription ==
-P2P -> Listener: Start()
-Listener -> ValidatorClient: Subscribe()
-ValidatorClient -> ValidatorServer: Subscribe()
-ValidatorServer -> Listener: Update subscribers map
-Listener -> P2P: Subscription established
+== Transaction Validation ==
+Client -> ValidatorServer: ValidateTransaction(ctx, req)
+activate ValidatorServer
+ValidatorServer -> Validator: Validate(ctx, tx, blockHeight)
+activate Validator
 
-=== Send Failed Transaction Notification ==
-group Upon failed transaction
-    ValidatorServer -> ValidatorServer: sendInvalidTxNotification()
-    loop For each subscriber
-        ValidatorServer -> P2P: gRPC Send(notification)
+Validator -> Validator: validateInternal()
+Validator -> UTXOStore: spendUtxos()
+Validator -> UTXOStore: storeTxInUtxoMap()
+
+alt if validation succeeds
+    alt if !blockAssemblyDisabled
+        Validator -> BlockAssembly: Store()
     end
+else if validation fails
+    Validator -> RejectedKafka: Publish rejected TX
 end
+
+Validator --> ValidatorServer: Return validation result
+deactivate Validator
+
+ValidatorServer --> Client: Return ValidateTransactionResponse
+deactivate ValidatorServer
+
+note right of RejectedKafka
+  Other services can subscribe to this Kafka topic
+  to receive notifications about invalid transactions
+end note
 
 left footer Last Modified On: %date("dd-MMM-yyyy")
 

@@ -1,3 +1,6 @@
+// Package repository provides access to blockchain data storage and retrieval operations.
+// It implements the necessary interfaces to interact with various data stores and
+// blockchain clients.
 package repository
 
 import (
@@ -24,6 +27,9 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// Package repository provides access to blockchain data storage and retrieval operations.
+// It implements the necessary interfaces to interact with various data stores and
+// blockchain clients.
 type Repository struct {
 	logger              ulogger.Logger
 	UtxoStore           utxo.Store
@@ -35,6 +41,21 @@ type Repository struct {
 	CoinbaseProvider coinbase_api.CoinbaseAPIClient
 }
 
+// NewRepository creates a new Repository instance with the provided dependencies.
+// It initializes connections to various data stores and sets up the coinbase provider
+// if configured.
+//
+// Parameters:
+//   - logger: Logger instance for repository operations
+//   - utxoStore: Store for UTXO data
+//   - txStore: Store for transaction data
+//   - blockchainClient: Client interface for blockchain operations
+//   - subtreeStore: Store for subtree data
+//   - blockPersisterStore: Store for block persistence
+//
+// Returns:
+//   - *Repository: Newly created repository instance
+//   - error: Any error encountered during creation
 func NewRepository(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store,
 	blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error) {
 	var cbc coinbase_api.CoinbaseAPIClient
@@ -85,6 +106,16 @@ func (repo *Repository) Health(ctx context.Context, checkLiveness bool) (int, st
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// GetTransaction retrieves transaction data by its hash.
+// It first checks the UTXO store, then falls back to the transaction store if needed.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the transaction to retrieve
+//
+// Returns:
+//   - []byte: Transaction data
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
 	repo.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 
@@ -102,14 +133,43 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 
 	return tx, nil
 }
+
+// GetBlockStats retrieves statistical information about the blockchain blocks.
+// It delegates to the blockchain client to fetch the statistics.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//
+// Returns:
+//   - *model.BlockStats: Block statistics data
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	return repo.BlockchainClient.GetBlockStats(ctx)
 }
 
+// GetBlockGraphData retrieves time-series data points for block metrics.
+// The data is aggregated based on the specified time period.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - periodMillis: Time period in milliseconds for data aggregation
+//
+// Returns:
+//   - *model.BlockDataPoints: Block data points over time
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
 	return repo.BlockchainClient.GetBlockGraphData(ctx, periodMillis)
 }
 
+// GetTransactionMeta retrieves metadata for a transaction by its hash.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the transaction
+//
+// Returns:
+//   - *meta.Data: Transaction metadata
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	repo.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 
@@ -121,6 +181,15 @@ func (repo *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.
 	return txMeta, nil
 }
 
+// GetBlockByHash retrieves a block by its hash.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the block to retrieve
+//
+// Returns:
+//   - *model.Block: Block data
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetBlockByHash(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
 	repo.logger.Debugf("[Repository] GetBlockByHash: %s", hash.String())
 
@@ -132,6 +201,15 @@ func (repo *Repository) GetBlockByHash(ctx context.Context, hash *chainhash.Hash
 	return block, nil
 }
 
+// GetBlockByHeight retrieves a block by its height in the blockchain.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - height: Block height
+//
+// Returns:
+//   - *model.Block: Block data
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
 	repo.logger.Debugf("[Repository] GetBlockByHeight: %d", height)
 
@@ -143,6 +221,16 @@ func (repo *Repository) GetBlockByHeight(ctx context.Context, height uint32) (*m
 	return block, nil
 }
 
+// GetBlockHeader retrieves a block header and its metadata by block hash.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the block
+//
+// Returns:
+//   - *model.BlockHeader: Block header data
+//   - *model.BlockHeaderMeta: Block header metadata
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	repo.logger.Debugf("[Repository] GetBlockHeader: %s", hash.String())
 
@@ -154,6 +242,17 @@ func (repo *Repository) GetBlockHeader(ctx context.Context, hash *chainhash.Hash
 	return blockHeader, blockHeaderMeta, nil
 }
 
+// GetLastNBlocks retrieves the most recent N blocks from the blockchain.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - n: Number of blocks to retrieve
+//   - includeOrphans: Whether to include orphaned blocks
+//   - fromHeight: Starting height for block retrieval
+//
+// Returns:
+//   - []*model.BlockInfo: Array of block information
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
 	repo.logger.Debugf("[Repository] GetLastNBlocks: %d", n)
 
@@ -165,6 +264,16 @@ func (repo *Repository) GetLastNBlocks(ctx context.Context, n int64, includeOrph
 	return blockInfo, nil
 }
 
+// GetBlocks retrieves a sequence of blocks starting from a specific block hash.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Starting block hash
+//   - n: Number of blocks to retrieve
+//
+// Returns:
+//   - []*model.Block: Array of blocks
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetBlocks(ctx context.Context, hash *chainhash.Hash, n uint32) ([]*model.Block, error) {
 	repo.logger.Debugf("[Repository] GetNBlocks: %d", n)
 
@@ -176,6 +285,17 @@ func (repo *Repository) GetBlocks(ctx context.Context, hash *chainhash.Hash, n u
 	return blocks, nil
 }
 
+// GetBlockHeaders retrieves a sequence of block headers starting from a specific hash.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Starting block hash
+//   - numberOfHeaders: Number of headers to retrieve
+//
+// Returns:
+//   - []*model.BlockHeader: Array of block headers
+//   - []*model.BlockHeaderMeta: Array of block header metadata
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	repo.logger.Debugf("[Repository] GetBlockHeaders: %s", hash.String())
 
@@ -187,6 +307,17 @@ func (repo *Repository) GetBlockHeaders(ctx context.Context, hash *chainhash.Has
 	return blockHeaders, blockHeaderMetas, nil
 }
 
+// GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - height: Starting block height
+//   - limit: Maximum number of headers to retrieve
+//
+// Returns:
+//   - []*model.BlockHeader: Array of block headers
+//   - []*model.BlockHeaderMeta: Array of block header metadata
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	repo.logger.Debugf("[Repository] GetBlockHeadersFromHeight: %d-%d", height, limit)
 
@@ -198,6 +329,15 @@ func (repo *Repository) GetBlockHeadersFromHeight(ctx context.Context, height, l
 	return blockHeaders, metas, nil
 }
 
+// GetSubtreeBytes retrieves the raw bytes of a subtree.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the subtree
+//
+// Returns:
+//   - []byte: Subtree data
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
 	subtreeBytes, err := repo.SubtreeStore.Get(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 	if err != nil {
@@ -207,14 +347,41 @@ func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Has
 	return subtreeBytes, nil
 }
 
+// GetSubtreeReader provides a reader interface for accessing subtree data.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the subtree
+//
+// Returns:
+//   - io.ReadCloser: Reader for subtree data
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	return repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 }
 
+// GetSubtreeDataReader provides a reader interface for accessing subtree data from block persister.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the subtree
+//
+// Returns:
+//   - io.ReadCloser: Reader for subtree data
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeDataReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error) {
 	return repo.BlockPersisterStore.GetIoReader(ctx, hash.CloneBytes(), options.WithFileExtension("subtree"))
 }
 
+// GetSubtree retrieves and deserializes a complete subtree structure.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the subtree
+//
+// Returns:
+//   - *util.Subtree: Deserialized subtree structure
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error) {
 	repo.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 
@@ -231,7 +398,16 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 	return subtree, nil
 }
 
-// GetSubtreeHead returns the head of the subtree, which only includes the Fees and SizeInBytes
+// GetSubtreeHead retrieves only the head portion of a subtree, containing fees and size information.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - hash: Hash of the subtree
+//
+// Returns:
+//   - *util.Subtree: Partial subtree containing head information
+//   - int: Number of nodes in the subtree
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error) {
 	repo.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 
@@ -265,6 +441,15 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 	return subtree, int(numNodes), nil // nolint:gosec
 }
 
+// GetUtxoBytes retrieves the spending transaction ID for a specific UTXO.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - spend: UTXO spend information
+//
+// Returns:
+//   - []byte: Spending transaction ID bytes
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]byte, error) {
 	resp, err := repo.GetUtxo(ctx, spend)
 	if err != nil {
@@ -274,6 +459,15 @@ func (repo *Repository) GetUtxoBytes(ctx context.Context, spend *utxo.Spend) ([]
 	return resp.SpendingTxID.CloneBytes(), nil
 }
 
+// GetUtxo retrieves detailed spend information for a specific UTXO.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - spend: UTXO spend information
+//
+// Returns:
+//   - *utxo.SpendResponse: Detailed spend information
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	repo.logger.Debugf("[Repository] GetUtxo: %s", spend.UTXOHash.String())
 
@@ -285,6 +479,15 @@ func (repo *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.S
 	return resp, nil
 }
 
+// GetBestBlockHeader retrieves the header of the current best block in the blockchain.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//
+// Returns:
+//   - *model.BlockHeader: Best block header
+//   - *model.BlockHeaderMeta: Best block header metadata
+//   - error: Any error encountered during retrieval
 func (repo *Repository) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	repo.logger.Debugf("[Repository] GetBestBlockHeader")
 

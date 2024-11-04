@@ -49,11 +49,11 @@ The node has been designed as a collection of microservices, each handling speci
 
 ### 2.1. Pre-requisites and Installation
 
-To be able to run the node locally, please check the [Installation Guide for Developers and Contributors](docs/developerSetup.md).
+To be able to run the node locally, please check the [Installation Guide for Developers and Contributors](docs/howto/developerSetup.md).
 
 ### Running the Node and Individual Services Locally for Development
 
-Please refer to the [Locally Running Services Documentation](docs/locallyRunningServices.md) for detailed instructions on how to run the node and / or individual services locally in development.
+Please refer to the [Locally Running Services Documentation](docs/howto/locallyRunningServices.md) for detailed instructions on how to run the node and / or individual services locally in development.
 
 ---
 

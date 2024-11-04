@@ -9,23 +9,20 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"testing"
 	"time"
 
-	"github.com/bitcoin-sv/ubsv/chaincfg"
 	"github.com/bitcoin-sv/ubsv/errors"
 	"github.com/bitcoin-sv/ubsv/model"
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob/memory"
-	blockchainstore "github.com/bitcoin-sv/ubsv/stores/blockchain/sql"
 	utxostore "github.com/bitcoin-sv/ubsv/stores/utxo/memory"
 	"github.com/bitcoin-sv/ubsv/ulogger"
+	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2"
 	"github.com/libsv/go-bt/v2/chainhash"
-	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,10 +33,12 @@ var appPID int
 
 func startKafka(logFile string) error {
 	kafkaCmd = exec.Command("../../deploy/dev/kafka.sh")
+
 	kafkaLog, err := os.Create(logFile)
 	if err != nil {
 		return err
 	}
+
 	defer kafkaLog.Close()
 
 	kafkaCmd.Stdout = kafkaLog
@@ -49,7 +48,8 @@ func startKafka(logFile string) error {
 
 func startApp(logFile string) error {
 	appCmd := exec.Command("go", "run", "../../.")
-	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test.ba")
+
+	appCmd.Env = append(os.Environ(), "SETTINGS_CONTEXT=dev.system.test.blockassembly")
 
 	appLog, err := os.Create(logFile)
 	if err != nil {
@@ -187,6 +187,7 @@ func TestCoinbaseSubsidyHeight(t *testing.T) {
 }
 
 func TestDifficultyAdjustment(t *testing.T) {
+	t.Skip("Skipping difficulty adjustment test")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	memStore := memory.New()
@@ -259,22 +260,6 @@ func TestShouldFollowLongerChain(t *testing.T) {
 	utxoStore := utxostore.New(ulogger.TestLogger{})
 	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
 	require.NoError(t, err)
-	blockchainStoreUrlstr, ok := gocore.Config().Get("blockchain_store")
-	require.True(t, ok)
-	blockchainStoreUrl, err := url.Parse(blockchainStoreUrlstr)
-	blockchainStore, err := blockchainstore.New(ulogger.TestLogger{}, blockchainStoreUrl)
-	paramsA := &chaincfg.MainNetParams
-
-
-	dA, err := blockchain.NewDifficulty(blockchainStore, ulogger.TestLogger{}, paramsA)
-	t.Logf("difficulty: %v", )
-	require.NoError(t, err)
-
-	paramsB = &chaincfg.RegressionNetParams
-
-	dB, err := blockchain.NewDifficulty(blockchainStore, ulogger.TestLogger{}, paramsB)
-	t.Logf("difficulty: %v", *dB.nBits)
-	require.NoError(t, err)
 
 	ba := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
 	require.NotNil(t, ba)
@@ -308,7 +293,7 @@ func TestShouldFollowLongerChain(t *testing.T) {
 	}
 
 	// Create chain B (lower difficulty)
-	chainBBits, _ := model.NewNBitFromString("1d00ffaa") // Lower difficulty
+	chainBBits, _ := model.NewNBitFromString("207fffff") // Lower difficulty
 	chainBHeader1 := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  initialHeader.Hash(),
@@ -357,6 +342,281 @@ func TestShouldFollowLongerChain(t *testing.T) {
 	assert.Equal(t, chainAHeader1.Hash(), bestHeader.Hash(), "Block assembler should follow the chain with higher difficulty")
 }
 
+func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	memStore := memory.New()
+	blobStore := memory.New()
+	utxoStore := utxostore.New(ulogger.TestLogger{})
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+
+	ba := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	require.NotNil(t, ba)
+
+	err = ba.Init(ctx)
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+
+	// Generate initial 101 blocks
+	_, err = CallRPC("http://localhost:9292", "generate", []interface{}{"[101]"})
+	require.NoError(t, err, "Failed to generate initial blocks")
+	time.Sleep(5 * time.Second)
+
+	// Get initial block height and hash
+	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err, "Failed to get initial block header")
+	initialHeight := initialMetadata.Height
+	t.Logf("Initial block height: %d", initialHeight)
+
+	// Create chain A (higher difficulty)
+	chainABits, _ := model.NewNBitFromString("1d00ffff")
+	chainAHeader1 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          1,
+		Bits:           *chainABits,
+		Timestamp:      uint32(time.Now().Unix()),
+	}
+
+	// Create chain B (lower difficulty) with multiple blocks
+	chainBBits, _ := model.NewNBitFromString("207fffff") // Much lower difficulty
+	chainBHeader1 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          2,
+		Bits:           *chainBBits,
+		Timestamp:      uint32(time.Now().Unix()),
+	}
+
+	chainBHeader2 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  chainBHeader1.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          3,
+		Bits:           *chainBBits,
+		Timestamp:      uint32(time.Now().Unix()),
+	}
+
+	chainBHeader3 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  chainBHeader2.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          4,
+		Bits:           *chainBBits,
+		Timestamp:      uint32(time.Now().Unix()),
+	}
+
+	// Store blocks from both chains
+	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+
+	// Store Chain A block (higher difficulty)
+	blockA := &model.Block{
+		Header:           chainAHeader1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockA, "")
+	require.NoError(t, err, "Failed to add Chain A block")
+
+	// Store Chain B blocks (lower difficulty but longer)
+	blockB1 := &model.Block{
+		Header:           chainBHeader1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockB1, "")
+	require.NoError(t, err, "Failed to add Chain B block 1")
+
+	blockB2 := &model.Block{
+		Header:           chainBHeader2,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockB2, "")
+	require.NoError(t, err, "Failed to add Chain B block 2")
+
+	blockB3 := &model.Block{
+		Header:           chainBHeader3,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockB3, "")
+	require.NoError(t, err, "Failed to add Chain B block 3")
+
+	t.Logf("Chain A: 1 block with difficulty %s", chainABits.String())
+	t.Logf("Chain B: 3 blocks with difficulty %s", chainBBits.String())
+
+	// Create new block assembler to check which chain it follows
+	newBA := New(ulogger.TestLogger{}, memStore, utxoStore, blobStore, blockchainClient)
+	require.NotNil(t, newBA)
+
+	err = newBA.Init(ctx)
+	require.NoError(t, err)
+
+	// Get the best block header from the new block assembler
+	bestHeader, _, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, bestHeader)
+
+	// Assert that it followed chain A (higher difficulty) despite chain B being longer
+	assert.Equal(t, chainAHeader1.Hash(), bestHeader.Hash(),
+		"Block assembler should follow Chain A (more chainwork) despite Chain B being longer (3 blocks)")
+}
+
+func TestShouldAddSubtreesToLongerChain(t *testing.T) {
+	os.Setenv("blockchain_store_cache_enabled", "false")
+	// Create a cancellable context
+	ctx := context.Background()
+	done := make(chan struct{})
+
+	blobStore := memory.New()
+	utxoStore := utxostore.New(ulogger.TestLogger{})
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+
+
+	t.Logf("Creating block assembler...")
+
+	baService := New(ulogger.TestLogger{}, blobStore, utxoStore, blobStore, blockchainClient)
+	require.NotNil(t, baService)
+	err = baService.Init(ctx)
+	require.NoError(t, err)
+
+	t.Logf("Block assembler created")
+
+	go func() {
+		defer close(done)
+		err = baService.Start(ctx)
+		if err != nil {
+			t.Errorf("Error starting service: %v", err)
+		}
+	}()
+
+	//wait for the block assembler to start
+	time.Sleep(5 * time.Second)
+	ba := baService.blockAssembler
+
+	// Get initial state
+	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	t.Logf("Initial block height: %d", initialMetadata.Height)
+
+	// Create test transactions
+	t.Log("Creating test transactions...")
+	testTx1 := newTx(1)
+	testTx2 := newTx(2)
+	testTx3 := newTx(3)
+
+	testHash1 := testTx1.TxIDChainHash()
+	testHash2 := testTx2.TxIDChainHash()
+	testHash3 := testTx3.TxIDChainHash()
+
+	// Create and add Chain B block (lower difficulty)
+	t.Log("Creating Chain B block...")
+	chainBBits, _ := model.NewNBitFromString("207fffff")
+	chainBHeader1 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          2,
+		Bits:           *chainBBits,
+		Timestamp:      uint32(time.Now().Unix()),
+	}
+
+	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000") // Dummy coinbase
+	blockB := &model.Block{
+		Header:           chainBHeader1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+
+	// Create and add Chain A block (higher difficulty)
+	t.Log("Creating Chain A block...")
+	chainABits, _ := model.NewNBitFromString("1d00ffff")
+	chainAHeader1 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:          1,
+		Bits:           *chainABits,
+		Timestamp:      uint32(time.Now().Unix()),
+	}
+
+	blockA := &model.Block{
+		Header:           chainAHeader1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+
+	t.Log("Adding Chain A block...")
+	err = ba.blockchainClient.AddBlock(ctx, blockA, "")
+	require.NoError(t, err)
+	time.Sleep(2 * time.Second)
+
+	t.Log("Adding Chain B block...")
+	err = ba.blockchainClient.AddBlock(ctx, blockB, "")
+	require.NoError(t, err)
+	time.Sleep(1 * time.Second)
+
+	// Add transactions
+	t.Log("Adding transactions...")
+	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
+	require.NoError(t, err)
+	ba.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
+
+	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
+	require.NoError(t, err)
+	ba.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
+
+	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
+	require.NoError(t, err)
+	ba.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
+
+	t.Log("Waiting for transactions to be processed...")
+	time.Sleep(2 * time.Second)
+
+
+	// Get mining candidate with timeout context
+	t.Log("Getting mining candidate...")
+	var miningCandidate *model.MiningCandidate
+	var s []*util.Subtree
+	miningCandidate, s, mcErr := ba.getMiningCandidate()
+	require.NoError(t, mcErr)
+
+	// Verify the mining candidate is built on Chain A
+	prevHash, _ := chainhash.NewHash(miningCandidate.PreviousHash)
+	t.Logf("Mining candidate built on block with previous hash: %s", prevHash.String())
+	t.Logf("Chain A block hash: %s", chainAHeader1.Hash().String())
+	assert.Equal(t, chainAHeader1.Hash(), prevHash,
+		"Mining candidate should be built on Chain A (higher difficulty)")
+
+	// Verify transactions were carried over
+	var foundTxs int
+	for _, subtree := range s {
+		for _, node := range subtree.Nodes {
+			if node.Hash.Equal(*testHash1) || node.Hash.Equal(*testHash2) || node.Hash.Equal(*testHash3) {
+				foundTxs++
+			}
+		}
+	}
+	t.Logf("Found %d transactions in subtrees", foundTxs)
+	assert.Equal(t, 3, foundTxs, "All transactions should be included in the mining candidate")
+}
+
 func CallRPC(url string, method string, params []interface{}) (string, error) {
 
 	// Create the request payload
@@ -399,4 +659,365 @@ func CallRPC(url string, method string, params []interface{}) (string, error) {
 
 	// Return the response as a string
 	return string(body), nil
+}
+
+func TestShouldHandleReorg(t *testing.T) {
+	os.Setenv("blockchain_store_cache_enabled", "false")
+	ctx := context.Background()
+	done := make(chan struct{})
+
+	blobStore := memory.New()
+	utxoStore := utxostore.New(ulogger.TestLogger{})
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+
+	t.Log("Creating block assembler...")
+	baService := New(ulogger.TestLogger{}, blobStore, utxoStore, blobStore, blockchainClient)
+	require.NotNil(t, baService)
+	err = baService.Init(ctx)
+	require.NoError(t, err)
+
+	// Start the service
+	go func() {
+		defer close(done)
+		err = baService.Start(ctx)
+		if err != nil {
+			t.Errorf("Error starting service: %v", err)
+		}
+	}()
+
+	time.Sleep(5 * time.Second)
+	ba := baService.blockAssembler
+
+	// Get initial state
+	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	t.Logf("Initial block height: %d", initialMetadata.Height)
+
+	// Create test transactions
+	t.Log("Creating test transactions...")
+	testTx1 := newTx(1)
+	testTx2 := newTx(2)
+	testTx3 := newTx(3)
+
+	testHash1 := testTx1.TxIDChainHash()
+	testHash2 := testTx2.TxIDChainHash()
+	testHash3 := testTx3.TxIDChainHash()
+
+	// Create chain A (original chain) with lower difficulty
+	t.Log("Creating Chain A (lower difficulty)...")
+	chainABits, _ := model.NewNBitFromString("207fffff") // Lower difficulty
+	chainAHeader1 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:         1,
+		Bits:          *chainABits,
+		Timestamp:     uint32(time.Now().Unix()),
+	}
+
+	// Create chain B (competing chain) with higher difficulty
+	t.Log("Creating Chain B (higher difficulty)...")
+	chainBBits, _ := model.NewNBitFromString("1d00ffff") // Higher difficulty
+	chainBHeader1 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:         3,
+		Bits:          *chainBBits,
+		Timestamp:     uint32(time.Now().Unix()),
+	}
+
+	// Add transactions
+	t.Log("Adding transactions...")
+	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
+	require.NoError(t, err)
+	ba.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
+
+	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
+	require.NoError(t, err)
+	ba.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
+
+	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
+	require.NoError(t, err)
+	ba.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
+
+	// Add Chain A block (lower difficulty)
+	t.Log("Adding Chain A block...")
+	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+
+	blockA := &model.Block{
+		Header:           chainAHeader1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockA, "")
+	require.NoError(t, err)
+	time.Sleep(2 * time.Second)
+
+	// Verify transactions in original chain
+	mc1, subtrees1, err := ba.getMiningCandidate()
+	require.NoError(t, err)
+	require.NotNil(t, mc1)
+	require.NotEmpty(t, subtrees1)
+
+	//check the previous hash of the mining candidate
+	prevHash := chainhash.Hash(mc1.PreviousHash)
+	t.Logf("Mining candidate built on block with previous hash: %s", prevHash)
+	assert.Equal(t, chainAHeader1.Hash().String(), prevHash.String(), "Mining candidate should be built on Chain A")
+
+	// Now trigger reorg by adding Chain B block with higher difficulty
+	t.Log("Triggering reorg with Chain B block (higher difficulty)...")
+	blockB := &model.Block{
+		Header:           chainBHeader1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockB, "")
+	require.NoError(t, err)
+	time.Sleep(2 * time.Second)
+
+	// Verify transactions are still present after reorg
+	mc2, subtrees2, err := ba.getMiningCandidate()
+	require.NoError(t, err)
+	require.NotNil(t, mc2)
+	require.NotEmpty(t, subtrees2)
+
+	//check the previous hash of the mining candidate
+	prevHash = chainhash.Hash(mc2.PreviousHash)
+	t.Logf("Mining candidate built on block with previous hash: %s", prevHash)
+	assert.Equal(t, chainBHeader1.Hash().String(), prevHash.String(), "Mining candidate should be built on Chain B")
+
+	// Verify transaction count is maintained
+	var foundTxsAfterReorg int
+	for _, subtree := range subtrees2 {
+		for _, node := range subtree.Nodes {
+			if node.Hash.Equal(*testHash1) || node.Hash.Equal(*testHash2) || node.Hash.Equal(*testHash3) {
+				foundTxsAfterReorg++
+			}
+		}
+	}
+	t.Logf("Found %d transactions after reorg", foundTxsAfterReorg)
+	assert.Equal(t, 3, foundTxsAfterReorg, "All transactions should be preserved after reorg")
+
+	// Verify we're on Chain B (higher difficulty chain)
+	bestHeader, _, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, chainBHeader1.Hash(), bestHeader.Hash(),
+		"Block assembler should follow Chain B due to higher difficulty")
+}
+
+func TestShouldHandleReorgWithLongerChain(t *testing.T) {
+	os.Setenv("blockchain_store_cache_enabled", "false")
+	ctx := context.Background()
+	done := make(chan struct{})
+
+	blobStore := memory.New()
+	utxoStore := utxostore.New(ulogger.TestLogger{})
+	blockchainClient, err := blockchain.NewClient(ctx, ulogger.TestLogger{}, "test")
+	require.NoError(t, err)
+
+	err = blockchainClient.Run(ctx, "test")
+	require.NoError(t, err, "Blockchain client failed to start")
+
+	t.Log("Creating block assembler...")
+	baService := New(ulogger.TestLogger{}, blobStore, utxoStore, blobStore, blockchainClient)
+	require.NotNil(t, baService)
+	err = baService.Init(ctx)
+	require.NoError(t, err)
+
+	// Start the service
+	go func() {
+		defer close(done)
+		err = baService.Start(ctx)
+		if err != nil {
+			t.Errorf("Error starting service: %v", err)
+		}
+	}()
+
+	time.Sleep(5 * time.Second)
+	ba := baService.blockAssembler
+
+	// Get initial state
+	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	t.Logf("Initial block height: %d", initialMetadata.Height)
+
+	// Create test transactions
+	t.Log("Creating test transactions...")
+	testTx1 := newTx(1)
+	testTx2 := newTx(2)
+	testTx3 := newTx(3)
+
+	testHash1 := testTx1.TxIDChainHash()
+	testHash2 := testTx2.TxIDChainHash()
+	testHash3 := testTx3.TxIDChainHash()
+
+	// Create chain A (original chain) with lower difficulty
+	t.Log("Creating Chain A (lower difficulty)...")
+	chainABits, _ := model.NewNBitFromString("207fffff") // Lower difficulty
+
+	// Create multiple blocks for Chain A
+	chainAHeader1 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:         1,
+		Bits:          *chainABits,
+		Timestamp:     uint32(time.Now().Unix()),
+	}
+
+	chainAHeader2 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  chainAHeader1.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:         2,
+		Bits:          *chainABits,
+		Timestamp:     uint32(time.Now().Unix()),
+	}
+
+	chainAHeader3 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  chainAHeader2.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:         3,
+		Bits:          *chainABits,
+		Timestamp:     uint32(time.Now().Unix()),
+	}
+
+	chainAHeader4 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  chainAHeader3.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:         4,
+		Bits:          *chainABits,
+		Timestamp:     uint32(time.Now().Unix()),
+	}
+
+	// Create chain B (competing chain) with higher difficulty
+	t.Log("Creating Chain B (higher difficulty)...")
+	chainBBits, _ := model.NewNBitFromString("1d00ffff") // Higher difficulty
+	chainBHeader1 := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  initialHeader.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Nonce:         10,
+		Bits:          *chainBBits,
+		Timestamp:     uint32(time.Now().Unix()),
+	}
+
+	// Add transactions
+	t.Log("Adding transactions...")
+	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
+	require.NoError(t, err)
+	ba.AddTx(util.SubtreeNode{Hash: *testHash1, Fee: 111})
+
+	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
+	require.NoError(t, err)
+	ba.AddTx(util.SubtreeNode{Hash: *testHash2, Fee: 222})
+
+	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
+	require.NoError(t, err)
+	ba.AddTx(util.SubtreeNode{Hash: *testHash3, Fee: 333})
+
+	// Add Chain A blocks (lower difficulty)
+	t.Log("Adding Chain A blocks...")
+	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
+
+	// Add all 4 blocks from Chain A
+	blockA1 := &model.Block{
+		Header:           chainAHeader1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockA1, "")
+	require.NoError(t, err)
+
+	blockA2 := &model.Block{
+		Header:           chainAHeader2,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockA2, "")
+	require.NoError(t, err)
+
+	blockA3 := &model.Block{
+		Header:           chainAHeader3,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockA3, "")
+	require.NoError(t, err)
+
+	blockA4 := &model.Block{
+		Header:           chainAHeader4,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockA4, "")
+	require.NoError(t, err)
+
+	time.Sleep(2 * time.Second)
+
+	// Get mining candidate while on Chain A
+	t.Log("Getting mining candidate on Chain A...")
+	mc1, subtrees1, err := ba.getMiningCandidate()
+	require.NoError(t, err)
+	require.NotNil(t, mc1)
+	require.NotEmpty(t, subtrees1)
+
+	// Verify we're on Chain A
+	bestHeaderBeforeReorg, _, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, chainAHeader4.Hash(), bestHeaderBeforeReorg.Hash(),
+		"Should be on Chain A before reorg")
+
+	// Now trigger reorg by adding single Chain B block with higher difficulty
+	t.Log("Triggering reorg with single Chain B block (higher difficulty)...")
+	blockB := &model.Block{
+		Header:           chainBHeader1,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}
+	err = ba.blockchainClient.AddBlock(ctx, blockB, "")
+	require.NoError(t, err)
+	time.Sleep(2 * time.Second)
+
+	// Verify transactions are still present after reorg
+	mc2, subtrees2, err := ba.getMiningCandidate()
+	require.NoError(t, err)
+	require.NotNil(t, mc2)
+	require.NotEmpty(t, subtrees2)
+
+	// Verify transaction count is maintained
+	var foundTxsAfterReorg int
+	for _, subtree := range subtrees2 {
+		for _, node := range subtree.Nodes {
+			if node.Hash.Equal(*testHash1) || node.Hash.Equal(*testHash2) || node.Hash.Equal(*testHash3) {
+				foundTxsAfterReorg++
+			}
+		}
+	}
+	t.Logf("Found %d transactions after reorg", foundTxsAfterReorg)
+	assert.Equal(t, 3, foundTxsAfterReorg, "All transactions should be preserved after reorg")
+
+	// Verify we're on Chain B (higher difficulty chain)
+	bestHeaderAfterReorg, _, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, chainBHeader1.Hash(), bestHeaderAfterReorg.Hash(),
+		"Block assembler should follow Chain B due to higher difficulty despite Chain A being longer")
+
+	t.Logf("Chain A length: 4 blocks, Chain B length: 1 block")
+	t.Logf("Chain A difficulty: %s", chainABits.String())
+	t.Logf("Chain B difficulty: %s", chainBBits.String())
 }

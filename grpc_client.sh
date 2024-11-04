@@ -23,8 +23,8 @@ sleep 20
 echo "Sending gRPC requests..."
 
 # Replace `your.package.Service/YourMethod` with the actual service and method names
-grpcurl -plaintext ubsv-1:8087 blockchain_api.BlockchainAPI.Run
-grpcurl -plaintext ubsv-2:8087 blockchain_api.BlockchainAPI.Run
-grpcurl -plaintext ubsv-3:8087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext ubsv1:8087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext ubsv2:8087 blockchain_api.BlockchainAPI.Run
+grpcurl -plaintext ubsv3:8087 blockchain_api.BlockchainAPI.Run
 
 echo "gRPC requests sent."

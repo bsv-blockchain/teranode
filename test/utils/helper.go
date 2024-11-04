@@ -168,7 +168,7 @@ func ReadFile(ctx context.Context, ext string, logger ulogger.Logger, r io.Reade
 
 		fmt.Printf("\t%d transactions\n", txCount)
 
-	case "block":
+	case "block": // here
 		block, err := block_model.NewBlockFromReader(r)
 		if err != nil {
 			return false, errors.NewProcessingError("error reading block: %v\n", err)
@@ -644,6 +644,23 @@ func CreateAndSendTxs(ctx context.Context, node tenv.TeranodeTestClient, count i
 
 	for i := 0; i < count; i++ {
 		tx, err := CreateAndSendTx(ctx, node)
+		if err != nil {
+			return nil, errors.NewProcessingError("error creating raw transaction : %w", err)
+		}
+
+		txHashes = append(txHashes, tx)
+
+		time.Sleep(1 * time.Second) // Wait 10 seconds between transactions
+	}
+
+	return txHashes, nil
+}
+
+func CreateAndSendTxsToASliceOfNodes(ctx context.Context, nodes []tenv.TeranodeTestClient, count int) ([]chainhash.Hash, error) {
+	var txHashes []chainhash.Hash
+
+	for i := 0; i < count; i++ {
+		tx, err := CreateAndSendTxToSliceOfNodes(ctx, nodes)
 		if err != nil {
 			return nil, errors.NewProcessingError("error creating raw transaction : %w", err)
 		}

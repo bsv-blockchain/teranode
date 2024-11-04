@@ -1,24 +1,45 @@
 @startuml
-participant "Propagation Module \n(services/propagation/Server.go)" as Propagation
-participant "SubtreeValidation Module \n(services/SubtreeValidation/Server.go)" as SubtreeValidation
-entity "Validator" as Validator
+participant "Propagation \n(services/propagation/Server.go)" as Propagation
+participant "SubtreeValidation \n(services/SubtreeValidation/Server.go)" as SubtreeValidation
+participant "Validator Server \n(services/validator/Server.go)" as ValidatorServer
+entity "Validator \n(services/validator/Validator.go)" as Validator
+database "UTXO Store" as UTXOStore
+participant "Block Assembly" as BlockAssembly
 
 == Transaction Propagation ==
 Propagation -> Propagation: ProcessTransaction()
 activate Propagation
-Propagation -> Validator: Validate()
+Propagation -> ValidatorServer: ValidateTransaction(ctx, req)
+activate ValidatorServer
+ValidatorServer -> Validator: Validate(ctx, tx, blockHeight)
 activate Validator
-Validator -> Propagation: Return errors, if any
+Validator -> UTXOStore: spendUtxos()
+Validator -> UTXOStore: storeTxInUtxoMap()
+alt if !blockAssemblyDisabled
+    Validator -> BlockAssembly: Store()
+end
+Validator --> ValidatorServer: Return result
 deactivate Validator
+ValidatorServer --> Propagation: Return ValidateTransactionResponse
+deactivate ValidatorServer
 deactivate Propagation
 
 == Block Validation ==
-SubtreeValidation -> SubtreeValidation: blessMissingTransaction()
+SubtreeValidation -> SubtreeValidation: validateMissingTransactions()
 activate SubtreeValidation
-SubtreeValidation -> Validator: Validate()
-
-Validator -> SubtreeValidation: Return errors, if any
-
+SubtreeValidation -> ValidatorServer: ValidateTransaction(ctx, req)
+activate ValidatorServer
+ValidatorServer -> Validator: Validate(ctx, tx, blockHeight)
+activate Validator
+Validator -> UTXOStore: spendUtxos()
+Validator -> UTXOStore: storeTxInUtxoMap()
+alt if !blockAssemblyDisabled
+    Validator -> BlockAssembly: Store()
+end
+Validator --> ValidatorServer: Return result
+deactivate Validator
+ValidatorServer --> SubtreeValidation: Return ValidateTransactionResponse
+deactivate ValidatorServer
 deactivate SubtreeValidation
 
 left footer Last Modified On: %date("dd-MMM-yyyy")

@@ -1,3 +1,6 @@
+// Package asset provides functionality for managing and querying Teranode Bitcoin SV blockchain assets.
+// It implements a server that handles both the HTTP and the Centrifuge protocol for asset-related operations.
+
 package asset
 
 import (
@@ -17,7 +20,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Server type carries the logger within it
+// Server represents the main asset service handler, managing blockchain data access and API endpoints.
+// It coordinates between different storage backends and provides both HTTP and Centrifuge interfaces
+// for accessing blockchain data.
 type Server struct {
 	logger              ulogger.Logger
 	utxoStore           utxo.Store
@@ -31,7 +36,20 @@ type Server struct {
 	blockchainClient    blockchain.ClientI
 }
 
-// NewServer will return a server instance with the logger stored within it
+// NewServer creates a new Server instance with the provided dependencies.
+// It initializes the server with necessary stores and clients for handling
+// blockchain data.
+//
+// Parameters:
+//   - logger: Logger instance for service logging
+//   - utxoStore: Store for UTXO (Unspent Transaction Output) data
+//   - txStore: Store for transaction data
+//   - subtreeStore: Store for subtree data
+//   - blockPersisterStore: Store for block persistence
+//   - blockchainClient: Client interface for blockchain operations
+//
+// Returns:
+//   - *Server: Newly created server instance
 func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server {
 	s := &Server{
 		logger:              logger,
@@ -45,6 +63,17 @@ func NewServer(logger ulogger.Logger, utxoStore utxo.Store, txStore blob.Store, 
 	return s
 }
 
+// Health performs health checks on the server and its dependencies.
+// It supports both liveness and readiness checks based on the checkLiveness parameter.
+//
+// Parameters:
+//   - ctx: Context for the health check operation
+//   - checkLiveness: If true, performs liveness check; if false, performs readiness check
+//
+// Returns:
+//   - int: HTTP status code indicating health status
+//   - string: Description of the health status
+//   - error: Any error encountered during health check
 func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -68,6 +97,14 @@ func (v *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
+// Init initializes the server by setting up HTTP and Centrifuge endpoints.
+// It configures the necessary components based on the provided configuration.
+//
+// Parameters:
+//   - ctx: Context for initialization
+//
+// Returns:
+//   - error: Any error encountered during initialization
 func (v *Server) Init(ctx context.Context) (err error) {
 	var httpOk, centrifugeOk bool
 	v.httpAddr, httpOk = gocore.Config().Get("asset_httpListenAddress")
@@ -112,7 +149,14 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-// Start function
+// Start begins the server operation, launching HTTP and Centrifuge servers
+// if configured. It also handles FSM state restoration if required.
+//
+// Parameters:
+//   - ctx: Context for server operation
+//
+// Returns:
+//   - error: Any error encountered during server startup
 func (v *Server) Start(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -159,6 +203,13 @@ func (v *Server) Start(ctx context.Context) error {
 	return nil
 }
 
+// Stop gracefully shuts down the server and its components.
+//
+// Parameters:
+//   - ctx: Context for shutdown operation
+//
+// Returns:
+//   - error: Any error encountered during shutdown
 func (v *Server) Stop(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

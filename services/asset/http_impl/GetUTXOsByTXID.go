@@ -1,3 +1,4 @@
+// Package http_impl provides HTTP handlers for blockchain data retrieval and analysis.
 package http_impl
 
 import (
@@ -15,17 +16,107 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// UTXOItem represents detailed information about an Unspent Transaction Output (UTXO).
+// It contains both the output details and its current status in the UTXO set.
 type UTXOItem struct {
-	Txid          *chainhash.Hash `json:"txid"`
-	Vout          uint32          `json:"vout"`
+	// Txid is the hash of the transaction that created this UTXO
+	Txid *chainhash.Hash `json:"txid"`
+
+	// Vout is the index of this output in the creating transaction
+	Vout uint32 `json:"vout"`
+
+	// LockingScript is the output's script that specifies spending conditions
 	LockingScript *bscript.Script `json:"lockingScript"`
-	Satoshis      uint64          `json:"satoshis"`
-	UtxoHash      *chainhash.Hash `json:"utxoHash"`
-	Status        string          `json:"status"`
-	SpendingTxID  *chainhash.Hash `json:"spendingTxId,omitempty"`
-	LockTime      uint32          `json:"lockTime,omitempty"`
+
+	// Satoshis represents the amount of this output in satoshis
+	Satoshis uint64 `json:"satoshis"`
+
+	// UtxoHash is a unique identifier for this UTXO, derived from txid, vout,
+	// locking script, and amount
+	UtxoHash *chainhash.Hash `json:"utxoHash"`
+
+	// Status indicates the current state of the UTXO (e.g., "SPENT", "NOT_FOUND")
+	Status string `json:"status"`
+
+	// SpendingTxID is the hash of the transaction that spent this UTXO.
+	// Only present if the UTXO has been spent.
+	SpendingTxID *chainhash.Hash `json:"spendingTxId,omitempty"`
+
+	// LockTime specifies when this UTXO becomes spendable.
+	// Only present if the UTXO has a time lock.
+	LockTime uint32 `json:"lockTime,omitempty"`
 }
 
+// GetUTXOsByTXID creates an HTTP handler for retrieving all UTXOs associated with a transaction.
+// It processes each output concurrently for improved performance.
+//
+// Parameters:
+//   - mode: ReadMode (only JSON mode is supported)
+//
+// Returns:
+//   - func(c echo.Context) error: Echo handler function
+//
+// URL Parameters:
+//   - hash: Transaction ID (hex string)
+//
+// HTTP Response:
+//
+//	Status: 200 OK
+//	Content-Type: application/json
+//	Body: Array of UTXO information:
+//	  [
+//	    {
+//	      "txid": "<string>",              // Transaction ID
+//	      "vout": <uint32>,                // Output index
+//	      "lockingScript": "<string>",      // Output locking script
+//	      "satoshis": <uint64>,            // Output value in satoshis
+//	      "utxoHash": "<string>",          // UTXO identifier hash
+//	      "status": "<string>",            // UTXO status (e.g., "NOT_FOUND")
+//	      "spendingTxId": "<string>",      // Hash of spending transaction (if spent)
+//	      "lockTime": <uint32>             // Optional lock time
+//	    },
+//	    // ... additional UTXOs
+//	  ]
+//
+// Error Responses:
+//
+//   - 404 Not Found:
+//
+//   - Transaction not found
+//     Example: {"message": "not found"}
+//
+//   - 500 Internal Server Error:
+//
+//   - Invalid transaction hash format
+//
+//   - Transaction retrieval errors
+//
+//   - Transaction parsing errors
+//
+//   - UTXO hash calculation errors
+//
+//   - Invalid read mode (non-JSON)
+//
+// Monitoring:
+//   - Execution time recorded in "GetUTXOsByTXID_http" statistic
+//   - Prometheus metric "asset_http_get_utxo" tracks successful responses
+//   - Debug logging of request handling
+//
+// Performance:
+//   - Processes all transaction outputs concurrently
+//   - Uses errgroup for parallel UTXO lookups
+//   - Maintains output order in response
+//
+// Example Usage:
+//
+//	# Get all UTXOs for a transaction
+//	GET /utxos/txid/<transaction_hash>
+//
+// Notes:
+//   - Only JSON format is supported
+//   - Each output's UTXO status is checked independently
+//   - Response array matches transaction output order
+//   - UTXOs can be in various states (spent, unspent, frozen, etc.)
 func (h *HTTP) GetUTXOsByTXID(mode ReadMode) func(c echo.Context) error {
 
 	return func(c echo.Context) error {

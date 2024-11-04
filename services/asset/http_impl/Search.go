@@ -1,3 +1,4 @@
+// Package http_impl provides HTTP handlers for blockchain data retrieval and analysis.
 package http_impl
 
 import (
@@ -17,6 +18,80 @@ type res struct {
 	Hash string `json:"hash"`
 }
 
+// Search creates an HTTP handler that searches for blockchain entities by hash or block height.
+// It supports finding blocks, transactions, subtrees, and UTXOs.
+//
+// Parameters:
+//   - c: Echo context containing the HTTP request and response
+//
+// Query Parameters:
+//   - q: Search query string, can be either:
+//   - 64-character hex string (hash search)
+//   - Numeric value (block height search)
+//     Example: ?q=000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
+//     Example: ?q=0
+//
+// Returns:
+//   - error: Any error encountered during processing
+//
+// HTTP Response:
+//
+//	Status: 200 OK
+//	Content-Type: application/json
+//	Body: Entity type and hash:
+//	  {
+//	    "type": "<string>",  // One of: "block", "tx", "subtree", "utxo"
+//	    "hash": "<string>"   // Hash of the found entity
+//	  }
+//
+// Search Process:
+//
+//	For hash searches (64-character hex):
+//	1. Tries to find as block hash
+//	2. If not found, tries as transaction hash
+//	3. If not found, tries as subtree hash
+//	4. If not found, tries as UTXO hash
+//
+//	For numeric searches:
+//	1. Validates block height is within range
+//	2. Returns block hash at that height if found
+//
+// Error Responses:
+//
+//   - 400 Bad Request (with error codes):
+//
+//   - Code 1: Missing query parameter
+//
+//   - Code 2: Invalid hash format
+//
+//   - Code 3: Block search error
+//
+//   - Code 4: Subtree search error
+//
+//   - Code 5: Transaction search error
+//
+//   - Code 6: UTXO search error
+//
+//   - Code 7: Invalid query format
+//
+//   - 404 Not Found:
+//
+//   - No matching entity found
+//
+//   - 500 Internal Server Error:
+//
+//   - Repository errors
+//
+// Monitoring:
+//   - Execution time recorded in "Search" statistic
+//
+// Example Usage:
+//
+//	# Search by block hash
+//	GET /search?q=000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
+//
+//	# Search by block height
+//	GET /search?q=0
 func (h *HTTP) Search(c echo.Context) error {
 	start := gocore.CurrentTime()
 	stat := AssetStat.NewStat("Search")

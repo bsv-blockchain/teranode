@@ -341,10 +341,9 @@ func (sm *SyncManager) startSync() {
 			continue
 		}
 
-		// Remove sync candidate peers that are no longer candidates due
+		// Skip sync candidate peers that are no longer candidates due
 		// to passing their latest known block.
 		if peer.LastBlock() < int32(bestBlockHeaderMeta.Height) {
-			state.syncCandidate = false
 			continue
 		}
 
@@ -916,17 +915,16 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 		if legacySyncMode && errors.Is(err, errors.ErrBlockNotFound) {
 			// previous block not found? Probably a new block message from our syncPeer while we are still syncing
 			sm.logger.Errorf("Failed to process block %v: %v", blockHash, err)
-			return nil
-		}
+		} else {
+			serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
+			if !legacySyncMode && !serviceError {
+				peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
+			}
 
-		serviceError := errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrStorageError)
-		if !legacySyncMode && !serviceError {
-			peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", blockHash, false)
+			// TODO TEMPORARY: we should not panic here, but return the error
+			panic(err)
+			// return err
 		}
-
-		// TODO TEMPORARY: we should not panic here, but return the error
-		panic(err)
-		// return err
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
@@ -968,7 +966,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockMsg) error {
 	// if we're syncing the chain from scratch.
 	if blkHashUpdate != nil && heightUpdate != 0 {
 		peer.UpdateLastBlockHeight(heightUpdate)
-		sm.logger.Infof("peer %s reports new height %d, current %v", peer.Addr(), heightUpdate, sm.current())
+		sm.logger.Debugf("peer %s reports new best height %d, current %v", peer.Addr(), peer.LastBlock(), sm.current())
 
 		if sm.current() { // used to check for isOrphan || sm.current()
 			go sm.peerNotifier.UpdatePeerHeights(blkHashUpdate, heightUpdate, peer)

@@ -589,19 +589,21 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, _ interface{}, 
 
 	merkleProofStrings := make([]string, len(mc.MerkleProof))
 
-	for _, hash := range mc.MerkleProof { //
-		merkleProofStrings = append(merkleProofStrings, hex.EncodeToString(hash))
+	for i, hash := range mc.MerkleProof {
+		merkleProofStrings[i] = hex.EncodeToString(hash)
 	}
 
 	jsonMap := map[string]interface{}{
-		"id":            hex.EncodeToString(mc.Id),
-		"prevhash":      pb.String(),
-		"coinbaseValue": mc.CoinbaseValue,
-		"version":       mc.Version,
-		"nBits":         hex.EncodeToString(reversedBits),
-		"time":          mc.Time,
-		"height":        mc.Height,
-		"merkleProof":   merkleProofStrings,
+		"id":                  hex.EncodeToString(mc.Id),
+		"prevhash":            pb.String(),
+		"coinbaseValue":       mc.CoinbaseValue,
+		"version":             mc.Version,
+		"nBits":               hex.EncodeToString(reversedBits),
+		"time":                mc.Time,
+		"height":              mc.Height,
+		"num_txs":             mc.NumTxs,
+		"sizeWithoutCoinbase": mc.SizeWithoutCoinbase,
+		"merkleProof":         merkleProofStrings,
 	}
 
 	return jsonMap, nil

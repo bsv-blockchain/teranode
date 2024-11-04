@@ -1,3 +1,4 @@
+// Package http_impl provides HTTP handlers for blockchain data retrieval and analysis.
 package http_impl
 
 import (
@@ -23,6 +24,90 @@ type SubtreeTx struct {
 	Fee          int    `json:"fee"`
 }
 
+// GetSubtreeTxs creates an HTTP handler for retrieving transaction details from a subtree
+// with pagination support. Only supports JSON output format.
+//
+// Parameters:
+//   - mode: ReadMode (only JSON mode is supported)
+//
+// Returns:
+//   - func(c echo.Context) error: Echo handler function
+//
+// URL Parameters:
+//   - hash: Subtree hash (hex string)
+//
+// Query Parameters:
+//
+//   - offset: Number of transactions to skip (default: 0)
+//     Example: ?offset=100
+//
+//   - limit: Maximum number of transactions to return (default: 20, max: 100)
+//     Example: ?limit=50
+//
+// HTTP Response:
+//
+//	Status: 200 OK
+//	Content-Type: application/json
+//	Body:
+//	  {
+//	    "data": [
+//	      {
+//	        "index": <int>,         // Position in subtree
+//	        "txid": "<string>",     // Transaction ID
+//	        "inputsCount": <int>,   // Number of inputs
+//	        "outputsCount": <int>,  // Number of outputs
+//	        "size": <int>,          // Transaction size in bytes
+//	        "fee": <int>            // Transaction fee
+//	      },
+//	      // ... additional transactions
+//	    ],
+//	    "pagination": {
+//	      "offset": <int>,          // Current offset
+//	      "limit": <int>,           // Current limit
+//	      "total_records": <int>    // Total number of transactions in subtree
+//	    }
+//	  }
+//
+// Error Responses:
+//
+//   - 400 Bad Request:
+//
+//   - Invalid pagination parameters
+//     Example: {"message": "invalid offset or limit"}
+//
+//   - 404 Not Found:
+//
+//   - Subtree not found
+//     Example: {"message": "not found"}
+//
+//   - 500 Internal Server Error:
+//
+//   - Invalid subtree hash format
+//
+//   - Subtree retrieval errors
+//
+//   - Invalid read mode (non-JSON)
+//
+// Monitoring:
+//   - Execution time recorded in "GetSubtree_http" statistic
+//   - Prometheus metric "asset_http_get_subtree" tracks responses
+//   - Performance logging including transfer speed (KB/sec)
+//   - Response size logging in KB
+//
+// Notes:
+//   - Only JSON format is supported
+//   - Missing transactions are skipped in the response
+//   - Coinbase transactions are marked with IsCoinbase flag
+//   - Response is pretty-printed for readability
+//   - Transaction metadata is fetched individually for each transaction
+//
+// Example Usage:
+//
+//	# Get first 20 transactions from subtree
+//	GET /subtree/txs/<hash>
+//
+//	# Get 50 transactions starting at offset 100
+//	GET /subtree/txs/<hash>?offset=100&limit=50
 func (h *HTTP) GetSubtreeTxs(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		var b []byte

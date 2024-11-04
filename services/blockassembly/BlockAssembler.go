@@ -17,11 +17,16 @@ import (
 	"github.com/bitcoin-sv/ubsv/services/blockchain"
 	"github.com/bitcoin-sv/ubsv/stores/blob"
 	"github.com/bitcoin-sv/ubsv/stores/utxo"
+	"github.com/bitcoin-sv/ubsv/tracing"
 	"github.com/bitcoin-sv/ubsv/ulogger"
 	"github.com/bitcoin-sv/ubsv/util"
 	"github.com/libsv/go-bt/v2/chainhash"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
+)
+
+var (
+	stats = gocore.NewStat("blockassembler")
 )
 
 type miningCandidateResponse struct {
@@ -155,6 +160,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 				b.logger.Infof("Stopping blockassembler as ctx is done")
 				close(b.miningCandidateCh)
 				close(b.blockchainSubscriptionCh)
+
 				return
 
 			case <-b.resetCh:
@@ -179,21 +185,36 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 					continue
 				}
 
+				isLegacySync, err := b.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateLEGACYSYNCING)
+				if err != nil {
+					b.logger.Errorf("[BlockAssembler][Reset] error getting FSM state: %v", err)
+
+					// if we can't get the FSM state, we assume we are not in legacy sync, which is the default, but less optimized
+					isLegacySync = false
+				}
+
 				currentHeight := meta.Height
-				if response := b.subtreeProcessor.Reset(b.bestBlockHeader.Load(), moveDownBlocks, moveUpBlocks); response.Err != nil {
+
+				if response := b.subtreeProcessor.Reset(b.bestBlockHeader.Load(), moveDownBlocks, moveUpBlocks, isLegacySync); response.Err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", err)
 					// something went wrong, we need to set the best block header in the block assembly to be the
 					// same as the subtree processor's best block header
 					bestBlockchainBlockHeader = b.subtreeProcessor.GetCurrentBlockHeader()
 
-					// set the new height based on the response counts
-					// nolint:gosec
-					currentHeight = uint32(int(meta.Height) - len(response.MovedDownBlocks) + len(response.MovedUpBlocks))
+					_, bestBlockchainBlockHeaderMeta, err := b.blockchainClient.GetBlockHeader(ctx, bestBlockchainBlockHeader.Hash())
+					if err != nil {
+						b.logger.Errorf("[BlockAssembler][Reset] error getting best block header meta: %v", err)
+						continue
+					}
+
+					// set the new height based on the best block header from the subtree processor
+					currentHeight = bestBlockchainBlockHeaderMeta.Height
 				}
 
 				b.logger.Warnf("[BlockAssembler][Reset] resetting to new best block header: %d", meta.Height)
 				b.bestBlockHeader.Store(bestBlockchainBlockHeader)
 				b.bestBlockHeight.Store(currentHeight)
+
 				if err = b.SetState(ctx); err != nil {
 					b.logger.Errorf("[BlockAssembler][Reset] error setting state: %v", err)
 				}
@@ -242,8 +263,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) {
 			case notification := <-b.blockchainSubscriptionCh:
 				b.currentRunningState.Store("blockchainSubscription")
 
-				switch notification.Type {
-				case model.NotificationType_Block:
+				if notification.Type == model.NotificationType_Block {
 					b.UpdateBestBlock(ctx)
 				}
 			} // select
@@ -258,6 +278,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		return
 	}
 	b.logger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), meta.Height)
+
 	defer b.logger.Infof("[BlockAssembler][%s] new best block header: %d DONE", bestBlockchainBlockHeader.Hash(), meta.Height)
 
 	prometheusBlockAssemblyBestBlockHeight.Set(float64(meta.Height))
@@ -285,6 +306,7 @@ func (b *BlockAssembler) UpdateBestBlock(ctx context.Context) {
 		}
 
 		b.currentRunningState.Store("movingUp")
+
 		if err = b.subtreeProcessor.MoveUpBlock(block); err != nil {
 			b.logger.Errorf("[BlockAssembler][%s] error moveUpBlock in subtree processor: %v", bestBlockchainBlockHeader.Hash(), err)
 			return
@@ -320,6 +342,7 @@ func (b *BlockAssembler) Start(ctx context.Context) error {
 	bestBlockHeader, bestBlockHeight, err := b.GetState(ctx)
 	b.bestBlockHeight.Store(bestBlockHeight)
 	b.bestBlockHeader.Store(bestBlockHeader)
+
 	if err != nil {
 		// TODO what is the best way to handle errors wrapped in grpc rpc errors?
 		if strings.Contains(err.Error(), sql.ErrNoRows.Error()) {
@@ -392,6 +415,7 @@ func (b *BlockAssembler) SetState(ctx context.Context) error {
 	state = append(state[:4], blockHeaderBytes...)
 
 	b.logger.Debugf("[BlockAssembler] setting state: %d: %s", blockHeight, blockHeader.Hash())
+
 	return b.blockchainClient.SetState(ctx, "BlockAssembler", state)
 }
 
@@ -453,6 +477,8 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	// Get the hash of the last subtree in the list...
 	// We do this by using the same subtree processor logic to get the top tree hash.
 	id := &chainhash.Hash{}
+	var txCount uint32
+	var sizeWithoutCoinbase uint32
 
 	if len(subtrees) > 0 {
 		topTree, err := util.NewIncompleteTreeByLeafCount(len(subtrees))
@@ -461,6 +487,10 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 		}
 		for _, subtree := range subtrees {
 			_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
+			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
+			txCount += uint32(len(subtree.Nodes))
+			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
+			sizeWithoutCoinbase += uint32(subtree.SizeInBytes)
 		}
 		id = topTree.RootHash()
 	}
@@ -488,6 +518,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	}
 
 	var coinbaseMerkleProofBytes [][]byte
+
 	if len(subtrees) > 0 {
 		coinbaseMerkleProof, err := util.GetMerkleProofForCoinbase(subtrees)
 		if err != nil {
@@ -508,14 +539,16 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*util.S
 	previousHash := b.bestBlockHeader.Load().Hash().CloneBytes()
 	miningCandidate := &model.MiningCandidate{
 		// create a job ID from the top tree hash and the previous block hash, to prevent empty block job id collisions
-		Id:            chainhash.HashB(append(append(id[:], previousHash...), timeBytes...)),
-		PreviousHash:  previousHash,
-		CoinbaseValue: coinbaseValue,
-		Version:       1,
-		NBits:         nBits.CloneBytes(),
-		Height:        b.bestBlockHeight.Load() + 1,
-		Time:          timeNow,
-		MerkleProof:   coinbaseMerkleProofBytes,
+		Id:                  chainhash.HashB(append(append(id[:], previousHash...), timeBytes...)),
+		PreviousHash:        previousHash,
+		CoinbaseValue:       coinbaseValue,
+		Version:             1,
+		NBits:               nBits.CloneBytes(),
+		Height:              b.bestBlockHeight.Load() + 1,
+		Time:                timeNow,
+		MerkleProof:         coinbaseMerkleProofBytes,
+		NumTxs:              txCount,
+		SizeWithoutCoinbase: sizeWithoutCoinbase,
 		// nolint:gosec
 		SubtreeCount: uint32(len(subtrees)),
 	}
@@ -551,6 +584,13 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 }
 
 func (b *BlockAssembler) getReorgBlocks(ctx context.Context, header *model.BlockHeader) ([]*model.Block, []*model.Block, error) {
+	_, _, deferFn := tracing.StartTracing(ctx, "getReorgBlocks",
+		tracing.WithParentStat(stats),
+		tracing.WithHistogram(prometheusBlockAssemblerGetReorgBlocksDuration),
+		tracing.WithLogMessage(b.logger, "[getReorgBlocks] called"),
+	)
+	defer deferFn()
+
 	moveDownBlockHeaders, moveUpBlockHeaders, err := b.getReorgBlockHeaders(ctx, header)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error getting reorg block headers", err)
@@ -670,6 +710,7 @@ func (b *BlockAssembler) getNextNbits() (*model.NBit, error) {
 		if err != nil {
 			return nil, errors.NewProcessingError("error getting next work required", err)
 		}
+
 		return nbit, nil
 	}
 
